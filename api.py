@@ -1,0 +1,752 @@
+# api.py
+import requests
+import json
+import time
+import sys
+import ssl
+import urllib3
+import re
+import os
+import yfinance as yf
+import pandas as pd
+from datetime import datetime, timedelta
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
+from collections import deque
+import config
+
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class TLSAdapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
+
+class ThrottledSession(requests.Session):
+    def __init__(self):
+        super().__init__()
+        self.last_request_time_sim = 0
+        self.last_request_time_real = 0
+        self.request_history = deque()
+
+    def _get_current_tps(self):
+        now = time.time()
+        while self.request_history and self.request_history[0] < now - 1.0:
+            self.request_history.popleft()
+        return len(self.request_history)
+
+    def request(self, method, url, *args, **kwargs):
+        is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
+        is_sim_server = "openapivts.koreainvestment.com" in url
+        
+        target_limit = 0
+        last_time = 0
+        server_type = "EXTERNAL"
+        
+        if is_real_server:
+            target_limit = config.REAL_TX_PER_SECOND
+            last_time = self.last_request_time_real
+            server_type = "REAL"
+        elif is_sim_server:
+            target_limit = config.SIM_TX_PER_SECOND
+            last_time = self.last_request_time_sim
+            server_type = "SIMULATION"
+
+        if target_limit > 0:
+            min_interval = (1.0 / target_limit) * 1.1
+            elapsed = time.time() - last_time
+            if elapsed < min_interval:
+                wait_time = min_interval - elapsed
+                time.sleep(wait_time)
+
+        self.request_history.append(time.time())
+        current_tps = self._get_current_tps()
+
+        if config.DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+            config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
+            if config.DEBUG_LEVEL == "DEBUG":
+                if kwargs.get('params'): config.console.print(f"[dim cyan]  > Params: {kwargs['params']}[/dim cyan]")
+                if kwargs.get('data'): config.console.print(f"[dim cyan]  > Body Data: {kwargs['data']}[/dim cyan]")
+                if kwargs.get('json'): config.console.print(f"[dim cyan]  > JSON Data: {kwargs['json']}[/dim cyan]")
+
+        # [변경] 재시도 로직 추가 (MAX_RETRIES 사용)
+        max_retries = config.MAX_RETRIES
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if 'timeout' not in kwargs:
+                    kwargs['timeout'] = config.DEFAULT_TIMEOUT
+                
+                response = super().request(method, url, *args, **kwargs)
+
+                if config.DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+                    rt_cd = "-"
+                    msg_cd = "-"
+                    desc = "정상"
+                    res_data = None
+                    try:
+                        res_data = response.json()
+                        rt_cd = res_data.get('rt_cd') or "-"
+                        msg_cd = res_data.get('msg_cd') or "-"
+                        if msg_cd == 'OPSQ2000': desc = "서버 지연"
+                        elif msg_cd in ['EGW00123', 'EGW00121']: desc = "토큰 만료"
+                        elif rt_cd != '0' and rt_cd != '-': desc = "오류 발생"
+                    except: pass
+                    
+                    url_tail = url.split('/')[-1].split('?')[0]
+                    config.console.print(f"[dim magenta][TRACE] RES ({server_type}) Status:{response.status_code} RT_CD:{rt_cd} MSG_CD:{msg_cd} ({desc}) | {url_tail}[/dim magenta]")
+                    
+                    if config.DEBUG_LEVEL == "DEBUG" and res_data:
+                        config.console.print(f"[dim magenta]  > Response Data: {json.dumps(res_data, ensure_ascii=False, indent=2)}[/dim magenta]")
+
+                try:
+                    if response.text and response.text.startswith('{'):
+                        res_json = response.json()
+                        msg_cd = res_json.get('msg_cd')
+                        
+                        if msg_cd == 'OPSQ2000':
+                            if config.DEBUG_LEVEL != "OFF":
+                                config.console.print(f"[bold yellow]서버 동기화 지연 감지(OPSQ2000). {config.RETRY_DELAY_SERVER}초 대기 후 재시도합니다...[/bold yellow]")
+                            time.sleep(config.RETRY_DELAY_SERVER)
+                            response = super().request(method, url, *args, **kwargs)
+
+                        elif msg_cd in ['EGW00123', 'EGW00121']:
+                            if config.DEBUG_LEVEL != "OFF":
+                                config.console.print(f"[bold yellow]토큰 만료 감지(Code: {msg_cd}). 토큰을 갱신합니다...[/bold yellow]")
+                            
+                            new_token = None
+                            if is_sim_server:
+                                new_token = get_access_token(force_refresh=True)
+                            elif is_real_server:
+                                new_token = get_real_access_token(force_refresh=True)
+                            
+                            if new_token:
+                                if 'headers' in kwargs:
+                                    kwargs['headers']['authorization'] = f"Bearer {new_token}"
+                                    kwargs['headers']['Authorization'] = f"Bearer {new_token}"
+                                else:
+                                    kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
+                                response = super().request(method, url, *args, **kwargs)
+                except Exception: pass
+                
+                # 성공 시 시간 기록 후 반환
+                now_final = time.time()
+                if is_real_server: self.last_request_time_real = now_final
+                elif is_sim_server: self.last_request_time_sim = now_final
+                
+                return response
+
+            except Exception as e:
+                # 연결 끊김 에러 체크
+                err_str = str(e)
+                is_disconnect = "Connection aborted" in err_str or "RemoteDisconnected" in err_str
+                
+                # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
+                if is_disconnect and attempt < max_retries:
+                    wait_time = 0.5
+                    if config.DEBUG_LEVEL != "OFF":
+                        config.console.print(f"[yellow][DEBUG] 서버 연결 끊김 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})...[/yellow]")
+                    time.sleep(wait_time)
+                    continue
+                
+                # 재시도 불가능하거나 횟수 초과 시 에러 발생
+                if config.DEBUG_LEVEL != "OFF":
+                    config.console.print(f"[bold red][DEBUG] Request Failed: {str(e)}[/bold red]")
+                raise e
+
+session = ThrottledSession()
+session.mount('https://', TLSAdapter())
+
+# 전역 토큰 변수
+SIM_ACCESS_TOKEN = ""
+REAL_ACCESS_TOKEN = "" 
+
+def load_token_cache():
+    try:
+        if not os.path.exists(config.TOKEN_CACHE_FILE): return {}
+        with open(config.TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception: return {}
+
+def save_token_cache(cache_data):
+    try:
+        with open(config.TOKEN_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+    except Exception: pass
+
+def check_token_validity(token_info):
+    if not token_info: return False
+    expired_str = token_info.get('token_expired')
+    access_token = token_info.get('access_token')
+    if not expired_str or not access_token: return False
+    
+    try:
+        expired_dt = datetime.strptime(expired_str, "%Y-%m-%d %H:%M:%S")
+        if datetime.now() < (expired_dt - timedelta(minutes=1)):
+            return True
+    except: return False
+    return False
+
+def get_current_token():
+    if config.IS_SIMULATION:
+        return get_access_token()
+    else:
+        return get_real_access_token()
+
+def get_access_token(force_refresh=False):
+    global SIM_ACCESS_TOKEN
+    
+    if not force_refresh and SIM_ACCESS_TOKEN:
+        return SIM_ACCESS_TOKEN
+
+    cache = load_token_cache()
+    sim_token_info = cache.get("SIMULATION")
+    
+    if not force_refresh and check_token_validity(sim_token_info):
+        SIM_ACCESS_TOKEN = sim_token_info['access_token']
+        if config.DEBUG_LEVEL != "OFF":
+            config.console.print(f"[dim][TRACE] 모의 캐시 토큰 사용 ({sim_token_info.get('token_expired')})[/dim]")
+        return SIM_ACCESS_TOKEN
+
+    headers = {"content-type": "application/json"}
+    body = {"grant_type": "client_credentials", "appkey": config.APP_KEY, "appsecret": config.APP_SECRET}
+    url = f"{config.URL_BASE}/oauth2/tokenP"
+    
+    try:
+        config.console.print("[dim]모의투자 토큰 신규 발급 요청...[/dim]")
+        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res_json = res.json()
+        
+        if 'access_token' in res_json:
+            SIM_ACCESS_TOKEN = res_json['access_token']
+            expired = res_json.get('access_token_token_expired')
+            
+            cache = load_token_cache()
+            cache["SIMULATION"] = {
+                "access_token": SIM_ACCESS_TOKEN,
+                "token_expired": expired,
+                "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            save_token_cache(cache)
+            config.console.print("[green]모의투자 토큰 발급 완료[/green]")
+            return SIM_ACCESS_TOKEN
+        
+        elif res_json.get('error_code') == 'EGW00133':
+            if config.DEBUG_LEVEL != "OFF": config.console.print("[yellow]빈도 제한. 캐시 재확인.[/yellow]")
+            cache = load_token_cache()
+            sim_token_info = cache.get("SIMULATION")
+            if check_token_validity(sim_token_info):
+                SIM_ACCESS_TOKEN = sim_token_info['access_token']
+                config.console.print("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
+                return SIM_ACCESS_TOKEN
+            return None
+        else:
+            config.console.print(f"[bold red]토큰 발급 실패: {res.text}[/bold red]")
+            return None
+            
+    except Exception as e:
+        config.console.print(f"[bold red]접속 오류: {str(e)}[/bold red]")
+        return None
+
+def get_real_access_token(force_refresh=False):
+    global REAL_ACCESS_TOKEN
+    
+    if not config.REAL_APP_KEY: return None
+
+    if not force_refresh and REAL_ACCESS_TOKEN: 
+        return REAL_ACCESS_TOKEN
+
+    cache = load_token_cache()
+    real_token_info = cache.get("REAL")
+
+    if not force_refresh and check_token_validity(real_token_info):
+        REAL_ACCESS_TOKEN = real_token_info['access_token']
+        if config.DEBUG_LEVEL != "OFF":
+            config.console.print(f"[dim][TRACE] 실전 캐시 토큰 사용 ({real_token_info.get('token_expired')})[/dim]")
+        return REAL_ACCESS_TOKEN
+
+    headers = {"content-type": "application/json"}
+    body = {"grant_type": "client_credentials", "appkey": config.REAL_APP_KEY, "appsecret": config.REAL_APP_SECRET}
+    url = f"{config.REAL_URL}/oauth2/tokenP"
+    
+    try:
+        config.console.print("[dim]실전투자 토큰 신규 발급 요청...[/dim]")
+        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        
+        if res.status_code == 200:
+            res_json = res.json()
+            REAL_ACCESS_TOKEN = res_json['access_token']
+            expired = res_json.get('access_token_token_expired')
+            
+            cache = load_token_cache()
+            cache["REAL"] = {
+                "access_token": REAL_ACCESS_TOKEN,
+                "token_expired": expired,
+                "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            save_token_cache(cache)
+            config.console.print("[green]실전투자 토큰 발급 완료[/green]")
+            return REAL_ACCESS_TOKEN
+        
+        else:
+            try:
+                err_json = res.json()
+                if err_json.get('error_code') == 'EGW00133':
+                    if config.DEBUG_LEVEL != "OFF": config.console.print("[yellow]실전 토큰 발급 빈도 제한(EGW00133). 캐시를 재확인합니다.[/yellow]")
+                    cache = load_token_cache()
+                    real_token_info = cache.get("REAL")
+                    if check_token_validity(real_token_info):
+                        REAL_ACCESS_TOKEN = real_token_info['access_token']
+                        config.console.print("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
+                        return REAL_ACCESS_TOKEN
+                    return None
+            except: pass
+            
+            config.console.print(f"[red]실전 토큰 발급 실패: {res.text}[/red]")
+            
+    except Exception as e:
+        config.console.print(f"[red]실전 토큰 발급 중 오류: {e}[/red]")
+        pass
+        
+    return None
+
+def safe_int(value):
+    try:
+        if value is None: return 0
+        s_val = str(value).strip().replace(',', '')
+        if not s_val: return 0
+        return int(float(s_val))
+    except Exception: return 0
+
+def get_stock_name_by_code(code, is_overseas):
+    final_name = None
+    if not is_overseas:
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        with config.console.status(f"[bold green]네이버에서 종목명({code}) 조회 중...[/]"):
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                r = session.get(url, headers=headers, verify=False, timeout=3)
+                m_og = re.search(r'meta property="og:title" content="(.*?)"', r.text)
+                if m_og:
+                    raw_title = m_og.group(1).strip()
+                    if "페이지를 찾을 수 없습니다" not in raw_title:
+                        clean_name = re.sub(r'\s*\(\d{6}\)', '', raw_title)
+                        clean_name = re.sub(r'\s*[:|-]\s*(Npay|네이버|Naver|금융|증권).*', '', clean_name, flags=re.IGNORECASE)
+                        final_name = clean_name.strip()
+                    if final_name in ["Npay 증권", "네이버 페이 증권", "증권", "금융", "네이버 금융"]: final_name = None
+                else: final_name = code
+            except Exception: final_name = code
+    else:
+        with config.console.status(f"[bold green]yfinance에서 종목명({code}) 조회 중...[/]"):
+            try:
+                with open(os.devnull, 'w') as fnull:
+                    old_stderr = sys.stderr; sys.stderr = fnull
+                    try:
+                        ticker = yf.Ticker(code); info = ticker.info
+                        if info: final_name = info.get('longName') or info.get('shortName')
+                    except: pass
+                    finally: sys.stderr = old_stderr
+            except Exception: pass
+    if not final_name and code: return code
+    return final_name
+
+def get_chart_data(code, is_overseas=False):
+    token_to_use = get_current_token()
+    
+    if config.IS_SIMULATION:
+        key_to_use = config.APP_KEY
+        secret_to_use = config.APP_SECRET
+        base_url_to_use = config.URL_BASE
+    else:
+        key_to_use = config.REAL_APP_KEY
+        secret_to_use = config.REAL_APP_SECRET
+        base_url_to_use = config.REAL_URL
+
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    start_date_origin = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
+    
+    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB')
+    if is_index:
+        try:
+            df = yf.download(code, period="2y", progress=False)
+            if df is None or df.empty: return pd.DataFrame()
+            if isinstance(df.columns, pd.MultiIndex):
+                try: df.columns = df.columns.get_level_values(0)
+                except: pass
+            df.reset_index(inplace=True)
+            df.rename(columns={'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}, inplace=True)
+            cols = ['date', 'close', 'high', 'low', 'volume']
+            for c in cols:
+                if c not in df.columns: df[c] = 0
+            df = df[cols].copy()
+            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d'))
+            df = df[df['date'] >= start_date_origin]
+            return df.sort_values('date', ascending=True).reset_index(drop=True)
+        except Exception: return pd.DataFrame()
+
+    url_bases = [base_url_to_use]
+
+    if not is_overseas:
+        url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key_to_use, "appSecret": secret_to_use, "tr_id": "FHKST03010100"}
+        all_items = []
+        current_end_date = today
+        current_start_date = start_date_origin
+        
+        for i in range(5):
+            params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
+            page_success = False
+            for retry in range(3):
+                for base_url in url_bases:
+                    url = f"{base_url}/{url_path}"
+                    try:
+                        res = session.get(url, headers=headers, params=params, verify=False, timeout=3)
+                        data = res.json()
+                        if data.get('rt_cd') == '0':
+                            items = data.get('output2')
+                            if items:
+                                all_items.extend(items)
+                                temp_dates = sorted([x['stck_bsop_date'] for x in items])
+                                current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                                page_success = True
+                            else: page_success = True
+                            break
+                        elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
+                        else: time.sleep(0.2)
+                    except: time.sleep(0.2); continue
+                if page_success: break
+            
+            if not page_success: break
+            if len(all_items) >= 250: break
+            
+        if not all_items: return pd.DataFrame()
+        df = pd.DataFrame(all_items).drop_duplicates(subset=['stck_bsop_date'])
+        df = df[df['stck_bsop_date'] >= start_date_origin]
+        df = df[['stck_bsop_date', 'stck_clpr', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
+        df.columns = ['date', 'close', 'high', 'low', 'volume']
+        df = df.astype({'close': float, 'high': float, 'low': float, 'volume': float})
+        return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+    
+    else:
+        cached_ex = config.EXCHANGE_CACHE.get(code)
+        exchanges = []
+        if cached_ex: exchanges.append(cached_ex)
+        for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
+            if e not in exchanges: exchanges.append(e)
+            
+        url_path = "uapi/overseas-price/v1/quotations/dailyprice"
+        headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key_to_use, "appSecret": secret_to_use, "tr_id": "HHDFS76240000"}
+        
+        for excd in exchanges:
+            all_items = []
+            next_bymd = today
+            page_success = False
+            
+            for i in range(4):
+                params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "0", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
+                sub_success = False
+                for retry in range(2):
+                    for base_url in url_bases:
+                        try:
+                            res = session.get(f"{base_url}/{url_path}", headers=headers, params=params, verify=False, timeout=3)
+                            data = res.json()
+                            if data.get('rt_cd') == '0':
+                                items = data.get('output2')
+                                if items:
+                                    if not all_items: 
+                                        if cached_ex != excd: config.update_cache_and_save(code, excd)
+                                    all_items.extend(items)
+                                    last = items[-1]['xymd']
+                                    next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                                    sub_success = True
+                                else: sub_success = True
+                                break
+                            elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
+                            else: time.sleep(0.1)
+                        except Exception as e: time.sleep(0.1)
+                    if sub_success: break
+                if not sub_success: break
+                if len(all_items) >= 250: break
+            
+            if all_items:
+                df = pd.DataFrame(all_items).drop_duplicates(subset=['xymd'])
+                df.rename(columns={'xymd': 'date', 'clos': 'close', 'high': 'high', 'low': 'low'}, inplace=True)
+                if 'tvol' in df.columns: df['volume'] = df['tvol']
+                elif 'tovol' in df.columns: df['volume'] = df['tovol']
+                elif 'vol' in df.columns: df['volume'] = df['vol']
+                else: df['volume'] = 0
+                df = df[df['date'] >= start_date_origin]
+                numeric_cols = ['close', 'high', 'low', 'volume']
+                for c in numeric_cols: df[c] = df[c].astype(float)
+                return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+        return None
+
+def get_current_price_data(code, is_overseas):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    url = f"{base_url}/uapi/domestic-stock/v1/quotations/inquire-price" if not is_overseas else f"{base_url}/uapi/overseas-price/v1/quotations/price"
+    tr_id = "FHKST01010100" if not is_overseas else "HHDFS00000300"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": tr_id}
+    
+    params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code} if not is_overseas else {"AUTH": "", "EXCD": "NAS", "SYMB": code}
+    
+    if is_overseas:
+        cached_ex = config.EXCHANGE_CACHE.get(code)
+        exchanges = []
+        if cached_ex: exchanges.append(cached_ex)
+        for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
+            if e not in exchanges: exchanges.append(e)
+        
+        for excd in exchanges:
+            params['EXCD'] = excd
+            try:
+                res = session.get(url, headers=headers, params=params, verify=False, timeout=3)
+                data = res.json()
+                if data.get('rt_cd') == '0':
+                    if float(data.get('output', {}).get('last', 0) or 0) > 0:
+                        if cached_ex != excd: config.update_cache_and_save(code, excd)
+                        return data
+            except: pass
+        return {'rt_cd': '9999'}
+    
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False, timeout=3)
+        return res.json()
+    except: return {'rt_cd': '9999'}
+
+def get_investor_trend(code):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+    
+    url = f"{base_url}/uapi/domestic-stock/v1/quotations/inquire-investor"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "FHKST01010900"}
+    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+    
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False)
+        if res.json().get('rt_cd') == '0': return res.json().get('output', [])
+    except: pass
+    return []
+
+def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
+    if is_overseas: return None
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+    
+    url = f"{base_url}/uapi/domestic-stock/v1/quotations/inquire-ccnl"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "FHKST01010300"}
+    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+    for _ in range(3):
+        try:
+            res = session.get(url, headers=headers, params=params, verify=False, timeout=2)
+            data = res.json()
+            if data.get('rt_cd') == '0':
+                items = data.get('output', [])
+                if items and items[0].get('tday_rltv'): return float(str(items[0].get('tday_rltv')).replace(',', ''))
+            elif data.get('msg_cd') == 'EGW00201': time.sleep(0.2)
+        except: time.sleep(0.2)
+    return None
+
+def fetch_overseas_detail_price(code, excd):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    url = f"{base_url}/uapi/overseas-price/v1/quotations/price-detail"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "HHDFS76200200"}
+    
+    exchanges = []
+    if excd: exchanges.append(excd)
+    for e in ["NASD", "NAS", "NYSE", "NYS", "AMEX", "AMS"]:
+        if e not in exchanges: exchanges.append(e)
+
+    for target_excd in exchanges:
+        params = {"AUTH": "", "EXCD": target_excd, "SYMB": code}
+        try:
+            res = session.get(url, headers=headers, params=params, verify=False, timeout=3)
+            data = res.json()
+            if data.get('rt_cd') == '0':
+                output = data.get('output', {})
+                if output.get('h52p') and float(output.get('h52p')) > 0:
+                    if target_excd != excd: config.update_cache_and_save(code, target_excd)
+                    return output
+        except: pass
+    return {}
+
+def fetch_domestic_period_price(code):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    today = datetime.now().strftime("%Y%m%d")
+    past = (datetime.now() - timedelta(days=100)).strftime("%Y%m%d")
+    
+    url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "FHKST03010100"}
+    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": past, "FID_INPUT_DATE_2": today, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
+    
+    try:
+        res = session.get(f"{base_url}/{url_path}", headers=headers, params=params, verify=False)
+        if res.json().get('rt_cd') == '0': return res.json().get('output2', [])
+    except: pass
+    return []
+
+def fetch_overseas_period_price(code, excd):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    today = datetime.now().strftime("%Y%m%d")
+    url_path = "uapi/overseas-price/v1/quotations/dailyprice"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "HHDFS76240000"}
+    
+    target_exchanges = []
+    if excd: target_exchanges.append(excd)
+    for e in ["NASD", "NAS", "NYSE", "NYS", "AMEX", "AMS"]:
+        if e not in target_exchanges: target_exchanges.append(e)
+    
+    for target_excd in target_exchanges:
+        params = {"AUTH": "", "EXCD": target_excd, "SYMB": code, "GUBN": "0", "BYMD": today, "MODP": "1", "KEYB": code}
+        try:
+            res = session.get(f"{base_url}/{url_path}", headers=headers, params=params, verify=False, timeout=5)
+            data = res.json()
+            if data.get('rt_cd') == '0':
+                items = data.get('output2')
+                if items:
+                    if target_excd != excd: config.update_cache_and_save(code, target_excd)
+                    df = pd.DataFrame(items).drop_duplicates(subset=['xymd'])
+                    df.rename(columns={'xymd': 'date', 'clos': 'close', 'tovol': 'volume', 'high': 'high', 'low': 'low'}, inplace=True)
+                    if 'volume' not in df.columns:
+                        if 'tvol' in df.columns: df['volume'] = df['tvol']
+                        else: df['volume'] = 0
+                    df = df.astype({'close': float, 'high': float, 'low': float, 'volume': float})
+                    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+        except: pass
+    return None
+
+def fetch_buyable_quantity(stock_code, price):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    tr_id = "VTTC8908R" if config.IS_SIMULATION else "TTTC8908R"
+    url = f"{base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": tr_id}
+    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": stock_code, "ORD_UNPR": str(price), "ORD_DVSN": "00" if price > 0 else "01", "CMA_EVLU_AMT_ICLD_YN": "N", "OVRS_ICLD_YN": "N", "CRDT_TYPE": "00"}
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False, timeout=5)
+        data = res.json()
+        if data.get('rt_cd') == '0':
+            out = data.get('output', {})
+            api_qty = safe_int(out.get('ord_psbl_qty')) or safe_int(out.get('nrcvb_buy_qty')) or safe_int(out.get('max_buy_qty'))
+            if price > 0:
+                cash = safe_int(out.get('ord_psbl_cash'))
+                return min(api_qty, int(cash / price))
+            return api_qty
+    except: pass
+    return 0
+
+def fetch_sellable_quantity(stock_code):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    tr_id = "VTTC8434R" if config.IS_SIMULATION else "TTTC8434R"
+    url = f"{base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-sell"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": tr_id}
+    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False)
+        data = res.json()
+        if data.get('rt_cd') == '0':
+            for item in data.get('output1', []):
+                if item.get('pdno') == stock_code: return safe_int(item.get('ord_psbl_qty'))
+    except: pass
+    return 0
+
+def fetch_overseas_buyable_quantity(stock_code, price, excd):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    url = f"{base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+    trade_excd = excd
+    if excd == "NAS": trade_excd = "NASD"
+    elif excd == "NYS": trade_excd = "NYSE"
+    elif excd == "AMS": trade_excd = "AMEX"
+    headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "tr_id"}
+    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": trade_excd, "OVRS_ORD_UNPR": str(price), "ITEM_CD": stock_code}
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False)
+        data = res.json()
+        if data.get('rt_cd') == '0':
+            out = data.get('output', {})
+            return safe_int(out.get('ovrs_ord_psbl_qty')) or safe_int(out.get('ord_psbl_qty'))
+    except: pass
+    return 0
+
+def fetch_overseas_sellable_quantity(stock_code, excd):
+    token_to_use = get_current_token()
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    url = f"{base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+    trade_excds = []
+    primary_excd = excd
+    if excd == "NAS": primary_excd = "NASD"
+    elif excd == "NYS": primary_excd = "NYSE"
+    elif excd == "AMS": primary_excd = "AMEX"
+    if config.IS_SIMULATION:
+        trade_excds.append(primary_excd)
+        for e in ["NASD", "NYSE", "AMEX"]:
+            if e != primary_excd: trade_excds.append(e)
+    else: trade_excds = ["NASD"]
+    for target_excd in trade_excds:
+        headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "tr_id"}
+        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": target_excd, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
+        try:
+            res = session.get(url, headers=headers, params=params, verify=False)
+            data = res.json()
+            if data.get('rt_cd') == '0':
+                for item in data.get('output1', []):
+                    if item.get('ovrs_pdno') == stock_code:
+                        qty = safe_int(item.get('ord_psbl_qty'))
+                        if qty > 0: return qty
+        except: pass
+    return 0
+
+def find_best_exchange_code(stock_code):
+    token_to_use = get_current_token()
+    cached = config.EXCHANGE_CACHE.get(stock_code)
+    if cached: return cached
+    
+    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+
+    for excd in ["NAS", "NYS", "AMS"]:
+        headers = {"Content-Type": "application/json", "authorization": f"Bearer {token_to_use}", "appKey": key, "appSecret": secret, "tr_id": "HHDFS00000300"}
+        params = {"AUTH": "", "EXCD": excd, "SYMB": stock_code}
+        try:
+            res = session.get(f"{base_url}/uapi/overseas-price/v1/quotations/price", headers=headers, params=params, verify=False)
+            if res.json().get('rt_cd') == '0' and float(str(res.json().get('output', {}).get('last', '0')).strip() or 0) > 0:
+                config.update_cache_and_save(stock_code, excd)
+                return excd
+        except: pass
+    return None
+

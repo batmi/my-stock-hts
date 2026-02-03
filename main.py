@@ -1,0 +1,204 @@
+# main.py
+#!/usr/bin/env python3
+import sys
+import time
+from datetime import datetime
+from rich.prompt import Prompt
+from rich.table import Table
+from rich import box
+import config
+import api
+import utils  
+from modules import market, analysis, chart, account, manage, trading
+
+def show_help():
+    config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
+    table = Table(title="지수 및 종목 상태별 색상 조건", box=box.SIMPLE_HEAD)
+    table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
+    table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
+    table.add_row("52주 고점대비", "등락률 > -3.0%", "[red]빨간색[/]", "신고가 근접 (초강세)")
+    table.add_row("", "등락률 < -20.0%", "[blue]파란색[/]", "침체/약세장 진입")
+    table.add_row("", "-3.0% ~ -20.0%", "[white]흰색[/]", "일반 조정/중립")
+    table.add_section()
+    table.add_row("WTI 원유", "가격 ≥ 120", "[magenta]보라색[/]", "에너지 위기 수준")
+    table.add_row("", "100 ≤ 가격 < 120", "[red]빨간색[/]", "인플레 강한 압력")
+    table.add_row("", "80 ≤ 가격 < 100", "[orange3]주황색[/]", "부담 있지만 정상")
+    table.add_row("", "60 ≤ 가격 < 80", "[green]초록색[/]", "이상적인 안정 구간")
+    table.add_row("", "40 ≤ 가격 < 60", "[yellow]노란색[/]", "경기 둔화 우려")
+    table.add_row("", "가격 < 40", "[blue]파란색[/]", "경기 침체 신호")
+    table.add_section()
+    table.add_row("천연가스", "가격 ≥ 10", "[magenta]보라색[/]", "에너지 위기")
+    table.add_row("", "6 ≤ 가격 < 10", "[red]빨간색[/]", "강한 비용 압력")
+    table.add_row("", "4 ≤ 가격 < 6", "[orange3]주황색[/]", "부담")
+    table.add_row("", "2.5 ≤ 가격 < 4", "[green]초록색[/]", "안정")
+    table.add_row("", "1.5 ≤ 가격 < 2.5", "[yellow]노란색[/]", "수요 둔화")
+    table.add_row("", "가격 < 1.5", "[blue]파란색[/]", "경기 침체")
+    table.add_section()
+    table.add_row("밀", "가격 ≥ 900", "[magenta]보라색[/]", "글로벌 식량 위기")
+    table.add_row("", "750 ≤ 가격 < 900", "[red]빨간색[/]", "식량 인플레 심각")
+    table.add_row("", "650 ≤ 가격 < 750", "[orange3]주황색[/]", "물가 부담")
+    table.add_row("", "500 ≤ 가격 < 650", "[green]초록색[/]", "균형 구간")
+    table.add_row("", "400 ≤ 가격 < 500", "[yellow]노란색[/]", "수요 둔화/공급 과잉")
+    table.add_row("", "가격 < 400", "[blue]파란색[/]", "디플레/농업  침체")
+    table.add_section()
+    table.add_row("달러 인덱스", "지수 ≥ 120", "[magenta]보라색[/]", "극단적 강세 (위기 가능성)")
+    table.add_row("", "110 ≤ 지수 < 120", "[red]빨간색[/]", "매우 강함")
+    table.add_row("", "100 ≤ 지수 < 110", "[orange3]주황색[/]", "강세 구간")
+    table.add_row("", "90 ≤ 지수 < 100", "[green]초록색[/]", "중립")
+    table.add_row("", "80 ≤ 지수 < 90", "[yellow]노란색[/]", "약세")
+    table.add_row("", "지수 < 80", "[blue]파란색[/]", "매우 약함")
+    table.add_section()
+    table.add_row("달러 환율", "환율 ≥ 1600원", "[magenta]보라색[/]", "시스템 위기 (외환·금융 복합 위기)")
+    table.add_row("", "1500 ≤ 환율 < 1600", "[red]빨간색[/]", "위기 구간 (정책 개입 불가피)")
+    table.add_row("", "1400 ≤ 환율 < 1500", "[orange3]주황색[/]", "구조적 고환율 (국가 부담 심화)")
+    table.add_row("", "1300 ≤ 환율 < 1400", "[yellow]노란색[/]", "강달러 뉴노멀 상단")
+    table.add_row("", "1200 ≤ 환율 < 1300", "[green]초록색[/]", "뉴노멀 중립 구간")
+    table.add_row("", "1100 ≤ 환율 < 1200", "[cyan]청록색[/]", "원화 강세 (비정상적 안정)")
+    table.add_row("", "환율 < 1100", "[blue]파란색[/]", "초강세 원화 (일시적/정책성)")
+    table.add_section()
+    table.add_row("VIX 변동성 지수", "지수 ≤ 20", "[green]초록색[/]", "안정")
+    table.add_row("", "20 < 지수 < 30", "[white]흰색[/]", "중립")
+    table.add_row("", "30 ≤ 지수 < 40", "[yellow]노란색[/]", "주의")
+    table.add_row("", "40 ≤ 지수 < 50", "[orange3]주황색[/]", "경계")
+    table.add_row("", "지수 ≥ 50", "[red]빨간색[/]", "위험")
+    table.add_section()
+    table.add_row("SOX 반도체 지수", "낙폭 > -5.0%", "[red]빨간색[/]", "초강세 (신고가 근접)")
+    table.add_row("", "-15.0% < 낙폭 ≤ -10.0%", "[orange3]주황색[/]", "주의 (단기 추세 이탈)")
+    table.add_row("", "-20.0% ≤ 낙폭 ≤ -15.0%", "[yellow]노란색[/]", "경계 (기술적 조정 진입)")
+    table.add_row("", "낙폭 < -25.0%", "[blue]파란색[/]", "침체 (기술적 하락장)")                
+    table.add_section()
+    table.add_row("등락폭/등락률", "상승 (> 0)", "[red]빨간색[/]", "")
+    table.add_row("", "하락 (< 0)", "[blue]파란색[/]", "")
+    table.add_row("", "보합 (== 0)", "[white]흰색[/]", "")
+    table.add_section()
+    table.add_row("종목명 색상", "이평선 정배열 & ADX ≥ 40 & RSI ≥ 70 & CCI ≥ 100", "[magenta]보라색[/]", "과열/하락 반전 주의")
+    table.add_row("", "이평선 정배열 & 현재가 > 5일선 & ADX ≥ 30 & RSI ≥ 55 & CCI ≥ 100", "[red]빨간색[/]", "강력한 상승 추세")
+    table.add_row("", "이평선 역배열 & 현재가 > 5일선 & ADX ≥ 20 & RSI ≥ 45 & CCI ≥ 0", "[orange3]주황색[/]", "바닥권 상승 반전 시도")
+    table.add_row("", "이평선 20선 > 60선 > 5선 & ADX ≥ 30 & RSI ≤ 30 & CCI ≤ 100", "[blue]파란색[/]", "하락 심화/매도 우위")
+    table.add_section()
+    table.add_row("종목 분류", "추세+타이밍+모멘텀 적절", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    table.add_row("", "추세 시작 단계", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
+    table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
+    table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
+    table.add_row("", "장기추세 붕괴 및 과열", "[blue]위험[/]", "적극 매도/손절 고려")
+    table.add_section()
+    table.add_row("현재가 (이평선)", "[정배열] 현재가 > 5일선", "[red]빨간색[/]", "강세 지속")
+    table.add_row("", "[정배열] 현재가 < 5일 or 20일선", "[dim]회색[/]", "약세 조정")
+    table.add_row("", "[정배열] 현재가 < 60일선", "[blue]파란색[/]", "약세 지속 (붕괴)")
+    table.add_row("", "[역배열] 현재가 < 5일선", "[blue]파란색[/]", "약세 지속")
+    table.add_row("", "[역배열] 현재가 > 20/60일선", "[orange3]주황색[/]", "강세 전환")
+    table.add_row("", "[역배열] 현재가 > 5일선", "[white]흰색[/]", "강세 조정 (반등)")
+    table.add_row("", "[혼조세] 5일선이 20~60선 사이 & 현재가>20선", "[orange3]주황색[/]", "강세 전환")
+    table.add_row("", "[혼조세] 5일선이 20~60선 사이 & 현재가<20선", "[white]흰색[/]", "강세 조정")
+    table.add_row("", "[혼조세] 현재가 < 5일선", "[blue]파란색[/]", "약세 지속")
+    table.add_section()
+    table.add_row("EMA 5일선", "5일선 > 20, 60, 120일선 (정배열)", "[green]초록색[/]", "강세 (가장 높음)")
+    table.add_row("", "5일선이 20일선과 60일선 사이", "[yellow]노란색[/]", "경계")
+    table.add_row("", "5일선이 60일선과 120일선 사이", "[orange3]주황색[/]", "주의")
+    table.add_row("", "5일선 < 20, 60, 120일선 (역배열)", "[red]빨간색[/]", "약세 (가장 낮음)")
+    table.add_section()
+    table.add_row("EMA 20일선", "20일선 > 60, 120일선", "[green]초록색[/]", "골든크로스")
+    table.add_row("", "20일선이 60일선과 120일선 사이", "[yellow]노란색[/]", "크로스 경계")
+    table.add_row("", "20일선 < 60, 120일선", "[red]빨간색[/]", "데드크로스")
+    table.add_section()
+    table.add_row("EMA 60일선", "120선 > 60선 > 5, 20선", "[red]빨간색[/]", "역배열")
+    table.add_row("", "120선 < 60선 < 5, 20선", "[green]초록색[/]", "정배열")
+    table.add_row("", "이 외", "[yellow]노란색[/]", "혼조세")
+    table.add_section()
+    table.add_row("EMA 120일선", "60일선 > 120일선 (정배열)", "[green]초록색[/]", "중장기 상승 추세 (지지)")
+    table.add_row("", "60일선 < 120일선 (역배열)", "[red]빨간색[/]", "중장기 하락 추세 (저항)")
+    table.add_section()
+    table.add_row("파라볼릭 SAR", "주가 > SAR (SAR이 주가 아래)", "[red]빨간색[/]", "상승 추세 (매수/보유)")
+    table.add_row("", "주가 < SAR (SAR이 주가 위)", "[blue]파란색[/]", "하락 추세 (매도/청산)")
+    table.add_row("", "", "", "")
+    table.add_row("", "SAR 는 추세가 끝났는지 아닌지 빠르게 알려주는 지표", "", "추세 유지/종료 판단용")
+    table.add_row("", "SAR 전환 발생 + 종가 기준 EMA60 이탈 + RSI 60 이상", "", "추세 종료 확정")
+    table.add_row("", "SAR 상승 중 + EMA60 위 + RSI 50~65", "", "보유")
+    table.add_row("", "SAR 하향 전환 +  EMA60 유지 + RSI 55 ", "", "관망")
+    table.add_row("", "SAR 하향 전환 +  EMA60 종가 이탈 + RSI 65 이상", "", "정리")
+    table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
+    table.add_section()
+    table.add_row("RSI", "RSI ≥ 70", "[magenta]보라색[/]", "과열 (추격금지)")
+    table.add_row("", "55 ≤ RSI < 70", "[red]빨간색[/]", "강세 유지 구간")
+    table.add_row("", "40 ~ 50 부근", "강세조정구간", "SAR 전환시 눌림후 재상승 가능성/분할매수")
+    table.add_row("", "RSI 30 이하", "과매도구간", "SAR 전환시 단기반등 시그널/신규매수금지")
+    table.add_section()
+    table.add_row("ADX", "0 ~ 15 미만", "[white]흰색[/]", "추세 없음 (횡보/박스권)")
+    table.add_row("", "15 ~ 20 미만", "[yellow]노란색[/]", "추세 형성 중 (CCI 방향 확인)")
+    table.add_row("", "20 ~ 30 미만", "[orange3]주황색[/]", "안정적 추세 (매매 최적)")
+    table.add_row("", "30 ~ 40 미만", "[red]빨간색[/]", "강한 추세 (과열 주의)")
+    table.add_row("", "40 이상", "[magenta]보라색[/]", "과열 (조정 주의)")
+    table.add_section()
+    table.add_row("CCI", "CCI ≥ 100", "[red]빨간색[/]", "과열 (추격 금물)")
+    table.add_row("", "0 < CCI < 100", "[orange3]주황색[/]", "상승 방향시 (추세 매매)")
+    table.add_row("", "-100 < CCI < 0", "[yellow]노란색[/]", "상승 방향시 (반등 시도)")
+    table.add_row("", "CCI ≤ -100", "[blue]파란색[/]", "과매도 (저점 탐색)")
+    table.add_section()
+    table.add_row("52주 위치", "90% 이상", "[red]빨간색[/]", "신고가 근접/초강세")
+    table.add_row("", "80% 이상", "[orange3]주황색[/]", "상승세 우위")
+    table.add_row("", "50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
+    table.add_row("", "30% 이하", "[blue]파란색[/]", "신저가 근접/침체")
+    table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
+    table.add_section()
+    table.add_row("투자자 동향", "순매수 (> 0)", "[red]빨간색[/]", "매수 우위")
+    table.add_row("(개인/외인/기관)", "순매도 (< 0)", "[blue]파란색[/]", "매도 우위")
+    table.add_section()
+    table.add_row("평가손익", "수익 (> 0)", "[red]빨간색[/]", "")
+    table.add_row("", "손실 (< 0)", "[blue]파란색[/]", "")
+    config.console.print(table)
+
+def main():
+    # 1. 환경 설정 로드
+    config.initialize_environment()
+    
+    # 2. 종목 데이터 로드
+    config.load_stock_config()
+    
+    # 3. 토큰 발급 (초기 실행 시 모드에 따라 즉시 발급)
+    if config.IS_SIMULATION:
+        api.get_access_token()
+    else:
+        api.get_real_access_token()
+
+    last_choice = "1"
+    while True:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
+        env_color = "green" if config.IS_SIMULATION else "bold red"
+        print("\n" + "="*50)
+        config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
+        print("="*50)
+        config.console.print("[1] 시장 지수 조회"); config.console.print("[2] 종목 시세 분석")
+        config.console.print("[3] 종목 차트 분석"); config.console.print("[4] 보유 잔고 및 자산 조회")
+        config.console.print("[5] 종목 검색 및 추가"); config.console.print("[6] 종목 삭제")
+        config.console.print("[7] [red]매수[/red] 주문"); config.console.print("[8] [blue]매도[/blue] 주문")
+        config.console.print("[9] [magenta]정정/취소[/magenta] 주문"); config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
+        print("-" * 50); config.console.print()
+        try:
+            choice = Prompt.ask("선택 ", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+            if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break
+            
+            if choice.lower() == "h": 
+                show_help()
+                continue
+                
+            last_choice = choice
+            if choice == "1": market.show_market_indices()
+            elif choice == "2": analysis.show_stock_analysis()
+            elif choice == "3": 
+                code, name, is_ovs = utils.select_stock_for_chart()
+                if code: chart.generate_visual_chart(code, name, is_ovs)
+            elif choice == "4": 
+                account.get_account_balance()
+                account.get_deposit_balance() 
+            elif choice == "5": manage.get_current_price() 
+            elif choice == "6": manage.delete_stock()
+            elif choice == "7": trading.send_order("buy")
+            elif choice == "8": trading.send_order("sell")
+            elif choice == "9": trading.modify_order()
+        except KeyboardInterrupt: config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]"); break
+        except Exception as e:
+            config.console.print(f"\n[bold red]치명적인 오류 발생: {e}[/bold red]")
+
+if __name__ == "__main__":
+    main()

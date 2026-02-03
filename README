@@ -1,0 +1,20 @@
+# 파일 구조
+stock_project/
+├── config.py           # 설정, 환경변수, 데이터 로드
+├── api.py              # 모든 서버 통신 (기간별 시세 조회 포함)
+├── indicators.py       # 보조지표 계산 (ADX, RSI, 파라볼릭 등)
+├── utils.py            # 종목 선택 공통 함수
+├── main.py             # 메인 실행 (도움말 포함)
+├── stock.json          # 주식 종목 정보
+├── token_cache.json    # KIS API 토근 관리
+└── modules/            # 기능 모듈 폴더
+    ├── __init__.py     # (빈 파일)
+    ├── market.py       # [1] 시장 지수
+    ├── analysis.py     # [2] 종목 시세 분석
+    ├── chart.py        # [3] 종목 차트 분석 (Matplotlib)
+    ├── account.py      # [4] 계좌 잔고 조회
+    ├── manage.py       # [5,6] 종목 조회/추가/삭제
+    └── trading.py      # [7,8,9] 매수/매도/정정/취소 주문
+
+# 설치 필요 라이브러리
+pip3 install requests pandas yfinance ta rich matplotlib numpy beautifulsoup4

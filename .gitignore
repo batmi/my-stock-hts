@@ -1,0 +1,14 @@
+# Python 관련
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# 시스템 및 설정 관련
+.DS_Store
+token_cache.json
+analysis_*.png
+
+# run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.
+#run.sh
