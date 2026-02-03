@@ -1,5 +1,5 @@
 # 파일 구조
-stock_project/
+my_stock_hts/
 ├── config.py           # 설정, 환경변수, 데이터 로드
 ├── api.py              # 모든 서버 통신 (기간별 시세 조회 포함)
 ├── indicators.py       # 보조지표 계산 (ADX, RSI, 파라볼릭 등)
