@@ -8,32 +8,42 @@ import config
 import api
 import indicators
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]"
     is_severe_danger = False
-    if ema120 is not None and price < ema120: is_severe_danger = True
-    elif rsi <= 20: is_severe_danger = True
-    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_severe_danger = True
+    # [수정] 위험 조건 완화: 장기(120)와 중기(60) 이평선을 모두 이탈해야 '위험'으로 간주 (변동성 감소)
+    if ema120 is not None and price < ema120 and price < ema60: is_severe_danger = True
+    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): is_severe_danger = True # 위험 기준은 하한선보다 더 낮게 설정 (예: 20)
+    # [수정] ADX 과열 중 RSI 하락은 '위험'보다는 '주의'로 이동
     if is_severe_danger: return "위험", "[blue]"
+    
     is_caution = False
-    if price < ema60: is_caution = True
+    # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 중 하나라도 해당되면 '주의' (완충 구간)
+    if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
     elif sar > price: is_caution = True
-    elif rsi >= 80 or rsi <= 30: is_caution = True
+    elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
+    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
     if is_caution: return "주의", "[yellow]"
+    
     score = 0
     if ema20 is not None and price > ema20: score += 1
     if ema20 is not None and ema60 is not None and ema20 > ema60: score += 1
     if ema60 is not None and ema120 is not None and ema60 > ema120: score += 1
     if sar < price: score += 1
-    if 40 <= rsi <= 55: score += 2
-    elif (55 < rsi <= 65) or (30 <= rsi < 40): score += 1
+    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): score += 2
+    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): score += 1
     if adx is not None:
-        if 20 <= adx <= 30: score += 1
+        # [수정] 보수적 접근: ADX 25 이상일 때만 +1점 (중복 점수 제거)
         if adx >= 25: score += 1
     if cci is not None:
         if cci > 0: score += 1
-        if cci > 100: score += 1
-    if score >= 8: return "매수", "[red]"
+        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: score += 1
+    
+    # [추가] OBV가 이동평균선(설정값) 위에 있으면 수급 양호 (+1점)
+    if obv_trend: score += 1
+
+    # [수정] 매수 기준 상향 (8 -> 9) 및 RSI 과열 방지 (60 미만일 때만 매수)
+    if score >= 9 and rsi < 60: return "매수", "[red]"
     elif score >= 6: return "상승", "[orange3]"
     else: return "관망", "[white]"
 
@@ -70,7 +80,7 @@ def print_table(title, data_list, is_overseas=False):
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
         if use_investor_data: table.add_column("개인/외인/기관", justify="center")
-        else: table.add_column("OBV", justify="right", style="dim")
+        else: table.add_column("OBV", justify="right")
     else:
         table.add_column("52주", justify="right")
         if is_us_stock:
@@ -177,7 +187,7 @@ def print_table(title, data_list, is_overseas=False):
                 try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
-            class_name, class_color = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'])
+            class_name, class_color = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'))
             
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
@@ -201,29 +211,29 @@ def print_table(title, data_list, is_overseas=False):
 
             ema_5_color = "[white]"
             if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
-                if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[green]"
-                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[red]"
+                if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[red]"
+                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[blue]"
                 elif (ind['ema_20'] < ind['ema_5'] < ind['ema_60']) or (ind['ema_60'] < ind['ema_5'] < ind['ema_20']): ema_5_color = "[yellow]"
                 elif (ind['ema_60'] < ind['ema_5'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_5'] < ind['ema_60']): ema_5_color = "[orange3]"
             ema_5_str = f"{ema_5_color}{fmt_idx(ind['ema_5'])}[/]"
 
             ema_20_color = "[white]"
             if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
-                if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[green]"
-                elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[red]"
+                if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[red]"
+                elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[blue]"
                 elif (ind['ema_60'] < ind['ema_20'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_20'] < ind['ema_60']): ema_20_color = "[yellow]"
             ema_20_str = f"{ema_20_color}{fmt_idx(ind['ema_20'])}[/]"
 
             ema_60_color = "[yellow]"
             if ind['ema_60'] and ind['ema_5'] and ind['ema_20'] and ind['ema_120']:
-                if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[red]"
-                elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[green]"
+                if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[blue]"
+                elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[red]"
             ema_60_str = f"{ema_60_color}{fmt_idx(ind['ema_60'])}[/]"
             
             ema_120_color = "[white]"
             if ind['ema_120'] and ind['ema_60']:
-                if ind['ema_60'] > ind['ema_120']: ema_120_color = "[green]" 
-                elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[red]"
+                if ind['ema_60'] > ind['ema_120']: ema_120_color = "[red]" 
+                elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
             ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
 
             sar_str = "-"
@@ -233,10 +243,10 @@ def print_table(title, data_list, is_overseas=False):
 
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             if ind['rsi'] is not None:
-                if ind['rsi'] >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
-                elif 55 <= ind['rsi'] < 70: rsi_str = f"[red]{rsi_str}[/]"
+                if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                elif 55 <= ind['rsi'] < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
                 elif 45 <= ind['rsi'] < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                elif 30 < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
                 else: rsi_str = f"[blue]{rsi_str}[/]"
 
             adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
@@ -249,9 +259,9 @@ def print_table(title, data_list, is_overseas=False):
 
             cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             if ind['cci'] is not None:
-                if ind['cci'] >= 100: cci_str = f"[red]{cci_str}[/]"
-                elif 0 < ind['cci'] < 100: cci_str = f"[orange3]{cci_str}[/]"
-                elif -100 < ind['cci'] <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                if ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                elif 0 < ind['cci'] < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                elif config.INDICATOR_PARAMS["CCI_LOWER"] < ind['cci'] <= 0: cci_str = f"[yellow]{cci_str}[/]"
                 else: cci_str = f"[blue]{cci_str}[/]"
 
             final_name_str = name
@@ -259,16 +269,17 @@ def print_table(title, data_list, is_overseas=False):
                 all_ema_green = (ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60'])
                 all_ema_red = (ind['ema_5'] < ind['ema_20'] and ind['ema_20'] < ind['ema_60'])
                 price_above_ema5 = (curr > ind['ema_5'])
-                if ind['adx'] >= 40 and ind['rsi'] >= 70 and ind['cci'] >= 100: final_name_str = f"[magenta]{name}[/]"
-                elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= 100: final_name_str = f"[red]{name}[/]"
+                if ind['adx'] >= 40 and ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
+                elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
                 elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
-                elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= 30 and ind['cci'] <= 100: final_name_str = f"[blue]{name}[/]"
+                elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
 
             row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, sar_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
                 row_data.append(w52_pos_str)
                 if not is_domestic_etf: row_data.append(foreign_rate_str)
-                row_data.append(inv_str if use_investor_data else f"{int(ind['obv']/1000):,}K")
+                obv_display = f"{'[red]' if ind.get('obv_trend') else '[blue]'}{int(ind['obv']/1000):,}K[/]"
+                row_data.append(inv_str if use_investor_data else obv_display)
             else:
                 row_data.append(w52_pos_str)
                 if is_us_stock: row_data.extend([per_str, pbr_str])
@@ -276,6 +287,7 @@ def print_table(title, data_list, is_overseas=False):
             table.add_row(*row_data)
         else:
             table.add_row(name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11)))
+
     config.console.print(table)
 
 def show_stock_analysis():
@@ -328,4 +340,3 @@ def show_stock_analysis():
                 config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
                 break
     except KeyboardInterrupt: config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
-

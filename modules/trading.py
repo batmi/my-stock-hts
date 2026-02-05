@@ -19,6 +19,7 @@ def select_stock_from_balance():
     config.console.print("\n[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
     config.console.print("[1] 국내 주식 잔고")
     config.console.print("[2] 해외 주식 잔고")
+    config.console.print()
     market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     
     if market_choice == 'q':
@@ -160,6 +161,156 @@ def select_stock_from_balance():
         return None, None, False, None
 
 
+# =========================================================================
+# [공통] 미체결 내역 조회 및 출력 함수 (재사용)
+# =========================================================================
+def _get_domestic_open_orders():
+    tr_id = utils.get_tr_id("domestic", "inquiry", "open_orders")
+    if config.IS_SIMULATION:
+        url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        dt_str = datetime.now().strftime("%Y%m%d")
+        params = {
+            "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+            "INQR_STRT_DT": dt_str, "INQR_END_DT": dt_str,
+            "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00",
+            "PDNO": "", "CCLD_DVSN": "02",
+            "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
+            "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
+        }
+    else:
+        url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        params = {
+            "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
+            "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
+        }
+
+    headers = utils.get_common_headers(tr_id)
+    try:
+        res = api.session.get(url, headers=headers, params=params, verify=False)
+        data = res.json()
+        if data.get('rt_cd') == '0':
+            return data.get('output1', []) if config.IS_SIMULATION else data.get('output', [])
+    except: pass
+    return []
+
+def _get_us_open_orders():
+    tr_id = utils.get_tr_id("overseas", "inquiry", "open_orders")
+    url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/inquire-nccs"
+    headers = utils.get_common_headers(tr_id)
+    
+    all_orders = []
+    target_exchanges = ["NASD", "NYSE", "AMEX"] if config.IS_SIMULATION else ["NASD"]
+    
+    for exc in target_exchanges:
+        params = {
+            "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+            "OVRS_EXCG_CD": exc, "SORT_SQN": "DS", 
+            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
+        }
+        try:
+            res = api.session.get(url, headers=headers, params=params, verify=False)
+            data = res.json()
+            if data.get('rt_cd') == '0':
+                orders = data.get('output', [])
+                if orders:
+                    for o in orders:
+                        if not o.get('ovrs_excg_cd'): o['ovrs_excg_cd'] = exc
+                    all_orders.extend(orders)
+        except: pass
+    return all_orders
+
+def show_open_orders():
+    """미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
+    with config.console.status("[bold green]미체결 내역 조회 중...[/]"):
+        dom_orders = _get_domestic_open_orders()
+        us_orders = _get_us_open_orders()
+    
+    if not dom_orders and not us_orders:
+        config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
+        return []
+
+    table = Table(box=box.SIMPLE_HEAD)
+    table.add_column("No", justify="right")
+    table.add_column("국가", justify="center")
+    table.add_column("주문시간", justify="center")
+    table.add_column("주문번호")
+    table.add_column("종목명(코드)")
+    table.add_column("구분", justify="center")
+    table.add_column("주문수량", justify="right")
+    table.add_column("주문단가", justify="right")
+    table.add_column("현재가", justify="right", style="bold")
+    table.add_column("잔량", justify="right")
+
+    selectable_orders = []
+    
+    # --- [A] 국내 주문 처리 ---
+    for order in dom_orders:
+        rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
+        if api.safe_int(rmn_qty) <= 0: continue
+        
+        order['_origin'] = 'KR'
+        selectable_orders.append(order)
+        idx = len(selectable_orders)
+        
+        sll_buy = order.get('sll_buy_dvsn_cd_name', '').strip()
+        if not sll_buy:
+            cd = order.get('sll_buy_dvsn_cd', '')
+            sll_buy = "매도" if cd == '01' else ("매수" if cd == '02' else cd)
+        
+        sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
+        
+        cur_price_str = "-"
+        if order.get('pdno'):
+            cp_res = api.get_current_price_data(order.get('pdno'), False)
+            if cp_res.get('rt_cd') == '0':
+                cur_price_str = f"{api.safe_int(cp_res['output']['stck_prpr']):,}원"
+        
+        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
+        ord_tmd = order.get('ord_tmd', '')
+        ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
+
+        table.add_row(str(idx), "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+
+    # --- [B] 해외 주문 처리 ---
+    for order in us_orders:
+        rmn_qty = order.get('nccs_qty', '0')
+        if float(rmn_qty) <= 0: continue
+
+        order['_origin'] = 'US'
+        selectable_orders.append(order)
+        idx = len(selectable_orders)
+
+        sll_buy_code = order.get('sll_buy_dvsn_cd')
+        sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
+        sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
+
+        ord_unpr = 0.0
+        for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
+            if order.get(key) and float(order.get(key)) > 0:
+                ord_unpr = float(order.get(key))
+                break
+        
+        cur_price_str = "-"
+        if order.get('pdno'):
+            cp_res = api.get_current_price_data(order.get('pdno'), True)
+            if cp_res.get('rt_cd') == '0':
+                cur_price_str = f"${float(cp_res['output'].get('last',0)):,.2f}"
+
+        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
+        ord_dt = order.get('ord_dt', '')
+        ord_tmd = order.get('ord_tmd', '')
+        ord_time = "-"
+        if len(ord_tmd) == 6:
+            t_str = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+            ord_time = f"{ord_dt[4:6]}/{ord_dt[6:]} {t_str}" if len(ord_dt) == 8 else t_str
+
+        table.add_row(str(idx), "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
+
+    config.console.print(table)
+    return selectable_orders
+
+
 def send_order(order_type):
     # 1. 타이틀 출력
     title_color = 'red' if order_type == 'buy' else 'blue'
@@ -229,11 +380,27 @@ def send_order(order_type):
         price = price.replace(',', '')
 
         display_price = "시장가(0)" if price == "0" else f"{int(price):,}원"
+        
+        # 주문 총액 계산 (시장가는 현재가 기준 예상)
+        calc_price = int(price) if price != "0" else curr_price
+        
+        # [보정] 시장가 주문인데 현재가가 0인 경우(초기 조회 실패 등), 재조회 시도
+        if price == "0" and calc_price == 0:
+            try:
+                retry_res = api.get_current_price_data(stock_code, is_overseas=False)
+                if retry_res.get('rt_cd') == '0':
+                    calc_price = int(retry_res['output']['stck_prpr'])
+            except: pass
+            
+        total_amt = int(qty) * calc_price
+        amt_str = f"{total_amt:,}원" + (" (예상)" if price == "0" else "")
+
         confirm_msg = (
             f"\n[bold white on {title_color}] [ 국내 {title_text} 주문 최종 확인 ] [/]\n"
-            f" 종목: [bold]{stock_code}[/bold]\n"
+            f" 종목: [bold]{stock_name} ({stock_code})[/bold]\n"
             f" 수량: [bold]{qty}주[/bold]\n"
             f" 단가: [bold]{display_price}[/bold]\n"
+            f" 총액: [bold]{amt_str}[/bold]\n"
         )
         config.console.print(Panel(confirm_msg, expand=False))
         
@@ -241,16 +408,23 @@ def send_order(order_type):
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
             return
 
-        tr_id = ("VTTC0802U" if order_type == 'buy' else "VTTC0801U") if config.IS_SIMULATION else ("TTTC0802U" if order_type == 'buy' else "TTTC0801U")
+        tr_id = utils.get_tr_id("domestic", "trade", order_type)
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-cash"
         headers = utils.get_common_headers(tr_id)
         ord_dvsn = "01" if price == "0" else "00"
         data = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": stock_code, "ORD_DVSN": ord_dvsn, "ORD_QTY": str(qty), "ORD_UNPR": str(price)}
         
+        if config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (Order-KR) | URL: {url} | Body: {data}[/dim cyan]")
+
         try:
             res = api.session.post(url, headers=headers, data=json.dumps(data), verify=False)
             result = res.json()
-            if result['rt_cd'] == '0': config.console.print(f"[bold green]주문 성공[/bold green] (번호: {result['output']['ODNO']})")
+            if result['rt_cd'] == '0': 
+                config.console.print(f"[bold green]주문 성공[/bold green] (번호: {result['output']['ODNO']})")
+                # [추가] 주문 후 미체결 내역 자동 조회
+                config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
             else: 
                 msg1 = result.get('msg1', '알 수 없는 오류')
                 config.console.print(f"[bold red]주문 실패: {msg1} (Code: {result.get('msg_cd')})[/bold red]")
@@ -289,8 +463,7 @@ def send_order(order_type):
         if not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
         price = price.replace(',', '')
 
-        if order_type == 'buy': tr_id = "VTTT1002U" if config.IS_SIMULATION else "TTTT1002U"
-        else: tr_id = "VTTT1006U" if config.IS_SIMULATION else "TTTT1006U"
+        tr_id = utils.get_tr_id("overseas", "trade", order_type)
 
         url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/order"
         headers = utils.get_common_headers(tr_id)
@@ -313,11 +486,18 @@ def send_order(order_type):
         else: ord_dvsn = "00"
 
         display_price_type = "(현재가)" if is_market_order else "(지정가)"
+        
+        # 주문 총액 계산 (시장가는 현재가 기준 예상)
+        calc_price = float(price) if price != "0" else curr_price
+        total_amt = int(qty) * calc_price
+        amt_str = f"${total_amt:,.2f}" + (" (예상)" if is_market_order else "")
+
         confirm_msg = (
             f"\n[bold white on {title_color}] [ 해외 {title_text} 주문 최종 확인 ] [/]\n"
-            f" 종목: [bold]{stock_code}[/bold] (거래소: {trade_excd})\n"
+            f" 종목: [bold]{stock_name} ({stock_code})[/bold] (거래소: {trade_excd})\n"
             f" 수량: [bold]{qty}주[/bold]\n"
             f" 단가: [bold]${price} {display_price_type}[/bold]\n"
+            f" 총액: [bold]{amt_str}[/bold]\n"
         )
         config.console.print(Panel(confirm_msg, expand=False))
         
@@ -327,12 +507,18 @@ def send_order(order_type):
 
         data = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": trade_excd, "PDNO": stock_code, "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price), "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn}
         
+        if config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (Order-US) | URL: {url} | Body: {data}[/dim cyan]")
+
         try:
             res = api.session.post(url, headers=headers, data=json.dumps(data), verify=False)
             result = res.json()
             if result['rt_cd'] == '0': 
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
                 config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+                # [추가] 주문 후 미체결 내역 자동 조회
+                config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
             else: 
                 msg1 = result.get('msg1', '알 수 없는 오류')
                 config.console.print(f"[bold red]주문 실패: {msg1} (Code: {result.get('msg_cd')})[/bold red]")
@@ -342,162 +528,10 @@ def modify_order():
     config.console.print("\n[bold magenta]=== 통합 정정/취소 주문 ===[/]")
     config.console.print(f"주문 계좌: [bold]{config.CANO}-{config.ACNT_PRDT_CD}[/bold]")
 
-    # =========================================================================
-    # 1. 국내 미체결 조회 함수
-    # =========================================================================
-    def get_domestic_open_orders():
-        if config.IS_SIMULATION:
-            tr_id = "VTTC8001R" 
-            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-            dt_str = datetime.now().strftime("%Y%m%d")
-            params = {
-                "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
-                "INQR_STRT_DT": dt_str, "INQR_END_DT": dt_str,
-                "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00",
-                "PDNO": "", "CCLD_DVSN": "02",
-                "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
-                "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
-            }
-        else:
-            tr_id = "TTTC8036R"
-            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
-            params = {
-                "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
-                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
-                "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
-            }
+    # [수정] 공통 함수 show_open_orders()를 사용하여 미체결 내역 조회 및 출력
+    selectable_orders = show_open_orders()
 
-        headers = utils.get_common_headers(tr_id)
-        try:
-            res = api.session.get(url, headers=headers, params=params, verify=False)
-            data = res.json()
-            if data.get('rt_cd') == '0':
-                return data.get('output1', []) if config.IS_SIMULATION else data.get('output', [])
-        except: pass
-        return []
-
-    # =========================================================================
-    # 2. 해외 미체결 조회 함수
-    # =========================================================================
-    def get_us_open_orders():
-        tr_id = "VTTS3018R" if config.IS_SIMULATION else "TTTS3018R"
-        url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/inquire-nccs"
-        headers = utils.get_common_headers(tr_id)
-        
-        all_orders = []
-        target_exchanges = ["NASD", "NYSE", "AMEX"] if config.IS_SIMULATION else ["NASD"]
-        
-        for exc in target_exchanges:
-            params = {
-                "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
-                "OVRS_EXCG_CD": exc, "SORT_SQN": "DS", 
-                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
-            }
-            try:
-                res = api.session.get(url, headers=headers, params=params, verify=False)
-                data = res.json()
-                if data.get('rt_cd') == '0':
-                    orders = data.get('output', [])
-                    if orders:
-                        for o in orders:
-                            if not o.get('ovrs_excg_cd'): o['ovrs_excg_cd'] = exc
-                        all_orders.extend(orders)
-            except: pass
-        return all_orders
-
-    # =========================================================================
-    # 3. 통합 조회 및 테이블 출력
-    # =========================================================================
-    with config.console.status("[bold green]국내 및 해외 미체결 내역 통합 조회 중...[/]"):
-        dom_orders = get_domestic_open_orders()
-        us_orders = get_us_open_orders()
-    
-    if not dom_orders and not us_orders:
-        config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
-        return
-
-    table = Table(box=box.SIMPLE_HEAD)
-    table.add_column("No", justify="right")
-    table.add_column("국가", justify="center")
-    table.add_column("주문번호")
-    table.add_column("종목명(코드)")  # 헤더 유지
-    table.add_column("구분", justify="center")
-    table.add_column("주문수량", justify="right")
-    table.add_column("주문단가", justify="right")
-    table.add_column("현재가", justify="right", style="bold")
-    table.add_column("잔량", justify="right")
-
-    selectable_orders = []
-    
-    # --- [A] 국내 주문 처리 ---
-    for order in dom_orders:
-        rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
-        if api.safe_int(rmn_qty) <= 0: continue
-        
-        order['_origin'] = 'KR'
-        selectable_orders.append(order)
-        idx = len(selectable_orders)
-        
-        sll_buy = order.get('sll_buy_dvsn_cd_name', '').strip()
-        if not sll_buy:
-            cd = order.get('sll_buy_dvsn_cd', '')
-            sll_buy = "매도" if cd == '01' else ("매수" if cd == '02' else cd)
-        
-        sll_buy_colored = f"[red]{sll_buy}[/]" if sll_buy == "매수" else f"[blue]{sll_buy}[/]"
-        
-        cur_price_str = "-"
-        if order.get('pdno'):
-            cp_res = api.get_current_price_data(order.get('pdno'), False)
-            if cp_res.get('rt_cd') == '0':
-                cur_price_str = f"{api.safe_int(cp_res['output']['stck_prpr']):,}원"
-        
-        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
-
-        table.add_row(
-            str(idx), "[bold]국내[/]", order.get('odno'), 
-            display_name,
-            sll_buy_colored, order.get('ord_qty'), 
-            f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty
-        )
-
-    # --- [B] 해외 주문 처리 ---
-    for order in us_orders:
-        rmn_qty = order.get('nccs_qty', '0')
-        if float(rmn_qty) <= 0: continue
-
-        order['_origin'] = 'US'
-        selectable_orders.append(order)
-        idx = len(selectable_orders)
-
-        sll_buy_code = order.get('sll_buy_dvsn_cd')
-        sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
-        sll_buy_colored = f"[red]{sll_buy}[/]" if sll_buy == "매수" else f"[blue]{sll_buy}[/]"
-
-        ord_unpr = 0.0
-        for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
-            if order.get(key) and float(order.get(key)) > 0:
-                ord_unpr = float(order.get(key))
-                break
-        
-        cur_price_str = "-"
-        if order.get('pdno'):
-            cp_res = api.get_current_price_data(order.get('pdno'), True)
-            if cp_res.get('rt_cd') == '0':
-                cur_price_str = f"${float(cp_res['output'].get('last',0)):,.2f}"
-
-        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
-
-        table.add_row(
-            str(idx), "[bold magenta]해외[/]", order.get('odno'),
-            display_name,
-            sll_buy_colored, order.get('ft_ord_qty', '0'),
-            f"${ord_unpr:,.2f}", cur_price_str, rmn_qty
-        )
-
-    config.console.print(table)
-    
     if not selectable_orders:
-        config.console.print("[yellow]조회된 잔량이 없습니다.[/yellow]")
         return
 
     # =========================================================================
@@ -516,6 +550,7 @@ def modify_order():
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
     config.console.print("[1] 정정 (Modify)")
     config.console.print("[2] 취소 (Cancel)")
+    config.console.print()
     action = Prompt.ask("작업 선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     if action.lower() == 'q': return
 
@@ -544,27 +579,50 @@ def modify_order():
         display_price = "시장가(0)" if price == "0" else f"{int(price):,}원"
         if action == "2": display_price = "(취소 시 미적용)"
 
+        amt_msg = ""
+        if action == "1":
+            calc_price = int(price)
+            if price == "0":
+                try:
+                    cp_res = api.get_current_price_data(target_order.get('pdno'), False)
+                    if cp_res.get('rt_cd') == '0':
+                        calc_price = int(cp_res['output']['stck_prpr'])
+                except: pass
+            if calc_price > 0:
+                total_amt = int(final_qty) * calc_price
+                amt_str = f"{total_amt:,}원" + (" (예상)" if price == "0" else "")
+                amt_msg = f" 총액: [bold]{amt_str}[/bold]\n"
+
         confirm_msg = (
             f"\n[bold white on magenta] [ 국내 주문 {action_name} 최종 확인 ] [/]\n"
             f" 원주문번호: [bold]{org_odno}[/bold]\n"
-            f" 종목: [bold]{target_order.get('prdt_name')}[/bold]\n"
+            f" 종목: [bold]{target_order.get('prdt_name')} ({target_order.get('pdno')})[/bold]\n"
             f" {action_name} 수량: [bold]{final_qty}주[/bold]\n"
             f" {action_name} 단가: [bold]{display_price}[/bold]\n"
+            f"{amt_msg}"
         )
         config.console.print(Panel(confirm_msg, expand=False))
         if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
-        tr_id = "VTTC0803U" if config.IS_SIMULATION else "TTTC0803U"
+        tr_id = utils.get_tr_id("domestic", "modify", "revise") # 정정/취소 동일 TR
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-rvsecncl"
         headers = utils.get_common_headers(tr_id)
         ord_dvsn = "01" if price == "0" else "00"
         qty_all_yn = "Y" if qty == "0" or qty == target_rmn else "N"
         
         data = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_odno, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": rvse_cncl_dvsn_cd, "ORD_QTY": final_qty, "ORD_UNPR": price, "QTY_ALL_ORD_YN": qty_all_yn}
+        
+        if config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (Modify-KR) | URL: {url} | Body: {data}[/dim cyan]")
+
         try:
             res = api.session.post(url, headers=headers, data=json.dumps(data), verify=False)
             res_json = res.json()
-            if res_json['rt_cd'] == '0': config.console.print(f"[bold green]접수 완료 (번호: {res_json['output']['ODNO']})[/]")
+            if res_json['rt_cd'] == '0': 
+                config.console.print(f"[bold green]접수 완료 (번호: {res_json['output']['ODNO']})[/]")
+                # [추가] 정정/취소 후 미체결 내역 자동 조회
+                config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
             else: config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
         except Exception as e: config.console.print(f"[red]에러: {e}[/]")
 
@@ -594,17 +652,27 @@ def modify_order():
         final_qty = target_rmn if qty == "0" else qty
         display_price = f"${price}" if action == "1" else "(취소 시 미적용)"
 
+        amt_msg = ""
+        if action == "1":
+            try:
+                calc_price = float(price)
+                total_amt = float(final_qty) * calc_price
+                amt_str = f"${total_amt:,.2f}"
+                amt_msg = f" 총액: [bold]{amt_str}[/bold]\n"
+            except: pass
+
         confirm_msg = (
             f"\n[bold white on magenta] [ 해외 주문 {action_name} 최종 확인 ] [/]\n"
             f" 원주문번호: [bold]{org_odno}[/bold]\n"
-            f" 종목: [bold]{target_order.get('prdt_name')}[/bold]\n"
+            f" 종목: [bold]{target_order.get('prdt_name')} ({target_order.get('pdno')})[/bold]\n"
             f" {action_name} 수량: [bold]{final_qty}주[/bold]\n"
             f" {action_name} 단가: [bold]{display_price}[/bold]\n"
+            f"{amt_msg}"
         )
         config.console.print(Panel(confirm_msg, expand=False))
         if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
-        tr_id = "VTTT1004U" if config.IS_SIMULATION else "TTTT1004U"
+        tr_id = utils.get_tr_id("overseas", "modify", "revise")
         url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/order-rvsecncl"
         headers = utils.get_common_headers(tr_id)
         
@@ -614,9 +682,17 @@ def modify_order():
             "ORGN_ODNO": org_odno, "RVSE_CNCL_DVSN_CD": rvse_cncl_dvsn_cd, 
             "ORD_QTY": final_qty, "OVRS_ORD_UNPR": price
         }
+        
+        if config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (Modify-US) | URL: {url} | Body: {data}[/dim cyan]")
+
         try:
             res = api.session.post(url, headers=headers, data=json.dumps(data), verify=False)
             res_json = res.json()
-            if res_json['rt_cd'] == '0': config.console.print(f"[bold green]접수 완료 (번호: {res_json.get('output', {}).get('ODNO')})[/]")
+            if res_json['rt_cd'] == '0': 
+                config.console.print(f"[bold green]접수 완료 (번호: {res_json.get('output', {}).get('ODNO')})[/]")
+                # [추가] 정정/취소 후 미체결 내역 자동 조회
+                config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
             else: config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
         except Exception as e: config.console.print(f"[red]에러: {e}[/]")

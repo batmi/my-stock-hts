@@ -2,6 +2,7 @@
 from rich.prompt import Prompt
 import config
 import api
+import constants
 
 def get_common_headers(tr_id):
     return {
@@ -11,6 +12,14 @@ def get_common_headers(tr_id):
         "appSecret": config.APP_SECRET,
         "tr_id": tr_id
     }
+
+def get_tr_id(market, category, action):
+    """constants.TR_ID_CONFIG에서 환경(실전/모의)에 맞는 TR_ID를 반환하는 헬퍼 함수"""
+    env_key = "sim" if config.IS_SIMULATION else "real"
+    try:
+        return constants.TR_ID_CONFIG[market][category][action][env_key]
+    except KeyError:
+        return ""
 
 def select_stock_for_chart():
     config.console.print("\n[bold]분석할 종목 그룹을 선택하세요:[/bold]")
@@ -155,4 +164,3 @@ def select_target_stock():
             code = Prompt.ask("종목코드(티커) 입력").upper()
             return code, code, is_overseas
     return None, None, None
-

@@ -4,6 +4,7 @@ from rich.panel import Panel
 from rich import box
 from datetime import datetime
 import time
+import yfinance as yf
 import config
 import api
 import utils
@@ -12,7 +13,7 @@ import utils
 # [보조 함수 1] 금일 투자 손익 요약 조회
 # -----------------------------------------------------------
 def fetch_today_profit_summary():
-    tr_id = "VTTC8494R" if config.IS_SIMULATION else "TTTC8494R"
+    tr_id = utils.get_tr_id("domestic", "inquiry", "profit")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-period-profit"
     headers = utils.get_common_headers(tr_id)
     today = datetime.now().strftime("%Y%m%d")
@@ -52,7 +53,7 @@ def fetch_today_profit_summary():
 # [보조 함수 2] 금일 체결(매매) 내역 조회 (백업용)
 # -----------------------------------------------------------
 def fetch_today_history():
-    tr_id = "VTTC8001R" if config.IS_SIMULATION else "TTTC8001R"
+    tr_id = utils.get_tr_id("domestic", "inquiry", "history")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
     headers = utils.get_common_headers(tr_id)
     today = datetime.now().strftime("%Y%m%d")
@@ -75,7 +76,7 @@ def fetch_today_history():
 
 def fetch_domestic_balance():
     """국내 주식 잔고 데이터를 조회하여 반환"""
-    tr_id = "VTTC8434R" if config.IS_SIMULATION else "TTTC8434R"
+    tr_id = utils.get_tr_id("domestic", "inquiry", "balance")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
     headers = utils.get_common_headers(tr_id)
     params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
@@ -102,9 +103,9 @@ def fetch_domestic_balance():
 
 def fetch_overseas_balance():
     """해외 주식 잔고 데이터를 조회하여 반환"""
-    ovrs_tr_id = "VTTS3012R" if config.IS_SIMULATION else "TTTS3012R"
+    ovrs_tr_id = utils.get_tr_id("overseas", "inquiry", "balance")
     ovrs_url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/inquire-balance"
-    target_exchanges = ["NASD", "NYSE", "AMEX"] if config.IS_SIMULATION else ["NASD"]
+    target_exchanges = ["NASD", "NYSE", "AMEX"]
     
     all_holdings = []
     
@@ -113,10 +114,21 @@ def fetch_overseas_balance():
         headers = utils.get_common_headers(ovrs_tr_id)
         params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
         
+        if config.DEBUG_LEVEL == "TRACE":
+            config.console.print(f"[dim cyan][TRACE] REQ (KIS:OvrsBal) | Exch: {exc}[/dim cyan]")
+        elif config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (KIS:OvrsBal) | URL: {ovrs_url} | Params: {params}[/dim cyan]")
+
         for retry in range(3):
             try:
                 res = api.session.get(ovrs_url, headers=headers, params=params, verify=False, timeout=10)
                 data = res.json()
+                
+                if config.DEBUG_LEVEL == "TRACE":
+                    config.console.print(f"[dim magenta][TRACE] RES (KIS:OvrsBal) | RT_CD: {data.get('rt_cd')} | Msg: {data.get('msg1')}[/dim magenta]")
+                elif config.DEBUG_LEVEL == "DEBUG":
+                    config.console.print(f"[dim magenta][DEBUG] RES (KIS:OvrsBal) | Body: {data}[/dim magenta]")
+
                 if data['rt_cd'] == '0':
                     output1 = data.get('output1', [])
                     if output1:
@@ -152,6 +164,7 @@ def get_account_balance():
             table.add_column("평가손익", justify="right")
             table.add_column("수익률", justify="right")
             
+            calculated_total_pchs = 0
             for item in output1:
                 name = f"{item['prdt_name']} ({item['pdno']})"
                 qty = int(item['hldg_qty'])
@@ -161,6 +174,7 @@ def get_account_balance():
                 profit = int(item['evlu_pfls_amt'])
                 rate = float(item['evlu_pfls_rt'])
                 pchs_amt = int(qty * buy_price)
+                calculated_total_pchs += pchs_amt
                 
                 p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
                 table.add_row(
@@ -181,6 +195,11 @@ def get_account_balance():
                 tot_evlu = api.safe_int(summary.get('scts_evlu_amt'))
                 tot_profit = api.safe_int(summary.get('evlu_pfls_smtl_amt'))
                 api_tot_pchs = api.safe_int(summary.get('pchs_amt_smtl'))
+                
+                # [보정] API 응답의 총 매입금액이 0인 경우, 개별 종목 합계로 대체
+                if api_tot_pchs == 0 and calculated_total_pchs > 0:
+                    api_tot_pchs = calculated_total_pchs
+
                 total_rate = 0.0
                 if api_tot_pchs > 0:
                     total_rate = (tot_profit / api_tot_pchs) * 100
@@ -266,13 +285,18 @@ def get_deposit_balance():
     # [수정] 여기도 안정성을 위해 진입 대기
     time.sleep(0.5)
     
+    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print("[dim cyan][TRACE] get_deposit_balance() 호출[/dim cyan]")
+    
     summary_data = {
         "withdraw": 0,      "tot_asset": 0,
         "dep_dom": 0,       "dep_ovs": 0,
         "d1_dep": 0,        "d2_dep": 0,
         "sec_buy": 0,       "sec_eval": 0,      "sec_pl": 0,
         "realized_pl": 0,   "total_cost": 0,
-        "buy_today": 0,     "sell_today": 0
+        "buy_today": 0,     "sell_today": 0,
+        "ovrs_eval_krw": 0,
+        "ovrs_pl_krw": 0
     }
     
     # 1. 금일 데이터 조회
@@ -293,7 +317,7 @@ def get_deposit_balance():
         except: pass
 
     # 2. 국내 주식 잔고 및 자산
-    tr_id_balance = "VTTC8434R" if config.IS_SIMULATION else "TTTC8434R"
+    tr_id_balance = utils.get_tr_id("domestic", "inquiry", "balance")
     url_balance = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
     headers_balance = utils.get_common_headers(tr_id_balance)
     params_balance = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
@@ -329,10 +353,64 @@ def get_deposit_balance():
         except Exception as e:
             config.console.print(f"[bold red]자산 현황 조회 오류: {str(e)}[/bold red]")
             pass # [수정] 패스
+            
+        # [추가] 해외 주식 잔고 합산 (원화 환산)
+        try:
+            ovrs_holdings = fetch_overseas_balance()
+            ovrs_buy_usd = 0.0
+            ovrs_eval_usd = 0.0
+            ovrs_pl_usd = 0.0
+            
+            for item in ovrs_holdings:
+                qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+                if qty > 0:
+                    pchs = float(item.get('pchs_avg_pric', 0))
+                    profit = float(item.get('frcr_evlu_pfls_amt', 0))
+                    buy_amt = qty * pchs
+                    eval_amt = buy_amt + profit
+                    
+                    ovrs_buy_usd += buy_amt
+                    ovrs_eval_usd += eval_amt
+                    ovrs_pl_usd += profit
+            
+            exchange_rate = 1430.0 # 기본값 (조회 실패 시 사용)
+            try:
+                if config.DEBUG_LEVEL == "TRACE":
+                    config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: KRW=X[/dim cyan]")
+                elif config.DEBUG_LEVEL == "DEBUG":
+                    config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: KRW=X | Method: fast_info.last_price[/dim cyan]")
+
+                # yfinance를 이용해 실시간 환율 조회 (KRW=X)
+                ticker = yf.Ticker("KRW=X")
+                current_rate = ticker.fast_info.last_price
+                if current_rate and current_rate > 0:
+                    exchange_rate = float(current_rate)
+                    if config.DEBUG_LEVEL == "TRACE":
+                        config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {exchange_rate:.2f}[/dim magenta]")
+                    elif config.DEBUG_LEVEL == "DEBUG":
+                        config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {exchange_rate} | Raw: {current_rate}[/dim magenta]")
+            except Exception as e:
+                if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
+                pass
+            
+            ovrs_eval_krw = int(ovrs_eval_usd * exchange_rate)
+            summary_data['ovrs_eval_krw'] = ovrs_eval_krw
+            ovrs_pl_krw = int(ovrs_pl_usd * exchange_rate)
+            summary_data['ovrs_pl_krw'] = ovrs_pl_krw
+            
+            if config.DEBUG_LEVEL == "DEBUG":
+                config.console.print(f"[dim magenta][DEBUG] CALC (Ovrs->KRW) | USD: Buy={ovrs_buy_usd:.2f}, Eval={ovrs_eval_usd:.2f}, PL={ovrs_pl_usd:.2f} | Rate: {exchange_rate} | KRW: Eval={ovrs_eval_krw}, PL={ovrs_pl_krw}[/dim magenta]")
+            
+            summary_data['sec_buy'] += int(ovrs_buy_usd * exchange_rate)
+            summary_data['sec_eval'] += ovrs_eval_krw
+            summary_data['sec_pl'] += ovrs_pl_krw
+        except Exception as e:
+            pass
 
     # 3. 예수금 조회
+    tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
     if config.IS_SIMULATION:
-        tr_id = "VTTC8908R"
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
         params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
         headers = utils.get_common_headers(tr_id)
@@ -355,7 +433,6 @@ def get_deposit_balance():
             return
     else:
         # 실전투자: 외화 예수금 조회 포함
-        tr_id = "CTRP6548R"
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-account-balance"
         params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "TR_CONT": "", "INQR_DVSN_1": "", "TR_CRCY_CD": "", "PDNO": "", "ORD_UNPR": "", "ORD_QTY": "", "ORD_DVSN": "00", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "BSPR_BF_DT_APLY_YN": "N"}
         headers = utils.get_common_headers(tr_id)
@@ -392,9 +469,14 @@ def get_deposit_balance():
     summary_table.add_row("출금가능금액", f"{summary_data['withdraw']:,}원")
     summary_table.add_row("유가증권매입금액", f"{summary_data['sec_buy']:,}원")
     summary_table.add_row("유가증권평가금액", f"{summary_data['sec_eval']:,}원")
+    if summary_data['ovrs_eval_krw'] > 0:
+        summary_table.add_row("  └ 해외주식(원화)", f"{summary_data['ovrs_eval_krw']:,}원", style="dim")
     
     pl_str = f"{summary_data['sec_pl']:,}원  ({roi:.2f}%)"
     summary_table.add_row("평가손익금액(보유)", f"[{get_color(summary_data['sec_pl'])}]{pl_str}[/]")
+    if summary_data['ovrs_eval_krw'] > 0:
+        ovrs_pl_val = summary_data['ovrs_pl_krw']
+        summary_table.add_row("  └ 해외손익(원화)", f"[{get_color(ovrs_pl_val)}]{ovrs_pl_val:+,}원[/]", style="dim")
 
     summary_table.add_section()
     

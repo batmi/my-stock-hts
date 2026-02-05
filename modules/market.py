@@ -367,26 +367,26 @@ def show_market_indices():
                 # EMA Colors
                 ema5_color = "[white]"
                 if ema5 and ema20 and ema60 and ema120:
-                    if ema5 > ema20 and ema5 > ema60 and ema5 > ema120: ema5_color = "[green]"
-                    elif ema5 < ema20 and ema5 < ema60 and ema5 < ema120: ema5_color = "[red]"
+                    if ema5 > ema20 and ema5 > ema60 and ema5 > ema120: ema5_color = "[red]"
+                    elif ema5 < ema20 and ema5 < ema60 and ema5 < ema120: ema5_color = "[blue]"
                     elif (ema20 < ema5 < ema60) or (ema60 < ema5 < ema20): ema5_color = "[yellow]"
                     elif (ema60 < ema5 < ema120) or (ema120 < ema5 < ema60): ema5_color = "[orange3]"
                 
                 ema20_color = "[white]"
                 if ema20 and ema60 and ema120:
-                    if ema20 > ema60 and ema20 > ema120: ema20_color = "[green]"
-                    elif ema20 < ema60 and ema20 < ema120: ema20_color = "[red]"
+                    if ema20 > ema60 and ema20 > ema120: ema20_color = "[red]"
+                    elif ema20 < ema60 and ema20 < ema120: ema20_color = "[blue]"
                     elif (ema60 < ema20 < ema120) or (ema120 < ema20 < ema60): ema20_color = "[yellow]"
 
                 ema60_color = "[yellow]"
                 if ema60 and ema5 and ema20 and ema120:
-                    if ema120 > ema60 and ema60 > ema5 and ema60 > ema20: ema60_color = "[red]"
-                    elif ema120 < ema60 and ema60 < ema5 and ema60 < ema20: ema60_color = "[green]"
+                    if ema120 > ema60 and ema60 > ema5 and ema60 > ema20: ema60_color = "[blue]"
+                    elif ema120 < ema60 and ema60 < ema5 and ema60 < ema20: ema60_color = "[red]"
 
                 ema120_color = "[white]"
                 if ema120 and ema60:
-                    if ema60 > ema120: ema120_color = "[green]" 
-                    elif ema60 < ema120: ema120_color = "[red]"
+                    if ema60 > ema120: ema120_color = "[red]" 
+                    elif ema60 < ema120: ema120_color = "[blue]"
 
                 sar_str = "-"
                 if val_psar is not None:
@@ -483,4 +483,3 @@ def show_market_indices():
     if missing_tickers:
         targets = ", ".join(missing_tickers)
         config.console.print(f"[dim][yellow] 주의: 일부 지수[{targets}]의 전일 데이터가 누락되어(보정 실패) 등락폭이 정확하지 않습니다.[/yellow][/dim]")
-
