@@ -86,9 +86,7 @@ def get_backtest_data(code, is_overseas, days):
         for t in tickers:
             if config.DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: {t} | Start: {start_str}[/dim cyan]")
-            elif config.DEBUG_LEVEL == "DEBUG":
-                config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: {t} | Start: {start_str} | Method: download[/dim cyan]")
-
+            
             df = yf.download(t, start=start_str, progress=False, threads=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
@@ -102,21 +100,11 @@ def get_backtest_data(code, is_overseas, days):
                 # 날짜 포맷 통일 (YYYYMMDD 문자열)
                 df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if isinstance(x, datetime) else str(x).replace('-', '')[:8])
                 
-                if config.DEBUG_LEVEL == "TRACE":
-                    config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Ticker: {t} | Rows: {len(df)}[/dim magenta]")
-                elif config.DEBUG_LEVEL == "DEBUG":
-                    config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Ticker: {t} | Rows: {len(df)} | Columns: {list(df.columns)}[/dim magenta]")
                 return df
-            else:
-                if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                    config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Ticker: {t} | Empty[/dim magenta]")
     except Exception as e:
-        if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-            config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
+        pass
 
     # 2. KIS API 시도 (Fallback)
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print(f"[dim yellow][TRACE] Fallback to KIS API for {code}[/dim yellow]")
     return api.get_chart_data(code, is_overseas)
 
 def run_backtest():
@@ -135,11 +123,6 @@ def run_backtest():
     
     initial_capital = 10_000_000
     
-    if config.DEBUG_LEVEL == "TRACE":
-        config.console.print(f"[dim cyan][TRACE] START Backtest | Code: {code} | Days: {days}[/dim cyan]")
-    elif config.DEBUG_LEVEL == "DEBUG":
-        config.console.print(f"[dim cyan][DEBUG] START Backtest | Code: {code} | Days: {days} | Capital: {initial_capital}[/dim cyan]")
-
     # 3. 데이터 준비
     with config.console.status(f"[bold green]{name} ({code}) 데이터 분석 중...[/]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
@@ -153,7 +136,7 @@ def run_backtest():
             df = get_backtest_data(code, is_overseas, days)
         finally:
             config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = original_lookback
-            
+
         if df is None or df.empty:
             config.console.print("[red]데이터를 불러올 수 없습니다.[/red]")
             return
@@ -170,11 +153,25 @@ def run_backtest():
         df['OBV_MA'] = df['OBV'].rolling(window=config.INDICATOR_PARAMS["OBV_MA_PERIOD"]).mean()
 
         # 분석 기간 필터링
-        start_idx = len(df) - days if len(df) > days else 0
+        # [수정] 행 개수 기준이 아닌 날짜 기준으로 필터링
+        cutoff_dt = datetime.now() - timedelta(days=days)
+        cutoff_str = cutoff_dt.strftime("%Y%m%d")
+        
+        start_idx = 0
+        mask = df['date'] >= cutoff_str
+        if mask.any():
+            start_idx = mask.idxmax()
+        
         sim_df = df.iloc[start_idx:].copy()
         
-        if len(sim_df) < days:
-            config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 확보된 데이터({len(sim_df)}일)가 적습니다.[/dim yellow]")
+        # [수정] 경고 로직: 실제 기간(일수)과 요청 기간 비교
+        if not sim_df.empty:
+            actual_days = (datetime.strptime(str(sim_df.iloc[-1]['date']), "%Y%m%d") - datetime.strptime(str(sim_df.iloc[0]['date']), "%Y%m%d")).days
+            if actual_days < days * 0.9: # 90% 미만일 때만 경고
+                config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
+                d_start = str(sim_df.iloc[0]['date'])
+                d_start_fmt = f"{d_start[:4]}-{d_start[4:6]}-{d_start[6:]}"
+                config.console.print(f"[dim yellow]      (데이터 시작일: {d_start_fmt} - 신규 상장 종목이거나 과거 데이터가 부족합니다)[/dim yellow]")
         
         # 시뮬레이션 변수
         balance = initial_capital
@@ -186,8 +183,13 @@ def run_backtest():
         max_score_observed = 0
         score_8_count = 0  # 8점 이상 횟수 (아까운 경우)
         
+        # [추가] MDD 및 승률 계산 변수
+        peak_asset = initial_capital
+        mdd = 0.0
+        win_trades = 0
+        loss_trades = 0
+        
         # 시뮬레이션 루프
-        prev_row = None
         # prev_row 초기화: 시뮬레이션 시작 전일 데이터가 있으면 사용
         prev_row = df.iloc[start_idx-1] if start_idx > 0 else None
         
@@ -195,6 +197,12 @@ def run_backtest():
             row = sim_df.iloc[i]
             date = row['date']
             price = row['close']
+            
+            # [추가] 일별 자산 평가 및 MDD 갱신
+            current_asset = balance + (holdings * price)
+            if current_asset > peak_asset: peak_asset = current_asset
+            dd = (current_asset - peak_asset) / peak_asset * 100
+            if dd < mdd: mdd = dd
             
             # 점수 계산
             score = calculate_daily_score(row, prev_row)
@@ -240,6 +248,10 @@ def run_backtest():
                     profit = sell_amt - (holdings * avg_price)
                     profit_rate = (profit / (holdings * avg_price)) * 100
                     
+                    # [추가] 승패 카운트
+                    if profit > 0: win_trades += 1
+                    else: loss_trades += 1
+                    
                     balance += sell_amt
                     holdings = 0
                     avg_price = 0
@@ -268,7 +280,15 @@ def run_backtest():
     
     color = "red" if total_return > 0 else "blue"
     config.console.print(f" 누적 수익률: [{color}]{total_return:+.2f}%[/]")
-    config.console.print(f" 총 매매 횟수: {len(trades)}건")
+    config.console.print()
+    
+    # [수정] 매매 횟수 상세 및 승률/MDD 출력
+    sell_count = win_trades + loss_trades
+    win_rate = (win_trades / sell_count * 100) if sell_count > 0 else 0.0
+    config.console.print(f" 총 매매 횟수: {len(trades)}건 (진입 {len(trades)-sell_count} / 청산 {sell_count})")
+    if sell_count > 0:
+        config.console.print(f" 승률 (Win Rate): {win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
+    config.console.print(f" 최대 낙폭 (MDD): [blue]{mdd:.2f}%[/]")
     
     # [추가] 매매가 없을 경우 진단 정보 출력
     if len(trades) == 0:
@@ -288,7 +308,6 @@ def run_backtest():
             profit_display = f"{p_color}{p_str}[/]" if p_color else p_str
             type_color = "[red]" if "매수" in t['type'] else "[blue]"
             date_str = str(t['date'])
-            if len(date_str) == 8 and date_str.isdigit():
-                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+            if len(date_str) == 8 and date_str.isdigit(): date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
             t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", f"{t['price']:,.0f}", profit_display)
         config.console.print(t_table)

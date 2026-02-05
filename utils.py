@@ -87,7 +87,7 @@ def select_stock_for_chart():
 
         config.console.print(f"\n[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
         config.console.print()
-        if Prompt.ask("이 종목으로 차트 분석을 진행하시겠습니까?", choices=["y", "n"], default="y").lower() == "n":
+        if Prompt.ask("이 종목으로 분석을 진행하시겠습니까?", choices=["y", "n"], default="y").lower() == "n":
             return None, None, None
 
         return code, name, is_overseas
