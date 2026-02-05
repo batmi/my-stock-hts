@@ -42,8 +42,8 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     # [추가] OBV가 이동평균선(설정값) 위에 있으면 수급 양호 (+1점)
     if obv_trend: score += 1
 
-    # [수정] 매수 기준 상향 (8 -> 9) 및 RSI 과열 방지 (60 미만일 때만 매수)
-    if score >= 9 and rsi < 60: return "매수", "[red]"
+    # [수정] 매수 기준 완화 (9 -> 8) 및 RSI 과열 방지 (60 미만일 때만 매수)
+    if score >= 8 and rsi < 60: return "매수", "[red]"
     elif score >= 6: return "상승", "[orange3]"
     else: return "관망", "[white]"
 

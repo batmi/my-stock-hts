@@ -6,10 +6,11 @@ from datetime import datetime
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
+from rich.markup import escape
 import config
 import api
 import utils  
-from modules import market, analysis, chart, account, manage, trading
+from modules import market, analysis, chart, account, manage, trading, backtest
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -87,11 +88,16 @@ def show_help():
     table.add_row("", "이평선 20선 > 60선 > 5선 & ADX ≥ 30 & RSI ≤ 30 & CCI ≤ 100", "[blue]파란색[/]", "하락 심화/매도 우위")
     table.add_section()
 
-    table.add_row("종목 분류", "9점↑ & RSI<60 (보수적)", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    table.add_row("종목 분류", "8점↑ & RSI<60 (보수적)", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     table.add_row("", "6~8점 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
     table.add_row("", "장기추세 붕괴 및 과열", "[blue]위험[/]", "적극 매도/손절 고려")
+    table.add_section()
+
+    table.add_row("매도 규칙 (권장)", "점수 6점 미만 (관망/주의)", "[blue]매도[/]", "추세 이탈 시 전량 매도")
+    table.add_row("", "손실률 -5.0% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
+    table.add_row("", "수익률 +10% or RSI > 70", "[red]익절[/]", "이익 실현 (Take Profit)")
     table.add_section()
 
     table.add_row("현재가 (이평선)", "[정배열] 현재가 > 5일선", "[red]빨간색[/]", "강세 지속")
@@ -212,14 +218,15 @@ def main():
         print("\n" + "="*50)
         config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
         print("="*50)
-        config.console.print("[1] 시장 지수 조회"); config.console.print("[2] 종목 시세 분석")
-        config.console.print("[3] 종목 차트 분석"); config.console.print("[4] 보유 잔고 및 자산 조회")
-        config.console.print("[5] 종목 검색 및 추가"); config.console.print("[6] 종목 삭제")
-        config.console.print("[7] [red]매수[/red] 주문"); config.console.print("[8] [blue]매도[/blue] 주문")
-        config.console.print("[9] [magenta]정정/취소[/magenta] 주문"); config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
+        config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
+        config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
+        config.console.print("[4] 전략 백테스팅"); config.console.print("[5] 종목 검색 및 추가")
+        config.console.print("[6] 종목 삭제"); config.console.print("[7] [red]매수[/red] 주문")
+        config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
+        config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
         print("-" * 50); config.console.print()
         try:
-            choice = Prompt.ask("선택 ", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+            choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
             if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break
             
             if choice.lower() == "h": 
@@ -227,14 +234,15 @@ def main():
                 continue
                 
             last_choice = choice
-            if choice == "1": market.show_market_indices()
+            if choice == "0": 
+                account.get_account_balance()
+                account.get_deposit_balance() 
+            elif choice == "1": market.show_market_indices()
             elif choice == "2": analysis.show_stock_analysis()
             elif choice == "3": 
                 code, name, is_ovs = utils.select_stock_for_chart()
                 if code: chart.generate_visual_chart(code, name, is_ovs)
-            elif choice == "4": 
-                account.get_account_balance()
-                account.get_deposit_balance() 
+            elif choice == "4": backtest.run_backtest()
             elif choice == "5": manage.get_current_price() 
             elif choice == "6": manage.delete_stock()
             elif choice == "7": trading.send_order("buy")
@@ -242,7 +250,7 @@ def main():
             elif choice == "9": trading.modify_order()
         except KeyboardInterrupt: config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]"); break
         except Exception as e:
-            config.console.print(f"\n[bold red]치명적인 오류 발생: {e}[/bold red]")
+            config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
 
 if __name__ == "__main__":
     main()

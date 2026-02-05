@@ -13,7 +13,7 @@ console = Console()
 # OFF   : 로그 출력 없음
 # TRACE : 한 줄 요약 로그 (TPS, URL, 상태코드)
 # DEBUG : 상세 로그 (모든 요청/응답 파라미터 및 데이터 포함)
-DEBUG_LEVEL = "OFF"
+DEBUG_LEVEL = "TRACE"
 
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
