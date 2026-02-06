@@ -1,5 +1,6 @@
 # utils.py
 from rich.prompt import Prompt
+import yfinance as yf
 import config
 import api
 import constants
@@ -20,6 +21,34 @@ def get_tr_id(market, category, action):
         return constants.TR_ID_CONFIG[market][category][action][env_key]
     except KeyError:
         return ""
+
+def get_exchange_rate():
+    """
+    실시간 원/달러 환율을 조회합니다. (yfinance: KRW=X)
+    실패 시 config.DEFAULT_EXCHANGE_RATE를 반환합니다.
+    """
+    rate = config.DEFAULT_EXCHANGE_RATE
+    try:
+        if config.DEBUG_LEVEL == "TRACE":
+            config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: KRW=X[/dim cyan]")
+        elif config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: KRW=X | Method: fast_info.last_price[/dim cyan]")
+
+        ticker = yf.Ticker("KRW=X")
+        current_rate = ticker.fast_info.last_price
+        
+        if current_rate and current_rate > 0:
+            rate = float(current_rate)
+            if config.DEBUG_LEVEL == "TRACE":
+                config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
+            elif config.DEBUG_LEVEL == "DEBUG":
+                config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {current_rate}[/dim magenta]")
+    except Exception as e:
+        if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+            config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
+        pass
+    
+    return rate
 
 def select_stock_for_chart():
     config.console.print("\n[bold]분석할 종목 그룹을 선택하세요:[/bold]")

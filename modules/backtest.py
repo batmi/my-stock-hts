@@ -178,16 +178,26 @@ def run_backtest():
         holdings = 0
         avg_price = 0
         trades = []
+        buy_date = None
         
         # [진단용] 통계 변수
         max_score_observed = 0
         score_8_count = 0  # 8점 이상 횟수 (아까운 경우)
         
+        # Config 설정값 로드
+        buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        rise_score_limit = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+
         # [추가] MDD 및 승률 계산 변수
         peak_asset = initial_capital
         mdd = 0.0
         win_trades = 0
         loss_trades = 0
+        gross_profit = 0
+        gross_loss = 0
+        cum_profit = 0
+        daily_assets = []
         
         # 시뮬레이션 루프
         # prev_row 초기화: 시뮬레이션 시작 전일 데이터가 있으면 사용
@@ -200,6 +210,7 @@ def run_backtest():
             
             # [추가] 일별 자산 평가 및 MDD 갱신
             current_asset = balance + (holdings * price)
+            daily_assets.append(current_asset)
             if current_asset > peak_asset: peak_asset = current_asset
             dd = (current_asset - peak_asset) / peak_asset * 100
             if dd < mdd: mdd = dd
@@ -209,23 +220,24 @@ def run_backtest():
             
             # [진단] 최고 점수 기록
             if score > max_score_observed: max_score_observed = score
-            if score >= 8: score_8_count += 1
+            if score >= buy_score_limit: score_8_count += 1
             
             # 매매 로직
             action = None
             profit_rate = 0.0
             
-            # [매수 조건] 8점 이상 AND RSI < 60 (과열 아님) AND 미보유
+            # [매수 조건] 설정된 점수 이상 AND RSI 과열 미만 AND 미보유
             if holdings == 0:
-                if score >= 8 and row['RSI'] < 60:
+                if score >= buy_score_limit and row['RSI'] < buy_rsi_limit:
                     qty = int(balance / price)
                     if qty > 0:
                         cost = qty * price
                         balance -= cost
                         holdings = qty
                         avg_price = price
+                        buy_date = date
                         action = "매수"
-                        trades.append({"date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, "profit": 0})
+                        trades.append({"date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, "profit": 0, "profit_amt": 0, "days": 0, "score": score, "rsi": row['RSI'], "cum_profit": cum_profit})
             
             # [매도 조건] 보유 중일 때
             elif holdings > 0:
@@ -234,7 +246,7 @@ def run_backtest():
                 is_stop_loss = loss_rate <= -5.0
                 
                 # 2. 점수 하락 (6점 미만)
-                is_score_drop = score < 6
+                is_score_drop = score < rise_score_limit
 
                 # 3. 익절 (Take Profit: +10% or RSI > 70)
                 is_take_profit = loss_rate >= 10.0 or row['RSI'] > 70
@@ -249,15 +261,31 @@ def run_backtest():
                     profit_rate = (profit / (holdings * avg_price)) * 100
                     
                     # [추가] 승패 카운트
-                    if profit > 0: win_trades += 1
-                    else: loss_trades += 1
+                    if profit > 0: 
+                        win_trades += 1
+                        gross_profit += profit
+                    else: 
+                        loss_trades += 1
+                        gross_loss += abs(profit)
+                    
+                    cum_profit += profit
+                    
+                    holding_days = 0
+                    if buy_date:
+                        try:
+                            d1 = datetime.strptime(str(buy_date), "%Y%m%d")
+                            d2 = datetime.strptime(str(date), "%Y%m%d")
+                            holding_days = (d2 - d1).days
+                        except: pass
                     
                     balance += sell_amt
+                    sold_qty = holdings
                     holdings = 0
                     avg_price = 0
+                    buy_date = None
                     action = "매도"
                     reason = "손절" if is_stop_loss else ("익절" if is_take_profit else "점수하락")
-                    trades.append({"date": date, "type": f"매도({reason})", "price": price, "qty": 0, "balance": balance, "profit": profit_rate})
+                    trades.append({"date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, "profit": profit_rate, "profit_amt": profit, "days": holding_days, "score": score, "rsi": row['RSI'], "cum_profit": cum_profit})
             
             prev_row = row
 
@@ -265,43 +293,97 @@ def run_backtest():
     final_asset = balance + (holdings * sim_df.iloc[-1]['close'])
     total_return = (final_asset - initial_capital) / initial_capital * 100
     
-    config.console.print("\n[bold white]--------------------------------------------------[/]")
-    config.console.print(f" [bold cyan]백테스팅 결과 리포트: {name}[/]")
-    config.console.print("[bold white]--------------------------------------------------[/]")
+    # [추가] 샤프 지수 계산 (연율화: 252일 기준)
+    sharpe_ratio = 0.0
+    if len(daily_assets) > 1:
+        returns = pd.Series(daily_assets).pct_change().dropna()
+        if not returns.empty and returns.std() > 0:
+            sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
+
+    # [수정] 결과 리포트를 테이블로 출력
+    config.console.print()
+    summary_table = Table(title=f"백테스팅 결과 리포트: {name}", box=box.HORIZONTALS, show_header=False, border_style="dim")
+    summary_table.add_column("항목", style="bold cyan", justify="left")
+    summary_table.add_column("값", justify="left")
     
     start_date_str = str(sim_df.iloc[0]['date'])
     end_date_str = str(sim_df.iloc[-1]['date'])
     if len(start_date_str) == 8 and start_date_str.isdigit(): start_date_str = f"{start_date_str[:4]}-{start_date_str[4:6]}-{start_date_str[6:]}"
     if len(end_date_str) == 8 and end_date_str.isdigit(): end_date_str = f"{end_date_str[:4]}-{end_date_str[4:6]}-{end_date_str[6:]}"
     
-    config.console.print(f" 기간: {days}일간 ({start_date_str} ~ {end_date_str})")
-    config.console.print(f" 초기 자본금: {initial_capital:,}원")
-    config.console.print(f" 최종 평가액: {int(final_asset):,}원")
+    summary_table.add_row("기간", f"{days}일간 ({start_date_str} ~ {end_date_str})")
+    summary_table.add_row("초기 자본금", f"{initial_capital:,}원")
+    summary_table.add_row("최종 평가액", f"{int(final_asset):,}원")
     
     color = "red" if total_return > 0 else "blue"
-    config.console.print(f" 누적 수익률: [{color}]{total_return:+.2f}%[/]")
-    config.console.print()
+    summary_table.add_row("누적 수익률", f"[{color}]{total_return:+.2f}%[/]")
+    
+    summary_table.add_section()
     
     # [수정] 매매 횟수 상세 및 승률/MDD 출력
     sell_count = win_trades + loss_trades
     win_rate = (win_trades / sell_count * 100) if sell_count > 0 else 0.0
-    config.console.print(f" 총 매매 횟수: {len(trades)}건 (진입 {len(trades)-sell_count} / 청산 {sell_count})")
+    summary_table.add_row("총 매매 횟수", f"{len(trades)}건 (진입 {len(trades)-sell_count} / 청산 {sell_count})")
+    
     if sell_count > 0:
-        config.console.print(f" 승률 (Win Rate): {win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
-    config.console.print(f" 최대 낙폭 (MDD): [blue]{mdd:.2f}%[/]")
+        summary_table.add_row("승률 (Win Rate)", f"{win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
+        
+        # [순서 변경] 평균 수익률 먼저 출력
+        sell_trades = [t for t in trades if t['type'].startswith("매도")]
+        profits = [t['profit'] for t in sell_trades if t['profit'] > 0]
+        losses = [t['profit'] for t in sell_trades if t['profit'] <= 0]
+        
+        avg_profit = sum(profits) / len(profits) if profits else 0.0
+        avg_loss = sum(losses) / len(losses) if losses else 0.0
+        
+        summary_table.add_row("평균 수익률", f"[red]{avg_profit:+.2f}%[/] / 평균 손실률: [blue]{avg_loss:+.2f}%[/]")
+        
+        # [수정] 손익비(Profit Factor) 출력 (설명 추가)
+        pf_str = "Inf"
+        pf_desc = ""
+        if gross_loss > 0:
+            pf = gross_profit / gross_loss
+            if pf >= 2.0: pf_color = "red"; pf_desc = " (매우 훌륭)"
+            elif pf >= 1.5: pf_color = "orange3"; pf_desc = " (우수)"
+            elif pf >= 1.0: pf_color = "green"; pf_desc = " (평범)"
+            else: pf_color = "blue"; pf_desc = " (손실)"
+            pf_str = f"[{pf_color}]{pf:.2f}[/]"
+        elif gross_profit > 0: 
+            pf_str = "[dim]0.00[/]"
+            pf_desc = " (손실 없음)"
+        else: pf_str = "[dim]-[/]"
+        
+        summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 {int(gross_profit):,}원 / 총 손실 {int(gross_loss):,}원)")
+        
+        # [수정] 샤프 지수 출력 (설명 추가)
+        sharpe_desc = ""
+        if sharpe_ratio >= 1.0: sharpe_color = "red"; sharpe_desc = " (매우 우수)"
+        elif sharpe_ratio >= 0.5: sharpe_color = "green"; sharpe_desc = " (양호)"
+        else: sharpe_color = "blue"; sharpe_desc = " (미흡)"
+        summary_table.add_row("샤프 지수 (Sharpe)", f"[{sharpe_color}]{sharpe_ratio:.2f}[/]{sharpe_desc}")
+    
+    mdd_color = "red"
+    mdd_desc = " (위험)"
+    if mdd >= -10: mdd_color = "green"; mdd_desc = " (안정)"
+    elif mdd >= -20: mdd_color = "yellow"; mdd_desc = " (보통)"
+    elif mdd >= -30: mdd_color = "orange3"; mdd_desc = " (주의)"
+    
+    summary_table.add_row("최대 낙폭 (MDD)", f"[{mdd_color}]{mdd:.2f}%[/]{mdd_desc}")
+    
+    config.console.print(summary_table)
     
     # [추가] 매매가 없을 경우 진단 정보 출력
     if len(trades) == 0:
         config.console.print("\n[bold yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/bold yellow]")
-        config.console.print(f"  - 기간 내 최고 점수: [bold]{max_score_observed}점[/bold] (매수 기준: 8점)")
-        config.console.print(f"  - 8점 이상 도달 횟수: {score_8_count}회")
-        config.console.print("  [안내] 현재 설정된 매수 조건(8점 이상 & RSI<60)이 엄격하여 진입 기회가 없었습니다.")
+        config.console.print(f"  - 기간 내 최고 점수: [bold]{max_score_observed}점[/bold] (매수 기준: {buy_score_limit}점)")
+        config.console.print(f"  - {buy_score_limit}점 이상 도달 횟수: {score_8_count}회")
+        config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score_limit}점 이상 & RSI<{buy_rsi_limit})이 엄격하여 진입 기회가 없었습니다.")
         config.console.print("  [Tip] 분석 기간을 늘려보세요.")
     
     if trades:
         config.console.print()
-        t_table = Table(title="[상세 매매 일지]", box=box.SIMPLE)
-        t_table.add_column("일자"); t_table.add_column("구분"); t_table.add_column("단가"); t_table.add_column("수익률")
+        t_table = Table(title="[상세 매매 일지]", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        t_table.add_column("일자"); t_table.add_column("구분"); t_table.add_column("점수(RSI)", justify="center"); t_table.add_column("수량", justify="right"); t_table.add_column("단가", justify="right"); t_table.add_column("수익금", justify="right"); t_table.add_column("수익률", justify="right"); t_table.add_column("누적손익", justify="right")
         for t in trades:
             p_str = f"{t['profit']:+.2f}%" if t['type'].startswith("매도") else "-"
             p_color = "[red]" if t['profit'] > 0 else ("[blue]" if t['profit'] < 0 else "")
@@ -309,5 +391,17 @@ def run_backtest():
             type_color = "[red]" if "매수" in t['type'] else "[blue]"
             date_str = str(t['date'])
             if len(date_str) == 8 and date_str.isdigit(): date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
-            t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", f"{t['price']:,.0f}", profit_display)
+            
+            score_rsi = f"{t.get('score', 0)} ({t.get('rsi', 0):.0f})"
+            
+            qty_str = f"{t['qty']:,}"
+            amt_str = f"{int(t.get('profit_amt', 0)):+,}" if t['type'].startswith("매도") else "-"
+            if t.get('profit_amt', 0) > 0: amt_str = f"[red]{amt_str}[/]"
+            elif t.get('profit_amt', 0) < 0: amt_str = f"[blue]{amt_str}[/]"
+            
+            cum_p_str = f"{int(t.get('cum_profit', 0)):+,}"
+            if t.get('cum_profit', 0) > 0: cum_p_str = f"[red]{cum_p_str}[/]"
+            elif t.get('cum_profit', 0) < 0: cum_p_str = f"[blue]{cum_p_str}[/]"
+            
+            t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", score_rsi, qty_str, f"{t['price']:,.0f}", amt_str, profit_display, cum_p_str)
         config.console.print(t_table)

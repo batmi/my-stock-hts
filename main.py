@@ -14,7 +14,7 @@ from modules import market, analysis, chart, account, manage, trading, backtest
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
-    table = Table(title="지수 및 종목 상태별 색상 조건", box=box.SIMPLE_HEAD)
+    table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
 
@@ -93,7 +93,7 @@ def show_help():
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
     table.add_row("", "장기추세 붕괴 및 과열", "[blue]위험[/]", "적극 매도/손절 고려")
-    table.add_section()
+    table.add_row("", "", "", "")
 
     table.add_row("매도 규칙 (권장)", "점수 6점 미만 (관망/주의)", "[blue]매도[/]", "추세 이탈 시 전량 매도")
     table.add_row("", "손실률 -5.0% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
@@ -195,6 +195,23 @@ def show_help():
     table.add_row("(개인/외인/기관)", "순매도 (< 0)", "[blue]파란색[/]", "매도 우위")
     table.add_section()
 
+    table.add_row("MDD (최대 낙폭)", "0% ~ -10%", "[green]초록색[/]", "매우 안정적 (방어력 우수)")
+    table.add_row("", "-10% ~ -20%", "[yellow]노란색[/]", "일반적인 주식 투자 수준")
+    table.add_row("", "-20% ~ -30%", "[orange3]주황색[/]", "주의 (높은 변동성)")
+    table.add_row("", "-30% 이하", "[red]빨간색[/]", "고위험 (큰 하락 감내 필요)")
+    table.add_section()
+
+    table.add_row("손익비 (Profit Factor)", "2.0 이상", "[red]빨간색[/]", "매우 훌륭한 전략")
+    table.add_row("", "1.5 ~ 2.0 미만", "[orange3]주황색[/]", "우수한 전략")
+    table.add_row("", "1.0 ~ 1.5 미만", "[green]초록색[/]", "수익 전략 (평범)")
+    table.add_row("", "1.0 미만", "[blue]파란색[/]", "손실 전략 (개선 필요)")
+    table.add_section()
+
+    table.add_row("샤프 지수 (Sharpe)", "1.0 이상", "[red]빨간색[/]", "매우 우수 (위험 대비 수익 높음)")
+    table.add_row("", "0.5 ~ 1.0", "[green]초록색[/]", "양호")
+    table.add_row("", "0.5 미만", "[blue]파란색[/]", "위험 대비 수익 낮음")
+    table.add_section()
+
     config.console.print(table)
 
 def main():
@@ -215,16 +232,16 @@ def main():
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
         env_color = "green" if config.IS_SIMULATION else "bold red"
-        print("\n" + "="*50)
+        print("\n" + "━"*50)
         config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-        print("="*50)
+        print("━"*50)
         config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
         config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
         config.console.print("[4] 전략 백테스팅"); config.console.print("[5] 종목 검색 및 추가")
         config.console.print("[6] 종목 삭제"); config.console.print("[7] [red]매수[/red] 주문")
         config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
         config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
-        print("-" * 50); config.console.print()
+        print("─" * 50); config.console.print()
         try:
             choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
             if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break

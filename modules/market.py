@@ -114,7 +114,7 @@ def show_market_indices():
         yf_tickers = yf.Tickers(" ".join(all_tickers_list))
 
         # [이동] 테이블 생성 및 데이터 처리 로직을 status 블록 안으로 이동
-        table = Table(title="지수 기술적 분석", box=box.SIMPLE, show_header=True, header_style="bold white")
+        table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table.add_column("지수명", justify="left", style="white")
         table.add_column("지수", justify="right")
         table.add_column("등락폭 (등락률)", justify="right")

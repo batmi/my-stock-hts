@@ -16,24 +16,66 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
     if not is_overseas:
         if basic_output:
-            table = Table(title="[국내주식] 상세 정보 (전체)", box=box.SIMPLE, show_header=True, header_style="bold yellow")
-            table.add_column("항목", justify="left", style="white")
+            config.console.print()
+            # [수정] 전체 정보 출력 + 그룹화 + 줄무늬 스타일 적용
+            table = Table(title="[국내주식] 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", row_styles=["", "dim"])
+            table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
-            table.add_column("항목", justify="left", style="white")
+            table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
-            items = []
-            for k, v in basic_output.items(): items.append((k, v))
-            for i in range(0, len(items), 2):
-                k1, v1 = items[i]
-                label1 = constants.FIELD_MAP_DOMESTIC.get(k1, k1)
-                k2, v2 = items[i+1] if i+1 < len(items) else ("", "")
-                label2 = constants.FIELD_MAP_DOMESTIC.get(k2, k2) if k2 else ""
-                def fmt(v, label):
-                    s = str(v).strip()
-                    if label.endswith("일자") and len(s) == 8 and s.isdigit(): return f"{s[:4]}/{s[4:6]}/{s[6:]}"
-                    if s.replace('-','').isdigit(): return f"{int(s):,}"
-                    return s
-                table.add_row(label1, fmt(v1, label1), label2, fmt(v2, label2) if k2 else "")
+            
+            # 그룹 정의 (논리적 순서)
+            groups = [
+                # 1. 기본/상태
+                ["rprs_mrkt_kor_name", "bstp_kor_isnm", "iscd_stat_cls_code", "stck_shrn_iscd", "stac_month", "lstn_stcn", "cpfn", "stck_fcam"],
+                # 2. 가격 정보
+                ["stck_prpr", "prdy_vrss", "prdy_ctrt", "stck_oprc", "stck_hgpr", "stck_lwpr", "stck_mxpr", "stck_llam", "stck_sdpr"],
+                # 3. 거래/수급
+                ["acml_vol", "acml_tr_pbmn", "prdy_vrss_vol_rate", "vol_tnrt", "hts_frgn_ehrt", "frgn_ntby_qty", "pgtr_ntby_qty", "whol_loan_rmnd_rate"],
+                # 4. 투자지표
+                ["hts_avls", "per", "pbr", "eps", "bps", "d250_hgpr", "d250_lwpr", "w52_hgpr", "w52_lwpr"]
+            ]
+
+            def _fmt(v, label):
+                s = str(v).strip()
+                if label.endswith("일자") and len(s) == 8 and s.isdigit(): return f"{s[:4]}/{s[4:6]}/{s[6:]}"
+                if s.replace('-','').isdigit(): return f"{int(s):,}"
+                return s
+
+            # 전체 키 추적용
+            processed_keys = set()
+            
+            # (1) 그룹별 출력
+            for group_keys in groups:
+                items = []
+                for k in group_keys:
+                    if k in basic_output:
+                        items.append((k, basic_output[k]))
+                        processed_keys.add(k)
+                
+                if items:
+                    for i in range(0, len(items), 2):
+                        k1, v1 = items[i]
+                        label1 = constants.FIELD_MAP_DOMESTIC.get(k1, k1)
+                        k2, v2 = items[i+1] if i+1 < len(items) else ("", "")
+                        label2 = constants.FIELD_MAP_DOMESTIC.get(k2, k2) if k2 else ""
+                        table.add_row(label1, _fmt(v1, label1), label2, _fmt(v2, label2) if k2 else "")
+                    table.add_section()
+
+            # (2) 나머지(기타) 출력
+            remaining = []
+            for k, v in basic_output.items():
+                if k not in processed_keys:
+                    remaining.append((k, v))
+            
+            if remaining:
+                for i in range(0, len(remaining), 2):
+                    k1, v1 = remaining[i]
+                    label1 = constants.FIELD_MAP_DOMESTIC.get(k1, k1)
+                    k2, v2 = remaining[i+1] if i+1 < len(remaining) else ("", "")
+                    label2 = constants.FIELD_MAP_DOMESTIC.get(k2, k2) if k2 else ""
+                    table.add_row(label1, _fmt(v1, label1), label2, _fmt(v2, label2) if k2 else "")
+
             config.console.print(table)
 
         # [수정] 국내 주식 기간별 시세 출력 (역순 정렬 적용)
@@ -45,7 +87,8 @@ def show_extended_info(code, is_overseas, basic_output=None):
              config.console.print(f"[dim magenta][DEBUG] 국내 기간별 시세 수신: {cnt}건[/dim magenta]")
 
         if daily_list:
-            table_d = Table(title="[국내주식] 기간별 시세 (최근 10일)", box=box.SIMPLE, show_header=True)
+            config.console.print()
+            table_d = Table(title="[국내주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
             table_d.add_column("대비", justify="right")
@@ -81,27 +124,64 @@ def show_extended_info(code, is_overseas, basic_output=None):
         excd = config.EXCHANGE_CACHE.get(code, "NAS")
         detail_data = api.fetch_overseas_detail_price(code, excd)
         if detail_data:
-            table = Table(title="[해외주식] 현재가 상세 정보 (전체)", box=box.SIMPLE, show_header=True, header_style="bold yellow")
-            table.add_column("항목", justify="left", style="white")
+            config.console.print()
+            table = Table(title="[해외주식] 현재가 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", row_styles=["", "dim"])
+            table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
-            table.add_column("항목", justify="left", style="white")
+            table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
-            items = []
-            for k, v in detail_data.items(): items.append((k, v))
-            for i in range(0, len(items), 2):
-                k1, v1 = items[i]
-                label1 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k1, k1)
-                k2, v2 = items[i+1] if i+1 < len(items) else ("", "")
-                label2 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k2, k2) if k2 else ""
-                def fmt(v, label):
-                    s = str(v).strip()
-                    if label.endswith("일자") and len(s) == 8 and s.isdigit(): return f"{s[:4]}/{s[4:6]}/{s[6:]}"
-                    try:
-                        if s.replace('-','').isdigit(): return f"{int(s):,}"
-                        if s.replace('.','',1).replace('-','').isdigit(): return f"{float(s):,.2f}"
-                    except: pass
-                    return s
-                table.add_row(label1, fmt(v1, label1), label2, fmt(v2, label2) if k2 else "")
+            
+            groups = [
+                # 1. 기본
+                ["rsym", "ovrs_nm", "excd", "curr", "zdiv", "vnit", "e_ordyn", "e_icod"],
+                # 2. 가격
+                ["last", "diff", "rate", "open", "high", "low", "base", "uplp", "dnlp"],
+                # 3. 거래/재무
+                ["tvol", "tamt", "tomv", "mcap", "shar", "perx", "pbrx", "epsx", "bpsx"],
+                # 4. 52주
+                ["h52p", "l52p", "h52d", "l52d"],
+                # 5. 원화 환산
+                ["t_xprc", "t_xdif", "t_xrat", "t_rate"]
+            ]
+
+            def _fmt(v, label):
+                s = str(v).strip()
+                if label.endswith("일자") and len(s) == 8 and s.isdigit(): return f"{s[:4]}/{s[4:6]}/{s[6:]}"
+                try:
+                    if s.replace('-','').isdigit(): return f"{int(s):,}"
+                    if s.replace('.','',1).replace('-','').isdigit(): return f"{float(s):,.2f}"
+                except: pass
+                return s
+
+            processed_keys = set()
+            for group_keys in groups:
+                items = []
+                for k in group_keys:
+                    if k in detail_data:
+                        items.append((k, detail_data[k]))
+                        processed_keys.add(k)
+                
+                if items:
+                    for i in range(0, len(items), 2):
+                        k1, v1 = items[i]
+                        label1 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k1, k1)
+                        k2, v2 = items[i+1] if i+1 < len(items) else ("", "")
+                        label2 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k2, k2) if k2 else ""
+                        table.add_row(label1, _fmt(v1, label1), label2, _fmt(v2, label2) if k2 else "")
+                    table.add_section()
+
+            remaining = []
+            for k, v in detail_data.items():
+                if k not in processed_keys: remaining.append((k, v))
+            
+            if remaining:
+                for i in range(0, len(remaining), 2):
+                    k1, v1 = remaining[i]
+                    label1 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k1, k1)
+                    k2, v2 = remaining[i+1] if i+1 < len(remaining) else ("", "")
+                    label2 = constants.FIELD_MAP_OVERSEAS_DETAIL.get(k2, k2) if k2 else ""
+                    table.add_row(label1, _fmt(v1, label1), label2, _fmt(v2, label2) if k2 else "")
+
             config.console.print(table)
         
         daily_df = api.fetch_overseas_period_price(code, excd)
@@ -112,7 +192,8 @@ def show_extended_info(code, is_overseas, basic_output=None):
             config.console.print(f"[dim magenta][DEBUG] 해외 기간별 시세 수신: {cnt}건[/dim magenta]")
             
         if daily_df is not None and not daily_df.empty:
-            table_d = Table(title="[해외주식] 기간별 시세 (최근 10일)", box=box.SIMPLE, show_header=True)
+            config.console.print()
+            table_d = Table(title="[해외주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
             table_d.add_column("대비", justify="right")

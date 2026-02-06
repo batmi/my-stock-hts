@@ -4,7 +4,6 @@ from rich.panel import Panel
 from rich import box
 from datetime import datetime
 import time
-import yfinance as yf
 import config
 import api
 import utils
@@ -154,7 +153,7 @@ def get_account_balance():
         output1, summary = fetch_domestic_balance()
         
         if output1:
-            table = Table(title=f"\n[cyan][국내] 계좌 잔고 현황[/]", box=box.SIMPLE, show_header=True, header_style="bold white")
+            table = Table(title=f"\n[cyan][국내] 계좌 잔고 현황[/]", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table.add_column("종목명", justify="left")
             table.add_column("보유수량", justify="right")
             table.add_column("매입단가", justify="right")
@@ -205,7 +204,7 @@ def get_account_balance():
                     total_rate = (tot_profit / api_tot_pchs) * 100
                 
                 profit_color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
-                config.console.print(f"[bold]국내 총 평가금액:[/bold] {tot_evlu:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {tot_evlu:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
             config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]\n")
 
@@ -220,7 +219,7 @@ def get_account_balance():
     if not all_overseas_holdings:
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
     else:
-        table_ovrs = Table(title=f"\n[magenta][해외] 계좌 잔고 현황[/] ", box=box.SIMPLE, show_header=True, header_style="bold white")
+        table_ovrs = Table(title=f"\n[magenta][해외] 계좌 잔고 현황[/] ", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table_ovrs.add_column("종목명(코드)", justify="left")
         table_ovrs.add_column("거래소", justify="center")
         table_ovrs.add_column("보유수량", justify="right")
@@ -277,7 +276,7 @@ def get_account_balance():
                 total_ovrs_rate = (tot_ovrs_profit / tot_ovrs_pchs) * 100
                 
             profit_color = "[red]" if tot_ovrs_profit > 0 else ("[blue]" if tot_ovrs_profit < 0 else "[white]")
-            config.console.print(f"[bold]해외 총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+            config.console.print(f"[bold]  해외 총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
         else:
             config.console.print("[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
 
@@ -373,26 +372,7 @@ def get_deposit_balance():
                     ovrs_eval_usd += eval_amt
                     ovrs_pl_usd += profit
             
-            exchange_rate = 1430.0 # 기본값 (조회 실패 시 사용)
-            try:
-                if config.DEBUG_LEVEL == "TRACE":
-                    config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: KRW=X[/dim cyan]")
-                elif config.DEBUG_LEVEL == "DEBUG":
-                    config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: KRW=X | Method: fast_info.last_price[/dim cyan]")
-
-                # yfinance를 이용해 실시간 환율 조회 (KRW=X)
-                ticker = yf.Ticker("KRW=X")
-                current_rate = ticker.fast_info.last_price
-                if current_rate and current_rate > 0:
-                    exchange_rate = float(current_rate)
-                    if config.DEBUG_LEVEL == "TRACE":
-                        config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {exchange_rate:.2f}[/dim magenta]")
-                    elif config.DEBUG_LEVEL == "DEBUG":
-                        config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {exchange_rate} | Raw: {current_rate}[/dim magenta]")
-            except Exception as e:
-                if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                    config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
-                pass
+            exchange_rate = utils.get_exchange_rate()
             
             ovrs_eval_krw = int(ovrs_eval_usd * exchange_rate)
             summary_data['ovrs_eval_krw'] = ovrs_eval_krw
@@ -455,7 +435,7 @@ def get_deposit_balance():
     
     def get_color(val): return "red" if val > 0 else ("blue" if val < 0 else "white")
 
-    summary_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2), expand=True)
+    summary_table = Table(box=box.HORIZONTALS, show_header=False, padding=(0, 2), expand=True, border_style="dim", show_edge=False)
     summary_table.add_column("Item", justify="left", style="white", ratio=6) 
     summary_table.add_column("Value", justify="right", style="white", ratio=4)
 
@@ -490,7 +470,7 @@ def get_deposit_balance():
         title="계좌 자산 현황 요약",
         subtitle=f"[dim]업데이트: {datetime.now().strftime('%H:%M:%S')}[/]",
         subtitle_align="right",
-        width=65,
+        width=75,
         border_style="green"
     )
 

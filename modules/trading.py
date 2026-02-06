@@ -95,7 +95,7 @@ def select_stock_from_balance():
         return None, None, False, None
 
     title = f"\n[{'해외' if is_overseas else '국내'}] 매도 가능 종목 리스트"
-    table = Table(title=title, box=box.SIMPLE, show_header=True, header_style="bold white")
+    table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     
     table.add_column("No.", justify="center", style="cyan")
     table.add_column("종목명 (코드)", justify="left")
@@ -230,7 +230,7 @@ def show_open_orders():
         config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
         return []
 
-    table = Table(box=box.SIMPLE_HEAD)
+    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No", justify="right")
     table.add_column("국가", justify="center")
     table.add_column("주문시간", justify="center")

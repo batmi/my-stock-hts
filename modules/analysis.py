@@ -42,9 +42,13 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     # [추가] OBV가 이동평균선(설정값) 위에 있으면 수급 양호 (+1점)
     if obv_trend: score += 1
 
-    # [수정] 매수 기준 완화 (9 -> 8) 및 RSI 과열 방지 (60 미만일 때만 매수)
-    if score >= 8 and rsi < 60: return "매수", "[red]"
-    elif score >= 6: return "상승", "[orange3]"
+    # [수정] config.py의 설정값을 사용하여 상태 판정
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+    buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+
+    if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]"
+    elif score >= rise_score: return "상승", "[orange3]"
     else: return "관망", "[white]"
 
 def print_table(title, data_list, is_overseas=False):
@@ -56,7 +60,7 @@ def print_table(title, data_list, is_overseas=False):
             sample = test_data[0]
             if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
     
-    table = Table(title=f"\n{title}", box=box.SIMPLE, show_header=True, header_style="bold white")
+    table = Table(title=f"\n{title}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
     table.add_column("분류", justify="center") 
@@ -89,7 +93,7 @@ def print_table(title, data_list, is_overseas=False):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    for name, code in data_list:
+    for i, (name, code) in enumerate(data_list):
         curr_data = api.get_current_price_data(code, is_overseas)
         chart_df = api.get_chart_data(code, is_overseas)
         
@@ -287,6 +291,9 @@ def print_table(title, data_list, is_overseas=False):
             table.add_row(*row_data)
         else:
             table.add_row(name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11)))
+        
+        if (i + 1) % 5 == 0:
+            table.add_section()
 
     config.console.print(table)
 
