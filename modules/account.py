@@ -258,7 +258,7 @@ def get_account_balance():
                 color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 
                 table_ovrs.add_row(
-                    f"{name}\n({code})", 
+                    f"{name} ({code})", 
                     exc_name,
                     f"{qty:,.0f}", 
                     f"{pchs_avg:,.2f}",
@@ -470,7 +470,7 @@ def get_deposit_balance():
         title="계좌 자산 현황 요약",
         subtitle=f"[dim]업데이트: {datetime.now().strftime('%H:%M:%S')}[/]",
         subtitle_align="right",
-        width=70,
+        width=75,
         border_style="green"
     )
 
