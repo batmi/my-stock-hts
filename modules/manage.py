@@ -14,6 +14,13 @@ def show_extended_info(code, is_overseas, basic_output=None):
     if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 상세/기간별 시세 정보 조회 요청: {code} (Overseas: {is_overseas})[/dim cyan]")
 
+    def _fmt_vol(v):
+        val = float(v)
+        if val == 0: return "0"
+        if val >= 1_000_000: return f"{val/1_000_000:,.1f}M"
+        if val >= 1_000: return f"{val/1_000:,.0f}K"
+        return f"{val:,.0f}"
+
     if not is_overseas:
         if basic_output:
             config.console.print()
@@ -91,14 +98,14 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d = Table(title="[국내주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
-            table_d.add_column("대비", justify="right")
+            table_d.add_column("등락폭 (등락률)", justify="right")
             table_d.add_column("시가", justify="right")
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
             table_d.add_column("거래량", justify="right")
             
-            # [중요] 최신순 정렬: 뒤에서 10개를 잘라 역순으로
-            recent_data = daily_list[-10:][::-1]
+            # [중요] 최신순 정렬: 앞에서 10개 (최신 데이터)
+            recent_data = daily_list[:10]
             
             for i, item in enumerate(recent_data):
                 date = item.get('stck_bsop_date', '')
@@ -113,9 +120,14 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 high = s_int(item.get('stck_hgpr'))
                 low = s_int(item.get('stck_lwpr'))
                 vol = s_int(item.get('acml_vol'))
+
+                # 등락률 계산
+                prev_close = close - diff
+                rate = 0.0
+                if prev_close != 0: rate = (diff / prev_close) * 100
                 
                 color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                table_d.add_row(f"{date}", f"{close:,}", f"{color}{diff:+}[/]", f"{open_p:,}", f"{high:,}", f"{low:,}", f"{vol:,}")
+                table_d.add_row(f"{date}", f"{close:,}", f"{color}{diff:+} ({rate:+.2f}%)[/]", f"{open_p:,}", f"{high:,}", f"{low:,}", _fmt_vol(vol))
             config.console.print(table_d)
         else:
             config.console.print("[yellow]기간별 시세 데이터가 없습니다.[/yellow]")
@@ -196,7 +208,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d = Table(title="[해외주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
-            table_d.add_column("대비", justify="right")
+            table_d.add_column("등락폭 (등락률)", justify="right")
             table_d.add_column("시가", justify="right")
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
@@ -219,7 +231,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 if sign in ['4', '5'] or rate < 0: diff = -abs(diff)
                 
                 color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                table_d.add_row(f"{date}", f"{close:,.2f}", f"{color}{diff:+.2f}[/]", f"{open_p:,.2f}", f"{high:,.2f}", f"{low:,.2f}", f"{vol:,.0f}")
+                table_d.add_row(f"{date}", f"{close:,.2f}", f"{color}{diff:+.2f} ({rate:+.2f}%)[/]", f"{open_p:,.2f}", f"{high:,.2f}", f"{low:,.2f}", _fmt_vol(vol))
             config.console.print(table_d)
 
 def get_current_price():
@@ -292,7 +304,7 @@ def get_current_price():
                 config.STOCK_CONFIG_DATA[target_list_key].append(new_item)
                 config.save_stock_config(config.STOCK_CONFIG_DATA)
                 config.load_stock_config()
-                config.console.print(f"[green]'{input_name}' 종목이 추가되었습니다.[/green]")
+                config.console.print(f"\n[green]'{input_name}' 종목이 추가되었습니다.[/green]")
             else:
                 config.console.print("\n[yellow]이미 등록된 종목입니다.[/yellow]")
     else:
@@ -342,6 +354,6 @@ def delete_stock():
                 del config.STOCK_CONFIG_DATA[target_key][idx]
                 config.save_stock_config(config.STOCK_CONFIG_DATA)
                 config.load_stock_config()
-                config.console.print(f"[green]삭제되었습니다.[/green]")
-        else: config.console.print("[red]잘못된 번호입니다.[/red]")
-    else: config.console.print("[red]숫자를 입력해주세요.[/red]")
+                config.console.print(f"\n[green]삭제되었습니다.[/green]")
+        else: config.console.print(f"\n[red]잘못된 번호입니다.[/red]")
+    else: config.console.print(f"\n[red]숫자를 입력해주세요.[/red]")
