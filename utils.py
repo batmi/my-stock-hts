@@ -191,5 +191,7 @@ def select_target_stock():
             return all_stocks[c_idx-1][1], all_stocks[c_idx-1][0], is_overseas
         elif c_idx == idx:
             code = Prompt.ask("종목코드(티커) 입력").upper()
-            return code, code, is_overseas
+            name = api.get_stock_name_by_code(code, is_overseas)
+            if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
+            return code, name, is_overseas
     return None, None, None
