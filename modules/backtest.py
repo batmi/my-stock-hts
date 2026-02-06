@@ -115,7 +115,7 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    days_input = Prompt.ask("분석 기간 (일 단위)", default="365")
+    days_input = Prompt.ask("\n분석 기간 (일 단위)", default="365")
     try:
         days = int(days_input)
     except:

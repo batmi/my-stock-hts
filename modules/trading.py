@@ -230,7 +230,7 @@ def show_open_orders():
         config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
         return []
 
-    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table = Table(title="\n미체결 내역", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No", justify="right")
     table.add_column("국가", justify="center")
     table.add_column("주문시간", justify="center")
@@ -371,11 +371,11 @@ def send_order(order_type):
                 config.console.print(f"[blue]보유 잔고: {max_qty}주 매도 가능[/blue]")
             else: config.console.print("[yellow]매도 가능 수량이 0입니다.[/yellow]")
 
-        qty = Prompt.ask("수량(주) [dim](취소: q)[/dim]", default=default_qty)
+        qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
         if qty.lower() == 'q': return
         qty = qty.replace(',', '')
 
-        price = Prompt.ask("단가(원) [dim]0 입력 시 시장가, 취소: q[/dim]", default="0")
+        price = Prompt.ask(f"[{title_color}]{title_text} 단가(원)[/] [dim]0 입력 시 시장가, 취소: q[/dim]", default="0")
         if price.lower() == 'q': return
         price = price.replace(',', '')
 
@@ -404,7 +404,7 @@ def send_order(order_type):
         )
         config.console.print(Panel(confirm_msg, expand=False))
         
-        if Prompt.ask("위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
             return
 
@@ -454,11 +454,11 @@ def send_order(order_type):
                 config.console.print(f"[blue]보유 잔고: {max_qty}주 매도 가능[/blue]")
             else: config.console.print("[yellow]매도 가능 수량이 0입니다.[/yellow]")
 
-        qty = Prompt.ask("수량(주) [dim](취소: q)[/dim]", default=default_qty)
+        qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
         if qty.lower() == 'q': return
         qty = qty.replace(',', '')
 
-        price = Prompt.ask("단가(달러) [dim]0 입력 시 현재가(시장가), 취소: q[/dim]", default="0")
+        price = Prompt.ask(f"[{title_color}]{title_text} 단가(달러)[/] [dim]0 입력 시 현재가(시장가), 취소: q[/dim]", default="0")
         if price.lower() == 'q': return
         if not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
         price = price.replace(',', '')
@@ -501,7 +501,7 @@ def send_order(order_type):
         )
         config.console.print(Panel(confirm_msg, expand=False))
         
-        if Prompt.ask("위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
             return
 
@@ -537,7 +537,7 @@ def modify_order():
     # =========================================================================
     # 4. 선택 및 분기 처리
     # =========================================================================
-    choice = Prompt.ask("선택 번호 [dim](취소: q)[/dim]")
+    choice = Prompt.ask("\n선택 번호 [dim](취소: q)[/dim]")
     if choice.lower() == 'q': return
     
     if not choice.isdigit() or int(choice) < 1 or int(choice) > len(selectable_orders):
@@ -564,13 +564,13 @@ def modify_order():
 
         if action == "1": 
             rvse_cncl_dvsn_cd = "01"
-            qty = Prompt.ask(f"정정 수량 (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+            qty = Prompt.ask(f"\n[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
             if qty.lower() == 'q': return
-            price = Prompt.ask("정정 단가 (0: 시장가) [dim](취소: q)[/dim]", default="0")
+            price = Prompt.ask("[magenta]정정 단가[/] (0: 시장가) [dim](취소: q)[/dim]", default="0")
             if price.lower() == 'q': return
         else: 
             rvse_cncl_dvsn_cd = "02"
-            qty = Prompt.ask(f"취소 수량 (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+            qty = Prompt.ask(f"\n[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
             if qty.lower() == 'q': return
             price = "0"
 
@@ -602,7 +602,7 @@ def modify_order():
             f"{amt_msg}"
         )
         config.console.print(Panel(confirm_msg, expand=False))
-        if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
+        if Prompt.ask("\n진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
         tr_id = utils.get_tr_id("domestic", "modify", "revise") # 정정/취소 동일 TR
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-rvsecncl"
@@ -637,14 +637,14 @@ def modify_order():
 
         if action == "1":
             rvse_cncl_dvsn_cd = "01"
-            qty = Prompt.ask(f"정정 수량 (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+            qty = Prompt.ask(f"[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
             if qty.lower() == 'q': return
-            price = Prompt.ask("정정 단가($) [dim](취소: q)[/dim]")
+            price = Prompt.ask("[magenta]정정 단가($)[/] [dim](취소: q)[/dim]")
             if price.lower() == 'q': return
             if not price: config.console.print("[red]가격 입력 필요[/]"); return
         else:
             rvse_cncl_dvsn_cd = "02"
-            qty = Prompt.ask(f"취소 수량 (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+            qty = Prompt.ask(f"\n[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
             if qty.lower() == 'q': return
             price = "0"
 

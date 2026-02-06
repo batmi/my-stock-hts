@@ -338,7 +338,7 @@ def delete_stock():
         idx = int(del_idx) - 1
         if 0 <= idx < len(target_list):
             item_to_del = target_list[idx]
-            if Prompt.ask(f"정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
+            if Prompt.ask(f"\n정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
                 del config.STOCK_CONFIG_DATA[target_key][idx]
                 config.save_stock_config(config.STOCK_CONFIG_DATA)
                 config.load_stock_config()

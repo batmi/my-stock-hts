@@ -470,7 +470,7 @@ def get_deposit_balance():
         title="계좌 자산 현황 요약",
         subtitle=f"[dim]업데이트: {datetime.now().strftime('%H:%M:%S')}[/]",
         subtitle_align="right",
-        width=75,
+        width=70,
         border_style="green"
     )
 
