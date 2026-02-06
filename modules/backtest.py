@@ -115,7 +115,7 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    days_input = Prompt.ask("\n분석 기간 (일 단위)", default="365")
+    days_input = Prompt.ask("분석 기간 (일 단위)", default="365")
     try:
         days = int(days_input)
     except:
@@ -303,7 +303,7 @@ def run_backtest():
     # [수정] 결과 리포트를 테이블로 출력
     config.console.print()
     summary_table = Table(title=f"백테스팅 결과 리포트: {name}", box=box.HORIZONTALS, show_header=False, border_style="dim")
-    summary_table.add_column("항목", style="bold cyan", justify="left")
+    summary_table.add_column("항목", style="cyan", justify="left")
     summary_table.add_column("값", justify="left")
     
     start_date_str = str(sim_df.iloc[0]['date'])
@@ -353,7 +353,7 @@ def run_backtest():
             pf_desc = " (손실 없음)"
         else: pf_str = "[dim]-[/]"
         
-        summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 {int(gross_profit):,}원 / 총 손실 {int(gross_loss):,}원)")
+        summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 [red]+{int(gross_profit):,}원[/] / 총 손실 [blue]-{int(gross_loss):,}원[/])")
         
         # [수정] 샤프 지수 출력 (설명 추가)
         sharpe_desc = ""

@@ -292,7 +292,7 @@ def print_table(title, data_list, is_overseas=False):
         else:
             table.add_row(name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11)))
         
-        if (i + 1) % 5 == 0:
+        if table.row_count % 5 == 0 and table.row_count < len(data_list):
             table.add_section()
 
     config.console.print(table)

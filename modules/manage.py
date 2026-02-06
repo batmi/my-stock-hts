@@ -18,7 +18,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
         if basic_output:
             config.console.print()
             # [수정] 전체 정보 출력 + 그룹화 + 줄무늬 스타일 적용
-            table = Table(title="[국내주식] 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", row_styles=["", "dim"])
+            table = Table(title="[국내주식] 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
             table.add_column("항목", justify="left", style="cyan")
@@ -100,7 +100,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             # [중요] 최신순 정렬: 뒤에서 10개를 잘라 역순으로
             recent_data = daily_list[-10:][::-1]
             
-            for item in recent_data:
+            for i, item in enumerate(recent_data):
                 date = item.get('stck_bsop_date', '')
                 if len(date) == 8 and date.isdigit(): date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
                 
@@ -125,7 +125,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
         detail_data = api.fetch_overseas_detail_price(code, excd)
         if detail_data:
             config.console.print()
-            table = Table(title="[해외주식] 현재가 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", row_styles=["", "dim"])
+            table = Table(title="[해외주식] 현재가 상세 정보 (전체)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table.add_column("항목", justify="left", style="cyan")
             table.add_column("값", justify="right")
             table.add_column("항목", justify="left", style="cyan")
@@ -204,7 +204,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             
             recent_df = daily_df.tail(10).iloc[::-1]
             
-            for idx, row in recent_df.iterrows():
+            for i, (idx, row) in enumerate(recent_df.iterrows()):
                 date = str(row.get('date', ''))
                 if len(date) == 8 and date.isdigit(): date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
                 close = float(row.get('close', 0))

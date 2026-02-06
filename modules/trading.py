@@ -477,7 +477,10 @@ def send_order(order_type):
         if price == "0":
             is_market_order = True
             if curr_price > 0:
-                price = str(curr_price)
+                if curr_price >= 1.0:
+                    price = f"{curr_price:.2f}"
+                else:
+                    price = f"{curr_price:.4f}"
                 ord_dvsn = "00"
                 config.console.print(f"[yellow]안내: 0(시장가)을 입력하여 현재가(${price}) 기준 지정가로 주문을 접수합니다.[/yellow]")
             else:
@@ -670,7 +673,7 @@ def modify_order():
             f"{amt_msg}"
         )
         config.console.print(Panel(confirm_msg, expand=False))
-        if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
+        if Prompt.ask("\n진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
         tr_id = utils.get_tr_id("overseas", "modify", "revise")
         url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/order-rvsecncl"

@@ -153,7 +153,7 @@ def get_account_balance():
         output1, summary = fetch_domestic_balance()
         
         if output1:
-            table = Table(title=f"\n[cyan][국내] 계좌 잔고 현황[/]", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+            table = Table(title="\n[국내] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table.add_column("종목명", justify="left")
             table.add_column("보유수량", justify="right")
             table.add_column("매입단가", justify="right")
@@ -219,7 +219,7 @@ def get_account_balance():
     if not all_overseas_holdings:
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
     else:
-        table_ovrs = Table(title=f"\n[magenta][해외] 계좌 잔고 현황[/] ", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table_ovrs = Table(title="\n[해외] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table_ovrs.add_column("종목명(코드)", justify="left")
         table_ovrs.add_column("거래소", justify="center")
         table_ovrs.add_column("보유수량", justify="right")
@@ -470,7 +470,7 @@ def get_deposit_balance():
         title="계좌 자산 현황 요약",
         subtitle=f"[dim]업데이트: {datetime.now().strftime('%H:%M:%S')}[/]",
         subtitle_align="right",
-        width=75,
+        width=70,
         border_style="green"
     )
 
