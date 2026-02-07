@@ -163,6 +163,8 @@ stock_project/
 ├── main.py             # 메인 실행 (도움말 포함)
 ├── stock.json          # 주식 종목 정보
 ├── token_cache.json    # KIS API 토근 관리
+├── logs/               # [자동 생성] 시스템 트레이딩 로그 저장소
+│   └── system_trade_YYYY-MM-DD.log
 └── modules/            # 기능 모듈 폴더
     ├── __init__.py     # (빈 파일)
     ├── market.py       # [1] 시장 지수
