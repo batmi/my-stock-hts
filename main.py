@@ -11,6 +11,7 @@ import config
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest
+from modules import auto_trade
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -88,16 +89,11 @@ def show_help():
     table.add_row("", "이평선 20선 > 60선 > 5선 & ADX ≥ 30 & RSI ≤ 30 & CCI ≤ 100", "[blue]파란색[/]", "하락 심화/매도 우위")
     table.add_section()
 
-    table.add_row("종목 분류", "8점↑ & RSI<60 (보수적)", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    table.add_row("종목 분류", "8점 이상 & RSI<60 (보수적)", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     table.add_row("", "6~8점 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
     table.add_row("", "장기추세 붕괴 및 과열", "[blue]위험[/]", "적극 매도/손절 고려")
-    table.add_row("", "", "", "")
-
-    table.add_row("매도 규칙 (권장)", "점수 6점 미만 (관망/주의)", "[blue]매도[/]", "추세 이탈 시 전량 매도")
-    table.add_row("", "손실률 -5.0% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
-    table.add_row("", "수익률 +10% or RSI > 70", "[red]익절[/]", "이익 실현 (Take Profit)")
     table.add_section()
 
     table.add_row("현재가 (이평선)", "[정배열] 현재가 > 5일선", "[red]빨간색[/]", "강세 지속")
@@ -213,6 +209,59 @@ def show_help():
     table.add_section()
 
     config.console.print(table)
+    
+    # [추가] 매수 점수 산정 기준 테이블 (README 내용 반영)
+    config.console.print()
+    score_table = Table(title="매매 전략 가이드 (매수/매도 기준)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    score_table.add_column("구분", style="cyan", justify="center")
+    score_table.add_column("조건", justify="left")
+    score_table.add_column("점수/행동", justify="center", style="red")
+    score_table.add_column("의미", justify="left")
+
+    score_table.add_row("이동평균 점수", "현재가 > 20일선", "+1", "단기 상승세")
+    score_table.add_row("", "20일선 > 60일선", "+1", "정배열 초기/지속")
+    score_table.add_row("", "60일선 > 120일선", "+1", "중장기 정배열")
+    score_table.add_row("","", "", "")
+    score_table.add_row("SAR 점수", "SAR < 현재가 (주가 아래)", "+1", "상승 추세 진행 중")
+    score_table.add_row("","", "", "")
+    score_table.add_row("RSI 점수", "40 ≤ RSI ≤ 55", "+2", "이상적인 매수 구간 (무릎~허리)")
+    score_table.add_row("", "55 < RSI ≤ 65", "+1", "상승 지속 (강세)")
+    score_table.add_row("", "30 ≤ RSI < 40", "+1", "바닥 탈출 시도 (반등)")
+    score_table.add_row("","", "", "")
+    score_table.add_row("ADX 점수", "ADX ≥ 25", "+1", "추세 강도 확보")
+    score_table.add_row("","", "", "")
+    score_table.add_row("CCI 점수", "CCI > 0", "+1", "상승 국면 진입")
+    score_table.add_row("", "CCI > 100", "+1", "강한 상승 탄력 (중복 적용)")
+    score_table.add_row("","", "", "")
+    score_table.add_row("OBV 점수", "OBV > OBV 이동평균", "+1", "수급 양호 (거래량 뒷받침)")
+    
+    # [추가] 필터링 (위험/주의) 섹션
+    score_table.add_section()
+    score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
+    score_table.add_row("필터링 (주의)", "60or120선 이탈, SAR 매도, RSI 80이상/30이하", "[yellow]주의[/]", "신규 진입 자제 (점수 무관)")
+
+    # [추가] 매수 타이밍 섹션
+    score_table.add_section()
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+    buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+
+    score_table.add_row("매수 (진입)", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
+    score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
+
+    # [추가] 매도 규칙 섹션
+    score_table.add_section()
+    sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+    stop_loss = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+
+    score_table.add_row("매도 (추세 이탈)", f"종합 점수 < {sell_score}점", "[blue]매도[/]", "관망/주의 단계 진입 시 청산")
+    score_table.add_row("매도 (손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
+    score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% or RSI > {take_profit_rsi}", "[red]익절[/]", "이익 실현 (Take Profit)")
+    
+    config.console.print(score_table)
 
 def main():
     # 1. 환경 설정 로드
@@ -237,8 +286,13 @@ def main():
         print("━"*50)
         config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
         config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
-        config.console.print("[4] 전략 백테스팅"); config.console.print("[5] 종목 검색 및 추가")
-        config.console.print("[6] 종목 삭제"); config.console.print("[7] [red]매수[/red] 주문")
+        
+        trader_status = ""
+        if auto_trade.AutoTrader().is_running:
+            trader_status = " [bold green](RUNNING)[/]"
+            
+        config.console.print(f"[4] 전략 백테스팅"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
+        config.console.print("[6] 관심 종목 관리"); config.console.print("[7] [red]매수[/red] 주문")
         config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
         config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
         print("─" * 50); config.console.print()
@@ -260,8 +314,8 @@ def main():
                 code, name, is_ovs = utils.select_stock_for_chart()
                 if code: chart.generate_visual_chart(code, name, is_ovs)
             elif choice == "4": backtest.run_backtest()
-            elif choice == "5": manage.get_current_price() 
-            elif choice == "6": manage.delete_stock()
+            elif choice == "5": auto_trade.system_trading_menu() 
+            elif choice == "6": manage.manage_stock_menu()
             elif choice == "7": trading.send_order("buy")
             elif choice == "8": trading.send_order("sell")
             elif choice == "9": trading.modify_order()

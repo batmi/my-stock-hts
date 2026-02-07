@@ -106,8 +106,12 @@ class ThrottledSession(requests.Session):
                         msg_cd = res_json.get('msg_cd')
                         
                         if msg_cd == 'OPSQ2000':
+                            msg = f"서버 동기화 지연 감지(OPSQ2000). {config.RETRY_DELAY_SERVER}초 대기 후 재시도합니다..."
                             if config.DEBUG_LEVEL != "OFF":
-                                config.console.print(f"[bold yellow]서버 동기화 지연 감지(OPSQ2000). {config.RETRY_DELAY_SERVER}초 대기 후 재시도합니다...[/bold yellow]")
+                                config.console.print(f"[bold yellow]{msg}[/bold yellow]")
+                            # [추가] 시스템 트레이딩 로그 기록
+                            if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                            
                             time.sleep(config.RETRY_DELAY_SERVER)
                             response = super().request(method, url, *args, **kwargs)
 
@@ -128,6 +132,20 @@ class ThrottledSession(requests.Session):
                                 else:
                                     kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
                                 response = super().request(method, url, *args, **kwargs)
+                        
+                        # [추가] Rate Limit 초과 (EGW00201) 적응형 재시도
+                        elif msg_cd == 'EGW00201':
+                            if attempt < max_retries:
+                                # Exponential Backoff: 0.5초 -> 1.0초 -> 2.0초 ...
+                                wait_time = 0.5 * (2 ** attempt)
+                                msg = f"초당 전송건수 초과(EGW00201). {wait_time:.1f}초 대기 후 재시도합니다 ({attempt+1}/{max_retries})..."
+                                if config.DEBUG_LEVEL != "OFF":
+                                    config.console.print(f"[bold yellow]{msg}[/bold yellow]")
+                                # [추가] 시스템 트레이딩 로그 기록
+                                if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                                
+                                time.sleep(wait_time)
+                                continue
                 except Exception: pass
                 
                 # 성공 시 시간 기록 후 반환
@@ -145,8 +163,12 @@ class ThrottledSession(requests.Session):
                 # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
                 if is_disconnect and attempt < max_retries:
                     wait_time = 0.5
+                    msg = f"서버 연결 끊김 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
                     if config.DEBUG_LEVEL != "OFF":
-                        config.console.print(f"[dim][yellow][TRACE] 서버 연결 끊김 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})...[/yellow][dim]")
+                        config.console.print(f"[dim][yellow][TRACE] {msg}[/yellow][dim]")
+                    # [추가] 시스템 트레이딩 로그 기록
+                    if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                    
                     time.sleep(wait_time)
                     continue
                 
@@ -325,45 +347,55 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     constants.TR_ID_CONFIG를 사용하여 TR_ID를 자동으로 조회하고 요청을 수행합니다.
     retries: 실패(예외 발생) 시 재시도 횟수. None일 경우 config.MAX_RETRIES 값을 따릅니다.
     """
-    if timeout is None: timeout = config.DEFAULT_TIMEOUT
-    if retries is None: retries = config.MAX_RETRIES
-    
-    token_to_use = get_current_token()
-    base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
-    key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
-    secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+    # [추가] 시스템 트레이딩 우선순위 락 처리
+    # RLock을 사용하여 시스템 트레이딩 스레드는 중복 획득 허용, 메인 스레드는 대기
+    if not config.SYSTEM_TRADING_LOCK.acquire(blocking=False):
+        config.console.print("[bold yellow]시스템 트레이딩 작업 중입니다. 잠시 대기해주세요...[/bold yellow]")
+        config.SYSTEM_TRADING_LOCK.acquire()
+        config.console.print("[bold green]대기 해제. 작업을 재개합니다.[/bold green]")
 
-    env_key = "sim" if config.IS_SIMULATION else "real"
     try:
-        tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
-    except KeyError:
-        return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
+        if timeout is None: timeout = config.DEFAULT_TIMEOUT
+        if retries is None: retries = config.MAX_RETRIES
+        
+        token_to_use = get_current_token()
+        base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
+        key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+        secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
 
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {token_to_use}",
-        "appKey": key,
-        "appSecret": secret,
-        "tr_id": tr_id
-    }
-    
-    full_url = f"{base_url}/{url_path}"
-    
-    last_error = None
-    for attempt in range(retries + 1):
+        env_key = "sim" if config.IS_SIMULATION else "real"
         try:
-            if method == "GET":
-                res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout)
-            else:
-                res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout)
-            return res.json()
-        except Exception as e:
-            last_error = e
-            if attempt < retries:
-                time.sleep(0.5)
-                continue
-    
-    return {'rt_cd': '9999', 'msg1': str(last_error)}
+            tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
+        except KeyError:
+            return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
+
+        headers = {
+            "Content-Type": "application/json",
+            "authorization": f"Bearer {token_to_use}",
+            "appKey": key,
+            "appSecret": secret,
+            "tr_id": tr_id
+        }
+        
+        full_url = f"{base_url}/{url_path}"
+        
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                if method == "GET":
+                    res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout)
+                else:
+                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout)
+                return res.json()
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.5)
+                    continue
+        
+        return {'rt_cd': '9999', 'msg1': str(last_error)}
+    finally:
+        config.SYSTEM_TRADING_LOCK.release()
 
 def get_stock_name_by_code(code, is_overseas):
     final_name = None

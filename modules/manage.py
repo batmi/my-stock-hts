@@ -234,7 +234,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 table_d.add_row(f"{date}", f"{close:,.2f}", f"{color}{diff:+.2f} ({rate:+.2f}%)[/]", f"{open_p:,.2f}", f"{high:,.2f}", f"{low:,.2f}", _fmt_vol(vol))
             config.console.print(table_d)
 
-def get_current_price():
+def get_current_price(mode='add'):
     config.console.print()
     # [로그] 메뉴 진입
     if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -283,6 +283,9 @@ def get_current_price():
             config.console.print(f"\n[bold cyan]종목명: {stock_name}[/bold cyan] [dim]({code})[/dim]")
         except Exception as e:
             config.console.print(f"[red]상세 정보 출력 중 오류: {e}[/red]")
+
+        # [수정] 단순 조회 모드일 경우 여기서 종료
+        if mode == 'simple': return
 
         if Prompt.ask("\n이 종목을 관심 종목 리스트에 추가하시겠습니까?", choices=["y", "n"], default="n") == "y":
             input_name = Prompt.ask("저장할 종목명 입력", default=stock_name)
@@ -357,3 +360,21 @@ def delete_stock():
                 config.console.print(f"\n[green]삭제되었습니다.[/green]")
         else: config.console.print(f"\n[red]잘못된 번호입니다.[/red]")
     else: config.console.print(f"\n[red]숫자를 입력해주세요.[/red]")
+
+def manage_stock_menu():
+    """종목 추가 및 삭제를 통합 관리하는 메뉴"""
+    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] 관심 종목 관리 메뉴 진입[/dim cyan]")
+
+    config.console.print("\n[bold]관심 종목 관리[/bold]")
+    config.console.print("[1] 종목 추가 (검색 후 등록)")
+    config.console.print("[2] 종목 삭제")
+    config.console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    if choice.lower() == 'q': return
+
+    if choice == "1":
+        get_current_price(mode='add')
+    elif choice == "2":
+        delete_stock()

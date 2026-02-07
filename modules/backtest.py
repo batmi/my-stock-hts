@@ -31,43 +31,46 @@ def calculate_daily_score(row, prev_row):
     # Previous RSI for divergence check
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
 
-    # 1. 위험/주의 필터링 (analysis.py 로직)
-    # 위험 (Severe Danger)
-    if ema120 is not None and price < ema120 and price < ema60: return 0
-    if rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): return 0
-    
-    # 주의 (Caution) -> 점수를 0으로 처리하여 매도 유도
-    is_caution = False
-    if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
-    elif sar > price: is_caution = True
-    elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
-    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
-    
-    if is_caution: return 0
-    
-    # 2. 점수 계산
-    score = 0
-    if ema20 is not None and price > ema20: score += 1
-    if ema20 is not None and ema60 is not None and ema20 > ema60: score += 1
-    if ema60 is not None and ema120 is not None and ema60 > ema120: score += 1
-    if sar < price: score += 1
+    # 1. 점수 계산 (raw_score) - 필터링 전 순수 점수
+    raw_score = 0
+    if ema20 is not None and price > ema20: raw_score += 1
+    if ema20 is not None and ema60 is not None and ema20 > ema60: raw_score += 1
+    if ema60 is not None and ema120 is not None and ema60 > ema120: raw_score += 1
+    if sar < price: raw_score += 1
     
     # RSI Score
-    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): score += 2
-    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): score += 1
+    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): raw_score += 2
+    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): raw_score += 1
     
     # ADX Score (Conservative: >= 25)
-    if adx is not None and adx >= 25: score += 1
+    if adx is not None and adx >= 25: raw_score += 1
     
     # CCI Score
     if cci is not None:
-        if cci > 0: score += 1
-        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: score += 1
+        if cci > 0: raw_score += 1
+        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: raw_score += 1
     
     # OBV Score
-    if obv_trend: score += 1
+    if obv_trend: raw_score += 1
 
-    return score
+    # 2. 위험/주의 필터링 (analysis.py 로직) -> final_score 결정
+    final_score = raw_score
+
+    # 위험 (Severe Danger)
+    if ema120 is not None and price < ema120 and price < ema60: final_score = 0
+    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): final_score = 0
+    
+    else:
+        # 주의 (Caution) -> 점수를 0으로 처리하여 매도 유도
+        is_caution = False
+        if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
+        elif sar > price: is_caution = True
+        elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
+        elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
+        
+        if is_caution: final_score = 0
+    
+    return final_score, raw_score
 
 def get_backtest_data(code, is_overseas, days):
     """백테스팅용 데이터 조회 (yfinance 우선 사용 -> KIS API 실패 시 사용)"""
@@ -188,6 +191,12 @@ def run_backtest():
         buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         rise_score_limit = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        
+        # [추가] 매도 설정값 로드
+        stop_loss_limit = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        take_profit_limit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        take_profit_rsi_limit = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
 
         # [추가] MDD 및 승률 계산 변수
         peak_asset = initial_capital
@@ -216,7 +225,7 @@ def run_backtest():
             if dd < mdd: mdd = dd
             
             # 점수 계산
-            score = calculate_daily_score(row, prev_row)
+            score, raw_score = calculate_daily_score(row, prev_row)
             
             # [진단] 최고 점수 기록
             if score > max_score_observed: max_score_observed = score
@@ -237,19 +246,19 @@ def run_backtest():
                         avg_price = price
                         buy_date = date
                         action = "매수"
-                        trades.append({"date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, "profit": 0, "profit_amt": 0, "days": 0, "score": score, "rsi": row['RSI'], "cum_profit": cum_profit})
+                        trades.append({"date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, "profit": 0, "profit_amt": 0, "days": 0, "score": raw_score, "rsi": row['RSI'], "cum_profit": cum_profit})
             
             # [매도 조건] 보유 중일 때
             elif holdings > 0:
-                # 1. 손절매 (-5%)
+                # 1. 손절매
                 loss_rate = (price - avg_price) / avg_price * 100
-                is_stop_loss = loss_rate <= -5.0
+                is_stop_loss = loss_rate <= stop_loss_limit
                 
-                # 2. 점수 하락 (6점 미만)
-                is_score_drop = score < rise_score_limit
+                # 2. 점수 하락
+                is_score_drop = score < sell_score_limit
 
-                # 3. 익절 (Take Profit: +10% or RSI > 70)
-                is_take_profit = loss_rate >= 10.0 or row['RSI'] > 70
+                # 3. 익절 (Take Profit or RSI 과열)
+                is_take_profit = loss_rate >= take_profit_limit or row['RSI'] > take_profit_rsi_limit
                 
                 if is_stop_loss or is_score_drop or is_take_profit:
                     sell_amt = holdings * price
@@ -285,7 +294,7 @@ def run_backtest():
                     buy_date = None
                     action = "매도"
                     reason = "손절" if is_stop_loss else ("익절" if is_take_profit else "점수하락")
-                    trades.append({"date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, "profit": profit_rate, "profit_amt": profit, "days": holding_days, "score": score, "rsi": row['RSI'], "cum_profit": cum_profit})
+                    trades.append({"date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, "profit": profit_rate, "profit_amt": profit, "days": holding_days, "score": raw_score, "rsi": row['RSI'], "cum_profit": cum_profit})
             
             prev_row = row
 

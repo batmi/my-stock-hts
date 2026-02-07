@@ -8,6 +8,48 @@ import config
 import api
 import indicators
 
+def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
+    """기술적 지표를 바탕으로 매수 점수를 계산하여 반환"""
+    score = 0
+    details = []
+    
+    if ema20 is not None and price > ema20: 
+        score += 1
+        details.append("이동평균: 현재가 > 20일선 (+1)")
+    if ema20 is not None and ema60 is not None and ema20 > ema60: 
+        score += 1
+        details.append("이동평균: 20일선 > 60일선 (+1)")
+    if ema60 is not None and ema120 is not None and ema60 > ema120: 
+        score += 1
+        details.append("이동평균: 60일선 > 120일선 (+1)")
+    if sar < price: 
+        score += 1
+        details.append("SAR: 주가 아래 (상승 추세) (+1)")
+    
+    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): 
+        score += 2
+        details.append(f"RSI: {rsi:.1f} (이상적 매수 구간 40~55) (+2)")
+    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): 
+        score += 1
+        details.append(f"RSI: {rsi:.1f} (강세/반등 구간) (+1)")
+    
+    if adx is not None and adx >= 25: 
+        score += 1
+        details.append(f"ADX: {adx:.1f} (25 이상 추세 강도) (+1)")
+    
+    if cci is not None:
+        if cci > 0: 
+            score += 1
+            details.append(f"CCI: {cci:.1f} (0 이상 상승 국면) (+1)")
+        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            score += 1
+            details.append(f"CCI: {cci:.1f} (100 이상 강한 상승) (+1)")
+    
+    if obv_trend: 
+        score += 1
+        details.append("OBV: 이동평균 상회 (수급 양호) (+1)")
+    return score, details
+
 def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]"
     is_severe_danger = False
@@ -25,22 +67,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
     if is_caution: return "주의", "[yellow]"
     
-    score = 0
-    if ema20 is not None and price > ema20: score += 1
-    if ema20 is not None and ema60 is not None and ema20 > ema60: score += 1
-    if ema60 is not None and ema120 is not None and ema60 > ema120: score += 1
-    if sar < price: score += 1
-    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): score += 2
-    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): score += 1
-    if adx is not None:
-        # [수정] 보수적 접근: ADX 25 이상일 때만 +1점 (중복 점수 제거)
-        if adx >= 25: score += 1
-    if cci is not None:
-        if cci > 0: score += 1
-        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: score += 1
-    
-    # [추가] OBV가 이동평균선(설정값) 위에 있으면 수급 양호 (+1점)
-    if obv_trend: score += 1
+    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
