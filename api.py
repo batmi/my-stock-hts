@@ -430,6 +430,10 @@ def get_stock_name_by_code(code, is_overseas):
     return final_name
 
 def get_chart_data(code, is_overseas=False):
+    """
+    기술적 분석을 위한 차트 데이터를 조회합니다.
+    현재 로직은 '일봉(Daily)' 데이터를 기준으로 하며, 장 중에는 당일의 실시간 시세가 반영된 일봉 데이터가 포함됩니다.
+    """
     now = datetime.now()
     today = now.strftime("%Y%m%d")
     start_date_origin = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")

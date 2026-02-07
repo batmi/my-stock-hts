@@ -295,7 +295,7 @@ class AutoTrader:
         if not code: return
 
         with console.status(f"[bold green]{name}({code}) 데이터 분석 중...[/]"):
-            # 1. 데이터 조회
+            # 1. 데이터 조회 (실시간 시세 반영된 일봉)
             df = api.get_chart_data(code, is_overseas=is_overseas)
             if df is None or df.empty:
                 console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
@@ -439,9 +439,13 @@ class AutoTrader:
                 # [수정] 시스템 트레이딩 작업 구간을 락으로 보호 (API 우선권 확보)
                 with config.SYSTEM_TRADING_LOCK:
                     # 1. 매도 조건 점검 (리스크 관리)
+                    # [확인] 보유 종목의 최신 데이터(실시간 반영)를 받아와 지표를 재계산하고,
+                    # 손절/익절/추세이탈 시그널 발생 시 즉시 매도를 진행합니다.
                     self._check_sell_conditions()
                     
                     # 2. 매수 조건 점검
+                    # [확인] 관심 종목의 최신 데이터(실시간 반영)를 받아와 지표를 재계산하고,
+                    # 매수 시그널(점수 등) 발생 시 우선순위에 따라 매수를 진행합니다.
                     self._check_buy_conditions()
                     
                     # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
@@ -450,6 +454,7 @@ class AutoTrader:
                 self.log("모니터링 완료. 대기 중...")
                 
                 # 설정된 주기만큼 대기 (중단 요청 시 즉시 반응)
+                # [확인] 설정된 간격(현재 180초)마다 위 로직을 반복합니다.
                 interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
                 for _ in range(interval): 
                     if not self.is_running: break
@@ -609,19 +614,28 @@ class AutoTrader:
             if profit_rate <= stop_loss_rate: reason = f"손절({profit_rate}%)"
             elif profit_rate >= take_profit_rate: reason = f"익절({profit_rate}%)"
             
-            if not reason:
-                df = api.get_chart_data(code, is_overseas=False)
-                if df is not None and not df.empty:
-                    ind = indicators.calculate_indicators(df)
-                    prev_rsi = self._get_prev_rsi(df)
-                    state, _ = analysis.classify_stock_state(
-                        float(item['prpr']), ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                        ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
-                    )
+            # [수정] 손절/익절 여부와 관계없이 항상 기술적 분석 수행 및 로그 출력
+            # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
+            df = api.get_chart_data(code, is_overseas=False)
+            if df is not None and not df.empty:
+                ind = indicators.calculate_indicators(df)
+                prev_rsi = self._get_prev_rsi(df)
+                current_price = float(item['prpr'])
+                
+                state, _ = analysis.classify_stock_state(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                )
+                
+                # [추가] 분석 로그 기록
+                score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
+                rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+                adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+                self.log(f"[보유분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}")
+
+                # 이미 손절/익절 사유가 있다면 그것을 우선하고, 없다면 추세 이탈 여부를 체크
+                if not reason:
                     if state in ["관망", "주의", "위험"]:
-                        score, _ = analysis.calculate_score(float(item['prpr']), ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
-                        rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] else "-"
-                        adx_val = f"{ind['adx']:.1f}" if ind['adx'] else "-"
                         reason = f"추세이탈({state}) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}]"
 
             if reason:
@@ -683,20 +697,26 @@ class AutoTrader:
             # [추가] 보유 중이면 스킵
             if code in holding_codes: continue
             
+            # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
             df = api.get_chart_data(code, is_overseas=False)
             if df is None or df.empty: continue
             
             ind = indicators.calculate_indicators(df)
             prev_rsi = self._get_prev_rsi(df)
+            current_price = float(df.iloc[-1]['close'])
+            
             state, _ = analysis.classify_stock_state(
-                float(df.iloc[-1]['close']), ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
             )
             
+            # [추가] 분석 로그 기록
+            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
+            rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+            adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+            self.log(f"[분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}")
+            
             if state == "매수":
-                current_price = float(df.iloc[-1]['close'])
-                score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
-                
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
                     'score': score, 'rsi': ind['rsi'], 'adx': ind['adx']
