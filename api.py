@@ -350,9 +350,9 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     # [추가] 시스템 트레이딩 우선순위 락 처리
     # RLock을 사용하여 시스템 트레이딩 스레드는 중복 획득 허용, 메인 스레드는 대기
     if not config.SYSTEM_TRADING_LOCK.acquire(blocking=False):
-        config.console.print("[bold yellow]시스템 트레이딩 작업 중입니다. 잠시 대기해주세요...[/bold yellow]")
+        config.console.print("\n[yellow]시스템 트레이딩 작업 중입니다. 잠시 대기합니다.[/yellow]")
         config.SYSTEM_TRADING_LOCK.acquire()
-        config.console.print("[bold green]대기 해제. 작업을 재개합니다.[/bold green]")
+        config.console.print("\n[yellow]시스템 트레이딩 작업 완료. 작업을 재개합니다.[/yellow]")
 
     try:
         if timeout is None: timeout = config.DEFAULT_TIMEOUT

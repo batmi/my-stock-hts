@@ -124,8 +124,16 @@ def run_backtest():
     except:
         days = 365
     
-    initial_capital = 10_000_000
+    # [수정] 초기 자본금 및 환율 설정
+    initial_capital_krw = 10_000_000
+    exchange_rate = 1.0
     
+    if is_overseas:
+        exchange_rate = config.DEFAULT_EXCHANGE_RATE
+        initial_capital = initial_capital_krw / exchange_rate
+    else:
+        initial_capital = initial_capital_krw
+
     # 3. 데이터 준비
     with config.console.status(f"[bold green]{name} ({code}) 데이터 분석 중...[/]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
@@ -263,7 +271,8 @@ def run_backtest():
                 if is_stop_loss or is_score_drop or is_take_profit:
                     sell_amt = holdings * price
                     # 수수료/세금 약 0.23% 가정
-                    fee = int(sell_amt * 0.0023)
+                    fee = sell_amt * 0.0023
+                    if not is_overseas: fee = int(fee)
                     sell_amt -= fee
                     
                     profit = sell_amt - (holdings * avg_price)
@@ -309,6 +318,11 @@ def run_backtest():
         if not returns.empty and returns.std() > 0:
             sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
 
+    # [추가] 포맷팅 헬퍼 함수
+    def fmt_money(val):
+        if is_overseas: return f"${val:,.2f}"
+        return f"{int(val):,}원"
+
     # [수정] 결과 리포트를 테이블로 출력
     config.console.print()
     summary_table = Table(title=f"백테스팅 결과 리포트: {name}", box=box.HORIZONTALS, show_header=False, border_style="dim")
@@ -321,8 +335,8 @@ def run_backtest():
     if len(end_date_str) == 8 and end_date_str.isdigit(): end_date_str = f"{end_date_str[:4]}-{end_date_str[4:6]}-{end_date_str[6:]}"
     
     summary_table.add_row("기간", f"{days}일간 ({start_date_str} ~ {end_date_str})")
-    summary_table.add_row("초기 자본금", f"{initial_capital:,}원")
-    summary_table.add_row("최종 평가액", f"{int(final_asset):,}원")
+    summary_table.add_row("초기 자본금", fmt_money(initial_capital))
+    summary_table.add_row("최종 평가액", fmt_money(final_asset))
     
     color = "red" if total_return > 0 else "blue"
     summary_table.add_row("누적 수익률", f"[{color}]{total_return:+.2f}%[/]")
@@ -362,7 +376,7 @@ def run_backtest():
             pf_desc = " (손실 없음)"
         else: pf_str = "[dim]-[/]"
         
-        summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 [red]+{int(gross_profit):,}원[/] / 총 손실 [blue]-{int(gross_loss):,}원[/])")
+        summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 [red]+{fmt_money(gross_profit)}[/] / 총 손실 [blue]-{fmt_money(gross_loss)}[/])")
         
         # [수정] 샤프 지수 출력 (설명 추가)
         sharpe_desc = ""
@@ -387,7 +401,7 @@ def run_backtest():
         config.console.print(f"  - 기간 내 최고 점수: [bold]{max_score_observed}점[/bold] (매수 기준: {buy_score_limit}점)")
         config.console.print(f"  - {buy_score_limit}점 이상 도달 횟수: {score_8_count}회")
         config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score_limit}점 이상 & RSI<{buy_rsi_limit})이 엄격하여 진입 기회가 없었습니다.")
-        config.console.print("  [Tip] 분석 기간을 늘려보세요.")
+        config.console.print("  [Tip] config.py 에서 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
     
     if trades:
         config.console.print()
@@ -404,13 +418,27 @@ def run_backtest():
             score_rsi = f"{t.get('score', 0)} ({t.get('rsi', 0):.0f})"
             
             qty_str = f"{t['qty']:,}"
-            amt_str = f"{int(t.get('profit_amt', 0)):+,}" if t['type'].startswith("매도") else "-"
-            if t.get('profit_amt', 0) > 0: amt_str = f"[red]{amt_str}[/]"
-            elif t.get('profit_amt', 0) < 0: amt_str = f"[blue]{amt_str}[/]"
             
-            cum_p_str = f"{int(t.get('cum_profit', 0)):+,}"
-            if t.get('cum_profit', 0) > 0: cum_p_str = f"[red]{cum_p_str}[/]"
-            elif t.get('cum_profit', 0) < 0: cum_p_str = f"[blue]{cum_p_str}[/]"
+            # [수정] 금액 포맷팅 (해외/국내 분기)
+            price_str = f"{t['price']:,.2f}" if is_overseas else f"{t['price']:,.0f}"
             
-            t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", score_rsi, qty_str, f"{t['price']:,.0f}", amt_str, profit_display, cum_p_str)
+            amt_val = t.get('profit_amt', 0)
+            amt_str = "-"
+            if t['type'].startswith("매도"):
+                s_val = fmt_money(abs(amt_val)).replace('$', '').replace('원', '')
+                prefix = "$" if is_overseas else ""
+                suffix = "" if is_overseas else "원"
+                if amt_val > 0: amt_str = f"[red]+{prefix}{s_val}{suffix}[/]"
+                elif amt_val < 0: amt_str = f"[blue]-{prefix}{s_val}{suffix}[/]"
+                else: amt_str = f"{prefix}{s_val}{suffix}"
+            
+            cum_val = t.get('cum_profit', 0)
+            s_cum = fmt_money(abs(cum_val)).replace('$', '').replace('원', '')
+            prefix = "$" if is_overseas else ""
+            suffix = "" if is_overseas else "원"
+            cum_p_str = f"{prefix}{s_cum}{suffix}"
+            if cum_val > 0: cum_p_str = f"[red]+{cum_p_str}[/]"
+            elif cum_val < 0: cum_p_str = f"[blue]-{cum_p_str}[/]"
+            
+            t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", score_rsi, qty_str, price_str, amt_str, profit_display, cum_p_str)
         config.console.print(t_table)

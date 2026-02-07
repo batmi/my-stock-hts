@@ -30,6 +30,7 @@ class AutoTrader:
             cls._instance.start_time = None
             cls._instance.consecutive_errors = 0
             cls._instance.initial_asset = 0
+            cls._instance.was_market_open = None
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -52,6 +53,7 @@ class AutoTrader:
         self.is_running = True
         self.start_time = datetime.now()
         self.consecutive_errors = 0
+        self.was_market_open = self.is_market_open()
         
         # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
         self.initial_asset = self._get_total_estimated_asset()
@@ -343,34 +345,65 @@ class AutoTrader:
         # 지표 상세
         console.print(f"[bold]1. 기술적 지표 값[/bold]")
         
-        # RSI 색상
+        # RSI 색상 및 의미
         rsi_val = ind['rsi']
         rsi_str = f"{rsi_val:.2f}"
-        if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
-        elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
-        elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-        elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
-        else: rsi_str = f"[blue]{rsi_str}[/]"
-        console.print(f"   - RSI (14): {rsi_str}")
+        rsi_desc = ""
+        if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: 
+            rsi_str = f"[magenta]{rsi_str}[/]"
+            rsi_desc = "과열 (추격금지)"
+        elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: 
+            rsi_str = f"[red]{rsi_str}[/]"
+            rsi_desc = "강세 유지"
+        elif 45 <= rsi_val < 55: 
+            rsi_str = f"[orange3]{rsi_str}[/]"
+            rsi_desc = "강세 조정 (진입후보)"
+        elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: 
+            rsi_str = f"[yellow]{rsi_str}[/]"
+            rsi_desc = "약세/하락전환 가능"
+        else: 
+            rsi_str = f"[blue]{rsi_str}[/]"
+            rsi_desc = "침체 (과매도)"
+        console.print(f"   - RSI (14): {rsi_str} [dim]({rsi_desc})[/dim]")
 
-        # ADX 색상
+        # ADX 색상 및 의미
         adx_val = ind['adx']
         adx_str = f"{adx_val:.2f}"
-        if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-        elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
-        elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
-        elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
-        else: adx_str = f"[white]{adx_str}[/]"
-        console.print(f"   - ADX (14): {adx_str}")
+        adx_desc = ""
+        if adx_val >= 40: 
+            adx_str = f"[magenta]{adx_str}[/]" 
+            adx_desc = "과열 (조정 주의)"
+        elif adx_val >= 30: 
+            adx_str = f"[red]{adx_str}[/]"     
+            adx_desc = "강한 추세"
+        elif adx_val >= 20: 
+            adx_str = f"[orange3]{adx_str}[/]"
+            adx_desc = "안정적 추세"
+        elif adx_val >= 15: 
+            adx_str = f"[yellow]{adx_str}[/]"
+            adx_desc = "추세 형성 중"
+        else: 
+            adx_str = f"[white]{adx_str}[/]"
+            adx_desc = "추세 없음 (횡보)"
+        console.print(f"   - ADX (14): {adx_str} [dim]({adx_desc})[/dim]")
 
-        # CCI 색상
+        # CCI 색상 및 의미
         cci_val = ind['cci']
         cci_str = f"{cci_val:.2f}"
-        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
-        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
-        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
-        else: cci_str = f"[blue]{cci_str}[/]"
-        console.print(f"   - CCI (20): {cci_str}")
+        cci_desc = ""
+        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[red]{cci_str}[/]"
+            cci_desc = "과열 (추격 금물)"
+        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[orange3]{cci_str}[/]"
+            cci_desc = "상승 추세"
+        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
+            cci_str = f"[yellow]{cci_str}[/]"
+            cci_desc = "반등 시도"
+        else: 
+            cci_str = f"[blue]{cci_str}[/]"
+            cci_desc = "과매도 (저점 탐색)"
+        console.print(f"   - CCI (20): {cci_str} [dim]({cci_desc})[/dim]")
 
         # OBV 추세 색상
         obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
@@ -416,10 +449,10 @@ class AutoTrader:
         is_buy_score = score >= buy_score_limit
         is_buy_rsi = ind['rsi'] < buy_rsi_limit
         
-        buy_result = "[red]매수 가능[/]" if (is_buy_score and is_buy_rsi) else "[dim]매수 불가[/]"
+        buy_result = "[red]매수 가능[/]" if (is_buy_score and is_buy_rsi) else "[blue]매수 불가[/]"
         console.print(f"   - 매수 판단: {buy_result}")
-        if not is_buy_score: console.print(f"     └ 점수 미달 (기준: {buy_score_limit}점 이상)")
-        if not is_buy_rsi: console.print(f"     └ RSI 과열 (기준: {buy_rsi_limit} 미만)")
+        if not is_buy_score: console.print(f"     └ 점수 미달 (기준: {buy_score_limit}점 이상 매수)")
+        if not is_buy_rsi: console.print(f"     └ RSI 과열 (기준: {buy_rsi_limit} 미만 매수)")
         
         # 매도(추세 이탈) 조건 체크
         sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
@@ -431,25 +464,48 @@ class AutoTrader:
         
         console.print(f"[dim]{'─' * 60}[/dim]")
 
+    def is_market_open(self):
+        """국내 정규장 운영 시간 확인 (config 설정 시간 따름)"""
+        now = datetime.now()
+        if now.weekday() > 4: return False # 주말
+        current_time = now.strftime("%H%M")
+        
+        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
+        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
+        return start_time <= current_time <= end_time
+
     def _run_loop(self):
         while self.is_running:
             try:
                 self.log("모니터링 주기 시작...")
                 
-                # [수정] 시스템 트레이딩 작업 구간을 락으로 보호 (API 우선권 확보)
-                with config.SYSTEM_TRADING_LOCK:
-                    # 1. 매도 조건 점검 (리스크 관리)
-                    # [확인] 보유 종목의 최신 데이터(실시간 반영)를 받아와 지표를 재계산하고,
-                    # 손절/익절/추세이탈 시그널 발생 시 즉시 매도를 진행합니다.
-                    self._check_sell_conditions()
-                    
-                    # 2. 매수 조건 점검
-                    # [확인] 관심 종목의 최신 데이터(실시간 반영)를 받아와 지표를 재계산하고,
-                    # 매수 시그널(점수 등) 발생 시 우선순위에 따라 매수를 진행합니다.
-                    self._check_buy_conditions()
-                    
-                    # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
-                    self._monitor_account_status()
+                current_market_status = self.is_market_open()
+                
+                # [추가] 장 시작/마감 상태 변경 감지 및 로그
+                if self.was_market_open is not None:
+                    if not self.was_market_open and current_market_status:
+                        self.log("=" * 80)
+                        self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
+                        self.log("=" * 80)
+                    elif self.was_market_open and not current_market_status:
+                        self.log("=" * 80)
+                        self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
+                        self.log("=" * 80)
+                
+                self.was_market_open = current_market_status
+                
+                if current_market_status:
+                    self.log("시스템 상태: RUNNING")
+                    # [수정] 시스템 트레이딩 작업 구간을 락으로 보호 (API 우선권 확보)
+                    with config.SYSTEM_TRADING_LOCK:
+                        # 1. 매도 조건 점검 (리스크 관리)
+                        self._check_sell_conditions()
+                        # 2. 매수 조건 점검
+                        self._check_buy_conditions()
+                        # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
+                        self._monitor_account_status()
+                else:
+                    self.log("시스템 상태: WAITING (거래 시간 외)")
                 
                 self.log("모니터링 완료. 대기 중...")
                 

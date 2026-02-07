@@ -47,8 +47,8 @@ MAX_RETRIES = 1
 # ==========================================================
 # [설정] 기본 환율 (Fallback)
 # ==========================================================
-# 실시간 환율 조회(yfinance) 실패 시 사용할 기본 환율입니다.
-DEFAULT_EXCHANGE_RATE = 1450.0
+# 실시간 환율 조회(yfinance) 실패 시 / 백테스팅 시 사용할 기본 환율입니다.
+DEFAULT_EXCHANGE_RATE = 1450.00
 
 # ==========================================================
 # [설정] 기술적 분석 지표 파라미터
@@ -169,6 +169,8 @@ SYSTEM_TRADING_LOG_DIR = "logs" # 시스템 트레이딩 로그 저장 디렉토
 SYSTEM_INVEST_PER_STOCK = 0.5  # 종목당 투자 비중 (예수금의 50%씩 분산 투자)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
+SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
+SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 시스템 트레이딩 로거 (AutoTrader 실행 시 함수 할당)
 SYSTEM_LOGGER = None

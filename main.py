@@ -238,7 +238,7 @@ def show_help():
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
     score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
-    score_table.add_row("필터링 (주의)", "60or120선 이탈, SAR 매도, RSI 80이상/30이하", "[yellow]주의[/]", "신규 진입 자제 (점수 무관)")
+    score_table.add_row("필터링 (주의)", "60일선 or 120일선 이탈, SAR 매도, RSI ≥ 80 or RSI ≤ 30", "[yellow]주의[/]", "신규 진입 자제 (점수 무관)")
 
     # [추가] 매수 타이밍 섹션
     score_table.add_section()
@@ -288,8 +288,12 @@ def main():
         config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
         
         trader_status = ""
-        if auto_trade.AutoTrader().is_running:
-            trader_status = " [bold green](RUNNING)[/]"
+        trader = auto_trade.AutoTrader()
+        if trader.is_running:
+            if trader.is_market_open():
+                trader_status = " [bold green](RUNNING)[/]"
+            else:
+                trader_status = " [bold yellow](WAITING)[/]"
             
         config.console.print(f"[4] 전략 백테스팅"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
         config.console.print("[6] 관심 종목 관리"); config.console.print("[7] [red]매수[/red] 주문")
