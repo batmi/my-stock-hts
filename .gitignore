@@ -10,5 +10,8 @@ venv/
 token_cache.json
 analysis_*.png
 
+# 시스템 트레이딩 로그
+./logs/system_trading*.log
+
 # run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.
 #run.sh
