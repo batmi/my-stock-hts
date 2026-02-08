@@ -31,6 +31,7 @@ class AutoTrader:
             cls._instance.consecutive_errors = 0
             cls._instance.initial_asset = 0
             cls._instance.was_market_open = None
+            cls._instance.order_status = {} # [추가] 주문별 체결 수량 추적 {odno: qty}
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -103,39 +104,77 @@ class AutoTrader:
         except Exception: pass
 
     def print_status(self):
-        status = "[green]실행 중[/green]" if self.is_running else "[red]중지됨[/red]"
-        console.print(f"\n[bold]시스템 상태:[/bold] {status}")
+        status_color = "green" if self.is_running else "red"
+        status_text = "실행 중 (RUNNING)" if self.is_running else "중지됨 (STOPPED)"
         
+        console.print(f"\n[bold]=== 시스템 트레이딩 상태 ({status_text}) ===[/bold]", style=status_color)
+        
+        # 1. 실행 시간 정보
         if self.is_running and self.start_time:
             start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
             elapsed = datetime.now() - self.start_time
-            elapsed_str = str(elapsed).split('.')[0]  # 마이크로초 제거
-            console.print(f"[bold]시작 시간:[/bold] {start_str}  |  [bold]경과 시간:[/bold] {elapsed_str}")
+            elapsed_str = str(elapsed).split('.')[0]
+            console.print(f"• 실행 시간: {start_str} (경과: {elapsed_str})")
         
-        console.print("\n[bold]최근 로그 (Last 50):[/bold]")
-        if not self.logs: console.print("[dim]로그가 없습니다.[/dim]")
-        for l in self.logs[-50:]:
-            # [수정] 로그 키워드 색상 적용
-            # escape()를 사용하여 로그 내용 중 []가 태그로 오인되는 것을 방지
-            safe_l = escape(l)
-            colored_l = safe_l.replace("성공", "[bold green]성공[/bold green]") \
-                         .replace("실패", "[bold red]실패[/bold red]") \
-                         .replace("에러", "[bold red]에러[/bold red]") \
-                         .replace("매수", "[red]매수[/red]") \
-                         .replace("매도", "[blue]매도[/blue]") \
-                         .replace("손절", "[blue]손절[/blue]") \
-                         .replace("익절", "[red]익절[/red]") \
-                         .replace("추세이탈", "[yellow]추세이탈[/yellow]")
-            console.print(colored_l)
+        # 2. 마켓 상태
+        market_status = "장 운영 중 (거래 가능)" if self.is_market_open() else "장 마감/휴장 (대기 중)"
+        if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
+        console.print(f"• 마켓 상태: {market_status}")
+
+        # 3. 자산 및 손익 현황 (안전성 핵심)
+        current_asset = None
+        deposit = 0
+        
+        with console.status("[bold green]트레이딩 상태 및 자산 정보 조회 중...[/]"):
+            current_asset = self._get_total_estimated_asset()
             
-        console.print("\n[bold]금일 매매 기록:[/bold]")
-        if not self.trade_history: console.print("\n[dim]매매 기록이 없습니다.[/dim]")
-        for h in self.trade_history:
-            safe_h = escape(h)
-            colored_h = safe_h.replace("BUY", "[red]BUY[/red]") \
-                         .replace("SELL", "[blue]SELL[/blue]") \
-                         .replace("성공", "[bold green]성공[/bold green]")
-            console.print(colored_h)
+            # 예수금 별도 조회 (매수 여력 확인용)
+            try:
+                tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
+                url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+                headers = utils.get_common_headers(tr_id)
+                params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+                res = api.session.get(url, headers=headers, params=params, verify=False)
+                if res.json()['rt_cd'] == '0': deposit = int(res.json()['output']['ord_psbl_cash'])
+            except: pass
+
+        console.print("\n[bold cyan][자산 및 손익 현황][/bold cyan]")
+        if self.initial_asset > 0:
+            if current_asset is not None:
+                profit = current_asset - self.initial_asset
+                rate = (profit / self.initial_asset) * 100
+                color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                
+                console.print(f"  - 초기 자산: {self.initial_asset:,}원")
+                console.print(f"  - 현재 자산: {current_asset:,}원")
+                console.print(f"  - 누적 손익: {color}{profit:+,}원 ({rate:+.2f}%)[/]")
+                console.print(f"  - 주문 가능: {deposit:,}원")
+                
+                # 일일 손실 제한 체크
+                loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+                if loss_limit > 0:
+                    safety_msg = "[green]안전[/green]"
+                    if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
+                    elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
+                    console.print(f"  - 손실 제한: -{loss_limit}% (상태: {safety_msg})")
+            else:
+                console.print("  - [bold red]자산 정보 조회 실패 (통신 오류)[/bold red]")
+                console.print(f"  - 초기 자산: {self.initial_asset:,}원")
+        else:
+            console.print("  - 자산 정보 로딩 중...")
+
+        # 4. 시스템 안정성 (에러 카운트)
+        console.print("\n[bold cyan][시스템 안정성][/bold cyan]")
+        err_cnt = self.consecutive_errors
+        max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
+        err_color = "[green]" if err_cnt == 0 else ("[red]" if err_cnt >= max_err else "[yellow]")
+        console.print(f"  - 연속 에러: {err_color}{err_cnt} / {max_err}회[/]")
+        
+        # 5. 매매 요약
+        buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
+        sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
+        console.print(f"  - 금일 매매: 매수 {buy_cnt}건 / 매도 {sell_cnt}건")
+
         console.print()
 
     def print_report(self):
@@ -288,181 +327,38 @@ class AutoTrader:
             
         console.print(detail_table)
 
-    def diagnose_stock(self):
-        """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
-        console.print("\n[bold cyan]=== 시스템 트레이딩 로직 진단 ===[/]")
-        
-        # 종목 선택 (utils 활용)
-        code, name, is_overseas = utils.select_target_stock()
-        if not code: return
+    def view_log_file(self):
+        """현재 날짜의 시스템 트레이딩 로그 파일을 실시간으로 출력합니다."""
+        log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        filename = f"system_trade_{date_str}.log"
+        filepath = os.path.join(log_dir, filename)
 
-        with console.status(f"[bold green]{name}({code}) 데이터 분석 중...[/]"):
-            # 1. 데이터 조회 (실시간 시세 반영된 일봉)
-            df = api.get_chart_data(code, is_overseas=is_overseas)
-            if df is None or df.empty:
-                console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
-                return
+        if not os.path.exists(filepath):
+            console.print(f"\n[yellow]오늘 날짜({date_str})의 로그 파일이 없습니다.[/yellow]")
+            return
 
-            # 2. 지표 계산
-            ind = indicators.calculate_indicators(df)
-            prev_rsi = self._get_prev_rsi(df)
-            current_price = float(df.iloc[-1]['close'])
-            
-            # 3. 상태 분류 및 점수 계산
-            state, state_color = analysis.classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
-            )
-            
-            score, details = analysis.calculate_score(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
-            )
+        console.print(f"\n[bold cyan]=== 실시간 로그 모니터링 ({filename}) ===[/bold cyan]")
+        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
 
-        # 4. 결과 출력
-        console.print(f"\n[bold]종목:[/bold] {name} ({code})")
-        
-        # 현재가 색상 로직 (analysis.py 참조)
-        curr_price_color = "[white]"
-        if ind['ema_5'] and ind['ema_20'] and ind['ema_60']:
-            if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
-                if current_price > ind['ema_5']: curr_price_color = "[red]"
-                elif current_price < ind['ema_60']: curr_price_color = "[blue]"
-                elif current_price < ind['ema_5'] or current_price < ind['ema_20']: curr_price_color = "[dim]"
-            elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60']:
-                if current_price < ind['ema_5']: curr_price_color = "[blue]"
-                elif current_price > ind['ema_20'] or current_price > ind['ema_60']: curr_price_color = "[orange3]"
-                elif current_price > ind['ema_5']: curr_price_color = "[white]"
-            else:
-                if current_price < ind['ema_5']: curr_price_color = "[blue]"
-                elif current_price > ind['ema_20']: curr_price_color = "[orange3]"
-                elif current_price < ind['ema_20']: curr_price_color = "[white]"
-
-        price_str = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
-        console.print(f"[bold]현재가:[/bold] {curr_price_color}{price_str}[/]")
-        console.print(f"[dim]{'─' * 60}[/dim]")
-        
-        # 지표 상세
-        console.print(f"[bold]1. 기술적 지표 값[/bold]")
-        
-        # RSI 색상 및 의미
-        rsi_val = ind['rsi']
-        rsi_str = f"{rsi_val:.2f}"
-        rsi_desc = ""
-        if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: 
-            rsi_str = f"[magenta]{rsi_str}[/]"
-            rsi_desc = "과열 (추격금지)"
-        elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: 
-            rsi_str = f"[red]{rsi_str}[/]"
-            rsi_desc = "강세 유지"
-        elif 45 <= rsi_val < 55: 
-            rsi_str = f"[orange3]{rsi_str}[/]"
-            rsi_desc = "강세 조정 (진입후보)"
-        elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: 
-            rsi_str = f"[yellow]{rsi_str}[/]"
-            rsi_desc = "약세/하락전환 가능"
-        else: 
-            rsi_str = f"[blue]{rsi_str}[/]"
-            rsi_desc = "침체 (과매도)"
-        console.print(f"   - RSI (14): {rsi_str} [dim]({rsi_desc})[/dim]")
-
-        # ADX 색상 및 의미
-        adx_val = ind['adx']
-        adx_str = f"{adx_val:.2f}"
-        adx_desc = ""
-        if adx_val >= 40: 
-            adx_str = f"[magenta]{adx_str}[/]" 
-            adx_desc = "과열 (조정 주의)"
-        elif adx_val >= 30: 
-            adx_str = f"[red]{adx_str}[/]"     
-            adx_desc = "강한 추세"
-        elif adx_val >= 20: 
-            adx_str = f"[orange3]{adx_str}[/]"
-            adx_desc = "안정적 추세"
-        elif adx_val >= 15: 
-            adx_str = f"[yellow]{adx_str}[/]"
-            adx_desc = "추세 형성 중"
-        else: 
-            adx_str = f"[white]{adx_str}[/]"
-            adx_desc = "추세 없음 (횡보)"
-        console.print(f"   - ADX (14): {adx_str} [dim]({adx_desc})[/dim]")
-
-        # CCI 색상 및 의미
-        cci_val = ind['cci']
-        cci_str = f"{cci_val:.2f}"
-        cci_desc = ""
-        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
-            cci_str = f"[red]{cci_str}[/]"
-            cci_desc = "과열 (추격 금물)"
-        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
-            cci_str = f"[orange3]{cci_str}[/]"
-            cci_desc = "상승 추세"
-        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
-            cci_str = f"[yellow]{cci_str}[/]"
-            cci_desc = "반등 시도"
-        else: 
-            cci_str = f"[blue]{cci_str}[/]"
-            cci_desc = "과매도 (저점 탐색)"
-        console.print(f"   - CCI (20): {cci_str} [dim]({cci_desc})[/dim]")
-
-        # OBV 추세 색상
-        obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
-        obv_color = "[red]" if ind.get('obv_trend') else "[blue]"
-        console.print(f"   - OBV 추세: {obv_color}{obv_trend_str}[/]")
-        
-        sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
-        sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
-        console.print(f"   - SAR 위치: {sar_color}{sar_pos}[/]")
-        
-        ema_align = "알 수 없음"
-        ema_color = "[white]"
-        if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: 
-            ema_align = "정배열 (20>60>120)"; ema_color = "[red]"
-        elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: 
-            ema_align = "역배열 (20<60<120)"; ema_color = "[blue]"
-        else: 
-            ema_align = "혼조세"; ema_color = "[yellow]"
-        console.print(f"   - 이평 배열: {ema_color}{ema_align}[/]")
-
-        console.print(f"[dim]{'─' * 60}[/dim]")
-        
-        # 로직 판단 결과
-        # 색상 태그 정제 (예: "[red]" -> "red")
-        s_color = state_color.replace('[', '').replace(']', '')
-
-        console.print(f"[bold]2. 로직 판단 결과[/bold]")
-        console.print(f"   - 종합 점수: [bold {s_color}]{score}점[/]")
-        
-        console.print("   - [점수 획득 상세]")
-        if details:
-            for d in details:
-                console.print(f"     [green]* {d}[/green]")
-        else:
-            console.print("     [dim]획득한 점수가 없습니다.[/dim]")
-            
-        console.print(f"   - 상태 분류: [{s_color}]{state}[/]")
-        
-        # 매수 조건 체크
-        buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        
-        is_buy_score = score >= buy_score_limit
-        is_buy_rsi = ind['rsi'] < buy_rsi_limit
-        
-        buy_result = "[red]매수 가능[/]" if (is_buy_score and is_buy_rsi) else "[blue]매수 불가[/]"
-        console.print(f"   - 매수 판단: {buy_result}")
-        if not is_buy_score: console.print(f"     └ 점수 미달 (기준: {buy_score_limit}점 이상 매수)")
-        if not is_buy_rsi: console.print(f"     └ RSI 과열 (기준: {buy_rsi_limit} 미만 매수)")
-        
-        # 매도(추세 이탈) 조건 체크
-        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-        is_sell_signal = score < sell_score_limit
-        
-        sell_result = "[blue]매도(추세이탈)[/]" if is_sell_signal else "[green]보유(추세유지)[/]"
-        console.print(f"   - 보유 시 판단: {sell_result}")
-        if is_sell_signal: console.print(f"     └ 점수 하락 (기준: {sell_score_limit}점 미만)")
-        
-        console.print(f"[dim]{'─' * 60}[/dim]")
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                # 초기 출력: 최근 50줄
+                lines = f.readlines()
+                for line in lines[-50:]:
+                    console.print(escape(line.strip()))
+                
+                # 실시간 모니터링
+                while True:
+                    line = f.readline()
+                    if line:
+                        console.print(escape(line.strip()))
+                    else:
+                        time.sleep(0.1)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]로그 모니터링을 종료합니다.[/yellow]")
+        except Exception as e:
+            console.print(f"\n[red]로그 파일 읽기 오류: {e}[/red]")
 
     def is_market_open(self):
         """국내 정규장 운영 시간 확인 (config 설정 시간 따름)"""
@@ -502,6 +398,8 @@ class AutoTrader:
                         self._check_sell_conditions()
                         # 2. 매수 조건 점검
                         self._check_buy_conditions()
+                        # [추가] 체결 내역 확인 (주문 체결 모니터링)
+                        self._check_conclusions()
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                         self._monitor_account_status()
                 else:
@@ -529,6 +427,84 @@ class AutoTrader:
                     self.stop()
                     break
                 time.sleep(10)
+
+    def _check_conclusions(self):
+        """금일 체결 내역을 확인하고 로그에 기록"""
+        try:
+            # API 호출 전 대기 (Rate Limit 방지)
+            time.sleep(0.2)
+            
+            tr_id = utils.get_tr_id("domestic", "inquiry", "history")
+            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+            headers = utils.get_common_headers(tr_id)
+            today = datetime.now().strftime("%Y%m%d")
+            
+            params = {
+                "CANO": config.CANO, 
+                "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+                "INQR_STRT_DT": today, 
+                "INQR_END_DT": today, 
+                "SLL_BUY_DVSN_CD": "00", 
+                "INQR_DVSN": "00", 
+                "PDNO": "", 
+                "CCLD_DVSN": "01", # 주문별 체결 합계
+                "ORD_GNO_BRNO": "", 
+                "ODNO": "", 
+                "INQR_DVSN_3": "00", 
+                "INQR_DVSN_1": "", 
+                "CTX_AREA_FK100": "", 
+                "CTX_AREA_NK100": ""
+            }
+            
+            res = api.session.get(url, headers=headers, params=params, verify=False, timeout=config.DEFAULT_TIMEOUT)
+            data = res.json()
+            
+            if data['rt_cd'] == '0':
+                trades = data.get('output1', [])
+                for item in trades:
+                    odno = item.get('odno')
+                    if not odno: continue
+                    
+                    tot_ccld_qty = int(item.get('tot_ccld_qty', 0))
+                    if tot_ccld_qty <= 0: continue
+                    
+                    prev_qty = self.order_status.get(odno, 0)
+                    
+                    if tot_ccld_qty > prev_qty:
+                        # 새로운 체결 발생
+                        new_qty = tot_ccld_qty - prev_qty
+                        avg_price = float(item.get('avg_prvs', 0))
+                        name = item.get('prdt_name')
+                        code = item.get('pdno')
+                        type_name = item.get('sll_buy_dvsn_cd_name')
+                        type_cd = item.get('sll_buy_dvsn_cd') # 01:매도, 02:매수
+                        
+                        trade_amt = int(new_qty * avg_price)
+                        add_info = ""
+                        
+                        if type_cd == '02': # 매수
+                            add_info = f" (매수금액: {trade_amt:,.0f}원)"
+                        elif type_cd == '01': # 매도
+                            # trade_records에서 해당 주문번호의 예상 수익률 조회
+                            found_rate = None
+                            for r in self.trade_records:
+                                if r.get('odno') == odno:
+                                    found_rate = r.get('profit_rate')
+                                    break
+                            if found_rate is not None:
+                                r_color = "red" if found_rate > 0 else "blue"
+                                add_info = f" (수익률: [{r_color}]{found_rate:+.2f}%[/], 매도금액: {trade_amt:,.0f}원)"
+                            else:
+                                add_info = f" (매도금액: {trade_amt:,.0f}원)"
+                        
+                        # 로그 기록
+                        self.log(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 체결 (단가: {avg_price:,.0f}원){add_info}")
+                        
+                        # 상태 업데이트
+                        self.order_status[odno] = tot_ccld_qty
+                        
+        except Exception as e:
+            self.log(f"체결 내역 조회 중 오류: {str(e)}")
 
     def _monitor_account_status(self):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
@@ -609,14 +585,16 @@ class AutoTrader:
             res = api.session.get(url, headers=headers, params=params, verify=False)
             cash = 0
             if res.json()['rt_cd'] == '0': cash = int(res.json()['output']['ord_psbl_cash'])
+            else: return None # [수정] 예수금 조회 실패 시 None 반환
             
             # 2. 주식 평가금 조회
             _, summary = account.fetch_domestic_balance()
             stock_eval = 0
             if summary: stock_eval = api.safe_int(summary.get('scts_evlu_amt'))
+            else: return None # [수정] 잔고 조회 실패 시 None 반환
             
             return cash + stock_eval
-        except: return 0
+        except: return None
 
     def _check_loss_limit(self, current_stock_eval):
         """자산 변동을 체크하여 손실 한도 초과 시 비상 정지"""
@@ -625,7 +603,7 @@ class AutoTrader:
 
         # 현재 총 자산 재계산 (예수금 + 현재 주식 평가금)
         current_total = self._get_total_estimated_asset()
-        if current_total == 0: return
+        if current_total is None or current_total == 0: return # [수정] 조회 실패 시 체크 건너뜀
 
         loss_rate = (current_total - self.initial_asset) / self.initial_asset * 100
         
@@ -659,12 +637,17 @@ class AutoTrader:
         for item in holdings:
             if not self.is_running: break
             code = item['pdno']; name = item['prdt_name']
-            qty = int(item['hldg_qty']); profit_rate = float(item['evlu_pfls_rt'])
+            
+            # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
+            # 미체결 매도 주문이 있을 경우 중복 매도를 방지하기 위함
+            qty = int(item.get('ord_psbl_qty', 0))
+            profit_rate = float(item['evlu_pfls_rt'])
             
             # [추가] API 호출 전 대기 (Rate Limit 방지)
             time.sleep(safe_delay)
             
-            if qty <= 0: continue
+            if qty <= 0: 
+                continue # 주문 가능 수량이 없으면 스킵
 
             reason = ""
             if profit_rate <= stop_loss_rate: reason = f"손절({profit_rate}%)"
@@ -696,7 +679,8 @@ class AutoTrader:
 
             if reason:
                 self.log(f"매도 실행: {name} - {reason}")
-                if self._send_order(code, qty, "sell"):
+                odno = self._send_order(code, qty, "sell")
+                if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
                         "type": "sell",
@@ -707,7 +691,8 @@ class AutoTrader:
                         "profit_rate": profit_rate,
                         "profit_amt": int(item['evlu_pfls_amt']),
                         "reason": reason,
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "odno": odno
                     }
                     self.trade_records.append(record)
 
@@ -794,11 +779,19 @@ class AutoTrader:
             # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
             if invest_amt < cand['price']: invest_amt = avail_cash
             
-            qty = int(invest_amt / cand['price'])
+            # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
+            # 시장가 주문 시 증거금 부족 등을 방지하기 위해 price=0(시장가)으로 조회
+            max_qty = api.fetch_buyable_quantity(cand['code'], 0)
+            
+            # 자산 배분 비중 적용 수량
+            target_qty = int(invest_amt / cand['price'])
+            
+            # 실제 주문 수량은 (목표 수량)과 (API 조회 가능 수량) 중 작은 값
+            qty = min(target_qty, max_qty)
             
             # [추가] 예수금 부족 로그
             if qty < 1:
-                self.log(f"매수 실패: {cand['name']} - 예수금 부족 (필요: {cand['price']:,.0f}원, 잔고: {avail_cash:,.0f}원)")
+                self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty})")
                 continue
 
             if avail_cash >= (qty * cand['price']):
@@ -807,7 +800,8 @@ class AutoTrader:
                 reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}]"
                 
                 self.log(f"매수 실행: {cand['name']} - {reason}")
-                if self._send_order(cand['code'], qty, "buy"): 
+                odno = self._send_order(cand['code'], qty, "buy")
+                if odno: 
                     avail_cash -= (qty * cand['price'])
                     record = {
                         "type": "buy",
@@ -816,7 +810,8 @@ class AutoTrader:
                         "qty": qty,
                         "price": cand['price'],
                         "reason": reason,
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "odno": odno
                     }
                     self.trade_records.append(record)
 
@@ -842,7 +837,7 @@ class AutoTrader:
                 success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
-                return True
+                return odno
             else:
                 err_msg = res_json.get('msg1', 'Unknown Error')
                 self.log(f"결과: 실패 ({err_msg}) [Code: {res_json.get('msg_cd')}]")
@@ -850,7 +845,7 @@ class AutoTrader:
             self.log(f"결과: 에러 발생 ({str(e)})")
         finally:
             self.log("========================================")
-        return False
+        return None
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
@@ -866,23 +861,23 @@ def system_trading_menu():
     console.print("[dim]안내: 시스템 트레이딩은 현재 '국내주식(stocks_kr)' 리스트를 대상으로만 작동합니다.[/dim]")
     console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
-    console.print("[1] 실행 (Start)")
-    console.print("[2] 상태 (Status)")
-    console.print("[3] 중단 (Stop)")
-    console.print("[4] 평가 (Report)")
-    console.print("[5] 진단 (Diagnosis)")
+    console.print("[1] 트레이딩 실행 (Start)")
+    console.print("[2] 트레이딩 중단 (Stop)")
+    console.print("[3] 트레이딩 상태 (Status)")
+    console.print("[4] 트레이딩 평가 (Report)")
+    console.print("[5] 트레이딩 로그 (Log Viewer)")
     console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="2")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="3")
     if choice.lower() == 'q': return
     
     if choice == "1":
         trader.start()
     elif choice == "2":
-        trader.print_status()
-    elif choice == "3":
         trader.stop()
+    elif choice == "3":
+        trader.print_status()
     elif choice == "4":
         trader.print_report()
     elif choice == "5":
-        trader.diagnose_stock()
+        trader.view_log_file()

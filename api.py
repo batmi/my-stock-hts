@@ -158,7 +158,7 @@ class ThrottledSession(requests.Session):
             except Exception as e:
                 # 연결 끊김 에러 체크
                 err_str = str(e)
-                is_disconnect = "Connection aborted" in err_str or "RemoteDisconnected" in err_str
+                is_disconnect = "Connection aborted" in err_str or "RemoteDisconnected" in err_str or "timed out" in err_str
                 
                 # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
                 if is_disconnect and attempt < max_retries:
