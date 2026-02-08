@@ -104,23 +104,16 @@ class AutoTrader:
         except Exception: pass
 
     def print_status(self):
-        status_color = "green" if self.is_running else "red"
-        status_text = "실행 중 (RUNNING)" if self.is_running else "중지됨 (STOPPED)"
+        if not self.is_running:
+            status_text = "STOPPED"
+            status_color = "red"
+        elif self.is_market_open():
+            status_text = "RUNNING"
+            status_color = "green"
+        else:
+            status_text = "WAITING"
+            status_color = "yellow"
         
-        console.print(f"\n[bold]=== 시스템 트레이딩 상태 ({status_text}) ===[/bold]", style=status_color)
-        
-        # 1. 실행 시간 정보
-        if self.is_running and self.start_time:
-            start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-            elapsed = datetime.now() - self.start_time
-            elapsed_str = str(elapsed).split('.')[0]
-            console.print(f"• 실행 시간: {start_str} (경과: {elapsed_str})")
-        
-        # 2. 마켓 상태
-        market_status = "장 운영 중 (거래 가능)" if self.is_market_open() else "장 마감/휴장 (대기 중)"
-        if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
-        console.print(f"• 마켓 상태: {market_status}")
-
         # 3. 자산 및 손익 현황 (안전성 핵심)
         current_asset = None
         deposit = 0
@@ -138,43 +131,69 @@ class AutoTrader:
                 if res.json()['rt_cd'] == '0': deposit = int(res.json()['output']['ord_psbl_cash'])
             except: pass
 
-        console.print("\n[bold cyan][자산 및 손익 현황][/bold cyan]")
-        if self.initial_asset > 0:
-            if current_asset is not None:
+        console.print()
+        table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_style=status_color, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table.add_column("구분", justify="left", style="cyan", width=15)
+        table.add_column("상세 내용", justify="left")
+
+        # 1. 실행 정보
+        if self.is_running and self.start_time:
+            start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+            elapsed = datetime.now() - self.start_time
+            elapsed_str = str(elapsed).split('.')[0]
+            table.add_row("실행 시간", f"{start_str} (경과: {elapsed_str})")
+        
+        # 2. 마켓 상태
+        market_status = "장 운영 중 (거래 가능)" if self.is_market_open() else "장 마감/휴장 (대기 중)"
+        if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
+        table.add_row("마켓 상태", market_status)
+
+        table.add_section()
+
+        # 3. 자산 현황
+        if current_asset is not None:
+            if self.initial_asset > 0:
                 profit = current_asset - self.initial_asset
                 rate = (profit / self.initial_asset) * 100
                 color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 
-                console.print(f"  - 초기 자산: {self.initial_asset:,}원")
-                console.print(f"  - 현재 자산: {current_asset:,}원")
-                console.print(f"  - 누적 손익: {color}{profit:+,}원 ({rate:+.2f}%)[/]")
-                console.print(f"  - 주문 가능: {deposit:,}원")
-                
-                # 일일 손실 제한 체크
+                table.add_row("초기 자산", f"{self.initial_asset:,}원")
+                table.add_row("현재 자산", f"{current_asset:,}원")
+                table.add_row("누적 손익", f"{color}{profit:+,}원 ({rate:+.2f}%)[/]")
+            else:
+                table.add_row("초기 자산", "- (미설정)")
+                table.add_row("현재 자산", f"{current_asset:,}원")
+                table.add_row("누적 손익", "-")
+            
+            table.add_row("주문 가능", f"{deposit:,}원")
+            
+            # 일일 손실 제한 체크 (초기 자산이 있을 때만)
+            if self.initial_asset > 0:
                 loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
                 if loss_limit > 0:
                     safety_msg = "[green]안전[/green]"
                     if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
                     elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
-                    console.print(f"  - 손실 제한: -{loss_limit}% (상태: {safety_msg})")
-            else:
-                console.print("  - [bold red]자산 정보 조회 실패 (통신 오류)[/bold red]")
-                console.print(f"  - 초기 자산: {self.initial_asset:,}원")
+                    table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
         else:
-            console.print("  - 자산 정보 로딩 중...")
+            table.add_row("자산 정보", "[bold red]조회 실패 (통신 오류)[/bold red]")
+            if self.initial_asset > 0:
+                table.add_row("초기 자산", f"{self.initial_asset:,}원")
 
-        # 4. 시스템 안정성 (에러 카운트)
-        console.print("\n[bold cyan][시스템 안정성][/bold cyan]")
+        table.add_section()
+
+        # 4. 시스템 안정성
         err_cnt = self.consecutive_errors
         max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
         err_color = "[green]" if err_cnt == 0 else ("[red]" if err_cnt >= max_err else "[yellow]")
-        console.print(f"  - 연속 에러: {err_color}{err_cnt} / {max_err}회[/]")
+        table.add_row("연속 에러", f"{err_color}{err_cnt} / {max_err}회[/]")
         
         # 5. 매매 요약
         buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
         sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
-        console.print(f"  - 금일 매매: 매수 {buy_cnt}건 / 매도 {sell_cnt}건")
+        table.add_row("금일 매매", f"매수 {buy_cnt}건 / 매도 {sell_cnt}건")
 
+        console.print(table)
         console.print()
 
     def print_report(self):

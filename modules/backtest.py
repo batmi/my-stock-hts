@@ -254,7 +254,12 @@ def run_backtest():
                         avg_price = price
                         buy_date = date
                         action = "매수"
-                        trades.append({"date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, "profit": 0, "profit_amt": 0, "days": 0, "score": raw_score, "rsi": row['RSI'], "cum_profit": cum_profit})
+                        trades.append({
+                            "date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, 
+                            "profit": 0, "profit_amt": 0, "days": 0, 
+                            "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                            "cum_profit": cum_profit
+                        })
             
             # [매도 조건] 보유 중일 때
             elif holdings > 0:
@@ -303,7 +308,12 @@ def run_backtest():
                     buy_date = None
                     action = "매도"
                     reason = "손절" if is_stop_loss else ("익절" if is_take_profit else "점수하락")
-                    trades.append({"date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, "profit": profit_rate, "profit_amt": profit, "days": holding_days, "score": raw_score, "rsi": row['RSI'], "cum_profit": cum_profit})
+                    trades.append({
+                        "date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, 
+                        "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
+                        "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                        "cum_profit": cum_profit
+                    })
             
             prev_row = row
 
@@ -406,7 +416,19 @@ def run_backtest():
     if trades:
         config.console.print()
         t_table = Table(title="[상세 매매 일지]", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-        t_table.add_column("일자"); t_table.add_column("구분"); t_table.add_column("점수(RSI)", justify="center"); t_table.add_column("수량", justify="right"); t_table.add_column("단가", justify="right"); t_table.add_column("수익금", justify="right"); t_table.add_column("수익률", justify="right"); t_table.add_column("누적손익", justify="right")
+        t_table.add_column("일자", justify="center")
+        t_table.add_column("구분", justify="center")
+        t_table.add_column("점수", justify="center")
+        t_table.add_column("RSI", justify="right")
+        t_table.add_column("ADX", justify="right")
+        t_table.add_column("CCI", justify="right")
+        t_table.add_column("OBV", justify="right")
+        t_table.add_column("수량", justify="right")
+        t_table.add_column("단가", justify="right")
+        t_table.add_column("수익금", justify="right")
+        t_table.add_column("수익률", justify="right")
+        t_table.add_column("누적손익", justify="right")
+
         for t in trades:
             p_str = f"{t['profit']:+.2f}%" if t['type'].startswith("매도") else "-"
             p_color = "[red]" if t['profit'] > 0 else ("[blue]" if t['profit'] < 0 else "")
@@ -415,7 +437,48 @@ def run_backtest():
             date_str = str(t['date'])
             if len(date_str) == 8 and date_str.isdigit(): date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
             
-            score_rsi = f"{t.get('score', 0)} ({t.get('rsi', 0):.0f})"
+            # 지표 색상 적용
+            # RSI
+            rsi_val = t.get('rsi', 0)
+            if rsi_val is None or np.isnan(rsi_val):
+                rsi_str = "-"
+                rsi_c = "dim"
+            else:
+                rsi_str = f"{rsi_val:.1f}"
+                rsi_c = "blue"
+                if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_c = "magenta"
+                elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_c = "red"
+                elif 45 <= rsi_val < 55: rsi_c = "orange3"
+                elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_c = "yellow"
+            
+            # ADX
+            adx_val = t.get('adx', 0)
+            if adx_val is None or np.isnan(adx_val):
+                adx_str = "-"
+                adx_c = "dim"
+            else:
+                adx_str = f"{adx_val:.1f}"
+                adx_c = "white"
+                if adx_val >= 40: adx_c = "magenta"
+                elif adx_val >= 30: adx_c = "red"
+                elif adx_val >= 20: adx_c = "orange3"
+                elif adx_val >= 15: adx_c = "yellow"
+            
+            # CCI
+            cci_val = t.get('cci', 0)
+            if cci_val is None or np.isnan(cci_val):
+                cci_str = "-"
+                cci_c = "dim"
+            else:
+                cci_str = f"{cci_val:.1f}"
+                cci_c = "blue"
+                if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_c = "red"
+                elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_c = "orange3"
+                elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_c = "yellow"
+            
+            # OBV
+            obv_val = t.get('obv') or 0
+            obv_c = "red" if t.get('obv_trend') else "blue"
             
             qty_str = f"{t['qty']:,}"
             
@@ -440,5 +503,18 @@ def run_backtest():
             if cum_val > 0: cum_p_str = f"[red]+{cum_p_str}[/]"
             elif cum_val < 0: cum_p_str = f"[blue]-{cum_p_str}[/]"
             
-            t_table.add_row(date_str[:10], f"{type_color}{t['type']}[/]", score_rsi, qty_str, price_str, amt_str, profit_display, cum_p_str)
+            t_table.add_row(
+                date_str[:10], 
+                f"{type_color}{t['type']}[/]", 
+                str(t.get('score', 0)),
+                f"[{rsi_c}]{rsi_str}[/]",
+                f"[{adx_c}]{adx_str}[/]",
+                f"[{cci_c}]{cci_str}[/]",
+                f"[{obv_c}]{int(obv_val/1000):,}K[/]",
+                qty_str, 
+                price_str, 
+                amt_str, 
+                profit_display, 
+                cum_p_str
+            )
         config.console.print(t_table)

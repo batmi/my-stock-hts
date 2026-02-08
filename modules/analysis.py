@@ -124,7 +124,7 @@ def diagnose_stock():
     config.console.print()
     
     # [테이블 1] 기술적 지표 분석
-    table_tech = Table(title=f"기술적 지표 분석: {name} ({code})", box=box.ROUNDED, header_style="dim", border_style="dim")
+    table_tech = Table(title=f"기술적 지표 분석: {name} ({code})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table_tech.add_column("지표", justify="left", style="cyan", width=12)
     table_tech.add_column("값 (상태)", justify="left")
     table_tech.add_column("해석/기준", justify="left", style="dim")
@@ -252,7 +252,7 @@ def diagnose_stock():
     config.console.print()
     
     # [테이블 2] 시스템 트레이딩 판단 결과
-    table_logic = Table(title="시스템 트레이딩 판단 결과", box=box.ROUNDED, header_style="dim", border_style="dim")
+    table_logic = Table(title="시스템 트레이딩 판단 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table_logic.add_column("항목", justify="center", style="cyan", width=15)
     table_logic.add_column("결과", justify="center", width=20)
     table_logic.add_column("상세 내용 / 사유", justify="left", style="dim")
