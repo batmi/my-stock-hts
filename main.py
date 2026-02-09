@@ -295,8 +295,8 @@ def main():
             else:
                 trader_status = " [bold yellow](WAITING)[/]"
             
-        config.console.print(f"[4] 전략 백테스팅"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
-        config.console.print("[6] 관심 종목 관리"); config.console.print("[7] [red]매수[/red] 주문")
+        config.console.print("[4] 관심 종목 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
+        config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red] 주문")
         config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
         config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
         print("─" * 50); config.console.print()
@@ -317,9 +317,9 @@ def main():
             elif choice == "3": 
                 code, name, is_ovs = utils.select_stock_for_chart()
                 if code: chart.generate_visual_chart(code, name, is_ovs)
-            elif choice == "4": backtest.run_backtest()
+            elif choice == "4": manage.manage_stock_menu()
             elif choice == "5": auto_trade.system_trading_menu() 
-            elif choice == "6": manage.manage_stock_menu()
+            elif choice == "6": backtest.run_backtest()
             elif choice == "7": trading.send_order("buy")
             elif choice == "8": trading.send_order("sell")
             elif choice == "9": trading.modify_order()

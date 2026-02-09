@@ -183,6 +183,7 @@ session.mount('https://', TLSAdapter())
 # 전역 토큰 변수
 SIM_ACCESS_TOKEN = ""
 REAL_ACCESS_TOKEN = "" 
+AUTO_ACCESS_TOKEN = "" # [추가] 시스템 트레이딩 전용 토큰
 
 def load_token_cache():
     try:
@@ -211,6 +212,10 @@ def check_token_validity(token_info):
     return False
 
 def get_current_token():
+    # [추가] 시스템 트레이딩 컨텍스트 확인
+    if getattr(config.trade_context, 'use_auto_account', False) and not config.IS_SIMULATION:
+        return get_auto_access_token()
+        
     if config.IS_SIMULATION:
         return get_access_token()
     else:
@@ -333,6 +338,51 @@ def get_real_access_token(force_refresh=False):
         
     return None
 
+def get_auto_access_token(force_refresh=False):
+    """시스템 트레이딩 전용 계좌 토큰 발급"""
+    global AUTO_ACCESS_TOKEN
+    
+    if not config.AUTO_APP_KEY: return None
+
+    if not force_refresh and AUTO_ACCESS_TOKEN: 
+        return AUTO_ACCESS_TOKEN
+
+    cache = load_token_cache()
+    auto_token_info = cache.get("AUTO")
+
+    if not force_refresh and check_token_validity(auto_token_info):
+        AUTO_ACCESS_TOKEN = auto_token_info['access_token']
+        if config.DEBUG_LEVEL != "OFF":
+            config.console.print(f"[dim][TRACE] 자동매매 캐시 토큰 사용 ({auto_token_info.get('token_expired')})[/dim]")
+        return AUTO_ACCESS_TOKEN
+
+    headers = {"content-type": "application/json"}
+    body = {"grant_type": "client_credentials", "appkey": config.AUTO_APP_KEY, "appsecret": config.AUTO_APP_SECRET}
+    url = f"{config.REAL_URL}/oauth2/tokenP"
+    
+    try:
+        config.console.print("[dim]자동매매용 토큰 신규 발급 요청...[/dim]")
+        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        
+        if res.status_code == 200:
+            res_json = res.json()
+            AUTO_ACCESS_TOKEN = res_json['access_token']
+            expired = res_json.get('access_token_token_expired')
+            
+            cache = load_token_cache()
+            cache["AUTO"] = {
+                "access_token": AUTO_ACCESS_TOKEN,
+                "token_expired": expired,
+                "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            save_token_cache(cache)
+            config.console.print("[green]자동매매용 토큰 발급 완료[/green]")
+            return AUTO_ACCESS_TOKEN
+    except Exception as e:
+        config.console.print(f"[red]자동매매 토큰 발급 중 오류: {e}[/red]")
+        
+    return None
+
 def safe_int(value):
     try:
         if value is None: return 0
@@ -360,8 +410,17 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
         
         token_to_use = get_current_token()
         base_url = config.URL_BASE if config.IS_SIMULATION else config.REAL_URL
-        key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
-        secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
+        
+        # [수정] 컨텍스트에 따라 키 선택
+        use_auto = getattr(config.trade_context, 'use_auto_account', False)
+        if use_auto and not config.IS_SIMULATION:
+            key = config.AUTO_APP_KEY
+            secret = config.AUTO_APP_SECRET
+            if not key: # Fallback
+                key = config.REAL_APP_KEY; secret = config.REAL_APP_SECRET
+        else:
+            key = config.APP_KEY if config.IS_SIMULATION else config.REAL_APP_KEY
+            secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
 
         env_key = "sim" if config.IS_SIMULATION else "real"
         try:
@@ -625,7 +684,14 @@ def fetch_overseas_period_price(code, excd):
     return None
 
 def fetch_buyable_quantity(stock_code, price):
-    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": stock_code, "ORD_UNPR": str(price), "ORD_DVSN": "00" if price > 0 else "01", "CMA_EVLU_AMT_ICLD_YN": "N", "OVRS_ICLD_YN": "N", "CRDT_TYPE": "00"}
+    # [수정] 컨텍스트에 따른 계좌번호 선택
+    cano = config.CANO
+    acnt_prdt_cd = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "PDNO": stock_code, "ORD_UNPR": str(price), "ORD_DVSN": "00" if price > 0 else "01", "CMA_EVLU_AMT_ICLD_YN": "N", "OVRS_ICLD_YN": "N", "CRDT_TYPE": "00"}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params, timeout=5)
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
@@ -637,7 +703,14 @@ def fetch_buyable_quantity(stock_code, price):
     return 0
 
 def fetch_sellable_quantity(stock_code):
-    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    # [수정] 컨텍스트에 따른 계좌번호 선택
+    cano = config.CANO
+    acnt_prdt_cd = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-sell", "domestic", "inquiry", "sellable", params=params)
     if data.get('rt_cd') == '0':
         for item in data.get('output1', []):
@@ -649,7 +722,15 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
     if excd == "NAS": trade_excd = "NASD"
     elif excd == "NYS": trade_excd = "NYSE"
     elif excd == "AMS": trade_excd = "AMEX"
-    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": trade_excd, "OVRS_ORD_UNPR": str(price), "ITEM_CD": stock_code}
+    
+    # [수정] 컨텍스트에 따른 계좌번호 선택
+    cano = config.CANO
+    acnt_prdt_cd = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+        
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": trade_excd, "OVRS_ORD_UNPR": str(price), "ITEM_CD": stock_code}
     data = call_api("uapi/overseas-stock/v1/trading/inquire-psamount", "overseas", "inquiry", "buyable", params=params)
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
@@ -667,8 +748,16 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
         for e in ["NASD", "NYSE", "AMEX"]:
             if e != primary_excd: trade_excds.append(e)
     else: trade_excds = ["NASD"]
+    
+    # [수정] 컨텍스트에 따른 계좌번호 선택
+    cano = config.CANO
+    acnt_prdt_cd = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+
     for target_excd in trade_excds:
-        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": target_excd, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": target_excd, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
         data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "sellable", params=params)
         if data.get('rt_cd') == '0':
             for item in data.get('output1', []):
@@ -689,3 +778,100 @@ def find_best_exchange_code(stock_code):
             config.update_cache_and_save(stock_code, excd)
             return excd
     return None
+
+def get_domestic_balance():
+    """국내 주식 잔고 조회 (시스템 트레이딩용, account 모듈 대체)"""
+    cano = config.CANO
+    acnt_prdt_cd = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
+    
+    if data.get('rt_cd') == '0':
+        return data.get('output1', []), data.get('output2', [])
+    
+    # [추가] 실패 시 로그 출력
+    msg = f"잔고 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})"
+    if config.DEBUG_LEVEL != "OFF":
+        config.console.print(f"[dim red][DEBUG] {msg}[/dim red]")
+    if config.SYSTEM_LOGGER:
+        config.SYSTEM_LOGGER(f"[API] {msg}")
+        
+    return [], []
+
+def send_telegram_message(message):
+    """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+
+    # [추가] 계좌 정보 식별 및 메시지 헤더 추가
+    cano = config.CANO
+    acc_label = "모의" if config.IS_SIMULATION else "실전"
+
+    # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acc_label = "AUTO"
+
+    # 계좌번호 마스킹 (앞 4자리 노출, 나머지 *)
+    masked_acc = f"{cano[:4]}****" if cano and len(cano) >= 8 else cano
+    
+    account_info = f"[{acc_label} {masked_acc}]"
+
+    # [수정] 계좌 정보를 메시지 가장 마지막에 추가
+    final_msg = f"{message} {account_info}"
+
+    # [추가] 전송 메시지 로그 기록
+    if config.SYSTEM_LOGGER:
+        # 로그 파일 가독성을 위해 줄바꿈을 구분자로 치환하여 기록
+        log_content = final_msg.replace('\n', ' | ')
+        config.SYSTEM_LOGGER(f"[Telegram] 메시지 발송: {log_content}")
+
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg}
+    
+    # [추가] 화면 디버그 로그 (요청)
+    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] REQ (TELEGRAM) | POST {url}[/dim cyan]")
+        if config.DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan]  > Message: {message.replace(chr(10), ' ')}[/dim cyan]")
+
+    # [수정] 재시도 로직 추가 (최대 3회)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 매매 로직 지연 방지를 위해 짧은 타임아웃 설정 (재시도 시 조금씩 증가)
+            current_timeout = 1 + (attempt * 0.5)
+            res = requests.post(url, data=data, timeout=current_timeout)
+            
+            # [추가] 화면 디버그 로그 (응답)
+            if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                status_color = "magenta" if res.status_code == 200 else "red"
+                config.console.print(f"[dim {status_color}][TRACE] RES (TELEGRAM) Status:{res.status_code} ({attempt+1}/{max_retries})[/dim {status_color}]")
+                if config.DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
+                     config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
+            
+            if res.status_code == 200:
+                if config.SYSTEM_LOGGER:
+                    config.SYSTEM_LOGGER("[Telegram] 전송 성공")
+                return # 성공 시 함수 종료
+            else:
+                if config.SYSTEM_LOGGER:
+                    config.SYSTEM_LOGGER(f"[Telegram] 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
+        except Exception as e:
+            # [추가] 화면 디버그 로그 (예외)
+            if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
+
+            if config.SYSTEM_LOGGER:
+                config.SYSTEM_LOGGER(f"[Telegram] 전송 중 오류 발생({attempt+1}/{max_retries}): {str(e)}")
+        
+        # 마지막 시도가 아니면 대기
+        if attempt < max_retries - 1:
+            time.sleep(1)
+            
+    if config.SYSTEM_LOGGER:
+        config.SYSTEM_LOGGER("[Telegram] 최종 전송 실패")

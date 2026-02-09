@@ -12,7 +12,7 @@ import config
 import api
 import utils
 import indicators
-from modules import account, analysis
+from modules import analysis # account 모듈 의존성 제거
 
 console = config.console
 
@@ -47,42 +47,73 @@ class AutoTrader:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
         
+        # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.IS_SIMULATION:
-            console.print("[bold red]실전 투자 모드에서는 자동매매를 실행할 수 없습니다.[/bold red]")
-            return
+            if not config.AUTO_APP_KEY or not config.AUTO_CANO:
+                console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
+                console.print("[dim]환경 변수 AUTO_APP_KEY, AUTO_APP_SECRET, AUTO_ACC_NUM을 설정해주세요.[/dim]")
+                return
+            
+            console.print("\n[bold red]!!! 경고: 실전 투자 모드에서 시스템 트레이딩을 시작합니다 !!![/bold red]")
+            console.print(f"운용 계좌: [bold yellow]{config.AUTO_CANO}-{config.AUTO_ACNT_PRDT_CD}[/bold yellow] (시스템 트레이딩 전용)")
+            if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                console.print("[yellow]시작을 취소했습니다.[/yellow]")
+                return
 
-        self.is_running = True
-        self.start_time = datetime.now()
-        self.consecutive_errors = 0
-        self.was_market_open = self.is_market_open()
-        
-        # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
-        self.initial_asset = self._get_total_estimated_asset()
-        if self.initial_asset > 0:
-            self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
-        
-        # [추가] API 모듈에서 로그를 남길 수 있도록 연결
-        config.SYSTEM_LOGGER = self.log
-        
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.thread.start()
+        with console.status("[bold green]시스템 시작 준비 중 (자산 조회 및 스레드 시작)...[/]"):
+            self.is_running = True
+            self.start_time = datetime.now()
+            self.consecutive_errors = 0
+            self.was_market_open = self.is_market_open()
+            
+            # [추가] 시작 시 컨텍스트 임시 설정하여 초기 자산 조회
+            config.trade_context.use_auto_account = True
+            # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
+            self.initial_asset = self._get_total_estimated_asset()
+            config.trade_context.use_auto_account = False # 복구
+            
+            if self.initial_asset is None:
+                self.initial_asset = 0
+                self.log("초기 자산 조회 실패 또는 자산 없음 (0원으로 설정)")
+
+            if self.initial_asset > 0:
+                self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
+            
+            # [추가] API 모듈에서 로그를 남길 수 있도록 연결
+            config.SYSTEM_LOGGER = self.log
+            
+            self.thread = threading.Thread(target=self._run_loop, daemon=True)
+            self.thread.start()
+
         console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
         self.log("시스템 시작")
+        
+        # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
+        config.trade_context.use_auto_account = True
+        api.send_telegram_message(f"▶️ [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원")
+        config.trade_context.use_auto_account = False
 
     def stop(self):
         if not self.is_running:
-            console.print("[yellow]실행 중인 자동매매가 없습니다.[/yellow]")
+            console.print("\n[yellow]실행 중인 자동매매가 없습니다.[/yellow]")
             return
             
-        self.is_running = False
-        
-        # [추가] 로거 연결 해제
-        config.SYSTEM_LOGGER = None
-        
-        if self.thread:
-            self.thread.join(timeout=5)
+        with console.status("[bold red]시스템 중단 요청 처리 중...[/]"):
+            self.is_running = False
+            
+            if self.thread:
+                self.thread.join(timeout=5)
+
         console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
         self.log("시스템 중단")
+        
+        # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
+        config.trade_context.use_auto_account = True
+        api.send_telegram_message("⏹ [시스템 종료] 자동매매가 종료되었습니다.")
+        config.trade_context.use_auto_account = False
+        
+        # [추가] 로거 연결 해제 (메시지 전송 후 해제)
+        config.SYSTEM_LOGGER = None
 
     def log(self, msg):
         now = datetime.now()
@@ -118,18 +149,25 @@ class AutoTrader:
         current_asset = None
         deposit = 0
         
+        # [추가] 상태 조회 시에도 시스템 트레이딩 컨텍스트 사용
+        original_context = getattr(config.trade_context, 'use_auto_account', False)
+        config.trade_context.use_auto_account = True
+        
         with console.status("[bold green]트레이딩 상태 및 자산 정보 조회 중...[/]"):
             current_asset = self._get_total_estimated_asset()
             
             # 예수금 별도 조회 (매수 여력 확인용)
             try:
-                tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
-                url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
-                headers = utils.get_common_headers(tr_id)
-                params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
-                res = api.session.get(url, headers=headers, params=params, verify=False)
-                if res.json()['rt_cd'] == '0': deposit = int(res.json()['output']['ord_psbl_cash'])
+                cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+                acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+                params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+                
+                # [수정] api.call_api 사용하여 안정성 확보
+                res = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params)
+                if res.get('rt_cd') == '0': deposit = int(res['output']['ord_psbl_cash'])
             except: pass
+            
+        config.trade_context.use_auto_account = original_context # 복구
 
         console.print()
         table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_style=status_color, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -202,6 +240,10 @@ class AutoTrader:
         if not self.trade_records:
             console.print("\n[yellow]매매 기록이 없습니다.[/yellow]")
             return
+
+        # [추가] 리포트 생성 상태 표시
+        with console.status("[bold green]매매 리포트 데이터 분석 중...[/]"):
+            time.sleep(0.5) # UX를 위한 짧은 대기
 
         # 통계 계산
         total_trades = len(self.trade_records)
@@ -360,6 +402,9 @@ class AutoTrader:
         console.print(f"\n[bold cyan]=== 실시간 로그 모니터링 ({filename}) ===[/bold cyan]")
         console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
 
+        with console.status("[bold green]로그 파일 로딩 중...[/]"):
+            time.sleep(0.5)
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 # 초기 출력: 최근 50줄
@@ -392,7 +437,18 @@ class AutoTrader:
     def _run_loop(self):
         while self.is_running:
             try:
+                # [추가] 스레드 내에서 시스템 트레이딩 컨텍스트 활성화
+                config.trade_context.use_auto_account = True
+                
                 self.log("모니터링 주기 시작...")
+                
+                # [추가] 현재 운용 계좌 정보 로깅 (마스킹 처리)
+                current_cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+                if current_cano:
+                    mask_len = max(0, len(current_cano) - 4)
+                    masked_account = current_cano[:4] + "*" * mask_len
+                    acc_type = "모의투자" if config.IS_SIMULATION else "실전투자(AUTO)"
+                    self.log(f"운용 계좌: {masked_account} [{acc_type}]")
                 
                 current_market_status = self.is_market_open()
                 
@@ -402,10 +458,12 @@ class AutoTrader:
                         self.log("=" * 80)
                         self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
                         self.log("=" * 80)
+                        api.send_telegram_message("🔔 [장 시작] 거래 가능 시간이 되었습니다.")
                     elif self.was_market_open and not current_market_status:
                         self.log("=" * 80)
                         self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
                         self.log("=" * 80)
+                        api.send_telegram_message("🌙 [장 마감] 거래 시간이 종료되었습니다.")
                 
                 self.was_market_open = current_market_status
                 
@@ -443,6 +501,7 @@ class AutoTrader:
                 
                 if self.consecutive_errors >= max_err:
                     self.log(f"[비상 정지] 연속 에러 {max_err}회 발생으로 시스템을 중단합니다.")
+                    api.send_telegram_message(f"🚨 [비상 정지] 연속 에러 {max_err}회 발생으로 시스템을 중단합니다.")
                     self.stop()
                     break
                 time.sleep(10)
@@ -453,14 +512,17 @@ class AutoTrader:
             # API 호출 전 대기 (Rate Limit 방지)
             time.sleep(0.2)
             
+            cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+            acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+            
             tr_id = utils.get_tr_id("domestic", "inquiry", "history")
             url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
             headers = utils.get_common_headers(tr_id)
             today = datetime.now().strftime("%Y%m%d")
             
             params = {
-                "CANO": config.CANO, 
-                "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+                "CANO": cano, 
+                "ACNT_PRDT_CD": acnt, 
                 "INQR_STRT_DT": today, 
                 "INQR_END_DT": today, 
                 "SLL_BUY_DVSN_CD": "00", 
@@ -519,6 +581,10 @@ class AutoTrader:
                         # 로그 기록
                         self.log(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 체결 (단가: {avg_price:,.0f}원){add_info}")
                         
+                        # 알림 발송 (텔레그램 + 비프음)
+                        print('\a') # 소리 알림
+                        api.send_telegram_message(f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원\n{add_info.strip()}")
+                        
                         # 상태 업데이트
                         self.order_status[odno] = tot_ccld_qty
                         
@@ -530,7 +596,7 @@ class AutoTrader:
         try:
             # API 호출 전 대기 (Rate Limit 방지)
             time.sleep(0.2)
-            holdings, summary = account.fetch_domestic_balance()
+            holdings, summary = api.get_domestic_balance() # [수정] api 모듈 함수 사용
             
             if not holdings:
                 self.log("보유 종목: 없음")
@@ -583,9 +649,10 @@ class AutoTrader:
                     self.log(row_str)
                 
                 self.log("-" * 125)
-                if summary:
-                    total_profit = api.safe_int(summary.get('evlu_pfls_smtl_amt'))
-                    total_eval = api.safe_int(summary.get('scts_evlu_amt'))
+                if summary and len(summary) > 0:
+                    s_data = summary[0]
+                    total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+                    total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
                     self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
                     # [추가] 일일 손실 제한 체크
@@ -595,25 +662,41 @@ class AutoTrader:
 
     def _get_total_estimated_asset(self):
         """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
-        try:
-            # 1. 예수금 조회
-            tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
-            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
-            headers = utils.get_common_headers(tr_id)
-            params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
-            res = api.session.get(url, headers=headers, params=params, verify=False)
-            cash = 0
-            if res.json()['rt_cd'] == '0': cash = int(res.json()['output']['ord_psbl_cash'])
-            else: return None # [수정] 예수금 조회 실패 시 None 반환
-            
-            # 2. 주식 평가금 조회
-            _, summary = account.fetch_domestic_balance()
-            stock_eval = 0
-            if summary: stock_eval = api.safe_int(summary.get('scts_evlu_amt'))
-            else: return None # [수정] 잔고 조회 실패 시 None 반환
-            
-            return cash + stock_eval
-        except: return None
+        # [추가] 일시적 오류 대비 재시도 로직 (최대 3회)
+        for attempt in range(3):
+            try:
+                cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+                acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+                
+                # 1. 예수금 조회
+                # [수정] api.call_api 사용하여 토큰 갱신 및 재시도 로직 활용
+                params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+                res = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params)
+                
+                cash = 0
+                if res.get('rt_cd') == '0': 
+                    cash = int(res['output']['ord_psbl_cash'])
+                else: 
+                    # [추가] 실패 원인 로그 기록
+                    if config.DEBUG_LEVEL != "OFF":
+                        self.log(f"[DEBUG] 예수금 조회 실패({attempt+1}/3): {res.get('msg1')} [{res.get('msg_cd')}]")
+                    time.sleep(0.5)
+                    continue # 실패 시 재시도
+                
+                # 2. 주식 평가금 조회
+                _, summary = api.get_domestic_balance() # [수정] api 모듈 함수 사용
+                stock_eval = 0
+                if summary and len(summary) > 0: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+                # 잔고 조회 실패(빈 리스트)일 수도 있으나, 실제 잔고가 없는 경우와 구분 어려우므로 진행
+                
+                return cash + stock_eval
+            except Exception as e:
+                # [추가] 예외 로그 기록
+                if config.DEBUG_LEVEL != "OFF":
+                    self.log(f"[DEBUG] 자산 조회 중 예외 발생({attempt+1}/3): {str(e)}")
+                time.sleep(1)
+        
+        return None
 
     def _check_loss_limit(self, current_stock_eval):
         """자산 변동을 체크하여 손실 한도 초과 시 비상 정지"""
@@ -629,6 +712,7 @@ class AutoTrader:
         if loss_rate <= -loss_limit_pct:
             self.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
             self.log(f"시작 자산: {self.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
+            api.send_telegram_message(f"🚨 [손실 제한] 일일 손실 한도 초과!\n수익률: {loss_rate:.2f}%\n현재 자산: {current_total:,}원")
             self.stop()
 
     def _get_prev_rsi(self, df):
@@ -642,7 +726,7 @@ class AutoTrader:
         return None
 
     def _check_sell_conditions(self):
-        holdings, _ = account.fetch_domestic_balance()
+        holdings, _ = api.get_domestic_balance() # [수정] api 모듈 함수 사용
         if not holdings: return
 
         stop_loss_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
@@ -720,7 +804,7 @@ class AutoTrader:
         if not targets: return
         
         # [추가] 보유 종목 조회 (중복 매수 방지)
-        holdings, _ = account.fetch_domestic_balance()
+        holdings, _ = api.get_domestic_balance() # [수정] api 모듈 함수 사용
         holding_codes = set()
         if holdings:
             for h in holdings:
@@ -728,9 +812,11 @@ class AutoTrader:
         
         # 예수금 확인 (API 직접 호출)
         tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
+        cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+        acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
         headers = utils.get_common_headers(tr_id)
-        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
         
         avail_cash = 0
         try:
@@ -838,7 +924,9 @@ class AutoTrader:
         tr_id = utils.get_tr_id("domestic", "trade", type_str)
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-cash"
         headers = utils.get_common_headers(tr_id)
-        data = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": code, "ORD_DVSN": "01", "ORD_QTY": str(qty), "ORD_UNPR": "0"}
+        cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+        acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": code, "ORD_DVSN": "01", "ORD_QTY": str(qty), "ORD_UNPR": "0"}
         
         # [추가] 상세 로그: 요청 정보
         self.log(f"======== [주문 실행] {type_str.upper()} ========")
@@ -856,6 +944,7 @@ class AutoTrader:
                 success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
+                api.send_telegram_message(f"🚀 [주문 접수] {type_str.upper()} {code} {qty}주 (시장가)\n주문번호: {odno}")
                 return odno
             else:
                 err_msg = res_json.get('msg1', 'Unknown Error')
@@ -868,11 +957,6 @@ class AutoTrader:
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
-    # [추가] 실전 투자 모드 제한
-    if not config.IS_SIMULATION:
-        console.print("\n[bold red]경고: 시스템 트레이딩 기능은 현재 모의투자 환경에서만 지원합니다.[/bold red]")
-        console.print("[dim]안전성을 위해 실전 투자 모드에서는 접근이 제한됩니다.[/dim]\n")
-        return
 
     trader = AutoTrader()
 

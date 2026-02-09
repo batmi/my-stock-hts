@@ -402,7 +402,7 @@ def send_order(order_type):
             f" 단가: [bold]{display_price}[/bold]\n"
             f" 총액: [bold]{amt_str}[/bold]\n"
         )
-        config.console.print(Panel(confirm_msg, expand=False))
+        config.console.print(Panel(confirm_msg, expand=False, width=60))
         
         if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
@@ -502,7 +502,7 @@ def send_order(order_type):
             f" 단가: [bold]${price} {display_price_type}[/bold]\n"
             f" 총액: [bold]{amt_str}[/bold]\n"
         )
-        config.console.print(Panel(confirm_msg, expand=False))
+        config.console.print(Panel(confirm_msg, expand=False, width=60))
         
         if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
@@ -604,7 +604,7 @@ def modify_order():
             f" {action_name} 단가: [bold]{display_price}[/bold]\n"
             f"{amt_msg}"
         )
-        config.console.print(Panel(confirm_msg, expand=False))
+        config.console.print(Panel(confirm_msg, expand=False, width=60))
         if Prompt.ask("\n진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
         tr_id = utils.get_tr_id("domestic", "modify", "revise") # 정정/취소 동일 TR
@@ -672,7 +672,7 @@ def modify_order():
             f" {action_name} 단가: [bold]{display_price}[/bold]\n"
             f"{amt_msg}"
         )
-        config.console.print(Panel(confirm_msg, expand=False))
+        config.console.print(Panel(confirm_msg, expand=False, width=60))
         if Prompt.ask("\n진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
         tr_id = utils.get_tr_id("overseas", "modify", "revise")

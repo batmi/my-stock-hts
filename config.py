@@ -183,6 +183,9 @@ SYSTEM_LOGGER = None
 # [추가] 시스템 트레이딩 우선순위 처리를 위한 락 (RLock 사용)
 SYSTEM_TRADING_LOCK = threading.RLock()
 
+# [추가] 스레드별 컨텍스트 관리 (API 호출 시 계좌 분리용)
+trade_context = threading.local()
+
 # ----------------------------------------------------------
 # 전역 변수 초기화
 # ----------------------------------------------------------
@@ -197,6 +200,16 @@ IS_SIMULATION = False
 REAL_APP_KEY = ""
 REAL_APP_SECRET = ""
 
+# [추가] 시스템 트레이딩 전용 변수 (실전 모드에서 분리 운용 시 사용)
+AUTO_APP_KEY = ""
+AUTO_APP_SECRET = ""
+AUTO_CANO = ""
+AUTO_ACNT_PRDT_CD = ""
+
+# [추가] 텔레그램 알림 설정
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+
 # 서버 URL 상수 정의
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
 REAL_URL = "https://openapi.koreainvestment.com:9443"
@@ -209,7 +222,8 @@ STOCK_CONFIG_DATA = {}
 
 def initialize_environment():
     global APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD, URL_BASE, IS_SIMULATION
-    global REAL_APP_KEY, REAL_APP_SECRET
+    global REAL_APP_KEY, REAL_APP_SECRET, AUTO_APP_KEY, AUTO_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    global AUTO_CANO, AUTO_ACNT_PRDT_CD
     
     console.print("\n[bold]접속할 서버를 선택하세요:[/bold]")
     console.print("[1] 모의투자 (Simulation)")
@@ -227,6 +241,7 @@ def initialize_environment():
         sys.exit()
     
     acc_num_input = ""
+    auto_acc_num = None
     
     if choice == "1":
         APP_KEY = os.environ.get("SIM_APP_KEY")
@@ -243,6 +258,12 @@ def initialize_environment():
         APP_KEY = REAL_APP_KEY
         APP_SECRET = REAL_APP_SECRET
         acc_num_input = os.environ.get("REAL_ACC_NUM")
+        
+        # [추가] 시스템 트레이딩 전용 계좌 정보 로드
+        AUTO_APP_KEY = os.environ.get("AUTO_APP_KEY")
+        AUTO_APP_SECRET = os.environ.get("AUTO_APP_SECRET")
+        auto_acc_num = os.environ.get("AUTO_ACC_NUM")
+        
         URL_BASE = REAL_URL
         IS_SIMULATION = False
         console.print()
@@ -251,6 +272,10 @@ def initialize_environment():
     if not all([APP_KEY, APP_SECRET, acc_num_input]):
         console.print("[bold red]오류: 해당 환경의 필수 환경변수(KEY, SECRET, ACC_NUM)가 설정되지 않았습니다.[/bold red]")
         sys.exit()
+
+    # [추가] 텔레그램 설정 로드 (선택 사항)
+    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
     clean_acc = acc_num_input.strip().replace('-', '')
     if len(clean_acc) == 8:
@@ -262,6 +287,16 @@ def initialize_environment():
     else:
         console.print(f"[bold red]오류: 계좌번호 형식이 올바르지 않습니다. ({acc_num_input})[/bold red]")
         sys.exit()
+
+    # [추가] 자동매매 계좌번호 파싱
+    if auto_acc_num:
+        clean_auto = auto_acc_num.strip().replace('-', '')
+        if len(clean_auto) == 8:
+            AUTO_CANO = clean_auto
+            AUTO_ACNT_PRDT_CD = "01"
+        elif len(clean_auto) == 10:
+            AUTO_CANO = clean_auto[:8]
+            AUTO_ACNT_PRDT_CD = clean_auto[8:]
 
 def load_stock_config(filename=None):
     global STOCK_CONFIG_DATA

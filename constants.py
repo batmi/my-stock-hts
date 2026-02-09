@@ -56,8 +56,8 @@ TR_ID_CONFIG = {
 # [설정] 데이터 필드 매핑 (한글 명칭 변환용)
 # ==========================================================
 FIELD_MAP_DOMESTIC = {
-    "marg_rate": "증거금 비율", "rprs_mrkt_kor_name": "대표 시장 한글 명", "new_hgpr_lwpr_cls_code": "신 고가 저가 구분 코드",
-    "bstp_kor_isnm": "업종 한글 종목명", "temp_stop_yn": "임시 정지 여부", "oprc_rang_cont_yn": "시가 범위 연장 여부",
+    "marg_rate": "증거금 비율", "rprs_mrkt_kor_name": "대표 시장", "new_hgpr_lwpr_cls_code": "신 고가 저가 구분 코드",
+    "bstp_kor_isnm": "업종", "temp_stop_yn": "임시 정지 여부", "oprc_rang_cont_yn": "시가 범위 연장 여부",
     "clpr_rang_cont_yn": "종가 범위 연장 여부", "crdt_able_yn": "신용 가능 여부", "grmn_rate_cls_code": "보증금 비율 구분 코드",
     "elw_pblc_yn": "ELW 발행 여부", "stck_prpr": "주식 현재가", "prdy_vrss": "전일 대비", "prdy_vrss_sign": "전일 대비 부호",
     "prdy_ctrt": "전일 대비율", "acml_tr_pbmn": "누적 거래 대금", "acml_vol": "누적 거래량", "prdy_vrss_vol_rate": "전일 대비 거래량 비율",
