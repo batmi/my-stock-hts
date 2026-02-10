@@ -821,7 +821,7 @@ def send_telegram_message(message):
     # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
     if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
         cano = config.AUTO_CANO
-        acc_label = "AUTO"
+        acc_label = "자동"
 
     # 계좌번호 마스킹 (앞 4자리 노출, 나머지 *)
     masked_acc = f"{cano[:4]}****" if cano and len(cano) >= 8 else cano

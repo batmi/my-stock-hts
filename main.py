@@ -287,7 +287,7 @@ def main():
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)
-            config.console.print("[0] 자산관리"); config.console.print("[1] 시장 지수 조회")
+            config.console.print("[0] 자산 관리"); config.console.print("[1] 시장 지수 조회")
             config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
             
             trader_status = ""

@@ -43,7 +43,8 @@ class DBManager:
                     "profit_amt": "INTEGER DEFAULT 0",
                     "profit_rate": "REAL DEFAULT 0.0",
                     "reason": "TEXT",
-                    "strategy_score": "REAL DEFAULT 0"
+                    "strategy_score": "REAL DEFAULT 0",
+                    "order_status": "TEXT DEFAULT '접수'"
                 }
                 
                 for col, dtype in new_columns.items():
@@ -61,14 +62,14 @@ class DBManager:
                 if config.DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Init Error: {e}[/red]")
 
-    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0):
+    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None):
         """거래 내역 및 스냅샷 저장"""
         with self.lock:
             try:
                 conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 cursor = conn.cursor()
                 
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now_str = custom_time if custom_time else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # 계좌 정보 식별
                 acc_no = f"{config.CANO}-{config.ACNT_PRDT_CD}"
@@ -79,9 +80,9 @@ class DBManager:
                 snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                 
                 cursor.execute('''
-                    INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score))
+                    INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status))
                 
                 conn.commit()
                 conn.close()
@@ -93,7 +94,7 @@ class DBManager:
                 if config.DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Insert Error: {e}[/red]")
 
-    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False):
+    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None):
         """거래 내역 조회"""
         with self.lock:
             try:
@@ -118,6 +119,11 @@ class DBManager:
                 if is_auto:
                     query += " AND type LIKE '%(AUTO)%'"
                 
+                # [추가] 모의/실전 필터링
+                if is_sim is not None:
+                    query += " AND is_sim = ?"
+                    params.append(1 if is_sim else 0)
+                
                 query += " ORDER BY id DESC"
                 
                 if limit:
@@ -133,7 +139,7 @@ class DBManager:
                     config.console.print(f"[red][DB] Select Error: {e}[/red]")
                 return []
     
-    def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None):
+    def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None, order_status=None):
         """주문번호(odno)를 기준으로 거래 내역 업데이트 (체결 단가 등)"""
         with self.lock:
             try:
@@ -147,6 +153,7 @@ class DBManager:
                 if qty is not None: updates.append("qty = ?"); params.append(str(qty))
                 if profit_amt is not None: updates.append("profit_amt = ?"); params.append(profit_amt)
                 if profit_rate is not None: updates.append("profit_rate = ?"); params.append(profit_rate)
+                if order_status is not None: updates.append("order_status = ?"); params.append(order_status)
                 
                 if updates:
                     params.append(odno)
@@ -156,6 +163,18 @@ class DBManager:
             except Exception as e:
                 if config.DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Update Error: {e}[/red]")
+    
+    def check_trade_exists(self, odno, order_status):
+        """특정 주문번호와 상태를 가진 거래 내역 존재 여부 확인"""
+        with self.lock:
+            try:
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute("SELECT count(*) FROM trades WHERE odno = ? AND order_status = ?", (odno, order_status))
+                cnt = cursor.fetchone()[0]
+                conn.close()
+                return cnt > 0
+            except: return False
 
 # 전역 인스턴스
 db = DBManager()

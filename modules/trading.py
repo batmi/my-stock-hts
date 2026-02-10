@@ -426,6 +426,10 @@ def send_order(order_type):
                 config.console.print(f"[bold green]주문 성공[/bold green] (번호: {result['output']['ODNO']})")
                 # [추가] 주문 후 미체결 내역 자동 조회
                 
+                # [추가] 텔레그램 알림 발송
+                t_type = "매수" if order_type == 'buy' else "매도"
+                api.send_telegram_message(f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {result['output']['ODNO']}")
+                
                 # [DB] 거래 내역 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=False)
                 db_manager.db.insert_trade(f"매수(수동)" if order_type=='buy' else f"매도(수동)", stock_code, stock_name, qty, price, result['output']['ODNO'], snapshot=snapshot, reason="사용자 수동 주문")
@@ -526,6 +530,11 @@ def send_order(order_type):
             if result['rt_cd'] == '0': 
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
                 config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+                
+                # [추가] 텔레그램 알림 발송
+                t_type = "매수" if order_type == 'buy' else "매도"
+                p_str = f"${price} {display_price_type}"
+                api.send_telegram_message(f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {p_str}\n주문번호: {odno}")
                 
                 # [DB] 거래 내역 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=True)
@@ -636,6 +645,9 @@ def modify_order():
             if res_json['rt_cd'] == '0': 
                 config.console.print(f"[bold green]접수 완료 (번호: {res_json['output']['ODNO']})[/]")
                 
+                # [추가] 텔레그램 알림 발송
+                api.send_telegram_message(f"🚀 [수동 주문] {action_name} 접수\n종목: {target_order.get('prdt_name')} ({target_order.get('pdno')})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {res_json['output']['ODNO']}")
+                
                 # [DB] 정정/취소 내역 저장
                 db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json['output']['ODNO'], org_odno=org_odno, reason=f"사용자 {action_name}")
 
@@ -710,6 +722,9 @@ def modify_order():
             res_json = res.json()
             if res_json['rt_cd'] == '0': 
                 config.console.print(f"[bold green]접수 완료 (번호: {res_json.get('output', {}).get('ODNO')})[/]")
+                
+                # [추가] 텔레그램 알림 발송
+                api.send_telegram_message(f"🚀 [수동 주문] {action_name} 접수\n종목: {target_order.get('prdt_name')} ({target_order.get('pdno')})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {res_json.get('output', {}).get('ODNO')}")
                 
                 # [DB] 정정/취소 내역 저장
                 db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json.get('output', {}).get('ODNO'), org_odno=org_odno, reason=f"사용자 {action_name}")

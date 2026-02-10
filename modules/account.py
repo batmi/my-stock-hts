@@ -11,16 +11,36 @@ from modules import db_manager
 import json
 
 # -----------------------------------------------------------
+# [내부 헬퍼] 계좌별 헤더 생성 (자동매매 계좌 키 적용)
+# -----------------------------------------------------------
+def _get_headers(tr_id, target_cano):
+    # 컨텍스트 설정 (토큰 발급용)
+    is_auto = (not config.IS_SIMULATION and target_cano == config.AUTO_CANO)
+    config.trade_context.use_auto_account = is_auto
+    
+    headers = utils.get_common_headers(tr_id)
+    
+    # AppKey/Secret 오버라이드 (utils가 메인 키를 사용할 수 있으므로)
+    if is_auto and config.AUTO_APP_KEY:
+        headers["appKey"] = config.AUTO_APP_KEY
+        headers["appSecret"] = config.AUTO_APP_SECRET
+        
+    return headers
+
+# -----------------------------------------------------------
 # [보조 함수 1] 금일 투자 손익 요약 조회
 # -----------------------------------------------------------
-def fetch_today_profit_summary():
+def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None):
+    if not cano: cano = config.CANO
+    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
+
     tr_id = utils.get_tr_id("domestic", "inquiry", "profit")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-period-profit"
-    headers = utils.get_common_headers(tr_id)
+    headers = _get_headers(tr_id, cano)
     today = datetime.now().strftime("%Y%m%d")
     
     params = {
-        "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD,
+        "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
         "INQR_STRT_DT": today, "INQR_END_DT": today,
         "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
         "PDNO": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
@@ -53,12 +73,15 @@ def fetch_today_profit_summary():
 # -----------------------------------------------------------
 # [보조 함수 2] 금일 체결(매매) 내역 조회 (백업용)
 # -----------------------------------------------------------
-def fetch_today_history():
+def fetch_today_history(cano=None, acnt_prdt_cd=None):
+    if not cano: cano = config.CANO
+    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
+
     tr_id = utils.get_tr_id("domestic", "inquiry", "history")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-    headers = utils.get_common_headers(tr_id)
+    headers = _get_headers(tr_id, cano)
     today = datetime.now().strftime("%Y%m%d")
-    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     
     summary = {'buy_total': 0, 'sell_total': 0}
     try:
@@ -75,12 +98,15 @@ def fetch_today_history():
     except: pass
     return summary
 
-def fetch_domestic_balance():
+def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
     """국내 주식 잔고 데이터를 조회하여 반환"""
+    if not cano: cano = config.CANO
+    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
+
     tr_id = utils.get_tr_id("domestic", "inquiry", "balance")
     url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
-    headers = utils.get_common_headers(tr_id)
-    params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    headers = _get_headers(tr_id, cano)
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     
     holdings = []
     summary = None
@@ -109,8 +135,11 @@ def fetch_domestic_balance():
         
     return holdings, summary
 
-def fetch_overseas_balance():
+def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
     """해외 주식 잔고 데이터를 조회하여 반환"""
+    if not cano: cano = config.CANO
+    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
+
     ovrs_tr_id = utils.get_tr_id("overseas", "inquiry", "balance")
     ovrs_url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/inquire-balance"
     target_exchanges = ["NASD", "NYSE", "AMEX"]
@@ -119,8 +148,8 @@ def fetch_overseas_balance():
     
     for exc in target_exchanges:
         if config.IS_SIMULATION: time.sleep(0.3)
-        headers = utils.get_common_headers(ovrs_tr_id)
-        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
+        headers = _get_headers(ovrs_tr_id, cano)
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
         
         if config.DEBUG_LEVEL == "TRACE":
             config.console.print(f"[dim cyan][TRACE] REQ (KIS:OvrsBal) | Exch: {exc}[/dim cyan]")
@@ -181,22 +210,36 @@ def sync_today_trades():
                 tot_qty = int(item.get('tot_ccld_qty', 0))
                 
                 if odno and avg_price > 0:
-                    # DB 업데이트 (단가가 0이거나 다를 경우 갱신)
-                    db_manager.db.update_trade(odno, price=avg_price, qty=tot_qty)
-                    count += 1
+                    # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
+                    if not db_manager.db.check_trade_exists(odno, "체결"):
+                        # 체결 시간 포맷팅
+                        ord_dt = item.get('ord_dt', '')
+                        ord_tmd = item.get('ord_tmd', '')
+                        trade_time = None
+                        if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                            trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                        
+                        type_cd = item.get('sll_buy_dvsn_cd')
+                        type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
+                        
+                        db_manager.db.insert_trade(
+                            type_str, item.get('pdno'), item.get('prdt_name'), 
+                            tot_qty, avg_price, odno, 
+                            order_status="체결", custom_time=trade_time,
+                            reason="체결 확인"
+                        )
+                        count += 1
             return count
     except: pass
     return 0
 
-def get_account_balance():
-    # [수정] ★★★ 핵심: 진입 시 강제 대기 (서버 세션 안정화) ★★★
-    time.sleep(0.5)
-
+def _display_balance_details(cano, acnt_prdt_cd):
+    """특정 계좌의 잔고 상세 출력"""
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
     with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
-        output1, summary = fetch_domestic_balance()
+        output1, summary = fetch_domestic_balance(cano, acnt_prdt_cd)
         
         if output1:
             table = Table(title="\n[국내] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -260,7 +303,7 @@ def get_account_balance():
     # [해외 주식 잔고]
     # ---------------------------
     with config.console.status("[bold green]해외 잔고 조회 중...[/]"):
-        all_overseas_holdings = fetch_overseas_balance()
+        all_overseas_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
 
     if not all_overseas_holdings:
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
@@ -326,8 +369,24 @@ def get_account_balance():
         else:
             config.console.print("[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
 
-def get_deposit_balance():
-    # [수정] 여기도 안정성을 위해 진입 대기
+def get_account_balance():
+    """보유 잔고 조회 (메인/자동 계좌 순차 조회)"""
+    time.sleep(0.5)
+    
+    accounts = []
+    if config.IS_SIMULATION:
+        accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
+    else:
+        accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
+        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and config.AUTO_CANO != config.CANO:
+            accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
+    
+    for cano, acnt, label in accounts:
+        config.console.print(f"\n[bold cyan]➤ {label} 계좌 잔고 ({cano}-{acnt})[/]")
+        _display_balance_details(cano, acnt)
+
+def _display_asset_status(cano, acnt_prdt_cd):
+    """특정 계좌의 자산 현황 출력"""
     time.sleep(0.5)
     
     if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -347,7 +406,7 @@ def get_deposit_balance():
     # 1. 금일 데이터 조회
     with config.console.status("[bold green]금일 투자/매매 내역 조회 중...[/bold green]"):
         try:
-            profit_data = fetch_today_profit_summary()
+            profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
             summary_data['buy_today'] = profit_data['buy_amt']
             summary_data['sell_today'] = profit_data['sell_amt']
             summary_data['total_cost'] = profit_data['total_cost']
@@ -355,7 +414,7 @@ def get_deposit_balance():
             
             if summary_data['buy_today'] == 0 and summary_data['sell_today'] == 0:
                  time.sleep(0.2)
-                 backup_data = fetch_today_history()
+                 backup_data = fetch_today_history(cano, acnt_prdt_cd)
                  if backup_data['buy_total'] > 0 or backup_data['sell_total'] > 0:
                      summary_data['buy_today'] = backup_data['buy_total']
                      summary_data['sell_today'] = backup_data['sell_total']
@@ -364,8 +423,8 @@ def get_deposit_balance():
     # 2. 국내 주식 잔고 및 자산
     tr_id_balance = utils.get_tr_id("domestic", "inquiry", "balance")
     url_balance = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
-    headers_balance = utils.get_common_headers(tr_id_balance)
-    params_balance = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    headers_balance = _get_headers(tr_id_balance, cano)
+    params_balance = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
 
     with config.console.status("[bold green]계좌 실시간 자산 평가 중...[/bold green]"):
         try:
@@ -407,7 +466,7 @@ def get_deposit_balance():
             
         # [추가] 해외 주식 잔고 합산 (원화 환산)
         try:
-            ovrs_holdings = fetch_overseas_balance()
+            ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
             ovrs_buy_usd = 0.0
             ovrs_eval_usd = 0.0
             ovrs_pl_usd = 0.0
@@ -444,8 +503,8 @@ def get_deposit_balance():
     tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
     if config.IS_SIMULATION:
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
-        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
-        headers = utils.get_common_headers(tr_id)
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+        headers = _get_headers(tr_id, cano)
         
         try:
             time.sleep(0.3)
@@ -466,8 +525,8 @@ def get_deposit_balance():
     else:
         # 실전투자: 외화 예수금 조회 포함
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-account-balance"
-        params = {"CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, "TR_CONT": "", "INQR_DVSN_1": "", "TR_CRCY_CD": "", "PDNO": "", "ORD_UNPR": "", "ORD_QTY": "", "ORD_DVSN": "00", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "BSPR_BF_DT_APLY_YN": "N"}
-        headers = utils.get_common_headers(tr_id)
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "TR_CONT": "", "INQR_DVSN_1": "", "TR_CRCY_CD": "", "PDNO": "", "ORD_UNPR": "", "ORD_QTY": "", "ORD_DVSN": "00", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "BSPR_BF_DT_APLY_YN": "N"}
+        headers = _get_headers(tr_id, cano)
         
         try:
             time.sleep(0.3)
@@ -530,6 +589,22 @@ def get_deposit_balance():
     config.console.print(panel)
     config.console.print("\n")
 
+def get_deposit_balance():
+    """자산 현황 조회 (메인/자동 계좌 순차 조회)"""
+    time.sleep(0.5)
+    
+    accounts = []
+    if config.IS_SIMULATION:
+        accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
+    else:
+        accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
+        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and config.AUTO_CANO != config.CANO:
+            accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
+            
+    for cano, acnt, label in accounts:
+        config.console.print(f"\n[bold cyan]➤ {label} 자산 현황 ({cano}-{acnt})[/]")
+        _display_asset_status(cano, acnt)
+
 def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
     config.console.print("\n[bold]거래 내역 조회 옵션:[/bold]")
@@ -559,82 +634,119 @@ def view_trade_history():
         config.console.print("\n[yellow]검색된 거래 내역이 없습니다.[/yellow]")
         return
 
-    table = Table(title=f"\n거래 히스토리 ({len(trades)}건)", box=box.HORIZONTALS, header_style="dim", border_style="dim", show_lines=True)
-    table.add_column("시간", justify="center", style="dim", width=20)
-    table.add_column("계좌", justify="center", style="dim", width=10)
-    table.add_column("유형", justify="center")
-    table.add_column("종목명(코드)", justify="left")
-    table.add_column("수량", justify="right")
-    table.add_column("단가", justify="right")
-    table.add_column("손익(수익률)", justify="right")
-    table.add_column("점수", justify="center")
-    table.add_column("사유", justify="left")
-    table.add_column("지표 (Snapshot)", justify="left", style="dim")
-    table.add_column("주문번호", justify="center", style="dim")
-
+    # [수정] 데이터 분류 및 그룹핑 (계좌 종류/번호별 분리)
+    grouped_trades = {} # (category, account) -> list
+    
     for t in trades:
-        type_str = t['type']
-        type_color = "red" if "매수" in type_str else ("blue" if "매도" in type_str else "white")
+        # 1. 모드 필터링 (모의투자 모드면 모의내역만, 실전이면 실전/자동 내역만)
+        is_sim_data = bool(t['is_sim'])
+        if config.IS_SIMULATION and not is_sim_data: continue
+        if not config.IS_SIMULATION and is_sim_data: continue
         
-        # 스냅샷 정보 요약 (있는 경우)
-        note = ""
-        indicators_str = "-"
-        if t['snapshot'] and t['snapshot'] != "{}":
+        # 2. 카테고리 결정
+        category = "모의"
+        if not is_sim_data:
+            if "AUTO" in t['type']: category = "자동"
+            else: category = "실전"
+            
+        # 3. 그룹핑
+        key = (category, t['account'])
+        if key not in grouped_trades:
+            grouped_trades[key] = []
+        grouped_trades[key].append(t)
+        
+    if not grouped_trades:
+        config.console.print("\n[yellow]현재 모드에 해당하는 거래 내역이 없습니다.[/yellow]")
+        return
+
+    # 출력 순서 정의 (실전 -> 자동 -> 모의)
+    def sort_key(k):
+        cat, acc = k
+        order = {"실전": 1, "자동": 2, "모의": 3}
+        return (order.get(cat, 99), acc)
+
+    sorted_keys = sorted(grouped_trades.keys(), key=sort_key)
+
+    for cat, acc in sorted_keys:
+        t_list = grouped_trades[(cat, acc)]
+        if not t_list: continue
+
+        # 테이블 생성 (제목에 계좌번호 포함)
+        table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
+        table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        table.add_column("시간", justify="center", style="dim", width=20)
+        # 계좌 컬럼 제거됨
+        table.add_column("유형", justify="center")
+        table.add_column("상태", justify="center", width=6)
+        table.add_column("종목명(코드)", justify="left")
+        table.add_column("수량", justify="right")
+        table.add_column("단가", justify="right")
+        table.add_column("손익(수익률)", justify="right")
+        table.add_column("점수", justify="center")
+        table.add_column("사유", justify="left")
+        table.add_column("주문번호", justify="center", style="dim")
+
+        for i, t in enumerate(t_list):
+            type_str = t['type']
+            
+            # [수정] 유형 표기 한글화 및 태그 변경
+            if "buy" in type_str.lower(): type_str = type_str.replace("buy", "매수").replace("BUY", "매수")
+            if "sell" in type_str.lower(): type_str = type_str.replace("sell", "매도").replace("SELL", "매도")
+            type_str = type_str.replace("AUTO", "자동")
+            
+            # [수정] 색상 적용 (매수/매도, 자동/수동 분리)
+            if "매수" in type_str: type_str = type_str.replace("매수", "[red]매수[/]")
+            elif "매도" in type_str: type_str = type_str.replace("매도", "[blue]매도[/]")
+            
+            if "자동" in type_str: type_str = type_str.replace("자동", "[yellow]자동[/]")
+            if "수동" in type_str: type_str = type_str.replace("수동", "[green]수동[/]")
+
+            # 상태 표시
+            status_str = t.get('order_status', '접수') # 기본값 접수
+            if status_str == "체결": status_str = "[green]체결[/]"
+            else: status_str = f"[dim]{status_str}[/]"
+
+            # 가격 포맷팅
+            price_display = t['price']
             try:
-                snap = json.loads(t['snapshot'])
-                inds = snap.get('indicators', {})
-                rsi = inds.get('rsi')
-                adx = inds.get('adx')
-                cci = inds.get('cci')
-                parts = []
-                if rsi: parts.append(f"RSI:{rsi:.1f}")
-                if adx: parts.append(f"ADX:{adx:.1f}")
-                if cci: parts.append(f"CCI:{cci:.1f}")
-                indicators_str = ", ".join(parts)
+                p_val = float(t['price'])
+                if p_val > 0:
+                    price_display = f"{int(p_val):,}" if p_val >= 1000 else f"{p_val:,.2f}"
+                elif p_val == 0:
+                    price_display = "시장가"
             except: pass
+            
+            # 손익 정보
+            profit_display = "-"
+            if "매도" in type_str:
+                amt = t.get('profit_amt', 0)
+                rate = t.get('profit_rate', 0.0)
+                if amt is not None and rate is not None:
+                    color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
+                    profit_display = f"[{color}]{amt:+,}원 ({rate:+.2f}%)[/]"
 
-        # 가격 포맷팅
-        price_display = t['price']
-        try:
-            p_val = float(t['price'])
-            if p_val > 0:
-                price_display = f"{int(p_val):,}" if p_val >= 1000 else f"{p_val:,.2f}"
-            elif p_val == 0:
-                price_display = "시장가"
-        except: pass
-        
-        # 손익 정보
-        profit_display = "-"
-        if "매도" in type_str:
-            amt = t.get('profit_amt', 0)
-            rate = t.get('profit_rate', 0.0)
-            if amt is not None and rate is not None:
-                color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
-                profit_display = f"[{color}]{amt:+,}원\n({rate:+.2f}%)[/]"
+            # 점수
+            score = t.get('strategy_score', 0)
+            score_str = str(score) if score else "-"
 
-        # 점수
-        score = t.get('strategy_score', 0)
-        score_str = str(score) if score else "-"
+            table.add_row(
+                t['time'], # YYYY-MM-DD HH:MM:SS
+                type_str,
+                status_str,
+                f"{t['name']}({t['code']})",
+                f"{t['qty']}",
+                price_display,
+                profit_display,
+                score_str,
+                t.get('reason') or "-",
+                t['odno']
+            )
+            
+            # [추가] 5개마다 실선 추가
+            if (i + 1) % 5 == 0 and (i + 1) < len(t_list):
+                table.add_section()
 
-        # 계좌번호 포맷팅 (앞 8자리)
-        acc_str = t['account']
-        acc_disp = acc_str[:8]
-
-        table.add_row(
-            t['time'], # YYYY-MM-DD HH:MM:SS
-            acc_disp,
-            f"[{type_color}]{type_str}[/]",
-            f"{t['name']}({t['code']})",
-            f"{t['qty']}",
-            price_display,
-            profit_display,
-            score_str,
-            t.get('reason') or "-",
-            indicators_str,
-            t['odno']
-        )
-
-    config.console.print(table)
+        config.console.print(table)
 
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
