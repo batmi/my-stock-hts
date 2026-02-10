@@ -35,6 +35,15 @@ class DBManager:
                     )
                 ''')
                 
+                # [추가] 트레일링 스탑 추적 테이블 생성
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS trailing_stops (
+                        code TEXT PRIMARY KEY,
+                        highest_price REAL,
+                        update_time TEXT
+                    )
+                ''')
+                
                 # [추가] 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [info[1] for info in cursor.fetchall()]
@@ -175,6 +184,53 @@ class DBManager:
                 conn.close()
                 return cnt > 0
             except: return False
+            
+    def update_highest_price(self, code, price):
+        """트레일링 스탑용 최고가 갱신 (현재가가 더 높을 때만 업데이트)"""
+        with self.lock:
+            try:
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                cursor = conn.cursor()
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # 기존 최고가 조회
+                cursor.execute("SELECT highest_price FROM trailing_stops WHERE code = ?", (code,))
+                row = cursor.fetchone()
+                
+                if row:
+                    if price > row[0]:
+                        cursor.execute("UPDATE trailing_stops SET highest_price = ?, update_time = ? WHERE code = ?", (price, now_str, code))
+                else:
+                    cursor.execute("INSERT INTO trailing_stops (code, highest_price, update_time) VALUES (?, ?, ?)", (price, now_str, code))
+                
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                if config.DEBUG_LEVEL != "OFF":
+                    config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
+
+    def get_highest_price(self, code):
+        """종목의 기록된 최고가 조회"""
+        with self.lock:
+            try:
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute("SELECT highest_price FROM trailing_stops WHERE code = ?", (code,))
+                row = cursor.fetchone()
+                conn.close()
+                return row[0] if row else None
+            except: return None
+
+    def delete_trailing_stop(self, code):
+        """매도 후 트레일링 스탑 정보 삭제"""
+        with self.lock:
+            try:
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM trailing_stops WHERE code = ?", (code,))
+                conn.commit()
+                conn.close()
+            except: pass
 
 # 전역 인스턴스
 db = DBManager()

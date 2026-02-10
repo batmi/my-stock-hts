@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from rich.table import Table
 from rich.panel import Panel
+from rich.columns import Columns
 from rich.prompt import Prompt
 from rich import box
 import yfinance as yf
@@ -59,16 +60,11 @@ def calculate_daily_score(row, prev_row):
     # 위험 (Severe Danger)
     if ema120 is not None and price < ema120 and price < ema60: final_score = 0
     elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): final_score = 0
-    
-    else:
-        # 주의 (Caution) -> 점수를 0으로 처리하여 매도 유도
-        is_caution = False
-        if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
-        elif sar > price: is_caution = True
-        elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
-        elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
-        
-        if is_caution: final_score = 0
+    # [수정] analysis.py와 동일하게 '위험' 상태일 때만 0점 처리 (매도 유도)
+    # '주의' 상태는 점수를 유지하여 매도하지 않음
+    # analysis.py의 classify_stock_state 로직 참조:
+    # - 위험: 120선&60선 동시 이탈 OR RSI <= 20
+    # - 그 외 주의/관망 상태라도 점수가 SELL_SCORE(5) 이상이면 보유
     
     return final_score, raw_score
 
@@ -205,6 +201,10 @@ def run_backtest():
         take_profit_limit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         take_profit_rsi_limit = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
+        
+        # [추가] 트레일링 스탑 설정
+        ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
         # [추가] MDD 및 승률 계산 변수
         peak_asset = initial_capital
@@ -216,6 +216,9 @@ def run_backtest():
         cum_profit = 0
         daily_assets = []
         
+        # [추가] 트레일링 스탑 추적 변수
+        ts_highest_price = 0
+        
         # 시뮬레이션 루프
         # prev_row 초기화: 시뮬레이션 시작 전일 데이터가 있으면 사용
         prev_row = df.iloc[start_idx-1] if start_idx > 0 else None
@@ -224,6 +227,7 @@ def run_backtest():
             row = sim_df.iloc[i]
             date = row['date']
             price = row['close']
+            high_price = row['high'] # 트레일링 스탑용 고가
             
             # [추가] 일별 자산 평가 및 MDD 갱신
             current_asset = balance + (holdings * price)
@@ -253,6 +257,7 @@ def run_backtest():
                         holdings = qty
                         avg_price = price
                         buy_date = date
+                        ts_highest_price = price # 매수 시 최고가 초기화
                         action = "매수"
                         trades.append({
                             "date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, 
@@ -263,17 +268,40 @@ def run_backtest():
             
             # [매도 조건] 보유 중일 때
             elif holdings > 0:
-                # 1. 손절매
+                # 수익률 계산
                 loss_rate = (price - avg_price) / avg_price * 100
-                is_stop_loss = loss_rate <= stop_loss_limit
                 
-                # 2. 점수 하락
-                is_score_drop = score < sell_score_limit
+                # 트레일링 스탑 최고가 갱신 (종가 기준 보수적 접근, 혹은 고가 기준)
+                # 여기서는 장중 고가를 알 수 있으므로 고가로 체크하되, 매도는 종가 기준
+                if high_price > ts_highest_price:
+                    ts_highest_price = high_price
 
-                # 3. 익절 (Take Profit or RSI 과열)
-                is_take_profit = loss_rate >= take_profit_limit or row['RSI'] > take_profit_rsi_limit
+                # 매도 조건 체크 (우선순위 적용: 익절 -> 손절 -> 트레일링스탑 -> RSI과열 -> 추세이탈)
+                sell_signal = False
+                reason = ""
+
+                # 1. 익절 (Take Profit)
+                if loss_rate >= take_profit_limit:
+                    sell_signal = True; reason = "익절"
+                # 2. 손절 (Stop Loss)
+                elif loss_rate <= stop_loss_limit:
+                    sell_signal = True; reason = "손절"
+                # 3. 트레일링 스탑 (Trailing Stop)
+                elif ts_highest_price > 0:
+                    max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
+                    if max_profit_rate >= ts_activation:
+                        drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
+                        if drop_rate >= ts_callback:
+                            sell_signal = True; reason = "트레일링스탑"
                 
-                if is_stop_loss or is_score_drop or is_take_profit:
+                # 4. RSI 과열
+                if not sell_signal and row['RSI'] > take_profit_rsi_limit:
+                    sell_signal = True; reason = "RSI과열"
+                # 5. 추세 이탈 (점수 하락)
+                if not sell_signal and score < sell_score_limit:
+                    sell_signal = True; reason = "점수하락"
+                
+                if sell_signal:
                     sell_amt = holdings * price
                     # 수수료/세금 약 0.23% 가정
                     fee = sell_amt * 0.0023
@@ -307,11 +335,16 @@ def run_backtest():
                     avg_price = 0
                     buy_date = None
                     action = "매도"
-                    reason = "손절" if is_stop_loss else ("익절" if is_take_profit else "점수하락")
+                    ts_highest_price = 0 # 초기화
+                    
+                    # [추가] 필터링에 의한 점수 하락인 경우 사유 구체화
+                    if reason == "점수하락" and score == 0 and raw_score > 0:
+                        reason = "위험"
+                        
                     trades.append({
                         "date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, 
                         "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
-                        "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                        "score": score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                         "cum_profit": cum_profit
                     })
             
@@ -518,3 +551,38 @@ def run_backtest():
                 cum_p_str
             )
         config.console.print(t_table)
+
+    # [추가] 매매 사유별 통계 분석 (마지막에 출력)
+    if sell_trades:
+        reason_stats = {}
+        for t in sell_trades:
+            # 사유 추출 (예: "매도(익절)" -> "익절")
+            raw_type = t['type']
+            reason = raw_type.replace("매도(", "").replace(")", "")
+            if reason not in reason_stats:
+                reason_stats[reason] = {'count': 0, 'profit_sum': 0.0}
+            
+            reason_stats[reason]['count'] += 1
+            reason_stats[reason]['profit_sum'] += t['profit']
+            
+        reason_table = Table(title="매매 사유별 성과 분석", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        reason_table.add_column("사유", justify="left", style="cyan")
+        reason_table.add_column("횟수", justify="right")
+        reason_table.add_column("비중", justify="right")
+        reason_table.add_column("평균 수익률", justify="right")
+        
+        total_sells = len(sell_trades)
+        
+        # 수익률 높은 순으로 정렬
+        sorted_reasons = sorted(reason_stats.items(), key=lambda x: x[1]['profit_sum'] / x[1]['count'], reverse=True)
+        
+        for reason, stat in sorted_reasons:
+            cnt = stat['count']
+            avg_p = stat['profit_sum'] / cnt
+            ratio = (cnt / total_sells) * 100
+            
+            p_color = "[red]" if avg_p > 0 else ("[blue]" if avg_p < 0 else "[white]")
+            reason_table.add_row(reason, f"{cnt}회", f"{ratio:.1f}%", f"{p_color}{avg_p:+.2f}%[/]")
+            
+        config.console.print()
+        config.console.print(reason_table)

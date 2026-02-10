@@ -378,7 +378,8 @@ def get_account_balance():
         accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
     else:
         accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
-        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and config.AUTO_CANO != config.CANO:
+        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and \
+           (config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD):
             accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
     
     for cano, acnt, label in accounts:
@@ -598,7 +599,8 @@ def get_deposit_balance():
         accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
     else:
         accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
-        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and config.AUTO_CANO != config.CANO:
+        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and \
+           (config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD):
             accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
             
     for cano, acnt, label in accounts:

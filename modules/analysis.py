@@ -290,10 +290,16 @@ def diagnose_stock():
     
     # 매도(추세 이탈) 조건 체크
     sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-    is_sell_signal = score < sell_score_limit
+    is_sell_signal = (score < sell_score_limit) or (state == "위험")
     
     sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
-    sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)" if is_sell_signal else "추세 유지 중"
+    
+    if state == "위험":
+        sell_reason = "위험 상태 진입 (필터링 조건)"
+    elif score < sell_score_limit:
+        sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)"
+    else:
+        sell_reason = "추세 유지 중 (주의/관망 상태라도 점수 유지 시 보유)"
     
     table_logic.add_row("보유 판단", sell_result, sell_reason)
     
