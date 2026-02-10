@@ -10,6 +10,8 @@ import config
 import api
 import utils
 from modules import account
+from modules import db_manager
+from modules import analysis
 
 def select_stock_from_balance():
     """
@@ -423,6 +425,11 @@ def send_order(order_type):
             if result['rt_cd'] == '0': 
                 config.console.print(f"[bold green]주문 성공[/bold green] (번호: {result['output']['ODNO']})")
                 # [추가] 주문 후 미체결 내역 자동 조회
+                
+                # [DB] 거래 내역 저장
+                snapshot = analysis.get_snapshot(stock_code, is_overseas=False)
+                db_manager.db.insert_trade(f"매수(수동)" if order_type=='buy' else f"매도(수동)", stock_code, stock_name, qty, price, result['output']['ODNO'], snapshot=snapshot, reason="사용자 수동 주문")
+
                 config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
             else: 
@@ -519,6 +526,11 @@ def send_order(order_type):
             if result['rt_cd'] == '0': 
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
                 config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+                
+                # [DB] 거래 내역 저장
+                snapshot = analysis.get_snapshot(stock_code, is_overseas=True)
+                db_manager.db.insert_trade(f"매수(수동)" if order_type=='buy' else f"매도(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문")
+
                 # [추가] 주문 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
@@ -623,6 +635,10 @@ def modify_order():
             res_json = res.json()
             if res_json['rt_cd'] == '0': 
                 config.console.print(f"[bold green]접수 완료 (번호: {res_json['output']['ODNO']})[/]")
+                
+                # [DB] 정정/취소 내역 저장
+                db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json['output']['ODNO'], org_odno=org_odno, reason=f"사용자 {action_name}")
+
                 # [추가] 정정/취소 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
@@ -694,6 +710,10 @@ def modify_order():
             res_json = res.json()
             if res_json['rt_cd'] == '0': 
                 config.console.print(f"[bold green]접수 완료 (번호: {res_json.get('output', {}).get('ODNO')})[/]")
+                
+                # [DB] 정정/취소 내역 저장
+                db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json.get('output', {}).get('ODNO'), org_odno=org_odno, reason=f"사용자 {action_name}")
+
                 # [추가] 정정/취소 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()

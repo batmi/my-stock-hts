@@ -14,6 +14,7 @@ import api
 import utils
 import indicators
 from modules import analysis # account 모듈 의존성 제거
+from modules import db_manager # [추가] DB 매니저
 
 console = config.console
 
@@ -61,6 +62,10 @@ class AutoTrader:
                 console.print("[yellow]시작을 취소했습니다.[/yellow]")
                 return
 
+        # [추가] 텔레그램 메시지 구성을 위한 변수 미리 선언
+        holdings = []
+        summary = []
+
         with console.status("[bold green]시스템 시작 준비 중 (자산 조회 및 스레드 시작)...[/]"):
             self.is_running = True
             self.start_time = datetime.now()
@@ -71,6 +76,13 @@ class AutoTrader:
             config.trade_context.use_auto_account = True
             # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
             self.initial_asset = self._get_total_estimated_asset()
+            
+            # [추가] 체결 내역 상태 동기화 (재시작 시 과거 내역 알림 방지)
+            self._check_conclusions(initial=True)
+            
+            # [추가] 텔레그램 알림용 잔고 조회
+            holdings, summary = api.get_domestic_balance()
+            
             config.trade_context.use_auto_account = False # 복구
             
             if self.initial_asset is None:
@@ -91,7 +103,28 @@ class AutoTrader:
         
         # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
         config.trade_context.use_auto_account = True
-        api.send_telegram_message(f"▶️ [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원")
+        
+        # [수정] 시작 메시지에 보유 종목 및 자산 현황 추가
+        msg = f"▶️ [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원"
+        
+        if summary and len(summary) > 0:
+            s_data = summary[0]
+            total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
+            total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+            msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
+            
+        if holdings:
+            msg += "\n\n📋 [보유 종목 현황]"
+            for item in holdings:
+                name = item['prdt_name']
+                qty = int(item['hldg_qty'])
+                rate = float(item['evlu_pfls_rt'])
+                profit = int(item['evlu_pfls_amt'])
+                msg += f"\n• {name}: {qty}주 | {rate:+.2f}% ({profit:+,}원)"
+        else:
+            msg += "\n\n📋 [보유 종목] 없음"
+
+        api.send_telegram_message(msg)
         config.trade_context.use_auto_account = False
 
     def stop(self):
@@ -242,14 +275,37 @@ class AutoTrader:
     def print_report(self):
         console.print("\n[bold yellow]=== 시스템 트레이딩 리포트 ===[/]")
         
-        if not self.trade_records:
-            console.print("\n[yellow]매매 기록이 없습니다.[/yellow]")
-            return
-
         # [추가] 리포트 생성 상태 표시
-        with console.status("[bold green]매매 리포트 데이터 분석 중...[/]"):
+        with console.status("[bold green]DB에서 매매 내역 조회 및 분석 중...[/]"):
             time.sleep(0.5) # UX를 위한 짧은 대기
+            
+            # [수정] DB에서 시스템 트레이딩 내역 조회
+            db_records = db_manager.db.get_trades(is_auto=True, limit=500) # 최근 500건 조회
+            
+            # DB 레코드를 내부 포맷으로 변환
+            self.trade_records = []
+            for r in reversed(db_records): # DB는 최신순이므로 시간순(과거->최신)으로 뒤집음
+                # type 파싱: "buy(AUTO)" -> "buy"
+                type_str = r['type']
+                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                
+                self.trade_records.append({
+                    "type": simple_type,
+                    "code": r['code'],
+                    "name": r['name'],
+                    "qty": int(r['qty']),
+                    "price": float(r['price']),
+                    "profit_rate": float(r['profit_rate'] or 0),
+                    "profit_amt": int(r['profit_amt'] or 0),
+                    "reason": r['reason'],
+                    "time": r['time'],
+                    "odno": r['odno']
+                })
 
+        if not self.trade_records:
+            console.print("\n[yellow]저장된 시스템 트레이딩 기록이 없습니다.[/yellow]")
+            return
+            
         # 통계 계산
         total_trades = len(self.trade_records)
         buy_trades = [r for r in self.trade_records if r['type'] == 'buy']
@@ -510,13 +566,11 @@ class AutoTrader:
                 
                 self.log("모니터링 주기 시작...")
                 
-                # [추가] 현재 운용 계좌 정보 로깅 (마스킹 처리)
+                # [추가] 현재 운용 계좌 정보 로깅
                 current_cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
                 if current_cano:
-                    mask_len = max(0, len(current_cano) - 4)
-                    masked_account = current_cano[:4] + "*" * mask_len
                     acc_type = "모의투자" if config.IS_SIMULATION else "실전투자(AUTO)"
-                    self.log(f"운용 계좌: {masked_account} [{acc_type}]")
+                    self.log(f"운용 계좌: {current_cano} [{acc_type}]")
                 
                 current_market_status = self.is_market_open()
                 
@@ -574,11 +628,13 @@ class AutoTrader:
                     break
                 time.sleep(10)
 
-    def _check_conclusions(self):
+    def _check_conclusions(self, initial=False):
         """금일 체결 내역을 확인하고 로그에 기록"""
         try:
             # API 호출 전 대기 (Rate Limit 방지)
             time.sleep(0.2)
+            if not initial:
+                time.sleep(0.2)
             
             cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
             acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
@@ -631,6 +687,13 @@ class AutoTrader:
                         trade_amt = int(new_qty * avg_price)
                         add_info = ""
                         
+                        # [추가] 매매일시 정보 추출
+                        ord_dt = item.get('ord_dt', '')
+                        ord_tmd = item.get('ord_tmd', '')
+                        trade_time_str = ""
+                        if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                            trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+
                         if type_cd == '02': # 매수
                             add_info = f" (매수금액: {trade_amt:,.0f}원)"
                         elif type_cd == '01': # 매도
@@ -646,15 +709,26 @@ class AutoTrader:
                             else:
                                 add_info = f" (매도금액: {trade_amt:,.0f}원)"
                         
-                        # 로그 기록
-                        self.log(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 체결 (단가: {avg_price:,.0f}원){add_info}")
-                        
-                        # 알림 발송 (텔레그램 + 비프음)
-                        print('\a') # 소리 알림
-                        api.send_telegram_message(f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원\n{add_info.strip()}")
+                        # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
+                        if not initial:
+                            # 로그 기록
+                            self.log(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 체결 (단가: {avg_price:,.0f}원){add_info}")
+                            
+                            # 알림 발송 (텔레그램 + 비프음)
+                            print('\a') # 소리 알림
+                            
+                            msg = f"✅ [체결 알림] {type_name} {name}({code})\n"
+                            if trade_time_str:
+                                msg += f"일시: {trade_time_str}\n"
+                            msg += f"수량: {new_qty}주 / 단가: {avg_price:,.0f}원\n{add_info.strip()}"
+                            
+                            api.send_telegram_message(msg)
                         
                         # 상태 업데이트
                         self.order_status[odno] = tot_ccld_qty
+                        
+                        # [추가] DB에 실시간 체결 단가 업데이트
+                        db_manager.db.update_trade(odno, price=avg_price, qty=tot_ccld_qty)
                         
         except Exception as e:
             self.log(f"체결 내역 조회 중 오류: {str(e)}")
@@ -841,16 +915,18 @@ class AutoTrader:
                 score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
                 rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
                 adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
-                self.log(f"[보유분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}")
+                cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+                self.log(f"[보유분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
 
                 # 이미 손절/익절 사유가 있다면 그것을 우선하고, 없다면 추세 이탈 여부를 체크
                 if not reason:
                     if state in ["관망", "주의", "위험"]:
-                        reason = f"추세이탈({state}) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}]"
+                        reason = f"추세이탈({state}) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
 
             if reason:
                 self.log(f"매도 실행: {name} - {reason}")
-                odno = self._send_order(code, qty, "sell", name=name)
+                # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
+                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
@@ -928,12 +1004,13 @@ class AutoTrader:
             score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
-            self.log(f"[분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}")
+            cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+            self.log(f"[분석] {name}({code}): 점수={score}, 상태={state}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
             
             if state == "매수":
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
-                    'score': score, 'rsi': ind['rsi'], 'adx': ind['adx']
+                    'score': score, 'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci']
                 })
 
         # [수정] 2단계: 우선순위 정렬 (점수 높은 순 -> RSI 낮은 순)
@@ -947,8 +1024,21 @@ class AutoTrader:
             if not self.is_running: break
             if avail_cash < 50000: break
 
-            # 투자 금액 계산 (예수금의 N%)
-            invest_amt = int(avail_cash * invest_ratio)
+            # 투자 금액 계산 (초기 자산의 N%)
+            # [수정] 현재 예수금이 아닌 시스템 시작 시점의 총 자산(initial_asset) 기준으로 비중 산정
+            if self.initial_asset > 0:
+                target_invest_amt = int(self.initial_asset * invest_ratio)
+            else:
+                target_invest_amt = int(avail_cash * invest_ratio)
+            
+            # 실제 집행 금액은 목표 금액과 현재 예수금 중 작은 값 (예수금 초과 불가)
+            # (예: 50% 설정 시, 첫 번째 매수 후 남은 예수금이 목표 금액 이하가 되므로 두 번째 매수 시 전액 투자됨)
+            invest_amt = min(target_invest_amt, avail_cash)
+            
+            # [추가] 자산 배분 계산 로그 기록 (동작 확인용)
+            if config.DEBUG_LEVEL == "DEBUG":
+                self.log(f"[자산배분] 목표금액: {target_invest_amt:,}원 (초기자산의 {invest_ratio*100:.0f}%) / 현재예수금: {avail_cash:,}원 -> 투자금액: {invest_amt:,}원")
+
             # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
             if invest_amt < cand['price']: invest_amt = avail_cash
             
@@ -970,10 +1060,12 @@ class AutoTrader:
             if avail_cash >= (qty * cand['price']):
                 rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
                 adx_val = f"{cand['adx']:.1f}" if cand['adx'] else "-"
-                reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}]"
+                cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
+                reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
                 
                 self.log(f"매수 실행: {cand['name']} - {reason}")
-                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'])
+                # [수정] 매수 시 사유와 점수를 DB 저장을 위해 전달
+                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'])
                 if odno: 
                     avail_cash -= (qty * cand['price'])
                     record = {
@@ -988,7 +1080,7 @@ class AutoTrader:
                     }
                     self.trade_records.append(record)
 
-    def _send_order(self, code, qty, type_str, name=None):
+    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0):
         tr_id = utils.get_tr_id("domestic", "trade", type_str)
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-cash"
         headers = utils.get_common_headers(tr_id)
@@ -1014,6 +1106,11 @@ class AutoTrader:
                 self.log(f"결과: 성공 (주문번호: {odno})")
                 stock_display = f"{name}({code})" if name else code
                 api.send_telegram_message(f"🚀 [주문 접수] {type_str.upper()} {stock_display} {qty}주 (시장가)\n주문번호: {odno}")
+                
+                # [DB] 시스템 트레이딩 주문 기록 (스냅샷 및 상세 정보 포함)
+                snapshot = analysis.get_snapshot(code, is_overseas=False)
+                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, "0", odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score)
+                
                 return odno
             else:
                 err_msg = res_json.get('msg1', 'Unknown Error')

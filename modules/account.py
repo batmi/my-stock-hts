@@ -2,11 +2,13 @@
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import config
 import api
 import utils
+from modules import db_manager
+import json
 
 # -----------------------------------------------------------
 # [보조 함수 1] 금일 투자 손익 요약 조회
@@ -148,6 +150,43 @@ def fetch_overseas_balance():
             except: time.sleep(0.3); continue
             
     return all_holdings
+
+def sync_today_trades():
+    """금일 체결 내역을 API로 조회하여 DB의 단가(시장가=0) 정보를 업데이트"""
+    # 모의/실전 구분하여 API 호출
+    tr_id = utils.get_tr_id("domestic", "inquiry", "history")
+    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+    headers = utils.get_common_headers(tr_id)
+    today = datetime.now().strftime("%Y%m%d")
+    
+    # 계좌별(모의/실전/AUTO)로 루프를 돌며 확인하면 좋겠지만, 현재 컨텍스트 기준 계좌만 확인
+    params = {
+        "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
+        "INQR_STRT_DT": today, "INQR_END_DT": today, 
+        "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
+        "PDNO": "", "CCLD_DVSN": "01", # 주문별 체결 합계
+        "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
+        "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
+    }
+    
+    try:
+        res = api.session.get(url, headers=headers, params=params, verify=False, timeout=5)
+        data = res.json()
+        if data['rt_cd'] == '0':
+            trades = data.get('output1', [])
+            count = 0
+            for item in trades:
+                odno = item.get('odno')
+                avg_price = float(item.get('avg_prvs', 0))
+                tot_qty = int(item.get('tot_ccld_qty', 0))
+                
+                if odno and avg_price > 0:
+                    # DB 업데이트 (단가가 0이거나 다를 경우 갱신)
+                    db_manager.db.update_trade(odno, price=avg_price, qty=tot_qty)
+                    count += 1
+            return count
+    except: pass
+    return 0
 
 def get_account_balance():
     # [수정] ★★★ 핵심: 진입 시 강제 대기 (서버 세션 안정화) ★★★
@@ -490,3 +529,127 @@ def get_deposit_balance():
     config.console.print("\n")
     config.console.print(panel)
     config.console.print("\n")
+
+def view_trade_history():
+    """DB에 저장된 거래 내역 조회"""
+    config.console.print("\n[bold]거래 내역 조회 옵션:[/bold]")
+    config.console.print("[1] 전체 내역 (최신순 50건)")
+    config.console.print("[2] 최근 30일 내역")
+    config.console.print("[3] 종목명/코드 검색")
+    config.console.print()
+    
+    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    if choice.lower() == 'q': return
+
+    # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
+    with config.console.status("[bold green]최신 체결 내역 동기화 중...[/]"):
+        sync_today_trades()
+
+    trades = []
+    if choice == "1":
+        trades = db_manager.db.get_trades(limit=50)
+    elif choice == "2":
+        start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        trades = db_manager.db.get_trades(start_date=start_dt)
+    elif choice == "3":
+        keyword = config.Prompt.ask("검색할 종목명 또는 코드")
+        trades = db_manager.db.get_trades(code=keyword)
+
+    if not trades:
+        config.console.print("\n[yellow]검색된 거래 내역이 없습니다.[/yellow]")
+        return
+
+    table = Table(title=f"\n거래 히스토리 ({len(trades)}건)", box=box.HORIZONTALS, header_style="dim", border_style="dim", show_lines=True)
+    table.add_column("시간", justify="center", style="dim", width=20)
+    table.add_column("계좌", justify="center", style="dim", width=10)
+    table.add_column("유형", justify="center")
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("수량", justify="right")
+    table.add_column("단가", justify="right")
+    table.add_column("손익(수익률)", justify="right")
+    table.add_column("점수", justify="center")
+    table.add_column("사유", justify="left")
+    table.add_column("지표 (Snapshot)", justify="left", style="dim")
+    table.add_column("주문번호", justify="center", style="dim")
+
+    for t in trades:
+        type_str = t['type']
+        type_color = "red" if "매수" in type_str else ("blue" if "매도" in type_str else "white")
+        
+        # 스냅샷 정보 요약 (있는 경우)
+        note = ""
+        indicators_str = "-"
+        if t['snapshot'] and t['snapshot'] != "{}":
+            try:
+                snap = json.loads(t['snapshot'])
+                inds = snap.get('indicators', {})
+                rsi = inds.get('rsi')
+                adx = inds.get('adx')
+                cci = inds.get('cci')
+                parts = []
+                if rsi: parts.append(f"RSI:{rsi:.1f}")
+                if adx: parts.append(f"ADX:{adx:.1f}")
+                if cci: parts.append(f"CCI:{cci:.1f}")
+                indicators_str = ", ".join(parts)
+            except: pass
+
+        # 가격 포맷팅
+        price_display = t['price']
+        try:
+            p_val = float(t['price'])
+            if p_val > 0:
+                price_display = f"{int(p_val):,}" if p_val >= 1000 else f"{p_val:,.2f}"
+            elif p_val == 0:
+                price_display = "시장가"
+        except: pass
+        
+        # 손익 정보
+        profit_display = "-"
+        if "매도" in type_str:
+            amt = t.get('profit_amt', 0)
+            rate = t.get('profit_rate', 0.0)
+            if amt is not None and rate is not None:
+                color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
+                profit_display = f"[{color}]{amt:+,}원\n({rate:+.2f}%)[/]"
+
+        # 점수
+        score = t.get('strategy_score', 0)
+        score_str = str(score) if score else "-"
+
+        # 계좌번호 포맷팅 (앞 8자리)
+        acc_str = t['account']
+        acc_disp = acc_str[:8]
+
+        table.add_row(
+            t['time'], # YYYY-MM-DD HH:MM:SS
+            acc_disp,
+            f"[{type_color}]{type_str}[/]",
+            f"{t['name']}({t['code']})",
+            f"{t['qty']}",
+            price_display,
+            profit_display,
+            score_str,
+            t.get('reason') or "-",
+            indicators_str,
+            t['odno']
+        )
+
+    config.console.print(table)
+
+def asset_management_menu():
+    """자산 관리 메인 메뉴"""
+    config.console.print("\n[bold]자산 관리[/bold]")
+    config.console.print("[1] 자산 조회 (예수금/총자산)")
+    config.console.print("[2] 보유 잔고 (종목별 상세)")
+    config.console.print("[3] 거래 내역 (히스토리)")
+    config.console.print()
+    
+    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    if choice.lower() == 'q': return
+
+    if choice == "1":
+        get_deposit_balance()
+    elif choice == "2":
+        get_account_balance()
+    elif choice == "3":
+        view_trade_history()

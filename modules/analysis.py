@@ -602,3 +602,26 @@ def show_stock_analysis():
                 config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
                 break
     except KeyboardInterrupt: config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+
+def get_snapshot(code, is_overseas):
+    """주문 시점의 종목 상태 스냅샷 생성 (DB 저장용)"""
+    snapshot = {}
+    try:
+        # 1. 차트 데이터 및 지표
+        df = api.get_chart_data(code, is_overseas)
+        if df is not None and not df.empty:
+            ind = indicators.calculate_indicators(df)
+            # numpy float 등을 일반 float으로 변환하여 저장
+            snapshot['indicators'] = {k: (float(v) if v is not None else None) for k, v in ind.items()}
+            snapshot['price'] = float(df.iloc[-1]['close'])
+        
+        # 2. 환율 (해외인 경우)
+        if is_overseas:
+            snapshot['exchange_rate'] = utils.get_exchange_rate()
+            
+        snapshot['market'] = "Overseas" if is_overseas else "Domestic"
+        
+    except Exception as e:
+        snapshot['error'] = str(e)
+        
+    return snapshot

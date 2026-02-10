@@ -287,7 +287,7 @@ def main():
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)
-            config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
+            config.console.print("[0] 자산관리"); config.console.print("[1] 시장 지수 조회")
             config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
             
             trader_status = ""
@@ -312,8 +312,7 @@ def main():
                     
                 last_choice = choice
                 if choice == "0": 
-                    account.get_account_balance()
-                    account.get_deposit_balance() 
+                    account.asset_management_menu()
                 elif choice == "1": market.show_market_indices()
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 

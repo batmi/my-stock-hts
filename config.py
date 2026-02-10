@@ -32,6 +32,9 @@ STOCK_DATA_FILE = "stock.json"
 # API 접속 토큰을 캐싱하여 재사용하기 위한 파일 경로입니다.
 TOKEN_CACHE_FILE = "token_cache.json"
 
+# [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
+DB_FILE_PATH = "trade_history.db"
+
 # ==========================================================
 # [설정] 시스템 및 네트워크 정책
 # ==========================================================
@@ -171,7 +174,7 @@ SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 # - 너무 길면(예: 300초) 급변하는 시세에 대응하기 어렵습니다.
 SYSTEM_TRADING_LOG_DIR = "logs" # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
-SYSTEM_INVEST_PER_STOCK = 0.5  # 종목당 투자 비중 (예수금의 50%씩 분산 투자)
+SYSTEM_INVEST_PER_STOCK = 0.5  # 종목당 투자 비중 (최초 자산의 50%씩 분산 투자)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
