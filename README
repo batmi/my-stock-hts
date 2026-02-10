@@ -132,6 +132,53 @@
     *   *(참고: 시스템 트레이딩이 매매를 수행 중일 때 메인 메뉴에서 조회 기능을 실행하면, "잠시 대기해주세요" 메시지와 함께 작업이 끝날 때까지 대기할 수 있습니다.)*
 *   **거래 시간 제한:** 장 시작 후 변동성 완화 및 장 마감 전 정리를 위해 **09:15 ~ 15:15** 사이에만 매매를 수행합니다. (설정 변경 가능)
 
+#### [시스템 동작 순서도]
+```mermaid
+graph TD
+    Start([시스템 트레이딩 시작]) --> Init[초기화: 계좌 설정, 초기 자산 조회]
+    Init --> Sync[체결 내역 동기화: 재시작 시 중복 알림 방지]
+    Sync --> Thread[백그라운드 스레드 시작]
+    
+    Thread --> Loop{실행 중인가?}
+    Loop -- No --> Stop([시스템 종료: 최종 자산/손익 보고])
+    Loop -- Yes --> MarketCheck{장 운영 시간인가?\n(09:15 ~ 15:15)}
+    
+    MarketCheck -- No (장마감/휴장) --> Wait[대기 모드 (Waiting)]
+    Wait --> Sleep
+    
+    MarketCheck -- Yes (장중) --> Lock[시스템 락(Lock) 획득\n(API 우선순위 확보)]
+    
+    Lock --> SellLogic[[1. 매도 조건 점검]]
+    SellLogic --> SellCheck{보유 종목 분석}
+    SellCheck -- 손절/익절/추세이탈 --> SellOrder[매도 주문 실행 & DB 저장]
+    SellCheck -- 보유 유지 --> BuyLogic
+    SellOrder --> BuyLogic
+    
+    BuyLogic[[2. 매수 조건 점검]]
+    BuyLogic --> Analyze{관심 종목 전체 분석}
+    Analyze -- 매수 등급(8점↑) & RSI<60 --> Candidate[매수 후보 선정]
+    Analyze -- 기준 미달 --> Conclusion
+    Candidate --> Sort[우선순위 정렬 (점수 > RSI)]
+    Sort --> AssetCalc[자산 배분 계산 (초기 자산 대비 비중)]
+    AssetCalc --> BuyOrder[매수 주문 실행 & DB 저장]
+    BuyOrder --> Conclusion
+    
+    Conclusion[[3. 체결 내역 확인]]
+    Conclusion --> NewTrade{신규 체결 발생?}
+    NewTrade -- Yes --> Notify[텔레그램 알림 & DB 업데이트]
+    NewTrade -- No --> Monitor
+    Notify --> Monitor
+    
+    Monitor[[4. 계좌 모니터링]]
+    Monitor --> LossCheck{일일 손실 한도 초과?}
+    LossCheck -- Yes (위험) --> EmergencyStop[비상 정지 (Stop 호출)]
+    EmergencyStop --> Stop
+    LossCheck -- No (안전) --> Unlock
+    
+    Unlock[시스템 락 해제] --> Sleep[설정된 주기만큼 대기\n(기본 180초)]
+    Sleep --> Loop
+```
+
 ### (2) 매수 알고리즘 (Entry Logic)
 시스템은 `config.py`에 등록된 **'국내주식(stocks_kr)'** 리스트의 모든 종목을 순회하며 매수 기회를 포착합니다.
 
