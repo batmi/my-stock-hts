@@ -3,6 +3,7 @@ import time
 import json
 import os
 from datetime import datetime
+from collections import Counter
 from rich.prompt import Prompt
 from rich.markup import escape
 from rich.table import Table
@@ -223,13 +224,17 @@ class AutoTrader:
         # 4. 시스템 안정성
         err_cnt = self.consecutive_errors
         max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
-        err_color = "[green]" if err_cnt == 0 else ("[red]" if err_cnt >= max_err else "[yellow]")
-        table.add_row("연속 에러", f"{err_color}{err_cnt} / {max_err}회[/]")
+        if err_cnt == 0:
+            err_display = f"[dim green]{err_cnt} / {max_err}회[/]"
+        else:
+            err_color = "[red]" if err_cnt >= max_err else "[yellow]"
+            err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
+        table.add_row("연속 에러", err_display)
         
         # 5. 매매 요약
         buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
         sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
-        table.add_row("금일 매매", f"매수 {buy_cnt}건 / 매도 {sell_cnt}건")
+        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
 
         console.print(table)
         console.print()
@@ -314,19 +319,55 @@ class AutoTrader:
 
         # [추가] 종목별 성과 분석
         stock_stats = {}
+        buy_times_per_stock = {} # 종목별 매수 시간 추적 (FIFO)
+
         for r in self.trade_records:
             code = r['code']
             if code not in stock_stats:
-                stock_stats[code] = {'name': r['name'], 'buy': 0, 'sell': 0, 'profit': 0, 'rates': [], 'wins': 0}
+                stock_stats[code] = {
+                    'name': r['name'], 
+                    'buy': 0, 'sell': 0, 
+                    'profit': 0, 'rates': [], 'wins': 0,
+                    'reasons': [], # 매도 사유 리스트
+                    'holding_secs': [], # 보유 기간 리스트
+                    'max_rate': -999.0, 'min_rate': 999.0
+                }
+            if code not in buy_times_per_stock:
+                buy_times_per_stock[code] = []
+            
+            try:
+                dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
+            except: dt = datetime.now()
             
             if r['type'] == 'buy':
                 stock_stats[code]['buy'] += 1
+                buy_times_per_stock[code].append(dt)
             elif r['type'] == 'sell':
                 stock_stats[code]['sell'] += 1
                 p = r.get('profit_amt', 0)
+                rate = r.get('profit_rate', 0.0)
+                
                 stock_stats[code]['profit'] += p
-                stock_stats[code]['rates'].append(r.get('profit_rate', 0.0))
+                stock_stats[code]['rates'].append(rate)
                 if p > 0: stock_stats[code]['wins'] += 1
+                
+                # 사유 분석 (익절/손절/추세 등 키워드 추출)
+                reason_raw = r.get('reason', '')
+                reason_simple = "기타"
+                if "익절" in reason_raw: reason_simple = "익절"
+                elif "손절" in reason_raw: reason_simple = "손절"
+                elif "추세" in reason_raw: reason_simple = "추세"
+                stock_stats[code]['reasons'].append(reason_simple)
+                
+                # 최대/최소 수익률 갱신
+                if rate > stock_stats[code]['max_rate']: stock_stats[code]['max_rate'] = rate
+                if rate < stock_stats[code]['min_rate']: stock_stats[code]['min_rate'] = rate
+                
+                # 보유 기간 계산 (FIFO)
+                if buy_times_per_stock[code]:
+                    buy_dt = buy_times_per_stock[code].pop(0)
+                    hold_sec = (dt - buy_dt).total_seconds()
+                    stock_stats[code]['holding_secs'].append(hold_sec)
 
         if stock_stats:
             console.print("\n[bold]종목별 성과 분석[/bold]")
@@ -336,6 +377,10 @@ class AutoTrader:
             s_table.add_column("승률", justify="right")
             s_table.add_column("총 손익", justify="right")
             s_table.add_column("평균 수익률", justify="right")
+            # [추가] 상세 정보 컬럼
+            s_table.add_column("최대/최소", justify="right")
+            s_table.add_column("주요 사유", justify="center")
+            s_table.add_column("평균 보유", justify="right")
 
             for code, stat in stock_stats.items():
                 s_cnt = stat['sell']
@@ -345,12 +390,35 @@ class AutoTrader:
                 p_color = "[red]" if stat['profit'] > 0 else ("[blue]" if stat['profit'] < 0 else "[white]")
                 r_color = "[red]" if avg_rate > 0 else ("[blue]" if avg_rate < 0 else "[white]")
                 
+                # 최대/최소 수익률 포맷팅
+                max_r = stat['max_rate'] if stat['max_rate'] != -999.0 else 0.0
+                min_r = stat['min_rate'] if stat['min_rate'] != 999.0 else 0.0
+                range_str = f"[red]{max_r:+.1f}%[/] / [blue]{min_r:+.1f}%[/]" if s_cnt > 0 else "-"
+                
+                # 주요 매도 사유 (최빈값)
+                reason_str = "-"
+                if stat['reasons']:
+                    c = Counter(stat['reasons'])
+                    most_common = c.most_common(1)[0] # (사유, 횟수)
+                    reason_str = f"{most_common[0]}({most_common[1]})"
+                
+                # 평균 보유 시간 포맷팅
+                hold_str = "-"
+                if stat['holding_secs']:
+                    avg_sec = sum(stat['holding_secs']) / len(stat['holding_secs'])
+                    if avg_sec < 60: hold_str = f"{int(avg_sec)}초"
+                    elif avg_sec < 3600: hold_str = f"{int(avg_sec//60)}분"
+                    else: hold_str = f"{int(avg_sec//3600)}시간"
+                
                 s_table.add_row(
                     f"{stat['name']} ({code})",
                     f"{stat['buy']} / {stat['sell']}",
                     f"{win_rate:.1f}%",
                     f"{p_color}{stat['profit']:+,}원[/]",
-                    f"{r_color}{avg_rate:+.2f}%[/]"
+                    f"{r_color}{avg_rate:+.2f}%[/]",
+                    range_str,
+                    reason_str,
+                    hold_str
                 )
             console.print(s_table)
         
@@ -782,7 +850,7 @@ class AutoTrader:
 
             if reason:
                 self.log(f"매도 실행: {name} - {reason}")
-                odno = self._send_order(code, qty, "sell")
+                odno = self._send_order(code, qty, "sell", name=name)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
@@ -905,7 +973,7 @@ class AutoTrader:
                 reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}]"
                 
                 self.log(f"매수 실행: {cand['name']} - {reason}")
-                odno = self._send_order(cand['code'], qty, "buy")
+                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'])
                 if odno: 
                     avail_cash -= (qty * cand['price'])
                     record = {
@@ -920,7 +988,7 @@ class AutoTrader:
                     }
                     self.trade_records.append(record)
 
-    def _send_order(self, code, qty, type_str):
+    def _send_order(self, code, qty, type_str, name=None):
         tr_id = utils.get_tr_id("domestic", "trade", type_str)
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-cash"
         headers = utils.get_common_headers(tr_id)
@@ -944,7 +1012,8 @@ class AutoTrader:
                 success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
-                api.send_telegram_message(f"🚀 [주문 접수] {type_str.upper()} {code} {qty}주 (시장가)\n주문번호: {odno}")
+                stock_display = f"{name}({code})" if name else code
+                api.send_telegram_message(f"🚀 [주문 접수] {type_str.upper()} {stock_display} {qty}주 (시장가)\n주문번호: {odno}")
                 return odno
             else:
                 err_msg = res_json.get('msg1', 'Unknown Error')

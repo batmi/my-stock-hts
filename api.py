@@ -790,6 +790,13 @@ def get_domestic_balance():
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
     
+    # [추가] OPSQ2001 에러(INQR_DVSN 관련) 발생 시 '01'(대출일별)로 재시도
+    if data.get('msg_cd') == 'OPSQ2001':
+        if config.DEBUG_LEVEL != "OFF":
+            config.console.print("[dim yellow][API] 잔고 조회 '02' 실패(OPSQ2001). '01'로 재시도합니다.[/dim yellow]")
+        params["INQR_DVSN"] = "01"
+        data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
+
     if data.get('rt_cd') == '0':
         return data.get('output1', []), data.get('output2', [])
     

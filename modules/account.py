@@ -86,6 +86,13 @@ def fetch_domestic_balance():
     try:
         res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
         data = res.json()
+        
+        # [추가] OPSQ2001 에러 시 INQR_DVSN='01'로 재시도
+        if data.get('msg_cd') == 'OPSQ2001':
+            params['INQR_DVSN'] = '01'
+            res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
+            data = res.json()
+            
         if data['rt_cd'] == '0':
             for item in data.get('output1', []):
                 qty = int(item['hldg_qty'])
@@ -326,6 +333,12 @@ def get_deposit_balance():
             time.sleep(0.3)
             res = api.session.get(url_balance, headers=headers_balance, params=params_balance, verify=False, timeout=10)
             data = res.json()
+            
+            # [추가] OPSQ2001 에러 시 INQR_DVSN='01'로 재시도
+            if data.get('msg_cd') == 'OPSQ2001':
+                params_balance['INQR_DVSN'] = '01'
+                res = api.session.get(url_balance, headers=headers_balance, params=params_balance, verify=False, timeout=10)
+                data = res.json()
             
             if data['rt_cd'] == '0':
                 holdings = data.get('output1', [])

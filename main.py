@@ -276,56 +276,63 @@ def main():
     else:
         api.get_real_access_token()
 
+    trader = auto_trade.AutoTrader()
     last_choice = "1"
-    while True:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
-        env_color = "green" if config.IS_SIMULATION else "bold red"
-        print("\n" + "━"*50)
-        config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-        print("━"*50)
-        config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
-        config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
-        
-        trader_status = ""
-        trader = auto_trade.AutoTrader()
-        if trader.is_running:
-            if trader.is_market_open():
-                trader_status = " [bold green](RUNNING)[/]"
-            else:
-                trader_status = " [bold yellow](WAITING)[/]"
+    
+    try:
+        while True:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
+            env_color = "green" if config.IS_SIMULATION else "bold red"
+            print("\n" + "━"*50)
+            config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
+            print("━"*50)
+            config.console.print("[0] 보유 잔고 및 자산 조회"); config.console.print("[1] 시장 지수 조회")
+            config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
             
-        config.console.print("[4] 관심 종목 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
-        config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red] 주문")
-        config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
-        config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
-        print("─" * 50); config.console.print()
-        try:
-            choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
-            if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break
-            
-            if choice.lower() == "h": 
-                show_help()
-                continue
+            trader_status = ""
+            if trader.is_running:
+                if trader.is_market_open():
+                    trader_status = " [bold green](RUNNING)[/]"
+                else:
+                    trader_status = " [bold yellow](WAITING)[/]"
                 
-            last_choice = choice
-            if choice == "0": 
-                account.get_account_balance()
-                account.get_deposit_balance() 
-            elif choice == "1": market.show_market_indices()
-            elif choice == "2": analysis.show_stock_analysis()
-            elif choice == "3": 
-                code, name, is_ovs = utils.select_stock_for_chart()
-                if code: chart.generate_visual_chart(code, name, is_ovs)
-            elif choice == "4": manage.manage_stock_menu()
-            elif choice == "5": auto_trade.system_trading_menu() 
-            elif choice == "6": backtest.run_backtest()
-            elif choice == "7": trading.send_order("buy")
-            elif choice == "8": trading.send_order("sell")
-            elif choice == "9": trading.modify_order()
-        except KeyboardInterrupt: config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]"); break
-        except Exception as e:
-            config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
+            config.console.print("[4] 관심 종목 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
+            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red] 주문")
+            config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
+            config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
+            print("─" * 50); config.console.print()
+            try:
+                choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+                if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break
+                
+                if choice.lower() == "h": 
+                    show_help()
+                    continue
+                    
+                last_choice = choice
+                if choice == "0": 
+                    account.get_account_balance()
+                    account.get_deposit_balance() 
+                elif choice == "1": market.show_market_indices()
+                elif choice == "2": analysis.show_stock_analysis()
+                elif choice == "3": 
+                    code, name, is_ovs = utils.select_stock_for_chart()
+                    if code: chart.generate_visual_chart(code, name, is_ovs)
+                elif choice == "4": manage.manage_stock_menu()
+                elif choice == "5": auto_trade.system_trading_menu() 
+                elif choice == "6": backtest.run_backtest()
+                elif choice == "7": trading.send_order("buy")
+                elif choice == "8": trading.send_order("sell")
+                elif choice == "9": trading.modify_order()
+            except KeyboardInterrupt: config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]"); break
+            except Exception as e:
+                config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
+    finally:
+        # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
+        if trader.is_running:
+            config.console.print("\n[bold red]실행 중인 자동매매 시스템을 종료합니다...[/bold red]")
+            trader.stop()
 
 if __name__ == "__main__":
     main()
