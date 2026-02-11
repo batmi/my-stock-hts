@@ -240,6 +240,7 @@ stock_project/
 ├── indicators.py       # 보조지표 계산 (ADX, RSI, 파라볼릭 등)
 ├── utils.py            # 공통 유틸리티 (API 헤더, 종목 선택 등)
 ├── main.py             # 메인 실행 (도움말 포함)
+├── get_telegram_chat_id.py # [New] 텔레그램 Chat ID 조회 도구
 ├── db/                 # [자동 생성] DB 파일 저장소
 │   ├── trade_history.db
 │   ├── trade_history.db-shm
@@ -363,12 +364,15 @@ $env:TELEGRAM_CHAT_ID="채팅_ID"
     *   형식 예시: `123456789:ABCdefGhIJKlmNoPQRstuVWxyz`
 
 ### (2) 채팅 ID (Chat ID) 확인
-1.  생성한 봇을 검색하여 대화창을 열고 `/start`를 누르거나 아무 메시지나 보냅니다.
-2.  웹 브라우저에서 다음 URL에 접속합니다:
+**방법 A: 자동 조회 스크립트 사용 (권장)**
+1. 텔레그램 앱에서 생성한 봇에게 아무 메시지나 보냅니다.
+2. 터미널에서 `python3 get_telegram_chat_id.py`를 실행하고 토큰을 입력하면 Chat ID가 출력됩니다.
+
+**방법 B: 수동 조회**
+1.  웹 브라우저에서 다음 URL에 접속합니다:
     `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-    *   `<YOUR_BOT_TOKEN>` 부분에 위에서 발급받은 토큰을 넣으세요.
-3.  응답 결과(JSON)에서 `"chat": {"id": 123456789, ...}` 부분을 찾습니다.
-4.  이 숫자(`123456789`)가 **Chat ID**입니다. 이 값을 `TELEGRAM_CHAT_ID` 환경 변수에 저장하세요.
+2.  응답 결과(JSON)에서 `"chat": {"id": 123456789, ...}` 부분을 찾습니다.
+3.  이 숫자(`123456789`)가 **Chat ID**입니다. 이 값을 `TELEGRAM_CHAT_ID` 환경 변수에 저장하세요.
 
 ### (3) 설정 완료 확인
 환경 변수 설정 후 프로그램을 재시작하고 시스템 트레이딩을 실행하면, 시작 알림 메시지가 텔레그램으로 전송됩니다.
