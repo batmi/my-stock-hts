@@ -25,15 +25,35 @@ REAL_TX_PER_SECOND = 20   # 실전투자 서버 최대 TPS: 20
 # ==========================================================
 # [설정] 파일 경로 관리
 # ==========================================================
+# 프로젝트 루트 디렉토리 및 서브 디렉토리 정의
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DB_DIR = os.path.join(BASE_DIR, "db")
+CHART_DIR = os.path.join(BASE_DIR, "chart")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+JSON_DIR = os.path.join(BASE_DIR, "json")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+# 디렉토리 자동 생성
+for d in [DB_DIR, CHART_DIR, DATA_DIR, JSON_DIR, LOG_DIR]:
+    if not os.path.exists(d):
+        try: os.makedirs(d)
+        except Exception: pass
+
 # 종목 분석 대상 목록을 저장하는 JSON 파일의 경로입니다.
-# (기본값: stock.json)
-STOCK_DATA_FILE = "stock.json"
+# (기본값: json/stock.json)
+STOCK_DATA_FILE = os.path.join(JSON_DIR, "stock.json")
 
 # API 접속 토큰을 캐싱하여 재사용하기 위한 파일 경로입니다.
-TOKEN_CACHE_FILE = "token_cache.json"
+TOKEN_CACHE_FILE = os.path.join(JSON_DIR, "token_cache.json")
 
 # [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
-DB_FILE_PATH = "trade_history.db"
+DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")
+
+# [추가] DB 데이터 보존 기간 (일 단위)
+# 설정된 기간보다 오래된 거래 내역은 프로그램 종료 시 자동으로 삭제됩니다.
+# (기본값: 365일, 0으로 설정 시 자동 삭제 안 함)
+DB_DATA_RETENTION_DAYS = 365
 
 # ==========================================================
 # [설정] 시스템 및 네트워크 정책
@@ -182,7 +202,7 @@ SELL_STRATEGY = {
 SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 # - 너무 짧으면(예: 10초) API 호출 제한(Rate Limit)에 걸릴 수 있습니다.
 # - 너무 길면(예: 300초) 급변하는 시세에 대응하기 어렵습니다.
-SYSTEM_TRADING_LOG_DIR = "logs" # 시스템 트레이딩 로그 저장 디렉토리
+SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
 SYSTEM_INVEST_PER_STOCK = 0.5  # 종목당 투자 비중 (최초 자산의 50%씩 분산 투자)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단

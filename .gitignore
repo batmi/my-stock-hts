@@ -7,13 +7,9 @@ venv/
 
 # 시스템 및 설정 관련
 .DS_Store
-token_cache.json
-analysis_*.png
-trade_history.db
-trade_history.db-shm
-trade_history.db-wal
-
-# 시스템 트레이딩 로그
+./json/token_cache.json
+./chart/analysis_*.png
+./db/trade_history.db*
 ./logs/system_trade_*.log
 
 # run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.

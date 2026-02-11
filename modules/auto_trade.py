@@ -197,10 +197,34 @@ class ConclusionMonitor:
                                     if "(수동)" in origin_type: db_type_name += "(수동)"
                                     elif "(AUTO)" in origin_type or "(자동)" in origin_type: db_type_name += "(자동)"
                                 
+                                # [추가] 매도 체결 시 실현 손익 정보 조회
+                                profit_msg = ""
+                                if "매도" in type_name:
+                                    try:
+                                        found_record = None
+                                        # 1. AutoTrader 메모리 검색 (클래스가 정의된 경우)
+                                        trader_cls = globals().get('AutoTrader')
+                                        if trader_cls:
+                                            trader = trader_cls()
+                                            for record in reversed(trader.trade_records):
+                                                if str(record.get('odno')) == str(odno):
+                                                    found_record = record
+                                                    break
+                                        # 2. DB 검색 (메모리에 없을 경우)
+                                        if not found_record:
+                                            trades = db_manager.db.get_trades(limit=30)
+                                            for t in trades:
+                                                if str(t.get('odno')) == str(odno):
+                                                    found_record = t
+                                                    break
+                                        if found_record and found_record.get('profit_amt') is not None:
+                                            profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
+                                    except: pass
+
                                 # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
                                 if not initial:
                                     # 알림 발송
-                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원"
+                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}"
                                     api.send_telegram_message(msg)
                                     
                                     # 로그 기록 (시스템 로거 활용)
@@ -280,6 +304,7 @@ class AutoTrader:
         # [추가] 텔레그램 메시지 구성을 위한 변수 미리 선언
         holdings = []
         summary = []
+        deposit = 0
 
         with console.status("[bold green]시스템 시작 준비 중 (자산 조회 및 스레드 시작)...[/]"):
             self.is_running = True
@@ -295,11 +320,19 @@ class AutoTrader:
             # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
             ConclusionMonitor().check_now()
             
-            # [추가] 텔레그램 알림용 잔고 조회 (예외 처리 추가)
+            # [추가] 텔레그램 알림용 잔고 및 예수금 조회 (예외 처리 추가)
             try:
+                # 예수금 조회
+                cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+                acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+                params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+                res = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params)
+                if res.get('rt_cd') == '0':
+                    deposit = int(res['output']['ord_psbl_cash'])
+
                 holdings, summary = api.get_domestic_balance()
             except Exception as e:
-                self.log(f"시작 시 잔고 조회 실패: {e}")
+                self.log(f"시작 시 잔고/예수금 조회 실패: {e}")
                 holdings, summary = [], []
             
             config.trade_context.use_auto_account = False # 복구
@@ -325,6 +358,7 @@ class AutoTrader:
         
         # [수정] 시작 메시지에 보유 종목 및 자산 현황 추가
         msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원"
+        msg += f"\n현재 예수금: {deposit:,}원"
         
         if summary and len(summary) > 0:
             s_data = summary[0]
@@ -337,9 +371,11 @@ class AutoTrader:
             for item in holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
+                cur_price = int(item['prpr'])
+                eval_amt = int(item['evlu_amt'])
                 rate = float(item['evlu_pfls_rt'])
                 profit = int(item['evlu_pfls_amt'])
-                msg += f"\n• {name}: {qty}주 | {rate:+.2f}% ({profit:+,}원)"
+                msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
         else:
             msg += "\n\n📋 [보유 종목] 없음"
 
@@ -372,31 +408,45 @@ class AutoTrader:
         # [수정] 스레드가 종료된 경우에만 자산 및 보유 종목 조회 (락 충돌 방지)
         if not self.thread or not self.thread.is_alive():
             # [추가] 종료 시 최종 자산 현황 요약 전송
-            final_asset = self._get_total_estimated_asset()
-            if final_asset is None: final_asset = 0
-            
-            profit = final_asset - self.initial_asset
-            profit_rate = 0.0
-            if self.initial_asset > 0:
-                profit_rate = (profit / self.initial_asset) * 100
-                
-            msg += f"\n종료 자산: {final_asset:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
-            
-            # [추가] 종료 시 보유 종목 현황 추가
+            deposit = 0
+            stock_eval = 0
+            final_asset = 0
+
             try:
-                holdings, _ = api.get_domestic_balance()
+                # 1. 예수금 조회
+                cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+                acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+                params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+                res = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params)
+                if res.get('rt_cd') == '0':
+                    deposit = int(res['output']['ord_psbl_cash'])
+
+                # 2. 잔고 및 평가금 조회
+                holdings, summary = api.get_domestic_balance()
+                if summary and len(summary) > 0:
+                    stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+
+                final_asset = deposit + stock_eval
+                profit = final_asset - self.initial_asset
+                profit_rate = 0.0 if self.initial_asset <= 0 else (profit / self.initial_asset) * 100
+
+                msg += f"\n종료 자산: {final_asset:,}원\n최종 예수금: {deposit:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
+
                 if holdings:
-                    msg += "\n\n📋 [최종 보유 종목]"
+                    msg += "\n\n📋 [최종 보유 종목 현황]"
                     for item in holdings:
                         name = item['prdt_name']
                         qty = int(item['hldg_qty'])
+                        cur_price = int(item['prpr'])
+                        eval_amt = int(item['evlu_amt'])
                         rate = float(item['evlu_pfls_rt'])
                         profit_amt = int(item['evlu_pfls_amt'])
-                        msg += f"\n• {name}: {qty}주 | {rate:+.2f}% ({profit_amt:+,}원)"
+                        msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit_amt:+,}원 ({rate:+.2f}%)"
                 else:
                     msg += "\n\n📋 [최종 보유 종목] 없음"
             except Exception as e:
-                self.log(f"종료 시 잔고 조회 실패: {e}")
+                self.log(f"종료 시 자산/잔고 조회 실패: {e}")
+                msg += "\n(자산 조회 실패)"
         else:
             msg += "\n(시스템 응답 지연으로 최종 자산 정보 생략)"
             self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
@@ -440,6 +490,7 @@ class AutoTrader:
         # 3. 자산 및 손익 현황 (안전성 핵심)
         current_asset = None
         deposit = 0
+        holdings = []
         
         # [추가] 상태 조회 시에도 시스템 트레이딩 컨텍스트 사용
         original_context = getattr(config.trade_context, 'use_auto_account', False)
@@ -447,6 +498,11 @@ class AutoTrader:
         
         with console.status("[bold green]트레이딩 상태 및 자산 정보 조회 중...[/]"):
             current_asset = self._get_total_estimated_asset()
+            
+            # [추가] 보유 종목 확인
+            try:
+                holdings, _ = api.get_domestic_balance()
+            except: pass
             
             # 예수금 별도 조회 (매수 여력 확인용)
             try:
@@ -495,7 +551,7 @@ class AutoTrader:
                 table.add_row("현재 자산", f"{current_asset:,}원")
                 table.add_row("누적 손익", "-")
             
-            table.add_row("주문 가능", f"{deposit:,}원")
+            table.add_row("현재 예수금", f"{deposit:,}원")
             
             # 일일 손실 제한 체크 (초기 자산이 있을 때만)
             if self.initial_asset > 0:
@@ -528,6 +584,40 @@ class AutoTrader:
         table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
 
         console.print(table)
+        
+        # [추가] 보유 종목 리스트 출력
+        if holdings:
+            console.print("\n[bold]보유 종목 리스트[/bold]")
+            h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            h_table.add_column("종목명(코드)", justify="left")
+            h_table.add_column("수량", justify="right")
+            h_table.add_column("매입가", justify="right")
+            h_table.add_column("현재가", justify="right")
+            h_table.add_column("평가손익", justify="right")
+            h_table.add_column("수익률", justify="right")
+            
+            for item in holdings:
+                name = item['prdt_name']
+                code = item['pdno']
+                qty = int(item['hldg_qty'])
+                buy_price = float(item['pchs_avg_pric'])
+                cur_price = int(item['prpr'])
+                profit = int(item['evlu_pfls_amt'])
+                rate = float(item['evlu_pfls_rt'])
+                
+                p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                h_table.add_row(
+                    f"{name}({code})", 
+                    f"{qty:,}주", 
+                    f"{buy_price:,.0f}원",
+                    f"{cur_price:,}원", 
+                    f"{p_color}{profit:+,}원[/]", 
+                    f"{p_color}{rate:+.2f}%[/]"
+                )
+            console.print(h_table)
+        else:
+            console.print("\n[dim]현재 보유 중인 종목이 없습니다.[/dim]")
+            
         console.print()
 
     def print_report(self):
@@ -630,6 +720,41 @@ class AutoTrader:
             summary_table.add_row("평균 보유 기간", avg_holding_str)
         
         console.print(summary_table)
+
+        # [추가] 현재 보유 종목 현황 출력
+        try:
+            # 컨텍스트 설정 (시스템 트레이딩 계좌 조회)
+            original_context = getattr(config.trade_context, 'use_auto_account', False)
+            config.trade_context.use_auto_account = True
+            
+            holdings, _ = api.get_domestic_balance()
+            
+            if holdings:
+                console.print("\n[bold]현재 보유 종목 현황[/bold]")
+                h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+                h_table.add_column("종목명(코드)", justify="left")
+                h_table.add_column("보유수량", justify="right")
+                h_table.add_column("매입단가", justify="right")
+                h_table.add_column("현재가", justify="right")
+                h_table.add_column("평가손익", justify="right")
+                h_table.add_column("수익률", justify="right")
+                
+                for item in holdings:
+                    name = item['prdt_name']
+                    code = item['pdno']
+                    qty = int(item['hldg_qty'])
+                    buy_price = float(item['pchs_avg_pric'])
+                    cur_price = int(item['prpr'])
+                    profit = int(item['evlu_pfls_amt'])
+                    rate = float(item['evlu_pfls_rt'])
+                    
+                    p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                    
+                    h_table.add_row(f"{name}({code})", f"{qty:,}주", f"{buy_price:,.0f}원", f"{cur_price:,}원", f"{p_color}{profit:+,}원[/]", f"{p_color}{rate:+.2f}%[/]")
+                console.print(h_table)
+        except Exception: pass
+        finally:
+            config.trade_context.use_auto_account = original_context
 
         # [추가] 종목별 성과 분석
         stock_stats = {}

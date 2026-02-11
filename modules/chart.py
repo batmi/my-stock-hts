@@ -181,11 +181,12 @@ def generate_visual_chart(code, name, is_overseas):
         plt.tight_layout()
         safe_code = re.sub(r'[=\-\.\^]', '', code)
         file_name = f"analysis_{safe_code}.png"
-        plt.savefig(file_name, dpi=300); plt.close()
+        file_path = os.path.join(config.CHART_DIR, file_name)
+        plt.savefig(file_path, dpi=300); plt.close()
         
     config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
     try:
-        if platform.system() == "Windows": os.startfile(file_name)
-        elif platform.system() == "Darwin": os.system(f"open {file_name}")
-        else: os.system(f"xdg-open {file_name}")
+        if platform.system() == "Windows": os.startfile(file_path)
+        elif platform.system() == "Darwin": os.system(f"open {file_path}")
+        else: os.system(f"xdg-open {file_path}")
     except: pass

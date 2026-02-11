@@ -388,6 +388,7 @@ def run_backtest():
     
     # [수정] 매매 횟수 상세 및 승률/MDD 출력
     sell_count = win_trades + loss_trades
+    sell_trades = [t for t in trades if t['type'].startswith("매도")]
     win_rate = (win_trades / sell_count * 100) if sell_count > 0 else 0.0
     summary_table.add_row("총 매매 횟수", f"{len(trades)}건 (진입 {len(trades)-sell_count} / 청산 {sell_count})")
     
@@ -395,7 +396,6 @@ def run_backtest():
         summary_table.add_row("승률 (Win Rate)", f"{win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
         
         # [순서 변경] 평균 수익률 먼저 출력
-        sell_trades = [t for t in trades if t['type'].startswith("매도")]
         profits = [t['profit'] for t in sell_trades if t['profit'] > 0]
         losses = [t['profit'] for t in sell_trades if t['profit'] <= 0]
         

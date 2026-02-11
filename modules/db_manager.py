@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime
 import config
+import atexit
 
 class DBManager:
     def __init__(self):
@@ -293,5 +294,48 @@ class DBManager:
                     break
                 except: break
 
+    def cleanup_old_data(self, days_to_keep):
+        """보존 기간이 지난 오래된 거래 내역 삭제"""
+        if days_to_keep <= 0: return
+        
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            
+            # SQLite의 date 함수를 사용하여 기준일 계산
+            cursor.execute(f"DELETE FROM trades WHERE time < date('now', '-{days_to_keep} days')")
+            deleted_count = cursor.rowcount
+            conn.commit()
+            
+            if deleted_count > 0 and config.DEBUG_LEVEL != "OFF":
+                config.console.print(f"[dim yellow][DB] 오래된 거래 내역 {deleted_count}건을 정리했습니다. ({days_to_keep}일 이전)[/dim yellow]")
+        except Exception as e:
+            if config.DEBUG_LEVEL != "OFF":
+                config.console.print(f"[red][DB] Cleanup Error: {e}[/red]")
+
+    def run_vacuum(self):
+        """DB 최적화 (VACUUM) 실행 - 프로그램 종료 시 호출"""
+        try:
+            # 별도 연결 생성하여 실행 (스레드 로컬 연결 간섭 방지)
+            conn = sqlite3.connect(self.db_path, timeout=60)
+            if config.DEBUG_LEVEL != "OFF":
+                config.console.print("[dim cyan][DB] 데이터베이스 정리 및 최적화(VACUUM) 수행 중...[/dim cyan]")
+            
+            # 1. 오래된 데이터 삭제 (설정된 기간 기준)
+            retention_days = getattr(config, 'DB_DATA_RETENTION_DAYS', 365)
+            if retention_days > 0:
+                conn.execute(f"DELETE FROM trades WHERE time < date('now', '-{retention_days} days')")
+            
+            # 2. VACUUM 실행 (공간 회수)
+            conn.execute("VACUUM;")
+            conn.close()
+            
+            if config.DEBUG_LEVEL != "OFF":
+                config.console.print("[dim green][DB] 데이터베이스 최적화 완료[/dim green]")
+        except Exception as e:
+            if config.DEBUG_LEVEL != "OFF":
+                config.console.print(f"[red][DB] VACUUM Error: {e}[/red]")
+
 # 전역 인스턴스
 db = DBManager()
+atexit.register(db.run_vacuum)

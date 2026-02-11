@@ -827,10 +827,8 @@ def send_telegram_message(message):
         cano = config.AUTO_CANO
         acc_label = "자동"
 
-    # 계좌번호 마스킹 (앞 4자리 노출, 나머지 *)
-    masked_acc = f"{cano[:4]}****" if cano and len(cano) >= 8 else cano
-    
-    account_info = f"[{acc_label} {masked_acc}]"
+    # [수정] 계좌번호 마스킹 제거 (전체 번호 노출)
+    account_info = f"[{acc_label} {cano}]"
 
     # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
     # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지

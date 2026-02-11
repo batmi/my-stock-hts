@@ -3,12 +3,14 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from datetime import datetime, timedelta
+import os
 import time
 import config
 import api
 import utils
 from modules import db_manager
 import json
+import pandas as pd
 
 # -----------------------------------------------------------
 # [내부 헬퍼] 계좌별 헤더 생성 (자동매매 계좌 키 적용)
@@ -646,6 +648,65 @@ def get_deposit_balance():
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]➤ {label} 자산 현황 ({cano}-{acnt})[/]")
         _display_asset_status(cano, acnt)
+        
+def export_trade_history_to_excel():
+    """전체 거래 내역을 엑셀 파일로 저장"""
+    try:
+        trades = db_manager.db.get_trades(limit=None)
+        if not trades:
+            config.console.print("\n[yellow]저장할 거래 내역이 없습니다.[/yellow]")
+            return
+
+        # DataFrame 생성
+        df = pd.DataFrame(trades)
+        
+        # 컬럼 순서 및 이름 변경 (사용자 친화적)
+        columns_map = {
+            'time': '일시',
+            'type': '유형',
+            'name': '종목명',
+            'code': '종목코드',
+            'qty': '수량',
+            'price': '단가',
+            'profit_amt': '손익금',
+            'profit_rate': '수익률(%)',
+            'reason': '매매사유',
+            'strategy_score': '점수',
+            'order_status': '상태',
+            'odno': '주문번호',
+            'account': '계좌번호',
+            'is_sim': '모의투자여부'
+        }
+        
+        # 존재하는 컬럼만 선택하여 순서대로 정렬 (없는 컬럼은 제외)
+        target_cols = [c for c in columns_map.keys() if c in df.columns]
+        df = df[target_cols]
+        df.rename(columns=columns_map, inplace=True)
+        
+        # 모의투자여부 가독성 좋게 변경
+        if '모의투자여부' in df.columns:
+            df['모의투자여부'] = df['모의투자여부'].apply(lambda x: '모의' if x == 1 else '실전')
+
+        # 파일명 생성
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename_xlsx = os.path.join(config.DATA_DIR, f"trade_history_{timestamp}.xlsx")
+        
+        # 엑셀 저장
+        try:
+            with config.console.status(f"[bold green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]"):
+                df.to_excel(filename_xlsx, index=False)
+            config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_xlsx)}[/bold green]")
+        except ImportError:
+            config.console.print("\n[yellow]openpyxl 라이브러리가 설치되지 않아 엑셀(.xlsx) 저장이 불가능합니다.[/yellow]")
+            if config.Prompt.ask("대신 CSV 파일로 저장하시겠습니까?", choices=["y", "n"], default="y") == "y":
+                filename_csv = os.path.join(config.DATA_DIR, f"trade_history_{timestamp}.csv")
+                df.to_csv(filename_csv, index=False, encoding='utf-8-sig')
+                config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_csv)}[/bold green]")
+            else:
+                config.console.print("[dim]저장을 취소했습니다. (터미널에서 'pip install openpyxl'을 실행하세요)[/dim]")
+
+    except Exception as e:
+        config.console.print(f"\n[bold red]저장 실패: {e}[/bold red]")
 
 def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
@@ -653,9 +714,10 @@ def view_trade_history():
     config.console.print("[1] 전체 내역 (최신순 50건)")
     config.console.print("[2] 최근 30일 내역")
     config.console.print("[3] 종목코드(티커) 검색")
+    config.console.print("[4] 전체 거래 내역 저장 (Excel)")
     config.console.print()
     
-    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
     if choice.lower() == 'q': return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
@@ -671,6 +733,9 @@ def view_trade_history():
     elif choice == "3":
         keyword = config.Prompt.ask("검색할 종목코드(티커) 입력")
         trades = db_manager.db.get_trades(code=keyword)
+    elif choice == "4":
+        export_trade_history_to_excel()
+        return
 
     if not trades:
         config.console.print("\n[yellow]검색된 거래 내역이 없습니다.[/yellow]")
