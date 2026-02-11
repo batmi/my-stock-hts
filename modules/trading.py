@@ -12,6 +12,7 @@ import utils
 from modules import account
 from modules import db_manager
 from modules import analysis
+from modules import auto_trade # [추가] 체결 감시자 호출용
 
 def select_stock_from_balance():
     """
@@ -434,6 +435,14 @@ def send_order(order_type):
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=False)
                 db_manager.db.insert_trade(f"매수(수동)" if order_type=='buy' else f"매도(수동)", stock_code, stock_name, qty, price, result['output']['ODNO'], snapshot=snapshot, reason="사용자 수동 주문")
 
+                # [추가] 매도 주문 시 트레일링 스탑 정보 초기화 (재진입 시 간섭 방지)
+                if order_type == 'sell':
+                    db_manager.db.delete_trailing_stop(stock_code)
+                    auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
+
+                # [추가] 체결 감시자에게 즉시 확인 요청
+                auto_trade.ConclusionMonitor().check_now()
+
                 config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
             else: 
@@ -539,6 +548,14 @@ def send_order(order_type):
                 # [DB] 거래 내역 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=True)
                 db_manager.db.insert_trade(f"매수(수동)" if order_type=='buy' else f"매도(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문")
+
+                # [추가] 매도 주문 시 트레일링 스탑 정보 초기화
+                if order_type == 'sell':
+                    db_manager.db.delete_trailing_stop(stock_code)
+                    auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
+
+                # [추가] 체결 감시자에게 즉시 확인 요청
+                auto_trade.ConclusionMonitor().check_now()
 
                 # [추가] 주문 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
@@ -651,6 +668,9 @@ def modify_order():
                 # [DB] 정정/취소 내역 저장
                 db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json['output']['ODNO'], org_odno=org_odno, reason=f"사용자 {action_name}")
 
+                # [추가] 체결 감시자에게 즉시 확인 요청
+                auto_trade.ConclusionMonitor().check_now()
+
                 # [추가] 정정/취소 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
@@ -728,6 +748,9 @@ def modify_order():
                 
                 # [DB] 정정/취소 내역 저장
                 db_manager.db.insert_trade(f"{action_name}(수동)", target_order.get('pdno'), target_order.get('prdt_name'), final_qty, price, res_json.get('output', {}).get('ODNO'), org_odno=org_odno, reason=f"사용자 {action_name}")
+
+                # [추가] 체결 감시자에게 즉시 확인 요청
+                auto_trade.ConclusionMonitor().check_now()
 
                 # [추가] 정정/취소 후 미체결 내역 자동 조회
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")

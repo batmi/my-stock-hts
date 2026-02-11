@@ -190,6 +190,17 @@ SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도�
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
+# [추가] 체결 감시 모니터링 주기 (초)
+# 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초 - 반응성 향상)
+CONCLUSION_CHECK_INTERVAL = 5
+
+# 2. 대기 모드 주기: 주문이 없는 평상시 확인 주기 (기본값: 180초 = 3분)
+# (0으로 설정하면 평상시에는 아예 확인하지 않습니다. 외부 HTS 주문 감지 불필요 시 0 권장)
+CONCLUSION_CHECK_IDLE_INTERVAL = 180
+
+# 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
+CONCLUSION_CHECK_ACTIVE_DURATION = 100
+
 # [추가] 시스템 트레이딩 로거 (AutoTrader 실행 시 함수 할당)
 SYSTEM_LOGGER = None
 

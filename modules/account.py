@@ -16,6 +16,12 @@ import json
 def _get_headers(tr_id, target_cano):
     # 컨텍스트 설정 (토큰 발급용)
     is_auto = (not config.IS_SIMULATION and target_cano == config.AUTO_CANO)
+    
+    # [수정] 메인 계좌와 자동매매 계좌가 동일한 경우, 메인(Manual) 컨텍스트를 우선 사용
+    # (불필요한 자동매매 토큰 발급 로그 방지)
+    if config.CANO and config.AUTO_CANO and config.CANO == config.AUTO_CANO:
+        is_auto = False
+
     config.trade_context.use_auto_account = is_auto
     
     headers = utils.get_common_headers(tr_id)
@@ -181,57 +187,91 @@ def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
     return all_holdings
 
 def sync_today_trades():
-    """금일 체결 내역을 API로 조회하여 DB의 단가(시장가=0) 정보를 업데이트"""
-    # 모의/실전 구분하여 API 호출
+    """금일 체결 내역을 API로 조회하여 DB의 단가(시장가=0) 정보를 업데이트 (모든 계좌 대상)"""
     tr_id = utils.get_tr_id("domestic", "inquiry", "history")
-    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-    headers = utils.get_common_headers(tr_id)
     today = datetime.now().strftime("%Y%m%d")
     
-    # 계좌별(모의/실전/AUTO)로 루프를 돌며 확인하면 좋겠지만, 현재 컨텍스트 기준 계좌만 확인
-    params = {
-        "CANO": config.CANO, "ACNT_PRDT_CD": config.ACNT_PRDT_CD, 
-        "INQR_STRT_DT": today, "INQR_END_DT": today, 
-        "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
-        "PDNO": "", "CCLD_DVSN": "01", # 주문별 체결 합계
-        "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
-        "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
-    }
+    # 조회 대상 계좌 목록
+    accounts = []
+    if config.CANO and config.ACNT_PRDT_CD:
+        accounts.append({"cano": config.CANO, "acnt": config.ACNT_PRDT_CD, "type": "MAIN"})
+    
+    if not config.IS_SIMULATION and config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD:
+        if config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD:
+            accounts.append({"cano": config.AUTO_CANO, "acnt": config.AUTO_ACNT_PRDT_CD, "type": "AUTO"})
+            
+    total_count = 0
+    original_context = getattr(config.trade_context, 'use_auto_account', False)
     
     try:
-        res = api.session.get(url, headers=headers, params=params, verify=False, timeout=5)
-        data = res.json()
-        if data['rt_cd'] == '0':
-            trades = data.get('output1', [])
-            count = 0
-            for item in trades:
-                odno = item.get('odno')
-                avg_price = float(item.get('avg_prvs', 0))
-                tot_qty = int(item.get('tot_ccld_qty', 0))
+        for acc in accounts:
+            cano = acc['cano']
+            acnt = acc['acnt']
+            
+            # 헤더 생성 (자동매매 계좌인 경우 해당 키 사용)
+            headers = _get_headers(tr_id, cano)
+            
+            params = {
+                "CANO": cano, "ACNT_PRDT_CD": acnt, 
+                "INQR_STRT_DT": today, "INQR_END_DT": today, 
+                "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
+                "PDNO": "", "CCLD_DVSN": "01", # 주문별 체결 합계
+                "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
+                "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
+            }
+            
+            try:
+                url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+                res = api.session.get(url, headers=headers, params=params, verify=False, timeout=5)
+                data = res.json()
                 
-                if odno and avg_price > 0:
-                    # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
-                    if not db_manager.db.check_trade_exists(odno, "체결"):
-                        # 체결 시간 포맷팅
-                        ord_dt = item.get('ord_dt', '')
-                        ord_tmd = item.get('ord_tmd', '')
-                        trade_time = None
-                        if len(ord_dt) == 8 and len(ord_tmd) == 6:
-                            trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                if data['rt_cd'] == '0':
+                    trades = data.get('output1', [])
+                    for item in trades:
+                        odno = item.get('odno')
+                        avg_price = float(item.get('avg_prvs', 0))
+                        tot_qty = int(item.get('tot_ccld_qty', 0))
                         
-                        type_cd = item.get('sll_buy_dvsn_cd')
-                        type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
-                        
-                        db_manager.db.insert_trade(
-                            type_str, item.get('pdno'), item.get('prdt_name'), 
-                            tot_qty, avg_price, odno, 
-                            order_status="체결", custom_time=trade_time,
-                            reason="체결 확인"
-                        )
-                        count += 1
-            return count
-    except: pass
-    return 0
+                        if odno and avg_price > 0:
+                            # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
+                            if not db_manager.db.check_trade_exists(odno, "체결"):
+                                if config.DEBUG_LEVEL == "DEBUG":
+                                    config.console.print(f"[dim cyan][Account] 신규 체결 DB 저장 시도: {odno}[/dim cyan]")
+                                
+                                # 체결 시간 포맷팅
+                                ord_dt = item.get('ord_dt', '')
+                                ord_tmd = item.get('ord_tmd', '')
+                                trade_time = None
+                                if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                                    trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                                
+                                type_cd = item.get('sll_buy_dvsn_cd')
+                                type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
+                                
+                                # 원 주문 유형 조회 (수동/자동 태그 반영)
+                                origin_type = db_manager.db.get_original_order_type(odno)
+                                if origin_type:
+                                    if "(수동)" in origin_type: type_str += "(수동)"
+                                    elif "(AUTO)" in origin_type or "(자동)" in origin_type: type_str += "(자동)"
+                                
+                                db_manager.db.insert_trade(
+                                    type_str, item.get('pdno'), item.get('prdt_name'), 
+                                    tot_qty, avg_price, odno, 
+                                    order_status="체결", custom_time=trade_time,
+                                    reason="체결 확인"
+                                )
+                                # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
+                                db_manager.db.update_trade(odno, price=avg_price)
+                                
+                                total_count += 1
+                            else:
+                                if config.DEBUG_LEVEL == "DEBUG":
+                                    config.console.print(f"[dim yellow][Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})[/dim yellow]")
+            except: pass
+    finally:
+        config.trade_context.use_auto_account = original_context
+        
+    return total_count
 
 def _display_balance_details(cano, acnt_prdt_cd):
     """특정 계좌의 잔고 상세 출력"""
@@ -612,7 +652,7 @@ def view_trade_history():
     config.console.print("\n[bold]거래 내역 조회 옵션:[/bold]")
     config.console.print("[1] 전체 내역 (최신순 50건)")
     config.console.print("[2] 최근 30일 내역")
-    config.console.print("[3] 종목명/코드 검색")
+    config.console.print("[3] 종목코드(티커) 검색")
     config.console.print()
     
     choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
@@ -629,7 +669,7 @@ def view_trade_history():
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         trades = db_manager.db.get_trades(start_date=start_dt)
     elif choice == "3":
-        keyword = config.Prompt.ask("검색할 종목명 또는 코드")
+        keyword = config.Prompt.ask("검색할 종목코드(티커) 입력")
         trades = db_manager.db.get_trades(code=keyword)
 
     if not trades:
@@ -676,17 +716,17 @@ def view_trade_history():
         # 테이블 생성 (제목에 계좌번호 포함)
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
         table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
-        table.add_column("시간", justify="center", style="dim", width=20)
+        table.add_column("시간", justify="center", style="dim", width=15)
         # 계좌 컬럼 제거됨
-        table.add_column("유형", justify="center")
+        table.add_column("유형", justify="center", no_wrap=True)
         table.add_column("상태", justify="center", width=6)
-        table.add_column("종목명(코드)", justify="left")
+        table.add_column("종목명(코드)", justify="left", no_wrap=True)
         table.add_column("수량", justify="right")
-        table.add_column("단가", justify="right")
-        table.add_column("손익(수익률)", justify="right")
+        table.add_column("단가", justify="right", no_wrap=True)
+        table.add_column("손익(수익률)", justify="right", no_wrap=True)
         table.add_column("점수", justify="center")
-        table.add_column("사유", justify="left")
-        table.add_column("주문번호", justify="center", style="dim")
+        table.add_column("사유", justify="left", no_wrap=True, overflow="ellipsis")
+        table.add_column("주문번호", justify="center", style="dim", no_wrap=True)
 
         for i, t in enumerate(t_list):
             type_str = t['type']
@@ -732,7 +772,7 @@ def view_trade_history():
             score_str = str(score) if score else "-"
 
             table.add_row(
-                t['time'], # YYYY-MM-DD HH:MM:SS
+                t['time'][5:], # MM-DD HH:MM:SS
                 type_str,
                 status_str,
                 f"{t['name']}({t['code']})",
@@ -758,7 +798,7 @@ def asset_management_menu():
     config.console.print("[3] 거래 내역 (히스토리)")
     config.console.print()
     
-    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
     if choice.lower() == 'q': return
 
     if choice == "1":

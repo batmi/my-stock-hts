@@ -18,6 +18,221 @@ from modules import db_manager # [추가] DB 매니저
 
 console = config.console
 
+class ConclusionMonitor:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ConclusionMonitor, cls).__new__(cls)
+            cls._instance.is_running = False
+            cls._instance.thread = None
+            cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
+            
+            # [수정] 적응형 폴링 설정 로드
+            cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 2)
+            cls._instance.idle_interval = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 180)
+            cls._instance.active_duration = getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)
+            cls._instance.active_until = 0 # 집중 감시 유지 만료 시간
+            
+            cls._instance.event = threading.Event() # 즉시 실행 트리거용
+            cls._instance.initialized = False # [추가] 초기화 여부
+        return cls._instance
+
+    def start(self):
+        if self.is_running: return
+        
+        # [추가] 최초 실행 시 현재 체결 상태 동기화 (알림 미발송)
+        if not self.initialized:
+            try:
+                self._check_conclusions(initial=True)
+                self.initialized = True
+            except Exception as e:
+                if config.DEBUG_LEVEL != "OFF":
+                    console.print(f"[dim red]체결 감시 초기화 중 오류: {e}[/dim red]")
+
+        self.is_running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.is_running = False
+        self.event.set() # 대기 해제
+        if self.thread:
+            self.thread.join(timeout=2)
+
+    def check_now(self):
+        """즉시 체결 확인 요청"""
+        # [추가] 주문 발생 시 집중 감시 모드 시간 연장
+        self.active_until = time.time() + self.active_duration
+        self.event.set()
+
+    def _run_loop(self):
+        self.was_active_mode = False
+        while self.is_running:
+            # [추가] 현재 모드(Active/Idle)에 따른 주기 결정
+            is_active_mode = time.time() < self.active_until
+            
+            if is_active_mode != self.was_active_mode:
+                if is_active_mode:
+                    if config.DEBUG_LEVEL != "OFF":
+                        console.print(f"[dim cyan][Monitor] 집중 감시 모드 진입 (주기: {self.active_interval}초)[/dim cyan]")
+                else:
+                    if config.DEBUG_LEVEL != "OFF":
+                        console.print(f"[dim cyan][Monitor] 대기 모드 복귀 (주기: {self.idle_interval}초)[/dim cyan]")
+                self.was_active_mode = is_active_mode
+            
+            if is_active_mode:
+                wait_time = self.active_interval
+            else:
+                wait_time = self.idle_interval
+            
+            # Idle 주기가 0이면(비활성), 이벤트가 올 때까지 무한 대기 (트래픽 0)
+            if not is_active_mode and wait_time <= 0:
+                self.event.wait() 
+                self.event.clear()
+                continue
+
+            is_rate_limited = False
+            try:
+                is_rate_limited = self._check_conclusions()
+            except Exception as e:
+                if config.DEBUG_LEVEL != "OFF":
+                    console.print(f"[dim red]체결 감시 중 오류: {e}[/dim red]")
+            
+            # [추가] Rate Limit 감지 시 호출 간격 자동 조절
+            if is_rate_limited:
+                wait_time = min(wait_time * 2.0, 60.0) # 최대 60초까지 증가
+                if config.DEBUG_LEVEL != "OFF":
+                    console.print(f"[dim yellow][Monitor] API 호출 제한(Rate Limit) 감지. 대기 시간을 {wait_time:.1f}초로 조정합니다.[/dim yellow]")
+            
+            # interval 만큼 대기하되, event가 설정되면 즉시 깨어남
+            self.event.wait(wait_time)
+            self.event.clear()
+
+    def _check_conclusions(self, initial=False):
+        """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
+        rate_limit_hit = False
+        try:
+            # 모니터링 대상 계좌 목록 구성
+            accounts_to_check = []
+            
+            # 1. 메인 계좌 (수동 매매용)
+            if config.CANO and config.ACNT_PRDT_CD:
+                accounts_to_check.append({
+                    "cano": config.CANO,
+                    "acnt": config.ACNT_PRDT_CD,
+                    "type": "MAIN"
+                })
+            
+            # 2. 자동매매 계좌 (실전 모드이고 별도 설정된 경우)
+            if not config.IS_SIMULATION and config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD:
+                if config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD:
+                    accounts_to_check.append({
+                        "cano": config.AUTO_CANO,
+                        "acnt": config.AUTO_ACNT_PRDT_CD,
+                        "type": "AUTO"
+                    })
+            
+            # 중복 제거
+            unique_accounts = []
+            seen = set()
+            for acc in accounts_to_check:
+                key = (acc['cano'], acc['acnt'])
+                if key not in seen:
+                    seen.add(key)
+                    unique_accounts.append(acc)
+            
+            tr_id = utils.get_tr_id("domestic", "inquiry", "history")
+            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+            headers = utils.get_common_headers(tr_id)
+            today = datetime.now().strftime("%Y%m%d")
+            
+            for acc in unique_accounts:
+                cano = acc['cano']
+                acnt = acc['acnt']
+                
+                # 컨텍스트 스위칭
+                original_context = getattr(config.trade_context, 'use_auto_account', False)
+                config.trade_context.use_auto_account = (acc['type'] == 'AUTO')
+                
+                try:
+                    params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+                    
+                    res = api.session.get(url, headers=headers, params=params, verify=False, timeout=config.DEFAULT_TIMEOUT)
+                    data = res.json()
+                    
+                    if data.get('msg_cd') == 'EGW00201':
+                        rate_limit_hit = True
+                    
+                    if data['rt_cd'] == '0':
+                        trades = data.get('output1', [])
+                        for item in trades:
+                            odno = item.get('odno')
+                            if not odno: continue
+                            
+                            tot_ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
+                            if tot_ccld_qty <= 0: continue
+                            
+                            order_key = f"{cano}-{odno}"
+                            prev_qty = self.order_status.get(order_key, 0)
+                            
+                            if tot_ccld_qty > prev_qty:
+                                new_qty = tot_ccld_qty - prev_qty
+                                avg_price = float(item.get('avg_prvs', 0))
+                                name = item.get('prdt_name')
+                                code = item.get('pdno')
+                                type_name = item.get('sll_buy_dvsn_cd_name')
+                                
+                                # [추가] 매매일시 정보 추출 (DB 저장용)
+                                ord_dt = item.get('ord_dt', '')
+                                ord_tmd = item.get('ord_tmd', '')
+                                trade_time_str = None
+                                if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                                    trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                                
+                                # 원 주문 유형 조회 (수동/자동 태그 반영)
+                                origin_type = db_manager.db.get_original_order_type(odno)
+                                db_type_name = type_name
+                                if origin_type:
+                                    if "(수동)" in origin_type: db_type_name += "(수동)"
+                                    elif "(AUTO)" in origin_type or "(자동)" in origin_type: db_type_name += "(자동)"
+                                
+                                # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
+                                if not initial:
+                                    # 알림 발송
+                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원"
+                                    api.send_telegram_message(msg)
+                                    
+                                    # 로그 기록 (시스템 로거 활용)
+                                    if config.SYSTEM_LOGGER:
+                                        config.SYSTEM_LOGGER(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
+                                else:
+                                    if config.DEBUG_LEVEL == "DEBUG":
+                                        console.print(f"[dim cyan][Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})[/dim cyan]")
+                                
+                                # 상태 업데이트
+                                self.order_status[order_key] = tot_ccld_qty
+                                
+                                # DB 저장
+                                if not db_manager.db.check_trade_exists(odno, "체결"):
+                                    if config.DEBUG_LEVEL == "DEBUG":
+                                        console.print(f"[dim cyan][AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})[/dim cyan]")
+                                    
+                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str)
+                                    
+                                    # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
+                                    db_manager.db.update_trade(odno, price=avg_price)
+                                else:
+                                    if config.DEBUG_LEVEL == "DEBUG":
+                                        console.print(f"[dim yellow][AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})[/dim yellow]")
+                finally:
+                    config.trade_context.use_auto_account = original_context
+                    time.sleep(0.1)
+        except Exception as e:
+            if config.DEBUG_LEVEL != "OFF":
+                console.print(f"[dim red]체결 확인 중 오류 발생: {e}[/dim red]")
+        return rate_limit_hit
+
 class AutoTrader:
     _instance = None
     
@@ -33,7 +248,7 @@ class AutoTrader:
             cls._instance.consecutive_errors = 0
             cls._instance.initial_asset = 0
             cls._instance.was_market_open = None
-            cls._instance.order_status = {} # [추가] 주문별 체결 수량 추적 {odno: qty}
+            cls._instance.trailing_stop_cache = {} # [추가] 트레일링 스탑 메모리 캐시 (DB 부하 감소용)
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -77,8 +292,8 @@ class AutoTrader:
             # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
             self.initial_asset = self._get_total_estimated_asset()
             
-            # [추가] 체결 내역 상태 동기화 (재시작 시 과거 내역 알림 방지)
-            self._check_conclusions(initial=True)
+            # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
+            ConclusionMonitor().check_now()
             
             # [추가] 텔레그램 알림용 잔고 조회 (예외 처리 추가)
             try:
@@ -109,7 +324,7 @@ class AutoTrader:
         config.trade_context.use_auto_account = True
         
         # [수정] 시작 메시지에 보유 종목 및 자산 현황 추가
-        msg = f"▶️ [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원"
+        msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원"
         
         if summary and len(summary) > 0:
             s_data = summary[0]
@@ -140,7 +355,11 @@ class AutoTrader:
             self.is_running = False
             
             if self.thread:
-                self.thread.join(timeout=5)
+                self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
+
+        if self.thread and self.thread.is_alive():
+            console.print("\n[bold red]경고: 시스템 트레이딩 스레드가 응답하지 않습니다. (DB/API 작업 지연)[/bold red]")
+            console.print("[dim]강제로 중단 절차를 진행합니다. 일부 데이터가 누락될 수 있습니다.[/dim]")
 
         console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
         self.log("시스템 중단")
@@ -148,32 +367,39 @@ class AutoTrader:
         # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
         config.trade_context.use_auto_account = True
         
-        # [추가] 종료 시 최종 자산 현황 요약 전송
-        final_asset = self._get_total_estimated_asset()
-        if final_asset is None: final_asset = 0
+        msg = f"🔴 [시스템 종료] 자동매매가 종료되었습니다.\n시작 자산: {self.initial_asset:,}원"
         
-        profit = final_asset - self.initial_asset
-        profit_rate = 0.0
-        if self.initial_asset > 0:
-            profit_rate = (profit / self.initial_asset) * 100
+        # [수정] 스레드가 종료된 경우에만 자산 및 보유 종목 조회 (락 충돌 방지)
+        if not self.thread or not self.thread.is_alive():
+            # [추가] 종료 시 최종 자산 현황 요약 전송
+            final_asset = self._get_total_estimated_asset()
+            if final_asset is None: final_asset = 0
             
-        msg = f"⏹ [시스템 종료] 자동매매가 종료되었습니다.\n시작 자산: {self.initial_asset:,}원\n종료 자산: {final_asset:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
-        
-        # [추가] 종료 시 보유 종목 현황 추가
-        try:
-            holdings, _ = api.get_domestic_balance()
-            if holdings:
-                msg += "\n\n📋 [최종 보유 종목]"
-                for item in holdings:
-                    name = item['prdt_name']
-                    qty = int(item['hldg_qty'])
-                    rate = float(item['evlu_pfls_rt'])
-                    profit_amt = int(item['evlu_pfls_amt'])
-                    msg += f"\n• {name}: {qty}주 | {rate:+.2f}% ({profit_amt:+,}원)"
-            else:
-                msg += "\n\n📋 [최종 보유 종목] 없음"
-        except Exception as e:
-            self.log(f"종료 시 잔고 조회 실패: {e}")
+            profit = final_asset - self.initial_asset
+            profit_rate = 0.0
+            if self.initial_asset > 0:
+                profit_rate = (profit / self.initial_asset) * 100
+                
+            msg += f"\n종료 자산: {final_asset:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
+            
+            # [추가] 종료 시 보유 종목 현황 추가
+            try:
+                holdings, _ = api.get_domestic_balance()
+                if holdings:
+                    msg += "\n\n📋 [최종 보유 종목]"
+                    for item in holdings:
+                        name = item['prdt_name']
+                        qty = int(item['hldg_qty'])
+                        rate = float(item['evlu_pfls_rt'])
+                        profit_amt = int(item['evlu_pfls_amt'])
+                        msg += f"\n• {name}: {qty}주 | {rate:+.2f}% ({profit_amt:+,}원)"
+                else:
+                    msg += "\n\n📋 [최종 보유 종목] 없음"
+            except Exception as e:
+                self.log(f"종료 시 잔고 조회 실패: {e}")
+        else:
+            msg += "\n(시스템 응답 지연으로 최종 자산 정보 생략)"
+            self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
 
         api.send_telegram_message(msg)
         config.trade_context.use_auto_account = False
@@ -629,16 +855,13 @@ class AutoTrader:
                 
                 if current_market_status:
                     self.log("시스템 상태: RUNNING")
-                    # [수정] 시스템 트레이딩 작업 구간을 락으로 보호 (API 우선권 확보)
-                    with config.SYSTEM_TRADING_LOCK:
-                        # 1. 매도 조건 점검 (리스크 관리)
-                        self._check_sell_conditions()
-                        # 2. 매수 조건 점검
-                        self._check_buy_conditions()
-                        # [추가] 체결 내역 확인 (주문 체결 모니터링)
-                        self._check_conclusions()
-                        # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
-                        self._monitor_account_status()
+                    # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
+                    # 1. 매도 조건 점검 (리스크 관리)
+                    self._check_sell_conditions()
+                    # 2. 매수 조건 점검
+                    self._check_buy_conditions()
+                    # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
+                    self._monitor_account_status()
                 else:
                     self.log("시스템 상태: WAITING (거래 시간 외)")
                 
@@ -665,172 +888,6 @@ class AutoTrader:
                     self.stop()
                     break
                 time.sleep(10)
-
-    def _check_conclusions(self, initial=False):
-        """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
-        try:
-            # API 호출 전 대기 (Rate Limit 방지)
-            time.sleep(0.2)
-            if not initial:
-                time.sleep(0.2)
-            
-            # 모니터링 대상 계좌 목록 구성
-            accounts_to_check = []
-            
-            # 1. 메인 계좌 (수동 매매용)
-            if config.CANO and config.ACNT_PRDT_CD:
-                accounts_to_check.append({
-                    "cano": config.CANO,
-                    "acnt": config.ACNT_PRDT_CD,
-                    "type": "MAIN"
-                })
-            
-            # 2. 자동매매 계좌 (실전 모드이고 별도 설정된 경우)
-            if not config.IS_SIMULATION and config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD:
-                # 메인 계좌와 다를 경우에만 추가
-                if config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD:
-                    accounts_to_check.append({
-                        "cano": config.AUTO_CANO,
-                        "acnt": config.AUTO_ACNT_PRDT_CD,
-                        "type": "AUTO"
-                    })
-            
-            # 중복 제거
-            unique_accounts = []
-            seen = set()
-            for acc in accounts_to_check:
-                key = (acc['cano'], acc['acnt'])
-                if key not in seen:
-                    seen.add(key)
-                    unique_accounts.append(acc)
-            
-            tr_id = utils.get_tr_id("domestic", "inquiry", "history")
-            url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-            headers = utils.get_common_headers(tr_id)
-            today = datetime.now().strftime("%Y%m%d")
-            
-            for acc in unique_accounts:
-                cano = acc['cano']
-                acnt = acc['acnt']
-                
-                # 컨텍스트 스위칭 (API 호출 및 텔레그램 전송 시 올바른 계좌 태그 사용)
-                original_context = getattr(config.trade_context, 'use_auto_account', False)
-                config.trade_context.use_auto_account = (acc['type'] == 'AUTO')
-                
-                try:
-                    params = {
-                        "CANO": cano, 
-                        "ACNT_PRDT_CD": acnt, 
-                        "INQR_STRT_DT": today, 
-                        "INQR_END_DT": today, 
-                        "SLL_BUY_DVSN_CD": "00", 
-                        "INQR_DVSN": "00", 
-                        "PDNO": "", 
-                        "CCLD_DVSN": "01", # 주문별 체결 합계
-                        "ORD_GNO_BRNO": "", 
-                        "ODNO": "", 
-                        "INQR_DVSN_3": "00", 
-                        "INQR_DVSN_1": "", 
-                        "CTX_AREA_FK100": "", 
-                        "CTX_AREA_NK100": ""
-                    }
-                    
-                    res = api.session.get(url, headers=headers, params=params, verify=False, timeout=config.DEFAULT_TIMEOUT)
-                    data = res.json()
-                    
-                    if data['rt_cd'] == '0':
-                        trades = data.get('output1', [])
-                        for item in trades:
-                            odno = item.get('odno')
-                            if not odno: continue
-                            
-                            tot_ccld_qty = int(item.get('tot_ccld_qty', 0))
-                            if tot_ccld_qty <= 0: continue
-                            
-                            # 계좌별 고유 키 생성 (계좌번호-주문번호)
-                            order_key = f"{cano}-{odno}"
-                            prev_qty = self.order_status.get(order_key, 0)
-                            
-                            if tot_ccld_qty > prev_qty:
-                                # 새로운 체결 발생
-                                new_qty = tot_ccld_qty - prev_qty
-                                avg_price = float(item.get('avg_prvs', 0))
-                                name = item.get('prdt_name')
-                                code = item.get('pdno')
-                                type_name = item.get('sll_buy_dvsn_cd_name')
-                                type_cd = item.get('sll_buy_dvsn_cd') # 01:매도, 02:매수
-                                
-                                trade_amt = int(new_qty * avg_price)
-                                add_info = ""
-                                
-                                # 매매일시 정보 추출
-                                ord_dt = item.get('ord_dt', '')
-                                ord_tmd = item.get('ord_tmd', '')
-                                trade_time_str = ""
-                                if len(ord_dt) == 8 and len(ord_tmd) == 6:
-                                    trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
-
-                                if type_cd == '02': # 매수
-                                    add_info = f" (매수금액: {trade_amt:,.0f}원)"
-                                elif type_cd == '01': # 매도
-                                    # trade_records에서 해당 주문번호의 예상 수익률 조회
-                                    found_rate = None
-                                    for r in self.trade_records:
-                                        if r.get('odno') == odno:
-                                            found_rate = r.get('profit_rate')
-                                            break
-                                    if found_rate is not None:
-                                        r_color = "red" if found_rate > 0 else "blue"
-                                        add_info = f" (수익률: [{r_color}]{found_rate:+.2f}%[/], 매도금액: {trade_amt:,.0f}원)"
-                                    else:
-                                        add_info = f" (매도금액: {trade_amt:,.0f}원)"
-                                
-                                # 초기화 단계가 아닐 때만 알림 및 로그 수행
-                                if not initial:
-                                    # 로그 기록
-                                    self.log(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 체결 (단가: {avg_price:,.0f}원){add_info}")
-                                    
-                                    # 알림 발송 (텔레그램 + 비프음)
-                                    print('\a') # 소리 알림
-                                    
-                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n"
-                                    if trade_time_str:
-                                        msg += f"일시: {trade_time_str}\n"
-                                    msg += f"수량: {new_qty}주 / 단가: {avg_price:,.0f}원\n{add_info.strip()}"
-                                    
-                                    # [추가] 현재 총 자산 및 수익률 정보 추가
-                                    # 자산 조회 시 올바른 토큰 사용을 위해 컨텍스트 임시 변경
-                                    temp_ctx = getattr(config.trade_context, 'use_auto_account', False)
-                                    config.trade_context.use_auto_account = True # 시스템 계좌 기준 조회
-                                    try:
-                                        curr_asset = self._get_total_estimated_asset()
-                                        if curr_asset and self.initial_asset > 0:
-                                            profit = curr_asset - self.initial_asset
-                                            profit_rate = (profit / self.initial_asset) * 100
-                                            msg += f"\n💰 자산: {curr_asset:,}원 ({profit:+,}원 / {profit_rate:+.2f}%)"
-                                    except: pass
-                                    finally:
-                                        config.trade_context.use_auto_account = temp_ctx # 복구
-                                    
-                                    api.send_telegram_message(msg)
-                                
-                                # 상태 업데이트
-                                self.order_status[order_key] = tot_ccld_qty
-                                
-                                # [수정] DB에 체결 내역 별도 저장 (중복 방지)
-                                if not db_manager.db.check_trade_exists(odno, "체결"):
-                                    db_manager.db.insert_trade(
-                                        type_name, code, name, tot_ccld_qty, avg_price, odno,
-                                        order_status="체결", custom_time=trade_time_str,
-                                        reason="시스템 감지 체결"
-                                    )
-                finally:
-                    # 컨텍스트 복구
-                    config.trade_context.use_auto_account = original_context
-                    time.sleep(0.1) # 계좌 간 호출 간격
-                        
-        except Exception as e:
-            self.log(f"체결 내역 조회 중 오류: {str(e)}")
 
     def _monitor_account_status(self):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
@@ -1030,10 +1087,23 @@ class AutoTrader:
                     reason = f"손절({profit_rate}%)"
                 # 3. 트레일링 스탑
                 else:
-                    if current_price > buy_price:
-                        db_manager.db.update_highest_price(code, current_price)
+                    # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
+                    cached_highest = self.trailing_stop_cache.get(code)
+                    if cached_highest is None:
+                        # 캐시에 없으면 DB 조회 (최초 1회)
+                        val = db_manager.db.get_highest_price(code)
+                        cached_highest = val if val is not None else 0.0
+                        self.trailing_stop_cache[code] = cached_highest
                     
-                    highest_price = db_manager.db.get_highest_price(code)
+                    highest_price = cached_highest
+                    
+                    # 현재가가 매수가보다 높고, 기록된 최고가보다 높을 때만 DB 업데이트
+                    if current_price > buy_price:
+                        if highest_price == 0.0 or current_price > highest_price:
+                            db_manager.db.update_highest_price(code, current_price)
+                            self.trailing_stop_cache[code] = current_price # 캐시 갱신
+                            highest_price = current_price
+                    
                     if highest_price and highest_price > 0:
                         max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
                         if max_profit_rate >= ts_activation:
@@ -1070,6 +1140,8 @@ class AutoTrader:
                     self.trade_records.append(record)
                     # [추가] 매도 성공 시 트레일링 스탑 정보 삭제
                     db_manager.db.delete_trailing_stop(code)
+                    if code in self.trailing_stop_cache: # 캐시 삭제
+                        del self.trailing_stop_cache[code]
 
     def _check_buy_conditions(self):
         targets = config.STOCK_CONFIG_DATA.get("stocks_kr", [])
@@ -1241,7 +1313,13 @@ class AutoTrader:
                 
                 # [DB] 시스템 트레이딩 주문 기록 (스냅샷 및 상세 정보 포함)
                 snapshot = analysis.get_snapshot(code, is_overseas=False)
+                
+                if config.DEBUG_LEVEL == "DEBUG":
+                    self.log(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
                 db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, "0", odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score)
+                
+                # [추가] 체결 감시자에게 즉시 확인 요청
+                ConclusionMonitor().check_now()
                 
                 return odno
             else:
@@ -1259,7 +1337,7 @@ def system_trading_menu():
     trader = AutoTrader()
 
     console.print("\n[bold yellow]=== 시스템 트레이딩 ===[/]")
-    console.print("[dim]안내: 시스템 트레이딩은 현재 '국내주식(stocks_kr)' 리스트를 대상으로만 작동합니다.[/dim]")
+    console.print("[dim]안내: 시스템 트레이딩은 현재 '국내주식' 리스트를 대상으로만 작동합니다.[/dim]")
     console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
     console.print("[1] 트레이딩 실행 (Start)")

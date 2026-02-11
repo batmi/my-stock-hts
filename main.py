@@ -238,7 +238,7 @@ def show_help():
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
     score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
-    score_table.add_row("필터링 (주의)", "60일선 or 120일선 이탈, SAR 매도, RSI ≥ 80 or RSI ≤ 30", "[yellow]주의[/]", "신규 진입 자제 (점수 무관)")
+    score_table.add_row("필터링 (주의)", "60일선 or 120일선 이탈, SAR 매도, RSI ≥ 80 or RSI ≤ 30", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
 
     # [추가] 매수 타이밍 섹션
     score_table.add_section()
@@ -256,10 +256,14 @@ def show_help():
     stop_loss = config.SELL_STRATEGY["STOP_LOSS_RATE"]
     take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
-    score_table.add_row("매도 (추세 이탈)", f"종합 점수 < {sell_score}점", "[blue]매도[/]", "관망/주의 단계 진입 시 청산")
+    score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
     score_table.add_row("매도 (손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
-    score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% or RSI > {take_profit_rsi}", "[red]익절[/]", "이익 실현 (Take Profit)")
+    score_table.add_row("매도 (트레일링)", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
+    score_table.add_row("매도 (과열)", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
+    score_table.add_row("매도 (추세이탈)", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
     
     config.console.print(score_table)
 
@@ -275,6 +279,9 @@ def main():
         api.get_access_token()
     else:
         api.get_real_access_token()
+
+    # [추가] 체결 감시자 시작 (백그라운드)
+    auto_trade.ConclusionMonitor().start()
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"
@@ -332,6 +339,9 @@ def main():
         if trader.is_running:
             config.console.print("\n[bold red]실행 중인 자동매매 시스템을 종료합니다...[/bold red]")
             trader.stop()
+            
+        # [추가] 체결 감시자 종료
+        auto_trade.ConclusionMonitor().stop()
 
 if __name__ == "__main__":
     main()

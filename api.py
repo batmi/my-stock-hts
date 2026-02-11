@@ -7,6 +7,7 @@ import ssl
 import urllib3
 import re
 import os
+import threading
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ class ThrottledSession(requests.Session):
         self.last_request_time_sim = 0
         self.last_request_time_real = 0
         self.request_history = deque()
+        self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
 
     def _get_current_tps(self):
         now = time.time()
@@ -44,23 +46,26 @@ class ThrottledSession(requests.Session):
         last_time = 0
         server_type = "EXTERNAL"
         
-        if is_real_server:
-            target_limit = config.REAL_TX_PER_SECOND
-            last_time = self.last_request_time_real
-            server_type = "REAL"
-        elif is_sim_server:
-            target_limit = config.SIM_TX_PER_SECOND
-            last_time = self.last_request_time_sim
-            server_type = "SIMULATION"
+        # [수정] 락을 사용하여 Rate Limit 계산 및 대기 로직을 원자적으로 처리
+        with self.lock:
+            if is_real_server:
+                target_limit = config.REAL_TX_PER_SECOND
+                last_time = self.last_request_time_real
+                server_type = "REAL"
+            elif is_sim_server:
+                target_limit = config.SIM_TX_PER_SECOND
+                last_time = self.last_request_time_sim
+                server_type = "SIMULATION"
 
-        if target_limit > 0:
-            min_interval = (1.0 / target_limit) * 1.1
-            elapsed = time.time() - last_time
-            if elapsed < min_interval:
-                wait_time = min_interval - elapsed
-                time.sleep(wait_time)
+            if target_limit > 0:
+                min_interval = (1.0 / target_limit) * 1.01
+                elapsed = time.time() - last_time
+                if elapsed < min_interval:
+                    wait_time = min_interval - elapsed
+                    time.sleep(wait_time)
 
-        self.request_history.append(time.time())
+            self.request_history.append(time.time())
+            
         current_tps = self._get_current_tps()
 
         if config.DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
@@ -149,9 +154,11 @@ class ThrottledSession(requests.Session):
                 except Exception: pass
                 
                 # 성공 시 시간 기록 후 반환
-                now_final = time.time()
-                if is_real_server: self.last_request_time_real = now_final
-                elif is_sim_server: self.last_request_time_sim = now_final
+                # [수정] 락 안에서 시간 업데이트
+                with self.lock:
+                    now_final = time.time()
+                    if is_real_server: self.last_request_time_real = now_final
+                    elif is_sim_server: self.last_request_time_sim = now_final
                 
                 return response
 
@@ -399,10 +406,7 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     """
     # [추가] 시스템 트레이딩 우선순위 락 처리
     # RLock을 사용하여 시스템 트레이딩 스레드는 중복 획득 허용, 메인 스레드는 대기
-    if not config.SYSTEM_TRADING_LOCK.acquire(blocking=False):
-        config.console.print("\n[yellow]시스템 트레이딩 작업 중입니다. 잠시 대기합니다.[/yellow]")
-        config.SYSTEM_TRADING_LOCK.acquire()
-        config.console.print("\n[yellow]시스템 트레이딩 작업 완료. 작업을 재개합니다.[/yellow]")
+    config.SYSTEM_TRADING_LOCK.acquire()
 
     try:
         if timeout is None: timeout = config.DEFAULT_TIMEOUT
@@ -833,7 +837,7 @@ def send_telegram_message(message):
     clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
 
     # [수정] 계좌 정보를 메시지 가장 마지막에 추가
-    final_msg = f"{clean_message} {account_info}"
+    final_msg = f"{clean_message}\n{account_info}"
 
     # [추가] 전송 메시지 로그 기록
     if config.SYSTEM_LOGGER:
