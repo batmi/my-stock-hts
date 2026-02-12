@@ -574,6 +574,19 @@ class AutoTrader:
                 if res.get('rt_cd') == '0': deposit = int(res['output']['ord_psbl_cash'])
             except: pass
             
+            # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
+            # 시스템이 정지 상태이거나 장 시작 전이라도 상태 조회 시에는 최신 정보를 보여주기 위함
+            if getattr(config, 'USE_MARKET_FILTER', True):
+                need_update = False
+                if "KOSPI" not in self.market_index_status or "KOSDAQ" not in self.market_index_status:
+                    need_update = True
+                elif self.market_index_status.get("KOSPI", {}).get("current", 0) == 0 or \
+                     self.market_index_status.get("KOSDAQ", {}).get("current", 0) == 0:
+                    need_update = True
+                
+                if need_update:
+                    self._update_market_indices_status()
+            
         config.trade_context.use_auto_account = original_context # 복구
 
         console.print()
@@ -599,8 +612,14 @@ class AutoTrader:
             kosdaq_stat = self.market_index_status.get("KOSDAQ")
             
             def get_stat_msg(stat):
-                if stat is None: return "[dim]확인 중[/]"
-                return "[red]상승(20일선↑)[/]" if stat else "[blue]하락(20일선↓)[/]"
+                if not stat or not isinstance(stat, dict) or stat.get('current', 0) == 0:
+                    return "[dim]확인 중[/]"
+                
+                is_healthy = stat.get('is_healthy', True)
+                current = stat.get('current', 0)
+                trend_icon = "↑" if is_healthy else "↓"
+                color = "red" if is_healthy else "blue"
+                return f"[{color}]{current:,.0f} ({trend_icon})[/]"
             
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
 
@@ -1401,8 +1420,10 @@ class AutoTrader:
             if getattr(config, 'USE_MARKET_FILTER', True):
                 market_type = self._get_stock_market_type(code)
                 # 해당 시장이 하락장이면 스킵 (기본값 True로 설정하여 데이터 없을 시 매수 허용)
-                if not self.market_index_status.get(market_type, True):
-                    continue
+                market_stat = self.market_index_status.get(market_type)
+                if market_stat and isinstance(market_stat, dict):
+                    if not market_stat.get('is_healthy', True):
+                        continue
             
             # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
             df = api.get_chart_data(code, is_overseas=False)
@@ -1503,21 +1524,37 @@ class AutoTrader:
 
     def _update_market_indices_status(self):
         """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림"""
-        target_indices = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
+        # [수정] KIS API 사용을 위한 종목 코드 변경 (KOSPI: 0001, KOSDAQ: 1001)
+        target_indices = {"KOSPI": "0001", "KOSDAQ": "1001"}
+        # [추가] Fallback용 yfinance 티커
+        yf_tickers = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
         
         for market_name, ticker in target_indices.items():
             try:
-                # 지수 데이터 조회 (yfinance 활용)
-                df = api.get_chart_data(ticker, is_overseas=True)
+                # [수정] KIS API를 통한 지수 차트 조회
+                df = api.get_domestic_index_chart(ticker)
+                
+                # [추가] KIS API 실패 시 yfinance로 재시도 (Fallback)
                 if df is None or df.empty or len(df) < 20:
-                    self.market_index_status[market_name] = True
+                    yf_ticker = yf_tickers.get(market_name)
+                    if yf_ticker:
+                        if config.DEBUG_LEVEL != "OFF":
+                            self.log(f"[지수] KIS API 조회 실패. yfinance로 재시도합니다: {yf_ticker}")
+                        df = api.get_chart_data(yf_ticker, is_overseas=True)
+
+                if df is None or df.empty or len(df) < 20:
+                    self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
                     continue
                 
                 ma20 = df['close'].rolling(window=20).mean().iloc[-1]
                 current_idx = df['close'].iloc[-1]
                 is_healthy = current_idx >= ma20
                 
-                self.market_index_status[market_name] = is_healthy
+                self.market_index_status[market_name] = {
+                    "is_healthy": is_healthy,
+                    "current": current_idx,
+                    "ma20": ma20
+                }
                 
                 # 상태 변경 알림
                 notified = self.market_status_notified.get(market_name, False)

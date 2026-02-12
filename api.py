@@ -398,7 +398,7 @@ def safe_int(value):
         return int(float(s_val))
     except Exception: return 0
 
-def call_api(url_path, market, category, action, params=None, data=None, method="GET", timeout=None, retries=None):
+def call_api(url_path, market, category, action, params=None, data=None, method="GET", timeout=None, retries=None, tr_id=None):
     """
     통합 API 호출 함수
     constants.TR_ID_CONFIG를 사용하여 TR_ID를 자동으로 조회하고 요청을 수행합니다.
@@ -427,10 +427,11 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
             secret = config.APP_SECRET if config.IS_SIMULATION else config.REAL_APP_SECRET
 
         env_key = "sim" if config.IS_SIMULATION else "real"
-        try:
-            tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
-        except KeyError:
-            return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
+        if tr_id is None:
+            try:
+                tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
+            except KeyError:
+                return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
 
         headers = {
             "Content-Type": "application/json",
@@ -599,6 +600,39 @@ def get_chart_data(code, is_overseas=False):
                 for c in numeric_cols: df[c] = df[c].astype(float)
                 return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
         return None
+
+def get_domestic_index_chart(code):
+    """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""
+    # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
+    url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+    tr_id = "FHKST03010200"
+    
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
+    
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "U", # U: 업종(Index)
+        "FID_INPUT_ISCD": code,        # 0001(KOSPI), 1001(KOSDAQ)
+        "FID_INPUT_DATE_1": start_date,
+        "FID_INPUT_DATE_2": today,
+        "FID_PERIOD_DIV_CODE": "D"     # D: 일봉
+    }
+    
+    data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id)
+    
+    if data.get('rt_cd') == '0':
+        items = data.get('output2', [])
+        if items:
+            df = pd.DataFrame(items)
+            # 컬럼 매핑 (KIS API 응답 -> 내부 표준)
+            # stck_bsop_date:일자, bstp_nmix_prpr:현재가(종가), bstp_nmix_hgpr:고가, bstp_nmix_lwpr:저가, acml_vol:거래량
+            df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
+            df.columns = ['date', 'close', 'high', 'low', 'volume']
+            df = df.astype({'close': float, 'high': float, 'low': float, 'volume': float})
+            return df.sort_values('date', ascending=True).reset_index(drop=True)
+            
+    return pd.DataFrame()
 
 def get_current_price_data(code, is_overseas):
     if not is_overseas:
