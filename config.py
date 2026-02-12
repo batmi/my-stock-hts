@@ -205,8 +205,8 @@ SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
 SYSTEM_INVEST_PER_STOCK = 0.5  # [수정] 종목당 투자 비중 (50%로 상향 조정)
-SYSTEM_MAX_HOLDINGS = 10       # [추가] 최대 보유 종목 수 제한 (과도한 백화점식 포트폴리오 방지)
 USE_MARKET_FILTER = True       # [추가] 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
+MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균선 (일)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
@@ -222,6 +222,10 @@ CONCLUSION_CHECK_IDLE_INTERVAL = 180
 
 # 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
 CONCLUSION_CHECK_ACTIVE_DURATION = 100
+
+# [추가] 미체결 주문 자동 취소 대기 시간 (초)
+# 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 600초 = 10분)
+UNFILLED_ORDER_CANCEL_SECONDS = 600
 
 # [추가] 시스템 트레이딩 로거 (AutoTrader 실행 시 함수 할당)
 SYSTEM_LOGGER = None

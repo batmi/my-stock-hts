@@ -236,6 +236,12 @@ def show_help():
     score_table.add_row("","", "", "")
     score_table.add_row("OBV 점수", "OBV > OBV 이동평균", "+1", "수급 양호 (거래량 뒷받침)")
     
+    # [추가] 시장 필터링 섹션
+    score_table.add_section()
+    filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[dim]OFF[/dim]"
+    ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
+    
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
     score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
@@ -366,6 +372,6 @@ def main():
         
         # [추가] 텔레그램 커맨더 종료
         telegram_cmd.stop()
-
+        
 if __name__ == "__main__":
     main()

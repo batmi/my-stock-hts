@@ -277,6 +277,7 @@ class AutoTrader:
             cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
             cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
+            cls._instance.skipped_by_market_filter_count = 0 # [추가] 시장 필터링 보류 종목 수
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -622,6 +623,10 @@ class AutoTrader:
                 return f"[{color}]{current:,.0f} ({trend_icon})[/]"
             
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
+            
+            # [추가] 필터링 보류 개수 표시
+            if self.skipped_by_market_filter_count > 0:
+                table.add_row("시장 필터링", f"[bold blue]{self.skipped_by_market_filter_count}종목 매수 보류[/] (하락장)")
 
         table.add_section()
 
@@ -654,6 +659,12 @@ class AutoTrader:
             table.add_row("자산 정보", "[bold red]조회 실패 (통신 오류)[/bold red]")
             if self.initial_asset > 0:
                 table.add_row("초기 자산", f"{self.initial_asset:,}원")
+
+        # [추가] 투자 설정 정보 표시
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        if invest_ratio <= 0: invest_ratio = 0.1
+        max_holdings = int(1 / invest_ratio)
+        table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목)")
 
         table.add_section()
 
@@ -1082,6 +1093,8 @@ class AutoTrader:
                     self._check_sell_conditions()
                     # 2. 매수 조건 점검
                     self._check_buy_conditions()
+                    # 3. 미체결 주문 관리 (오래된 주문 취소)
+                    self._manage_unfilled_orders()
                     # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                     self._monitor_account_status()
                 else:
@@ -1110,6 +1123,43 @@ class AutoTrader:
                     self.stop()
                     break
                 time.sleep(10)
+
+    def _manage_unfilled_orders(self):
+        """오래된 미체결 주문 확인 및 취소"""
+        try:
+            unfilled_list = api.get_unfilled_orders()
+            if not unfilled_list: return
+
+            cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)
+            now = datetime.now()
+            
+            for item in unfilled_list:
+                odno = item.get('odno')
+                code = item.get('pdno')
+                name = item.get('prdt_name')
+                qty = int(item.get('rmn_qty', 0)) # 잔여 수량
+                ord_time_str = item.get('ord_tmd') # 주문시간 (HHMMSS)
+                
+                if not odno or qty <= 0 or not ord_time_str: continue
+                
+                # 주문 시간 파싱
+                try:
+                    ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
+                    elapsed = (now - ord_dt).total_seconds()
+                    
+                    if elapsed >= cancel_seconds:
+                        self.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
+                        
+                        # 취소 주문 전송
+                        res = api.cancel_order(odno, code, qty, is_buy=True) # 매수/매도 구분 없이 취소 가능
+                        if res.get('rt_cd') == '0':
+                            api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
+                        else:
+                            self.log(f"취소 실패: {res.get('msg1')}")
+                            
+                except Exception: pass
+        except Exception as e:
+            self.log(f"미체결 관리 중 오류: {e}")
 
     def _monitor_account_status(self):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
@@ -1369,6 +1419,10 @@ class AutoTrader:
         targets = config.STOCK_CONFIG_DATA.get("stocks_kr", [])
         if not targets: return
         
+        # [추가] 필터링 카운트 초기화 (매 주기마다 갱신)
+        self.skipped_by_market_filter_count = 0
+        skipped_stocks = [] # [추가] 시장 필터링으로 보류된 종목 리스트
+        
         # [추가] 보유 종목 조회 (중복 매수 방지)
         holdings, _ = api.get_domestic_balance() # [수정] api 모듈 함수 사용
         holding_codes = set()
@@ -1376,11 +1430,14 @@ class AutoTrader:
             for h in holdings:
                 holding_codes.add(h['pdno'])
         
-        # [추가] 최대 보유 종목 수 체크
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        if invest_ratio <= 0: invest_ratio = 0.1 # 0 이하일 경우 기본값 10%
+        max_holdings = int(1 / invest_ratio)
+        
         if len(holding_codes) >= max_holdings:
             if self.consecutive_errors == 0: # 로그 도배 방지
-                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달")
+                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {invest_ratio*100:.0f}% 기준)")
             return
 
         # 예수금 확인 (API 직접 호출)
@@ -1423,6 +1480,8 @@ class AutoTrader:
                 market_stat = self.market_index_status.get(market_type)
                 if market_stat and isinstance(market_stat, dict):
                     if not market_stat.get('is_healthy', True):
+                        self.skipped_by_market_filter_count += 1
+                        skipped_stocks.append(f"{name}")
                         continue
             
             # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
@@ -1451,6 +1510,10 @@ class AutoTrader:
                     'code': code, 'name': name, 'price': current_price,
                     'score': score, 'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci']
                 })
+
+        # [추가] 시장 필터링 보류 종목 로그 기록
+        if skipped_stocks:
+            self.log(f"[시장 필터링] 하락장 매수 보류 ({len(skipped_stocks)}종목): {', '.join(skipped_stocks)}")
 
         # [수정] 2단계: 우선순위 정렬 (점수 높은 순 -> RSI 낮은 순)
         # 점수가 같다면 RSI가 낮을수록(저평가) 우선순위
@@ -1529,40 +1592,41 @@ class AutoTrader:
         # [추가] Fallback용 yfinance 티커
         yf_tickers = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
         
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+        
         for market_name, ticker in target_indices.items():
             try:
                 # [수정] KIS API를 통한 지수 차트 조회
                 df = api.get_domestic_index_chart(ticker)
                 
                 # [추가] KIS API 실패 시 yfinance로 재시도 (Fallback)
-                if df is None or df.empty or len(df) < 20:
+                if df is None or df.empty or len(df) < ma_period:
                     yf_ticker = yf_tickers.get(market_name)
                     if yf_ticker:
                         if config.DEBUG_LEVEL != "OFF":
                             self.log(f"[지수] KIS API 조회 실패. yfinance로 재시도합니다: {yf_ticker}")
                         df = api.get_chart_data(yf_ticker, is_overseas=True)
 
-                if df is None or df.empty or len(df) < 20:
+                if df is None or df.empty or len(df) < ma_period:
                     self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
                     continue
                 
-                ma20 = df['close'].rolling(window=20).mean().iloc[-1]
+                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
                 current_idx = df['close'].iloc[-1]
-                is_healthy = current_idx >= ma20
+                is_healthy = current_idx >= ma_val
                 
                 self.market_index_status[market_name] = {
                     "is_healthy": is_healthy,
-                    "current": current_idx,
-                    "ma20": ma20
+                    "current": current_idx
                 }
                 
                 # 상태 변경 알림
                 notified = self.market_status_notified.get(market_name, False)
                 if not is_healthy and not notified:
-                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 20일 이평선 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
+                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
                     self.market_status_notified[market_name] = True
                 elif is_healthy and notified:
-                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 20일 이평선을 회복했습니다.\n매수를 재개합니다.")
+                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선을 회복했습니다.\n매수를 재개합니다.")
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e}")
@@ -1710,7 +1774,9 @@ class TelegramCommander:
                             self._handle_message(result.get('message', {}))
                 elif response.status_code == 409:
                     # Conflict: 다른 인스턴스가 이미 폴링 중임
-                    console.print("\n[bold red][Telegram] 충돌 감지: 다른 인스턴스가 동일한 봇 토큰을 사용 중입니다. 폴링을 중단합니다.[/bold red]")
+                    console.print("\n[bold red][Telegram] 충돌 감지: 다른 인스턴스가 이미 텔레그램 봇을 사용 중입니다.[/bold red]")
+                    console.print("[bold red]기존 시스템 보호를 위해 현재 인스턴스의 텔레그램 폴링을 중단합니다.[/bold red]")
+                    self.trader.log("[Telegram] 충돌 감지: 다른 인스턴스가 봇을 사용 중이어서 폴링을 중단합니다.")
                     self.is_running = False
                     break
                     
@@ -1729,7 +1795,11 @@ class TelegramCommander:
 
         if not text.startswith('/'): return
 
-        command = text.split()[0].lower()
+        # 명령어 파싱 (인자 포함)
+        parts = text.split()
+        command = parts[0].lower()
+        args = parts[1:]
+
         response = ""
 
         if command == "/status":
@@ -1750,12 +1820,210 @@ class TelegramCommander:
                 self.trader.stop()
                 response = "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
         
+        elif command == "/help":
+            response = (
+                "🤖 [시스템 트레이딩 봇 도움말]\n\n"
+                "• /status : 현재 시스템 상태 및 자산 현황 조회\n"
+                "• /market : 주요 시장 지수(KOSPI/KOSDAQ) 현황\n"
+                "• /signal <종목명> : 종목 기술적 분석 및 진단\n"
+                "• /history : 최근 체결 내역(5건) 조회\n"
+                "• /start : 시스템 트레이딩 시작 (자동매매)\n"
+                "• /stop : 시스템 트레이딩 중단\n"
+                "• /help : 명령어 목록 확인"
+            )
+            
+        elif command == "/market":
+            response = self._get_market_status()
+            
+        elif command == "/signal":
+            if not args:
+                response = "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
+            else:
+                response = self._analyze_stock(" ".join(args))
+                
+        elif command == "/history":
+            response = self._get_trade_history()
+        
         else:
             return # 알 수 없는 명령어는 무시
 
         # 응답 전송
         if response:
             self._send_reply(response)
+
+    def _get_market_status(self):
+        """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
+        msg = "📊 [시장 지수 현황]\n"
+        
+        # 1. 국내 지수 (KIS API)
+        targets = {"KOSPI": "0001", "KOSDAQ": "1001"}
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+        
+        for name, code in targets.items():
+            try:
+                df = api.get_domestic_index_chart(code)
+                if df is None or df.empty:
+                    msg += f"\n• {name}: 데이터 조회 실패"
+                    continue
+                
+                current = df.iloc[-1]['close']
+                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+                
+                # 전일 대비 등락
+                prev = df.iloc[-2]['close'] if len(df) > 1 else current
+                diff = current - prev
+                rate = (diff / prev) * 100
+                
+                icon = "🔴" if diff > 0 else ("🔵" if diff < 0 else "⚪️")
+                trend = "상승장(이평위)" if current >= ma_val else "하락장(이평아래)"
+                trend_icon = "📈" if current >= ma_val else "📉"
+                
+                msg += f"\n• {name} {icon} {current:,.2f} ({rate:+.2f}%)\n  {trend_icon} 추세: {trend} ({ma_period}일선 기준)"
+            except Exception as e:
+                msg += f"\n• {name}: 오류 ({str(e)})"
+        
+        msg += "\n"
+
+        # 2. 글로벌 지수 및 원자재 (yfinance)
+        global_targets = [
+            ("금", "GC=F"),
+            ("은", "SI=F"),   
+            ("달러환율", "KRW=X"),
+            ("SOX(반도체)", "^SOX")
+        ]
+
+        for name, code in global_targets:
+            try:
+                df = api.get_chart_data(code, is_overseas=True)
+                if df is None or df.empty:
+                    msg += f"\n• {name}: 데이터 조회 실패"
+                    continue
+                
+                current = df.iloc[-1]['close']
+                prev = df.iloc[-2]['close'] if len(df) > 1 else current
+                diff = current - prev
+                rate = (diff / prev) * 100
+                
+                icon = "🔴" if diff > 0 else ("🔵" if diff < 0 else "⚪️")
+                
+                val_fmt = f"{current:,.2f}"
+                if code == "KRW=X": val_fmt += "원"
+                
+        global_targets = [
+            ("나스닥", "^IXIC"),
+            ("S&P500", "^GSPC"),
+            ("다우존스", "^DJI")
+        ]
+        for name, code in global_targets:
+                msg += f"\n• {name} {icon} {val_fmt} ({rate:+.2f}%)"
+            except Exception as e:
+                msg += f"\n• {name}: 오류"
+        
+        return msg
+
+    def _analyze_stock(self, keyword):
+        """특정 종목 기술적 분석 및 진단"""
+        code = None
+        name = None
+        is_overseas = False
+        
+        # 1. config에 등록된 종목에서 검색
+        all_stocks = config.STOCK_CONFIG_DATA.get("stocks_kr", []) + config.STOCK_CONFIG_DATA.get("etfs_kr", [])
+        for item in all_stocks:
+            if keyword == item['code'] or keyword == item['name']:
+                code = item['code']; name = item['name']; is_overseas = False
+                break
+        
+        if not code:
+            all_us = config.STOCK_CONFIG_DATA.get("stocks_us", []) + config.STOCK_CONFIG_DATA.get("etfs_us", [])
+            for item in all_us:
+                if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
+                    code = item['code']; name = item['name']; is_overseas = True
+                    break
+        
+        # 2. 등록된 종목이 아니면 입력값을 코드로 간주하거나 이름으로 검색 시도
+        if not code:
+            if keyword.isdigit() and len(keyword) == 6:
+                code = keyword
+                name = api.get_stock_name_by_code(code, False) or keyword
+                is_overseas = False
+            # [수정] 영문/숫자/특수문자(.-)로 구성된 경우 해외 티커로 간주 (한글 제외)
+            elif all(ord(c) < 128 for c in keyword):
+                code = keyword.upper()
+                name = api.get_stock_name_by_code(code, True) or keyword
+                is_overseas = True
+            else:
+                return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.\n관심 종목에 등록된 종목명이나 코드를 입력해주세요."
+
+        try:
+            # 3. 데이터 조회 및 분석
+            df = api.get_chart_data(code, is_overseas)
+            if df is None or df.empty:
+                return f"⚠️ {name}({code}) 차트 데이터를 불러올 수 없습니다."
+            
+            ind = indicators.calculate_indicators(df)
+            current_price = float(df.iloc[-1]['close'])
+            
+            # 전일 RSI 계산 (상태 분류용)
+            prev_rsi = self.trader._get_prev_rsi(df)
+
+            state, _ = analysis.classify_stock_state(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+            )
+            score, _ = analysis.calculate_score(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+            )
+            
+            # 4. 메시지 구성
+            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] else "-"
+            adx_str = f"{ind['adx']:.1f}" if ind['adx'] else "-"
+            score_icon = "⭐️" if score >= 8 else ("✨" if score >= 6 else "🌑")
+            
+            price_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+            
+            msg = f"🔍 [종목 진단] {name}({code})\n"
+            msg += f"현재가: {price_fmt}\n"
+            msg += f"종합 점수: {score_icon} {score}점 / 11점\n"
+            msg += f"진단 상태: {state}\n"
+            msg += f"\n[주요 지표]\n"
+            msg += f"• RSI: {rsi_str} (모멘텀)\n"
+            msg += f"• ADX: {adx_str} (추세강도)\n"
+            msg += f"• 이평선: {'정배열' if ind['ema_20']>ind['ema_60']>ind['ema_120'] else '혼조/역배열'}"
+            
+            return msg
+            
+        except Exception as e:
+            return f"⚠️ 분석 중 오류 발생: {str(e)}"
+
+    def _get_trade_history(self):
+        """최근 체결 내역 조회"""
+        trades = db_manager.db.get_trades(limit=5)
+        if not trades:
+            return "📭 거래 내역이 없습니다."
+        
+        msg = "📜 [최근 체결 내역 (5건)]"
+        for t in trades:
+            type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("수동", "")
+            name = t['name']
+            qty = t['qty']
+            price = float(t['price'])
+            price_str = f"{price:,.2f}" if price < 1000 and "." in str(price) else f"{int(price):,}"
+            
+            # 손익
+            profit_msg = ""
+            if "매도" in type_str:
+                amt = t.get('profit_amt', 0)
+                rate = t.get('profit_rate', 0.0)
+                if amt is not None:
+                    icon = "🔴" if amt > 0 else "🔵"
+                    profit_msg = f"\n   └ {icon} {amt:+,}원 ({rate:+.2f}%)"
+            
+            date_str = t['time'][5:16] # MM-DD HH:MM
+            msg += f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}{profit_msg}"
+            
+        return msg
 
     def _send_reply(self, text):
         # api.send_telegram_message 사용 (계좌 정보 및 인스턴스 이름이 꼬리말에 자동 추가됨)

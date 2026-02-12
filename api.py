@@ -847,6 +847,57 @@ def get_domestic_balance():
         
     return [], []
 
+def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
+    """미체결 내역 조회 (국내주식)"""
+    if not cano: cano = config.CANO
+    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
+    
+    # 시스템 트레이딩 컨텍스트 확인
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO
+        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+
+    # 미체결 조회 TR (주식정정취소가능주문조회)
+    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+    tr_id = utils.get_tr_id("domestic", "inquiry", "unfilled") # constants에 매핑 필요, 없으면 아래 로직으로 대체
+    
+    # TR ID 하드코딩 (안전장치)
+    if not tr_id:
+        tr_id = "VTTC8036R" if config.IS_SIMULATION else "TT800103R" # 주식정정취소가능주문조회
+
+    headers = _get_headers(tr_id, cano)
+    
+    params = {
+        "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
+        "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+        "INQR_DVSN_1": "0", # 0:전체, 1:현금, 2:융자
+        "INQR_DVSN_2": "0"  # 0:전체, 1:매도, 2:매수
+    }
+    
+    try:
+        res = session.get(url, headers=headers, params=params, verify=False, timeout=5)
+        data = res.json()
+        if data['rt_cd'] == '0':
+            return data.get('output', [])
+    except Exception: pass
+    return []
+
+def cancel_order(odno, code, qty, is_buy):
+    """주문 취소 실행"""
+    # 컨텍스트에 따른 계좌 선택
+    cano = config.CANO; acnt = config.ACNT_PRDT_CD
+    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+        cano = config.AUTO_CANO; acnt = config.AUTO_ACNT_PRDT_CD
+
+    tr_id = utils.get_tr_id("domestic", "trade", "cancel")
+    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+    headers = _get_headers(tr_id, cano)
+    
+    data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": odno, "ORD_DVSN": "00", "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": str(qty), "ORD_UNPR": "0", "QTY_ALL_ORD_YN": "Y"}
+    
+    res = session.post(url, headers=headers, data=json.dumps(data), verify=False)
+    return res.json()
+
 def send_telegram_message(message):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:

@@ -220,15 +220,16 @@ graph TD
 ### (5) 설정 및 로그 관리
 *   **주요 설정 (`config.py`):**
     *   `SYSTEM_TRADING_INTERVAL`: 모니터링 주기 (초 단위, 기본 180초)
-    *   `SYSTEM_INVEST_PER_STOCK`: 종목당 투자 비중 (0.0 ~ 1.0, 기본 0.5)
-    *   `SYSTEM_MAX_HOLDINGS`: 최대 보유 종목 수 제한 (기본 10개)
+    *   `SYSTEM_INVEST_PER_STOCK`: 종목당 투자 비중 (0.0 ~ 1.0, 기본 0.5). 이 값에 따라 최대 보유 종목 수가 자동 결정됩니다. (예: 0.5 -> 최대 2종목, 0.1 -> 최대 10종목)
     *   `USE_MARKET_FILTER`: 시장 지수(KOSPI/KOSDAQ) 추세 필터링 사용 여부 (True/False)
+    *   `MARKET_FILTER_MA`: 시장 필터링 기준 이동평균선 기간 (일 단위, 기본 20)
     *   `SYSTEM_DAILY_LOSS_LIMIT`: 일일 손실 제한율 (%, 기본 10.0)
     *   `SYSTEM_TRADING_START_TIME`: 거래 시작 시간 (HHMM, 기본 "0915")
     *   `SYSTEM_TRADING_END_TIME`: 거래 종료 시간 (HHMM, 기본 "1515")
     *   `CONCLUSION_CHECK_INTERVAL`: 체결 확인 집중 감시 주기 (초, 기본 5)
     *   `CONCLUSION_CHECK_IDLE_INTERVAL`: 체결 확인 대기 모드 주기 (초, 기본 180)
     *   `CONCLUSION_CHECK_ACTIVE_DURATION`: 집중 감시 유지 시간 (초, 기본 100)
+    *   `UNFILLED_ORDER_CANCEL_SECONDS`: 미체결 주문 자동 취소 대기 시간 (초, 기본 600)
     *   `DEFAULT_TIMEOUT`: API 요청 타임아웃 (초, 기본 10)
     *   `MAX_RETRIES`: API 요청 실패 시 재시도 횟수 (기본 1)
 *   **로그 파일:** `logs/system_trade_YYYY-MM-DD.log` 파일에 날짜별로 분리되어 모든 분석 결과와 주문 내역이 상세히 기록됩니다.
@@ -390,8 +391,12 @@ $env:TELEGRAM_CHAT_ID="채팅_ID"
 ### (5) 텔레그램 원격 제어 (Two-Way Control)
 텔레그램 봇에게 명령어를 보내 프로그램을 원격으로 제어할 수 있습니다.
 *   `/status`: 현재 시스템 트레이딩 상태, 자산 현황, 보유 종목 요약을 조회합니다.
+*   `/market`: 주요 시장 지수(KOSPI, KOSDAQ, 환율, 원자재 등) 현황을 조회합니다.
+*   `/signal <종목명>`: 특정 종목의 기술적 분석 지표와 진단 결과를 조회합니다.
+*   `/history`: 최근 체결된 거래 내역(5건)을 조회합니다.
 *   `/start`: 시스템 트레이딩을 시작합니다. (실전 모드에서도 경고 없이 즉시 시작되므로 주의)
 *   `/stop`: 실행 중인 시스템 트레이딩을 중단합니다.
+*   `/help`: 사용 가능한 명령어 목록을 확인합니다.
 
 **⚠️ 다중 실행 시 필수 주의사항:**
 텔레그램의 명령어 수신 기능(Polling)은 **하나의 봇 토큰당 하나의 연결만 허용**합니다.
