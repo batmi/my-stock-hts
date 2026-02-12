@@ -1889,7 +1889,10 @@ class TelegramCommander:
             ("금", "GC=F"),
             ("은", "SI=F"),   
             ("달러환율", "KRW=X"),
-            ("SOX(반도체)", "^SOX")
+            ("SOX(반도체)", "^SOX"),
+            ("나스닥", "^IXIC"),
+            ("S&P500", "^GSPC"),
+            ("다우존스", "^DJI")
         ]
 
         for name, code in global_targets:
@@ -1909,12 +1912,6 @@ class TelegramCommander:
                 val_fmt = f"{current:,.2f}"
                 if code == "KRW=X": val_fmt += "원"
                 
-        global_targets = [
-            ("나스닥", "^IXIC"),
-            ("S&P500", "^GSPC"),
-            ("다우존스", "^DJI")
-        ]
-        for name, code in global_targets:
                 msg += f"\n• {name} {icon} {val_fmt} ({rate:+.2f}%)"
             except Exception as e:
                 msg += f"\n• {name}: 오류"
