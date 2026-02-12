@@ -274,6 +274,9 @@ class AutoTrader:
             cls._instance.initial_asset = 0
             cls._instance.was_market_open = None
             cls._instance.trailing_stop_cache = {} # [추가] 트레일링 스탑 메모리 캐시 (DB 부하 감소용)
+            cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
+            cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
+            cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -316,6 +319,7 @@ class AutoTrader:
             self.start_time = datetime.now()
             self.consecutive_errors = 0
             self.was_market_open = self.is_market_open()
+            self.market_status_notified = {} # 시작 시 알림 상태 초기화
             
             # [추가] 시작 시 컨텍스트 임시 설정하여 초기 자산 조회
             config.trade_context.use_auto_account = True
@@ -588,6 +592,17 @@ class AutoTrader:
         market_status = "장 운영 중 (거래 가능)" if self.is_market_open() else "장 마감/휴장 (대기 중)"
         if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
         table.add_row("마켓 상태", market_status)
+        
+        # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
+        if getattr(config, 'USE_MARKET_FILTER', True):
+            kospi_stat = self.market_index_status.get("KOSPI")
+            kosdaq_stat = self.market_index_status.get("KOSDAQ")
+            
+            def get_stat_msg(stat):
+                if stat is None: return "[dim]확인 중[/]"
+                return "[red]상승(20일선↑)[/]" if stat else "[blue]하락(20일선↓)[/]"
+            
+            table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
 
         table.add_section()
 
@@ -645,6 +660,7 @@ class AutoTrader:
             console.print("\n[bold]보유 종목 리스트[/bold]")
             h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
             h_table.add_column("종목명(코드)", justify="left")
+            h_table.add_column("시장", justify="center")
             h_table.add_column("수량", justify="right")
             h_table.add_column("매입가", justify="right")
             h_table.add_column("현재가", justify="right")
@@ -654,6 +670,7 @@ class AutoTrader:
             for item in holdings:
                 name = item['prdt_name']
                 code = item['pdno']
+                market_type = self._get_stock_market_type(code)
                 qty = int(item['hldg_qty'])
                 buy_price = float(item['pchs_avg_pric'])
                 cur_price = int(item['prpr'])
@@ -663,6 +680,7 @@ class AutoTrader:
                 p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 h_table.add_row(
                     f"{name}({code})", 
+                    market_type,
                     f"{qty:,}주", 
                     f"{buy_price:,.0f}원",
                     f"{cur_price:,}원", 
@@ -1035,6 +1053,11 @@ class AutoTrader:
                 
                 if current_market_status:
                     self.log("시스템 상태: RUNNING")
+                    
+                    # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
+                    if getattr(config, 'USE_MARKET_FILTER', True):
+                        self._update_market_indices_status()
+                        
                     # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
                     # 1. 매도 조건 점검 (리스크 관리)
                     self._check_sell_conditions()
@@ -1334,6 +1357,13 @@ class AutoTrader:
             for h in holdings:
                 holding_codes.add(h['pdno'])
         
+        # [추가] 최대 보유 종목 수 체크
+        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        if len(holding_codes) >= max_holdings:
+            if self.consecutive_errors == 0: # 로그 도배 방지
+                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달")
+            return
+
         # 예수금 확인 (API 직접 호출)
         tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
         cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
@@ -1366,6 +1396,13 @@ class AutoTrader:
             
             # [추가] 보유 중이면 스킵
             if code in holding_codes: continue
+            
+            # [추가] 시장 지수 필터링 (종목별 적용)
+            if getattr(config, 'USE_MARKET_FILTER', True):
+                market_type = self._get_stock_market_type(code)
+                # 해당 시장이 하락장이면 스킵 (기본값 True로 설정하여 데이터 없을 시 매수 허용)
+                if not self.market_index_status.get(market_type, True):
+                    continue
             
             # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
             df = api.get_chart_data(code, is_overseas=False)
@@ -1423,12 +1460,15 @@ class AutoTrader:
             # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
             if invest_amt < cand['price']: invest_amt = avail_cash
             
+            # [수정] 지정가 주문을 위해 현재가(정수) 확보
+            current_price = int(cand['price'])
+            
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
-            # 시장가 주문 시 증거금 부족 등을 방지하기 위해 price=0(시장가)으로 조회
-            max_qty = api.fetch_buyable_quantity(cand['code'], 0)
+            # 지정가 주문 시 해당 가격 기준으로 조회
+            max_qty = api.fetch_buyable_quantity(cand['code'], current_price)
             
             # 자산 배분 비중 적용 수량
-            target_qty = int(invest_amt / cand['price'])
+            target_qty = int(invest_amt / current_price)
             
             # 실제 주문 수량은 (목표 수량)과 (API 조회 가능 수량) 중 작은 값
             qty = min(target_qty, max_qty)
@@ -1438,40 +1478,93 @@ class AutoTrader:
                 self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty})")
                 continue
 
-            if avail_cash >= (qty * cand['price']):
+            if avail_cash >= (qty * current_price):
                 rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
                 adx_val = f"{cand['adx']:.1f}" if cand['adx'] else "-"
                 cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
                 reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
                 
                 self.log(f"매수 실행: {cand['name']} - {reason}")
-                # [수정] 매수 시 사유와 점수를 DB 저장을 위해 전달
-                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'])
+                # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
+                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=current_price)
                 if odno: 
-                    avail_cash -= (qty * cand['price'])
+                    avail_cash -= (qty * current_price)
                     record = {
                         "type": "buy",
                         "code": cand['code'],
                         "name": cand['name'],
                         "qty": qty,
-                        "price": cand['price'],
+                        "price": current_price,
                         "reason": reason,
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "odno": odno
                     }
                     self.trade_records.append(record)
 
-    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0):
+    def _update_market_indices_status(self):
+        """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림"""
+        target_indices = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
+        
+        for market_name, ticker in target_indices.items():
+            try:
+                # 지수 데이터 조회 (yfinance 활용)
+                df = api.get_chart_data(ticker, is_overseas=True)
+                if df is None or df.empty or len(df) < 20:
+                    self.market_index_status[market_name] = True
+                    continue
+                
+                ma20 = df['close'].rolling(window=20).mean().iloc[-1]
+                current_idx = df['close'].iloc[-1]
+                is_healthy = current_idx >= ma20
+                
+                self.market_index_status[market_name] = is_healthy
+                
+                # 상태 변경 알림
+                notified = self.market_status_notified.get(market_name, False)
+                if not is_healthy and not notified:
+                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 20일 이평선 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
+                    self.market_status_notified[market_name] = True
+                elif is_healthy and notified:
+                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 20일 이평선을 회복했습니다.\n매수를 재개합니다.")
+                    self.market_status_notified[market_name] = False
+            except Exception as e:
+                self.log(f"{market_name} 지수 조회 실패: {e}")
+                self.market_index_status[market_name] = True
+
+    def _get_stock_market_type(self, code):
+        """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (캐싱 적용)"""
+        if code in self.stock_market_map: return self.stock_market_map[code]
+        
+        try:
+            res = api.get_current_price_data(code, is_overseas=False)
+            if res and res.get('rt_cd') == '0':
+                market_name = res['output'].get('rprs_mrkt_kor_name', '')
+                if "코스닥" in market_name:
+                    self.stock_market_map[code] = "KOSDAQ"
+                    return "KOSDAQ"
+                elif "유가증권" in market_name or "KOSPI" in market_name:
+                    self.stock_market_map[code] = "KOSPI"
+                    return "KOSPI"
+        except: pass
+        
+        return "KOSPI" # 기본값
+
+    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0):
         tr_id = utils.get_tr_id("domestic", "trade", type_str)
         url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/order-cash"
         headers = utils.get_common_headers(tr_id)
         cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
         acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
-        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": code, "ORD_DVSN": "01", "ORD_QTY": str(qty), "ORD_UNPR": "0"}
+        
+        # [수정] 지정가/시장가 구분 (price > 0 이면 지정가)
+        ord_dvsn = "00" if price > 0 else "01"
+        ord_unpr = str(price) if price > 0 else "0"
+        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": code, "ORD_DVSN": ord_dvsn, "ORD_QTY": str(qty), "ORD_UNPR": ord_unpr}
         
         # [추가] 상세 로그: 요청 정보
         self.log(f"======== [주문 실행] {type_str.upper()} ========")
-        self.log(f"대상: {code}, 수량: {qty}, 단가: 시장가(0)")
+        price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
+        self.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
         self.log(f"API URL: {url}")
         if config.DEBUG_LEVEL == "DEBUG":
             self.log(f"Body: {json.dumps(data)}")
@@ -1486,7 +1579,7 @@ class AutoTrader:
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
                 stock_display = f"{name}({code})" if name else code
-                msg = f"🚀 [주문 접수] {type_str.upper()} {stock_display} {qty}주 (시장가)\n주문번호: {odno}"
+                msg = f"🚀 [주문 접수] {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
                 if reason:
                     msg += f"\n사유: {reason}"
                 api.send_telegram_message(msg)
@@ -1496,7 +1589,7 @@ class AutoTrader:
                 
                 if config.DEBUG_LEVEL == "DEBUG":
                     self.log(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
-                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, "0", odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score)
+                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score)
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청
                 ConclusionMonitor().check_now()

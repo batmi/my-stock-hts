@@ -7,6 +7,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 from rich.markup import escape
+import argparse
 import config
 import api
 import utils  
@@ -268,8 +269,14 @@ def show_help():
     config.console.print(score_table)
 
 def main():
+    # [추가] 커맨드 라인 인자 파싱
+    parser = argparse.ArgumentParser(description='Stock Trading System')
+    parser.add_argument('--mode', choices=['1', '2'], help='투자 모드 (1: 모의투자, 2: 실전투자)')
+    parser.add_argument('--auto', action='store_true', help='시스템 트레이딩 자동 시작 및 로그 뷰어 실행')
+    args = parser.parse_args()
+
     # 1. 환경 설정 로드
-    config.initialize_environment()
+    config.initialize_environment(mode=args.mode)
     
     # 2. 종목 데이터 로드
     config.load_stock_config()
@@ -289,6 +296,16 @@ def main():
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"
+    
+    # [추가] 자동 시작 모드 처리
+    if args.auto:
+        config.console.print("\n[bold magenta]=== 자동 시작 모드 (Auto Start) ===[/]")
+        # 비대화형 모드로 트레이딩 시작
+        trader.start(interactive=False)
+        
+        # 로그 뷰어 실행 (메인 스레드 블로킹 유지)
+        time.sleep(1)
+        trader.view_log_file()
     
     try:
         while True:

@@ -204,7 +204,9 @@ SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 # - 너무 길면(예: 300초) 급변하는 시세에 대응하기 어렵습니다.
 SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
-SYSTEM_INVEST_PER_STOCK = 0.5  # 종목당 투자 비중 (최초 자산의 50%씩 분산 투자)
+SYSTEM_INVEST_PER_STOCK = 0.5  # [수정] 종목당 투자 비중 (50%로 상향 조정)
+SYSTEM_MAX_HOLDINGS = 10       # [추가] 최대 보유 종목 수 제한 (과도한 백화점식 포트폴리오 방지)
+USE_MARKET_FILTER = True       # [추가] 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
@@ -253,7 +255,7 @@ AUTO_ACNT_PRDT_CD = ""
 # [추가] 텔레그램 알림 설정
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
-TELEGRAM_INSTANCE_NAME = "MBA4" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
+TELEGRAM_INSTANCE_NAME = "HTS" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
 TELEGRAM_POLLING_TIMEOUT = 10  # [추가] 텔레그램 명령어 수신 대기 시간 (초)
 
 # 서버 URL 상수 정의
@@ -266,21 +268,24 @@ EXCHANGE_CACHE = {}
 # 종목 리스트 데이터
 STOCK_CONFIG_DATA = {}
 
-def initialize_environment():
+def initialize_environment(mode=None):
     global APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD, URL_BASE, IS_SIMULATION
     global REAL_APP_KEY, REAL_APP_SECRET, AUTO_APP_KEY, AUTO_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
     global AUTO_CANO, AUTO_ACNT_PRDT_CD, TELEGRAM_INSTANCE_NAME
     
-    console.print("\n[bold]접속할 서버를 선택하세요:[/bold]")
-    console.print("[1] 모의투자 (Simulation)")
-    console.print("[2] 실전투자 (Real Trading)")
-    
-    try:
-        console.print()
-        choice = Prompt.ask("선택 [dim](종료: q)[/dim]", choices=["1", "2", "q", "Q"], default="1")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n")
-        sys.exit()
+    if mode:
+        choice = str(mode)
+    else:
+        console.print("\n[bold]접속할 서버를 선택하세요:[/bold]")
+        console.print("[1] 모의투자 (Simulation)")
+        console.print("[2] 실전투자 (Real Trading)")
+        
+        try:
+            console.print()
+            choice = Prompt.ask("선택 [dim](종료: q)[/dim]", choices=["1", "2", "q", "Q"], default="1")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n")
+            sys.exit()
     
     if choice.lower() == 'q':
         console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n")
