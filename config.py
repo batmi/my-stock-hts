@@ -253,7 +253,7 @@ AUTO_ACNT_PRDT_CD = ""
 # [추가] 텔레그램 알림 설정
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
-TELEGRAM_INSTANCE_NAME = "HTS" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
+TELEGRAM_INSTANCE_NAME = "MBA4" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
 TELEGRAM_POLLING_TIMEOUT = 10  # [추가] 텔레그램 명령어 수신 대기 시간 (초)
 
 # 서버 URL 상수 정의
@@ -320,9 +320,9 @@ def initialize_environment():
         sys.exit()
 
     # [추가] 텔레그램 설정 로드 (선택 사항)
-    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-    TELEGRAM_INSTANCE_NAME = os.environ.get("TELEGRAM_INSTANCE_NAME", "HTS")
+    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
+    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
+    TELEGRAM_INSTANCE_NAME = os.environ.get("TELEGRAM_INSTANCE_NAME", TELEGRAM_INSTANCE_NAME)
 
     clean_acc = acc_num_input.strip().replace('-', '')
     if len(clean_acc) == 8:

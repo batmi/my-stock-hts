@@ -1580,7 +1580,7 @@ class TelegramCommander:
                             self._handle_message(result.get('message', {}))
                 elif response.status_code == 409:
                     # Conflict: 다른 인스턴스가 이미 폴링 중임
-                    console.print("[bold red][Telegram] 충돌 감지: 다른 인스턴스가 동일한 봇 토큰을 사용 중입니다. 폴링을 중단합니다.[/bold red]")
+                    console.print("\n[bold red][Telegram] 충돌 감지: 다른 인스턴스가 동일한 봇 토큰을 사용 중입니다. 폴링을 중단합니다.[/bold red]")
                     self.is_running = False
                     break
                     
