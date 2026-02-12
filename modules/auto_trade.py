@@ -278,6 +278,7 @@ class AutoTrader:
             cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
             cls._instance.skipped_by_market_filter_count = 0 # [추가] 시장 필터링 보류 종목 수
+            cls._instance.telegram_commander = None   # [추가] 텔레그램 커맨더 참조
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -292,6 +293,12 @@ class AutoTrader:
         if self.is_running:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
+        
+        # [추가] 텔레그램 봇 제어권 회수 (폴링 스레드가 죽어있다면 재시작)
+        if getattr(self, 'telegram_commander', None) and not self.telegram_commander.is_running:
+             if config.ENABLE_TELEGRAM:
+                 console.print("[bold cyan][Telegram] 시스템 트레이딩 시작과 함께 텔레그램 봇 제어권을 가져옵니다.[/bold cyan]")
+                 self.telegram_commander.start()
         
         # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.IS_SIMULATION:
@@ -1743,9 +1750,11 @@ class TelegramCommander:
         self.thread = None
         self.last_update_id = 0
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
+        self.trader.telegram_commander = self # [추가] AutoTrader에 자신을 등록
 
     def start(self):
         if not self.bot_token: return
+        if not config.ENABLE_TELEGRAM: return # [추가] 텔레그램 비활성화 시 시작 안 함
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
@@ -1855,47 +1864,22 @@ class TelegramCommander:
         """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
         msg = "📊 [시장 지수 현황]\n"
         
-        # 1. 국내 지수 (KIS API)
-        targets = {"KOSPI": "0001", "KOSDAQ": "1001"}
-        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
-        
-        for name, code in targets.items():
-            try:
-                df = api.get_domestic_index_chart(code)
-                if df is None or df.empty:
-                    msg += f"\n• {name}: 데이터 조회 실패"
-                    continue
-                
-                current = df.iloc[-1]['close']
-                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
-                
-                # 전일 대비 등락
-                prev = df.iloc[-2]['close'] if len(df) > 1 else current
-                diff = current - prev
-                rate = (diff / prev) * 100
-                
-                icon = "🔴" if diff > 0 else ("🔵" if diff < 0 else "⚪️")
-                trend = "상승장(이평위)" if current >= ma_val else "하락장(이평아래)"
-                trend_icon = "📈" if current >= ma_val else "📉"
-                
-                msg += f"\n• {name} {icon} {current:,.2f} ({rate:+.2f}%)\n  {trend_icon} 추세: {trend} ({ma_period}일선 기준)"
-            except Exception as e:
-                msg += f"\n• {name}: 오류 ({str(e)})"
-        
-        msg += "\n"
-
-        # 2. 글로벌 지수 및 원자재 (yfinance)
-        global_targets = [
+        # 통합 리스트 (모두 yfinance 사용)
+        targets = [
+            ("KOSDAQ", "^KQ11"),
+            ("KOSPI", "^KS11"),
+            ("나스닥", "^IXIC"),
+            ("S&P500", "^GSPC"),
+            ("다우존스", "^DJI"),
             ("금", "GC=F"),
             ("은", "SI=F"),   
             ("달러환율", "KRW=X"),
-            ("SOX(반도체)", "^SOX"),
-            ("나스닥", "^IXIC"),
-            ("S&P500", "^GSPC"),
-            ("다우존스", "^DJI")
+            ("SOX(반도체)", "^SOX")
         ]
-
-        for name, code in global_targets:
+        
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+        
+        for name, code in targets:
             try:
                 df = api.get_chart_data(code, is_overseas=True)
                 if df is None or df.empty:
@@ -1913,6 +1897,14 @@ class TelegramCommander:
                 if code == "KRW=X": val_fmt += "원"
                 
                 msg += f"\n• {name} {icon} {val_fmt} ({rate:+.2f}%)"
+                
+                # KOSPI/KOSDAQ의 경우 추세 정보 추가
+                if name in ["KOSPI", "KOSDAQ"]:
+                    ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+                    trend_icon = "📈" if current >= ma_val else "📉"
+                    trend = "상승" if current >= ma_val else "하락"
+                    msg += f"  {trend_icon} {trend}({ma_period}일선)"
+                    
             except Exception as e:
                 msg += f"\n• {name}: 오류"
         
@@ -1974,20 +1966,34 @@ class TelegramCommander:
             )
             
             # 4. 메시지 구성
-            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] else "-"
-            adx_str = f"{ind['adx']:.1f}" if ind['adx'] else "-"
+            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+            adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+            cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             score_icon = "⭐️" if score >= 8 else ("✨" if score >= 6 else "🌑")
             
             price_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
             
+            # SAR 상태
+            sar_state = "-"
+            if ind['psar'] is not None:
+                sar_state = "상승(주가아래)" if ind['psar'] < current_price else "하락(주가위)"
+
+            # 이평선 상태
+            ema_state = "혼조/역배열"
+            if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+                if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
+                elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
+
             msg = f"🔍 [종목 진단] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"종합 점수: {score_icon} {score}점 / 11점\n"
             msg += f"진단 상태: {state}\n"
             msg += f"\n[주요 지표]\n"
-            msg += f"• RSI: {rsi_str} (모멘텀)\n"
-            msg += f"• ADX: {adx_str} (추세강도)\n"
-            msg += f"• 이평선: {'정배열' if ind['ema_20']>ind['ema_60']>ind['ema_120'] else '혼조/역배열'}"
+            msg += f"• 이평선: {ema_state}\n"
+            msg += f"• SAR: {sar_state}\n"
+            msg += f"• RSI: {rsi_str}\n"
+            msg += f"• ADX: {adx_str}\n"
+            msg += f"• CCI: {cci_str}"
             
             return msg
             

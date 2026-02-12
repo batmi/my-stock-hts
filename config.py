@@ -261,6 +261,7 @@ TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
 TELEGRAM_INSTANCE_NAME = "HTS" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
 TELEGRAM_POLLING_TIMEOUT = 10  # [추가] 텔레그램 명령어 수신 대기 시간 (초)
+ENABLE_TELEGRAM = True         # [추가] 텔레그램 기능 활성화 여부 (기본값: True)
 
 # 서버 URL 상수 정의
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
