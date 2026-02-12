@@ -1,5 +1,6 @@
 import threading
 import time
+import requests
 import json
 import os
 from datetime import datetime
@@ -283,7 +284,7 @@ class AutoTrader:
                     console.print(f"[red]로그 디렉토리 생성 실패: {e}[/red]")
         return cls._instance
 
-    def start(self):
+    def start(self, interactive=True):
         if self.is_running:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
@@ -297,9 +298,13 @@ class AutoTrader:
             
             console.print("\n[bold red]!!! 경고: 실전 투자 모드에서 시스템 트레이딩을 시작합니다 !!![/bold red]")
             console.print(f"운용 계좌: [bold yellow]{config.AUTO_CANO}-{config.AUTO_ACNT_PRDT_CD}[/bold yellow] (시스템 트레이딩 전용)")
-            if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
-                console.print("[yellow]시작을 취소했습니다.[/yellow]")
-                return
+            
+            if interactive:
+                if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                    console.print("[yellow]시작을 취소했습니다.[/yellow]")
+                    return
+            else:
+                console.print("[bold cyan][텔레그램 명령] 실전 투자 자동매매를 시작합니다.[/bold cyan]")
 
         # [추가] 텔레그램 메시지 구성을 위한 변수 미리 선언
         holdings = []
@@ -456,6 +461,56 @@ class AutoTrader:
         
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
         config.SYSTEM_LOGGER = None
+
+    def get_status_message(self):
+        """텔레그램 전송용 상태 요약 메시지 생성"""
+        status_text = "STOPPED"
+        if self.is_running:
+            status_text = "RUNNING" if self.is_market_open() else "WAITING"
+        
+        msg = f"📊 [시스템 상태: {status_text}]\n"
+        
+        # 자산 정보 조회
+        current_asset = None
+        deposit = 0
+        holdings = []
+        
+        original_context = getattr(config.trade_context, 'use_auto_account', False)
+        config.trade_context.use_auto_account = True
+        
+        try:
+            current_asset = self._get_total_estimated_asset()
+            holdings, _ = api.get_domestic_balance()
+            
+            cano = config.AUTO_CANO if not config.IS_SIMULATION else config.CANO
+            acnt = config.AUTO_ACNT_PRDT_CD if not config.IS_SIMULATION else config.ACNT_PRDT_CD
+            params = {"CANO": cano, "ACNT_PRDT_CD": acnt, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
+            res = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params)
+            if res.get('rt_cd') == '0': deposit = int(res['output']['ord_psbl_cash'])
+        except: pass
+        finally:
+            config.trade_context.use_auto_account = original_context
+
+        if current_asset is not None:
+            profit = current_asset - self.initial_asset
+            rate = (profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+            msg += f"현재 자산: {current_asset:,}원\n"
+            msg += f"누적 손익: {profit:+,}원 ({rate:+.2f}%)\n"
+            msg += f"주문 가능: {deposit:,}원\n"
+        else:
+            msg += "자산 정보 조회 실패\n"
+            
+        if holdings:
+            msg += f"\n📋 보유 종목 ({len(holdings)}개):"
+            for item in holdings:
+                name = item['prdt_name']
+                qty = int(item['hldg_qty'])
+                rate = float(item['evlu_pfls_rt'])
+                msg += f"\n• {name}: {qty}주 ({rate:+.2f}%)"
+        else:
+            msg += "\n📋 보유 종목: 없음"
+            
+        return msg
 
     def log(self, msg):
         now = datetime.now()
@@ -1485,3 +1540,95 @@ def system_trading_menu():
         trader.print_report()
     elif choice == "5":
         trader.view_log_file()
+
+class TelegramCommander:
+    """텔레그램 명령어를 수신하고 처리하는 클래스"""
+    def __init__(self):
+        self.bot_token = config.TELEGRAM_BOT_TOKEN
+        self.is_running = False
+        self.thread = None
+        self.last_update_id = 0
+        self.trader = AutoTrader() # 싱글톤 인스턴스 참조
+
+    def start(self):
+        if not self.bot_token: return
+        self.is_running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        if config.DEBUG_LEVEL != "OFF":
+            console.print("[dim cyan][Telegram] 명령어 수신 대기 시작...[/dim cyan]")
+
+    def stop(self):
+        self.is_running = False
+        if self.thread:
+            self.thread.join(timeout=2)
+
+    def _run_loop(self):
+        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+        timeout = getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)
+        
+        while self.is_running:
+            try:
+                params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
+                response = requests.get(url, params=params, timeout=timeout + 5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('ok'):
+                        for result in data.get('result', []):
+                            self.last_update_id = result['update_id']
+                            self._handle_message(result.get('message', {}))
+                elif response.status_code == 409:
+                    # Conflict: 다른 인스턴스가 이미 폴링 중임
+                    console.print("[bold red][Telegram] 충돌 감지: 다른 인스턴스가 동일한 봇 토큰을 사용 중입니다. 폴링을 중단합니다.[/bold red]")
+                    self.is_running = False
+                    break
+                    
+            except Exception as e:
+                if self.is_running and config.DEBUG_LEVEL == "DEBUG":
+                    console.print(f"[dim red][Telegram] Polling Error: {e}[/dim red]")
+                time.sleep(5) # 에러 시 대기
+
+    def _handle_message(self, message):
+        text = message.get('text', '').strip()
+        chat_id = str(message.get('chat', {}).get('id'))
+        
+        # 설정된 Chat ID와 다르면 무시 (보안)
+        if config.TELEGRAM_CHAT_ID and chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        if not text.startswith('/'): return
+
+        command = text.split()[0].lower()
+        response = ""
+
+        if command == "/status":
+            response = self.trader.get_status_message()
+            
+        elif command == "/start":
+            if self.trader.is_running:
+                response = "⚠️ 이미 시스템 트레이딩이 실행 중입니다."
+            else:
+                # 메인 스레드가 아니므로 interactive=False로 실행
+                self.trader.start(interactive=False)
+                response = "🚀 시스템 트레이딩을 시작했습니다."
+                
+        elif command == "/stop":
+            if not self.trader.is_running:
+                response = "⚠️ 실행 중인 시스템 트레이딩이 없습니다."
+            else:
+                self.trader.stop()
+                response = "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
+        
+        else:
+            return # 알 수 없는 명령어는 무시
+
+        # 응답 전송
+        if response:
+            self._send_reply(response)
+
+    def _send_reply(self, text):
+        # api.send_telegram_message 사용 (계좌 정보 등 헤더 자동 추가됨)
+        # 단, 여기서는 답장이므로 인스턴스 이름 강조
+        instance = getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')
+        api.send_telegram_message(f"[{instance}] {text}")

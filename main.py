@@ -283,6 +283,10 @@ def main():
     # [추가] 체결 감시자 시작 (백그라운드)
     auto_trade.ConclusionMonitor().start()
 
+    # [추가] 텔레그램 명령어 수신 시작 (백그라운드)
+    telegram_cmd = auto_trade.TelegramCommander()
+    telegram_cmd.start()
+
     trader = auto_trade.AutoTrader()
     last_choice = "1"
     
@@ -342,6 +346,9 @@ def main():
             
         # [추가] 체결 감시자 종료
         auto_trade.ConclusionMonitor().stop()
+        
+        # [추가] 텔레그램 커맨더 종료
+        telegram_cmd.stop()
 
 if __name__ == "__main__":
     main()

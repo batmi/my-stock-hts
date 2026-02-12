@@ -253,6 +253,8 @@ AUTO_ACNT_PRDT_CD = ""
 # [추가] 텔레그램 알림 설정
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
+TELEGRAM_INSTANCE_NAME = "HTS" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
+TELEGRAM_POLLING_TIMEOUT = 10  # [추가] 텔레그램 명령어 수신 대기 시간 (초)
 
 # 서버 URL 상수 정의
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
@@ -267,7 +269,7 @@ STOCK_CONFIG_DATA = {}
 def initialize_environment():
     global APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD, URL_BASE, IS_SIMULATION
     global REAL_APP_KEY, REAL_APP_SECRET, AUTO_APP_KEY, AUTO_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-    global AUTO_CANO, AUTO_ACNT_PRDT_CD
+    global AUTO_CANO, AUTO_ACNT_PRDT_CD, TELEGRAM_INSTANCE_NAME
     
     console.print("\n[bold]접속할 서버를 선택하세요:[/bold]")
     console.print("[1] 모의투자 (Simulation)")
@@ -320,6 +322,7 @@ def initialize_environment():
     # [추가] 텔레그램 설정 로드 (선택 사항)
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+    TELEGRAM_INSTANCE_NAME = os.environ.get("TELEGRAM_INSTANCE_NAME", "HTS")
 
     clean_acc = acc_num_input.strip().replace('-', '')
     if len(clean_acc) == 8:
