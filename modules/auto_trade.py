@@ -1628,7 +1628,5 @@ class TelegramCommander:
             self._send_reply(response)
 
     def _send_reply(self, text):
-        # api.send_telegram_message 사용 (계좌 정보 등 헤더 자동 추가됨)
-        # 단, 여기서는 답장이므로 인스턴스 이름 강조
-        instance = getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')
-        api.send_telegram_message(f"[{instance}] {text}")
+        # api.send_telegram_message 사용 (계좌 정보 및 인스턴스 이름이 꼬리말에 자동 추가됨)
+        api.send_telegram_message(text)
