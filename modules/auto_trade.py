@@ -420,7 +420,7 @@ class AutoTrader:
         # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
         config.trade_context.use_auto_account = True
         
-        msg = f"🔴 [시스템 종료] 자동매매가 종료되었습니다.\n시작 자산: {self.initial_asset:,}원"
+        msg = f"⚪️ [시스템 종료] 자동매매가 종료되었습니다.\n시작 자산: {self.initial_asset:,}원"
         
         # [수정] 스레드가 종료된 경우에만 자산 및 보유 종목 조회 (락 충돌 방지)
         if not self.thread or not self.thread.is_alive():
@@ -1866,15 +1866,15 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
-            ("KOSDAQ", "^KQ11"),
             ("KOSPI", "^KS11"),
+            ("KOSDAQ", "^KQ11"),
             ("나스닥", "^IXIC"),
             ("S&P500", "^GSPC"),
             ("다우존스", "^DJI"),
             ("금", "GC=F"),
-            ("은", "SI=F"),   
-            ("달러환율", "KRW=X"),
-            ("SOX(반도체)", "^SOX")
+            ("은", "SI=F"),
+            ("SOX(반도체)", "^SOX"),
+            ("달러환율", "KRW=X")
         ]
         
         ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
@@ -1891,7 +1891,10 @@ class TelegramCommander:
                 diff = current - prev
                 rate = (diff / prev) * 100
                 
-                icon = "🔴" if diff > 0 else ("🔵" if diff < 0 else "⚪️")
+                if abs(rate) < 0.005:
+                    icon = "⚪️"
+                else:
+                    icon = "🔴" if rate > 0 else "🔵"
                 
                 val_fmt = f"{current:,.2f}"
                 if code == "KRW=X": val_fmt += "원"
@@ -1901,9 +1904,8 @@ class TelegramCommander:
                 # KOSPI/KOSDAQ의 경우 추세 정보 추가
                 if name in ["KOSPI", "KOSDAQ"]:
                     ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
-                    trend_icon = "📈" if current >= ma_val else "📉"
                     trend = "상승" if current >= ma_val else "하락"
-                    msg += f"  {trend_icon} {trend}({ma_period}일선)"
+                    msg += f" {trend}"
                     
             except Exception as e:
                 msg += f"\n• {name}: 오류"
