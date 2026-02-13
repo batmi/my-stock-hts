@@ -13,8 +13,11 @@ import api
 import utils
 import indicators
 
-def calculate_daily_score(row, prev_row):
-    """analysis.py의 로직을 기반으로 일별 점수 계산 (보수적 기준 적용)"""
+def calculate_daily_status(row, prev_row):
+    """
+    analysis.py의 로직을 기반으로 일별 상태 및 점수 계산
+    반환값: (raw_score, sell_check_score, can_buy_state)
+    """
     price = row['close']
     ema20 = row['EMA20']
     ema60 = row['EMA60']
@@ -54,19 +57,26 @@ def calculate_daily_score(row, prev_row):
     # OBV Score
     if obv_trend: raw_score += 1
 
-    # 2. 위험/주의 필터링 (analysis.py 로직) -> final_score 결정
-    final_score = raw_score
-
-    # 위험 (Severe Danger)
-    if ema120 is not None and price < ema120 and price < ema60: final_score = 0
-    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): final_score = 0
-    # [수정] analysis.py와 동일하게 '위험' 상태일 때만 0점 처리 (매도 유도)
-    # '주의' 상태는 점수를 유지하여 매도하지 않음
-    # analysis.py의 classify_stock_state 로직 참조:
-    # - 위험: 120선&60선 동시 이탈 OR RSI <= 20
-    # - 그 외 주의/관망 상태라도 점수가 SELL_SCORE(5) 이상이면 보유
+    # 2. 위험/주의 필터링 (analysis.py 로직 동기화)
+    is_severe_danger = False
+    # 위험: 120선&60선 동시 이탈 OR RSI <= 20
+    if ema120 is not None and price < ema120 and price < ema60: is_severe_danger = True
+    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): is_severe_danger = True
     
-    return final_score, raw_score
+    is_caution = False
+    # 주의: 60선 이탈 OR 120선 이탈 OR SAR 매도 OR RSI 과열(80)/침체(30) OR ADX과열 꺾임
+    if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
+    elif sar > price: is_caution = True
+    elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
+    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
+    
+    # 매수 가능 상태: 위험도 아니고 주의도 아니어야 함 (analysis.py의 '매수' 상태 조건)
+    can_buy_state = not (is_severe_danger or is_caution)
+    
+    # 매도 판단용 점수: 위험 상태면 0점 처리 (즉시 매도 유도), 그 외엔 점수 유지
+    sell_check_score = 0 if is_severe_danger else raw_score
+    
+    return raw_score, sell_check_score, can_buy_state
 
 def get_backtest_data(code, is_overseas, days):
     """백테스팅용 데이터 조회 (yfinance 우선 사용 -> KIS API 실패 시 사용)"""
@@ -106,8 +116,160 @@ def get_backtest_data(code, is_overseas, days):
     # 2. KIS API 시도 (Fallback)
     return api.get_chart_data(code, is_overseas)
 
+def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, stop_loss_rate=None, take_profit_rate=None):
+    """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
+    
+    # 시뮬레이션 변수
+    balance = initial_capital
+    holdings = 0
+    avg_price = 0
+    trades = []
+    buy_date = None
+    
+    # 통계 변수
+    max_score_observed = 0
+    score_8_count = 0
+    
+    # 매도 설정값 로드 (Config 참조)
+    stop_loss_limit = stop_loss_rate if stop_loss_rate is not None else config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    take_profit_limit = take_profit_rate if take_profit_rate is not None else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    take_profit_rsi_limit = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+    sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
+    
+    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+
+    peak_asset = initial_capital
+    mdd = 0.0
+    win_trades = 0
+    loss_trades = 0
+    gross_profit = 0
+    gross_loss = 0
+    cum_profit = 0
+    daily_assets = []
+    
+    ts_highest_price = 0
+    prev_row = prev_row_init
+    
+    for i in range(len(sim_df)):
+        row = sim_df.iloc[i]
+        date = row['date']
+        price = row['close']
+        high_price = row['high']
+        
+        current_asset = balance + (holdings * price)
+        daily_assets.append(current_asset)
+        if current_asset > peak_asset: peak_asset = current_asset
+        if peak_asset > 0:
+            dd = (current_asset - peak_asset) / peak_asset * 100
+            if dd < mdd: mdd = dd
+        
+        # 상태 및 점수 계산
+        raw_score, sell_check_score, can_buy_state = calculate_daily_status(row, prev_row)
+        
+        if raw_score > max_score_observed: max_score_observed = raw_score
+        if raw_score >= buy_score_limit: score_8_count += 1
+        
+        # 매매 로직
+        # [매수]
+        if holdings == 0:
+            if can_buy_state and raw_score >= buy_score_limit and row['RSI'] < buy_rsi_limit:
+                qty = int(balance / price)
+                if qty > 0:
+                    cost = qty * price
+                    balance -= cost
+                    holdings = qty
+                    avg_price = price
+                    buy_date = date
+                    ts_highest_price = price
+                    trades.append({
+                        "date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, 
+                        "profit": 0, "profit_amt": 0, "days": 0, 
+                        "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                        "cum_profit": cum_profit
+                    })
+        # [매도]
+        elif holdings > 0:
+            loss_rate = (price - avg_price) / avg_price * 100
+            if high_price > ts_highest_price: ts_highest_price = high_price
+
+            sell_signal = False
+            reason = ""
+
+            if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
+            elif loss_rate <= stop_loss_limit: sell_signal = True; reason = "손절"
+            elif ts_highest_price > 0:
+                max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
+                if max_profit_rate >= ts_activation:
+                    drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
+                    if drop_rate >= ts_callback: sell_signal = True; reason = "트레일링스탑"
+            
+            if not sell_signal and row['RSI'] > take_profit_rsi_limit: sell_signal = True; reason = "RSI과열"
+            if not sell_signal and sell_check_score < sell_score_limit: sell_signal = True; reason = "점수하락"
+            
+            if sell_signal:
+                sell_amt = holdings * price
+                fee = sell_amt * 0.0023
+                if not is_overseas: fee = int(fee)
+                sell_amt -= fee
+                
+                profit = sell_amt - (holdings * avg_price)
+                profit_rate = (profit / (holdings * avg_price)) * 100
+                
+                if profit > 0: 
+                    win_trades += 1
+                    gross_profit += profit
+                else: 
+                    loss_trades += 1
+                    gross_loss += abs(profit)
+                
+                cum_profit += profit
+                
+                holding_days = 0
+                if buy_date:
+                    try:
+                        d1 = datetime.strptime(str(buy_date), "%Y%m%d")
+                        d2 = datetime.strptime(str(date), "%Y%m%d")
+                        holding_days = (d2 - d1).days
+                    except: pass
+                
+                balance += sell_amt
+                sold_qty = holdings
+                holdings = 0
+                avg_price = 0
+                buy_date = None
+                ts_highest_price = 0
+                
+                if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = "위험"
+                    
+                trades.append({
+                    "date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, 
+                    "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
+                    "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "cum_profit": cum_profit
+                })
+        
+        prev_row = row
+
+    final_asset = balance + (holdings * sim_df.iloc[-1]['close'])
+    total_return = (final_asset - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
+    
+    return {
+        "trades": trades,
+        "final_asset": final_asset,
+        "total_return": total_return,
+        "mdd": mdd,
+        "win_trades": win_trades,
+        "loss_trades": loss_trades,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "daily_assets": daily_assets,
+        "max_score_observed": max_score_observed,
+        "score_8_count": score_8_count
+    }
+
 def run_backtest():
-    config.console.print("\n[bold magenta]=== 전략 백테스팅 (Backtest) ===[/]")
+    config.console.print("\n[magenta]=== 전략 백테스팅 (Backtest) ===[/]")
     
     # 1. 종목 선택
     code, name, is_overseas = utils.select_stock_for_chart()
@@ -131,7 +293,7 @@ def run_backtest():
         initial_capital = initial_capital_krw
 
     # 3. 데이터 준비
-    with config.console.status(f"[bold green]{name} ({code}) 데이터 분석 중...[/]"):
+    with config.console.status(f"[green]{name} ({code}) 데이터 분석 중...[/]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
         original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
         needed_days = days + 120 
@@ -170,190 +332,161 @@ def run_backtest():
             start_idx = mask.idxmax()
         
         sim_df = df.iloc[start_idx:].copy()
+        prev_row_init = df.iloc[start_idx-1] if start_idx > 0 else None
         
         # [수정] 경고 로직: 실제 기간(일수)과 요청 기간 비교
         if not sim_df.empty:
             actual_days = (datetime.strptime(str(sim_df.iloc[-1]['date']), "%Y%m%d") - datetime.strptime(str(sim_df.iloc[0]['date']), "%Y%m%d")).days
             if actual_days < days * 0.9: # 90% 미만일 때만 경고
                 config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
-                d_start = str(sim_df.iloc[0]['date'])
-                d_start_fmt = f"{d_start[:4]}-{d_start[4:6]}-{d_start[6:]}"
-                config.console.print(f"[dim yellow]      (데이터 시작일: {d_start_fmt} - 신규 상장 종목이거나 과거 데이터가 부족합니다)[/dim yellow]")
-        
-        # 시뮬레이션 변수
-        balance = initial_capital
-        holdings = 0
-        avg_price = 0
-        trades = []
-        buy_date = None
-        
-        # [진단용] 통계 변수
-        max_score_observed = 0
-        score_8_count = 0  # 8점 이상 횟수 (아까운 경우)
-        
-        # Config 설정값 로드
-        buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        rise_score_limit = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-        buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        
-        # [추가] 매도 설정값 로드
-        stop_loss_limit = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        take_profit_limit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        take_profit_rsi_limit = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-        
-        # [추가] 트레일링 스탑 설정
-        ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
-        # [추가] MDD 및 승률 계산 변수
-        peak_asset = initial_capital
-        mdd = 0.0
-        win_trades = 0
-        loss_trades = 0
-        gross_profit = 0
-        gross_loss = 0
-        cum_profit = 0
-        daily_assets = []
-        
-        # [추가] 트레일링 스탑 추적 변수
-        ts_highest_price = 0
-        
-        # 시뮬레이션 루프
-        # prev_row 초기화: 시뮬레이션 시작 전일 데이터가 있으면 사용
-        prev_row = df.iloc[start_idx-1] if start_idx > 0 else None
-        
-        for i in range(len(sim_df)):
-            row = sim_df.iloc[i]
-            date = row['date']
-            price = row['close']
-            high_price = row['high'] # 트레일링 스탑용 고가
-            
-            # [추가] 일별 자산 평가 및 MDD 갱신
-            current_asset = balance + (holdings * price)
-            daily_assets.append(current_asset)
-            if current_asset > peak_asset: peak_asset = current_asset
-            dd = (current_asset - peak_asset) / peak_asset * 100
-            if dd < mdd: mdd = dd
-            
-            # 점수 계산
-            score, raw_score = calculate_daily_score(row, prev_row)
-            
-            # [진단] 최고 점수 기록
-            if score > max_score_observed: max_score_observed = score
-            if score >= buy_score_limit: score_8_count += 1
-            
-            # 매매 로직
-            action = None
-            profit_rate = 0.0
-            
-            # [매수 조건] 설정된 점수 이상 AND RSI 과열 미만 AND 미보유
-            if holdings == 0:
-                if score >= buy_score_limit and row['RSI'] < buy_rsi_limit:
-                    qty = int(balance / price)
-                    if qty > 0:
-                        cost = qty * price
-                        balance -= cost
-                        holdings = qty
-                        avg_price = price
-                        buy_date = date
-                        ts_highest_price = price # 매수 시 최고가 초기화
-                        action = "매수"
-                        trades.append({
-                            "date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, 
-                            "profit": 0, "profit_amt": 0, "days": 0, 
-                            "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
-                            "cum_profit": cum_profit
-                        })
-            
-            # [매도 조건] 보유 중일 때
-            elif holdings > 0:
-                # 수익률 계산
-                loss_rate = (price - avg_price) / avg_price * 100
-                
-                # 트레일링 스탑 최고가 갱신 (종가 기준 보수적 접근, 혹은 고가 기준)
-                # 여기서는 장중 고가를 알 수 있으므로 고가로 체크하되, 매도는 종가 기준
-                if high_price > ts_highest_price:
-                    ts_highest_price = high_price
+    # [추가] 모드 선택 (단일 실행 vs 최적화)
+    config.console.print("\n[1] 백테스팅 리포팅")
+    config.console.print("[2] 최적 매수 점수 시뮬레이션")
+    config.console.print("[3] 익절/손절 비율 최적화 시뮬레이션")
+    mode = Prompt.ask("선택", choices=["1", "2", "3"], default="1")
 
-                # 매도 조건 체크 (우선순위 적용: 익절 -> 손절 -> 트레일링스탑 -> RSI과열 -> 추세이탈)
-                sell_signal = False
-                reason = ""
+    if mode == "2":
+        # === 최적화 모드 ===
+        config.console.print(f"\n[cyan]=== 매수 점수(BUY_SCORE) 최적화 분석 ({name}) ===[/]")
+        table = Table(box=box.SIMPLE, header_style="cyan")
+        table.add_column("매수 점수", justify="center")
+        table.add_column("수익률", justify="right")
+        table.add_column("승률", justify="right")
+        table.add_column("MDD", justify="right")
+        table.add_column("매매 횟수", justify="right")
+        table.add_column("손익비", justify="right")
+        
+        best_return_score = 0
+        best_return = -999.0
+        
+        best_mdd_score = 0
+        best_mdd = -999.0
+        
+        best_win_score = 0
+        best_win_rate = -1.0
+        
+        with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
+            for score in range(4, 10): # 4, 5, 6, 7, 8, 9
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], is_overseas)
+                
+                # 결과 계산
+                total_trades = len(res['trades'])
+                sell_trades = res['win_trades'] + res['loss_trades']
+                win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+                pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+                
+                # 1. 수익률 기준 갱신
+                if res['total_return'] > best_return:
+                    best_return = res['total_return']
+                    best_return_score = score
+                
+                # 2. MDD 기준 갱신 (값이 클수록 좋음, 예: -5 > -20)
+                if res['mdd'] > best_mdd:
+                    best_mdd = res['mdd']
+                    best_mdd_score = score
+                
+                # 3. 승률 기준 갱신
+                if win_rate > best_win_rate:
+                    best_win_rate = win_rate
+                    best_win_score = score
+                
+                # 테이블 행 추가
+                r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+                table.add_row(
+                    f"{score}점",
+                    f"{r_color}{res['total_return']:+.2f}%[/]",
+                    f"{win_rate:.1f}%",
+                    f"{res['mdd']:.2f}%",
+                    f"{total_trades}건",
+                    f"{pf:.2f}"
+                )
+        
+        config.console.print(table)
+        config.console.print(f"\n[green]추천 (수익률): [yellow]{best_return_score}점[/] (수익률 {best_return:+.2f}%)[/]")
+        config.console.print(f"[cyan]추천 (안정성): [yellow]{best_mdd_score}점[/] (MDD {best_mdd:.2f}%)[/]")
+        config.console.print(f"[magenta]추천 (승률):   [yellow]{best_win_score}점[/] (승률 {best_win_rate:.1f}%)[/]")
+        config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")
+        return
 
-                # 1. 익절 (Take Profit)
-                if loss_rate >= take_profit_limit:
-                    sell_signal = True; reason = "익절"
-                # 2. 손절 (Stop Loss)
-                elif loss_rate <= stop_loss_limit:
-                    sell_signal = True; reason = "손절"
-                # 3. 트레일링 스탑 (Trailing Stop)
-                elif ts_highest_price > 0:
-                    max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
-                    if max_profit_rate >= ts_activation:
-                        drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
-                        if drop_rate >= ts_callback:
-                            sell_signal = True; reason = "트레일링스탑"
-                
-                # 4. RSI 과열
-                if not sell_signal and row['RSI'] > take_profit_rsi_limit:
-                    sell_signal = True; reason = "RSI과열"
-                # 5. 추세 이탈 (점수 하락)
-                if not sell_signal and score < sell_score_limit:
-                    sell_signal = True; reason = "점수하락"
-                
-                if sell_signal:
-                    sell_amt = holdings * price
-                    # 수수료/세금 약 0.23% 가정
-                    fee = sell_amt * 0.0023
-                    if not is_overseas: fee = int(fee)
-                    sell_amt -= fee
+    if mode == "3":
+        # === 익절/손절 최적화 모드 ===
+        config.console.print(f"\n[cyan]=== 익절/손절 비율 최적화 분석 ({name}) ===[/]")
+        config.console.print(f"[dim]기준 매수 점수: {config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점[/dim]")
+        
+        table = Table(box=box.SIMPLE, header_style="cyan")
+        table.add_column("익절/손절", justify="center")
+        table.add_column("수익률", justify="right")
+        table.add_column("승률", justify="right")
+        table.add_column("MDD", justify="right")
+        table.add_column("매매 횟수", justify="right")
+        table.add_column("손익비", justify="right")
+        
+        best_return_set = None
+        best_return = -999.0
+        
+        best_mdd_set = None
+        best_mdd = -999.0
+        
+        # 테스트할 범위 설정
+        tp_candidates = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
+        sl_candidates = [-3.0, -5.0, -7.0, -10.0, -15.0]
+        
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+
+        with config.console.status("[green]다양한 익절/손절 조합 시뮬레이션 중...[/]"):
+            for tp in tp_candidates:
+                for sl in sl_candidates:
+                    res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, stop_loss_rate=sl, take_profit_rate=tp)
                     
-                    profit = sell_amt - (holdings * avg_price)
-                    profit_rate = (profit / (holdings * avg_price)) * 100
+                    total_trades = len(res['trades'])
+                    sell_trades = res['win_trades'] + res['loss_trades']
+                    win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+                    pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
                     
-                    # [추가] 승패 카운트
-                    if profit > 0: 
-                        win_trades += 1
-                        gross_profit += profit
-                    else: 
-                        loss_trades += 1
-                        gross_loss += abs(profit)
+                    if res['total_return'] > best_return:
+                        best_return = res['total_return']
+                        best_return_set = (tp, sl)
                     
-                    cum_profit += profit
+                    if res['mdd'] > best_mdd:
+                        best_mdd = res['mdd']
+                        best_mdd_set = (tp, sl)
                     
-                    holding_days = 0
-                    if buy_date:
-                        try:
-                            d1 = datetime.strptime(str(buy_date), "%Y%m%d")
-                            d2 = datetime.strptime(str(date), "%Y%m%d")
-                            holding_days = (d2 - d1).days
-                        except: pass
-                    
-                    balance += sell_amt
-                    sold_qty = holdings
-                    holdings = 0
-                    avg_price = 0
-                    buy_date = None
-                    action = "매도"
-                    ts_highest_price = 0 # 초기화
-                    
-                    # [추가] 필터링에 의한 점수 하락인 경우 사유 구체화
-                    if reason == "점수하락" and score == 0 and raw_score > 0:
-                        reason = "위험"
-                        
-                    trades.append({
-                        "date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, 
-                        "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
-                        "score": score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
-                        "cum_profit": cum_profit
-                    })
+                    label = f"익절 +{tp}% / 손절 {sl}%"
+                    r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+                    table.add_row(label, f"{r_color}{res['total_return']:+.2f}%[/]", f"{win_rate:.1f}%", f"{res['mdd']:.2f}%", f"{total_trades}건", f"{pf:.2f}")
+        
+        config.console.print(table)
+        
+        if best_return_set:
+            config.console.print(f"\n[green]추천 (수익률): [yellow]익절 +{best_return_set[0]}% / 손절 {best_return_set[1]}%[/] (수익률 {best_return:+.2f}%)[/]")
+        if best_mdd_set:
+            config.console.print(f"[cyan]추천 (안정성): [yellow]익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}%[/] (MDD {best_mdd:.2f}%)[/]")
             
-            prev_row = row
+        config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")
+        return
+
+    # === 단일 실행 모드 (기존 로직) ===
+    buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    
+    res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas)
+    
+    # 결과 변수 매핑 (기존 출력 로직 호환)
+    final_asset = res['final_asset']
+    total_return = res['total_return']
+    trades = res['trades']
+    win_trades = res['win_trades']
+    loss_trades = res['loss_trades']
+    gross_profit = res['gross_profit']
+    gross_loss = res['gross_loss']
+    mdd = res['mdd']
+    daily_assets = res['daily_assets']
+    max_score_observed = res['max_score_observed']
+    score_8_count = res['score_8_count']
 
     # 4. 결과 출력
-    final_asset = balance + (holdings * sim_df.iloc[-1]['close'])
-    total_return = (final_asset - initial_capital) / initial_capital * 100
-    
     # [추가] 샤프 지수 계산 (연율화: 252일 기준)
     sharpe_ratio = 0.0
     if len(daily_assets) > 1:
@@ -404,6 +537,14 @@ def run_backtest():
         
         summary_table.add_row("평균 수익률", f"[red]{avg_profit:+.2f}%[/] / 평균 손실률: [blue]{avg_loss:+.2f}%[/]")
         
+        # [추가] 보유 기간 통계
+        holding_days_list = [t['days'] for t in sell_trades]
+        if holding_days_list:
+            max_days = max(holding_days_list)
+            min_days = min(holding_days_list)
+            avg_days = sum(holding_days_list) / len(holding_days_list)
+            summary_table.add_row("보유 기간", f"평균 {avg_days:.1f}일 (최대 {max_days}일 / 최소 {min_days}일)")
+        
         # [수정] 손익비(Profit Factor) 출력 (설명 추가)
         pf_str = "Inf"
         pf_desc = ""
@@ -440,8 +581,8 @@ def run_backtest():
     
     # [추가] 매매가 없을 경우 진단 정보 출력
     if len(trades) == 0:
-        config.console.print("\n[bold yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/bold yellow]")
-        config.console.print(f"  - 기간 내 최고 점수: [bold]{max_score_observed}점[/bold] (매수 기준: {buy_score_limit}점)")
+        config.console.print("\n[yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/yellow]")
+        config.console.print(f"  - 기간 내 최고 점수: {max_score_observed}점 (매수 기준: {buy_score_limit}점)")
         config.console.print(f"  - {buy_score_limit}점 이상 도달 횟수: {score_8_count}회")
         config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score_limit}점 이상 & RSI<{buy_rsi_limit})이 엄격하여 진입 기회가 없었습니다.")
         config.console.print("  [Tip] config.py 에서 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
