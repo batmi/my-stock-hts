@@ -1903,8 +1903,8 @@ class TelegramCommander:
                 
                 # KOSPI/KOSDAQ의 경우 추세 정보 추가
                 if name in ["KOSPI", "KOSDAQ"]:
-                    ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
-                    trend = "상승" if current >= ma_val else "하락"
+                    ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
+                    trend = "EMA상위" if current >= ma_val else "EMA하위"
                     msg += f" {trend}"
                     
             except Exception as e:
