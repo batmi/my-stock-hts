@@ -230,7 +230,7 @@ class ConclusionMonitor:
                                     
                                     # 로그 기록 (시스템 로거 활용)
                                     if config.SYSTEM_LOGGER:
-                                        config.SYSTEM_LOGGER(f"✅ [체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
+                                        config.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
                                 else:
                                     if config.DEBUG_LEVEL == "DEBUG":
                                         console.print(f"[dim cyan][Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})[/dim cyan]")
@@ -625,7 +625,7 @@ class AutoTrader:
                 
                 is_healthy = stat.get('is_healthy', True)
                 current = stat.get('current', 0)
-                trend_icon = "↑" if is_healthy else "↓"
+                trend_icon = "EMA상위" if is_healthy else "EMA하위"
                 color = "red" if is_healthy else "blue"
                 return f"[{color}]{current:,.0f} ({trend_icon})[/]"
             
@@ -1832,13 +1832,13 @@ class TelegramCommander:
         elif command == "/help":
             response = (
                 "🤖 [시스템 트레이딩 봇 도움말]\n\n"
-                "• /status : 현재 시스템 상태 및 자산 현황 조회\n"
-                "• /market : 주요 시장 지수(KOSPI/KOSDAQ) 현황\n"
-                "• /signal <종목명> : 종목 기술적 분석 및 진단\n"
-                "• /history : 최근 체결 내역(5건) 조회\n"
-                "• /start : 시스템 트레이딩 시작 (자동매매)\n"
-                "• /stop : 시스템 트레이딩 중단\n"
                 "• /help : 명령어 목록 확인"
+                "• /start : 시스템 트레이딩 시작\n"
+                "• /stop : 시스템 트레이딩 중단\n"
+                "• /status : 시스템 트레이딩 상태 조회\n"
+                "• /market : 주요 시장 지수 현황\n"
+                "• /signal <종목> : 종목 기술적 분석 및 진단\n"
+                "• /history : 최근 체결 내역(10건) 조회\n"
             )
             
         elif command == "/market":
@@ -1978,7 +1978,7 @@ class TelegramCommander:
             # SAR 상태
             sar_state = "-"
             if ind['psar'] is not None:
-                sar_state = "상승(주가아래)" if ind['psar'] < current_price else "하락(주가위)"
+                sar_state = "상승" if ind['psar'] < current_price else "하락"
 
             # 이평선 상태
             ema_state = "혼조/역배열"
@@ -2004,11 +2004,11 @@ class TelegramCommander:
 
     def _get_trade_history(self):
         """최근 체결 내역 조회"""
-        trades = db_manager.db.get_trades(limit=5)
+        trades = db_manager.db.get_trades(limit=10)
         if not trades:
             return "📭 거래 내역이 없습니다."
         
-        msg = "📜 [최근 체결 내역 (5건)]"
+        msg = "📜 [최근 체결 내역 (10건)]"
         for t in trades:
             type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("수동", "")
             name = t['name']
