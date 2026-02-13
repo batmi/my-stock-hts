@@ -7,8 +7,10 @@ venv/
 
 # 시스템 및 설정 관련
 .DS_Store
+./json
 ./json/token_cache.json
 ./chart/analysis_*.png
+./db
 ./db/trade_history.db*
 ./logs/system_trade_*.log
 

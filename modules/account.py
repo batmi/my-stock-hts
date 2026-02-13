@@ -12,90 +12,26 @@ from modules import db_manager
 import json
 import pandas as pd
 
-# -----------------------------------------------------------
-# [내부 헬퍼] 계좌별 헤더 생성 (자동매매 계좌 키 적용)
-# -----------------------------------------------------------
-def _get_headers(tr_id, target_cano):
-    # 컨텍스트 설정 (토큰 발급용)
-    is_auto = (not config.IS_SIMULATION and target_cano == config.AUTO_CANO)
-    
-    # [수정] 메인 계좌와 자동매매 계좌가 동일한 경우, 메인(Manual) 컨텍스트를 우선 사용
-    # (불필요한 자동매매 토큰 발급 로그 방지)
-    if config.CANO and config.AUTO_CANO and config.CANO == config.AUTO_CANO:
-        is_auto = False
-
-    config.trade_context.use_auto_account = is_auto
-    
-    headers = utils.get_common_headers(tr_id)
-    
-    # AppKey/Secret 오버라이드 (utils가 메인 키를 사용할 수 있으므로)
-    if is_auto and config.AUTO_APP_KEY:
-        headers["appKey"] = config.AUTO_APP_KEY
-        headers["appSecret"] = config.AUTO_APP_SECRET
-        
-    return headers
-
-# -----------------------------------------------------------
-# [보조 함수 1] 금일 투자 손익 요약 조회
-# -----------------------------------------------------------
 def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None):
-    if not cano: cano = config.CANO
-    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
-
-    tr_id = utils.get_tr_id("domestic", "inquiry", "profit")
-    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-period-profit"
-    headers = _get_headers(tr_id, cano)
-    today = datetime.now().strftime("%Y%m%d")
-    
-    params = {
-        "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-        "INQR_STRT_DT": today, "INQR_END_DT": today,
-        "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
-        "PDNO": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
-        "AFHR_FLPR_YN": "N", "OFL_YN": "N", "UNPR_DVSN": "01",          
-        "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
-        "COST_ICLD_YN": "Y" 
-    }
-    
     summary = {'buy_amt': 0, 'sell_amt': 0, 'total_cost': 0, 'realized_pl': 0}
-
-    for retry in range(2):
-        try:
-            res = api.session.get(url, headers=headers, params=params, verify=False)
-            data = res.json()
-            if data['rt_cd'] == '0':
-                out2 = data.get('output2')
-                if isinstance(out2, list) and len(out2) > 0:
-                    summary_data = out2[0]
-                    summary['buy_amt'] = api.safe_int(summary_data.get('thdt_buy_amt'))
-                    summary['sell_amt'] = api.safe_int(summary_data.get('thdt_sll_amt'))
-                    summary['total_cost'] = api.safe_int(summary_data.get('thdt_tlex_amt'))
-                    summary['realized_pl'] = api.safe_int(summary_data.get('rlzt_pfls'))
-                return summary
-            elif data.get('msg_cd') == 'EGW00201': 
-                time.sleep(0.3); continue
-            else: break 
-        except: time.sleep(0.2); continue
+    try:
+        data = api.get_today_profit_summary(cano, acnt_prdt_cd)
+        if data.get('rt_cd') == '0':
+            out2 = data.get('output2')
+            if isinstance(out2, list) and len(out2) > 0:
+                summary_data = out2[0]
+                summary['buy_amt'] = api.safe_int(summary_data.get('thdt_buy_amt'))
+                summary['sell_amt'] = api.safe_int(summary_data.get('thdt_sll_amt'))
+                summary['total_cost'] = api.safe_int(summary_data.get('thdt_tlex_amt'))
+                summary['realized_pl'] = api.safe_int(summary_data.get('rlzt_pfls'))
+    except: pass
     return summary
 
-# -----------------------------------------------------------
-# [보조 함수 2] 금일 체결(매매) 내역 조회 (백업용)
-# -----------------------------------------------------------
 def fetch_today_history(cano=None, acnt_prdt_cd=None):
-    if not cano: cano = config.CANO
-    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
-
-    tr_id = utils.get_tr_id("domestic", "inquiry", "history")
-    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-    headers = _get_headers(tr_id, cano)
-    today = datetime.now().strftime("%Y%m%d")
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    
     summary = {'buy_total': 0, 'sell_total': 0}
     try:
-        res = api.session.get(url, headers=headers, params=params, verify=False)
-        data = res.json()
-        if data['rt_cd'] == '0':
+        data = api.get_today_history(cano, acnt_prdt_cd)
+        if data.get('rt_cd') == '0':
             trades = data.get('output1', [])
             if trades:
                 for item in trades:
@@ -108,36 +44,21 @@ def fetch_today_history(cano=None, acnt_prdt_cd=None):
 
 def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
     """국내 주식 잔고 데이터를 조회하여 반환"""
-    if not cano: cano = config.CANO
-    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
-
-    tr_id = utils.get_tr_id("domestic", "inquiry", "balance")
-    url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
-    headers = _get_headers(tr_id, cano)
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    
     holdings = []
     summary = None
     
     try:
-        res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
-        data = res.json()
+        # api.py의 함수 사용 (내부에서 OPSQ2001 재시도 및 토큰 처리)
+        output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
         
-        # [추가] OPSQ2001 에러 시 INQR_DVSN='01'로 재시도
-        if data.get('msg_cd') == 'OPSQ2001':
-            params['INQR_DVSN'] = '01'
-            res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
-            data = res.json()
-            
-        if data['rt_cd'] == '0':
-            for item in data.get('output1', []):
+        if output1:
+            for item in output1:
                 qty = int(item['hldg_qty'])
                 if qty > 0:
                     holdings.append(item)
-            if data.get('output2'):
-                summary = data['output2'][0]
-        else:
-            config.console.print(f"[red]국내 잔고 조회 실패: {data.get('msg1')}[/red]")
+        if output2:
+            summary = output2[0]
+            
     except Exception as e:
         config.console.print(f"[red]국내 잔고 조회 실패: {e}[/red]")
         
@@ -145,53 +66,10 @@ def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
 
 def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
     """해외 주식 잔고 데이터를 조회하여 반환"""
-    if not cano: cano = config.CANO
-    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
-
-    ovrs_tr_id = utils.get_tr_id("overseas", "inquiry", "balance")
-    ovrs_url = f"{config.URL_BASE}/uapi/overseas-stock/v1/trading/inquire-balance"
-    target_exchanges = ["NASD", "NYSE", "AMEX"]
-    
-    all_holdings = []
-    
-    for exc in target_exchanges:
-        if config.IS_SIMULATION: time.sleep(0.3)
-        headers = _get_headers(ovrs_tr_id, cano)
-        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        
-        if config.DEBUG_LEVEL == "TRACE":
-            config.console.print(f"[dim cyan][TRACE] REQ (KIS:OvrsBal) | Exch: {exc}[/dim cyan]")
-        elif config.DEBUG_LEVEL == "DEBUG":
-            config.console.print(f"[dim cyan][DEBUG] REQ (KIS:OvrsBal) | URL: {ovrs_url} | Params: {params}[/dim cyan]")
-
-        for retry in range(3):
-            try:
-                res = api.session.get(ovrs_url, headers=headers, params=params, verify=False, timeout=10)
-                data = res.json()
-                
-                if config.DEBUG_LEVEL == "TRACE":
-                    config.console.print(f"[dim magenta][TRACE] RES (KIS:OvrsBal) | RT_CD: {data.get('rt_cd')} | Msg: {data.get('msg1')}[/dim magenta]")
-                elif config.DEBUG_LEVEL == "DEBUG":
-                    config.console.print(f"[dim magenta][DEBUG] RES (KIS:OvrsBal) | Body: {data}[/dim magenta]")
-
-                if data['rt_cd'] == '0':
-                    output1 = data.get('output1', [])
-                    if output1:
-                        for item in output1:
-                            if '_exchange' not in item: item['_exchange'] = exc
-                            all_holdings.append(item)
-                    break
-                elif data.get('msg_cd') == 'EGW00201':
-                    time.sleep(0.5); continue
-                else: break
-            except: time.sleep(0.3); continue
-            
-    return all_holdings
+    return api.get_overseas_balance(cano, acnt_prdt_cd)
 
 def sync_today_trades():
     """금일 체결 내역을 API로 조회하여 DB의 단가(시장가=0) 정보를 업데이트 (모든 계좌 대상)"""
-    tr_id = utils.get_tr_id("domestic", "inquiry", "history")
-    today = datetime.now().strftime("%Y%m%d")
     
     # 조회 대상 계좌 목록
     accounts = []
@@ -210,24 +88,10 @@ def sync_today_trades():
             cano = acc['cano']
             acnt = acc['acnt']
             
-            # 헤더 생성 (자동매매 계좌인 경우 해당 키 사용)
-            headers = _get_headers(tr_id, cano)
-            
-            params = {
-                "CANO": cano, "ACNT_PRDT_CD": acnt, 
-                "INQR_STRT_DT": today, "INQR_END_DT": today, 
-                "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
-                "PDNO": "", "CCLD_DVSN": "01", # 주문별 체결 합계
-                "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
-                "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
-            }
-            
             try:
-                url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-                res = api.session.get(url, headers=headers, params=params, verify=False, timeout=5)
-                data = res.json()
+                data = api.get_today_history(cano, acnt)
                 
-                if data['rt_cd'] == '0':
+                if data.get('rt_cd') == '0':
                     trades = data.get('output1', [])
                     for item in trades:
                         odno = item.get('odno')
@@ -464,25 +328,14 @@ def _display_asset_status(cano, acnt_prdt_cd):
         except: pass
 
     # 2. 국내 주식 잔고 및 자산
-    tr_id_balance = utils.get_tr_id("domestic", "inquiry", "balance")
-    url_balance = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-balance"
-    headers_balance = _get_headers(tr_id_balance, cano)
-    params_balance = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-
     with config.console.status("[bold green]계좌 실시간 자산 평가 중...[/bold green]"):
         try:
             time.sleep(0.3)
-            res = api.session.get(url_balance, headers=headers_balance, params=params_balance, verify=False, timeout=10)
-            data = res.json()
+            # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
+            output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
             
-            # [추가] OPSQ2001 에러 시 INQR_DVSN='01'로 재시도
-            if data.get('msg_cd') == 'OPSQ2001':
-                params_balance['INQR_DVSN'] = '01'
-                res = api.session.get(url_balance, headers=headers_balance, params=params_balance, verify=False, timeout=10)
-                data = res.json()
-            
-            if data['rt_cd'] == '0':
-                holdings = data.get('output1', [])
+            if output1 is not None:
+                holdings = output1
                 calc_buy = 0; calc_eval = 0; calc_pl = 0
                 for item in holdings:
                     calc_buy += api.safe_int(item.get('pchs_amt'))
@@ -492,16 +345,13 @@ def _display_asset_status(cano, acnt_prdt_cd):
                 summary_data['sec_eval'] = calc_eval
                 summary_data['sec_pl'] = calc_pl
 
-                if data.get('output2'):
-                    summary = data['output2'][0]
+                if output2:
+                    summary = output2[0]
                     if not config.IS_SIMULATION:
                         summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
                         summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
                         summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt'))
                         summary_data['withdraw'] = summary_data['d2_dep'] 
-            else:
-                config.console.print(f"[bold red]자산 현황 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})[/bold red]")
-                pass 
 
         except Exception as e:
             config.console.print(f"[bold red]자산 현황 조회 오류: {str(e)}[/bold red]")
@@ -543,17 +393,44 @@ def _display_asset_status(cano, acnt_prdt_cd):
             pass
 
     # 3. 예수금 조회
-    tr_id = utils.get_tr_id("domestic", "inquiry", "deposit")
     if config.IS_SIMULATION:
-        url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+        # 모의투자는 주문가능금액 조회로 예수금 확인
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
-        headers = _get_headers(tr_id, cano)
         
         try:
             time.sleep(0.3)
-            res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
-            data = res.json()
-            if data['rt_cd'] == '0':
+            # api.call_api 사용 (내부에서 토큰/컨텍스트 처리)
+            # _prepare_account_params 로직이 call_api 호출 전 필요할 수 있으나, 
+            # call_api는 현재 컨텍스트를 사용하므로, 여기서 컨텍스트를 맞춰줘야 함.
+            # 하지만 api.py에 get_deposit_balance 같은 함수가 없으므로 call_api를 직접 쓰되,
+            # 컨텍스트 스위칭이 필요함.
+            # -> api.py에 get_deposit_balance 추가하는 것이 가장 깔끔하나, 
+            # 여기서는 임시로 api.get_domestic_balance 처럼 내부 헬퍼를 쓸 수 없으므로
+            # api.call_api를 쓰되, cano가 AUTO_CANO면 컨텍스트를 잠시 바꿈.
+            
+            # 더 좋은 방법: api.py에 get_deposit 함수 추가. (이번 리팩토링 범위에 포함)
+            # 여기서는 api.call_api를 쓰되, api.py의 _prepare_account_params 로직을 
+            # 외부에서 쓸 수 없으므로, api.py에 get_deposit_amount 함수를 추가하는 것을 권장.
+            # 일단은 call_api를 쓰되, 컨텍스트를 수동으로 맞춤.
+            
+            # [수정] api.py에 get_deposit_amount 함수가 없으므로 직접 구현 대신
+            # api.call_api를 사용하되, 컨텍스트 설정을 위해 api._prepare_account_params를 public으로 만들거나
+            # 여기서 수동 설정.
+            
+            # api.py에 get_deposit_amount 추가가 누락되었으므로, 
+            # call_api 호출 전 컨텍스트 설정을 위해 아래와 같이 처리
+            
+            original_context = getattr(config.trade_context, 'use_auto_account', False)
+            if not config.IS_SIMULATION and cano == config.AUTO_CANO:
+                config.trade_context.use_auto_account = True
+            elif not config.IS_SIMULATION and cano == config.CANO:
+                config.trade_context.use_auto_account = False
+                
+            data = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "deposit", params=params)
+            
+            config.trade_context.use_auto_account = original_context # 복구
+            
+            if data.get('rt_cd') == '0':
                 output = data.get('output', {})
                 cash_amt = api.safe_int(output.get('ord_psbl_cash'))
                 summary_data['dep_dom'] = cash_amt
@@ -567,15 +444,20 @@ def _display_asset_status(cano, acnt_prdt_cd):
             return
     else:
         # 실전투자: 외화 예수금 조회 포함
-        url = f"{config.URL_BASE}/uapi/domestic-stock/v1/trading/inquire-account-balance"
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "TR_CONT": "", "INQR_DVSN_1": "", "TR_CRCY_CD": "", "PDNO": "", "ORD_UNPR": "", "ORD_QTY": "", "ORD_DVSN": "00", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "BSPR_BF_DT_APLY_YN": "N"}
-        headers = _get_headers(tr_id, cano)
         
         try:
             time.sleep(0.3)
-            res = api.session.get(url, headers=headers, params=params, verify=False, timeout=10)
-            data = res.json()
-            if data['rt_cd'] == '0' and data.get('output2'):
+            
+            original_context = getattr(config.trade_context, 'use_auto_account', False)
+            if cano == config.AUTO_CANO: config.trade_context.use_auto_account = True
+            else: config.trade_context.use_auto_account = False
+                
+            data = api.call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params)
+            
+            config.trade_context.use_auto_account = original_context
+            
+            if data.get('rt_cd') == '0' and data.get('output2'):
                 out2 = data['output2'][0] if isinstance(data['output2'], list) else data['output2']
                 summary_data['dep_ovs'] = int(float(out2.get('frcr_evlu_tota', 0)))
         except: pass

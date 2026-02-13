@@ -128,7 +128,10 @@ class ThrottledSession(requests.Session):
                             if is_sim_server:
                                 new_token = get_access_token(force_refresh=True)
                             elif is_real_server:
-                                new_token = get_real_access_token(force_refresh=True)
+                                if getattr(config.trade_context, 'use_auto_account', False):
+                                    new_token = get_auto_access_token(force_refresh=True)
+                                else:
+                                    new_token = get_real_access_token(force_refresh=True)
                             
                             if new_token:
                                 if 'headers' in kwargs:
@@ -385,6 +388,21 @@ def get_auto_access_token(force_refresh=False):
             save_token_cache(cache)
             config.console.print("[green]자동매매용 토큰 발급 완료[/green]")
             return AUTO_ACCESS_TOKEN
+        else:
+            try:
+                err_json = res.json()
+                if err_json.get('error_code') == 'EGW00133':
+                    if config.DEBUG_LEVEL != "OFF": config.console.print("[yellow]자동매매 토큰 발급 빈도 제한(EGW00133). 캐시를 재확인합니다.[/yellow]")
+                    cache = load_token_cache()
+                    auto_token_info = cache.get("AUTO")
+                    if check_token_validity(auto_token_info):
+                        AUTO_ACCESS_TOKEN = auto_token_info['access_token']
+                        config.console.print("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
+                        return AUTO_ACCESS_TOKEN
+                    return None
+            except: pass
+            
+            config.console.print(f"[red]자동매매 토큰 발급 실패: {res.text}[/red]")
     except Exception as e:
         config.console.print(f"[red]자동매매 토큰 발급 중 오류: {e}[/red]")
         
@@ -817,14 +835,28 @@ def find_best_exchange_code(stock_code):
             return excd
     return None
 
-def get_domestic_balance():
-    """국내 주식 잔고 조회 (시스템 트레이딩용, account 모듈 대체)"""
-    cano = config.CANO
-    acnt_prdt_cd = config.ACNT_PRDT_CD
-    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
-        cano = config.AUTO_CANO
-        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+def _prepare_account_params(cano, acnt_prdt_cd):
+    """계좌 파라미터 준비 및 컨텍스트 설정 (내부 헬퍼)"""
+    # 인자가 없으면 현재 설정/컨텍스트 값 사용
+    if not cano:
+        if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
+            cano = config.AUTO_CANO
+            acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+        else:
+            cano = config.CANO
+            acnt_prdt_cd = config.ACNT_PRDT_CD
+    
+    # 요청 계좌가 자동매매 계좌와 일치하면 컨텍스트 전환 (토큰/Key 변경)
+    if not config.IS_SIMULATION and cano == config.AUTO_CANO and config.AUTO_APP_KEY:
+        config.trade_context.use_auto_account = True
+    elif not config.IS_SIMULATION and cano == config.CANO:
+        config.trade_context.use_auto_account = False
+        
+    return cano, acnt_prdt_cd
 
+def get_domestic_balance(cano=None, acnt_prdt_cd=None):
+    """국내 주식 잔고 조회"""
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
     
@@ -847,15 +879,54 @@ def get_domestic_balance():
         
     return [], []
 
+def get_overseas_balance(cano=None, acnt_prdt_cd=None):
+    """해외 주식 잔고 조회"""
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+    target_exchanges = ["NASD", "NYSE", "AMEX"]
+    all_holdings = []
+    
+    for exc in target_exchanges:
+        if config.IS_SIMULATION: time.sleep(0.2)
+        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
+        data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params)
+        
+        # Rate Limit 발생 시 잠시 대기 후 재시도 (call_api 내부 재시도와 별개로 루프 내 처리)
+        if data.get('msg_cd') == 'EGW00201':
+            time.sleep(0.5)
+            data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params)
+
+        if data.get('rt_cd') == '0':
+            for item in data.get('output1', []):
+                if '_exchange' not in item: item['_exchange'] = exc
+                all_holdings.append(item)
+                
+    return all_holdings
+
+def get_today_profit_summary(cano=None, acnt_prdt_cd=None):
+    """금일 투자 손익 요약 조회"""
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+    today = datetime.now().strftime("%Y%m%d")
+    params = {
+        "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
+        "INQR_STRT_DT": today, "INQR_END_DT": today,
+        "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
+        "PDNO": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+        "AFHR_FLPR_YN": "N", "OFL_YN": "N", "UNPR_DVSN": "01",          
+        "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
+        "COST_ICLD_YN": "Y" 
+    }
+    return call_api("uapi/domestic-stock/v1/trading/inquire-period-profit", "domestic", "inquiry", "profit", params=params)
+
+def get_today_history(cano=None, acnt_prdt_cd=None):
+    """금일 체결 내역 조회"""
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+    today = datetime.now().strftime("%Y%m%d")
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    return call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
+
 def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     """미체결 내역 조회 (국내주식)"""
-    if not cano: cano = config.CANO
-    if not acnt_prdt_cd: acnt_prdt_cd = config.ACNT_PRDT_CD
-    
-    # 시스템 트레이딩 컨텍스트 확인
-    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
-        cano = config.AUTO_CANO
-        acnt_prdt_cd = config.AUTO_ACNT_PRDT_CD
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
 
     # TR ID 설정 (주식정정취소가능주문조회)
     tr_id = "VTTC8036R" if config.IS_SIMULATION else "TT800103R"
@@ -877,10 +948,7 @@ def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
 
 def cancel_order(odno, code, qty, is_buy):
     """주문 취소 실행"""
-    # 컨텍스트에 따른 계좌 선택
-    cano = config.CANO; acnt = config.ACNT_PRDT_CD
-    if not config.IS_SIMULATION and getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
-        cano = config.AUTO_CANO; acnt = config.AUTO_ACNT_PRDT_CD
+    cano, acnt = _prepare_account_params(None, None)
 
     # TR ID 설정 (주식주문(정정취소))
     tr_id = "VTTC0803U" if config.IS_SIMULATION else "TT800303U"
