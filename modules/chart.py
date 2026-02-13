@@ -1,4 +1,6 @@
 # modules/chart.py
+import matplotlib
+matplotlib.use('Agg') # [추가] GUI 백엔드 미사용 (스레드 안전성 확보)
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager, rc
@@ -19,7 +21,7 @@ def setup_korean_font():
     except: pass
     plt.rcParams['axes.unicode_minus'] = False
 
-def generate_visual_chart(code, name, is_overseas):
+def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
@@ -182,11 +184,12 @@ def generate_visual_chart(code, name, is_overseas):
         safe_code = re.sub(r'[=\-\.\^]', '', code)
         file_name = f"analysis_{safe_code}.png"
         file_path = os.path.join(config.CHART_DIR, file_name)
-        plt.savefig(file_path, dpi=300); plt.close()
+        plt.savefig(file_path, dpi=dpi); plt.close()
         
     config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
-    try:
-        if platform.system() == "Windows": os.startfile(file_path)
-        elif platform.system() == "Darwin": os.system(f"open {file_path}")
-        else: os.system(f"xdg-open {file_path}")
-    except: pass
+    if open_file:
+        try:
+            if platform.system() == "Windows": os.startfile(file_path)
+            elif platform.system() == "Darwin": os.system(f"open {file_path}")
+            else: os.system(f"xdg-open {file_path}")
+        except: pass

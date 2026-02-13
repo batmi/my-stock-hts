@@ -3,7 +3,7 @@ import time
 import requests
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter
 from rich.prompt import Prompt
 from rich.markup import escape
@@ -16,6 +16,8 @@ import utils
 import indicators
 from modules import analysis # account 모듈 의존성 제거
 from modules import db_manager # [추가] DB 매니저
+from modules import chart # [추가] 차트 모듈
+import re # [추가] 정규식 모듈
 
 console = config.console
 
@@ -294,6 +296,9 @@ class AutoTrader:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
         
+        # [추가] 오래된 로그 파일 정리
+        self._cleanup_old_logs()
+        
         # [추가] 텔레그램 봇 제어권 회수 (폴링 스레드가 죽어있다면 재시작)
         if getattr(self, 'telegram_commander', None) and not self.telegram_commander.is_running:
              if config.ENABLE_TELEGRAM:
@@ -513,14 +518,17 @@ class AutoTrader:
             msg += "자산 정보 조회 실패\n"
             
         if holdings:
-            msg += f"\n📋 보유 종목 ({len(holdings)}개):"
+            msg += "\n📋 [보유 종목 현황]"
             for item in holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
+                cur_price = int(item['prpr'])
+                eval_amt = int(item['evlu_amt'])
                 rate = float(item['evlu_pfls_rt'])
-                msg += f"\n• {name}: {qty}주 ({rate:+.2f}%)"
+                profit = int(item['evlu_pfls_amt'])
+                msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
         else:
-            msg += "\n📋 보유 종목: 없음"
+            msg += "\n📋 [보유 종목] 없음"
             
         return msg
 
@@ -542,6 +550,28 @@ class AutoTrader:
             with open(daily_log_path, 'a', encoding='utf-8') as f:
                 f.write(log_msg + "\n")
         except Exception: pass
+
+    def get_recent_logs(self, count=10):
+        """최근 로그 반환 (텔레그램용)"""
+        if not self.logs:
+            return "📭 로그가 없습니다."
+        
+        candidates = self.logs[-count:]
+        final_logs = []
+        current_len = 0
+        max_len = 3800 # 텔레그램 제한(4096자) 고려하여 여유 있게 설정
+
+        for log in reversed(candidates):
+            if current_len + len(log) + 1 > max_len:
+                break
+            final_logs.append(log)
+            current_len += len(log) + 1
+        
+        final_logs.reverse()
+        msg = "📜 [최근 시스템 로그]\n"
+        if len(final_logs) < len(candidates):
+            msg += f"(길이 제한으로 최근 {len(final_logs)}줄만 표시)\n"
+        return msg + "\n".join(final_logs)
 
     def print_status(self):
         if not self.is_running:
@@ -1399,9 +1429,14 @@ class AutoTrader:
                     reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
 
             if reason:
+                # [추가] 매도 체결 확률을 높이기 위해 -1호가 적용
+                tick_size = self._get_tick_size(current_price)
+                order_price = int(current_price - tick_size)
+                if order_price <= 0: order_price = int(current_price)
+
                 self.log(f"매도 실행: {name} - {reason}")
                 # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
-                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score)
+                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
@@ -1409,7 +1444,7 @@ class AutoTrader:
                         "code": code,
                         "name": name,
                         "qty": qty,
-                        "price": float(item['prpr']),
+                        "price": float(order_price),
                         "profit_rate": profit_rate,
                         "profit_amt": int(item['evlu_pfls_amt']),
                         "reason": reason,
@@ -1421,6 +1456,16 @@ class AutoTrader:
                     db_manager.db.delete_trailing_stop(code)
                     if code in self.trailing_stop_cache: # 캐시 삭제
                         del self.trailing_stop_cache[code]
+
+    def _get_tick_size(self, price):
+        """국내 주식 호가 단위 계산"""
+        if price < 2000: return 1
+        if price < 5000: return 5
+        if price < 20000: return 10
+        if price < 50000: return 50
+        if price < 200000: return 100
+        if price < 500000: return 500
+        return 1000
 
     def _check_buy_conditions(self):
         targets = config.STOCK_CONFIG_DATA.get("stocks_kr", [])
@@ -1553,13 +1598,17 @@ class AutoTrader:
             
             # [수정] 지정가 주문을 위해 현재가(정수) 확보
             current_price = int(cand['price'])
+
+            # [추가] 매수 체결 확률을 높이기 위해 +1호가 적용
+            tick_size = self._get_tick_size(current_price)
+            order_price = current_price + tick_size
             
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
             # 지정가 주문 시 해당 가격 기준으로 조회
-            max_qty = api.fetch_buyable_quantity(cand['code'], current_price)
+            max_qty = api.fetch_buyable_quantity(cand['code'], order_price)
             
             # 자산 배분 비중 적용 수량
-            target_qty = int(invest_amt / current_price)
+            target_qty = int(invest_amt / order_price)
             
             # 실제 주문 수량은 (목표 수량)과 (API 조회 가능 수량) 중 작은 값
             qty = min(target_qty, max_qty)
@@ -1569,7 +1618,7 @@ class AutoTrader:
                 self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty})")
                 continue
 
-            if avail_cash >= (qty * current_price):
+            if avail_cash >= (qty * order_price):
                 rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
                 adx_val = f"{cand['adx']:.1f}" if cand['adx'] else "-"
                 cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
@@ -1577,15 +1626,15 @@ class AutoTrader:
                 
                 self.log(f"매수 실행: {cand['name']} - {reason}")
                 # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
-                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=current_price)
+                odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price)
                 if odno: 
-                    avail_cash -= (qty * current_price)
+                    avail_cash -= (qty * order_price)
                     record = {
                         "type": "buy",
                         "code": cand['code'],
                         "name": cand['name'],
                         "qty": qty,
-                        "price": current_price,
+                        "price": order_price,
                         "reason": reason,
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "odno": odno
@@ -1712,6 +1761,38 @@ class AutoTrader:
             self.log("========================================")
         return None
 
+    def _cleanup_old_logs(self):
+        """설정된 기간보다 오래된 로그 파일 삭제"""
+        retention_days = getattr(config, 'LOG_RETENTION_DAYS', 30)
+        if retention_days <= 0: return
+
+        log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
+        if not os.path.exists(log_dir): return
+
+        # 기준일 계산 (오늘 - 보존기간)
+        cutoff_date = datetime.now().date() - timedelta(days=retention_days)
+        
+        try:
+            for filename in os.listdir(log_dir):
+                if filename.startswith("system_trade_") and filename.endswith(".log"):
+                    try:
+                        # 파일명: system_trade_2024-05-20.log
+                        date_part = filename.replace("system_trade_", "").replace(".log", "")
+                        file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
+                        
+                        if file_date < cutoff_date:
+                            file_path = os.path.join(log_dir, filename)
+                            os.remove(file_path)
+                            if config.DEBUG_LEVEL != "OFF":
+                                console.print(f"[dim yellow][Log] 오래된 로그 파일 삭제: {filename}[/dim yellow]")
+                    except ValueError:
+                        continue
+                    except Exception:
+                        continue
+        except Exception as e:
+            if config.DEBUG_LEVEL != "OFF":
+                console.print(f"[dim red]로그 파일 정리 중 오류: {e}[/dim red]")
+
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 
@@ -1832,13 +1913,17 @@ class TelegramCommander:
         elif command == "/help":
             response = (
                 "🤖 [시스템 트레이딩 봇 도움말]\n\n"
-                "• /help : 명령어 목록 확인"
+                "• /help : 명령어 목록 확인\n"
                 "• /start : 시스템 트레이딩 시작\n"
                 "• /stop : 시스템 트레이딩 중단\n"
                 "• /status : 시스템 트레이딩 상태 조회\n"
                 "• /market : 주요 시장 지수 현황\n"
                 "• /signal <종목> : 종목 기술적 분석 및 진단\n"
+                "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
+                "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
+                "• /config : 현재 매매 전략 설정값 조회\n"
                 "• /history : 최근 체결 내역(10건) 조회\n"
+                "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)"
             )
             
         elif command == "/market":
@@ -1849,9 +1934,29 @@ class TelegramCommander:
                 response = "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
             else:
                 response = self._analyze_stock(" ".join(args))
+
+        elif command == "/chart":
+            if not args:
+                response = "⚠️ 종목명이나 코드를 입력해주세요.\n예: /chart 삼성전자"
+            else:
+                self._send_chart(" ".join(args))
+                return
+
+        elif command == "/stocks":
+            response = self._get_monitoring_list()
+
+        elif command == "/config":
+            response = self._get_strategy_config()
                 
         elif command == "/history":
             response = self._get_trade_history()
+            
+        elif command == "/log":
+            count = 10
+            if args and args[0].isdigit():
+                count = int(args[0])
+                if count > 20: count = 20 # 메시지 길이 제한 고려하여 최대 20줄
+            response = self.trader.get_recent_logs(count)
         
         else:
             return # 알 수 없는 명령어는 무시
@@ -1891,15 +1996,10 @@ class TelegramCommander:
                 diff = current - prev
                 rate = (diff / prev) * 100
                 
-                if abs(rate) < 0.005:
-                    icon = "⚪️"
-                else:
-                    icon = "🔴" if rate > 0 else "🔵"
-                
                 val_fmt = f"{current:,.2f}"
                 if code == "KRW=X": val_fmt += "원"
                 
-                msg += f"\n• {name} {icon} {val_fmt} ({rate:+.2f}%)"
+                msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
                 
                 # KOSPI/KOSDAQ의 경우 추세 정보 추가
                 if name in ["KOSPI", "KOSDAQ"]:
@@ -1912,8 +2012,8 @@ class TelegramCommander:
         
         return msg
 
-    def _analyze_stock(self, keyword):
-        """특정 종목 기술적 분석 및 진단"""
+    def _resolve_stock(self, keyword):
+        """종목명/코드를 입력받아 (코드, 이름, 해외여부)를 반환하는 헬퍼 함수"""
         code = None
         name = None
         is_overseas = False
@@ -1922,29 +2022,32 @@ class TelegramCommander:
         all_stocks = config.STOCK_CONFIG_DATA.get("stocks_kr", []) + config.STOCK_CONFIG_DATA.get("etfs_kr", [])
         for item in all_stocks:
             if keyword == item['code'] or keyword == item['name']:
-                code = item['code']; name = item['name']; is_overseas = False
-                break
+                return item['code'], item['name'], False
         
-        if not code:
-            all_us = config.STOCK_CONFIG_DATA.get("stocks_us", []) + config.STOCK_CONFIG_DATA.get("etfs_us", [])
-            for item in all_us:
-                if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
-                    code = item['code']; name = item['name']; is_overseas = True
-                    break
+        all_us = config.STOCK_CONFIG_DATA.get("stocks_us", []) + config.STOCK_CONFIG_DATA.get("etfs_us", [])
+        for item in all_us:
+            if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
+                return item['code'], item['name'], True
         
         # 2. 등록된 종목이 아니면 입력값을 코드로 간주하거나 이름으로 검색 시도
+        if keyword.isdigit() and len(keyword) == 6:
+            code = keyword
+            name = api.get_stock_name_by_code(code, False) or keyword
+            is_overseas = False
+        # 영문/숫자/특수문자(.-)로 구성된 경우 해외 티커로 간주 (한글 제외)
+        elif all(ord(c) < 128 for c in keyword):
+            code = keyword.upper()
+            name = api.get_stock_name_by_code(code, True) or keyword
+            is_overseas = True
+        
+        return code, name, is_overseas
+
+    def _analyze_stock(self, keyword):
+        """특정 종목 기술적 분석 및 진단"""
+        code, name, is_overseas = self._resolve_stock(keyword)
+        
         if not code:
-            if keyword.isdigit() and len(keyword) == 6:
-                code = keyword
-                name = api.get_stock_name_by_code(code, False) or keyword
-                is_overseas = False
-            # [수정] 영문/숫자/특수문자(.-)로 구성된 경우 해외 티커로 간주 (한글 제외)
-            elif all(ord(c) < 128 for c in keyword):
-                code = keyword.upper()
-                name = api.get_stock_name_by_code(code, True) or keyword
-                is_overseas = True
-            else:
-                return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.\n관심 종목에 등록된 종목명이나 코드를 입력해주세요."
+            return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.\n관심 종목에 등록된 종목명이나 코드를 입력해주세요."
 
         try:
             # 3. 데이터 조회 및 분석
@@ -1954,6 +2057,13 @@ class TelegramCommander:
             
             ind = indicators.calculate_indicators(df)
             current_price = float(df.iloc[-1]['close'])
+            
+            # 52주 최고/최저 및 위치 계산 (최근 250일 데이터 기준)
+            high_52 = df['high'].max()
+            low_52 = df['low'].min()
+            pos_52 = 0.0
+            if high_52 > low_52:
+                pos_52 = (current_price - low_52) / (high_52 - low_52) * 100
             
             # 전일 RSI 계산 (상태 분류용)
             prev_rsi = self.trader._get_prev_rsi(df)
@@ -1971,9 +2081,10 @@ class TelegramCommander:
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
-            score_icon = "⭐️" if score >= 8 else ("✨" if score >= 6 else "🌑")
             
             price_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+            h52_fmt = f"${high_52:,.2f}" if is_overseas else f"{int(high_52):,}원"
+            l52_fmt = f"${low_52:,.2f}" if is_overseas else f"{int(low_52):,}원"
             
             # SAR 상태
             sar_state = "-"
@@ -1988,7 +2099,8 @@ class TelegramCommander:
 
             msg = f"🔍 [종목 진단] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
-            msg += f"종합 점수: {score_icon} {score}점 / 11점\n"
+            msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
+            msg += f"종합 점수: {score}점 / 11점\n"
             msg += f"진단 상태: {state}\n"
             msg += f"\n[주요 지표]\n"
             msg += f"• 이평선: {ema_state}\n"
@@ -1998,9 +2110,129 @@ class TelegramCommander:
             msg += f"• CCI: {cci_str}"
             
             return msg
-            
         except Exception as e:
             return f"⚠️ 분석 중 오류 발생: {str(e)}"
+            
+    def _send_chart(self, keyword):
+        """차트 이미지를 생성하여 텔레그램으로 전송"""
+        code, name, is_overseas = self._resolve_stock(keyword)
+        
+        if not code:
+            self._send_reply(f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.")
+            return
+
+        try:
+            self._send_reply(f"⏳ {name}({code}) 차트 생성 중...")
+            
+            # 차트 생성 (config.CHART_DIR에 저장됨)
+            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100)
+            
+            # 파일 경로 추론
+            safe_code = re.sub(r'[=\-\.\^]', '', code)
+            filename = f"analysis_{safe_code}.png"
+            file_path = os.path.join(config.CHART_DIR, filename)
+            
+            if os.path.exists(file_path):
+                # [추가] 디버깅용 로그: 파일 정보
+                file_size = os.path.getsize(file_path)
+                self.trader.log(f"[Telegram] 차트 전송 시작: {filename} ({file_size} bytes)")
+
+                url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
+                
+                # [추가] 캡션에 계좌 정보 포함 (api.send_telegram_message 로직 참조)
+                cano = config.CANO
+                acc_label = "모의" if config.IS_SIMULATION else "실전"
+                instance_name = getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')
+                caption = f"📊 {name}({code}) 분석 차트\n\n[{instance_name} | {acc_label} {cano}]"
+
+                # [추가] 디버깅용 로그: 요청 파라미터
+                chat_id_str = str(config.TELEGRAM_CHAT_ID)
+                self.trader.log(f"[Telegram] 요청 파라미터: chat_id={chat_id_str}, caption_len={len(caption)}")
+
+                with open(file_path, 'rb') as f:
+                    data = {"chat_id": chat_id_str, "caption": caption}
+                    files = {"photo": (filename, f, 'image/png')}
+                    res = requests.post(url, data=data, files=files, timeout=30)
+                    
+                    if res.status_code != 200:
+                        # [추가] 상세 에러 로그 기록
+                        err_detail = res.text.replace('\n', ' ')
+                        self.trader.log(f"[Telegram] 전송 실패 (HTTP {res.status_code}): {err_detail}")
+                        
+                        self._send_reply(f"⚠️ 차트 전송 실패 (HTTP {res.status_code})\n상세: {err_detail[:50]}...")
+                        
+                        if config.DEBUG_LEVEL != "OFF":
+                            console.print(f"[dim red][Telegram] 차트 이미지 전송 실패: {res.text}[/dim red]")
+                    else:
+                        self.trader.log(f"[Telegram] 차트 전송 성공 (HTTP 200)")
+            else:
+                self.trader.log(f"[Telegram] 차트 파일 생성 실패: {file_path}")
+                self._send_reply("⚠️ 차트 이미지 파일이 생성되지 않았습니다.")
+                
+        except Exception as e:
+            self.trader.log(f"[Telegram] 차트 전송 중 예외 발생: {e}")
+            self._send_reply(f"⚠️ 차트 전송 중 오류 발생: {str(e)}")
+            if config.DEBUG_LEVEL != "OFF":
+                console.print(f"[dim red][Telegram] 차트 전송 예외: {e}[/dim red]")
+
+    def _get_monitoring_list(self):
+        """현재 감시 중인 종목 리스트 반환"""
+        msg = "📋 [현재 감시 종목 리스트]\n"
+        
+        groups = {
+            "stocks_kr": "🇰🇷 국내주식",
+            "etfs_kr": "🇰🇷 국내ETF",
+            "stocks_us": "🇺🇸 미국주식",
+            "etfs_us": "🇺🇸 미국ETF"
+        }
+        
+        has_stock = False
+        for key, label in groups.items():
+            stocks = config.STOCK_CONFIG_DATA.get(key, [])
+            if stocks:
+                has_stock = True
+                msg += f"\n{label}:"
+                for s in stocks:
+                    msg += f"\n - {s['name']} ({s['code']})"
+                msg += "\n"
+        
+        if not has_stock:
+            msg += "\n등록된 관심 종목이 없습니다."
+            
+        return msg
+
+    def _get_strategy_config(self):
+        """현재 매매 전략 설정값 반환"""
+        msg = "⚙️ [현재 매매 전략 설정]\n"
+        
+        # 매수 관련
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        msg += f"\n[매수 조건]\n"
+        msg += f"• 종합 점수: {buy_score}점 이상\n"
+        msg += f"• RSI 상한: {buy_rsi} 미만\n"
+        
+        # 매도 관련
+        sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        
+        msg += f"\n[매도 조건]\n"
+        msg += f"• 익절(TP): +{tp}%\n"
+        msg += f"• 손절(SL): {sl}%\n"
+        msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시\n"
+        msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
+        msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
+        
+        # 기타
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        msg += f"\n[기타]\n"
+        msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}%\n"
+        
+        return msg
 
     def _get_trade_history(self):
         """최근 체결 내역 조회"""

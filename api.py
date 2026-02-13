@@ -912,8 +912,8 @@ def send_telegram_message(message):
     # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
     clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
 
-    # [수정] 계좌 정보를 메시지 가장 마지막에 추가
-    final_msg = f"{clean_message}\n{account_info}"
+    # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
+    final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
 
     # [추가] 전송 메시지 로그 기록
     if config.SYSTEM_LOGGER:
