@@ -340,133 +340,6 @@ def run_backtest():
             if actual_days < days * 0.9: # 90% 미만일 때만 경고
                 config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
 
-    # [추가] 모드 선택 (단일 실행 vs 최적화)
-    config.console.print("\n[1] 백테스팅 리포팅")
-    config.console.print("[2] 최적 매수 점수 시뮬레이션")
-    config.console.print("[3] 익절/손절 비율 최적화 시뮬레이션")
-    mode = Prompt.ask("선택", choices=["1", "2", "3"], default="1")
-
-    if mode == "2":
-        # === 최적화 모드 ===
-        config.console.print(f"\n[cyan]=== 매수 점수(BUY_SCORE) 최적화 분석 ({name}) ===[/]")
-        table = Table(box=box.SIMPLE, header_style="cyan")
-        table.add_column("매수 점수", justify="center")
-        table.add_column("수익률", justify="right")
-        table.add_column("승률", justify="right")
-        table.add_column("MDD", justify="right")
-        table.add_column("매매 횟수", justify="right")
-        table.add_column("손익비", justify="right")
-        
-        best_return_score = 0
-        best_return = -999.0
-        
-        best_mdd_score = 0
-        best_mdd = -999.0
-        
-        best_win_score = 0
-        best_win_rate = -1.0
-        
-        with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
-            for score in range(4, 10): # 4, 5, 6, 7, 8, 9
-                res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], is_overseas)
-                
-                # 결과 계산
-                total_trades = len(res['trades'])
-                sell_trades = res['win_trades'] + res['loss_trades']
-                win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
-                pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
-                
-                # 1. 수익률 기준 갱신
-                if res['total_return'] > best_return:
-                    best_return = res['total_return']
-                    best_return_score = score
-                
-                # 2. MDD 기준 갱신 (값이 클수록 좋음, 예: -5 > -20)
-                if res['mdd'] > best_mdd:
-                    best_mdd = res['mdd']
-                    best_mdd_score = score
-                
-                # 3. 승률 기준 갱신
-                if win_rate > best_win_rate:
-                    best_win_rate = win_rate
-                    best_win_score = score
-                
-                # 테이블 행 추가
-                r_color = "[red]" if res['total_return'] > 0 else "[blue]"
-                table.add_row(
-                    f"{score}점",
-                    f"{r_color}{res['total_return']:+.2f}%[/]",
-                    f"{win_rate:.1f}%",
-                    f"{res['mdd']:.2f}%",
-                    f"{total_trades}건",
-                    f"{pf:.2f}"
-                )
-        
-        config.console.print(table)
-        config.console.print(f"\n[green]추천 (수익률): [yellow]{best_return_score}점[/] (수익률 {best_return:+.2f}%)[/]")
-        config.console.print(f"[cyan]추천 (안정성): [yellow]{best_mdd_score}점[/] (MDD {best_mdd:.2f}%)[/]")
-        config.console.print(f"[magenta]추천 (승률):   [yellow]{best_win_score}점[/] (승률 {best_win_rate:.1f}%)[/]")
-        config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")
-        return
-
-    if mode == "3":
-        # === 익절/손절 최적화 모드 ===
-        config.console.print(f"\n[cyan]=== 익절/손절 비율 최적화 분석 ({name}) ===[/]")
-        config.console.print(f"[dim]기준 매수 점수: {config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점[/dim]")
-        
-        table = Table(box=box.SIMPLE, header_style="cyan")
-        table.add_column("익절/손절", justify="center")
-        table.add_column("수익률", justify="right")
-        table.add_column("승률", justify="right")
-        table.add_column("MDD", justify="right")
-        table.add_column("매매 횟수", justify="right")
-        table.add_column("손익비", justify="right")
-        
-        best_return_set = None
-        best_return = -999.0
-        
-        best_mdd_set = None
-        best_mdd = -999.0
-        
-        # 테스트할 범위 설정
-        tp_candidates = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
-        sl_candidates = [-3.0, -5.0, -7.0, -10.0, -15.0]
-        
-        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-
-        with config.console.status("[green]다양한 익절/손절 조합 시뮬레이션 중...[/]"):
-            for tp in tp_candidates:
-                for sl in sl_candidates:
-                    res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, stop_loss_rate=sl, take_profit_rate=tp)
-                    
-                    total_trades = len(res['trades'])
-                    sell_trades = res['win_trades'] + res['loss_trades']
-                    win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
-                    pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
-                    
-                    if res['total_return'] > best_return:
-                        best_return = res['total_return']
-                        best_return_set = (tp, sl)
-                    
-                    if res['mdd'] > best_mdd:
-                        best_mdd = res['mdd']
-                        best_mdd_set = (tp, sl)
-                    
-                    label = f"익절 +{tp}% / 손절 {sl}%"
-                    r_color = "[red]" if res['total_return'] > 0 else "[blue]"
-                    table.add_row(label, f"{r_color}{res['total_return']:+.2f}%[/]", f"{win_rate:.1f}%", f"{res['mdd']:.2f}%", f"{total_trades}건", f"{pf:.2f}")
-        
-        config.console.print(table)
-        
-        if best_return_set:
-            config.console.print(f"\n[green]추천 (수익률): [yellow]익절 +{best_return_set[0]}% / 손절 {best_return_set[1]}%[/] (수익률 {best_return:+.2f}%)[/]")
-        if best_mdd_set:
-            config.console.print(f"[cyan]추천 (안정성): [yellow]익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}%[/] (MDD {best_mdd:.2f}%)[/]")
-            
-        config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")
-        return
-
     # === 단일 실행 모드 (기존 로직) ===
     buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
@@ -589,7 +462,7 @@ def run_backtest():
     
     if trades:
         config.console.print()
-        t_table = Table(title="[상세 매매 일지]", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        t_table = Table(title="상세 매매 일지", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         t_table.add_column("일자", justify="center")
         t_table.add_column("구분", justify="center")
         t_table.add_column("점수", justify="center")
@@ -727,3 +600,122 @@ def run_backtest():
             
         config.console.print()
         config.console.print(reason_table)
+
+    # === 최적화 모드 (매수 점수) ===
+    table = Table(title=f"\n매수 점수 최적화 분석 ({name})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("매수 점수", justify="center")
+    table.add_column("수익률", justify="right")
+    table.add_column("승률", justify="right")
+    table.add_column("MDD", justify="right")
+    table.add_column("매매 횟수", justify="right")
+    table.add_column("손익비", justify="right")
+    
+    best_return_score = 0
+    best_return = -999.0
+    
+    best_mdd_score = 0
+    best_mdd = -999.0
+    
+    best_win_score = 0
+    best_win_rate = -1.0
+    
+    with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
+        for score in range(4, 10): # 4, 5, 6, 7, 8, 9
+            res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], is_overseas)
+            
+            # 결과 계산
+            total_trades = len(res['trades'])
+            sell_trades = res['win_trades'] + res['loss_trades']
+            win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+            pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+            
+            # 1. 수익률 기준 갱신
+            if res['total_return'] > best_return:
+                best_return = res['total_return']
+                best_return_score = score
+            
+            # 2. MDD 기준 갱신 (값이 클수록 좋음, 예: -5 > -20)
+            if res['mdd'] > best_mdd:
+                best_mdd = res['mdd']
+                best_mdd_score = score
+            
+            # 3. 승률 기준 갱신
+            if win_rate > best_win_rate:
+                best_win_rate = win_rate
+                best_win_score = score
+            
+            # 테이블 행 추가
+            r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+            table.add_row(
+                f"{score}점",
+                f"{r_color}{res['total_return']:+.2f}%[/]",
+                f"{win_rate:.1f}%",
+                f"{res['mdd']:.2f}%",
+                f"{total_trades}건",
+                f"{pf:.2f}"
+            )
+    
+    config.console.print(table)
+    config.console.print(f"\n[green]추천 (수익률):[/] {best_return_score}점 (수익률 {best_return:+.2f}%)")
+    config.console.print(f"[cyan]추천 (안정성):[/] {best_mdd_score}점 (MDD {best_mdd:.2f}%)")
+    config.console.print(f"[magenta]추천 (승률):[/]   {best_win_score}점 (승률 {best_win_rate:.1f}%)")
+
+    # === 익절/손절 최적화 모드 ===
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    table = Table(title=f"\n익절/손절 비율 최적화 분석 ({name}) / 기준 매수 점수 ({buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("익절/손절", justify="center")
+    table.add_column("수익률", justify="right")
+    table.add_column("승률", justify="right")
+    table.add_column("MDD", justify="right")
+    table.add_column("매매 횟수", justify="right")
+    table.add_column("손익비", justify="right")
+    
+    best_return_set = None
+    best_return = -999.0
+    
+    best_mdd_set = None
+    best_mdd = -999.0
+    
+    # 테스트할 범위 설정
+    tp_candidates = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
+    sl_candidates = [-3.0, -5.0, -7.0, -10.0, -15.0]
+    
+    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+
+    row_count = 0
+    total_combinations = len(tp_candidates) * len(sl_candidates)
+
+    with config.console.status("[green]다양한 익절/손절 조합 시뮬레이션 중...[/]"):
+        for tp in tp_candidates:
+            for sl in sl_candidates:
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, stop_loss_rate=sl, take_profit_rate=tp)
+                
+                total_trades = len(res['trades'])
+                sell_trades = res['win_trades'] + res['loss_trades']
+                win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+                pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+                
+                if res['total_return'] > best_return:
+                    best_return = res['total_return']
+                    best_return_set = (tp, sl)
+                
+                if res['mdd'] > best_mdd:
+                    best_mdd = res['mdd']
+                    best_mdd_set = (tp, sl)
+                
+                label = f"익절 +{tp}% / 손절 {sl}%"
+                r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+                table.add_row(label, f"{r_color}{res['total_return']:+.2f}%[/]", f"{win_rate:.1f}%", f"{res['mdd']:.2f}%", f"{total_trades}건", f"{pf:.2f}")
+                
+                row_count += 1
+                if row_count % 5 == 0 and row_count < total_combinations:
+                    table.add_section()
+    
+    config.console.print(table)
+    
+    if best_return_set:
+        config.console.print(f"\n[green]추천 (수익률):[/] 익절 +{best_return_set[0]}% / 손절 {best_return_set[1]}% (수익률 {best_return:+.2f}%)")
+    if best_mdd_set:
+        config.console.print(f"[cyan]추천 (안정성):[/] 익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}% (MDD {best_mdd:.2f}%)")
+        
+    config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")

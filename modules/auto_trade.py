@@ -1922,7 +1922,7 @@ class TelegramCommander:
                 "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
                 "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
                 "• /config : 현재 매매 전략 설정값 조회\n"
-                "• /history : 최근 체결 내역(10건) 조회\n"
+                "• /history [개수] : 최근 체결 내역 조회 (기본 10건)\n"
                 "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)"
             )
             
@@ -1949,7 +1949,11 @@ class TelegramCommander:
             response = self._get_strategy_config()
                 
         elif command == "/history":
-            response = self._get_trade_history()
+            count = 10
+            if args and args[0].isdigit():
+                count = int(args[0])
+                if count > 50: count = 50 # 메시지 길이 제한 고려하여 최대 50건
+            response = self._get_trade_history(count)
             
         elif command == "/log":
             count = 10
@@ -2234,13 +2238,13 @@ class TelegramCommander:
         
         return msg
 
-    def _get_trade_history(self):
+    def _get_trade_history(self, limit=10):
         """최근 체결 내역 조회"""
-        trades = db_manager.db.get_trades(limit=10)
+        trades = db_manager.db.get_trades(limit=limit)
         if not trades:
             return "📭 거래 내역이 없습니다."
         
-        msg = "📜 [최근 체결 내역 (10건)]"
+        msg = f"📜 [최근 체결 내역 ({len(trades)}건)]"
         for t in trades:
             type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("수동", "")
             name = t['name']
@@ -2258,7 +2262,14 @@ class TelegramCommander:
                     profit_msg = f"\n   └ {icon} {amt:+,}원 ({rate:+.2f}%)"
             
             date_str = t['time'][5:16] # MM-DD HH:MM
-            msg += f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}{profit_msg}"
+            item_msg = f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}{profit_msg}"
+            
+            # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
+            if len(msg) + len(item_msg) > 4000:
+                msg += "\n\n...(메시지 길이 제한으로 이후 내역 생략)"
+                break
+            
+            msg += item_msg
             
         return msg
 
