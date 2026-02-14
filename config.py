@@ -3,18 +3,28 @@ import os
 import sys
 import threading
 from rich.console import Console
+import logging
+from rich.logging import RichHandler
 from rich.prompt import Prompt
 import json
+from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
+from session import SessionManager
 
 console = Console()
 
 # ==========================================================
-# [설정] 디버그 로그 레벨 설정 (OFF / DEBUG / TRACE)
+# [설정] 스크린 디버그 로그 레벨 설정 (OFF / DEBUG / TRACE)
 # ==========================================================
 # OFF   : 로그 출력 없음
-# TRACE : 한 줄 요약 로그 (TPS, URL, 상태코드)
-# DEBUG : 상세 로그 (모든 요청/응답 파라미터 및 데이터 포함)
-DEBUG_LEVEL = "OFF"
+# TRACE : [TRACE] 로그 화면 출력
+# DEBUG : [TRACE] 및 [DEBUG] 로그 화면 출력
+SCREEN_DEBUG_LEVEL = "OFF"
+
+# ==========================================================
+# [설정] 파일 로그 레벨 설정 (DEBUG / INFO / WARNING / ERROR / CRITICAL)
+# ==========================================================
+FILE_DEBUG_LEVEL = "INFO"
 
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
@@ -70,7 +80,7 @@ RETRY_DELAY_SERVER = 5.0  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 
 # [추가] API 요청 중 연결 끊김(RemoteDisconnected 등) 발생 시 재시도 횟수
 # 0으로 설정하면 재시도하지 않으며, 1로 설정하면 실패 시 1회 재시도합니다.
 # ==========================================================
-MAX_RETRIES = 1
+MAX_RETRIES = 3
 
 # ==========================================================
 # [설정] 기본 환율 (Fallback)
@@ -210,6 +220,7 @@ SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
 SYSTEM_INVEST_PER_STOCK = 0.5  # [수정] 종목당 투자 비중 (50%로 상향 조정)
+
 USE_MARKET_FILTER = True       # [추가] 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
 MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균선 (일)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
@@ -241,180 +252,56 @@ SYSTEM_TRADING_LOCK = threading.RLock()
 # [추가] 스레드별 컨텍스트 관리 (API 호출 시 계좌 분리용)
 trade_context = threading.local()
 
-# ----------------------------------------------------------
-# 전역 변수 초기화
-# ----------------------------------------------------------
-APP_KEY = ""
-APP_SECRET = ""
-CANO = ""
-ACNT_PRDT_CD = ""
-URL_BASE = ""
-IS_SIMULATION = False
-
-# [데이터 조회 가속용] 실전투자 변수
-REAL_APP_KEY = ""
-REAL_APP_SECRET = ""
-
-# [추가] 시스템 트레이딩 전용 변수 (실전 모드에서 분리 운용 시 사용)
-AUTO_APP_KEY = ""
-AUTO_APP_SECRET = ""
-AUTO_CANO = ""
-AUTO_ACNT_PRDT_CD = ""
-
-# [추가] 텔레그램 알림 설정
-TELEGRAM_BOT_TOKEN = ""
-TELEGRAM_CHAT_ID = ""
-TELEGRAM_INSTANCE_NAME = "HTS" # [추가] 알림 메시지 출처 구분용 별칭 (예: Home, Office)
-TELEGRAM_POLLING_TIMEOUT = 10  # [추가] 텔레그램 명령어 수신 대기 시간 (초)
-ENABLE_TELEGRAM = True         # [추가] 텔레그램 기능 활성화 여부 (기본값: True)
+session = SessionManager()
 
 # 서버 URL 상수 정의
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
 REAL_URL = "https://openapi.koreainvestment.com:9443"
 
-# 거래소 정보 캐싱
-EXCHANGE_CACHE = {}
+# [추가] 로깅 설정 초기화 함수
+def setup_logging():
+    # 기존 핸들러 제거
+    root = logging.getLogger()
+    if root.handlers:
+        for handler in root.handlers:
+            root.removeHandler(handler)
 
-# 종목 리스트 데이터
-STOCK_CONFIG_DATA = {}
-
-def initialize_environment(mode=None):
-    global APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD, URL_BASE, IS_SIMULATION
-    global REAL_APP_KEY, REAL_APP_SECRET, AUTO_APP_KEY, AUTO_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-    global AUTO_CANO, AUTO_ACNT_PRDT_CD, TELEGRAM_INSTANCE_NAME
+    # 로깅 활성화
+    logging.disable(logging.NOTSET)
     
-    if mode:
-        choice = str(mode)
-    else:
-        console.print("\n[bold]접속할 서버를 선택하세요:[/bold]")
-        console.print("[1] 모의투자 (Simulation)")
-        console.print("[2] 실전투자 (Real Trading)")
-        
-        try:
-            console.print()
-            choice = Prompt.ask("선택 [dim](종료: q)[/dim]", choices=["1", "2", "q", "Q"], default="1")
-        except KeyboardInterrupt:
-            console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n")
-            sys.exit()
-    
-    if choice.lower() == 'q':
-        console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n")
-        sys.exit()
-    
-    acc_num_input = ""
-    auto_acc_num = None
-    
-    if choice == "1":
-        APP_KEY = os.environ.get("SIM_APP_KEY")
-        APP_SECRET = os.environ.get("SIM_APP_SECRET")
-        acc_num_input = os.environ.get("SIM_ACC_NUM")
-        URL_BASE = SIM_URL
-        IS_SIMULATION = True
-        console.print()
-        console.print("[green]모의투자 서버 환경을 로드했습니다.[/green]")
-        
-    else:
-        REAL_APP_KEY = os.environ.get("REAL_APP_KEY")
-        REAL_APP_SECRET = os.environ.get("REAL_APP_SECRET")
-        APP_KEY = REAL_APP_KEY
-        APP_SECRET = REAL_APP_SECRET
-        acc_num_input = os.environ.get("REAL_ACC_NUM")
-        
-        # [추가] 시스템 트레이딩 전용 계좌 정보 로드
-        AUTO_APP_KEY = os.environ.get("AUTO_APP_KEY")
-        AUTO_APP_SECRET = os.environ.get("AUTO_APP_SECRET")
-        auto_acc_num = os.environ.get("AUTO_ACC_NUM")
-        
-        URL_BASE = REAL_URL
-        IS_SIMULATION = False
-        console.print()
-        console.print("[bold red]실전투자 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
 
-    if not all([APP_KEY, APP_SECRET, acc_num_input]):
-        console.print("[bold red]오류: 해당 환경의 필수 환경변수(KEY, SECRET, ACC_NUM)가 설정되지 않았습니다.[/bold red]")
-        sys.exit()
+    if not os.path.exists(LOG_DIR):
+        try: os.makedirs(LOG_DIR)
+        except: pass
 
-    # [추가] 텔레그램 설정 로드 (선택 사항)
-    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
-    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
-    TELEGRAM_INSTANCE_NAME = os.environ.get("TELEGRAM_INSTANCE_NAME", TELEGRAM_INSTANCE_NAME)
-
-    clean_acc = acc_num_input.strip().replace('-', '')
-    if len(clean_acc) == 8:
-        CANO = clean_acc
-        ACNT_PRDT_CD = "01" 
-    elif len(clean_acc) == 10:
-        CANO = clean_acc[:8]
-        ACNT_PRDT_CD = clean_acc[8:]
-    else:
-        console.print(f"[bold red]오류: 계좌번호 형식이 올바르지 않습니다. ({acc_num_input})[/bold red]")
-        sys.exit()
-
-    # [추가] 자동매매 계좌번호 파싱
-    if auto_acc_num:
-        clean_auto = auto_acc_num.strip().replace('-', '')
-        if len(clean_auto) == 8:
-            AUTO_CANO = clean_auto
-            AUTO_ACNT_PRDT_CD = "01"
-        elif len(clean_auto) == 10:
-            AUTO_CANO = clean_auto[:8]
-            AUTO_ACNT_PRDT_CD = clean_auto[8:]
-
-def load_stock_config(filename=None):
-    global STOCK_CONFIG_DATA
-    if filename is None:
-        filename = STOCK_DATA_FILE
-
-    default_config = {
-        "stocks_kr": [{"name": "삼성전자", "code": "005930"}],
-        "etfs_kr": [{"name": "ACE KRX금현물", "code": "411060"}],
-        "stocks_us": [{"name": "Apple Inc.", "code": "AAPL"}],
-        "etfs_us": [{"name": "Invesco QQQ Trust", "code": "QQQ"}]   
-    }
-
+    # [추가] 오래된 디버그 로그 파일 정리 (LOG_RETENTION_DAYS 적용)
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
-            if 'etfs' in config_data and 'etfs_kr' not in config_data: config_data['etfs_kr'] = config_data.pop('etfs')
-            
-            for group in ['stocks_us', 'etfs_us']:
-                for item in config_data.get(group, []):
-                    if 'exchange' in item:
-                        EXCHANGE_CACHE[item['code']] = item['exchange']
-            
-            STOCK_CONFIG_DATA = config_data
-            return
-            
-    except FileNotFoundError:
-        console.print(f"[yellow]'{filename}' 파일이 없습니다. 기본 설정을 사용합니다.[/yellow]")
-        STOCK_CONFIG_DATA = default_config
-    except json.JSONDecodeError:
-        console.print(f"[bold red]'{filename}' 파일 형식이 잘못되었습니다. 기본 설정을 사용합니다.[/bold red]")
-        STOCK_CONFIG_DATA = default_config
+        if LOG_RETENTION_DAYS > 0:
+            cutoff_date = datetime.now().date() - timedelta(days=LOG_RETENTION_DAYS)
+            for filename in os.listdir(LOG_DIR):
+                # system_YYYYMMDD.log 형식 확인 (system_trade_... 제외)
+                if filename.startswith("system_") and filename.endswith(".log") and "trade" not in filename:
+                    try:
+                        date_part = filename.replace("system_", "").replace(".log", "")
+                        if len(date_part) == 8 and date_part.isdigit():
+                            file_date = datetime.strptime(date_part, "%Y%m%d").date()
+                            if file_date < cutoff_date:
+                                os.remove(os.path.join(LOG_DIR, filename))
+                    except: pass
+    except: pass
 
-def save_stock_config(config_data, filename=None):
-    if filename is None:
-        filename = STOCK_DATA_FILE
-    try:
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        console.print(f"[bold red]저장 실패: {str(e)}[/bold red]")
+    log_filename = f"system_{datetime.now().strftime('%Y%m%d')}.log"
+    log_filepath = os.path.join(LOG_DIR, log_filename)
 
-def update_cache_and_save(code, excd):
-    if EXCHANGE_CACHE.get(code) != excd:
-        EXCHANGE_CACHE[code] = excd
+    # [수정] RotatingFileHandler 적용 (10MB, 백업 5개)
+    file_handler = RotatingFileHandler(log_filepath, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+    # [수정] 로그 포맷에 파일명과 라인 번호 추가
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
     
-    updated = False
-    target_groups = ['stocks_us', 'etfs_us']
-    
-    for group in target_groups:
-        if group in STOCK_CONFIG_DATA:
-            for item in STOCK_CONFIG_DATA[group]:
-                if item['code'] == code:
-                    if item.get('exchange') != excd:
-                        item['exchange'] = excd
-                        updated = True
-    
-    if updated:
-        save_stock_config(STOCK_CONFIG_DATA)
+    # 파일 로그 레벨 설정
+    level_name = FILE_DEBUG_LEVEL.upper()
+    numeric_level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(level=numeric_level, handlers=[file_handler], force=True)
+
+setup_logging()

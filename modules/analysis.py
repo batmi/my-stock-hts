@@ -356,7 +356,7 @@ def print_table(title, data_list, is_overseas=False):
         w52_pos_str, per_str, pbr_str, shar_str = "-", "-", "-", "-"
         foreign_rate_str = "-"
         inv_str = "-"
-        cached_ex = config.EXCHANGE_CACHE.get(code, "NAS") if is_overseas else None
+        cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
         strength_display = ""
 
         if not is_overseas:
@@ -575,7 +575,7 @@ def show_stock_analysis():
     elif choice in ["12", "34"]: real_choice = choice
 
     def get_list(key):
-        return [(x['name'], x['code']) for x in config.STOCK_CONFIG_DATA.get(key, [])]
+        return [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
 
     stocks_kr = get_list('stocks_kr')
     etfs_kr = get_list('etfs_kr')

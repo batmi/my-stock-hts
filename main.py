@@ -282,13 +282,13 @@ def main():
     args = parser.parse_args()
 
     # 1. 환경 설정 로드
-    config.initialize_environment(mode=args.mode)
+    config.session.initialize(mode=args.mode)
     
     # 2. 종목 데이터 로드
-    config.load_stock_config()
+    config.session.load_stock_config()
     
     # 3. 토큰 발급 (초기 실행 시 모드에 따라 즉시 발급)
-    if config.IS_SIMULATION:
+    if config.session.is_simulation:
         api.get_access_token()
     else:
         api.get_real_access_token()
@@ -316,8 +316,8 @@ def main():
     try:
         while True:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
-            env_color = "green" if config.IS_SIMULATION else "bold red"
+            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+            env_color = "green" if config.session.is_simulation else "bold red"
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)

@@ -25,20 +25,20 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 차트 생성 요청: {name} ({code}) | Overseas: {is_overseas}[/dim cyan]")
 
     with config.console.status(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]"):
         df = api.get_chart_data(code, is_overseas)
         
         if df is None or df.empty:
-            if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][TRACE] 차트 데이터 수신 실패 (Empty)[/dim red]")
             config.console.print(f"[red]{name} 데이터를 불러올 수 없습니다.[/]")
             return
         
         # [로그] 데이터 수신 확인
-        if config.DEBUG_LEVEL == "DEBUG":
+        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
             config.console.print(f"[dim magenta][DEBUG] 차트 데이터 수신 완료: {len(df)}행[/dim magenta]")
             if not df.empty:
                 tail_str = df.tail(2).to_string().replace('\n', '\n[DEBUG]      ')
@@ -46,7 +46,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
         
         df = df.reset_index(drop=True)
         
-        if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
             config.console.print(f"[dim cyan][TRACE] 보조지표 계산 시작...[/dim cyan]")
 
         ind = indicators.calculate_indicators(df) 

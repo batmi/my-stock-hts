@@ -1,4 +1,5 @@
 # modules/manage.py
+import logging
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
@@ -9,9 +10,11 @@ import api
 import utils
 import constants
 
+logger = logging.getLogger(__name__)
+
 def show_extended_info(code, is_overseas, basic_output=None):
     # [로그] 상세 정보 조회 시작
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 상세/기간별 시세 정보 조회 요청: {code} (Overseas: {is_overseas})[/dim cyan]")
 
     def _fmt_vol(v):
@@ -89,9 +92,9 @@ def show_extended_info(code, is_overseas, basic_output=None):
         daily_list = api.fetch_domestic_period_price(code)
         
         # [로그] 기간별 시세 수신 결과
-        if config.DEBUG_LEVEL == "DEBUG":
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
              cnt = len(daily_list) if daily_list else 0
-             config.console.print(f"[dim magenta][DEBUG] 국내 기간별 시세 수신: {cnt}건[/dim magenta]")
+             logger.debug(f"국내 기간별 시세 수신: {cnt}건")
 
         if daily_list:
             config.console.print()
@@ -133,7 +136,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             config.console.print("[yellow]기간별 시세 데이터가 없습니다.[/yellow]")
 
     else:
-        excd = config.EXCHANGE_CACHE.get(code, "NAS")
+        excd = config.session.exchange_cache.get(code, "NAS")
         detail_data = api.fetch_overseas_detail_price(code, excd)
         if detail_data:
             config.console.print()
@@ -199,9 +202,9 @@ def show_extended_info(code, is_overseas, basic_output=None):
         daily_df = api.fetch_overseas_period_price(code, excd)
         
         # [로그] 해외 기간별 시세 수신 결과
-        if config.DEBUG_LEVEL == "DEBUG":
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
             cnt = len(daily_df) if daily_df is not None else 0
-            config.console.print(f"[dim magenta][DEBUG] 해외 기간별 시세 수신: {cnt}건[/dim magenta]")
+            logger.debug(f"해외 기간별 시세 수신: {cnt}건")
             
         if daily_df is not None and not daily_df.empty:
             config.console.print()
@@ -237,7 +240,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
 def get_current_price(mode='add'):
     config.console.print()
     # [로그] 메뉴 진입
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 종목 검색/추가 메뉴 진입[/dim cyan]")
 
     raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
@@ -252,8 +255,8 @@ def get_current_price(mode='add'):
     is_overseas = not (code.isdigit() or (len(code) == 6 and code.startswith('0')))
 
     # [로그] 입력 파싱 결과
-    if config.DEBUG_LEVEL == "DEBUG":
-        config.console.print(f"[dim magenta][DEBUG] 사용자 입력 파싱: Code={code}, Name={guessed_name}, Overseas={is_overseas}[/dim magenta]")
+    if config.FILE_DEBUG_LEVEL == "DEBUG":
+        logger.debug(f"사용자 입력 파싱: Code={code}, Name={guessed_name}, Overseas={is_overseas}")
 
     stock_name = guessed_name if guessed_name else api.get_stock_name_by_code(code, is_overseas)
     if not stock_name or stock_name in ["Npay 증권", "네이버 페이 증권", "증권"]: stock_name = code 
@@ -262,9 +265,9 @@ def get_current_price(mode='add'):
         res = api.get_current_price_data(code, is_overseas)
     
     # [로그] 시세 조회 결과 확인
-    if config.DEBUG_LEVEL == "DEBUG":
+    if config.FILE_DEBUG_LEVEL == "DEBUG":
         rt_cd = res.get('rt_cd') if res else "None"
-        config.console.print(f"[dim magenta][DEBUG] 시세 조회 결과 코드: {rt_cd}[/dim magenta]")
+        logger.debug(f"시세 조회 결과 코드: {rt_cd}")
         
     if res and res.get('rt_cd') == '0':
         output = res['output']
@@ -282,7 +285,7 @@ def get_current_price(mode='add'):
             show_extended_info(code, is_overseas, basic_output=output)
             config.console.print(f"\n[bold cyan]종목명: {stock_name}[/bold cyan] [dim]({code})[/dim]")
         except Exception as e:
-            config.console.print(f"[red]상세 정보 출력 중 오류: {e}[/red]")
+            logger.error(f"상세 정보 출력 중 오류: {e}")
 
         # [수정] 단순 조회 모드일 경우 여기서 종료
         if mode == 'simple': return
@@ -301,12 +304,12 @@ def get_current_price(mode='add'):
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
 
             new_item = {"name": input_name, "code": code}
-            if code in config.EXCHANGE_CACHE: new_item["exchange"] = config.EXCHANGE_CACHE[code]
+            if code in config.session.exchange_cache: new_item["exchange"] = config.session.exchange_cache[code]
             
-            if not any(item['code'] == code for item in config.STOCK_CONFIG_DATA[target_list_key]):
-                config.STOCK_CONFIG_DATA[target_list_key].append(new_item)
-                config.save_stock_config(config.STOCK_CONFIG_DATA)
-                config.load_stock_config()
+            if not any(item['code'] == code for item in config.session.stock_data.get(target_list_key, [])):
+                config.session.stock_data[target_list_key].append(new_item)
+                config.session.save_stock_config(config.session.stock_data)
+                config.session.load_stock_config()
                 config.console.print(f"\n[green]'{input_name}' 종목이 추가되었습니다.[/green]")
             else:
                 config.console.print("\n[yellow]이미 등록된 종목입니다.[/yellow]")
@@ -315,7 +318,7 @@ def get_current_price(mode='add'):
 
 def delete_stock():
     # [로그] 메뉴 진입
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 종목 삭제 메뉴 진입[/dim cyan]")
 
     config.console.print("\n[bold]어떤 그룹에서 삭제하시겠습니까?[/bold]")
@@ -332,10 +335,10 @@ def delete_stock():
     target_key, group_name = group_map[cat_choice]
     
     # [로그] 그룹 선택
-    if config.DEBUG_LEVEL == "DEBUG":
-        config.console.print(f"[dim magenta][DEBUG] 삭제 대상 그룹 선택: {group_name} ({target_key})[/dim magenta]")
+    if config.FILE_DEBUG_LEVEL == "DEBUG":
+        logger.debug(f"삭제 대상 그룹 선택: {group_name} ({target_key})")
         
-    target_list = config.STOCK_CONFIG_DATA[target_key]
+    target_list = config.session.stock_data[target_key]
     
     if not target_list:
         config.console.print(f"[yellow]'{group_name}' 그룹에 저장된 종목이 없습니다.[/yellow]")
@@ -354,16 +357,16 @@ def delete_stock():
         if 0 <= idx < len(target_list):
             item_to_del = target_list[idx]
             if Prompt.ask(f"\n정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
-                del config.STOCK_CONFIG_DATA[target_key][idx]
-                config.save_stock_config(config.STOCK_CONFIG_DATA)
-                config.load_stock_config()
+                del config.session.stock_data[target_key][idx]
+                config.session.save_stock_config(config.session.stock_data)
+                config.session.load_stock_config()
                 config.console.print(f"\n[green]삭제되었습니다.[/green]")
         else: config.console.print(f"\n[red]잘못된 번호입니다.[/red]")
     else: config.console.print(f"\n[red]숫자를 입력해주세요.[/red]")
 
 def manage_stock_menu():
     """종목 추가 및 삭제를 통합 관리하는 메뉴"""
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 관심 종목 관리 메뉴 진입[/dim cyan]")
 
     config.console.print("\n[bold]관심 종목 관리[/bold]")

@@ -74,7 +74,7 @@ class DBManager:
                     if col not in columns:
                         try:
                             cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {dtype}")
-                            if config.DEBUG_LEVEL != "OFF":
+                            if config.SCREEN_DEBUG_LEVEL != "OFF":
                                 config.console.print(f"[dim green][DB] 컬럼 추가됨: {col}[/dim green]")
                         except Exception as e:
                             config.console.print(f"[red][DB] 컬럼 추가 실패({col}): {e}[/red]")
@@ -82,7 +82,7 @@ class DBManager:
                 conn.commit()
                 conn.close()
             except Exception as e:
-                if config.DEBUG_LEVEL != "OFF":
+                if config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Init Error: {e}[/red]")
 
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None):
@@ -91,7 +91,7 @@ class DBManager:
         with self.lock:
             for attempt in range(5):
                 try:
-                    if config.DEBUG_LEVEL == "DEBUG":
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DB][{threading.get_ident()}] insert_trade 요청 ({attempt+1}/5): {type_str} {name}({code})[/dim cyan]")
 
                     conn = self._get_conn()
@@ -99,11 +99,11 @@ class DBManager:
                     
                     now_str = custom_time if custom_time else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    acc_no = f"{config.CANO}-{config.ACNT_PRDT_CD}"
-                    if getattr(config.trade_context, 'use_auto_account', False) and config.AUTO_CANO:
-                        acc_no = f"{config.AUTO_CANO}-{config.AUTO_ACNT_PRDT_CD}"
+                    acc_no = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+                    if getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+                        acc_no = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
                     
-                    is_sim = 1 if config.IS_SIMULATION else 0
+                    is_sim = 1 if config.session.is_simulation else 0
                     snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                     
                     cursor.execute('''
@@ -113,7 +113,7 @@ class DBManager:
                     
                     conn.commit()
                     
-                    if config.DEBUG_LEVEL == "DEBUG":
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim green][DB][{threading.get_ident()}] 거래 내역 저장 완료 (ODNO: {odno})[/dim green]")
                     break
                     
@@ -121,11 +121,11 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
                     break
 
@@ -167,7 +167,7 @@ class DBManager:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except Exception as e:
-            if config.DEBUG_LEVEL != "OFF":
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Select Error: {e}[/red]")
             return []
     
@@ -197,11 +197,11 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Update Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Update Error: {e}[/red]")
                     break
     
@@ -213,7 +213,7 @@ class DBManager:
             cursor.execute("SELECT count(*) FROM trades WHERE odno = ? AND order_status = ?", (odno, order_status))
             cnt = cursor.fetchone()[0]
             
-            if config.DEBUG_LEVEL == "DEBUG" and cnt > 0:
+            if config.SCREEN_DEBUG_LEVEL == "DEBUG" and cnt > 0:
                 config.console.print(f"[dim yellow][DB] check_trade_exists: {odno} ({order_status}) -> 존재함[/dim yellow]")
             return cnt > 0
         except: return False
@@ -233,7 +233,7 @@ class DBManager:
         with self.lock:
             for attempt in range(5):
                 try:
-                    if config.DEBUG_LEVEL == "DEBUG":
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DB][{threading.get_ident()}] update_highest_price 요청 ({attempt+1}/5): {code} {price}[/dim cyan]")
 
                     conn = self._get_conn()
@@ -257,13 +257,13 @@ class DBManager:
                         time.sleep(0.5)
                         continue
                     if "locked" in str(e):
-                        if config.DEBUG_LEVEL != "OFF":
+                        if config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print(f"[yellow][DB] Locked during update_highest_price ({attempt+1}/5). Retrying...[/yellow]")
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.DEBUG_LEVEL != "OFF":
+                    if config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
                     break
 
@@ -307,18 +307,19 @@ class DBManager:
             deleted_count = cursor.rowcount
             conn.commit()
             
-            if deleted_count > 0 and config.DEBUG_LEVEL != "OFF":
+            if deleted_count > 0 and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[dim yellow][DB] 오래된 거래 내역 {deleted_count}건을 정리했습니다. ({days_to_keep}일 이전)[/dim yellow]")
         except Exception as e:
-            if config.DEBUG_LEVEL != "OFF":
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Cleanup Error: {e}[/red]")
 
     def run_vacuum(self):
         """DB 최적화 (VACUUM) 실행 - 프로그램 종료 시 호출"""
         try:
             # 별도 연결 생성하여 실행 (스레드 로컬 연결 간섭 방지)
-            conn = sqlite3.connect(self.db_path, timeout=60)
-            if config.DEBUG_LEVEL != "OFF":
+            # [수정] VACUUM은 트랜잭션 내에서 실행할 수 없으므로 isolation_level=None (Auto-commit) 설정
+            conn = sqlite3.connect(self.db_path, timeout=60, isolation_level=None)
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print("[dim cyan][DB] 데이터베이스 정리 및 최적화(VACUUM) 수행 중...[/dim cyan]")
             
             # 1. 오래된 데이터 삭제 (설정된 기간 기준)
@@ -330,10 +331,10 @@ class DBManager:
             conn.execute("VACUUM;")
             conn.close()
             
-            if config.DEBUG_LEVEL != "OFF":
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print("[dim green][DB] 데이터베이스 최적화 완료[/dim green]")
         except Exception as e:
-            if config.DEBUG_LEVEL != "OFF":
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] VACUUM Error: {e}[/red]")
 
 # 전역 인스턴스
