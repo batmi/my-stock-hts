@@ -105,6 +105,12 @@ class SessionManager:
             if sim_cano:
                 self.cano = sim_cano
                 self.acnt_prdt_cd = sim_acnt
+            
+            # [추가] 모의투자 모드: 시스템 트레이딩 계좌 = 모의투자 계좌 강제 동기화
+            self.auto_cano = self.cano
+            self.auto_acnt_prdt_cd = self.acnt_prdt_cd
+            self.auto_app_key = self.app_key
+            self.auto_app_secret = self.app_secret
                 
             config.console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
             
@@ -137,6 +143,15 @@ class SessionManager:
             
         if not self.acnt_prdt_cd and self.cano:
             self.acnt_prdt_cd = Prompt.ask("계좌 상품코드(2자리) 입력", default="01")
+            
+        # [추가] 로드된 설정 정보 확인 메시지 출력
+        key_status = "OK" if self.app_key and self.app_secret else "MISSING"
+        env_label = "모의투자" if self.is_simulation else "실전투자"
+        config.console.print(f"\n[dim cyan][{env_label}] 설정 로드 확인[/dim cyan]")
+        config.console.print(f"[dim]   - APP_KEY 상태: {key_status}[/dim]")
+        config.console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")
+        if self.auto_cano:
+            config.console.print(f"[dim]   - 자동매매 계좌: {self.auto_cano}-{self.auto_acnt_prdt_cd}[/dim]")
 
     def load_stock_config(self):
         if os.path.exists(config.STOCK_DATA_FILE):

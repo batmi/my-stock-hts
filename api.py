@@ -64,6 +64,83 @@ class TLSAdapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
         self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
 
+def _get_telegram_footer():
+    """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
+    if not config.TELEGRAM_BOT_TOKEN:
+        return
+
+    cano = config.session.cano
+    acc_label = "모의" if config.session.is_simulation else "실전"
+
+    # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
+    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+        cano = config.session.auto_cano
+        acc_label = "자동"
+
+    instance_name = config.TELEGRAM_INSTANCE_NAME
+    return f"[{instance_name} | {acc_label} {cano}]"
+
+def send_telegram_message(message):
+    """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+
+    account_info = _get_telegram_footer()
+    
+    # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
+    # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
+    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
+
+    # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
+    final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
+
+    # [수정] 전송 메시지 로그 기록 (시스템 로그로 변경)
+    log_content = final_msg.replace('\n', ' | ')
+    logger.info(f"[Telegram] 메시지 발송: {log_content}")
+
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg}
+    
+    # [추가] 화면 디버그 로그 (요청)
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] REQ (TELEGRAM) | POST {url}[/dim cyan]")
+        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+            config.console.print(f"[dim cyan]  > Message: {message.replace(chr(10), ' ')}[/dim cyan]")
+
+    # [수정] 재시도 로직 추가 (최대 3회)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 매매 로직 지연 방지를 위해 짧은 타임아웃 설정 (재시도 시 조금씩 증가)
+            current_timeout = 1 + (attempt * 0.5)
+            res = requests.post(url, data=data, timeout=current_timeout)
+            
+            # [추가] 화면 디버그 로그 (응답)
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} ({attempt+1}/{max_retries})[/dim magenta]")
+                if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
+                     config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
+            
+            if res.status_code == 200:
+                logger.info("[Telegram] 전송 성공")
+                return # 성공 시 함수 종료
+            else:
+                logger.error(f"[Telegram] 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
+        except Exception as e:
+            # [추가] 화면 디버그 로그 (예외)
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
+
+            logger.error(f"[Telegram] 전송 중 오류 발생({attempt+1}/{max_retries}): {str(e)}")
+        
+        # 마지막 시도가 아니면 대기
+        if attempt < max_retries - 1:
+            time.sleep(1)
+            
+    logger.error("[Telegram] 최종 전송 실패")
+
+_last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
+
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
@@ -79,6 +156,7 @@ class ThrottledSession(requests.Session):
         return len(self.request_history)
 
     def request(self, method, url, *args, **kwargs):
+        global _last_alert_time
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
         is_sim_server = "openapivts.koreainvestment.com" in url
         
@@ -104,7 +182,14 @@ class ThrottledSession(requests.Session):
                     wait_time = min_interval - elapsed
                     time.sleep(wait_time)
 
-            self.request_history.append(time.time())
+            # [수정] 요청 전송 직전에 시간 갱신 (멀티스레드 환경에서 중복 전송 방지)
+            now_req = time.time()
+            if is_real_server:
+                self.last_request_time_real = now_req
+            elif is_sim_server:
+                self.last_request_time_sim = now_req
+
+            self.request_history.append(now_req)
             
         current_tps = self._get_current_tps()
 
@@ -151,13 +236,27 @@ class ThrottledSession(requests.Session):
                         msg_cd = res_json.get('msg_cd')
                         
                         if msg_cd == 'OPSQ2000':
-                            msg = f"서버 동기화 지연 감지(OPSQ2000). {config.RETRY_DELAY_SERVER}초 대기 후 재시도합니다..."
+                            # [개선] 허위 에러 메시지 설명 추가
+                            msg1 = res_json.get('msg1', '')
+                            note = ""
+                            if "INVALID_CHECK_ACNO" in msg1:
+                                note = " (※ 서버 내부 오류로 인한 허위 메시지입니다.)"
+
+                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {config.RETRY_DELAY_SERVER}초 대기 후 재시도..."
                             logger.warning(msg)
                             # [추가] 시스템 트레이딩 로그 기록
                             if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
                             
+                            # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
+                            if time.time() - _last_alert_time > 300:
+                                send_telegram_message(f"⚠️ [서버 경고] KIS 서버 처리 지연(OPSQ2000).\n(자동 재시도 중...)")
+                                _last_alert_time = time.time()
+                            
                             time.sleep(config.RETRY_DELAY_SERVER)
-                            response = super().request(method, url, *args, **kwargs)
+                            
+                            # [개선] 재시도 루프 활용 (단발성 재시도가 아닌 루프 continue)
+                            if attempt < max_retries:
+                                continue
 
                         elif msg_cd in ['EGW00123', 'EGW00121']:
                             logger.warning(f"토큰 만료 감지(Code: {msg_cd}). 토큰을 갱신합니다...")
@@ -193,13 +292,6 @@ class ThrottledSession(requests.Session):
                                 continue
                 except Exception: pass
                 
-                # 성공 시 시간 기록 후 반환
-                # [수정] 락 안에서 시간 업데이트
-                with self.lock:
-                    now_final = time.time()
-                    if is_real_server: self.last_request_time_real = now_final
-                    elif is_sim_server: self.last_request_time_sim = now_final
-                
                 return response
 
             except Exception as e:
@@ -210,11 +302,16 @@ class ThrottledSession(requests.Session):
                 # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
                 if is_disconnect and attempt < max_retries:
                     wait_time = 0.5 * (2 ** attempt)
-                    msg = f"서버 연결 끊김 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
+                    msg = f"⚠️ KIS 서버 연결 끊김(불안정) 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
                     # [추가] 시스템 트레이딩 로그 기록
                     if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                    
+                    # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
+                    if time.time() - _last_alert_time > 300:
+                        send_telegram_message(f"⚠️ [서버 경고] KIS 서버 연결 불안정.\n내용: {str(e)}\n(자동 재시도 중...)")
+                        _last_alert_time = time.time()
                     
                     time.sleep(wait_time)
                     continue
@@ -446,16 +543,6 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 
                 res_json = res.json()
                 
-                # [수정] EGW00201 (초당 전송 건수 초과) 발생 시 지수 백오프 재시도
-                if res_json.get('msg_cd') == 'EGW00201':
-                    if attempt < retries:
-                        wait_time = 0.5 * (2 ** attempt)
-                        msg = f"API 호출 빈도 제한(EGW00201) 감지. {wait_time:.1f}초 후 재시도합니다 ({attempt+1}/{retries})..."
-                        logger.warning(msg)
-                        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                            config.console.print(f"[dim yellow][API] {msg}[/dim yellow]")
-                        time.sleep(wait_time)
-                        continue
                 
                 return res_json
             except Exception as e:
@@ -868,7 +955,31 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None):
         data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
 
     if data.get('rt_cd') == '0':
-        return data.get('output1', []), data.get('output2', [])
+        output1 = data.get('output1', [])
+        output2 = data.get('output2', [])
+        
+        # [디버깅] 잔고 조회 결과 로그 출력
+        count = len(output1)
+        summary_eval = 0
+        if output2:
+            summary_tmp = output2[0] if isinstance(output2, list) and output2 else (output2 if isinstance(output2, dict) else {})
+            summary_eval = safe_int(summary_tmp.get('scts_evlu_amt'))
+            
+        logger.info(f"[API] 잔고 조회 결과: 종목수={count}, 총평가금={summary_eval:,}원 (RT_CD={data.get('rt_cd')})")
+        
+        # [보정] 리스트는 비어있는데 총 평가금액이 있는 경우 (데이터 불일치), 조회 구분 변경 시도
+        if not output1 and output2:
+            summary = output2[0] if isinstance(output2, list) and output2 else (output2 if isinstance(output2, dict) else {})
+            total_eval = safe_int(summary.get('scts_evlu_amt'))
+            
+            if total_eval > 0 and params["INQR_DVSN"] == "02":
+                logger.info(f"[API] 잔고 불일치 감지(평가금:{total_eval}, 종목수:0). INQR_DVSN='01'로 재조회 시도.")
+                params["INQR_DVSN"] = "01"
+                retry_data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
+                if retry_data.get('rt_cd') == '0':
+                    return retry_data.get('output1', []), retry_data.get('output2', [])
+        
+        return output1, output2
     
     # [추가] 실패 시 로그 출력
     msg = f"잔고 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})"
@@ -1050,6 +1161,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
     """예수금 및 자산 현황 조회 (모의/실전 자동 분기)"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0}
+    success = False # [추가] 조회 성공 여부 플래그
 
     if config.session.is_simulation:
         # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
@@ -1060,6 +1172,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
             res['deposit'] = int(float(summary.get('dnca_tot_amt', 0)))
             res['d2_deposit'] = int(float(summary.get('prvs_rcdl_excc_amt', 0)))
             res['withdraw'] = res['d2_deposit']
+            success = True
         
         # 잔고조회에서 예수금을 못 가져왔거나 0인 경우, 기존 방식(주문가능금액) 시도
         if res['deposit'] == 0:
@@ -1070,8 +1183,14 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
                 res['deposit'] = cash
                 res['withdraw'] = cash
                 res['d2_deposit'] = cash
+                success = True
             else:
-                logger.error(f"모의투자 예수금 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})")
+                # [수정] 서버 장애(OPSQ2000)로 인한 조회 실패 시 로그 레벨 완화 및 D+2 예수금 활용
+                logger.warning(f"모의투자 예수금 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})")
+                # 잔고 조회(get_domestic_balance)에서 가져온 d2_deposit이 있다면 이를 deposit으로 대체 사용
+                if res['d2_deposit'] > 0:
+                    res['deposit'] = res['d2_deposit']
+                    success = True
     else:
         data = get_foreign_deposit(cano, acnt_prdt_cd)
         if data.get('rt_cd') == '0' and data.get('output2'):
@@ -1080,85 +1199,24 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
             res['deposit'] = int(float(out2.get('dnca_tot_amt', 0)))
             res['d2_deposit'] = int(float(out2.get('prvs_rcdl_excc_amt', 0)))
             res['withdraw'] = res['d2_deposit']
+            success = True
         else:
             logger.error(f"실전투자 예수금 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})")
             
-    return res
+    return res if success else None # [수정] 실패 시 None 반환
 
-def _get_telegram_footer():
-    """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
-    if not config.TELEGRAM_BOT_TOKEN:
-        return
-
-    cano = config.session.cano
-    acc_label = "모의" if config.session.is_simulation else "실전"
-
-    # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
-        cano = config.session.auto_cano
-        acc_label = "자동"
-
-    instance_name = config.TELEGRAM_INSTANCE_NAME
-    return f"[{instance_name} | {acc_label} {cano}]"
-
-def send_telegram_message(message):
-    """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
-        return
-
-    account_info = _get_telegram_footer()
-    
-    # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
-    # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
-    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
-
-    # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
-    final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
-
-    # [수정] 전송 메시지 로그 기록 (시스템 로그로 변경)
-    log_content = final_msg.replace('\n', ' | ')
-    logger.info(f"[Telegram] 메시지 발송: {log_content}")
-
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg}
-    
-    # [추가] 화면 디버그 로그 (요청)
-    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print(f"[dim cyan][TRACE] REQ (TELEGRAM) | POST {url}[/dim cyan]")
-        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-            config.console.print(f"[dim cyan]  > Message: {message.replace(chr(10), ' ')}[/dim cyan]")
-
-    # [수정] 재시도 로직 추가 (최대 3회)
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # 매매 로직 지연 방지를 위해 짧은 타임아웃 설정 (재시도 시 조금씩 증가)
-            current_timeout = 1 + (attempt * 0.5)
-            res = requests.post(url, data=data, timeout=current_timeout)
-            
-            # [추가] 화면 디버그 로그 (응답)
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} ({attempt+1}/{max_retries})[/dim magenta]")
-                if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
-                     config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
-            
-            if res.status_code == 200:
-                logger.info("[Telegram] 전송 성공")
-                return # 성공 시 함수 종료
-            else:
-                logger.error(f"[Telegram] 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
-        except Exception as e:
-            # [추가] 화면 디버그 로그 (예외)
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
-
-            logger.error(f"[Telegram] 전송 중 오류 발생({attempt+1}/{max_retries}): {str(e)}")
-        
-        # 마지막 시도가 아니면 대기
-        if attempt < max_retries - 1:
-            time.sleep(1)
-            
-    logger.error("[Telegram] 최종 전송 실패")
+def check_server_health():
+    """서버 상태 점검 (삼성전자 현재가 조회)"""
+    try:
+        # 타임아웃 5초, 재시도 0회로 설정하여 빠르게 확인
+        res = call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", 
+                       params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": "005930"}, 
+                       timeout=5, retries=0)
+        if res and res.get('rt_cd') == '0':
+            return True
+    except:
+        pass
+    return False
 
 def send_telegram_photo(file_path, caption=None):
     """텔레그램 사진 전송"""

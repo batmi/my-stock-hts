@@ -19,7 +19,7 @@ console = Console()
 # OFF   : 로그 출력 없음
 # TRACE : [TRACE] 로그 화면 출력
 # DEBUG : [TRACE] 및 [DEBUG] 로그 화면 출력
-SCREEN_DEBUG_LEVEL = "OFF"
+SCREEN_DEBUG_LEVEL = "DEBUG"
 
 # ==========================================================
 # [설정] 파일 로그 레벨 설정 (DEBUG / INFO / WARNING / ERROR / CRITICAL)

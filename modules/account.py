@@ -147,6 +147,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
+    config.console.print(f"[dim]ℹ️ 조회 대상 계좌: {cano}-{acnt_prdt_cd}[/dim]")
+    
     with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
         # [수정] api.get_domestic_balance 직접 호출
         raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
@@ -359,7 +361,8 @@ def _display_asset_status(cano, acnt_prdt_cd):
                     if not config.session.is_simulation:
                         summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
                         summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
-                        summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt'))
+                        # [수정] 모의투자에서도 dnca_tot_amt 사용 가능
+                        summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt')) 
                         summary_data['withdraw'] = summary_data['d2_dep'] 
 
         except Exception as e:
@@ -406,13 +409,14 @@ def _display_asset_status(cano, acnt_prdt_cd):
         time.sleep(0.3)
         with utils.AccountContext(cano):
             dep_data = api.get_deposit_balance(cano, acnt_prdt_cd)
-        
-        if config.session.is_simulation:
-            summary_data['dep_dom'] = dep_data['deposit']
-            summary_data['d2_dep'] = dep_data['d2_deposit']
-            summary_data['withdraw'] = dep_data['withdraw']
-        else:
-            summary_data['dep_ovs'] = dep_data['foreign_deposit']
+            
+            if dep_data:
+                if config.session.is_simulation:
+                    summary_data['dep_dom'] = dep_data['deposit']
+                    summary_data['d2_dep'] = dep_data['d2_deposit']
+                    summary_data['withdraw'] = dep_data['withdraw']
+                else:
+                    summary_data['dep_ovs'] = dep_data['foreign_deposit']
     except Exception: pass
 
     # 4. 출력

@@ -349,7 +349,7 @@ class AutoTrader:
                 
                 # [추가] 자산 조회 실패 체크
                 if self.initial_asset is None:
-                    self.initial_asset = 0
+                    self.initial_asset = 0 # 실패 시 0으로 설정하되, 아래에서 경고 메시지 처리
                     asset_check_failed = True
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
@@ -357,9 +357,15 @@ class AutoTrader:
                 
                 # [추가] 텔레그램 알림용 잔고 및 예수금 조회 (예외 처리 추가)
                 try:
+                    # [수정] 실패 시 None 반환 처리 대응
                     acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                     res = api.get_deposit_balance(target_cano, acnt)
-                    deposit = res['deposit'] + res['foreign_deposit']
+                    if res:
+                        deposit = res['deposit'] + res['foreign_deposit']
+                    else:
+                        deposit = 0
+                        asset_check_failed = True
+                        
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                 except Exception as e:
                     self.log(f"시작 시 잔고/예수금 조회 실패: {e}")
@@ -394,9 +400,10 @@ class AutoTrader:
         msg += f"초기 자산: {self.initial_asset:,}원"
         msg += f"\n현재 예수금: {deposit:,}원"
         
+        total_eval = 0 # [추가] 초기화
         if summary and len(summary) > 0:
             s_data = summary[0]
-            total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
+            total_eval = api.safe_int(s_data.get('scts_evlu_amt')) # 값 저장
             total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
             msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
             
@@ -412,6 +419,8 @@ class AutoTrader:
                 msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
         else:
             msg += "\n\n📋 [보유 종목] 없음"
+            if total_eval > 0:
+                msg += " (⚠️ 평가금액 존재 - API 데이터 불일치)"
 
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
@@ -444,6 +453,7 @@ class AutoTrader:
             deposit = 0
             stock_eval = 0
             final_asset = 0
+            is_data_valid = False # [추가] 데이터 유효성 플래그
 
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             with utils.AccountContext(target_cano):
@@ -451,18 +461,25 @@ class AutoTrader:
                     # 1. 예수금 조회
                     acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                     res = api.get_deposit_balance(target_cano, acnt)
-                    deposit = res['deposit'] + res['foreign_deposit']
+                    if res:
+                        deposit = res['deposit'] + res['foreign_deposit']
+                        is_data_valid = True
+                    else:
+                        deposit = 0
 
                     # 2. 잔고 및 평가금 조회
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                     if summary and len(summary) > 0:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
 
-                    final_asset = deposit + stock_eval
-                    profit = final_asset - self.initial_asset
-                    profit_rate = 0.0 if self.initial_asset <= 0 else (profit / self.initial_asset) * 100
+                    if is_data_valid:
+                        final_asset = deposit + stock_eval
+                        profit = final_asset - self.initial_asset
+                        profit_rate = 0.0 if self.initial_asset <= 0 else (profit / self.initial_asset) * 100
 
-                    msg += f"\n종료 자산: {final_asset:,}원\n최종 예수금: {deposit:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
+                        msg += f"\n종료 자산: {final_asset:,}원\n최종 예수금: {deposit:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
+                    else:
+                        msg += "\n(⚠️ 종료 시 자산 정보 조회 실패 - 서버 응답 없음)"
 
                     if holdings:
                         msg += "\n\n📋 [최종 보유 종목 현황]"
@@ -476,6 +493,8 @@ class AutoTrader:
                             msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit_amt:+,}원 ({rate:+.2f}%)"
                     else:
                         msg += "\n\n📋 [최종 보유 종목] 없음"
+                        if not is_data_valid:
+                            msg += " (조회 실패 가능성 있음)"
                 except Exception as e:
                     self.log(f"종료 시 자산/잔고 조회 실패: {e}")
                     msg += "\n(자산 조회 실패)"
@@ -509,7 +528,10 @@ class AutoTrader:
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 holdings, _ = api.get_domestic_balance(target_cano, acnt)
                 res = api.get_deposit_balance(target_cano, acnt)
-                deposit = res['d2_deposit'] # 주문 가능 금액 기준
+                if res:
+                    deposit = res['d2_deposit'] # 주문 가능 금액 기준
+                else:
+                    deposit = 0
             except: pass
 
         if current_asset is not None:
@@ -608,7 +630,10 @@ class AutoTrader:
                 # 예수금 별도 조회 (매수 여력 확인용)
                 try:
                     res = api.get_deposit_balance(target_cano, acnt)
-                    deposit = res['d2_deposit']
+                    if res:
+                        deposit = res['d2_deposit']
+                    else:
+                        deposit = 0
                 except: pass
                 
                 # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
@@ -652,9 +677,9 @@ class AutoTrader:
                 
                 is_healthy = stat.get('is_healthy', True)
                 current = stat.get('current', 0)
-                trend_icon = "EMA상위" if is_healthy else "EMA하위"
+                trend_icon = "📈" if is_healthy else "📉"
                 color = "red" if is_healthy else "blue"
-                return f"[{color}]{current:,.0f} ({trend_icon})[/]"
+                return f"[{color}]{current:,.0f} {trend_icon}[/]"
             
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
             
@@ -690,7 +715,7 @@ class AutoTrader:
                     elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
                     table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
         else:
-            table.add_row("자산 정보", "[bold red]조회 실패 (통신 오류)[/bold red]")
+            table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
                 table.add_row("초기 자산", f"{self.initial_asset:,}원")
 
@@ -795,10 +820,58 @@ class AutoTrader:
                     "odno": r['odno']
                 })
 
-    def _calculate_statistics(self):
-        total_trades = len(self.trade_records)
-        buy_trades = [r for r in self.trade_records if r['type'] == 'buy']
-        sell_trades = [r for r in self.trade_records if r['type'] == 'sell']
+    def get_performance_report(self):
+        """텔레그램용 성과 리포트 생성"""
+        # DB에서 조회 (로그 출력 없이)
+        db_records = db_manager.db.get_trades(is_auto=True, is_sim=config.session.is_simulation, limit=500)
+        
+        temp_records = []
+        for r in reversed(db_records):
+            type_str = r['type']
+            simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+            
+            temp_records.append({
+                "type": simple_type,
+                "code": r['code'],
+                "name": r['name'],
+                "qty": int(r['qty']),
+                "price": float(r['price']),
+                "profit_rate": float(r['profit_rate'] or 0),
+                "profit_amt": int(r['profit_amt'] or 0),
+                "reason": r['reason'],
+                "time": r['time'],
+                "odno": r['odno']
+            })
+            
+        if not temp_records:
+            return "📭 매매 기록이 없습니다."
+            
+        stats = self._calculate_statistics(temp_records)
+        
+        msg = "📊 [시스템 트레이딩 성과 리포트]\n"
+        msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
+        
+        if stats['sell_trades_exist']:
+            win_rate = stats['win_rate']
+            total_profit = stats['total_profit']
+            avg_profit_rate = stats['avg_profit_rate']
+            
+            icon = "🔴" if total_profit > 0 else ("🔵" if total_profit < 0 else "⚪️")
+            msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
+            msg += f"총 손익: {icon} {total_profit:+,}원\n"
+            msg += f"평균 수익률: {avg_profit_rate:+.2f}%\n"
+            msg += f"평균 보유: {stats['avg_holding_str']}"
+        else:
+            msg += "\n(청산된 내역이 없어 수익률 산출 불가)"
+            
+        return msg
+
+    def _calculate_statistics(self, records=None):
+        if records is None: records = self.trade_records
+        
+        total_trades = len(records)
+        buy_trades = [r for r in records if r['type'] == 'buy']
+        sell_trades = [r for r in records if r['type'] == 'sell']
         
         win_trades = 0
         loss_trades = 0
@@ -811,7 +884,7 @@ class AutoTrader:
         buy_times = {} # code -> list of datetime
 
         # 시간순 처리를 위해 전체 기록 순회
-        for r in self.trade_records:
+        for r in records:
             code = r['code']
             try:
                 dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
@@ -1142,15 +1215,28 @@ class AutoTrader:
                         if getattr(config, 'USE_MARKET_FILTER', True):
                             self._update_market_indices_status()
                             
+                        # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
+                        # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
+                        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                        
+                        # 1. 잔고 조회
+                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                        
+                        # 2. 예수금 조회
+                        deposit_res = api.get_deposit_balance(target_cano, acnt)
+                        
+                        # API 호출 간격 조절 (Rate Limit 방지)
+                        time.sleep(0.2)
+
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
                         # 1. 매도 조건 점검 (리스크 관리)
-                        self._check_sell_conditions()
+                        self._check_sell_conditions(holdings)
                         # 2. 매수 조건 점검
-                        self._check_buy_conditions()
+                        self._check_buy_conditions(holdings, deposit_res)
                         # 3. 미체결 주문 관리 (오래된 주문 취소)
                         self._manage_unfilled_orders()
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
-                        self._monitor_account_status()
+                        self._monitor_account_status(holdings, summary, deposit_res)
                     else:
                         self.log("시스템 상태: WAITING (거래 시간 외)")
                     
@@ -1172,11 +1258,37 @@ class AutoTrader:
                 self.log(f"에러 발생({self.consecutive_errors}/{max_err}): {str(e)}")
                 
                 if self.consecutive_errors >= max_err:
-                    self.log(f"[비상 정지] 연속 에러 {max_err}회 발생으로 시스템을 중단합니다.")
-                    api.send_telegram_message(f"🚨 [비상 정지] 연속 에러 {max_err}회 발생으로 시스템을 중단합니다.")
-                    self.stop()
-                    break
+                    # [수정] 중단 대신 대기 모드로 전환
+                    self.log(f"[장애 감지] 연속 에러 {max_err}회 발생. 서버 장애로 판단하여 대기 모드로 전환합니다.")
+                    api.send_telegram_message(f"🚨 [서버 장애] 연속 에러 {max_err}회 발생.\n매매를 일시 중지하고 서버 복구를 대기합니다.")
+                    
+                    self._wait_for_server_recovery()
+                    
+                    # 복구되어 리턴되면 에러 카운트 초기화 후 루프 재개
+                    self.consecutive_errors = 0
+                    continue
+                
                 time.sleep(10)
+
+    def _wait_for_server_recovery(self):
+        """서버가 정상화될 때까지 대기"""
+        check_interval = 60 # 1분마다 확인
+        
+        while self.is_running:
+            time.sleep(check_interval)
+            
+            self.log("[장애 대기] 서버 상태 점검 중...")
+            
+            try:
+                # 삼성전자 현재가 조회로 서버 상태 확인
+                if api.check_server_health():
+                    self.log("[서버 복구] 서버 정상화 확인. 매매를 재개합니다.")
+                    api.send_telegram_message("✅ [서버 복구] KIS 서버가 정상화되었습니다.\n자동매매를 재개합니다.")
+                    return
+                else:
+                    self.log("[장애 대기] 서버 여전히 응답 없음.")
+            except Exception as e:
+                self.log(f"[장애 대기] 점검 중 오류: {e}")
 
     def _manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""
@@ -1217,15 +1329,9 @@ class AutoTrader:
         except Exception as e:
             self.log(f"미체결 관리 중 오류: {e}")
 
-    def _monitor_account_status(self):
+    def _monitor_account_status(self, holdings, summary, deposit_res):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
         try:
-            # API 호출 전 대기 (Rate Limit 방지)
-            time.sleep(0.2)
-            cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-            holdings, summary = api.get_domestic_balance(cano, acnt)
-            
             if not holdings:
                 self.log("보유 종목: 없음")
             else:
@@ -1283,8 +1389,16 @@ class AutoTrader:
                     total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
                     self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
+                    # 총 자산 계산 (예수금 + 평가금)
+                    current_total = 0
+                    if deposit_res:
+                        # 총 자산 계산 시에는 원화+외화 예수금 합산
+                        cash = deposit_res['deposit'] + deposit_res['foreign_deposit']
+                        current_total = cash + total_eval
+                    
                     # [추가] 일일 손실 제한 체크
-                    self._check_loss_limit(total_eval)
+                    if current_total > 0:
+                        self._check_loss_limit(current_total)
                     
         except Exception: pass
 
@@ -1298,6 +1412,8 @@ class AutoTrader:
                 
                 # 1. 예수금 조회
                 res = api.get_deposit_balance(cano, acnt)
+                if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
+                
                 # 총 자산 계산 시에는 원화+외화 예수금 합산
                 cash = res['deposit'] + res['foreign_deposit']
                 
@@ -1313,16 +1429,15 @@ class AutoTrader:
                 logger.debug(f"자산 조회 중 예외 발생({attempt+1}/3): {str(e)}")
                 time.sleep(1)
         
+        self.log(f"⚠️ 자산 조회 최종 실패. (KIS 서버 응답 지연)")
         return None
 
-    def _check_loss_limit(self, current_stock_eval):
+    def _check_loss_limit(self, current_total):
         """자산 변동을 체크하여 손실 한도 초과 시 비상 정지"""
         loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
         if loss_limit_pct <= 0 or self.initial_asset <= 0: return
 
-        # 현재 총 자산 재계산 (예수금 + 현재 주식 평가금)
-        current_total = self._get_total_estimated_asset()
-        if current_total is None or current_total == 0: return # [수정] 조회 실패 시 체크 건너뜀
+        if current_total <= 0: return
 
         loss_rate = (current_total - self.initial_asset) / self.initial_asset * 100
         
@@ -1342,10 +1457,8 @@ class AutoTrader:
             except: pass
         return None
 
-    def _check_sell_conditions(self):
-        cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-        holdings, _ = api.get_domestic_balance(cano, acnt)
+    def _check_sell_conditions(self, holdings):
+        # [최적화] 인자로 전달받은 holdings 사용
         if not holdings: return
 
         stop_loss_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
@@ -1479,7 +1592,7 @@ class AutoTrader:
         if price < 500000: return 500
         return 1000
 
-    def _check_buy_conditions(self):
+    def _check_buy_conditions(self, holdings, deposit_res):
         targets = config.session.stock_data.get("stocks_kr", [])
         if not targets: return
         
@@ -1488,9 +1601,6 @@ class AutoTrader:
         skipped_stocks = [] # [추가] 시장 필터링으로 보류된 종목 리스트
         
         # [추가] 보유 종목 조회 (중복 매수 방지)
-        cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-        holdings, _ = api.get_domestic_balance(cano, acnt)
         holding_codes = set()
         if holdings:
             for h in holdings:
@@ -1508,10 +1618,10 @@ class AutoTrader:
 
         # 예수금 확인 (API 직접 호출)
         avail_cash = 0
-        try:
-            res = api.get_deposit_balance(cano, acnt)
-            avail_cash = res['d2_deposit'] # 주문 가능 금액은 D+2 예수금 기준
-        except: return
+        if deposit_res:
+            avail_cash = deposit_res['d2_deposit'] # 주문 가능 금액은 D+2 예수금 기준
+        else:
+            return # 조회 실패 시 매수 중단
 
         if avail_cash < 50000: return # 최소 주문 가능 금액 설정
 
@@ -1843,6 +1953,7 @@ class TelegramCommander:
             "/start": self._cmd_start,
             "/stop": self._cmd_stop,
             "/help": self._cmd_help,
+            "/report": self._cmd_report,
             "/market": self._cmd_market,
             "/signal": self._cmd_signal,
             "/chart": self._cmd_chart,
@@ -1850,7 +1961,6 @@ class TelegramCommander:
             "/config": self._cmd_config,
             "/history": self._cmd_history,
             "/log": self._cmd_log,
-            "/profit": self._cmd_profit,
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings
         }
@@ -1941,6 +2051,7 @@ class TelegramCommander:
             "• /start : 시스템 트레이딩 시작\n"
             "• /stop : 시스템 트레이딩 중단\n"
             "• /status : 시스템 트레이딩 상태 조회\n"
+            "• /report : 매매 성과 리포트 조회\n"
             "• /market : 주요 시장 지수 현황\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
             "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
@@ -1948,10 +2059,12 @@ class TelegramCommander:
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /history [개수] : 최근 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
-            "• /profit : 금일 실현 손익 조회\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
         )
+
+    def _cmd_report(self, args):
+        return self.trader.get_performance_report()
 
     def _cmd_market(self, args):
         return self._get_market_status()
@@ -1987,36 +2100,6 @@ class TelegramCommander:
             if count > 20: count = 20
         return self.trader.get_recent_logs(count)
 
-    def _cmd_profit(self, args):
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-        
-        if not config.session.is_simulation and not target_cano:
-            target_cano = config.session.cano
-            acnt = config.session.acnt_prdt_cd
-
-        try:
-            with utils.AccountContext(target_cano):
-                data = api.get_today_profit_summary(target_cano, acnt)
-            
-            if data.get('rt_cd') == '0':
-                summary = {'buy_amt': 0, 'sell_amt': 0, 'total_cost': 0, 'realized_pl': 0}
-                out2 = data.get('output2')
-                if isinstance(out2, list) and len(out2) > 0:
-                    summary_data = out2[0]
-                    summary['buy_amt'] = api.safe_int(summary_data.get('thdt_buy_amt'))
-                    summary['sell_amt'] = api.safe_int(summary_data.get('thdt_sll_amt'))
-                    summary['total_cost'] = api.safe_int(summary_data.get('thdt_tlex_amt'))
-                    summary['realized_pl'] = api.safe_int(summary_data.get('rlzt_pfls'))
-                
-                pl = summary['realized_pl']
-                icon = "🔴" if pl > 0 else ("🔵" if pl < 0 else "⚪️")
-                return f"💰 [금일 실현 손익]\n매수 금액: {summary['buy_amt']:,}원\n매도 금액: {summary['sell_amt']:,}원\n제비용: {summary['total_cost']:,}원\n실현 손익: {icon} {pl:+,}원"
-            else:
-                return f"⚠️ 손익 조회 실패: {data.get('msg1')}"
-        except Exception as e:
-            return f"⚠️ 손익 조회 중 오류 발생: {str(e)}"
-
     def _cmd_balance(self, args):
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -2029,10 +2112,13 @@ class TelegramCommander:
             with utils.AccountContext(target_cano):
                 # 1. 예수금 조회
                 dep_res = api.get_deposit_balance(target_cano, acnt)
-                deposit = dep_res['deposit']
-                foreign_deposit = dep_res['foreign_deposit']
-                d2_deposit = dep_res['d2_deposit']
-                total_cash = deposit + foreign_deposit
+                if dep_res:
+                    deposit = dep_res['deposit']
+                    foreign_deposit = dep_res['foreign_deposit']
+                    d2_deposit = dep_res['d2_deposit']
+                    total_cash = deposit + foreign_deposit
+                else:
+                    return "⚠️ 자산 조회 실패 (서버 응답 없음)"
 
                 # 2. 주식 평가금 조회
                 _, summary = api.get_domestic_balance(target_cano, acnt)
@@ -2048,7 +2134,7 @@ class TelegramCommander:
                 msg = f"💰 [계좌 자산 현황]\n"
                 msg += f"총 자산: {total_asset:,}원\n"
                 msg += f"평가 손익: {total_profit:+,}원\n"
-                msg += f"------------------\n"
+                msg += "\n"
                 msg += f"예수금(원화): {deposit:,}원\n"
                 msg += f"예수금(외화): {foreign_deposit:,}원\n"
                 msg += f"주문가능(D+2): {d2_deposit:,}원\n"
@@ -2134,7 +2220,7 @@ class TelegramCommander:
                 # KOSPI/KOSDAQ의 경우 추세 정보 추가
                 if name in ["KOSPI", "KOSDAQ"]:
                     ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
-                    trend = "EMA상위" if current >= ma_val else "EMA하위"
+                    trend = "📈" if current >= ma_val else "📉"
                     msg += f" {trend}"
                     
             except Exception as e:
