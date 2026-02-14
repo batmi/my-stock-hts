@@ -60,9 +60,13 @@ TOKEN_CACHE_FILE = os.path.join(JSON_DIR, "token_cache.json")
 # [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
 DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")
 
+# ==========================================================
+# [설정] 데이터 보존 및 관리 정책
+# ==========================================================
 # [추가] DB 데이터 보존 기간 (일 단위)
 # 설정된 기간보다 오래된 거래 내역은 프로그램 종료 시 자동으로 삭제됩니다.
 # (기본값: 365일, 0으로 설정 시 자동 삭제 안 함)
+
 DB_DATA_RETENTION_DAYS = 365
 
 # [추가] 로그 파일 보존 기간 (일 단위)
@@ -238,19 +242,19 @@ SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 �
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
-# 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초 - 반응성 향상)
-CONCLUSION_CHECK_INTERVAL = 5
+# 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 10초)
+CONCLUSION_CHECK_INTERVAL = 10
 
-# 2. 대기 모드 주기: 주문이 없는 평상시 확인 주기 (기본값: 180초 = 3분)
+# 2. 대기 모드 주기: 주문이 없는 평상시 확인 주기 (기본값: 300초 = 5분)
 # (0으로 설정하면 평상시에는 아예 확인하지 않습니다. 외부 HTS 주문 감지 불필요 시 0 권장)
-CONCLUSION_CHECK_IDLE_INTERVAL = 180
+CONCLUSION_CHECK_IDLE_INTERVAL = 300
 
 # 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
 CONCLUSION_CHECK_ACTIVE_DURATION = 100
 
 # [추가] 미체결 주문 자동 취소 대기 시간 (초)
-# 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 600초 = 10분)
-UNFILLED_ORDER_CANCEL_SECONDS = 600
+# 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 900초 = 15분)
+UNFILLED_ORDER_CANCEL_SECONDS = 900
 
 # [추가] 시스템 트레이딩 로거 (AutoTrader 실행 시 함수 할당)
 SYSTEM_LOGGER = None

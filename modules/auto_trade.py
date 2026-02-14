@@ -71,9 +71,24 @@ class ConclusionMonitor:
         self.active_until = time.time() + self.active_duration
         self.event.set()
 
+    def _is_market_open(self):
+        """국내 정규장 운영 시간 확인"""
+        now = datetime.now()
+        if now.weekday() > 4: return False # 주말
+        current_time = now.strftime("%H%M")
+        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
+        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
+        return start_time <= current_time <= end_time
+
     def _run_loop(self):
         self.was_active_mode = False
         while self.is_running:
+            # [추가] 장 운영 시간 외에는 모니터링 중단 (트래픽 감소)
+            if not self._is_market_open():
+                self.event.wait(60)
+                if not self.event.is_set():
+                    continue
+
             # [추가] 현재 모드(Active/Idle)에 따른 주기 결정
             is_active_mode = time.time() < self.active_until
             
@@ -1206,37 +1221,40 @@ class AutoTrader:
                             self.log("=" * 80)
                             api.send_telegram_message("🌙 [장 마감] 거래 시간이 종료되었습니다.")
                     
-                    # [변경] 장 운영 시간 여부와 관계없이 분석 수행 (매매만 제한)
-                    status_msg = "RUNNING" if current_market_status else "WAITING (분석 모드)"
-                    self.log(f"시스템 상태: {status_msg}")
-                    
-                    # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
-                    if getattr(config, 'USE_MARKET_FILTER', True):
-                        self._update_market_indices_status()
+                    # [변경] 장 마감 시 분석 중단 (트래픽 감소)
+                    if not current_market_status:
+                        self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
+                        self.was_market_open = current_market_status
+                    else:
+                        status_msg = "RUNNING"
+                        self.log(f"시스템 상태: {status_msg}")
                         
-                    # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
-                    # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
-                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                    
-                    # 1. 잔고 조회
-                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                    
-                    # 2. 예수금 조회
-                    deposit_res = api.get_deposit_balance(target_cano, acnt)
-                    
-                    # API 호출 간격 조절 (Rate Limit 방지)
-                    time.sleep(0.2)
+                        # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
+                        if getattr(config, 'USE_MARKET_FILTER', True):
+                            self._update_market_indices_status()
+                            
+                        # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
+                        # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
+                        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                        
+                        # 1. 잔고 조회
+                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                        
+                        # 2. 예수금 조회
+                        deposit_res = api.get_deposit_balance(target_cano, acnt)
+                        
+                        # API 호출 간격 조절 (Rate Limit 방지)
+                        time.sleep(0.2)
 
-                    # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
-                    # 1. 매도 조건 점검 (리스크 관리)
-                    self._check_sell_conditions(holdings, current_market_status)
-                    # 2. 매수 조건 점검
-                    self._check_buy_conditions(holdings, deposit_res, current_market_status)
-                    # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
-                    if current_market_status:
+                        # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
+                        # 1. 매도 조건 점검 (리스크 관리)
+                        self._check_sell_conditions(holdings, current_market_status)
+                        # 2. 매수 조건 점검
+                        self._check_buy_conditions(holdings, deposit_res, current_market_status)
+                        # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self._manage_unfilled_orders()
-                    # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
-                    self._monitor_account_status(holdings, summary, deposit_res)
+                        # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
+                        self._monitor_account_status(holdings, summary, deposit_res)
                     
                     self.was_market_open = current_market_status
                     
