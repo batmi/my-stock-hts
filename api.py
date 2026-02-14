@@ -240,9 +240,11 @@ class ThrottledSession(requests.Session):
                             msg1 = res_json.get('msg1', '')
                             note = ""
                             if "INVALID_CHECK_ACNO" in msg1:
-                                note = " (※ 서버 내부 오류로 인한 허위 메시지입니다.)"
+                                note = " (※ 서버 내부 오류)"
 
-                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {config.RETRY_DELAY_SERVER}초 대기 후 재시도..."
+                            # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
+                            wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
+                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도..."
                             logger.warning(msg)
                             # [추가] 시스템 트레이딩 로그 기록
                             if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
@@ -252,7 +254,7 @@ class ThrottledSession(requests.Session):
                                 send_telegram_message(f"⚠️ [서버 경고] KIS 서버 처리 지연(OPSQ2000).\n(자동 재시도 중...)")
                                 _last_alert_time = time.time()
                             
-                            time.sleep(config.RETRY_DELAY_SERVER)
+                            time.sleep(wait_time)
                             
                             # [개선] 재시도 루프 활용 (단발성 재시도가 아닌 루프 continue)
                             if attempt < max_retries:

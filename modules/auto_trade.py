@@ -1206,39 +1206,39 @@ class AutoTrader:
                             self.log("=" * 80)
                             api.send_telegram_message("🌙 [장 마감] 거래 시간이 종료되었습니다.")
                     
-                    self.was_market_open = current_market_status
+                    # [변경] 장 운영 시간 여부와 관계없이 분석 수행 (매매만 제한)
+                    status_msg = "RUNNING" if current_market_status else "WAITING (분석 모드)"
+                    self.log(f"시스템 상태: {status_msg}")
                     
-                    if current_market_status:
-                        self.log("시스템 상태: RUNNING")
+                    # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
+                    if getattr(config, 'USE_MARKET_FILTER', True):
+                        self._update_market_indices_status()
                         
-                        # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
-                        if getattr(config, 'USE_MARKET_FILTER', True):
-                            self._update_market_indices_status()
-                            
-                        # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
-                        # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
-                        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                        
-                        # 1. 잔고 조회
-                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                        
-                        # 2. 예수금 조회
-                        deposit_res = api.get_deposit_balance(target_cano, acnt)
-                        
-                        # API 호출 간격 조절 (Rate Limit 방지)
-                        time.sleep(0.2)
+                    # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
+                    # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
+                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                    
+                    # 1. 잔고 조회
+                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                    
+                    # 2. 예수금 조회
+                    deposit_res = api.get_deposit_balance(target_cano, acnt)
+                    
+                    # API 호출 간격 조절 (Rate Limit 방지)
+                    time.sleep(0.2)
 
-                        # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
-                        # 1. 매도 조건 점검 (리스크 관리)
-                        self._check_sell_conditions(holdings)
-                        # 2. 매수 조건 점검
-                        self._check_buy_conditions(holdings, deposit_res)
-                        # 3. 미체결 주문 관리 (오래된 주문 취소)
+                    # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
+                    # 1. 매도 조건 점검 (리스크 관리)
+                    self._check_sell_conditions(holdings, current_market_status)
+                    # 2. 매수 조건 점검
+                    self._check_buy_conditions(holdings, deposit_res, current_market_status)
+                    # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
+                    if current_market_status:
                         self._manage_unfilled_orders()
-                        # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
-                        self._monitor_account_status(holdings, summary, deposit_res)
-                    else:
-                        self.log("시스템 상태: WAITING (거래 시간 외)")
+                    # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
+                    self._monitor_account_status(holdings, summary, deposit_res)
+                    
+                    self.was_market_open = current_market_status
                     
                     self.log("모니터링 완료. 대기 중...")
                 
@@ -1457,7 +1457,7 @@ class AutoTrader:
             except: pass
         return None
 
-    def _check_sell_conditions(self, holdings):
+    def _check_sell_conditions(self, holdings, is_market_open=True):
         # [최적화] 인자로 전달받은 holdings 사용
         if not holdings: return
 
@@ -1559,6 +1559,10 @@ class AutoTrader:
                 order_price = int(current_price - tick_size)
                 if order_price <= 0: order_price = int(current_price)
 
+                if not is_market_open:
+                    self.log(f"[장마감] 매도 신호 감지 (주문 미전송): {name} - {reason}")
+                    continue
+
                 self.log(f"매도 실행: {name} - {reason}")
                 # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
                 odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price)
@@ -1592,7 +1596,7 @@ class AutoTrader:
         if price < 500000: return 500
         return 1000
 
-    def _check_buy_conditions(self, holdings, deposit_res):
+    def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
         targets = config.session.stock_data.get("stocks_kr", [])
         if not targets: return
         
@@ -1630,6 +1634,12 @@ class AutoTrader:
         
         # 2. 매수 집행
         if candidates:
+            if not is_market_open:
+                self.log(f"[장마감] 매수 후보 감지 (주문 미전송): {len(candidates)}종목")
+                for cand in candidates:
+                     self.log(f"   - {cand['name']} ({cand['score']}점)")
+                return
+
             self._execute_buy_orders(candidates, avail_cash, invest_ratio)
 
     def _analyze_candidates(self, targets, holding_codes):
