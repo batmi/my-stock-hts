@@ -252,6 +252,11 @@ def get_access_token(force_refresh=False):
             logger.debug("모의 캐시 토큰 사용")
             return token
 
+    # [추가] 키 누락 시 조기 리턴 (불필요한 서버 요청 방지)
+    if not config.session.app_key or not config.session.app_secret:
+        logger.error("모의투자 API Key 또는 Secret이 설정되지 않았습니다. (환경변수 SIM_APP_KEY, SIM_APP_SECRET 확인 필요)")
+        return None
+
     headers = {"content-type": "application/json"}
     # [수정] session에서 키 사용
     body = {"grant_type": "client_credentials", "appkey": config.session.app_key, "appsecret": config.session.app_secret}
@@ -1047,13 +1052,26 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0}
 
     if config.session.is_simulation:
-        data = get_deposit(cano, acnt_prdt_cd)
-        if data.get('rt_cd') == '0':
-            output = data.get('output', {})
-            cash = safe_int(output.get('ord_psbl_cash'))
-            res['deposit'] = cash
-            res['withdraw'] = cash
-            res['d2_deposit'] = cash
+        # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
+        holdings, summary_list = get_domestic_balance(cano, acnt_prdt_cd)
+        
+        if summary_list and len(summary_list) > 0:
+            summary = summary_list[0]
+            res['deposit'] = int(float(summary.get('dnca_tot_amt', 0)))
+            res['d2_deposit'] = int(float(summary.get('prvs_rcdl_excc_amt', 0)))
+            res['withdraw'] = res['d2_deposit']
+        
+        # 잔고조회에서 예수금을 못 가져왔거나 0인 경우, 기존 방식(주문가능금액) 시도
+        if res['deposit'] == 0:
+            data = get_deposit(cano, acnt_prdt_cd)
+            if data.get('rt_cd') == '0':
+                output = data.get('output', {})
+                cash = safe_int(output.get('ord_psbl_cash'))
+                res['deposit'] = cash
+                res['withdraw'] = cash
+                res['d2_deposit'] = cash
+            else:
+                logger.error(f"모의투자 예수금 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})")
     else:
         data = get_foreign_deposit(cano, acnt_prdt_cd)
         if data.get('rt_cd') == '0' and data.get('output2'):
@@ -1062,6 +1080,8 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
             res['deposit'] = int(float(out2.get('dnca_tot_amt', 0)))
             res['d2_deposit'] = int(float(out2.get('prvs_rcdl_excc_amt', 0)))
             res['withdraw'] = res['d2_deposit']
+        else:
+            logger.error(f"실전투자 예수금 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})")
             
     return res
 

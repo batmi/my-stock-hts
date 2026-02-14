@@ -332,6 +332,7 @@ class AutoTrader:
         holdings = []
         summary = []
         deposit = 0
+        asset_check_failed = False # [추가] 자산 조회 실패 여부 플래그
 
         with console.status("[bold green]시스템 시작 준비 중 (자산 조회 및 스레드 시작)...[/]"):
             self.is_running = True
@@ -346,6 +347,11 @@ class AutoTrader:
             with utils.AccountContext(target_cano):
                 self.initial_asset = self._get_total_estimated_asset()
                 
+                # [추가] 자산 조회 실패 체크
+                if self.initial_asset is None:
+                    self.initial_asset = 0
+                    asset_check_failed = True
+                
                 # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
                 ConclusionMonitor().check_now()
                 
@@ -358,10 +364,10 @@ class AutoTrader:
                 except Exception as e:
                     self.log(f"시작 시 잔고/예수금 조회 실패: {e}")
                     holdings, summary = [], []
+                    asset_check_failed = True
             
-            if self.initial_asset is None:
-                self.initial_asset = 0
-                self.log("초기 자산 조회 실패 또는 자산 없음 (0원으로 설정)")
+            if asset_check_failed:
+                self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
 
             if self.initial_asset > 0:
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
@@ -380,7 +386,12 @@ class AutoTrader:
         # send_telegram_message 내부에서 처리하도록 두는 것이 좋으나, 여기서는 명시적으로 설정
         
         # [수정] 시작 메시지에 보유 종목 및 자산 현황 추가
-        msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n초기 자산: {self.initial_asset:,}원"
+        msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
+        
+        if asset_check_failed:
+            msg += "⚠️ [경고] 자산 정보를 불러오지 못했습니다. (API 오류)\n"
+            
+        msg += f"초기 자산: {self.initial_asset:,}원"
         msg += f"\n현재 예수금: {deposit:,}원"
         
         if summary and len(summary) > 0:

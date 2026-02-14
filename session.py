@@ -16,6 +16,10 @@ class SessionManager:
         self.cano = ""
         self.acnt_prdt_cd = ""
         
+        # 모의투자 정보 저장
+        self.sim_app_key = ""
+        self.sim_app_secret = ""
+        
         # 실전투자 정보 저장
         self.real_app_key = ""
         self.real_app_secret = ""
@@ -35,15 +39,6 @@ class SessionManager:
         self.exchange_cache = {}
 
     def initialize(self, mode=None):
-        # 1. 시크릿 파일 로드 (없으면 환경변수 사용)
-        secret_file = os.path.join(config.JSON_DIR, "secret.json")
-        secrets = {}
-        if os.path.exists(secret_file):
-            try:
-                with open(secret_file, 'r', encoding='utf-8') as f:
-                    secrets = json.load(f)
-            except: pass
-
         # [추가] 계좌번호 파싱 헬퍼 (XXXX-XX 형식 지원)
         def parse_acc(acc_str):
             if not acc_str: return "", ""
@@ -52,44 +47,41 @@ class SessionManager:
                 return parts[0].strip(), parts[1].strip()
             return acc_str.strip(), ""
 
-        self.app_key = secrets.get("APP_KEY") or os.environ.get("APP_KEY", "")
-        self.app_secret = secrets.get("APP_SECRET") or os.environ.get("APP_SECRET", "")
+        # 1. 환경변수 로드 (SIM_, REAL_, AUTO_ 접두사 사용)
+        # 모의투자 (SIM_)
+        self.sim_app_key = os.environ.get("SIM_APP_KEY", "")
+        self.sim_app_secret = os.environ.get("SIM_APP_SECRET", "")
         
-        # [수정] 기본 CANO 로드 (Fallback용)
-        default_cano = secrets.get("CANO") or os.environ.get("CANO", "")
-        default_acnt = secrets.get("ACNT_PRDT_CD") or os.environ.get("ACNT_PRDT_CD", "")
+        # 실전투자 (REAL_)
+        self.real_app_key = os.environ.get("REAL_APP_KEY", "")
+        self.real_app_secret = os.environ.get("REAL_APP_SECRET", "")
         
-        self.real_app_key = secrets.get("REAL_APP_KEY") or os.environ.get("REAL_APP_KEY", "")
-        self.real_app_secret = secrets.get("REAL_APP_SECRET") or os.environ.get("REAL_APP_SECRET", "")
+        # 자동투자 (AUTO_)
+        self.auto_app_key = os.environ.get("AUTO_APP_KEY", "")
+        self.auto_app_secret = os.environ.get("AUTO_APP_SECRET", "")
         
-        self.auto_app_key = secrets.get("AUTO_APP_KEY") or os.environ.get("AUTO_APP_KEY", "")
-        self.auto_app_secret = secrets.get("AUTO_APP_SECRET") or os.environ.get("AUTO_APP_SECRET", "")
+        # 계좌번호 (ACC_NUM)
+        sim_acc_str = os.environ.get("SIM_ACC_NUM", "")
+        real_acc_str = os.environ.get("REAL_ACC_NUM", "")
+        auto_acc_str = os.environ.get("AUTO_ACC_NUM", "")
         
-        # [수정] 환경변수 *_ACC_NUM 지원 및 파싱
-        sim_acc_str = secrets.get("SIM_ACC_NUM") or os.environ.get("SIM_ACC_NUM", "")
-        real_acc_str = secrets.get("REAL_ACC_NUM") or os.environ.get("REAL_ACC_NUM", "")
-        auto_acc_str = secrets.get("AUTO_ACC_NUM") or os.environ.get("AUTO_ACC_NUM", "")
-        
+        # 계좌번호 파싱
         sim_cano, sim_acnt = parse_acc(sim_acc_str)
         real_cano, real_acnt = parse_acc(real_acc_str)
-        auto_cano_parsed, auto_acnt_parsed = parse_acc(auto_acc_str)
+        auto_cano, auto_acnt = parse_acc(auto_acc_str)
         
-        # 자동매매 계좌 설정 (우선순위: AUTO_ACC_NUM > AUTO_CANO)
-        if auto_cano_parsed:
-            self.auto_cano = auto_cano_parsed
-            self.auto_acnt_prdt_cd = auto_acnt_parsed
-        else:
-            self.auto_cano = secrets.get("AUTO_CANO") or os.environ.get("AUTO_CANO", "")
-            self.auto_acnt_prdt_cd = secrets.get("AUTO_ACNT_PRDT_CD") or os.environ.get("AUTO_ACNT_PRDT_CD", "")
+        # 자동매매 계좌 설정
+        self.auto_cano = auto_cano
+        self.auto_acnt_prdt_cd = auto_acnt
         
-        # 텔레그램 설정 (우선순위: secret.json > 환경변수 > config.py 직접 설정)
-        tg_token = secrets.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+        # 텔레그램 설정
+        tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
         if tg_token: config.TELEGRAM_BOT_TOKEN = tg_token
 
-        tg_chat_id = secrets.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
+        tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
         if tg_chat_id: config.TELEGRAM_CHAT_ID = tg_chat_id
 
-        tg_inst = secrets.get("TELEGRAM_INSTANCE_NAME") or os.environ.get("TELEGRAM_INSTANCE_NAME")
+        tg_inst = os.environ.get("TELEGRAM_INSTANCE_NAME")
         if tg_inst: config.TELEGRAM_INSTANCE_NAME = tg_inst
 
         # 2. 모드 설정 (CLI 인자 -> 사용자 입력)
@@ -104,15 +96,21 @@ class SessionManager:
             self.is_simulation = True
             self.url_base = config.SIM_URL
             
+            # 모의투자 키 적용
+            if self.sim_app_key:
+                self.app_key = self.sim_app_key
+                self.app_secret = self.sim_app_secret
+            
             # [수정] 모의투자 계좌 우선 적용
             if sim_cano:
                 self.cano = sim_cano
                 self.acnt_prdt_cd = sim_acnt
-            else:
-                self.cano = default_cano
-                self.acnt_prdt_cd = default_acnt
                 
             config.console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
+            
+            # [추가] 모의투자 키 누락 확인 (환경변수)
+            if not self.app_key or not self.app_secret:
+                config.console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
         else:
             self.is_simulation = False
             self.url_base = config.REAL_URL
@@ -125,11 +123,12 @@ class SessionManager:
             if real_cano:
                 self.cano = real_cano
                 self.acnt_prdt_cd = real_acnt
-            else:
-                self.cano = default_cano
-                self.acnt_prdt_cd = default_acnt
                 
             config.console.print("\n[bold red]실전투자 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
+            
+            # [추가] 실전투자 키 누락 확인 (환경변수)
+            if not self.app_key or not self.app_secret:
+                config.console.print("[bold red]⚠️ 경고: 실전투자용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
             
         # [추가] 계좌 정보 누락 시 사용자 입력 요청
         if not self.cano:
