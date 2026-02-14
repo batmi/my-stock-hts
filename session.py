@@ -26,13 +26,6 @@ class SessionManager:
         self.auto_cano = ""
         self.auto_acnt_prdt_cd = ""
         
-        # 텔레그램 설정
-        self.telegram_token = ""
-        self.telegram_chat_id = ""
-        self.telegram_instance_name = "HTS"
-        self.telegram_polling_timeout = 10
-        self.enable_telegram = True
-        
         # 토큰 관리 (API 모듈에서 사용)
         self.sim_access_token = ""
         self.real_access_token = ""
@@ -89,11 +82,15 @@ class SessionManager:
             self.auto_cano = secrets.get("AUTO_CANO") or os.environ.get("AUTO_CANO", "")
             self.auto_acnt_prdt_cd = secrets.get("AUTO_ACNT_PRDT_CD") or os.environ.get("AUTO_ACNT_PRDT_CD", "")
         
-        self.telegram_token = secrets.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        self.telegram_chat_id = secrets.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", "")
-        
-        # [추가] 텔레그램 인스턴스 이름 설정
-        self.telegram_instance_name = secrets.get("TELEGRAM_INSTANCE_NAME") or os.environ.get("TELEGRAM_INSTANCE_NAME", "HTS")
+        # 텔레그램 설정 (우선순위: secret.json > 환경변수 > config.py 직접 설정)
+        tg_token = secrets.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+        if tg_token: config.TELEGRAM_BOT_TOKEN = tg_token
+
+        tg_chat_id = secrets.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
+        if tg_chat_id: config.TELEGRAM_CHAT_ID = tg_chat_id
+
+        tg_inst = secrets.get("TELEGRAM_INSTANCE_NAME") or os.environ.get("TELEGRAM_INSTANCE_NAME")
+        if tg_inst: config.TELEGRAM_INSTANCE_NAME = tg_inst
 
         # 2. 모드 설정 (CLI 인자 -> 사용자 입력)
         if mode is None:

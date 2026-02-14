@@ -1067,7 +1067,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
 
 def _get_telegram_footer():
     """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
-    if not config.session.telegram_token:
+    if not config.TELEGRAM_BOT_TOKEN:
         return
 
     cano = config.session.cano
@@ -1078,12 +1078,12 @@ def _get_telegram_footer():
         cano = config.session.auto_cano
         acc_label = "자동"
 
-    instance_name = config.session.telegram_instance_name
+    instance_name = config.TELEGRAM_INSTANCE_NAME
     return f"[{instance_name} | {acc_label} {cano}]"
 
 def send_telegram_message(message):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
-    if not config.session.telegram_token or not config.session.telegram_chat_id:
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return
 
     account_info = _get_telegram_footer()
@@ -1099,8 +1099,8 @@ def send_telegram_message(message):
     log_content = final_msg.replace('\n', ' | ')
     logger.info(f"[Telegram] 메시지 발송: {log_content}")
 
-    url = f"https://api.telegram.org/bot{config.session.telegram_token}/sendMessage"
-    data = {"chat_id": config.session.telegram_chat_id, "text": final_msg}
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg}
     
     # [추가] 화면 디버그 로그 (요청)
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -1142,7 +1142,7 @@ def send_telegram_message(message):
 
 def send_telegram_photo(file_path, caption=None):
     """텔레그램 사진 전송"""
-    if not config.session.telegram_token or not config.session.telegram_chat_id:
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return False
 
     if not os.path.exists(file_path):
@@ -1152,8 +1152,8 @@ def send_telegram_photo(file_path, caption=None):
     account_info = _get_telegram_footer()
     final_caption = f"{caption}\n\n{account_info}" if caption else account_info
 
-    url = f"https://api.telegram.org/bot{config.session.telegram_token}/sendPhoto"
-    chat_id = config.session.telegram_chat_id
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendPhoto"
+    chat_id = config.TELEGRAM_CHAT_ID
     
     logger.info(f"[Telegram] 사진 전송 시작: {os.path.basename(file_path)}")
 

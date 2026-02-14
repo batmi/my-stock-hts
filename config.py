@@ -83,6 +83,15 @@ RETRY_DELAY_SERVER = 5.0  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 
 MAX_RETRIES = 3
 
 # ==========================================================
+# [설정] 텔레그램 설정 (Telegram Configuration)
+# ==========================================================
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+TELEGRAM_INSTANCE_NAME = "HTS"
+TELEGRAM_POLLING_TIMEOUT = 10
+ENABLE_TELEGRAM = True
+
+# ==========================================================
 # [설정] 기본 환율 (Fallback)
 # ==========================================================
 # 실시간 환율 조회(yfinance) 실패 시 / 백테스팅 시 사용할 기본 환율입니다.

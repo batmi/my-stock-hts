@@ -225,7 +225,7 @@ class ConclusionMonitor:
                                         config.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
                                     
                                     # [추가] 체결 시 차트 이미지 전송 (텔레그램)
-                                    if config.session.enable_telegram:
+                                    if config.ENABLE_TELEGRAM:
                                         try:
                                             # 해외 여부 판단 (단순 로직: 6자리 숫자가 아니면 해외로 간주)
                                             is_overseas = not (code.isdigit() and len(code) == 6)
@@ -307,7 +307,7 @@ class AutoTrader:
         
         # [추가] 텔레그램 봇 제어권 회수 (폴링 스레드가 죽어있다면 재시작)
         if getattr(self, 'telegram_commander', None) and not self.telegram_commander.is_running:
-             if config.session.enable_telegram:
+             if config.ENABLE_TELEGRAM:
                  console.print("[bold cyan][Telegram] 시스템 트레이딩 시작과 함께 텔레그램 봇 제어권을 가져옵니다.[/bold cyan]")
                  self.telegram_commander.start()
         
@@ -1819,7 +1819,7 @@ def system_trading_menu():
 class TelegramCommander:
     """텔레그램 명령어를 수신하고 처리하는 클래스"""
     def __init__(self):
-        self.bot_token = config.session.telegram_token
+        self.bot_token = config.TELEGRAM_BOT_TOKEN
         self.is_running = False
         self.thread = None
         self.last_update_id = 0
@@ -1846,7 +1846,7 @@ class TelegramCommander:
 
     def start(self):
         if not self.bot_token: return
-        if not config.session.enable_telegram: return # [추가] 텔레그램 비활성화 시 시작 안 함
+        if not config.ENABLE_TELEGRAM: return # [추가] 텔레그램 비활성화 시 시작 안 함
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
@@ -1859,7 +1859,7 @@ class TelegramCommander:
 
     def _run_loop(self):
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
-        timeout = config.session.telegram_polling_timeout
+        timeout = config.TELEGRAM_POLLING_TIMEOUT
         
         while self.is_running:
             try:
@@ -1889,7 +1889,7 @@ class TelegramCommander:
         chat_id = str(message.get('chat', {}).get('id'))
         
         # 설정된 Chat ID와 다르면 무시 (보안)
-        if config.session.telegram_chat_id and chat_id != str(config.session.telegram_chat_id):
+        if config.TELEGRAM_CHAT_ID and chat_id != str(config.TELEGRAM_CHAT_ID):
             return
 
         if not text.startswith('/'): return
