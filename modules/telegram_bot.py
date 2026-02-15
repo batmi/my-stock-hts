@@ -405,11 +405,27 @@ class TelegramCommander:
             
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
-            buy_result = "매수 가능" if (is_buy_score and is_buy_rsi) else "매수 불가"
+            is_safe_state = state not in ["위험", "주의"]
+            
+            if is_buy_score and is_buy_rsi and is_safe_state:
+                buy_result = "매수 가능 (조건 충족)"
+            else:
+                reasons = []
+                if not is_safe_state: reasons.append(f"상태:{state}")
+                if not is_buy_score: reasons.append(f"점수미달({score}<{buy_score_limit})")
+                if not is_buy_rsi: reasons.append(f"RSI과열({ind['rsi'] if ind['rsi'] is not None else 'N/A'}>={buy_rsi_limit})")
+                buy_result = f"매수 불가 ({', '.join(reasons)})"
 
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
             is_sell_signal = (score < sell_score_limit) or (state == "위험")
-            sell_result = "매도(추세이탈)" if is_sell_signal else "보유(추세유지)"
+            
+            if is_sell_signal:
+                reasons = []
+                if state == "위험": reasons.append(f"상태:{state}")
+                if score < sell_score_limit: reasons.append(f"점수하락({score}<{sell_score_limit})")
+                sell_result = f"매도 ({', '.join(reasons)})"
+            else:
+                sell_result = "보유 (추세유지)"
 
             msg = f"🔍 [종목 진단] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
