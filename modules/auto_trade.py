@@ -450,32 +450,41 @@ class AutoTrader:
             # [수정] AccountContext 사용
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             with utils.AccountContext(target_cano):
-                self.initial_asset = self._get_total_estimated_asset()
+                # [최적화] 자산 조회 로직 통합 (중복 API 호출 제거)
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 
-                # [추가] 자산 조회 실패 체크
-                if self.initial_asset is None:
-                    self.initial_asset = 0 # 실패 시 0으로 설정하되, 아래에서 경고 메시지 처리
-                    asset_check_failed = True
+                for attempt in range(3):
+                    try:
+                        # 1. 잔고 및 평가금 조회
+                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                        
+                        # 2. 예수금 조회
+                        # 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
+                        if config.session.is_simulation and summary:
+                            deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        else:
+                            # 실전투자거나 데이터가 없으면 정석대로 조회
+                            res = api.get_deposit_balance(target_cano, acnt)
+                            if res:
+                                deposit = res['deposit'] + res['foreign_deposit']
+                            else:
+                                deposit = 0
+                        
+                        # 3. 총 자산 계산
+                        stock_eval = 0
+                        if summary:
+                            stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+                        
+                        self.initial_asset = deposit + stock_eval
+                        asset_check_failed = False
+                        break # 성공 시 루프 탈출
+                    except Exception as e:
+                        logger.error(f"시작 자산 조회 실패({attempt+1}/3): {e}")
+                        asset_check_failed = True
+                        time.sleep(1)
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
                 ConclusionMonitor().check_now()
-                
-                # [추가] 텔레그램 알림용 잔고 및 예수금 조회 (예외 처리 추가)
-                try:
-                    # [수정] 실패 시 None 반환 처리 대응
-                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                    res = api.get_deposit_balance(target_cano, acnt)
-                    if res:
-                        deposit = res['deposit'] + res['foreign_deposit']
-                    else:
-                        deposit = 0
-                        asset_check_failed = True
-                        
-                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                except Exception as e:
-                    self.log(f"시작 시 잔고/예수금 조회 실패: {e}")
-                    holdings, summary = [], []
-                    asset_check_failed = True
             
             if asset_check_failed:
                 self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
