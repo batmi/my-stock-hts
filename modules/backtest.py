@@ -17,7 +17,7 @@ from modules import analysis
 def calculate_daily_status(row, prev_row):
     """
     analysis.py의 로직을 기반으로 일별 상태 및 점수 계산
-    반환값: (raw_score, sell_check_score, can_buy_state)
+    반환값: (raw_score, sell_check_score, can_buy_state, state, reason)
     """
     price = row['close']
     ema20 = row['EMA20']
@@ -38,7 +38,7 @@ def calculate_daily_status(row, prev_row):
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
-    state, _ = analysis.classify_stock_state(
+    state, _, reason = analysis.classify_stock_state(
         price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend
     )
     
@@ -51,7 +51,7 @@ def calculate_daily_status(row, prev_row):
     can_buy_state = (state not in ["위험", "주의"]) # 위험/주의 상태가 아니면 매수 후보
     sell_check_score = 0 if state == "위험" else raw_score # 위험 상태면 점수 0점 처리 (매도 유도)
     
-    return raw_score, sell_check_score, can_buy_state
+    return raw_score, sell_check_score, can_buy_state, state, reason
 
 def get_backtest_data(code, is_overseas, days):
     # 1. yfinance 시도 (장기간 데이터 확보 유리)
@@ -114,6 +114,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     max_score_observed = 0
     score_8_count = 0
     
+    # [추가] 매수 보류 카운트
+    missed_caution_count = 0
+    missed_danger_count = 0
+    missed_trades = [] # [추가] 매수 보류 상세 내역
+    
     # 매도 설정값 로드 (Config 참조)
     stop_loss_limit = stop_loss_rate if stop_loss_rate is not None else config.SELL_STRATEGY["STOP_LOSS_RATE"]
     take_profit_limit = take_profit_rate if take_profit_rate is not None else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
@@ -149,7 +154,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if dd < mdd: mdd = dd
         
         # 상태 및 점수 계산
-        raw_score, sell_check_score, can_buy_state = calculate_daily_status(row, prev_row)
+        raw_score, sell_check_score, can_buy_state, state, reason = calculate_daily_status(row, prev_row)
         
         if raw_score > max_score_observed: max_score_observed = raw_score
         if raw_score >= buy_score_limit: score_8_count += 1
@@ -157,26 +162,46 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         # 매매 로직
         # [매수]
         if holdings == 0:
-            if can_buy_state and raw_score >= buy_score_limit and row['RSI'] < buy_rsi_limit:
-                # [수정] 슬리피지 적용 (국내 주식: 1호가 높게 매수)
-                buy_price = price
-                if not is_overseas:
-                    tick = get_tick_size(price)
-                    buy_price = int(price + tick)
+            # [수정] 매수 조건 체크 (상태 필터링 통계 추가)
+            is_score_ok = raw_score >= buy_score_limit
+            is_rsi_ok = row['RSI'] < buy_rsi_limit
+            
+            if is_score_ok and is_rsi_ok:
+                if can_buy_state:
+                    # [수정] 슬리피지 적용 (국내 주식: 1호가 높게 매수)
+                    buy_price = price
+                    if not is_overseas:
+                        tick = get_tick_size(price)
+                        buy_price = int(price + tick)
 
-                qty = int(balance / buy_price)
-                if qty > 0:
-                    cost = qty * buy_price
-                    balance -= cost
-                    holdings = qty
-                    avg_price = buy_price
-                    buy_date = date
-                    ts_highest_price = buy_price
-                    trades.append({
-                        "date": date, "type": "매수", "price": buy_price, "qty": qty, "balance": balance, 
-                        "profit": 0, "profit_amt": 0, "days": 0, 
-                        "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
-                        "cum_profit": cum_profit
+                    qty = int(balance / buy_price)
+                    if qty > 0:
+                        cost = qty * buy_price
+                        balance -= cost
+                        holdings = qty
+                        avg_price = buy_price
+                        buy_date = date
+                        ts_highest_price = buy_price
+                        trades.append({
+                            "date": date, "type": "매수", "price": buy_price, "qty": qty, "balance": balance, 
+                            "profit": 0, "profit_amt": 0, "days": 0, 
+                            "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                            "cum_profit": cum_profit
+                        })
+                else:
+                    # [추가] 매수 보류 카운팅
+                    if state == "주의": missed_caution_count += 1
+                    elif state == "위험": missed_danger_count += 1
+                    
+                    # [추가] 보류 내역 저장
+                    missed_trades.append({
+                        "date": date,
+                        "score": raw_score,
+                        "state": state,
+                        "reason": reason,
+                        "rsi": row['RSI'],
+                        "adx": row['ADX'],
+                        "cci": row['CCI']
                     })
         # [매도]
         elif holdings > 0:
@@ -262,7 +287,10 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "gross_loss": gross_loss,
         "daily_assets": daily_assets,
         "max_score_observed": max_score_observed,
-        "score_8_count": score_8_count
+        "score_8_count": score_8_count,
+        "missed_caution_count": missed_caution_count,
+        "missed_danger_count": missed_danger_count,
+        "missed_trades": missed_trades
     }
 
 def run_backtest():
@@ -355,6 +383,9 @@ def run_backtest():
     daily_assets = res['daily_assets']
     max_score_observed = res['max_score_observed']
     score_8_count = res['score_8_count']
+    missed_caution = res.get('missed_caution_count', 0)
+    missed_danger = res.get('missed_danger_count', 0)
+    missed_trades = res.get('missed_trades', [])
 
     # 4. 결과 출력
     # [추가] 샤프 지수 계산 (연율화: 252일 기준)
@@ -394,6 +425,10 @@ def run_backtest():
     sell_trades = [t for t in trades if t['type'].startswith("매도")]
     win_rate = (win_trades / sell_count * 100) if sell_count > 0 else 0.0
     summary_table.add_row("총 매매 횟수", f"{len(trades)}건 (진입 {len(trades)-sell_count} / 청산 {sell_count})")
+    
+    # [추가] 매수 보류 통계 출력
+    if missed_caution > 0 or missed_danger > 0:
+        summary_table.add_row("매수 보류 (상태)", f"[yellow]주의 {missed_caution}회[/] / [blue]위험 {missed_danger}회[/] (점수 충족했으나 진입 불가)")
     
     if sell_count > 0:
         summary_table.add_row("승률 (Win Rate)", f"{win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
@@ -584,7 +619,7 @@ def run_backtest():
             )
         config.console.print(t_table)
 
-    # [추가] 매매 사유별 통계 분석 (마지막에 출력)
+    # [추가] 매매 사유별 통계 분석 (상세 매매 일지 다음에 출력)
     if sell_trades:
         reason_stats = {}
         for t in sell_trades:
@@ -592,32 +627,84 @@ def run_backtest():
             raw_type = t['type']
             reason = raw_type.replace("매도(", "").replace(")", "")
             if reason not in reason_stats:
-                reason_stats[reason] = {'count': 0, 'profit_sum': 0.0}
+                reason_stats[reason] = {
+                    'count': 0, 
+                    'profit_rate_sum': 0.0, 
+                    'profit_amt_sum': 0, 
+                    'win_count': 0, 
+                    'days_sum': 0
+                }
             
             reason_stats[reason]['count'] += 1
-            reason_stats[reason]['profit_sum'] += t['profit']
+            reason_stats[reason]['profit_rate_sum'] += t['profit']
+            reason_stats[reason]['profit_amt_sum'] += t.get('profit_amt', 0)
+            reason_stats[reason]['days_sum'] += t.get('days', 0)
+            if t['profit'] > 0:
+                reason_stats[reason]['win_count'] += 1
             
         reason_table = Table(title="매매 사유별 성과 분석", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         reason_table.add_column("사유", justify="left", style="cyan")
         reason_table.add_column("횟수", justify="right")
         reason_table.add_column("비중", justify="right")
+        reason_table.add_column("승률", justify="right")
         reason_table.add_column("평균 수익률", justify="right")
+        reason_table.add_column("총 손익", justify="right")
+        reason_table.add_column("평균 보유", justify="right")
         
         total_sells = len(sell_trades)
         
         # 수익률 높은 순으로 정렬
-        sorted_reasons = sorted(reason_stats.items(), key=lambda x: x[1]['profit_sum'] / x[1]['count'], reverse=True)
+        sorted_reasons = sorted(reason_stats.items(), key=lambda x: x[1]['profit_rate_sum'] / x[1]['count'], reverse=True)
         
         for reason, stat in sorted_reasons:
             cnt = stat['count']
-            avg_p = stat['profit_sum'] / cnt
+            avg_p = stat['profit_rate_sum'] / cnt
             ratio = (cnt / total_sells) * 100
+            win_rate = (stat['win_count'] / cnt) * 100
+            total_amt = stat['profit_amt_sum']
+            avg_days = stat['days_sum'] / cnt
             
             p_color = "[red]" if avg_p > 0 else ("[blue]" if avg_p < 0 else "[white]")
-            reason_table.add_row(reason, f"{cnt}회", f"{ratio:.1f}%", f"{p_color}{avg_p:+.2f}%[/]")
+            amt_color = "[red]" if total_amt > 0 else ("[blue]" if total_amt < 0 else "[white]")
+            
+            amt_str = fmt_money(total_amt)
+            if total_amt > 0: amt_str = f"+{amt_str}"
+            
+            reason_table.add_row(
+                reason, 
+                f"{cnt}회", 
+                f"{ratio:.1f}%", 
+                f"{win_rate:.1f}%",
+                f"{p_color}{avg_p:+.2f}%[/]",
+                f"{amt_color}{amt_str}[/]",
+                f"{avg_days:.1f}일"
+            )
             
         config.console.print()
         config.console.print(reason_table)
+
+    # [이동] 매수 보류 상세 내역 테이블 출력 (매매 사유별 분석 아래로 이동)
+    if missed_trades:
+        config.console.print()
+        m_table = Table(title="매수 보류 상세 내역 (점수 충족했으나 상태 필터링됨)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        m_table.add_column("일자", justify="center")
+        m_table.add_column("점수", justify="center")
+        m_table.add_column("상태", justify="center")
+        m_table.add_column("RSI", justify="right")
+        m_table.add_column("ADX", justify="right")
+        m_table.add_column("CCI", justify="right")
+        m_table.add_column("사유", justify="left")
+        
+        for m in missed_trades:
+            date_str = str(m['date'])
+            if len(date_str) == 8: date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+            
+            state_color = "yellow" if m['state'] == "주의" else "blue"
+            adx_str = f"{m.get('adx', 0):.1f}"
+            cci_str = f"{m.get('cci', 0):.1f}"
+            m_table.add_row(date_str, str(m['score']), f"[{state_color}]{m['state']}[/]", f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+            
+        config.console.print(m_table)
 
     # === 최적화 모드 (매수 점수) ===
     table = Table(title=f"\n매수 점수 최적화 분석 ({name})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -736,4 +823,4 @@ def run_backtest():
     if best_mdd_set:
         config.console.print(f"[cyan]추천 (안정성):[/] 익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}% (MDD {best_mdd:.2f}%)")
         
-    config.console.print("[dim]참고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/dim]")
+    config.console.print("\n[bold red]경고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/bold red]")

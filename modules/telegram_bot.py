@@ -370,7 +370,7 @@ class TelegramCommander:
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
-            state, _ = analysis.classify_stock_state(
+            state, _, reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
             )
@@ -415,7 +415,7 @@ class TelegramCommander:
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 11점\n"
-            msg += f"상태 분류: {state}\n"
+            msg += f"상태 분류: {state} ({reason})\n"
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
             msg += f"\n[주요 지표]\n"

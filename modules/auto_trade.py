@@ -257,6 +257,18 @@ class ConclusionMonitor:
                                                 ind = indicators.calculate_indicators(df)
                                                 current_price = float(df.iloc[-1]['close'])
                                                 
+                                                # [추가] prev_rsi 계산 (상태 분류용)
+                                                delta = df['close'].diff()
+                                                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                                                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                                                prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+
+                                                # [수정] 상태 및 사유 조회
+                                                state, _, state_reason = analysis.classify_stock_state(
+                                                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                                                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                                                )
+
                                                 score, _ = analysis.calculate_score(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                                                     ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
@@ -266,7 +278,7 @@ class ConclusionMonitor:
                                                 adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
                                                 cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
                                                 
-                                                strategy_info = f"\n\n📊 [전략 지표]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                                strategy_info = f"\n\n📊 [전략 지표]\n• 점수: {score}점 ({state})\n• 상태: {state_reason}\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                         except Exception as e:
                                             logger.error(f"체결 지표 계산 중 오류: {e}")
 
@@ -337,7 +349,7 @@ class DefaultStrategy:
         loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
         prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
 
-        state, _ = analysis.classify_stock_state(
+        state, _, state_reason = analysis.classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
         )
@@ -378,7 +390,7 @@ class DefaultStrategy:
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
 
-            state, _ = analysis.classify_stock_state(
+            state, _, _ = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
             )
@@ -393,7 +405,10 @@ class DefaultStrategy:
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
-                reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
+                if state == "위험":
+                    reason = f"위험진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
+                else:
+                    reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             
         return {
             'action': 'sell' if reason else 'hold',

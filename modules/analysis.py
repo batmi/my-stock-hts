@@ -53,21 +53,44 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
     return score, details
 
 def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend):
-    if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]"
+    if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
+    
+    reasons = []
     is_severe_danger = False
+    
     # [수정] 위험 조건 완화: 장기(120)와 중기(60) 이평선을 모두 이탈해야 '위험'으로 간주 (변동성 감소)
-    if ema120 is not None and price < ema120 and price < ema60: is_severe_danger = True
-    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): is_severe_danger = True # 위험 기준은 하한선보다 더 낮게 설정 (예: 20)
+    if ema120 is not None and price < ema120 and price < ema60: 
+        is_severe_danger = True
+        reasons.append("이평선 완전 이탈(60&120)")
+    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): 
+        is_severe_danger = True # 위험 기준은 하한선보다 더 낮게 설정 (예: 20)
+        reasons.append(f"RSI 초과매도({rsi:.1f})")
+        
     # [수정] ADX 과열 중 RSI 하락은 '위험'보다는 '주의'로 이동
-    if is_severe_danger: return "위험", "[blue]"
+    if is_severe_danger: return "위험", "[blue]", ", ".join(reasons)
     
     is_caution = False
     # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 중 하나라도 해당되면 '주의' (완충 구간)
-    if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
-    elif sar > price: is_caution = True
-    elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
-    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
-    if is_caution: return "주의", "[yellow]"
+    if price < ema60: 
+        is_caution = True
+        reasons.append("60일선 이탈")
+    if ema120 is not None and price < ema120: 
+        is_caution = True
+        reasons.append("120일선 이탈")
+    if sar > price: 
+        is_caution = True
+        reasons.append("SAR 매도신호")
+    if rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10): 
+        is_caution = True
+        reasons.append(f"RSI 과열({rsi:.1f})")
+    elif rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: 
+        is_caution = True
+        reasons.append(f"RSI 침체({rsi:.1f})")
+    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: 
+        is_caution = True
+        reasons.append(f"ADX과열({adx:.1f})+RSI하락")
+        
+    if is_caution: return "주의", "[yellow]", ", ".join(reasons)
     
     score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend)
 
@@ -76,9 +99,9 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
 
-    if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]"
-    elif score >= rise_score: return "상승", "[orange3]"
-    else: return "관망", "[white]"
+    if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]", "매수 조건 충족"
+    elif score >= rise_score: return "상승", "[orange3]", "상승 추세 (점수 양호)"
+    else: return "관망", "[white]", "방향성 탐색 구간"
 
 def diagnose_stock():
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
@@ -110,7 +133,7 @@ def diagnose_stock():
         current_price = float(df.iloc[-1]['close'])
         
         # 3. 상태 분류 및 점수 계산
-        state, state_color = classify_stock_state(
+        state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
         )
@@ -270,7 +293,7 @@ def diagnose_stock():
     table_logic.add_row("종합 점수", score_str, details_str)
     
     # 상태 분류
-    table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", "점수 및 위험 필터링 결과")
+    table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
     
     # 매수 조건 체크
     buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -278,10 +301,12 @@ def diagnose_stock():
     
     is_buy_score = score >= buy_score_limit
     is_buy_rsi = ind['rsi'] < buy_rsi_limit
+    is_safe_state = state not in ["위험", "주의"]
     
-    buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi) else "[bold blue]매수 불가[/]"
+    buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state) else "[bold blue]매수 불가[/]"
     
     buy_reason_list = []
+    if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
     if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
     if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     buy_reason = "\n".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
@@ -446,7 +471,7 @@ def print_table(title, data_list, is_overseas=False):
                 try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
-            class_name, class_color = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'))
+            class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'))
             
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
