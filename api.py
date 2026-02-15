@@ -94,21 +94,35 @@ def send_telegram_message(message):
     # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
     clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # [수정] 종목 코드에 링크 자동 적용 (토스증권 -> 네이버/야후 변경)
-    # 토스증권 링크는 모바일 텔레그램 인앱 브라우저에서 호환성 문제가 있으므로
-    # 모바일 웹을 지원하는 네이버 증권(국내) 및 야후 파이낸스(해외)로 변경합니다.
-    # 패턴: 괄호 안의 6자리 숫자(국내) 또는 영문 대문자(해외) -> 예: (005930)
+    # [수정] 종목 코드에 링크 자동 적용 (네이버 증권)
+    # 패턴: 괄호 안의 6자리 숫자/영문(국내) 또는 영문 대문자(해외) -> 예: (005930), (0080G0), (AAPL)
     def add_stock_link(match):
         code = match.group(1)
-        if code.isdigit() and len(code) == 6:
-            # 국내 주식: 네이버 증권 모바일
-            url = f"https://m.stock.naver.com/item/main.nhn?code={code}"
+        
+        # 1. 국내 주식 (6자리)
+        if len(code) == 6:
+            # 국내 주식: 네이버 증권 모바일 (최신 URL 구조 적용)
+            url = f"https://m.stock.naver.com/domestic/stock/{code}"
+        # 2. 해외 주식
         else:
-            # 해외 주식: 야후 파이낸스
-            url = f"https://finance.yahoo.com/quote/{code}"
+            # 거래소 정보 확인 (config.session.exchange_cache 활용)
+            exchange = config.session.exchange_cache.get(code, "")
+            suffix = ""
+            
+            # 네이버 증권 해외주식 거래소 접미사 매핑
+            if exchange in ["NAS", "NASD"]: suffix = ".O"   # NASDAQ
+            elif exchange in ["NYS", "NYSE"]: suffix = ".N" # NYSE
+            elif exchange in ["AMS", "AMEX"]: suffix = ".A" # AMEX
+            
+            if suffix:
+                url = f"https://m.stock.naver.com/worldstock/stock/{code}{suffix}"
+            else:
+                # 거래소 정보가 없거나 매핑되지 않으면 검색 페이지로 연결
+                url = f"https://m.stock.naver.com/worldstock/search?query={code}"
+                
         return f'(<a href="{url}">{code}</a>)'
     
-    clean_message = re.sub(r'\(([0-9]{6}|[A-Z]{1,5})\)', add_stock_link, clean_message)
+    clean_message = re.sub(r'\(([0-9A-Z]{6}|[A-Z]{1,5})\)', add_stock_link, clean_message)
 
     # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
     final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
