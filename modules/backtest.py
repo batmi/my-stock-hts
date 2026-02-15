@@ -2,11 +2,8 @@
 import pandas as pd
 import numpy as np
 from rich.table import Table
-from rich.panel import Panel
-from rich.columns import Columns
 from rich.prompt import Prompt
 from rich import box
-import yfinance as yf
 from datetime import datetime, timedelta
 import config
 import api
@@ -100,7 +97,10 @@ def get_tick_size(price):
     if price < 500000: return 500
     return 1000
 
-def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, stop_loss_rate=None, take_profit_rate=None):
+def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
+                      stop_loss_rate=None, take_profit_rate=None, 
+                      take_profit_rsi=None, sell_score=None, 
+                      ts_activation_rate=None, ts_callback_rate=None):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
     
     # 시뮬레이션 변수
@@ -122,11 +122,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     # 매도 설정값 로드 (Config 참조)
     stop_loss_limit = stop_loss_rate if stop_loss_rate is not None else config.SELL_STRATEGY["STOP_LOSS_RATE"]
     take_profit_limit = take_profit_rate if take_profit_rate is not None else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-    take_profit_rsi_limit = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-    sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
+    take_profit_rsi_limit = take_profit_rsi if take_profit_rsi is not None else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+    sell_score_limit = sell_score if sell_score is not None else config.SELL_STRATEGY["SELL_SCORE"]
     
-    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
     peak_asset = initial_capital
     mdd = 0.0
@@ -309,11 +309,72 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    days_input = Prompt.ask("분석 기간 (일 단위)", default="365")
-    try:
-        days = int(days_input)
-    except:
-        days = 365
+    change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n"], default="n")
+    
+    # 기본값 설정
+    days = 365
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+    stop_loss = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+
+    if change_settings == "y":
+        days_input = Prompt.ask("분석 기간 (일 단위)", default="365")
+        if days_input.lower() == 'q': return
+        try:
+            days = int(days_input)
+        except:
+            days = 365
+        
+        # 매수 조건
+        def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        val = Prompt.ask(f"매수 기준 점수 (기본: {def_buy_score}점)\n[dim]설명: 이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(def_buy_score))
+        if val.lower() == 'q': return
+        buy_score = int(val)
+        
+        def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]설명: RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
+        if val.lower() == 'q': return
+        buy_rsi = float(val)
+        
+        # 매도 조건
+        def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+        val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]설명: 점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
+        if val.lower() == 'q': return
+        sell_score = int(val)
+        
+        def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]설명: 손실이 이 비율에 도달하면 손절매[/dim]", default=str(def_sl))
+        if val.lower() == 'q': return
+        stop_loss = float(val)
+        
+        def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]설명: 수익이 이 비율에 도달하면 이익 실현[/dim]", default=str(def_tp))
+        if val.lower() == 'q': return
+        take_profit = float(val)
+        
+        def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]설명: RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
+        if val.lower() == 'q': return
+        take_profit_rsi = float(val)
+        
+        def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]설명: 수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
+        if val.lower() == 'q': return
+        ts_activation = float(val)
+        
+        def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]설명: 최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
+        if val.lower() == 'q': return
+        ts_callback = float(val)
+        
+        config.console.print(f"\n[dim]설정한 조건으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%)[/dim]")
+    else:
+        config.console.print(f"\n[dim]기본 설정으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%)[/dim]")
     
     # [수정] 초기 자본금 및 환율 설정
     initial_capital_krw = 10_000_000
@@ -326,7 +387,7 @@ def run_backtest():
         initial_capital = initial_capital_krw
 
     # 3. 데이터 준비
-    with config.console.status(f"[green]{name} ({code}) 데이터 분석 중...[/]"):
+    with config.console.status(f"[green]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
         original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
         needed_days = days + 120 
@@ -374,10 +435,10 @@ def run_backtest():
                 config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
 
     # === 단일 실행 모드 (기존 로직) ===
-    buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-    
-    res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas)
+    res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                            stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                            take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                            ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
     
     # 결과 변수 매핑 (기존 출력 로직 호환)
     final_asset = res['final_asset']
@@ -516,10 +577,10 @@ def run_backtest():
     # [추가] 매매가 없을 경우 진단 정보 출력
     if len(trades) == 0:
         config.console.print("\n[yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/yellow]")
-        config.console.print(f"  - 기간 내 최고 점수: {max_score_observed}점 (매수 기준: {buy_score_limit}점)")
-        config.console.print(f"  - {buy_score_limit}점 이상 도달 횟수: {score_8_count}회")
-        config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score_limit}점 이상 & RSI<{buy_rsi_limit})이 엄격하여 진입 기회가 없었습니다.")
-        config.console.print("  [Tip] config.py 에서 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
+        config.console.print(f"  - 기간 내 최고 점수: {max_score_observed}점 (매수 기준: {buy_score}점)")
+        config.console.print(f"  - {buy_score}점 이상 도달 횟수: {score_8_count}회")
+        config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score}점 이상 & RSI<{buy_rsi})이 엄격하여 진입 기회가 없었습니다.")
+        config.console.print("  [Tip] 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
     
     if trades:
         config.console.print()
@@ -636,9 +697,9 @@ def run_backtest():
             reason = raw_type.replace("매도(", "").replace(")", "")
             
             if reason == "RSI과열":
-                reason = f"RSI과열({config.SELL_STRATEGY['TAKE_PROFIT_RSI']})"
+                reason = f"RSI과열({take_profit_rsi})"
             elif reason == "점수하락":
-                reason = f"점수하락({config.SELL_STRATEGY['SELL_SCORE']})"
+                reason = f"점수하락({sell_score})"
 
             if reason not in reason_stats:
                 reason_stats[reason] = {
@@ -716,7 +777,7 @@ def run_backtest():
     # [이동] 매수 보류 상세 내역 테이블 출력 (매매 사유별 분석 아래로 이동)
     if missed_trades:
         config.console.print()
-        m_table = Table(title=f"매수 보류 상세 내역 (기준 점수 {buy_score_limit}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        m_table = Table(title=f"매수 보류 상세 내역 (기준 점수 {buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         m_table.add_column("일자", justify="center")
         m_table.add_column("점수", justify="center")
         m_table.add_column("상태", justify="center")
@@ -765,7 +826,10 @@ def run_backtest():
     
     with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
         for score in range(4, 10): # 4, 5, 6, 7, 8, 9
-            res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], is_overseas)
+            res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, buy_rsi, is_overseas,
+                                    stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                    take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
             
             # 결과 계산
             total_trades = len(res['trades'])
@@ -805,8 +869,7 @@ def run_backtest():
     config.console.print(f"[magenta]추천 (승률):[/]   {best_win_score}점 (승률 {best_win_rate:.1f}%)")
 
     # === RSI 최적화 모드 ===
-    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    table = Table(title=f"\nRSI 최적화 분석 ({name}) / 기준 점수 ({buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table = Table(title=f"\nRSI 최적화 분석 ({name}) / 점수 {buy_score}점 / RSI {buy_rsi}", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("RSI 기준", justify="center")
     table.add_column("수익률", justify="right")
     table.add_column("승률", justify="right")
@@ -821,7 +884,10 @@ def run_backtest():
     
     with config.console.status("[green]RSI 기준별 시뮬레이션 진행 중...[/]"):
         for rsi_limit in rsi_candidates:
-            res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas)
+            res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas,
+                                    stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                    take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
             
             total_trades = len(res['trades'])
             sell_trades = res['win_trades'] + res['loss_trades']
@@ -846,7 +912,6 @@ def run_backtest():
     config.console.print(f"\n[green]추천 (수익률):[/] RSI < {best_return_rsi} (수익률 {best_return:+.2f}%)")
 
     # === 익절/손절 최적화 모드 ===
-    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     table = Table(title=f"\n익절/손절 비율 최적화 분석 ({name}) / 기준 매수 점수 ({buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("익절/손절", justify="center")
     table.add_column("수익률", justify="right")
@@ -864,8 +929,6 @@ def run_backtest():
     # 테스트할 범위 설정
     tp_candidates = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
     sl_candidates = [-3.0, -5.0, -7.0, -10.0, -15.0]
-    
-    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
 
     row_count = 0
     total_combinations = len(tp_candidates) * len(sl_candidates)
@@ -873,7 +936,10 @@ def run_backtest():
     with config.console.status("[green]다양한 익절/손절 조합 시뮬레이션 중...[/]"):
         for tp in tp_candidates:
             for sl in sl_candidates:
-                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, stop_loss_rate=sl, take_profit_rate=tp)
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                                        stop_loss_rate=sl, take_profit_rate=tp,
+                                        take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
                 
                 total_trades = len(res['trades'])
                 sell_trades = res['win_trades'] + res['loss_trades']

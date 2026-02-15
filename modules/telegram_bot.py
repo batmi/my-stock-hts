@@ -4,7 +4,6 @@ import time
 import requests
 import re
 import os
-from rich.console import Console
 
 import config
 import api

@@ -10,7 +10,6 @@ from rich.prompt import Prompt
 from rich.markup import escape
 from rich.table import Table
 from rich import box
-from rich.rule import Rule
 import config
 import api
 import utils

@@ -7,8 +7,6 @@ import config
 import indicators
 import api
 from datetime import datetime, timedelta
-import os
-import shutil
 import math
 
 def show_market_indices():

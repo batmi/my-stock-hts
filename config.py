@@ -1,12 +1,8 @@
 # config.py
 import os
-import sys
 import threading
 from rich.console import Console
 import logging
-from rich.logging import RichHandler
-from rich.prompt import Prompt
-import json
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from session import SessionManager

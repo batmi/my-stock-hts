@@ -1,10 +1,6 @@
 # modules/analysis.py
-import time
-from datetime import datetime
 from rich.table import Table
 from rich import box
-from rich.rule import Rule
-from rich.prompt import Prompt
 import config
 import api
 import indicators
