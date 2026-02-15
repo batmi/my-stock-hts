@@ -374,7 +374,7 @@ def main():
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
         config.console.print()
-        with config.console.status("[bold red]시스템 종료 프로세스 진행 중... (자동매매/DB/텔레그램 정리)[/]"):
+        with config.console.status("[bold green]시스템 종료 프로세스 진행 중...[/]"):
             # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
             if trader.is_running:
                 trader.stop(use_status=False)
