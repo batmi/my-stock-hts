@@ -367,7 +367,9 @@ def main():
                 elif choice == "7": trading.send_order("buy")
                 elif choice == "8": trading.send_order("sell")
                 elif choice == "9": trading.modify_order()
-            except KeyboardInterrupt: break
+            except KeyboardInterrupt:
+                config.console.print() # 줄바꿈 추가
+                break
             except Exception as e:
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
@@ -375,7 +377,7 @@ def main():
         with config.console.status("[bold red]시스템 종료 프로세스 진행 중... (자동매매/DB/텔레그램 정리)[/]"):
             # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
             if trader.is_running:
-                trader.stop()
+                trader.stop(use_status=False)
             
             # [추가] 체결 감시자 및 텔레그램 봇 종료
             auto_trade.ConclusionMonitor().stop()

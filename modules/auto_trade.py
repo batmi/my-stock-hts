@@ -390,7 +390,7 @@ class DefaultStrategy:
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
 
-            state, _, _ = analysis.classify_stock_state(
+            state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
             )
@@ -597,16 +597,21 @@ class AutoTrader:
         with utils.AccountContext(target_cano):
             api.send_telegram_message(msg)
 
-    def stop(self):
+    def stop(self, use_status=True):
         if not self.is_running:
             console.print("\n[yellow]실행 중인 자동매매가 없습니다.[/yellow]")
             return
             
-        with console.status("[bold red]시스템 중단 요청 처리 중...[/]"):
+        def _stop_logic():
             self.is_running = False
-            
             if self.thread:
                 self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
+
+        if use_status:
+            with console.status("[bold red]시스템 중단 요청 처리 중...[/]"):
+                _stop_logic()
+        else:
+            _stop_logic()
 
         if self.thread and self.thread.is_alive():
             console.print("\n[bold red]경고: 시스템 트레이딩 스레드가 응답하지 않습니다. (DB/API 작업 지연)[/bold red]")
@@ -2092,7 +2097,12 @@ def system_trading_menu():
     console.print("[5] 트레이딩 로그 (Log Viewer)")
     console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="3")
+    try:
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="3")
+    except KeyboardInterrupt:
+        console.print()
+        return
+
     if choice.lower() == 'q': return
     
     if choice == "1":
