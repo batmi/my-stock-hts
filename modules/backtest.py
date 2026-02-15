@@ -166,8 +166,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             is_score_ok = raw_score >= buy_score_limit
             is_rsi_ok = row['RSI'] < buy_rsi_limit
             
-            if is_score_ok and is_rsi_ok:
-                if can_buy_state:
+            if is_score_ok:
+                if is_rsi_ok and can_buy_state:
                     # [수정] 슬리피지 적용 (국내 주식: 1호가 높게 매수)
                     buy_price = price
                     if not is_overseas:
@@ -193,15 +193,23 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if state == "주의": missed_caution_count += 1
                     elif state == "위험": missed_danger_count += 1
                     
+                    # [추가] 보류 사유 상세화
+                    missed_reason = reason
+                    if not can_buy_state:
+                        missed_reason = f"{state}: {reason}"
+                    elif not is_rsi_ok:
+                        missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {buy_rsi_limit})"
+
                     # [추가] 보류 내역 저장
                     missed_trades.append({
                         "date": date,
                         "score": raw_score,
                         "state": state,
-                        "reason": reason,
+                        "reason": missed_reason,
                         "rsi": row['RSI'],
                         "adx": row['ADX'],
-                        "cci": row['CCI']
+                        "cci": row['CCI'],
+                        "price": price
                     })
         # [매도]
         elif holdings > 0:
@@ -626,13 +634,21 @@ def run_backtest():
             # 사유 추출 (예: "매도(익절)" -> "익절")
             raw_type = t['type']
             reason = raw_type.replace("매도(", "").replace(")", "")
+            
+            if reason == "RSI과열":
+                reason = f"RSI과열({config.SELL_STRATEGY['TAKE_PROFIT_RSI']})"
+            elif reason == "점수하락":
+                reason = f"점수하락({config.SELL_STRATEGY['SELL_SCORE']})"
+
             if reason not in reason_stats:
                 reason_stats[reason] = {
                     'count': 0, 
                     'profit_rate_sum': 0.0, 
                     'profit_amt_sum': 0, 
                     'win_count': 0, 
-                    'days_sum': 0
+                    'days_sum': 0,
+                    'max_profit': -9999.0,
+                    'min_profit': 9999.0
                 }
             
             reason_stats[reason]['count'] += 1
@@ -642,12 +658,20 @@ def run_backtest():
             if t['profit'] > 0:
                 reason_stats[reason]['win_count'] += 1
             
+            if t['profit'] > reason_stats[reason]['max_profit']:
+                reason_stats[reason]['max_profit'] = t['profit']
+            
+            if t['profit'] < reason_stats[reason]['min_profit']:
+                reason_stats[reason]['min_profit'] = t['profit']
+            
         reason_table = Table(title="매매 사유별 성과 분석", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         reason_table.add_column("사유", justify="left", style="cyan")
         reason_table.add_column("횟수", justify="right")
         reason_table.add_column("비중", justify="right")
         reason_table.add_column("승률", justify="right")
         reason_table.add_column("평균 수익률", justify="right")
+        reason_table.add_column("최대 수익률", justify="right")
+        reason_table.add_column("최대 손실률", justify="right")
         reason_table.add_column("총 손익", justify="right")
         reason_table.add_column("평균 보유", justify="right")
         
@@ -663,8 +687,12 @@ def run_backtest():
             win_rate = (stat['win_count'] / cnt) * 100
             total_amt = stat['profit_amt_sum']
             avg_days = stat['days_sum'] / cnt
+            max_p = stat['max_profit']
+            min_p = stat['min_profit']
             
             p_color = "[red]" if avg_p > 0 else ("[blue]" if avg_p < 0 else "[white]")
+            max_p_color = "[red]" if max_p > 0 else ("[blue]" if max_p < 0 else "[white]")
+            min_p_color = "[red]" if min_p > 0 else ("[blue]" if min_p < 0 else "[white]")
             amt_color = "[red]" if total_amt > 0 else ("[blue]" if total_amt < 0 else "[white]")
             
             amt_str = fmt_money(total_amt)
@@ -676,6 +704,8 @@ def run_backtest():
                 f"{ratio:.1f}%", 
                 f"{win_rate:.1f}%",
                 f"{p_color}{avg_p:+.2f}%[/]",
+                f"{max_p_color}{max_p:+.2f}%[/]",
+                f"{min_p_color}{min_p:+.2f}%[/]",
                 f"{amt_color}{amt_str}[/]",
                 f"{avg_days:.1f}일"
             )
@@ -686,10 +716,11 @@ def run_backtest():
     # [이동] 매수 보류 상세 내역 테이블 출력 (매매 사유별 분석 아래로 이동)
     if missed_trades:
         config.console.print()
-        m_table = Table(title="매수 보류 상세 내역 (점수 충족했으나 상태 필터링됨)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        m_table = Table(title=f"매수 보류 상세 내역 (기준 점수 {buy_score_limit}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         m_table.add_column("일자", justify="center")
         m_table.add_column("점수", justify="center")
         m_table.add_column("상태", justify="center")
+        m_table.add_column("당시 주가", justify="right")
         m_table.add_column("RSI", justify="right")
         m_table.add_column("ADX", justify="right")
         m_table.add_column("CCI", justify="right")
@@ -699,10 +730,18 @@ def run_backtest():
             date_str = str(m['date'])
             if len(date_str) == 8: date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
             
-            state_color = "yellow" if m['state'] == "주의" else "blue"
+            state = m['state']
+            state_color = "white"
+            if state == "매수": state_color = "red"
+            elif state == "상승": state_color = "orange3"
+            elif state == "관망": state_color = "white"
+            elif state == "주의": state_color = "yellow"
+            elif state == "위험": state_color = "blue"
+
             adx_str = f"{m.get('adx', 0):.1f}"
             cci_str = f"{m.get('cci', 0):.1f}"
-            m_table.add_row(date_str, str(m['score']), f"[{state_color}]{m['state']}[/]", f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+            price_str = fmt_money(m.get('price', 0))
+            m_table.add_row(date_str, str(m['score']), f"[{state_color}]{m['state']}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
             
         config.console.print(m_table)
 
@@ -764,6 +803,47 @@ def run_backtest():
     config.console.print(f"\n[green]추천 (수익률):[/] {best_return_score}점 (수익률 {best_return:+.2f}%)")
     config.console.print(f"[cyan]추천 (안정성):[/] {best_mdd_score}점 (MDD {best_mdd:.2f}%)")
     config.console.print(f"[magenta]추천 (승률):[/]   {best_win_score}점 (승률 {best_win_rate:.1f}%)")
+
+    # === RSI 최적화 모드 ===
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    table = Table(title=f"\nRSI 최적화 분석 ({name}) / 기준 점수 ({buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("RSI 기준", justify="center")
+    table.add_column("수익률", justify="right")
+    table.add_column("승률", justify="right")
+    table.add_column("MDD", justify="right")
+    table.add_column("매매 횟수", justify="right")
+    table.add_column("손익비", justify="right")
+    
+    best_return_rsi = 0
+    best_return = -999.0
+    
+    rsi_candidates = [45, 50, 55, 60, 65, 70]
+    
+    with config.console.status("[green]RSI 기준별 시뮬레이션 진행 중...[/]"):
+        for rsi_limit in rsi_candidates:
+            res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas)
+            
+            total_trades = len(res['trades'])
+            sell_trades = res['win_trades'] + res['loss_trades']
+            win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+            pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+            
+            if res['total_return'] > best_return:
+                best_return = res['total_return']
+                best_return_rsi = rsi_limit
+            
+            r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+            table.add_row(
+                f"RSI < {rsi_limit}",
+                f"{r_color}{res['total_return']:+.2f}%[/]",
+                f"{win_rate:.1f}%",
+                f"{res['mdd']:.2f}%",
+                f"{total_trades}건",
+                f"{pf:.2f}"
+            )
+    
+    config.console.print(table)
+    config.console.print(f"\n[green]추천 (수익률):[/] RSI < {best_return_rsi} (수익률 {best_return:+.2f}%)")
 
     # === 익절/손절 최적화 모드 ===
     buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
