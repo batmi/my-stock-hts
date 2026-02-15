@@ -347,7 +347,7 @@ def main():
             print("─" * 50); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
-                if choice.lower() == "q": config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]\n"); break
+                if choice.lower() == "q": break
                 
                 if choice.lower() == "h": 
                     show_help()
@@ -367,20 +367,21 @@ def main():
                 elif choice == "7": trading.send_order("buy")
                 elif choice == "8": trading.send_order("sell")
                 elif choice == "9": trading.modify_order()
-            except KeyboardInterrupt: config.console.print("\n[yellow]프로그램을 종료합니다.[/yellow]"); break
+            except KeyboardInterrupt: break
             except Exception as e:
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
-        # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
-        if trader.is_running:
-            config.console.print("\n[bold red]실행 중인 자동매매 시스템을 종료합니다...[/bold red]")
-            trader.stop()
+        config.console.print()
+        with config.console.status("[bold red]시스템 종료 프로세스 진행 중... (자동매매/DB/텔레그램 정리)[/]"):
+            # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
+            if trader.is_running:
+                trader.stop()
             
-        # [추가] 체결 감시자 종료
-        auto_trade.ConclusionMonitor().stop()
-        
-        # [추가] 텔레그램 커맨더 종료
-        telegram_cmd.stop()
+            # [추가] 체결 감시자 및 텔레그램 봇 종료
+            auto_trade.ConclusionMonitor().stop()
+            telegram_cmd.stop()
+
+        config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
         
 if __name__ == "__main__":
     main()
