@@ -205,8 +205,9 @@ class ConclusionMonitor:
                                 except Exception:
                                     db_type_name = type_name
                                 
-                                # [추가] 매도 체결 시 실현 손익 정보 조회
+                                # [추가] 매도 체결 시 실현 손익 및 사유 조회
                                 profit_msg = ""
+                                reason_msg = ""
                                 if "매도" in type_name:
                                     try:
                                         found_record = None
@@ -225,8 +226,11 @@ class ConclusionMonitor:
                                                 if str(t.get('odno')) == str(odno):
                                                     found_record = t
                                                     break
-                                        if found_record and found_record.get('profit_amt') is not None:
-                                            profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
+                                        if found_record:
+                                            if found_record.get('profit_amt') is not None:
+                                                profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
+                                            if found_record.get('reason'):
+                                                reason_msg = f"\n사유: {found_record['reason']}"
                                     except: pass
 
                                 # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
@@ -242,9 +246,32 @@ class ConclusionMonitor:
                                             icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
                                             cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                     except: pass
+                                    
+                                    # [추가] 매수 체결 시 전략 점수 및 지표 추가
+                                    strategy_info = ""
+                                    if type_name and "매수" in type_name:
+                                        try:
+                                            is_overseas_stock = not (code.isdigit() and len(code) == 6)
+                                            df = api.get_chart_data(code, is_overseas=is_overseas_stock)
+                                            if df is not None and not df.empty:
+                                                ind = indicators.calculate_indicators(df)
+                                                current_price = float(df.iloc[-1]['close'])
+                                                
+                                                score, _ = analysis.calculate_score(
+                                                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+                                                )
+                                                
+                                                rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+                                                adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+                                                cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+                                                
+                                                strategy_info = f"\n\n📊 [전략 지표]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                        except Exception as e:
+                                            logger.error(f"체결 지표 계산 중 오류: {e}")
 
                                     # 알림 발송
-                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{cur_info}"
+                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{reason_msg}{cur_info}{strategy_info}"
                                     api.send_telegram_message(msg)
                                     
                                     # 로그 기록 (시스템 로거 활용)
@@ -514,6 +541,21 @@ class AutoTrader:
         msg += f"초기 자산: {self.initial_asset:,}원"
         msg += f"\n현재 예수금: {deposit:,}원"
         
+        # [추가] 전략 설정 요약 정보 추가
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        
+        msg += "\n\n⚙️ [적용 전략]"
+        msg += f"\n• 매수: {buy_score}점↑ & RSI<{buy_rsi}"
+        msg += f"\n• 익절: +{tp}% / 손절: {sl}%"
+        msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
+        msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
+
         total_eval = 0 # [추가] 초기화
         if summary and len(summary) > 0:
             s_data = summary[0]

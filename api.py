@@ -91,6 +91,18 @@ def send_telegram_message(message):
     # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
     clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
 
+    # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
+    clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # [추가] 종목 코드에 토스증권 링크 자동 적용
+    # 패턴: 괄호 안의 6자리 숫자(국내) 또는 영문 대문자(해외) -> 예: (005930)
+    def add_toss_link(match):
+        code = match.group(1)
+        url = f"https://tossinvest.com/stocks/{code}"
+        return f'(<a href="{url}">{code}</a>)'
+    
+    clean_message = re.sub(r'\(([0-9]{6}|[A-Z]{1,5})\)', add_toss_link, clean_message)
+
     # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
     final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
 
@@ -99,7 +111,8 @@ def send_telegram_message(message):
     logger.info(f"[Telegram] 메시지 발송: {log_content}")
 
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg}
+    # [수정] HTML 파싱 모드 활성화 및 링크 미리보기 비활성화
+    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     
     # [추가] 화면 디버그 로그 (요청)
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
