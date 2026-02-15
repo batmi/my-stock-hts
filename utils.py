@@ -6,17 +6,32 @@ import api
 import constants
 
 def get_common_headers(tr_id):
+    # [수정] 컨텍스트에 따라 적절한 앱 키/시크릿 선택
+    use_auto = getattr(config.trade_context, 'use_auto_account', False)
+    is_sim = config.session.is_simulation
+    
+    if is_sim:
+        app_key = config.session.app_key
+        app_secret = config.session.app_secret
+    else:
+        if use_auto and config.session.auto_app_key:
+            app_key = config.session.auto_app_key
+            app_secret = config.session.auto_app_secret
+        else:
+            app_key = config.session.real_app_key
+            app_secret = config.session.real_app_secret
+
     return {
         "Content-Type": "application/json",
         "authorization": f"Bearer {api.get_current_token()}",
-        "appKey": config.APP_KEY,
-        "appSecret": config.APP_SECRET,
+        "appKey": app_key,
+        "appSecret": app_secret,
         "tr_id": tr_id
     }
 
 def get_tr_id(market, category, action):
     """constants.TR_ID_CONFIG에서 환경(실전/모의)에 맞는 TR_ID를 반환하는 헬퍼 함수"""
-    env_key = "sim" if config.IS_SIMULATION else "real"
+    env_key = "sim" if config.session.is_simulation else "real"
     try:
         return constants.TR_ID_CONFIG[market][category][action][env_key]
     except KeyError:
@@ -29,9 +44,9 @@ def get_exchange_rate():
     """
     rate = config.DEFAULT_EXCHANGE_RATE
     try:
-        if config.DEBUG_LEVEL == "TRACE":
+        if config.SCREEN_DEBUG_LEVEL == "TRACE":
             config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: KRW=X[/dim cyan]")
-        elif config.DEBUG_LEVEL == "DEBUG":
+        elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
             config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: KRW=X | Method: fast_info.last_price[/dim cyan]")
 
         ticker = yf.Ticker("KRW=X")
@@ -39,12 +54,12 @@ def get_exchange_rate():
         
         if current_rate and current_rate > 0:
             rate = float(current_rate)
-            if config.DEBUG_LEVEL == "TRACE":
+            if config.SCREEN_DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
-            elif config.DEBUG_LEVEL == "DEBUG":
+            elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
                 config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {current_rate}[/dim magenta]")
     except Exception as e:
-        if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
             config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
         pass
     
@@ -123,7 +138,7 @@ def select_stock_for_chart():
 
     target_info = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = target_info[group_choice]
-    target_list = config.STOCK_CONFIG_DATA[target_key]
+    target_list = config.session.stock_data[target_key]
     is_overseas = True if "us" in target_key else False
 
     config.console.print(f"\n[bold]{group_name} 목록:[/bold]")
@@ -158,23 +173,23 @@ def select_target_stock():
     
     if is_overseas:
         config.console.print("[yellow]-- 미국 주식 --[/yellow]")
-        for item in config.STOCK_CONFIG_DATA["stocks_us"]:
+        for item in config.session.stock_data["stocks_us"]:
             config.console.print(f"[{idx}] {item['name']} ({item['code']})")
             all_stocks.append((item['name'], item['code']))
             idx += 1
         config.console.print("[yellow]-- 미국 ETF --[/yellow]")
-        for item in config.STOCK_CONFIG_DATA["etfs_us"]:
+        for item in config.session.stock_data["etfs_us"]:
             config.console.print(f"[{idx}] {item['name']} ({item['code']})")
             all_stocks.append((item['name'], item['code']))
             idx += 1
     else:
         config.console.print("[yellow]-- 국내 주식 --[/yellow]")
-        for item in config.STOCK_CONFIG_DATA["stocks_kr"]:
+        for item in config.session.stock_data["stocks_kr"]:
             config.console.print(f"[{idx}] {item['name']} ({item['code']})")
             all_stocks.append((item['name'], item['code']))
             idx += 1
         config.console.print("[yellow]-- 국내 ETF --[/yellow]")
-        for item in config.STOCK_CONFIG_DATA["etfs_kr"]:
+        for item in config.session.stock_data["etfs_kr"]:
             config.console.print(f"[{idx}] {item['name']} ({item['code']})")
             all_stocks.append((item['name'], item['code']))
             idx += 1
@@ -195,3 +210,24 @@ def select_target_stock():
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
             return code, name, is_overseas
     return None, None, None
+
+class AccountContext:
+    """
+    특정 계좌(cano)에 맞춰 trade_context.use_auto_account를 설정하고,
+    종료 시 원래 상태로 복구하는 Context Manager
+    """
+    def __init__(self, cano):
+        self.cano = cano
+        self.original_state = None
+
+    def __enter__(self):
+        self.original_state = getattr(config.trade_context, 'use_auto_account', False)
+        if not config.session.is_simulation and self.cano:
+            if self.cano == config.session.auto_cano:
+                config.trade_context.use_auto_account = True
+            elif self.cano == config.session.cano:
+                config.trade_context.use_auto_account = False
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        config.trade_context.use_auto_account = self.original_state

@@ -12,7 +12,7 @@ import config
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest
-from modules import auto_trade
+from modules import auto_trade, telegram_bot
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -281,14 +281,17 @@ def main():
     parser.add_argument('--auto', action='store_true', help='시스템 트레이딩 자동 시작 및 로그 뷰어 실행')
     args = parser.parse_args()
 
+    # [추가] 로깅 설정 초기화
+    config.setup_logging()
+
     # 1. 환경 설정 로드
-    config.initialize_environment(mode=args.mode)
+    config.session.initialize(mode=args.mode)
     
     # 2. 종목 데이터 로드
-    config.load_stock_config()
+    config.session.load_stock_config()
     
     # 3. 토큰 발급 (초기 실행 시 모드에 따라 즉시 발급)
-    if config.IS_SIMULATION:
+    if config.session.is_simulation:
         api.get_access_token()
     else:
         api.get_real_access_token()
@@ -297,7 +300,7 @@ def main():
     auto_trade.ConclusionMonitor().start()
 
     # [추가] 텔레그램 명령어 수신 시작 (백그라운드)
-    telegram_cmd = auto_trade.TelegramCommander()
+    telegram_cmd = telegram_bot.TelegramCommander()
     telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
@@ -316,8 +319,8 @@ def main():
     try:
         while True:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            env_str = "[모의투자]" if config.IS_SIMULATION else "[실전투자]"
-            env_color = "green" if config.IS_SIMULATION else "bold red"
+            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+            env_color = "green" if config.session.is_simulation else "bold red"
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)

@@ -1,4 +1,5 @@
 # modules/account.py
+import logging
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
@@ -11,6 +12,8 @@ import utils
 from modules import db_manager
 import json
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None):
     summary = {'buy_amt': 0, 'sell_amt': 0, 'total_cost': 0, 'realized_pl': 0}
@@ -60,7 +63,7 @@ def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
             summary = output2[0]
             
     except Exception as e:
-        config.console.print(f"[red]국내 잔고 조회 실패: {e}[/red]")
+        logger.error(f"국내 잔고 조회 실패: {e}")
         
     return holdings, summary
 
@@ -73,12 +76,12 @@ def sync_today_trades():
     
     # 조회 대상 계좌 목록
     accounts = []
-    if config.CANO and config.ACNT_PRDT_CD:
-        accounts.append({"cano": config.CANO, "acnt": config.ACNT_PRDT_CD, "type": "MAIN"})
+    if config.session.cano and config.session.acnt_prdt_cd:
+        accounts.append({"cano": config.session.cano, "acnt": config.session.acnt_prdt_cd, "type": "MAIN"})
     
-    if not config.IS_SIMULATION and config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD:
-        if config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD:
-            accounts.append({"cano": config.AUTO_CANO, "acnt": config.AUTO_ACNT_PRDT_CD, "type": "AUTO"})
+    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_acnt_prdt_cd:
+        if config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd:
+            accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "type": "AUTO"})
             
     total_count = 0
     original_context = getattr(config.trade_context, 'use_auto_account', False)
@@ -101,8 +104,8 @@ def sync_today_trades():
                         if odno and avg_price > 0:
                             # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
                             if not db_manager.db.check_trade_exists(odno, "체결"):
-                                if config.DEBUG_LEVEL == "DEBUG":
-                                    config.console.print(f"[dim cyan][Account] 신규 체결 DB 저장 시도: {odno}[/dim cyan]")
+                                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                    logger.debug(f"[Account] 신규 체결 DB 저장 시도: {odno}")
                                 
                                 # 체결 시간 포맷팅
                                 ord_dt = item.get('ord_dt', '')
@@ -131,8 +134,8 @@ def sync_today_trades():
                                 
                                 total_count += 1
                             else:
-                                if config.DEBUG_LEVEL == "DEBUG":
-                                    config.console.print(f"[dim yellow][Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})[/dim yellow]")
+                                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                    logger.debug(f"[Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})")
             except: pass
     finally:
         config.trade_context.use_auto_account = original_context
@@ -144,8 +147,15 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
+    config.console.print(f"[dim]ℹ️ 조회 대상 계좌: {cano}-{acnt_prdt_cd}[/dim]")
+    
     with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
-        output1, summary = fetch_domestic_balance(cano, acnt_prdt_cd)
+        # [수정] api.get_domestic_balance 직접 호출
+        raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
+        
+        # 보유수량 0 이상인 종목만 필터링
+        output1 = [item for item in raw_holdings if int(item.get('hldg_qty', 0)) > 0]
+        summary = raw_summary[0] if raw_summary else None
         
         if output1:
             table = Table(title="\n[국내] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -209,7 +219,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # [해외 주식 잔고]
     # ---------------------------
     with config.console.status("[bold green]해외 잔고 조회 중...[/]"):
-        all_overseas_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
+        # [수정] api.get_overseas_balance 직접 호출
+        all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd)
 
     if not all_overseas_holdings:
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
@@ -280,25 +291,20 @@ def get_account_balance():
     time.sleep(0.5)
     
     accounts = []
-    if config.IS_SIMULATION:
-        accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
+    if config.session.is_simulation:
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
-        accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
-        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and \
-           (config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD):
-            accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
+        if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
+           (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
+            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
     
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}-{acnt})[/]")
         _display_balance_details(cano, acnt)
 
-def _display_asset_status(cano, acnt_prdt_cd):
-    """특정 계좌의 자산 현황 출력"""
-    time.sleep(0.5)
-    
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print("[dim cyan][TRACE] get_deposit_balance() 호출[/dim cyan]")
-    
+def get_asset_status_data(cano, acnt_prdt_cd):
+    """자산 현황 데이터 조회 및 계산 (UI 로직 없음)"""
     summary_data = {
         "withdraw": 0,      "tot_asset": 0,
         "dep_dom": 0,       "dep_ovs": 0,
@@ -311,160 +317,111 @@ def _display_asset_status(cano, acnt_prdt_cd):
     }
     
     # 1. 금일 데이터 조회
-    with config.console.status("[bold green]금일 투자/매매 내역 조회 중...[/bold green]"):
-        try:
-            profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
-            summary_data['buy_today'] = profit_data['buy_amt']
-            summary_data['sell_today'] = profit_data['sell_amt']
-            summary_data['total_cost'] = profit_data['total_cost']
-            summary_data['realized_pl'] = profit_data['realized_pl']
-            
-            if summary_data['buy_today'] == 0 and summary_data['sell_today'] == 0:
-                 time.sleep(0.2)
-                 backup_data = fetch_today_history(cano, acnt_prdt_cd)
-                 if backup_data['buy_total'] > 0 or backup_data['sell_total'] > 0:
-                     summary_data['buy_today'] = backup_data['buy_total']
-                     summary_data['sell_today'] = backup_data['sell_total']
-        except: pass
+    try:
+        profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
+        summary_data['buy_today'] = profit_data['buy_amt']
+        summary_data['sell_today'] = profit_data['sell_amt']
+        summary_data['total_cost'] = profit_data['total_cost']
+        summary_data['realized_pl'] = profit_data['realized_pl']
+        
+        if summary_data['buy_today'] == 0 and summary_data['sell_today'] == 0:
+                backup_data = fetch_today_history(cano, acnt_prdt_cd)
+                if backup_data['buy_total'] > 0 or backup_data['sell_total'] > 0:
+                    summary_data['buy_today'] = backup_data['buy_total']
+                    summary_data['sell_today'] = backup_data['sell_total']
+    except: pass
 
     # 2. 국내 주식 잔고 및 자산
-    with config.console.status("[bold green]계좌 실시간 자산 평가 중...[/bold green]"):
-        try:
-            time.sleep(0.3)
-            # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
-            output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
-            
-            if output1 is not None:
-                holdings = output1
-                calc_buy = 0; calc_eval = 0; calc_pl = 0
-                for item in holdings:
-                    calc_buy += api.safe_int(item.get('pchs_amt'))
-                    calc_eval += api.safe_int(item.get('evlu_amt'))
-                    calc_pl += api.safe_int(item.get('evlu_pfls_amt'))
-                summary_data['sec_buy'] = calc_buy
-                summary_data['sec_eval'] = calc_eval
-                summary_data['sec_pl'] = calc_pl
+    try:
+        # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
+        output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
+        
+        if output1 is not None:
+            holdings = output1
+            calc_buy = 0; calc_eval = 0; calc_pl = 0
+            for item in holdings:
+                calc_buy += api.safe_int(item.get('pchs_amt'))
+                calc_eval += api.safe_int(item.get('evlu_amt'))
+                calc_pl += api.safe_int(item.get('evlu_pfls_amt'))
+            summary_data['sec_buy'] = calc_buy
+            summary_data['sec_eval'] = calc_eval
+            summary_data['sec_pl'] = calc_pl
 
-                if output2:
-                    summary = output2[0]
-                    if not config.IS_SIMULATION:
-                        summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
-                        summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
-                        summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt'))
-                        summary_data['withdraw'] = summary_data['d2_dep'] 
+            if output2:
+                summary = output2[0]
+                if not config.session.is_simulation:
+                    summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
+                    summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
+                    # [수정] 모의투자에서도 dnca_tot_amt 사용 가능
+                    summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt')) 
+                    summary_data['withdraw'] = summary_data['d2_dep'] 
 
-        except Exception as e:
-            config.console.print(f"[bold red]자산 현황 조회 오류: {str(e)}[/bold red]")
-            pass # [수정] 패스
-            
-        # [추가] 해외 주식 잔고 합산 (원화 환산)
-        try:
-            ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
-            ovrs_buy_usd = 0.0
-            ovrs_eval_usd = 0.0
-            ovrs_pl_usd = 0.0
-            
-            for item in ovrs_holdings:
-                qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
-                if qty > 0:
-                    pchs = float(item.get('pchs_avg_pric', 0))
-                    profit = float(item.get('frcr_evlu_pfls_amt', 0))
-                    buy_amt = qty * pchs
-                    eval_amt = buy_amt + profit
-                    
-                    ovrs_buy_usd += buy_amt
-                    ovrs_eval_usd += eval_amt
-                    ovrs_pl_usd += profit
-            
-            exchange_rate = utils.get_exchange_rate()
-            
-            ovrs_eval_krw = int(ovrs_eval_usd * exchange_rate)
-            summary_data['ovrs_eval_krw'] = ovrs_eval_krw
-            ovrs_pl_krw = int(ovrs_pl_usd * exchange_rate)
-            summary_data['ovrs_pl_krw'] = ovrs_pl_krw
-            
-            if config.DEBUG_LEVEL == "DEBUG":
-                config.console.print(f"[dim magenta][DEBUG] CALC (Ovrs->KRW) | USD: Buy={ovrs_buy_usd:.2f}, Eval={ovrs_eval_usd:.2f}, PL={ovrs_pl_usd:.2f} | Rate: {exchange_rate} | KRW: Eval={ovrs_eval_krw}, PL={ovrs_pl_krw}[/dim magenta]")
-            
-            summary_data['sec_buy'] += int(ovrs_buy_usd * exchange_rate)
-            summary_data['sec_eval'] += ovrs_eval_krw
-            summary_data['sec_pl'] += ovrs_pl_krw
-        except Exception as e:
-            pass
+    except Exception as e:
+        logger.error(f"자산 현황 조회 오류: {str(e)}")
+        pass
+        
+    # [추가] 해외 주식 잔고 합산 (원화 환산)
+    try:
+        ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
+        ovrs_buy_usd = 0.0
+        ovrs_eval_usd = 0.0
+        ovrs_pl_usd = 0.0
+        
+        for item in ovrs_holdings:
+            qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+            if qty > 0:
+                pchs = float(item.get('pchs_avg_pric', 0))
+                profit = float(item.get('frcr_evlu_pfls_amt', 0))
+                buy_amt = qty * pchs
+                eval_amt = buy_amt + profit
+                
+                ovrs_buy_usd += buy_amt
+                ovrs_eval_usd += eval_amt
+                ovrs_pl_usd += profit
+        
+        exchange_rate = utils.get_exchange_rate()
+        
+        ovrs_eval_krw = int(ovrs_eval_usd * exchange_rate)
+        summary_data['ovrs_eval_krw'] = ovrs_eval_krw
+        ovrs_pl_krw = int(ovrs_pl_usd * exchange_rate)
+        summary_data['ovrs_pl_krw'] = ovrs_pl_krw
+        
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"CALC (Ovrs->KRW) | USD: Buy={ovrs_buy_usd:.2f}, Eval={ovrs_eval_usd:.2f}, PL={ovrs_pl_usd:.2f} | Rate: {exchange_rate} | KRW: Eval={ovrs_eval_krw}, PL={ovrs_pl_krw}")
+        
+        summary_data['sec_buy'] += int(ovrs_buy_usd * exchange_rate)
+        summary_data['sec_eval'] += ovrs_eval_krw
+        summary_data['sec_pl'] += ovrs_pl_krw
+    except Exception as e:
+        pass
 
     # 3. 예수금 조회
-    if config.IS_SIMULATION:
-        # 모의투자는 주문가능금액 조회로 예수금 확인
-        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"}
-        
-        try:
-            time.sleep(0.3)
-            # api.call_api 사용 (내부에서 토큰/컨텍스트 처리)
-            # _prepare_account_params 로직이 call_api 호출 전 필요할 수 있으나, 
-            # call_api는 현재 컨텍스트를 사용하므로, 여기서 컨텍스트를 맞춰줘야 함.
-            # 하지만 api.py에 get_deposit_balance 같은 함수가 없으므로 call_api를 직접 쓰되,
-            # 컨텍스트 스위칭이 필요함.
-            # -> api.py에 get_deposit_balance 추가하는 것이 가장 깔끔하나, 
-            # 여기서는 임시로 api.get_domestic_balance 처럼 내부 헬퍼를 쓸 수 없으므로
-            # api.call_api를 쓰되, cano가 AUTO_CANO면 컨텍스트를 잠시 바꿈.
+    try:
+        with utils.AccountContext(cano):
+            dep_data = api.get_deposit_balance(cano, acnt_prdt_cd)
             
-            # 더 좋은 방법: api.py에 get_deposit 함수 추가. (이번 리팩토링 범위에 포함)
-            # 여기서는 api.call_api를 쓰되, api.py의 _prepare_account_params 로직을 
-            # 외부에서 쓸 수 없으므로, api.py에 get_deposit_amount 함수를 추가하는 것을 권장.
-            # 일단은 call_api를 쓰되, 컨텍스트를 수동으로 맞춤.
-            
-            # [수정] api.py에 get_deposit_amount 함수가 없으므로 직접 구현 대신
-            # api.call_api를 사용하되, 컨텍스트 설정을 위해 api._prepare_account_params를 public으로 만들거나
-            # 여기서 수동 설정.
-            
-            # api.py에 get_deposit_amount 추가가 누락되었으므로, 
-            # call_api 호출 전 컨텍스트 설정을 위해 아래와 같이 처리
-            
-            original_context = getattr(config.trade_context, 'use_auto_account', False)
-            if not config.IS_SIMULATION and cano == config.AUTO_CANO:
-                config.trade_context.use_auto_account = True
-            elif not config.IS_SIMULATION and cano == config.CANO:
-                config.trade_context.use_auto_account = False
-                
-            data = api.call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "deposit", params=params)
-            
-            config.trade_context.use_auto_account = original_context # 복구
-            
-            if data.get('rt_cd') == '0':
-                output = data.get('output', {})
-                cash_amt = api.safe_int(output.get('ord_psbl_cash'))
-                summary_data['dep_dom'] = cash_amt
-                summary_data['d2_dep'] = cash_amt
-                summary_data['withdraw'] = cash_amt
-            else:
-                config.console.print(f"[red]예수금 조회 실패: {data.get('msg1')}[/red]")
-                return
-        except:
-            config.console.print("[red]예수금 조회 중 통신 오류[/red]")
-            return
-    else:
-        # 실전투자: 외화 예수금 조회 포함
-        params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "TR_CONT": "", "INQR_DVSN_1": "", "TR_CRCY_CD": "", "PDNO": "", "ORD_UNPR": "", "ORD_QTY": "", "ORD_DVSN": "00", "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "BSPR_BF_DT_APLY_YN": "N"}
-        
-        try:
-            time.sleep(0.3)
-            
-            original_context = getattr(config.trade_context, 'use_auto_account', False)
-            if cano == config.AUTO_CANO: config.trade_context.use_auto_account = True
-            else: config.trade_context.use_auto_account = False
-                
-            data = api.call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params)
-            
-            config.trade_context.use_auto_account = original_context
-            
-            if data.get('rt_cd') == '0' and data.get('output2'):
-                out2 = data['output2'][0] if isinstance(data['output2'], list) else data['output2']
-                summary_data['dep_ovs'] = int(float(out2.get('frcr_evlu_tota', 0)))
-        except: pass
-
-    # 4. 출력
+            if dep_data:
+                if config.session.is_simulation:
+                    summary_data['dep_dom'] = dep_data['deposit']
+                    summary_data['d2_dep'] = dep_data['d2_deposit']
+                    summary_data['withdraw'] = dep_data['withdraw']
+                else:
+                    summary_data['dep_ovs'] = dep_data['foreign_deposit']
+    except Exception: pass
+    
+    # 4. 최종 계산
     real_cash = summary_data['d2_dep']
     summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval']
+    
+    return summary_data
+
+def _display_asset_status(cano, acnt_prdt_cd):
+    """특정 계좌의 자산 현황 출력 (UI)"""
+    
+    with config.console.status("[bold green]자산 현황 조회 및 분석 중...[/]"):
+        summary_data = get_asset_status_data(cano, acnt_prdt_cd)
+        time.sleep(0.5) # UX Pacing
+
     display_tot_deposit = summary_data['dep_dom'] + summary_data['dep_ovs']
     roi = 0.0
     if summary_data['sec_buy'] > 0: roi = (summary_data['sec_pl'] / summary_data['sec_buy']) * 100
@@ -478,7 +435,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
     summary_table.add_row("총 평가금액", f"{summary_data['tot_asset']:,}원")
     summary_table.add_row("총 예수금(D+0)", f"{display_tot_deposit:,}원")
     summary_table.add_row("    원화 예수금", f"{summary_data['dep_dom']:,}원", style="dim")
-    if not config.IS_SIMULATION:
+    if not config.session.is_simulation:
         summary_table.add_row("      └ D+1 (익일)", f"{summary_data['d1_dep']:,}원", style="dim")
         summary_table.add_row("      └ D+2 (가수도)", f"{summary_data['d2_dep']:,}원", style="dim")
     summary_table.add_row("    외화예수금", f"{summary_data['dep_ovs']:,}원", style="dim")
@@ -519,13 +476,13 @@ def get_deposit_balance():
     time.sleep(0.5)
     
     accounts = []
-    if config.IS_SIMULATION:
-        accounts.append((config.CANO, config.ACNT_PRDT_CD, "모의투자"))
+    if config.session.is_simulation:
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
-        accounts.append((config.CANO, config.ACNT_PRDT_CD, "실전투자 (수동)"))
-        if config.AUTO_CANO and config.AUTO_ACNT_PRDT_CD and \
-           (config.AUTO_CANO != config.CANO or config.AUTO_ACNT_PRDT_CD != config.ACNT_PRDT_CD):
-            accounts.append((config.AUTO_CANO, config.AUTO_ACNT_PRDT_CD, "실전투자 (자동)"))
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
+        if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
+           (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
+            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
             
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}-{acnt})[/]")
@@ -629,8 +586,8 @@ def view_trade_history():
     for t in trades:
         # 1. 모드 필터링 (모의투자 모드면 모의내역만, 실전이면 실전/자동 내역만)
         is_sim_data = bool(t['is_sim'])
-        if config.IS_SIMULATION and not is_sim_data: continue
-        if not config.IS_SIMULATION and is_sim_data: continue
+        if config.session.is_simulation and not is_sim_data: continue
+        if not config.session.is_simulation and is_sim_data: continue
         
         # 2. 카테고리 결정
         category = "모의"

@@ -11,41 +11,9 @@ import os
 import shutil
 import math
 
-def _clear_yfinance_cache():
-    """yfinance 캐시 파일(.sqlite)을 강제로 삭제하여 DB Lock 문제를 해결합니다."""
-    # [변경] config.DEBUG_LEVEL 참조
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print("[dim cyan][DEBUG] yfinance 캐시 정리 시도...[/dim cyan]")
-
-    possible_paths = [
-        os.path.join(os.path.expanduser("~"), ".cache", "py-yfinance"), # Linux/Mac
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "py-yfinance"), # Windows
-        os.path.join(os.path.expanduser("~"), "Library", "Caches", "py-yfinance") # Mac fallback
-    ]
-    
-    deleted_count = 0
-    for c_path in possible_paths:
-        if os.path.exists(c_path):
-            try:
-                # 디렉토리 내 sqlite 파일 삭제
-                for f in os.listdir(c_path):
-                    if f.endswith('.sqlite') or f.endswith('.sqlite-journal'):
-                        full_path = os.path.join(c_path, f)
-                        try:
-                            os.remove(full_path)
-                            deleted_count += 1
-                        except Exception:
-                            pass 
-            except Exception:
-                pass
-    
-    # [변경] config.DEBUG_LEVEL 참조
-    if config.DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
-        config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
-
 def show_market_indices():
     # [변경] config.DEBUG_LEVEL 참조
-    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
     # [변경] console.status의 범위를 테이블 출력 직전까지 확장
@@ -70,15 +38,15 @@ def show_market_indices():
             for attempt in range(2):
                 try:
                     # [변경] config.DEBUG_LEVEL 참조
-                    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim cyan][TRACE] REQ ({label}) | Attempt: {attempt+1} | Tickers: {tickers_str}[/dim cyan]")
 
                     # 일봉과 분봉 동시 요청
-                    d_data = yf.download(tickers_str, period="1y", interval="1d", group_by='ticker', progress=False, threads=False)
-                    i_data = yf.download(tickers_str, period="5d", interval="5m", group_by='ticker', progress=False, threads=False)
+                    d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
+                    i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
                     
                     # [변경] config.DEBUG_LEVEL 참조
-                    if config.DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         d_shape = d_data.shape if not d_data.empty else "Empty"
                         i_shape = i_data.shape if not i_data.empty else "Empty"
                         config.console.print(f"[dim magenta][TRACE] RES ({label}) | Daily: {d_shape}, Intra: {i_shape}[/dim magenta]")
@@ -106,7 +74,7 @@ def show_market_indices():
                         data_storage[t] = {'daily': d_df, 'intra': i_df}
                     break
                 except Exception as e:
-                    if "database" in str(e).lower(): _clear_yfinance_cache()
+                    if "database" in str(e).lower(): api.clear_yfinance_cache()
                     else: break
 
         # 2. Tickers 객체 생성 (fast_info 접근용)
@@ -149,7 +117,7 @@ def show_market_indices():
 
                 # [DEBUG] 상세 데이터 로깅
                 # [변경] config.DEBUG_LEVEL 참조
-                if config.DEBUG_LEVEL == "DEBUG":
+                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
                     
                     # Daily Tail 출력
@@ -216,16 +184,16 @@ def show_market_indices():
                         
                         use_fast_info = True
                         # [변경] config.DEBUG_LEVEL 참조
-                        if config.DEBUG_LEVEL == "DEBUG":
+                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                             config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
                     else:
                         # [변경] config.DEBUG_LEVEL 참조
-                        if config.DEBUG_LEVEL == "DEBUG":
+                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                             config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
 
                 except Exception as e:
                     # [변경] config.DEBUG_LEVEL 참조
-                    if config.DEBUG_LEVEL == "DEBUG":
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
                 # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
@@ -320,7 +288,7 @@ def show_market_indices():
                             missing_tickers.append(f"{name}(Last:{prev_date_src})")
 
                     # [변경] config.DEBUG_LEVEL 참조
-                    if config.DEBUG_LEVEL == "DEBUG":
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim magenta][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: Fallback DF, Date: {target_date} vs {prev_date_src})[/dim magenta]")
 
                 # C. 결과 계산
@@ -469,7 +437,7 @@ def show_market_indices():
 
             except Exception as e:
                 # [변경] config.DEBUG_LEVEL 참조
-                if config.DEBUG_LEVEL in ["DEBUG", "TRACE"]:
+                if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                     config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
                 table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
     

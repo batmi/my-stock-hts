@@ -1,5 +1,6 @@
 # Python 관련
 __pycache__/
+./modules/__pycache__/
 *.py[cod]
 *$py.class
 .venv/
@@ -7,12 +8,10 @@ venv/
 
 # 시스템 및 설정 관련
 .DS_Store
-./json
 ./json/token_cache.json
 ./chart/analysis_*.png
-./db
 ./db/trade_history.db*
-./logs/system_trade_*.log
+./logs/system_*.log
 
 # run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.
 #run.sh

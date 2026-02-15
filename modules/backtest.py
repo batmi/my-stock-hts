@@ -12,6 +12,7 @@ import config
 import api
 import utils
 import indicators
+from modules import analysis
 
 def calculate_daily_status(row, prev_row):
     """
@@ -35,51 +36,24 @@ def calculate_daily_status(row, prev_row):
     # Previous RSI for divergence check
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
 
-    # 1. 점수 계산 (raw_score) - 필터링 전 순수 점수
-    raw_score = 0
-    if ema20 is not None and price > ema20: raw_score += 1
-    if ema20 is not None and ema60 is not None and ema20 > ema60: raw_score += 1
-    if ema60 is not None and ema120 is not None and ema60 > ema120: raw_score += 1
-    if sar < price: raw_score += 1
+    # [수정] analysis 모듈을 사용하여 로직 동기화
+    # 1. 상태 분류 (위험/주의/관망/상승/매수)
+    state, _ = analysis.classify_stock_state(
+        price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend
+    )
     
-    # RSI Score
-    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): raw_score += 2
-    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): raw_score += 1
+    # 2. 점수 계산
+    raw_score, _ = analysis.calculate_score(
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend
+    )
     
-    # ADX Score (Conservative: >= 25)
-    if adx is not None and adx >= 25: raw_score += 1
-    
-    # CCI Score
-    if cci is not None:
-        if cci > 0: raw_score += 1
-        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: raw_score += 1
-    
-    # OBV Score
-    if obv_trend: raw_score += 1
-
-    # 2. 위험/주의 필터링 (analysis.py 로직 동기화)
-    is_severe_danger = False
-    # 위험: 120선&60선 동시 이탈 OR RSI <= 20
-    if ema120 is not None and price < ema120 and price < ema60: is_severe_danger = True
-    elif rsi <= (config.INDICATOR_PARAMS["RSI_LOWER"] - 10): is_severe_danger = True
-    
-    is_caution = False
-    # 주의: 60선 이탈 OR 120선 이탈 OR SAR 매도 OR RSI 과열(80)/침체(30) OR ADX과열 꺾임
-    if price < ema60 or (ema120 is not None and price < ema120): is_caution = True
-    elif sar > price: is_caution = True
-    elif rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10) or rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: is_caution = True
-    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: is_caution = True
-    
-    # 매수 가능 상태: 위험도 아니고 주의도 아니어야 함 (analysis.py의 '매수' 상태 조건)
-    can_buy_state = not (is_severe_danger or is_caution)
-    
-    # 매도 판단용 점수: 위험 상태면 0점 처리 (즉시 매도 유도), 그 외엔 점수 유지
-    sell_check_score = 0 if is_severe_danger else raw_score
+    # 3. 백테스팅용 플래그 변환
+    can_buy_state = (state not in ["위험", "주의"]) # 위험/주의 상태가 아니면 매수 후보
+    sell_check_score = 0 if state == "위험" else raw_score # 위험 상태면 점수 0점 처리 (매도 유도)
     
     return raw_score, sell_check_score, can_buy_state
 
 def get_backtest_data(code, is_overseas, days):
-    """백테스팅용 데이터 조회 (yfinance 우선 사용 -> KIS API 실패 시 사용)"""
     # 1. yfinance 시도 (장기간 데이터 확보 유리)
     try:
         start_dt = datetime.now() - timedelta(days=days + 120) # 지표 계산용 여유 기간 포함
@@ -93,10 +67,10 @@ def get_backtest_data(code, is_overseas, days):
             tickers.append(f"{code}.KQ") # 코스닥
             
         for t in tickers:
-            if config.DEBUG_LEVEL == "TRACE":
+            if config.SCREEN_DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: {t} | Start: {start_str}[/dim cyan]")
             
-            df = yf.download(t, start=start_str, progress=False, threads=False)
+            df = api.fetch_yfinance_data(t, start=start_str)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     try: df = df.xs(t, axis=1, level=1)
@@ -115,6 +89,16 @@ def get_backtest_data(code, is_overseas, days):
 
     # 2. KIS API 시도 (Fallback)
     return api.get_chart_data(code, is_overseas)
+
+def get_tick_size(price):
+    """국내 주식 호가 단위 계산"""
+    if price < 2000: return 1
+    if price < 5000: return 5
+    if price < 20000: return 10
+    if price < 50000: return 50
+    if price < 200000: return 100
+    if price < 500000: return 500
+    return 1000
 
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, stop_loss_rate=None, take_profit_rate=None):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
@@ -174,16 +158,22 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         # [매수]
         if holdings == 0:
             if can_buy_state and raw_score >= buy_score_limit and row['RSI'] < buy_rsi_limit:
-                qty = int(balance / price)
+                # [수정] 슬리피지 적용 (국내 주식: 1호가 높게 매수)
+                buy_price = price
+                if not is_overseas:
+                    tick = get_tick_size(price)
+                    buy_price = int(price + tick)
+
+                qty = int(balance / buy_price)
                 if qty > 0:
-                    cost = qty * price
+                    cost = qty * buy_price
                     balance -= cost
                     holdings = qty
-                    avg_price = price
+                    avg_price = buy_price
                     buy_date = date
-                    ts_highest_price = price
+                    ts_highest_price = buy_price
                     trades.append({
-                        "date": date, "type": "매수", "price": price, "qty": qty, "balance": balance, 
+                        "date": date, "type": "매수", "price": buy_price, "qty": qty, "balance": balance, 
                         "profit": 0, "profit_amt": 0, "days": 0, 
                         "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                         "cum_profit": cum_profit
@@ -208,7 +198,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if not sell_signal and sell_check_score < sell_score_limit: sell_signal = True; reason = "점수하락"
             
             if sell_signal:
-                sell_amt = holdings * price
+                # [수정] 슬리피지 적용 (국내 주식: 1호가 낮게 매도)
+                sell_price = price
+                if not is_overseas:
+                    tick = get_tick_size(price)
+                    sell_price = int(price - tick)
+                    if sell_price <= 0: sell_price = int(price)
+
+                sell_amt = holdings * sell_price
                 fee = sell_amt * 0.0023
                 if not is_overseas: fee = int(fee)
                 sell_amt -= fee
@@ -243,7 +240,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = "위험"
                     
                 trades.append({
-                    "date": date, "type": f"매도({reason})", "price": price, "qty": sold_qty, "balance": balance, 
+                    "date": date, "type": f"매도({reason})", "price": sell_price, "qty": sold_qty, "balance": balance, 
                     "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
                     "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                     "cum_profit": cum_profit
@@ -410,6 +407,27 @@ def run_backtest():
         
         summary_table.add_row("평균 수익률", f"[red]{avg_profit:+.2f}%[/] / 평균 손실률: [blue]{avg_loss:+.2f}%[/]")
         
+        # [추가] 손익 구조 분석 (평균 손익비 기반)
+        structure_msg = "-"
+        if avg_loss == 0:
+            structure_msg = "[green]무손실 (완벽한 방어)[/]"
+        else:
+            # 손익비 = 평균수익 / |평균손실|
+            pl_ratio = abs(avg_profit / avg_loss)
+            # 손익분기 승률 = 1 / (손익비 + 1)
+            be_win_rate = (1 / (pl_ratio + 1)) * 100
+            
+            if pl_ratio >= 2.0:
+                structure_msg = f"[green]매우 우수 (승률 {be_win_rate:.0f}%만 넘으면 수익)[/]"
+            elif pl_ratio >= 1.5:
+                structure_msg = f"[green]양호 (승률 {be_win_rate:.0f}%만 넘으면 수익)[/]"
+            elif pl_ratio >= 1.0:
+                structure_msg = f"[yellow]보통 (승률 {be_win_rate:.0f}% 이상 필요)[/]"
+            else:
+                structure_msg = f"[red]불리함 (승률 {be_win_rate:.0f}% 이상 필요)[/]"
+        
+        summary_table.add_row("손익 구조 분석", structure_msg)
+
         # [추가] 보유 기간 통계
         holding_days_list = [t['days'] for t in sell_trades]
         if holding_days_list:
