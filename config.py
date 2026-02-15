@@ -27,6 +27,15 @@ SCREEN_DEBUG_LEVEL = "OFF"
 FILE_DEBUG_LEVEL = "INFO"
 
 # ==========================================================
+# [설정] 텔레그램 설정 (Telegram Configuration)
+# ==========================================================
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+TELEGRAM_INSTANCE_NAME = "HTS"
+TELEGRAM_POLLING_TIMEOUT = 10
+ENABLE_TELEGRAM = True
+
+# ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
 # ==========================================================
 SIM_TX_PER_SECOND = 2     # 모의투자 서버 최대 TPS: 2
@@ -85,15 +94,6 @@ RETRY_DELAY_SERVER = 0.5  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 
 # 0으로 설정하면 재시도하지 않으며, 1로 설정하면 실패 시 1회 재시도합니다.
 # ==========================================================
 MAX_RETRIES = 3
-
-# ==========================================================
-# [설정] 텔레그램 설정 (Telegram Configuration)
-# ==========================================================
-TELEGRAM_BOT_TOKEN = ""
-TELEGRAM_CHAT_ID = ""
-TELEGRAM_INSTANCE_NAME = "HTS"
-TELEGRAM_POLLING_TIMEOUT = 10
-ENABLE_TELEGRAM = True
 
 # ==========================================================
 # [설정] 기본 환율 (Fallback)
@@ -317,4 +317,4 @@ def setup_logging():
 
     logging.basicConfig(level=numeric_level, handlers=[file_handler], force=True)
 
-setup_logging()
+# setup_logging() # main.py에서 명시적으로 호출하도록 변경

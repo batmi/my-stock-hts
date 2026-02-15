@@ -437,6 +437,12 @@ def get_real_access_token(force_refresh=False):
 
 def get_auto_access_token(force_refresh=False):
     """시스템 트레이딩 전용 계좌 토큰 발급"""
+    # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
+    # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)
+    if config.session.auto_app_key and config.session.real_app_key and \
+       config.session.auto_app_key == config.session.real_app_key:
+        return get_real_access_token(force_refresh)
+
     if not config.session.auto_app_key: return None
 
     if not force_refresh:

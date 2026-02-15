@@ -12,7 +12,7 @@ import config
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest
-from modules import auto_trade
+from modules import auto_trade, telegram_bot
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -281,6 +281,9 @@ def main():
     parser.add_argument('--auto', action='store_true', help='시스템 트레이딩 자동 시작 및 로그 뷰어 실행')
     args = parser.parse_args()
 
+    # [추가] 로깅 설정 초기화
+    config.setup_logging()
+
     # 1. 환경 설정 로드
     config.session.initialize(mode=args.mode)
     
@@ -297,7 +300,7 @@ def main():
     auto_trade.ConclusionMonitor().start()
 
     # [추가] 텔레그램 명령어 수신 시작 (백그라운드)
-    telegram_cmd = auto_trade.TelegramCommander()
+    telegram_cmd = telegram_bot.TelegramCommander()
     telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
