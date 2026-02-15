@@ -247,6 +247,7 @@ stock_project/
 ├── constants.py        # 상수 정의 (TR ID, 필드 매핑 등)
 ├── indicators.py       # 보조지표 계산 (ADX, RSI, 파라볼릭 등)
 ├── utils.py            # 공통 유틸리티 (API 헤더, 종목 선택 등)
+├── session.py          # 세션 및 토큰 관리
 ├── main.py             # 메인 실행 (도움말 포함)
 ├── get_telegram_chat_id.py # [New] 텔레그램 Chat ID 조회 도구
 ├── db/                 # [자동 생성] DB 파일 저장소
@@ -262,7 +263,8 @@ stock_project/
 ├── data/               # [자동 생성] 데이터 내보내기 저장소 (Excel/CSV)
 └── modules/            # 기능 모듈 폴더
     ├── __init__.py     # (빈 파일)
-    ├── db_manager.py   # [New] SQLite DB 관리 및 입출력
+    ├── db_manager.py   # SQLite DB 관리 및 입출력
+    ├── telegram_bot.py # 텔레그램 봇 명령어 처리
     ├── market.py       # [1] 시장 지수
     ├── analysis.py     # [2] 종목 시세 분석 (개별 진단 포함)
     ├── chart.py        # [3] 종목 차트 분석 (Matplotlib)
