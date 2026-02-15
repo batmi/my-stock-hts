@@ -385,12 +385,26 @@ class TelegramCommander:
             if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
                 if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
+            
+            # 매수/보유 판단 로직
+            buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+            
+            is_buy_score = score >= buy_score_limit
+            is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
+            buy_result = "매수 가능" if (is_buy_score and is_buy_rsi) else "매수 불가"
+
+            sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
+            is_sell_signal = (score < sell_score_limit) or (state == "위험")
+            sell_result = "매도(추세이탈)" if is_sell_signal else "보유(추세유지)"
 
             msg = f"🔍 [종목 진단] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 11점\n"
-            msg += f"진단 상태: {state}\n"
+            msg += f"상태 분류: {state}\n"
+            msg += f"매수 판단: {buy_result}\n"
+            msg += f"보유 판단: {sell_result}\n"
             msg += f"\n[주요 지표]\n"
             msg += f"• 이평선: {ema_state}\n"
             msg += f"• SAR: {sar_state}\n"
@@ -539,4 +553,3 @@ class TelegramCommander:
             msg += item_msg
             
         return msg
-
