@@ -279,6 +279,7 @@ def main():
     parser = argparse.ArgumentParser(description='Stock Trading System')
     parser.add_argument('--mode', choices=['1', '2'], help='투자 모드 (1: 모의투자, 2: 실전투자)')
     parser.add_argument('--auto', action='store_true', help='시스템 트레이딩 자동 시작 및 로그 뷰어 실행')
+    parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송은 유지)')
     args = parser.parse_args()
 
     # [추가] 로깅 설정 초기화
@@ -287,6 +288,11 @@ def main():
     # 1. 환경 설정 로드
     config.session.initialize(mode=args.mode)
     
+    # [추가] CLI 인자로 봇 비활성화 요청 시 설정 변경
+    if args.no_bot:
+        config.ENABLE_TELEGRAM = False
+        config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
+
     # 2. 종목 데이터 로드
     config.session.load_stock_config()
     

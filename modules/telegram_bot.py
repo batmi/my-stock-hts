@@ -30,6 +30,7 @@ class TelegramCommander:
             "/status": self._cmd_status,
             "/start": self._cmd_start,
             "/stop": self._cmd_stop,
+            "/restart": self._cmd_restart,
             "/help": self._cmd_help,
             "/report": self._cmd_report,
             "/market": self._cmd_market,
@@ -122,12 +123,24 @@ class TelegramCommander:
             self.trader.stop()
             return "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
 
+    def _cmd_restart(self, args):
+        msg = []
+        if self.trader.is_running:
+            self.trader.stop()
+            msg.append("🛑 시스템 트레이딩 중단 완료.")
+            time.sleep(1)  # 상태 정리 대기
+        
+        self.trader.start(interactive=False)
+        msg.append("🚀 시스템 트레이딩을 재시작했습니다.")
+        return "\n".join(msg)
+
     def _cmd_help(self, args):
         return (
             "🤖 [시스템 트레이딩 봇 도움말]\n\n"
             "• /help : 명령어 목록 확인\n"
             "• /start : 시스템 트레이딩 시작\n"
             "• /stop : 시스템 트레이딩 중단\n"
+            "• /restart : 시스템 트레이딩 재시작\n"
             "• /status : 시스템 트레이딩 상태 조회\n"
             "• /report : 매매 성과 리포트 조회\n"
             "• /market : 주요 시장 지수 현황\n"

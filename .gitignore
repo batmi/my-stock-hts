@@ -8,10 +8,10 @@ venv/
 
 # 시스템 및 설정 관련
 .DS_Store
-./json/token_cache.json
-./chart/analysis_*.png
-./db/trade_history.db*
-./logs/system_*.log
+json/token_cache.json
+chart/
+db/
+logs/
 
 # run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.
 #run.sh
