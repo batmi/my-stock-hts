@@ -94,14 +94,21 @@ def send_telegram_message(message):
     # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
     clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # [추가] 종목 코드에 토스증권 링크 자동 적용
+    # [수정] 종목 코드에 링크 자동 적용 (토스증권 -> 네이버/야후 변경)
+    # 토스증권 링크는 모바일 텔레그램 인앱 브라우저에서 호환성 문제가 있으므로
+    # 모바일 웹을 지원하는 네이버 증권(국내) 및 야후 파이낸스(해외)로 변경합니다.
     # 패턴: 괄호 안의 6자리 숫자(국내) 또는 영문 대문자(해외) -> 예: (005930)
-    def add_toss_link(match):
+    def add_stock_link(match):
         code = match.group(1)
-        url = f"https://tossinvest.com/stocks/{code}"
+        if code.isdigit() and len(code) == 6:
+            # 국내 주식: 네이버 증권 모바일
+            url = f"https://m.stock.naver.com/item/main.nhn?code={code}"
+        else:
+            # 해외 주식: 야후 파이낸스
+            url = f"https://finance.yahoo.com/quote/{code}"
         return f'(<a href="{url}">{code}</a>)'
     
-    clean_message = re.sub(r'\(([0-9]{6}|[A-Z]{1,5})\)', add_toss_link, clean_message)
+    clean_message = re.sub(r'\(([0-9]{6}|[A-Z]{1,5})\)', add_stock_link, clean_message)
 
     # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
     final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
