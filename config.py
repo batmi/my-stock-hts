@@ -83,7 +83,7 @@ LOG_RETENTION_DAYS = 30
 # [설정] 시스템 및 네트워크 정책
 # ==========================================================
 DEFAULT_TIMEOUT = 10      # API 요청 타임아웃 (초)
-RETRY_DELAY_SERVER = 1.5  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 시간 (초) (기본값 1.5)
+RETRY_DELAY_SERVER = 1.0  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 시간 (초) (기본값 1.0)
 
 # ==========================================================
 # [추가] API 요청 중 연결 끊김(RemoteDisconnected 등) 발생 시 재시도 횟수
@@ -239,12 +239,12 @@ SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 �
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
-# 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 10초)
-CONCLUSION_CHECK_INTERVAL = 10
+# 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
+CONCLUSION_CHECK_INTERVAL = 5
 
 # 2. 대기 모드 주기: 주문이 없는 평상시 확인 주기 (기본값: 300초 = 5분)
 # (0으로 설정하면 평상시에는 아예 확인하지 않습니다. 외부 HTS 주문 감지 불필요 시 0 권장)
-CONCLUSION_CHECK_IDLE_INTERVAL = 300
+CONCLUSION_CHECK_IDLE_INTERVAL = 0
 
 # 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
 CONCLUSION_CHECK_ACTIVE_DURATION = 100

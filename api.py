@@ -210,7 +210,7 @@ class ThrottledSession(requests.Session):
                 server_type = "SIMULATION"
 
             if target_limit > 0:
-                min_interval = (1.0 / target_limit) * 1.01
+                min_interval = (1.0 / target_limit) * 1.05
                 elapsed = time.time() - last_time
                 if elapsed < min_interval:
                     wait_time = min_interval - elapsed
@@ -397,7 +397,7 @@ def get_access_token(force_refresh=False):
     
     try:
         logger.info("모의투자 토큰 신규 발급 요청...")
-        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
         res_json = res.json()
         
         if 'access_token' in res_json:
@@ -439,7 +439,7 @@ def get_real_access_token(force_refresh=False):
     
     try:
         logger.info("실전투자 토큰 신규 발급 요청...")
-        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
         
         if res.status_code == 200:
             res_json = res.json()
@@ -492,7 +492,7 @@ def get_auto_access_token(force_refresh=False):
     
     try:
         logger.info("자동매매용 토큰 신규 발급 요청...")
-        res = requests.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
         
         if res.status_code == 200:
             res_json = res.json()
