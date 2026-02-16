@@ -285,11 +285,11 @@ class ThrottledSession(requests.Session):
                                         token_key = "AUTO"
                                         
                                     if config.session.is_token_recently_issued(token_key, seconds=60):
-                                        logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 토큰은 최신입니다. 잠시 대기 후 재시도합니다...")
-                                        time.sleep(2.0)
+                                        logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 기존 토큰 유지 및 서버 동기화 대기 ({attempt+1}/{max_retries+1})...")
+                                        time.sleep(5.0)
                                         continue
 
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000) 감지. 토큰 세션 재설정을 시도합니다...")
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000) 감지. 토큰 세션 재설정을 시도합니다 ({attempt+1}/{max_retries+1})...")
                                     
                                     new_token = None
                                     if is_sim_server:
