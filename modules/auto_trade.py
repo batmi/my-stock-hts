@@ -74,8 +74,9 @@ class ConclusionMonitor:
     def _run_loop(self):
         self.was_active_mode = False
         
-        # [추가] 프로그램 시작 직후 API 요청 집중 방지를 위한 초기 지연 (5초)
-        time.sleep(5.0)
+        # [수정] 프로그램 시작 직후 API 요청 집중 방지를 위한 초기 지연 (설정값의 3배)
+        initial_delay = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5) * 3
+        time.sleep(initial_delay)
         
         # [이동] 초기화 로직을 스레드 내부에서 수행 (메인 스레드와 부하 분산)
         if not self.initialized:

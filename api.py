@@ -285,14 +285,14 @@ class ThrottledSession(requests.Session):
                                     # config.RETRY_DELAY_SERVER(기본 1.0)을 기준으로 2배수로 시작 (설정값 1.0일 때: 2초 -> 4초)
                                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
                                     wait_time = (base_delay * 2) * (2 ** attempt)
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1})...")
+                                    logger.warning(f"⚠️ KIS API 서버 오류(OPSQ2000)  {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1})...")
                                     time.sleep(wait_time)
                                     continue
                                 else:
                                     # [수정] 마지막 시도에서도 대기 시간 표시 및 수행 (포맷 통일)
                                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
                                     wait_time = (base_delay * 2) * (2 ** attempt)
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). {wait_time:.1f}초 대기 후 최종 실패 ({attempt+1}/{max_retry_limit+1}).")
+                                    logger.warning(f"⚠️ KIS API 서버 오류(OPSQ2000)  {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1}).")
                                     time.sleep(wait_time)
                                     return response
 
