@@ -1705,7 +1705,8 @@ class AutoTrader:
             rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
             adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
             cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
-            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
+            action_str = "매도" if result['action'] == 'sell' else "보유"
+            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, 판단={action_str}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
 
             if result['action'] == 'sell':
                 reason = result['reason']
