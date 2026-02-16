@@ -494,7 +494,7 @@ class AutoTrader:
                 # [최적화] 자산 조회 로직 통합 (중복 API 호출 제거)
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 
-                for attempt in range(3):
+                for attempt in range(5): # [수정] 재시도 횟수 증가 (3 -> 5)
                     try:
                         # 1. 잔고 및 평가금 조회
                         holdings, summary = api.get_domestic_balance(target_cano, acnt)
@@ -522,7 +522,7 @@ class AutoTrader:
                     except Exception as e:
                         logger.error(f"시작 자산 조회 실패({attempt+1}/3): {e}")
                         asset_check_failed = True
-                        time.sleep(1)
+                        time.sleep(2) # [수정] 대기 시간 증가
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
                 ConclusionMonitor().check_now()
@@ -1576,6 +1576,11 @@ class AutoTrader:
                     
                     # [추가] 일일 손실 제한 체크
                     if current_total > 0:
+                        # [Fix] 초기 자산 로드 실패(0원) 시, 첫 유효 조회 값으로 보정
+                        if self.initial_asset == 0:
+                            self.initial_asset = current_total
+                            self.log(f"[시스템 보정] 초기 자산 정보 갱신: {self.initial_asset:,}원")
+
                         self._check_loss_limit(current_total)
                     
         except Exception: pass

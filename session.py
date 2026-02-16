@@ -249,6 +249,22 @@ class SessionManager:
         }
         self._save_token_cache(cache)
 
+    def is_token_recently_issued(self, key, seconds=60):
+        """토큰이 지정된 시간(초) 이내에 발급되었는지 확인"""
+        cache = self._load_token_cache()
+        token_info = cache.get(key)
+        if not token_info: return False
+        
+        issued_at_str = token_info.get('issued_at')
+        if not issued_at_str: return False
+        
+        try:
+            issued_dt = datetime.strptime(issued_at_str, "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - issued_dt).total_seconds() < seconds:
+                return True
+        except: pass
+        return False
+
     def _update_memory_token(self, key, token):
         if key == "SIMULATION": self.sim_access_token = token
         elif key == "REAL": self.real_access_token = token

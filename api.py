@@ -279,6 +279,16 @@ class ThrottledSession(requests.Session):
                                 # [Fix] 계좌번호 오류 메시지가 떴지만, 일시적인 세션/토큰 꼬임일 수 있으므로
                                 # 즉시 실패 처리하지 않고 토큰을 강제로 갱신하여 복구를 시도합니다.
                                 if attempt < max_retries:
+                                    # [개선] 토큰이 방금 발급된 것이라면(60초 이내), 재발급해도 소용없으므로 대기만 수행
+                                    token_key = "SIMULATION" if is_sim_server else "REAL"
+                                    if is_real_server and getattr(config.trade_context, 'use_auto_account', False):
+                                        token_key = "AUTO"
+                                        
+                                    if config.session.is_token_recently_issued(token_key, seconds=60):
+                                        logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 토큰은 최신입니다. 잠시 대기 후 재시도합니다...")
+                                        time.sleep(2.0)
+                                        continue
+
                                     logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000) 감지. 토큰 세션 재설정을 시도합니다...")
                                     
                                     new_token = None
