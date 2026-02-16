@@ -237,7 +237,7 @@ MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균�
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
-SYSTEM_TRADING_END_TIME = "1915"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
+SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
 # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
