@@ -279,39 +279,10 @@ class ThrottledSession(requests.Session):
                                 # [Fix] 계좌번호 오류 메시지가 떴지만, 일시적인 세션/토큰 꼬임일 수 있으므로
                                 # 즉시 실패 처리하지 않고 토큰을 강제로 갱신하여 복구를 시도합니다.
                                 if attempt < max_retries:
-                                    # [개선] 토큰이 방금 발급된 것이라면(60초 이내), 재발급해도 소용없으므로 대기만 수행
-                                    token_key = "SIMULATION" if is_sim_server else "REAL"
-                                    if is_real_server and getattr(config.trade_context, 'use_auto_account', False):
-                                        token_key = "AUTO"
-                                        
-                                    if config.session.is_token_recently_issued(token_key, seconds=60):
-                                        logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 기존 토큰 유지 및 서버 동기화 대기 ({attempt+1}/{max_retries+1})...")
-                                        time.sleep(5.0)
-                                        continue
-
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000) 감지. 토큰 세션 재설정을 시도합니다 ({attempt+1}/{max_retries+1})...")
-                                    
-                                    new_token = None
-                                    if is_sim_server:
-                                        new_token = get_access_token(force_refresh=True)
-                                    elif is_real_server:
-                                        if getattr(config.trade_context, 'use_auto_account', False):
-                                            new_token = get_auto_access_token(force_refresh=True)
-                                        else:
-                                            new_token = get_real_access_token(force_refresh=True)
-                                    
-                                    if new_token:
-                                        # 갱신된 토큰으로 헤더 교체
-                                        if 'headers' in kwargs:
-                                            kwargs['headers']['authorization'] = f"Bearer {new_token}"
-                                            kwargs['headers']['Authorization'] = f"Bearer {new_token}"
-                                        else:
-                                            kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
-                                        
-                                        # 1초 대기 후 재요청 (서버 동기화 시간 고려)
-                                        time.sleep(1.0)
-                                        response = super().request(method, url, *args, **kwargs)
-                                        return response
+                                    # [수정] OPSQ2000 발생 시 토큰 갱신 없이 대기 후 재시도 (사용자 원칙 준수)
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 기존 토큰 유지 및 서버 동기화 대기 ({attempt+1}/{max_retries+1})...")
+                                    time.sleep(2.0)
+                                    continue
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
                             wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
@@ -421,6 +392,12 @@ def get_access_token(force_refresh=False):
         return _get_access_token_internal(force_refresh)
 
 def _get_access_token_internal(force_refresh=False):
+    # [추가] 빈도 제한(EGW00133) 방지: 최근 발급된 토큰이 있으면 강제 갱신 요청이 와도 무시하고 캐시 반환
+    if force_refresh:
+        if config.session.is_token_recently_issued("SIMULATION", seconds=60):
+            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+            return config.session.get_valid_token("SIMULATION", force_disk_reload=True)
+
     if not force_refresh:
         token = config.session.get_valid_token("SIMULATION")
         if token:
@@ -471,6 +448,12 @@ def get_real_access_token(force_refresh=False):
         return _get_real_access_token_internal(force_refresh)
 
 def _get_real_access_token_internal(force_refresh=False):
+    # [추가] 빈도 제한(EGW00133) 방지
+    if force_refresh:
+        if config.session.is_token_recently_issued("REAL", seconds=60):
+            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+            return config.session.get_valid_token("REAL", force_disk_reload=True)
+
     if not config.session.real_app_key: return None
 
     if not force_refresh:
@@ -522,6 +505,12 @@ def get_auto_access_token(force_refresh=False):
         return _get_auto_access_token_internal(force_refresh)
 
 def _get_auto_access_token_internal(force_refresh=False):
+    # [추가] 빈도 제한(EGW00133) 방지
+    if force_refresh:
+        if config.session.is_token_recently_issued("AUTO", seconds=60):
+            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+            return config.session.get_valid_token("AUTO", force_disk_reload=True)
+
     """시스템 트레이딩 전용 계좌 토큰 발급"""
     # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
     # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)
