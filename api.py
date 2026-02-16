@@ -275,6 +275,33 @@ class ThrottledSession(requests.Session):
                             note = ""
                             if "INVALID_CHECK_ACNO" in msg1:
                                 note = " (※ 서버 내부 오류)"
+                                
+                                # [Fix] 계좌번호 오류 메시지가 떴지만, 일시적인 세션/토큰 꼬임일 수 있으므로
+                                # 즉시 실패 처리하지 않고 토큰을 강제로 갱신하여 복구를 시도합니다.
+                                if attempt < max_retries:
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000) 감지. 토큰 세션 재설정을 시도합니다...")
+                                    
+                                    new_token = None
+                                    if is_sim_server:
+                                        new_token = get_access_token(force_refresh=True)
+                                    elif is_real_server:
+                                        if getattr(config.trade_context, 'use_auto_account', False):
+                                            new_token = get_auto_access_token(force_refresh=True)
+                                        else:
+                                            new_token = get_real_access_token(force_refresh=True)
+                                    
+                                    if new_token:
+                                        # 갱신된 토큰으로 헤더 교체
+                                        if 'headers' in kwargs:
+                                            kwargs['headers']['authorization'] = f"Bearer {new_token}"
+                                            kwargs['headers']['Authorization'] = f"Bearer {new_token}"
+                                        else:
+                                            kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
+                                        
+                                        # 1초 대기 후 재요청 (서버 동기화 시간 고려)
+                                        time.sleep(1.0)
+                                        response = super().request(method, url, *args, **kwargs)
+                                        return response
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
                             wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
@@ -379,6 +406,11 @@ def get_current_token():
         return get_real_access_token()
 
 def get_access_token(force_refresh=False):
+    # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
+    with config.TOKEN_REFRESH_LOCK:
+        return _get_access_token_internal(force_refresh)
+
+def _get_access_token_internal(force_refresh=False):
     if not force_refresh:
         token = config.session.get_valid_token("SIMULATION")
         if token:
@@ -424,6 +456,11 @@ def get_access_token(force_refresh=False):
         return None
 
 def get_real_access_token(force_refresh=False):
+    # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
+    with config.TOKEN_REFRESH_LOCK:
+        return _get_real_access_token_internal(force_refresh)
+
+def _get_real_access_token_internal(force_refresh=False):
     if not config.session.real_app_key: return None
 
     if not force_refresh:
@@ -470,6 +507,11 @@ def get_real_access_token(force_refresh=False):
     return None
 
 def get_auto_access_token(force_refresh=False):
+    # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
+    with config.TOKEN_REFRESH_LOCK:
+        return _get_auto_access_token_internal(force_refresh)
+
+def _get_auto_access_token_internal(force_refresh=False):
     """시스템 트레이딩 전용 계좌 토큰 발급"""
     # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
     # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)

@@ -259,6 +259,9 @@ SYSTEM_LOGGER = None
 # [추가] 시스템 트레이딩 우선순위 처리를 위한 락 (RLock 사용)
 SYSTEM_TRADING_LOCK = threading.RLock()
 
+# [추가] 토큰 갱신 경합 방지를 위한 락 (API 모듈에서 사용)
+TOKEN_REFRESH_LOCK = threading.Lock()
+
 # [추가] 스레드별 컨텍스트 관리 (API 호출 시 계좌 분리용)
 trade_context = threading.local()
 
