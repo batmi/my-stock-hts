@@ -236,7 +236,7 @@ MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균�
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
-SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
+SYSTEM_TRADING_END_TIME = "1715"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
 # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
@@ -244,7 +244,7 @@ CONCLUSION_CHECK_INTERVAL = 5
 
 # 2. 대기 모드 주기: 주문이 없는 평상시 확인 주기 (기본값: 300초 = 5분)
 # (0으로 설정하면 평상시에는 아예 확인하지 않습니다. 외부 HTS 주문 감지 불필요 시 0 권장)
-CONCLUSION_CHECK_IDLE_INTERVAL = 0
+CONCLUSION_CHECK_IDLE_INTERVAL = 300
 
 # 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
 CONCLUSION_CHECK_ACTIVE_DURATION = 100
@@ -309,7 +309,7 @@ def setup_logging():
     # [수정] RotatingFileHandler 적용 (10MB, 백업 5개)
     file_handler = RotatingFileHandler(log_filepath, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     # [수정] 로그 포맷에 파일명과 라인 번호 추가
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] [%(threadName)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
     
     # 파일 로그 레벨 설정
     level_name = FILE_DEBUG_LEVEL.upper()

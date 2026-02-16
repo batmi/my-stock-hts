@@ -153,6 +153,10 @@ def _display_balance_details(cano, acnt_prdt_cd):
         # [수정] api.get_domestic_balance 직접 호출
         raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
         
+        if raw_holdings is None:
+            config.console.print("[red]잔고 조회 실패 (API 오류)[/red]")
+            return
+
         # 보유수량 0 이상인 종목만 필터링
         output1 = [item for item in raw_holdings if int(item.get('hldg_qty', 0)) > 0]
         summary = raw_summary[0] if raw_summary else None

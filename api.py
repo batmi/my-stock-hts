@@ -278,11 +278,17 @@ class ThrottledSession(requests.Session):
                                 
                                 # [Fix] 계좌번호 오류 메시지가 떴지만, 일시적인 세션/토큰 꼬임일 수 있으므로
                                 # 즉시 실패 처리하지 않고 토큰을 강제로 갱신하여 복구를 시도합니다.
-                                if attempt < max_retries:
+                                # [수정] 재시도 횟수 단축: 최대 2회(총 3회)까지만 시도하여 지연 시간 단축
+                                max_retry_limit = min(max_retries, 2)
+                                if attempt < max_retry_limit:
                                     # [수정] OPSQ2000 발생 시 토큰 갱신 없이 대기 후 재시도 (사용자 원칙 준수)
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 기존 토큰 유지 및 서버 동기화 대기 ({attempt+1}/{max_retries+1})...")
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 서버 동기화 대기 ({attempt+1}/{max_retry_limit+1})...")
                                     time.sleep(2.0)
                                     continue
+                                else:
+                                    # [추가] 마지막 시도에서도 동일한 에러 발생 시 명확한 로그 출력 후 종료 (일반 지연 메시지로 넘어가지 않음)
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 서버 동기화 대기 ({attempt+1}/{max_retry_limit+1}) - 최종 실패.")
+                                    return response
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
                             wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
@@ -1070,7 +1076,7 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None):
     if config.SYSTEM_LOGGER:
         config.SYSTEM_LOGGER(f"[API] {msg}")
         
-    return [], []
+    return None, None
 
 def get_overseas_balance(cano=None, acnt_prdt_cd=None):
     """해외 주식 잔고 조회"""
@@ -1110,12 +1116,12 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None):
     }
     return call_api("uapi/domestic-stock/v1/trading/inquire-period-profit", "domestic", "inquiry", "profit", params=params)
 
-def get_today_history(cano=None, acnt_prdt_cd=None):
+def get_today_history(cano=None, acnt_prdt_cd=None, retries=None):
     """금일 체결 내역 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = datetime.now().strftime("%Y%m%d")
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    return call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
+    return call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params, retries=retries)
 
 def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     """미체결 내역 조회 (국내주식) - get_domestic_open_orders의 Alias"""
@@ -1240,7 +1246,7 @@ def get_foreign_deposit(cano=None, acnt_prdt_cd=None):
     }
     return call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params)
 
-def get_deposit_balance(cano=None, acnt_prdt_cd=None):
+def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False):
     """예수금 및 자산 현황 조회 (모의/실전 자동 분기)"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0}
@@ -1248,7 +1254,8 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None):
 
     if config.session.is_simulation:
         # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
-        holdings, summary_list = get_domestic_balance(cano, acnt_prdt_cd)
+        # skip_balance_check가 True이면(이미 외부에서 조회했다면) 건너뜀
+        holdings, summary_list = ([], []) if skip_balance_check else get_domestic_balance(cano, acnt_prdt_cd)
         
         if summary_list and len(summary_list) > 0:
             summary = summary_list[0]

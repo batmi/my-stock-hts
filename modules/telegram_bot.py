@@ -47,7 +47,7 @@ class TelegramCommander:
         if not self.bot_token: return
         if not config.ENABLE_TELEGRAM: return # [추가] 텔레그램 비활성화 시 시작 안 함
         self.is_running = True
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread = threading.Thread(target=self._run_loop, daemon=True, name="TelegramBot")
         self.thread.start()
         logger.debug("[Telegram] 명령어 수신 대기 시작...")
 

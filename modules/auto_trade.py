@@ -55,7 +55,7 @@ class ConclusionMonitor:
                 logger.error(f"체결 감시 초기화 중 오류: {e}")
 
         self.is_running = True
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread = threading.Thread(target=self._run_loop, daemon=True, name="ConclusionMonitor")
         self.thread.start()
 
     def stop(self):
@@ -110,15 +110,21 @@ class ConclusionMonitor:
                 continue
 
             is_rate_limited = False
+            has_error = False # [추가] 에러 발생 여부 플래그
             try:
-                is_rate_limited = self._check_conclusions()
+                is_rate_limited, has_error = self._check_conclusions() # [수정] 반환값 변경
             except Exception as e:
                 logger.error(f"체결 감시 중 오류: {e}")
+                has_error = True
             
             # [추가] Rate Limit 감지 시 호출 간격 자동 조절
             if is_rate_limited:
                 wait_time = min(wait_time * 2.0, 60.0) # 최대 60초까지 증가
                 logger.warning(f"[Monitor] API 호출 제한(Rate Limit) 감지. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
+            elif has_error:
+                # [추가] 서버 에러(OPSQ2000 등) 발생 시 대기 시간을 늘려 로그 도배 방지
+                wait_time = max(wait_time, 20.0)
+                logger.debug(f"[Monitor] 체결 확인 중 에러 발생. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
             
             # interval 만큼 대기하되, event가 설정되면 즉시 깨어남
             self.event.wait(wait_time)
@@ -127,6 +133,7 @@ class ConclusionMonitor:
     def _check_conclusions(self, initial=False):
         """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
         rate_limit_hit = False
+        has_error = False # [추가]
         try:
             # 모니터링 대상 계좌 목록 구성
             accounts_to_check = []
@@ -162,11 +169,16 @@ class ConclusionMonitor:
                 acnt = acc['acnt']
                 
                 try:
-                    # api.get_today_history 내부에서 계좌별 컨텍스트 스위칭 처리됨
-                    data = api.get_today_history(cano, acnt)
+                    # [최적화] retries=0 설정: 모니터링 루프가 주기적으로 돌기 때문에
+                    # API 내부에서 blocking 재시도를 하지 않고 즉시 실패 처리(Fail Fast)하여 다음 주기로 넘김
+                    data = api.get_today_history(cano, acnt, retries=0)
                     
                     if data.get('msg_cd') == 'EGW00201':
                         rate_limit_hit = True
+                    
+                    # [추가] API 호출 실패(RT_CD != 0) 감지
+                    if data.get('rt_cd') != '0':
+                        has_error = True
                     
                     if data.get('rt_cd') == '0':
                         trades = data.get('output1', [])
@@ -327,9 +339,11 @@ class ConclusionMonitor:
                                     logger.debug(f"[AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})")
                 except Exception as e:
                     logger.error(f"계좌({cano}) 체결 확인 중 오류: {e}")
+                    has_error = True
         except Exception as e:
             logger.error(f"체결 확인 중 오류 발생: {e}")
-        return rate_limit_hit
+            has_error = True
+        return rate_limit_hit, has_error
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
@@ -505,7 +519,8 @@ class AutoTrader:
                             deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
                         else:
                             # 실전투자거나 데이터가 없으면 정석대로 조회
-                            res = api.get_deposit_balance(target_cano, acnt)
+                            # [최적화] 이미 get_domestic_balance를 시도했으므로 내부 재호출 방지
+                            res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                             if res:
                                 deposit = res['deposit'] + res['foreign_deposit']
                             else:
@@ -524,8 +539,8 @@ class AutoTrader:
                         asset_check_failed = True
                         time.sleep(2) # [수정] 대기 시간 증가
                 
-                # [추가] 체결 감시자에게 즉시 확인 요청 (초기화)
-                ConclusionMonitor().check_now()
+                # [수정] 시작 시 불필요한 집중 감시 모드 진입 방지 (IDLE_INTERVAL=0 설정 존중)
+                # ConclusionMonitor().check_now()
             
             if asset_check_failed:
                 self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
@@ -536,7 +551,7 @@ class AutoTrader:
             # [추가] API 모듈에서 로그를 남길 수 있도록 연결
             config.SYSTEM_LOGGER = self.log
             
-            self.thread = threading.Thread(target=self._run_loop, daemon=True)
+            self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
 
         console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
@@ -1411,6 +1426,11 @@ class AutoTrader:
                         # 1. 잔고 조회
                         holdings, summary = api.get_domestic_balance(target_cano, acnt)
                         
+                        # [추가] 잔고 조회 실패(API 오류) 시 이번 주기 스킵 (연쇄 오류 방지)
+                        if holdings is None:
+                            self.log("잔고 조회 실패(API 오류). 이번 모니터링 주기를 건너뜁니다.")
+                            continue
+                        
                         # 2. 예수금 조회
                         # [최적화] 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
                         deposit_res = None
@@ -1418,7 +1438,8 @@ class AutoTrader:
                             dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
                             deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': dnca}
                         else:
-                            deposit_res = api.get_deposit_balance(target_cano, acnt)
+                            # [최적화] 이미 get_domestic_balance를 시도했으므로 내부 재호출 방지
+                            deposit_res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         
                         # API 호출 간격 조절 (Rate Limit 방지)
                         time.sleep(0.2)
@@ -1620,7 +1641,8 @@ class AutoTrader:
                     return 0
 
                 # 실전투자: 예수금 별도 조회 필요
-                res = api.get_deposit_balance(cano, acnt)
+                # [최적화] 내부 재호출 방지
+                res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
                 if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
                 
                 cash = res['deposit'] + res['foreign_deposit']
