@@ -698,15 +698,26 @@ class AutoTrader:
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
             try:
-                current_asset = self._get_total_estimated_asset()
-                
+                # [최적화] API 호출 통합 (중복 조회 제거)
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                holdings, _ = api.get_domestic_balance(target_cano, acnt)
-                res = api.get_deposit_balance(target_cano, acnt)
-                if res:
-                    deposit = res['d2_deposit'] # 주문 가능 금액 기준
+                
+                # 1. 잔고 조회 (평가금 포함)
+                holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                
+                # 2. 예수금 및 총 자산 계산
+                if config.session.is_simulation:
+                    if summary:
+                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                        current_asset = deposit + stock_eval
                 else:
-                    deposit = 0
+                    res = api.get_deposit_balance(target_cano, acnt)
+                    if res:
+                        deposit = res['d2_deposit']
+                        stock_eval = 0
+                        if summary: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                        total_cash = res['deposit'] + res['foreign_deposit']
+                        current_asset = total_cash + stock_eval
             except: pass
 
         if current_asset is not None:
@@ -1401,7 +1412,13 @@ class AutoTrader:
                         holdings, summary = api.get_domestic_balance(target_cano, acnt)
                         
                         # 2. 예수금 조회
-                        deposit_res = api.get_deposit_balance(target_cano, acnt)
+                        # [최적화] 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
+                        deposit_res = None
+                        if config.session.is_simulation and summary:
+                            dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                            deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': dnca}
+                        else:
+                            deposit_res = api.get_deposit_balance(target_cano, acnt)
                         
                         # API 호출 간격 조절 (Rate Limit 방지)
                         time.sleep(0.2)
@@ -1593,18 +1610,24 @@ class AutoTrader:
                 cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 
-                # 1. 예수금 조회
+                # [최적화] 모의투자일 경우 잔고 조회만으로 해결 (예수금 포함됨)
+                if config.session.is_simulation:
+                    _, summary = api.get_domestic_balance(cano, acnt)
+                    if summary and len(summary) > 0:
+                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                        cash = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        return cash + stock_eval
+                    return 0
+
+                # 실전투자: 예수금 별도 조회 필요
                 res = api.get_deposit_balance(cano, acnt)
                 if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
                 
-                # 총 자산 계산 시에는 원화+외화 예수금 합산
                 cash = res['deposit'] + res['foreign_deposit']
                 
-                # 2. 주식 평가금 조회
                 _, summary = api.get_domestic_balance(cano, acnt)
                 stock_eval = 0
                 if summary and len(summary) > 0: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
-                # 잔고 조회 실패(빈 리스트)일 수도 있으나, 실제 잔고가 없는 경우와 구분 어려우므로 진행
                 
                 return cash + stock_eval
             except Exception as e:

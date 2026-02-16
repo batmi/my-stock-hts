@@ -315,7 +315,7 @@ class ThrottledSession(requests.Session):
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
                             wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
-                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도..."
+                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retries+1})..."
                             logger.warning(msg)
                             # [추가] 시스템 트레이딩 로그 기록
                             if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
