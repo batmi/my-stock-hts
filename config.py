@@ -83,11 +83,12 @@ LOG_RETENTION_DAYS = 30
 # [설정] 시스템 및 네트워크 정책
 # ==========================================================
 DEFAULT_TIMEOUT = 10      # API 요청 타임아웃 (초)
-RETRY_DELAY_SERVER = 1.0  # 서버 지연(OPSQ2000) 발생 시 재시도 대기 시간 (초) (기본값 1.0)
+RETRY_DELAY_SERVER = 1.0  # 서버 에러 발생 시 재시도 대기 시간 (초) (기본값 1.0)
 
 # ==========================================================
 # [추가] API 요청 중 연결 끊김(RemoteDisconnected 등) 발생 시 재시도 횟수
 # 0으로 설정하면 재시도하지 않으며, 1로 설정하면 실패 시 1회 재시도합니다.
+# 재시도 시 RETRY_DELAY_SERVER를 이용한 백오프 방식으로 대기 후 재시도합니다.
 # ==========================================================
 MAX_RETRIES = 3
 
@@ -236,7 +237,7 @@ MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균�
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
-SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
+SYSTEM_TRADING_END_TIME = "1915"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
 # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
@@ -260,7 +261,7 @@ SYSTEM_LOGGER = None
 SYSTEM_TRADING_LOCK = threading.RLock()
 
 # [추가] 토큰 갱신 경합 방지를 위한 락 (API 모듈에서 사용)
-TOKEN_REFRESH_LOCK = threading.Lock()
+TOKEN_REFRESH_LOCK = threading.RLock()
 
 # [추가] 스레드별 컨텍스트 관리 (API 호출 시 계좌 분리용)
 trade_context = threading.local()

@@ -46,14 +46,6 @@ class ConclusionMonitor:
     def start(self):
         if self.is_running: return
         
-        # [추가] 최초 실행 시 현재 체결 상태 동기화 (알림 미발송)
-        if not self.initialized:
-            try:
-                self._check_conclusions(initial=True)
-                self.initialized = True
-            except Exception as e:
-                logger.error(f"체결 감시 초기화 중 오류: {e}")
-
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="ConclusionMonitor")
         self.thread.start()
@@ -81,6 +73,18 @@ class ConclusionMonitor:
 
     def _run_loop(self):
         self.was_active_mode = False
+        
+        # [추가] 프로그램 시작 직후 API 요청 집중 방지를 위한 초기 지연 (5초)
+        time.sleep(5.0)
+        
+        # [이동] 초기화 로직을 스레드 내부에서 수행 (메인 스레드와 부하 분산)
+        if not self.initialized:
+            try:
+                self._check_conclusions(initial=True)
+                self.initialized = True
+            except Exception as e:
+                logger.error(f"체결 감시 초기화 중 오류: {e}")
+
         while self.is_running:
             # [추가] 장 운영 시간 외에는 모니터링 중단 (트래픽 감소)
             if not self._is_market_open():
@@ -878,7 +882,7 @@ class AutoTrader:
                 
                 is_healthy = stat.get('is_healthy', True)
                 current = stat.get('current', 0)
-                trend_icon = "📈" if is_healthy else "📉"
+                trend_icon = "(상승)" if is_healthy else "(하락)"
                 color = "red" if is_healthy else "blue"
                 return f"[{color}]{current:,.0f} {trend_icon}[/]"
             
@@ -1428,7 +1432,8 @@ class AutoTrader:
                         
                         # [추가] 잔고 조회 실패(API 오류) 시 이번 주기 스킵 (연쇄 오류 방지)
                         if holdings is None:
-                            self.log("잔고 조회 실패(API 오류). 이번 모니터링 주기를 건너뜁니다.")
+                            self.log("잔고 조회 실패(API 오류). 잠시 대기 후 재시도합니다.")
+                            time.sleep(5.0) # [수정] 실패 시 즉시 재시도 방지를 위한 대기
                             continue
                         
                         # 2. 예수금 조회

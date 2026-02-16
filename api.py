@@ -281,13 +281,19 @@ class ThrottledSession(requests.Session):
                                 # [수정] 재시도 횟수 단축: 최대 2회(총 3회)까지만 시도하여 지연 시간 단축
                                 max_retry_limit = min(max_retries, 2)
                                 if attempt < max_retry_limit:
-                                    # [수정] OPSQ2000 발생 시 토큰 갱신 없이 대기 후 재시도 (사용자 원칙 준수)
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 서버 동기화 대기 ({attempt+1}/{max_retry_limit+1})...")
-                                    time.sleep(2.0)
+                                    # [수정] OPSQ2000 발생 시 점진적 대기 (Exponential Backoff) 적용
+                                    # config.RETRY_DELAY_SERVER(기본 1.0)을 기준으로 2배수로 시작 (설정값 1.0일 때: 2초 -> 4초)
+                                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+                                    wait_time = (base_delay * 2) * (2 ** attempt)
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1})...")
+                                    time.sleep(wait_time)
                                     continue
                                 else:
-                                    # [추가] 마지막 시도에서도 동일한 에러 발생 시 명확한 로그 출력 후 종료 (일반 지연 메시지로 넘어가지 않음)
-                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). 서버 동기화 대기 ({attempt+1}/{max_retry_limit+1}) - 최종 실패.")
+                                    # [수정] 마지막 시도에서도 대기 시간 표시 및 수행 (포맷 통일)
+                                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+                                    wait_time = (base_delay * 2) * (2 ** attempt)
+                                    logger.warning(f"⚠️ 계좌번호 인식 오류(OPSQ2000). {wait_time:.1f}초 대기 후 최종 실패 ({attempt+1}/{max_retry_limit+1}).")
+                                    time.sleep(wait_time)
                                     return response
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
@@ -332,7 +338,8 @@ class ThrottledSession(requests.Session):
                         elif msg_cd == 'EGW00201':
                             if attempt < max_retries:
                                 # Exponential Backoff: 0.5초 -> 1.0초 -> 2.0초 ...
-                                wait_time = 0.5 * (2 ** attempt)
+                                base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+                                wait_time = base_delay * (2 ** attempt)
                                 msg = f"초당 전송건수 초과(EGW00201). {wait_time:.1f}초 대기 후 재시도합니다 ({attempt+1}/{max_retries})..."
                                 logger.warning(msg)
                                 # [추가] 시스템 트레이딩 로그 기록
@@ -351,8 +358,9 @@ class ThrottledSession(requests.Session):
                 
                 # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
                 if is_disconnect and attempt < max_retries:
-                    wait_time = 0.5 * (2 ** attempt)
-                    msg = f"⚠️ KIS 서버 연결 끊김(불안정) 감지. {wait_time}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
+                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+                    wait_time = base_delay * (2 ** attempt)
+                    msg = f"⚠️ KIS 서버 연결 끊김(불안정) 감지. {wait_time:.1f}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
                     # [추가] 시스템 트레이딩 로그 기록
@@ -583,7 +591,11 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     # [추가] 시스템 트레이딩 우선순위 락 처리
     # RLock을 사용하여 시스템 트레이딩 스레드는 중복 획득 허용, 메인 스레드는 대기
     # [수정] 성능 최적화: 단순 조회(GET)는 락 없이 병렬 처리 허용, 주문(POST)만 동기화
-    use_lock = (method != "GET")
+    # [변경] 계좌 관련 조회(잔고, 체결, 가능수량 등)도 락을 적용하여 OPSQ2000(동시성 오류) 방지
+    # 시세 조회(quotations) 등은 병렬 처리 유지
+    is_account_related = "trading" in url_path or "balance" in action or "ccld" in action or "psbl" in action or "nccs" in action
+    use_lock = (method != "GET") or is_account_related
+    
     if use_lock:
         config.SYSTEM_TRADING_LOCK.acquire()
 
@@ -637,7 +649,8 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
             except Exception as e:
                 last_error = e
                 if attempt < retries:
-                    wait_time = 0.5 * (2 ** attempt)
+                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+                    wait_time = base_delay * (2 ** attempt)
                     time.sleep(wait_time)
                     continue
         

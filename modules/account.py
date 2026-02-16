@@ -3,6 +3,7 @@ import logging
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
+from rich.prompt import Prompt
 from datetime import datetime, timedelta
 import os
 import time
@@ -541,7 +542,7 @@ def export_trade_history_to_excel():
             config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_xlsx)}[/bold green]")
         except ImportError:
             config.console.print("\n[yellow]openpyxl 라이브러리가 설치되지 않아 엑셀(.xlsx) 저장이 불가능합니다.[/yellow]")
-            if config.Prompt.ask("대신 CSV 파일로 저장하시겠습니까?", choices=["y", "n"], default="y") == "y":
+            if Prompt.ask("대신 CSV 파일로 저장하시겠습니까?", choices=["y", "n"], default="y") == "y":
                 filename_csv = os.path.join(config.DATA_DIR, f"trade_history_{timestamp}.csv")
                 df.to_csv(filename_csv, index=False, encoding='utf-8-sig')
                 config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_csv)}[/bold green]")
@@ -560,7 +561,7 @@ def view_trade_history():
     config.console.print("[4] 전체 거래 내역 저장 (Excel)")
     config.console.print()
     
-    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
     if choice.lower() == 'q': return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
@@ -574,7 +575,7 @@ def view_trade_history():
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         trades = db_manager.db.get_trades(start_date=start_dt)
     elif choice == "3":
-        keyword = config.Prompt.ask("검색할 종목코드(티커) 입력")
+        keyword = Prompt.ask("검색할 종목코드(티커) 입력")
         trades = db_manager.db.get_trades(code=keyword)
     elif choice == "4":
         export_trade_history_to_excel()
@@ -706,7 +707,7 @@ def asset_management_menu():
     config.console.print("[3] 거래 내역 (히스토리)")
     config.console.print()
     
-    choice = config.Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
     if choice.lower() == 'q': return
 
     if choice == "1":

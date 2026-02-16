@@ -412,7 +412,9 @@ class TelegramCommander:
                 reasons = []
                 if not is_safe_state: reasons.append(f"상태:{state}")
                 if not is_buy_score: reasons.append(f"점수미달({score}<{buy_score_limit})")
-                if not is_buy_rsi: reasons.append(f"RSI과열({ind['rsi'] if ind['rsi'] is not None else 'N/A'}>={buy_rsi_limit})")
+                if not is_buy_rsi:
+                    rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "N/A"
+                    reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")
                 buy_result = f"매수 불가 ({', '.join(reasons)})"
 
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
