@@ -289,30 +289,28 @@ class ThrottledSession(requests.Session):
                                     time.sleep(wait_time)
                                     continue
                                 else:
-                                    # [수정] 마지막 시도에서도 대기 시간 표시 및 수행 (포맷 통일)
-                                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                                    wait_time = (base_delay * 2) * (2 ** attempt)
-                                    logger.warning(f"⚠️ KIS API 서버 오류(OPSQ2000)  {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1}).")
-                                    time.sleep(wait_time)
+                                    # [수정] 마지막 시도 실패 로그 출력
+                                    logger.error(f"⚠️ KIS API 서버 오류(OPSQ2000) 최종 실패 ({attempt+1}/{max_retry_limit+1}). 내용: {msg1}")
                                     return response
 
                             # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
                             wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
-                            msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retries+1})..."
-                            logger.warning(msg)
-                            # [추가] 시스템 트레이딩 로그 기록
-                            if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
                             
-                            # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
-                            if time.time() - _last_alert_time > 300:
-                                send_telegram_message(f"⚠️ [서버 경고] KIS 서버 처리 지연(OPSQ2000).\n(자동 재시도 중...)")
-                                _last_alert_time = time.time()
-                            
-                            time.sleep(wait_time)
-                            
-                            # [개선] 재시도 루프 활용 (단발성 재시도가 아닌 루프 continue)
                             if attempt < max_retries:
+                                msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retries+1})..."
+                                logger.warning(msg)
+                                # [추가] 시스템 트레이딩 로그 기록
+                                if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                                
+                                # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
+                                if time.time() - _last_alert_time > 300:
+                                    send_telegram_message(f"⚠️ [서버 경고] KIS 서버 처리 지연(OPSQ2000).\n(자동 재시도 중...)")
+                                    _last_alert_time = time.time()
+                                
+                                time.sleep(wait_time)
                                 continue
+                            else:
+                                logger.error(f"⚠️ KIS API 서버 오류(OPSQ2000) 최종 실패 ({attempt+1}/{max_retries+1}). 내용: {msg1}")
 
                         elif msg_cd in ['EGW00123', 'EGW00121']:
                             logger.warning(f"토큰 만료 감지(Code: {msg_cd}). 토큰을 갱신합니다...")
