@@ -330,7 +330,7 @@ class ThrottledSession(requests.Session):
                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
                     wait_time = base_delay * (2 ** attempt)
                     
-                    msg = f"⚠️ API 요청 실패 ({attempt+1}/{max_retries+1}). {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
+                    msg = f"⚠️ API 요청 실패. {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
                     logger.warning(msg)
                     
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -343,7 +343,7 @@ class ThrottledSession(requests.Session):
                     continue
                 
                 # [수정] 최종 실패 시 로그 출력 및 마지막 응답/예외 반환
-                logger.error(f"⚠️ API 요청 최종 실패 ({attempt+1}/{max_retries+1}). 사유: {str(e)}")
+                logger.error(f"⚠️ API 요청 최종 실패. 사유: {str(e)}")
                 if response is not None:
                     return response
                 raise e
