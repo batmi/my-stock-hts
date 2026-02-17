@@ -234,8 +234,11 @@ class ThrottledSession(requests.Session):
                 if kwargs.get('data'): config.console.print(f"[dim cyan]  > Body Data: {kwargs['data']}[/dim cyan]")
                 if kwargs.get('json'): config.console.print(f"[dim cyan]  > JSON Data: {kwargs['json']}[/dim cyan]")
 
-        # [변경] 재시도 로직 추가 (MAX_RETRIES 사용)
-        max_retries = config.MAX_RETRIES
+        # [수정] 재시도 횟수 설정 (kwargs에서 전달받거나 config 기본값 사용)
+        max_retries = kwargs.pop('retries', config.MAX_RETRIES)
+        if max_retries is None: max_retries = config.MAX_RETRIES
+        
+        response = None
         
         for attempt in range(max_retries + 1):
             try:
@@ -264,57 +267,26 @@ class ThrottledSession(requests.Session):
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res_data:
                         config.console.print(f"[dim magenta]  > Response Data: {json.dumps(res_data, ensure_ascii=False, indent=2)}[/dim magenta]")
 
-                try:
-                    if response.text and response.text.startswith('{'):
+                # [수정] 통합 재시도 로직 (모든 에러 상황 처리)
+                should_retry = False
+                retry_reason = ""
+
+                # 1. HTTP Status 확인
+                if response.status_code != 200:
+                    should_retry = True
+                    retry_reason = f"HTTP Status {response.status_code}"
+                
+                # 2. API 응답 코드 확인
+                if not should_retry:
+                    try:
                         res_json = response.json()
+                        rt_cd = res_json.get('rt_cd')
                         msg_cd = res_json.get('msg_cd')
-                        
-                        if msg_cd == 'OPSQ2000':
-                            # [개선] 허위 에러 메시지 설명 추가
-                            msg1 = res_json.get('msg1', '')
-                            note = ""
-                            if "INVALID_CHECK_ACNO" in msg1:
-                                note = " (※ 서버 내부 오류)"
-                                
-                                # [Fix] 계좌번호 오류 메시지가 떴지만, 일시적인 세션/토큰 꼬임일 수 있으므로
-                                # 즉시 실패 처리하지 않고 토큰을 강제로 갱신하여 복구를 시도합니다.
-                                # [수정] 재시도 횟수 단축: 최대 2회(총 3회)까지만 시도하여 지연 시간 단축
-                                max_retry_limit = min(max_retries, 2)
-                                if attempt < max_retry_limit:
-                                    # [수정] OPSQ2000 발생 시 점진적 대기 (Exponential Backoff) 적용
-                                    # config.RETRY_DELAY_SERVER(기본 1.0)을 기준으로 2배수로 시작 (설정값 1.0일 때: 2초 -> 4초)
-                                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                                    wait_time = (base_delay * 2) * (2 ** attempt)
-                                    logger.warning(f"⚠️ KIS API 서버 오류(OPSQ2000)  {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retry_limit+1})...")
-                                    time.sleep(wait_time)
-                                    continue
-                                else:
-                                    # [수정] 마지막 시도 실패 로그 출력
-                                    logger.error(f"⚠️ KIS API 서버 오류(OPSQ2000) 최종 실패 ({attempt+1}/{max_retry_limit+1}). 내용: {msg1}")
-                                    return response
+                        msg1 = res_json.get('msg1', '')
 
-                            # [수정] 고정 대기 대신 지수 백오프(Exponential Backoff) 적용
-                            wait_time = config.RETRY_DELAY_SERVER * (2 ** attempt)
-                            
-                            if attempt < max_retries:
-                                msg = f"⚠️ KIS 서버 처리 지연(OPSQ2000) 발생{note}. 서버 상태가 불안정할 수 있습니다. {wait_time:.1f}초 대기 후 재시도 ({attempt+1}/{max_retries+1})..."
-                                logger.warning(msg)
-                                # [추가] 시스템 트레이딩 로그 기록
-                                if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
-                                
-                                # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
-                                if time.time() - _last_alert_time > 300:
-                                    send_telegram_message(f"⚠️ [서버 경고] KIS 서버 처리 지연(OPSQ2000).\n(자동 재시도 중...)")
-                                    _last_alert_time = time.time()
-                                
-                                time.sleep(wait_time)
-                                continue
-                            else:
-                                logger.error(f"⚠️ KIS API 서버 오류(OPSQ2000) 최종 실패 ({attempt+1}/{max_retries+1}). 내용: {msg1}")
-
-                        elif msg_cd in ['EGW00123', 'EGW00121']:
+                        # 토큰 만료 처리 (특수 케이스: 갱신 후 재시도)
+                        if msg_cd in ['EGW00123', 'EGW00121']:
                             logger.warning(f"토큰 만료 감지(Code: {msg_cd}). 토큰을 갱신합니다...")
-                            
                             new_token = None
                             if is_sim_server:
                                 new_token = get_access_token(force_refresh=True)
@@ -330,51 +302,53 @@ class ThrottledSession(requests.Session):
                                     kwargs['headers']['Authorization'] = f"Bearer {new_token}"
                                 else:
                                     kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
-                                response = super().request(method, url, *args, **kwargs)
+                                # 토큰 갱신 성공 시 재시도 (백오프 적용을 위해 예외 발생)
+                                raise Exception(f"Token Expired ({msg_cd}) - Refreshed")
                         
-                        # [추가] Rate Limit 초과 (EGW00201) 적응형 재시도
-                        elif msg_cd == 'EGW00201':
-                            if attempt < max_retries:
-                                # Exponential Backoff: 0.5초 -> 1.0초 -> 2.0초 ...
-                                base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                                wait_time = base_delay * (2 ** attempt)
-                                msg = f"초당 전송건수 초과(EGW00201). {wait_time:.1f}초 대기 후 재시도합니다 ({attempt+1}/{max_retries})..."
-                                logger.warning(msg)
-                                # [추가] 시스템 트레이딩 로그 기록
-                                if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
-                                
-                                time.sleep(wait_time)
-                                continue
-                except Exception: pass
+                        # 그 외 모든 API 에러 (성공이 아닌 경우)
+                        elif rt_cd != '0':
+                            should_retry = True
+                            retry_reason = f"API Error {msg_cd}: {msg1}"
+
+                    except Exception as e:
+                        # JSON 파싱 실패 등
+                        if not str(e).startswith("Token Expired"):
+                            should_retry = True
+                            retry_reason = f"Response Parsing Error: {e}"
+                        else:
+                            raise e # 토큰 만료 예외는 그대로 전달
                 
-                return response
+                if not should_retry:
+                    return response
+                
+                # 재시도 대상이면 예외를 발생시켜 아래 except 블록에서 처리
+                raise Exception(retry_reason)
 
             except Exception as e:
-                # 연결 끊김 에러 체크
-                err_str = str(e)
-                is_disconnect = "Connection aborted" in err_str or "RemoteDisconnected" in err_str or "timed out" in err_str
-                
-                # 재시도 가능한 에러이고 횟수가 남았으면 대기 후 재시도
-                if is_disconnect and attempt < max_retries:
+                # [수정] 모든 예외(연결 끊김, API 에러 등)에 대해 백오프 후 재시도
+                if attempt < max_retries:
                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
                     wait_time = base_delay * (2 ** attempt)
-                    msg = f"⚠️ KIS 서버 연결 끊김(불안정) 감지. {wait_time:.1f}초 후 재시도합니다 ({attempt+1}/{max_retries})..."
+                    
+                    msg = f"⚠️ API 요청 실패 ({attempt+1}/{max_retries+1}). {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
+                    logger.warning(msg)
+                    
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
+                    
                     # [추가] 시스템 트레이딩 로그 기록
                     if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
-                    
-                    # [추가] 텔레그램 긴급 알림 (5분 간격 제한)
-                    if time.time() - _last_alert_time > 300:
-                        send_telegram_message(f"⚠️ [서버 경고] KIS 서버 연결 불안정.\n내용: {str(e)}\n(자동 재시도 중...)")
-                        _last_alert_time = time.time()
                     
                     time.sleep(wait_time)
                     continue
                 
-                # 재시도 불가능하거나 횟수 초과 시 에러 발생
-                logger.error(f"Request Failed: {str(e)}")
+                # [수정] 최종 실패 시 로그 출력 및 마지막 응답/예외 반환
+                logger.error(f"⚠️ API 요청 최종 실패 ({attempt+1}/{max_retries+1}). 사유: {str(e)}")
+                if response is not None:
+                    return response
                 raise e
+        
+        return response
 
 session = ThrottledSession()
 
@@ -632,27 +606,16 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
         
         full_url = f"{base_url}/{url_path}"
         
-        last_error = None
-        for attempt in range(retries + 1):
-            try:
-                if method == "GET":
-                    res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout)
-                else:
-                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout)
-                
-                res_json = res.json()
-                
-                
-                return res_json
-            except Exception as e:
-                last_error = e
-                if attempt < retries:
-                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                    wait_time = base_delay * (2 ** attempt)
-                    time.sleep(wait_time)
-                    continue
-        
-        return {'rt_cd': '9999', 'msg1': str(last_error)}
+        # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
+        try:
+            if method == "GET":
+                res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout, retries=retries)
+            else:
+                res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout, retries=retries)
+            
+            return res.json()
+        except Exception as e:
+            return {'rt_cd': '9999', 'msg1': str(e)}
     finally:
         if use_lock:
             config.SYSTEM_TRADING_LOCK.release()
