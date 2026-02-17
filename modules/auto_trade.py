@@ -459,6 +459,8 @@ class AutoTrader:
             cls._instance.skipped_by_market_filter_count = 0 # [추가] 시장 필터링 보류 종목 수
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
+            cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
+            cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -515,6 +517,10 @@ class AutoTrader:
                     try:
                         # 1. 잔고 및 평가금 조회
                         holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                        
+                        # [추가] 스레드 첫 실행 시 재사용을 위해 저장
+                        self.initial_holdings = holdings
+                        self.initial_summary = summary
                         
                         # 2. 예수금 조회
                         # 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
@@ -1438,7 +1444,14 @@ class AutoTrader:
                         acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                         
                         # 1. 잔고 조회
-                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                        # [수정] 초기 구동 시 메인 스레드에서 조회한 데이터 재사용 (API 호출 절약)
+                        if self.initial_holdings is not None:
+                            holdings = self.initial_holdings
+                            summary = self.initial_summary
+                            self.initial_holdings = None
+                            self.initial_summary = None
+                        else:
+                            holdings, summary = api.get_domestic_balance(target_cano, acnt)
                         
                         # [추가] 잔고 조회 실패(API 오류) 시 이번 주기 스킵 (연쇄 오류 방지)
                         if holdings is None:
