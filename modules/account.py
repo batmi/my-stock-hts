@@ -148,7 +148,6 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
-    config.console.print(f"[dim]ℹ️ 조회 대상 계좌: {cano}-{acnt_prdt_cd}[/dim]")
     
     with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
         # [수정] api.get_domestic_balance 직접 호출

@@ -293,18 +293,29 @@ def setup_logging():
         if LOG_RETENTION_DAYS > 0:
             cutoff_date = datetime.now().date() - timedelta(days=LOG_RETENTION_DAYS)
             for filename in os.listdir(LOG_DIR):
-                # system_YYYYMMDD.log 형식 확인 (system_trade_... 제외)
-                if filename.startswith("system_") and filename.endswith(".log") and "trade" not in filename:
+                file_path = os.path.join(LOG_DIR, filename)
+                
+                # mystock_YYYYMMDD.log 형식 확인 (system_trade_... 제외)
+                if filename.startswith("mystock_") and filename.endswith(".log") and "trade" not in filename:
                     try:
-                        date_part = filename.replace("system_", "").replace(".log", "")
+                        date_part = filename.replace("mystock_", "").replace(".log", "")
                         if len(date_part) == 8 and date_part.isdigit():
                             file_date = datetime.strptime(date_part, "%Y%m%d").date()
                             if file_date < cutoff_date:
-                                os.remove(os.path.join(LOG_DIR, filename))
+                                os.remove(file_path)
+                    except: pass
+                
+                # [추가] 트레이딩 로그 (system_trade_YYYY-MM-DD.log) 정리 통합
+                elif filename.startswith("system_trade_") and filename.endswith(".log"):
+                    try:
+                        date_part = filename.replace("system_trade_", "").replace(".log", "")
+                        file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
+                        if file_date < cutoff_date:
+                            os.remove(file_path)
                     except: pass
     except: pass
 
-    log_filename = f"system_{datetime.now().strftime('%Y%m%d')}.log"
+    log_filename = f"mystock_{datetime.now().strftime('%Y%m%d')}.log"
     log_filepath = os.path.join(LOG_DIR, log_filename)
 
     # [수정] RotatingFileHandler 적용 (10MB, 백업 5개)

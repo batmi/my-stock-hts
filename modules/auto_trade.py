@@ -458,6 +458,7 @@ class AutoTrader:
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
             cls._instance.skipped_by_market_filter_count = 0 # [추가] 시장 필터링 보류 종목 수
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
+            cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -472,9 +473,6 @@ class AutoTrader:
         if self.is_running:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
-        
-        # [추가] 오래된 로그 파일 정리
-        self._cleanup_old_logs()
         
         # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.session.is_simulation:
@@ -1388,6 +1386,17 @@ class AutoTrader:
     def _run_loop(self):
         while self.is_running:
             try:
+                # [추가] 날짜 변경 시 시스템 로그 파일 갱신 (자정 경과 확인)
+                current_date = datetime.now().date()
+                if current_date != self.last_log_date:
+                    self.log(f"날짜 변경 감지 ({self.last_log_date} -> {current_date}). 시스템 로그 파일을 갱신합니다.")
+                    try:
+                        config.setup_logging()
+                        logger.info("날짜 변경으로 인해 새로운 로그 파일이 생성되었습니다.")
+                    except Exception as e:
+                        self.log(f"로그 핸들러 갱신 실패: {e}")
+                    self.last_log_date = current_date
+
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
                     self.log("모니터링 주기 시작...")
@@ -2106,36 +2115,6 @@ class AutoTrader:
         finally:
             self.log("========================================")
         return None
-
-    def _cleanup_old_logs(self):
-        """설정된 기간보다 오래된 로그 파일 삭제"""
-        retention_days = getattr(config, 'LOG_RETENTION_DAYS', 30)
-        if retention_days <= 0: return
-
-        log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
-        if not os.path.exists(log_dir): return
-
-        # 기준일 계산 (오늘 - 보존기간)
-        cutoff_date = datetime.now().date() - timedelta(days=retention_days)
-        
-        try:
-            for filename in os.listdir(log_dir):
-                if filename.startswith("system_trade_") and filename.endswith(".log"):
-                    try:
-                        # 파일명: system_trade_2024-05-20.log
-                        date_part = filename.replace("system_trade_", "").replace(".log", "")
-                        file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
-                        
-                        if file_date < cutoff_date:
-                            file_path = os.path.join(log_dir, filename)
-                            os.remove(file_path)
-                            logger.info(f"[Log] 오래된 로그 파일 삭제: {filename}")
-                    except ValueError:
-                        continue
-                    except Exception:
-                        continue
-        except Exception as e:
-            logger.error(f"로그 파일 정리 중 오류: {e}")
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
