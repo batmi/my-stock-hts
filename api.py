@@ -273,9 +273,7 @@ class ThrottledSession(requests.Session):
 
                 # 1. HTTP Status 확인
                 if response.status_code != 200:
-                    should_retry = True
-                    retry_reason = f"HTTP Status {response.status_code}"
-                    # [추가] HTTP 에러 상세 로깅 (응답 본문 포함)
+                    # [수정] HTTP 에러는 재시도하지 않고 로그만 기록 (연결 끊김은 except 블록에서 처리됨)
                     try:
                         logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {response.text[:500]}")
                     except: pass
@@ -292,6 +290,11 @@ class ThrottledSession(requests.Session):
                             msg_cd = res_json.get('msg_cd')
                             msg1 = res_json.get('msg1', '')
 
+                            # [추가] 지수 조회 API(실전)의 빈 응답 이슈 예외 처리
+                            # 실전투자 서버에서 지수 조회 시 rt_cd가 없거나 빈 값으로 오는 경우가 있음 -> 에러 로그 제외하고 Fallback 유도
+                            if "inquire-daily-indexchartprice" in url and (not rt_cd or rt_cd != '0'):
+                                return response
+
                             # 토큰 만료 처리 (특수 케이스: 갱신 후 재시도)
                             if msg_cd in ['EGW00123', 'EGW00121']:
                                 # [수정] 자동 갱신 로직 삭제. 만료 플래그만 설정하고 예외 발생시킴.
@@ -301,16 +304,23 @@ class ThrottledSession(requests.Session):
                             
                             # 그 외 모든 API 에러 (성공이 아닌 경우)
                             elif rt_cd is not None and rt_cd != '0':
-                                should_retry = True
-                                retry_reason = f"API Error {msg_cd}: {msg1}"
-                                # [추가] API 에러 상세 로깅
-                                logger.error(f"⚠️ [API Error] URL: {url} | RT_CD: {rt_cd} | MSG_CD: {msg_cd} | MSG: {msg1}")
+                                # [수정] OPSQ2000 에러만 재시도 적용
+                                if msg_cd == 'OPSQ2000':
+                                    should_retry = True
+                                    retry_reason = f"API Error {msg_cd}: {msg1}"
+                                
+                                # [추가] API 에러 상세 로깅 (모든 에러에 대해 기록)
+                                rt_disp = rt_cd if rt_cd else "(Empty)"
+                                msg_disp = msg_cd if msg_cd else "(Empty)"
+                                msg1_disp = msg1 if msg1 else "(Empty)"
+                                logger.error(f"⚠️ [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp}")
 
                         except Exception as e:
                             # JSON 파싱 실패 등
                             if not str(e).startswith("Token Expired"):
-                                should_retry = True
-                                retry_reason = f"Response Parsing Error: {e}"
+                                # [수정] 파싱 에러는 재시도하지 않음
+                                # should_retry = True
+                                # retry_reason = f"Response Parsing Error: {e}"
                                 # [추가] 파싱 에러 상세 로깅
                                 logger.error(f"⚠️ [Parsing Error] URL: {url} | Error: {e} | Body: {response.text[:500]}")
                             else:
@@ -511,6 +521,12 @@ def get_auto_access_token(force_refresh=False):
         return _get_auto_access_token_internal(force_refresh)
 
 def _get_auto_access_token_internal(force_refresh=False):
+    # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
+    # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)
+    if config.session.auto_app_key and config.session.real_app_key and \
+       config.session.auto_app_key == config.session.real_app_key:
+        return get_real_access_token(force_refresh)
+
     # [수정] 메인 스레드가 아니면 신규 발급 금지
     if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
         if not force_refresh:
@@ -524,13 +540,6 @@ def _get_auto_access_token_internal(force_refresh=False):
         if config.session.is_token_recently_issued("AUTO", seconds=60):
             logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
             return config.session.get_valid_token("AUTO", force_disk_reload=True)
-
-    """시스템 트레이딩 전용 계좌 토큰 발급"""
-    # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
-    # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)
-    if config.session.auto_app_key and config.session.real_app_key and \
-       config.session.auto_app_key == config.session.real_app_key:
-        return get_real_access_token(force_refresh)
 
     if not config.session.auto_app_key: return None
 
@@ -804,7 +813,8 @@ def get_domestic_index_chart(code):
         "FID_PERIOD_DIV_CODE": "D"     # D: 일봉
     }
     
-    data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id)
+    # [수정] 지수 조회는 실패 시 yfinance Fallback이 있으므로 재시도 없이 즉시 실패 처리 (retries=0)
+    data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
     
     if data.get('rt_cd') == '0':
         items = data.get('output2', [])

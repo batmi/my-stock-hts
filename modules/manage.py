@@ -244,6 +244,9 @@ def get_current_price(mode='add'):
         config.console.print(f"[dim cyan][TRACE] 종목 검색/추가 메뉴 진입[/dim cyan]")
 
     raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
+    if raw_input.lower() != 'q' and raw_input.strip():
+        logger.info(f"운영자 입력 (종목조회): {raw_input}")
+
     if raw_input.lower() == 'q': return
     if not raw_input.strip(): 
         config.console.print("[yellow]종목코드가 입력되지 않았습니다.[/yellow]")
@@ -300,6 +303,9 @@ def get_current_price(mode='add'):
             config.console.print()
             cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
             
+            if cat_choice.lower() != 'q':
+                logger.info(f"운영자 입력 (종목추가): 이름={input_name}, 그룹={cat_choice}")
+            
             if cat_choice.lower() == 'q': return
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
 
@@ -329,6 +335,8 @@ def delete_stock():
     config.console.print()
     
     cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    if cat_choice.lower() != 'q':
+        logger.info(f"운영자 입력 (삭제그룹선택): {cat_choice}")
     if cat_choice.lower() == 'q': return
 
     group_map = {"1": ("stocks_kr", "한국주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국주식"), "4": ("etfs_us", "미국 ETF")}
@@ -350,6 +358,8 @@ def delete_stock():
         
     config.console.print()
     del_idx = Prompt.ask("삭제할 번호 선택 [dim](취소: q)[/dim]")
+    if del_idx.lower() != 'q':
+        logger.info(f"운영자 입력 (삭제번호선택): {del_idx}")
     if del_idx.lower() == 'q': return
     
     if del_idx.isdigit():
@@ -375,6 +385,11 @@ def manage_stock_menu():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    
+    menu_map = {"1": "종목 추가", "2": "종목 삭제"}
+    if choice in menu_map:
+        logger.info(f"운영자 서브메뉴 선택 (관심종목): [{choice}] {menu_map[choice]}")
+
     if choice.lower() == 'q': return
 
     if choice == "1":

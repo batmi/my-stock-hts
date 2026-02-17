@@ -561,6 +561,11 @@ def view_trade_history():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    
+    menu_map = {"1": "전체 내역", "2": "최근 30일", "3": "종목 검색", "4": "엑셀 저장"}
+    if choice in menu_map:
+        logger.info(f"운영자 입력 (거래내역조회): [{choice}] {menu_map[choice]}")
+
     if choice.lower() == 'q': return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
@@ -575,6 +580,7 @@ def view_trade_history():
         trades = db_manager.db.get_trades(start_date=start_dt)
     elif choice == "3":
         keyword = Prompt.ask("검색할 종목코드(티커) 입력")
+        logger.info(f"운영자 입력 (거래내역검색): {keyword}")
         trades = db_manager.db.get_trades(code=keyword)
     elif choice == "4":
         export_trade_history_to_excel()
@@ -707,6 +713,11 @@ def asset_management_menu():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
+    
+    menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
+    if choice in menu_map:
+        logger.info(f"운영자 서브메뉴 선택 (자산관리): [{choice}] {menu_map[choice]}")
+
     if choice.lower() == 'q': return
 
     if choice == "1":

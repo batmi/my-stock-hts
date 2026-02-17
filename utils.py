@@ -1,9 +1,12 @@
 # utils.py
 from rich.prompt import Prompt
 import yfinance as yf
+import logging
 import config
 import api
 import constants
+
+logger = logging.getLogger(__name__)
 
 def get_common_headers(tr_id):
     # [수정] 컨텍스트에 따라 적절한 앱 키/시크릿 선택
@@ -77,6 +80,9 @@ def select_stock_for_chart():
     config.console.print()
     # choices에 "6" 추가
     group_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="5")
+    if group_choice.lower() != 'q':
+        logger.info(f"운영자 입력 (차트분석-그룹): {group_choice}")
+
     if group_choice.lower() == 'q': return None, None, None
     
     # [복구] 시장 지수 선택 로직 추가
@@ -96,6 +102,8 @@ def select_stock_for_chart():
         
         config.console.print()
         idx_choice = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+        if idx_choice.lower() != 'q':
+            logger.info(f"운영자 입력 (차트분석-지수선택): {idx_choice}")
         if idx_choice.lower() == 'q': return None, None, None
 
         if idx_choice.isdigit() and 1 <= int(idx_choice) <= len(indices_list):
@@ -107,6 +115,8 @@ def select_stock_for_chart():
     if group_choice == "5":
         config.console.print()
         raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
+        if raw_input.lower() != 'q' and raw_input.strip():
+            logger.info(f"운영자 입력 (차트분석-직접입력): {raw_input}")
         if raw_input.lower() == 'q' or not raw_input.strip(): return None, None, None
 
         parts = raw_input.split()
@@ -147,6 +157,8 @@ def select_stock_for_chart():
     
     config.console.print()
     choice_idx = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+    if choice_idx.lower() != 'q':
+        logger.info(f"운영자 입력 (차트분석-종목선택): {choice_idx}")
     if choice_idx.lower() == 'q': return None, None, None
     
     if choice_idx.isdigit() and 1 <= int(choice_idx) <= len(target_list):
@@ -162,6 +174,8 @@ def select_target_stock():
     config.console.print("[2] 미국 (Overseas/US)")
     config.console.print()
     nation_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    if nation_choice.lower() != 'q':
+        logger.info(f"운영자 입력 (주문-국가선택): {nation_choice}")
     if nation_choice.lower() == 'q': return None, None, None
     
     is_overseas = (nation_choice == "2")
@@ -197,6 +211,8 @@ def select_target_stock():
     config.console.print(f"[{idx}] 직접 입력")
     config.console.print()
     choice_idx = Prompt.ask("선택 [dim](취소: q)[/dim]", default=str(idx))
+    if choice_idx.lower() != 'q':
+        logger.info(f"운영자 입력 (주문-종목선택): {choice_idx}")
     
     if choice_idx.lower() == 'q': return None, None, None
     
@@ -206,6 +222,7 @@ def select_target_stock():
             return all_stocks[c_idx-1][1], all_stocks[c_idx-1][0], is_overseas
         elif c_idx == idx:
             code = Prompt.ask("종목코드(티커) 입력").upper()
+            logger.info(f"운영자 입력 (주문-직접입력): {code}")
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
             return code, name, is_overseas
