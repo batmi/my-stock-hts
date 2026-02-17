@@ -286,24 +286,10 @@ class ThrottledSession(requests.Session):
 
                         # 토큰 만료 처리 (특수 케이스: 갱신 후 재시도)
                         if msg_cd in ['EGW00123', 'EGW00121']:
-                            logger.warning(f"토큰 만료 감지(Code: {msg_cd}). 토큰을 갱신합니다...")
-                            new_token = None
-                            if is_sim_server:
-                                new_token = get_access_token(force_refresh=True)
-                            elif is_real_server:
-                                if getattr(config.trade_context, 'use_auto_account', False):
-                                    new_token = get_auto_access_token(force_refresh=True)
-                                else:
-                                    new_token = get_real_access_token(force_refresh=True)
-                            
-                            if new_token:
-                                if 'headers' in kwargs:
-                                    kwargs['headers']['authorization'] = f"Bearer {new_token}"
-                                    kwargs['headers']['Authorization'] = f"Bearer {new_token}"
-                                else:
-                                    kwargs['headers'] = {"authorization": f"Bearer {new_token}"}
-                                # 토큰 갱신 성공 시 재시도 (백오프 적용을 위해 예외 발생)
-                                raise Exception(f"Token Expired ({msg_cd}) - Refreshed")
+                            # [수정] 자동 갱신 로직 삭제. 만료 플래그만 설정하고 예외 발생시킴.
+                            logger.error(f"토큰 만료 감지(Code: {msg_cd}). 메인 스레드에 갱신을 요청합니다.")
+                            config.TOKEN_EXPIRED = True
+                            raise Exception(f"Token Expired ({msg_cd})")
                         
                         # 그 외 모든 API 에러 (성공이 아닌 경우)
                         elif rt_cd != '0':
@@ -378,6 +364,14 @@ def get_access_token(force_refresh=False):
         return _get_access_token_internal(force_refresh)
 
 def _get_access_token_internal(force_refresh=False):
+    # [수정] 메인 스레드가 아니면 신규 발급 금지 (캐시된 토큰만 허용)
+    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
+        if not force_refresh:
+            token = config.session.get_valid_token("SIMULATION")
+            if token: return token
+        logger.error("[Token] 백그라운드 스레드에서 토큰 발급이 요청되었습니다. (발급 거부)")
+        return None
+
     # [추가] 빈도 제한(EGW00133) 방지: 최근 발급된 토큰이 있으면 강제 갱신 요청이 와도 무시하고 캐시 반환
     if force_refresh:
         if config.session.is_token_recently_issued("SIMULATION", seconds=60):
@@ -434,6 +428,14 @@ def get_real_access_token(force_refresh=False):
         return _get_real_access_token_internal(force_refresh)
 
 def _get_real_access_token_internal(force_refresh=False):
+    # [수정] 메인 스레드가 아니면 신규 발급 금지
+    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
+        if not force_refresh:
+            token = config.session.get_valid_token("REAL")
+            if token: return token
+        logger.error("[Token] 백그라운드 스레드에서 실전 토큰 발급이 요청되었습니다. (발급 거부)")
+        return None
+
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
         if config.session.is_token_recently_issued("REAL", seconds=60):
@@ -491,6 +493,14 @@ def get_auto_access_token(force_refresh=False):
         return _get_auto_access_token_internal(force_refresh)
 
 def _get_auto_access_token_internal(force_refresh=False):
+    # [수정] 메인 스레드가 아니면 신규 발급 금지
+    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
+        if not force_refresh:
+            token = config.session.get_valid_token("AUTO")
+            if token: return token
+        logger.error("[Token] 백그라운드 스레드에서 자동매매 토큰 발급이 요청되었습니다. (발급 거부)")
+        return None
+
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
         if config.session.is_token_recently_issued("AUTO", seconds=60):

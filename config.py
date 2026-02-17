@@ -266,6 +266,10 @@ TOKEN_REFRESH_LOCK = threading.RLock()
 # [추가] 스레드별 컨텍스트 관리 (API 호출 시 계좌 분리용)
 trade_context = threading.local()
 
+# [추가] 토큰 관리 및 스레드 제어용 전역 변수
+MAIN_THREAD_ID = None
+TOKEN_EXPIRED = False
+
 session = SessionManager()
 
 # 서버 URL 상수 정의
