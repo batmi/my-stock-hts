@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime
 import threading
+import logging
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
@@ -370,6 +371,16 @@ def main():
             print("─" * 50); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+                
+                # [추가] 운영자 메뉴 선택 로깅
+                menu_map = {
+                    "0": "자산 관리", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
+                    "4": "관심 종목 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
+                    "7": "매수 주문", "8": "매도 주문", "9": "정정/취소 주문",
+                    "q": "종료", "h": "도움말"
+                }
+                logging.info(f"운영자 메뉴 선택: [{choice}] {menu_map.get(choice.lower(), '')}")
+
                 if choice.lower() == "q": break
                 
                 if choice.lower() == "h": 

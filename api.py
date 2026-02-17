@@ -275,34 +275,46 @@ class ThrottledSession(requests.Session):
                 if response.status_code != 200:
                     should_retry = True
                     retry_reason = f"HTTP Status {response.status_code}"
+                    # [추가] HTTP 에러 상세 로깅 (응답 본문 포함)
+                    try:
+                        logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {response.text[:500]}")
+                    except: pass
                 
                 # 2. API 응답 코드 확인
                 if not should_retry:
-                    try:
-                        res_json = response.json()
-                        rt_cd = res_json.get('rt_cd')
-                        msg_cd = res_json.get('msg_cd')
-                        msg1 = res_json.get('msg1', '')
+                    # [수정] OAuth 토큰 발급 요청 등은 rt_cd 구조가 다르므로 검사 제외
+                    if "oauth2" in url:
+                        pass
+                    else:
+                        try:
+                            res_json = response.json()
+                            rt_cd = res_json.get('rt_cd')
+                            msg_cd = res_json.get('msg_cd')
+                            msg1 = res_json.get('msg1', '')
 
-                        # 토큰 만료 처리 (특수 케이스: 갱신 후 재시도)
-                        if msg_cd in ['EGW00123', 'EGW00121']:
-                            # [수정] 자동 갱신 로직 삭제. 만료 플래그만 설정하고 예외 발생시킴.
-                            logger.error(f"토큰 만료 감지(Code: {msg_cd}). 메인 스레드에 갱신을 요청합니다.")
-                            config.TOKEN_EXPIRED = True
-                            raise Exception(f"Token Expired ({msg_cd})")
-                        
-                        # 그 외 모든 API 에러 (성공이 아닌 경우)
-                        elif rt_cd != '0':
-                            should_retry = True
-                            retry_reason = f"API Error {msg_cd}: {msg1}"
+                            # 토큰 만료 처리 (특수 케이스: 갱신 후 재시도)
+                            if msg_cd in ['EGW00123', 'EGW00121']:
+                                # [수정] 자동 갱신 로직 삭제. 만료 플래그만 설정하고 예외 발생시킴.
+                                logger.error(f"토큰 만료 감지(Code: {msg_cd}). 메인 스레드에 갱신을 요청합니다.")
+                                config.TOKEN_EXPIRED = True
+                                raise Exception(f"Token Expired ({msg_cd})")
+                            
+                            # 그 외 모든 API 에러 (성공이 아닌 경우)
+                            elif rt_cd is not None and rt_cd != '0':
+                                should_retry = True
+                                retry_reason = f"API Error {msg_cd}: {msg1}"
+                                # [추가] API 에러 상세 로깅
+                                logger.error(f"⚠️ [API Error] URL: {url} | RT_CD: {rt_cd} | MSG_CD: {msg_cd} | MSG: {msg1}")
 
-                    except Exception as e:
-                        # JSON 파싱 실패 등
-                        if not str(e).startswith("Token Expired"):
-                            should_retry = True
-                            retry_reason = f"Response Parsing Error: {e}"
-                        else:
-                            raise e # 토큰 만료 예외는 그대로 전달
+                        except Exception as e:
+                            # JSON 파싱 실패 등
+                            if not str(e).startswith("Token Expired"):
+                                should_retry = True
+                                retry_reason = f"Response Parsing Error: {e}"
+                                # [추가] 파싱 에러 상세 로깅
+                                logger.error(f"⚠️ [Parsing Error] URL: {url} | Error: {e} | Body: {response.text[:500]}")
+                            else:
+                                raise e # 토큰 만료 예외는 그대로 전달
                 
                 if not should_retry:
                     return response
@@ -396,26 +408,32 @@ def _get_access_token_internal(force_refresh=False):
     
     try:
         logger.info("모의투자 토큰 신규 발급 요청...")
-        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
-        res_json = res.json()
+        # [수정] 재시도 비활성화 (retries=0) 및 상태 코드 확인
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False, retries=0)
         
-        if 'access_token' in res_json:
-            token = res_json['access_token']
-            expired = res_json.get('access_token_token_expired')
-            config.session.set_token("SIMULATION", token, expired)
-            logger.info("[green]모의투자 토큰 발급 완료[/green]")
-            return token
-        
-        elif res_json.get('error_code') == 'EGW00133':
-            logger.warning("빈도 제한. 캐시 재확인.")
-            # 디스크에서 다시 로드 시도
-            token = config.session.get_valid_token("SIMULATION", force_disk_reload=True)
-            if token:
-                logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
+        if res.status_code == 200:
+            res_json = res.json()
+            if 'access_token' in res_json:
+                token = res_json['access_token']
+                expired = res_json.get('access_token_token_expired')
+                config.session.set_token("SIMULATION", token, expired)
+                logger.info("[green]모의투자 토큰 발급 완료[/green]")
                 return token
-            return None
+            else:
+                logger.error(f"토큰 발급 응답 오류: {res.text}")
+                return None
         else:
-            logger.error(f"토큰 발급 실패: {res.text}")
+            try:
+                res_json = res.json()
+                if res_json.get('error_code') == 'EGW00133':
+                    logger.warning("빈도 제한(EGW00133). 캐시 재확인.")
+                    token = config.session.get_valid_token("SIMULATION", force_disk_reload=True)
+                    if token:
+                        logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
+                        return token
+            except: pass
+            
+            logger.error(f"토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             return None
             
     except Exception as e:
@@ -457,7 +475,7 @@ def _get_real_access_token_internal(force_refresh=False):
     
     try:
         logger.info("실전투자 토큰 신규 발급 요청...")
-        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False, retries=0)
         
         if res.status_code == 200:
             res_json = res.json()
@@ -479,7 +497,7 @@ def _get_real_access_token_internal(force_refresh=False):
                     return None
             except: pass
             
-            logger.error(f"실전 토큰 발급 실패: {res.text}")
+            logger.error(f"실전 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             
     except Exception as e:
         logger.error(f"실전 토큰 발급 중 오류: {e}")
@@ -529,7 +547,7 @@ def _get_auto_access_token_internal(force_refresh=False):
     
     try:
         logger.info("자동매매용 토큰 신규 발급 요청...")
-        res = session.post(url, headers=headers, data=json.dumps(body), verify=False)
+        res = session.post(url, headers=headers, data=json.dumps(body), verify=False, retries=0)
         
         if res.status_code == 200:
             res_json = res.json()
@@ -550,7 +568,7 @@ def _get_auto_access_token_internal(force_refresh=False):
                     return None
             except: pass
             
-            logger.error(f"자동매매 토큰 발급 실패: {res.text}")
+            logger.error(f"자동매매 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
     except Exception as e:
         logger.error(f"자동매매 토큰 발급 중 오류: {e}")
         
@@ -1087,6 +1105,11 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None):
 
 def get_today_profit_summary(cano=None, acnt_prdt_cd=None):
     """금일 투자 손익 요약 조회"""
+    # [수정] 모의투자 서버는 기간별 손익 조회(TTTC8494R/VTTC8494R)를 지원하지 않음 (OPSQ0002 에러 발생)
+    # 따라서 모의투자일 경우 API 호출을 생략하고 빈 값 반환하여 에러 로그 방지
+    if config.session.is_simulation:
+        return {'rt_cd': '0', 'output2': []}
+
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = datetime.now().strftime("%Y%m%d")
     params = {
