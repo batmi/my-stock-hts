@@ -1367,24 +1367,43 @@ class AutoTrader:
         with console.status("[bold green]로그 파일 로딩 중...[/]"):
             time.sleep(0.5)
 
+        f = None
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                # 초기 출력: 최근 50줄
-                lines = f.readlines()
-                for line in lines[-50:]:
+            f = open(filepath, 'r', encoding='utf-8')
+            # 초기 출력: 최근 50줄
+            lines = f.readlines()
+            for line in lines[-50:]:
+                console.print(escape(line.strip()))
+            
+            # 현재 파일의 inode 저장 (파일 교체 감지용)
+            current_inode = os.fstat(f.fileno()).st_ino
+            
+            # 실시간 모니터링
+            while True:
+                line = f.readline()
+                if line:
                     console.print(escape(line.strip()))
-                
-                # 실시간 모니터링
-                while True:
-                    line = f.readline()
-                    if line:
-                        console.print(escape(line.strip()))
-                    else:
-                        time.sleep(0.1)
+                else:
+                    time.sleep(0.1)
+                    # 파일 교체(로테이션) 감지
+                    try:
+                        if os.path.exists(filepath):
+                            new_inode = os.stat(filepath).st_ino
+                            if new_inode != current_inode:
+                                # 파일이 교체됨 (자정 로테이션 등)
+                                f.close()
+                                f = open(filepath, 'r', encoding='utf-8')
+                                current_inode = new_inode
+                                console.print("\n[dim yellow]>>> 로그 파일이 교체되었습니다 (Log Rotation) <<<[/dim yellow]\n")
+                    except Exception:
+                        pass
         except KeyboardInterrupt:
             console.print("\n[yellow]로그 모니터링을 종료합니다.[/yellow]")
         except Exception as e:
             console.print(f"\n[red]로그 파일 읽기 오류: {e}[/red]")
+        finally:
+            if f and not f.closed:
+                f.close()
 
     def is_market_open(self):
         """국내 정규장 운영 시간 확인 (config 설정 시간 따름)"""

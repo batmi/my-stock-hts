@@ -51,6 +51,12 @@ class TelegramCommander:
         self.thread.start()
         logger.debug("[Telegram] 명령어 수신 대기 시작...")
 
+        # [추가] 봇 재시작 알림 전송
+        try:
+            api.send_telegram_message("🤖 [시스템 알림] 텔레그램 봇이 재연결되었습니다.")
+        except Exception as e:
+            logger.error(f"[Telegram] 재시작 알림 전송 실패: {e}")
+
     def stop(self):
         self.is_running = False
         if self.thread:
@@ -73,11 +79,9 @@ class TelegramCommander:
                             self._handle_message(result.get('message', {}))
                 elif response.status_code == 409:
                     # Conflict: 다른 인스턴스가 이미 폴링 중임
-                    console.print("\n[bold red][Telegram] 충돌 감지: 다른 인스턴스가 이미 텔레그램 봇을 사용 중입니다.[/bold red]")
-                    console.print("[bold red]기존 시스템 보호를 위해 현재 인스턴스의 텔레그램 폴링을 중단합니다.[/bold red]")
-                    self.trader.log("[Telegram] 충돌 감지: 다른 인스턴스가 봇을 사용 중이어서 폴링을 중단합니다.")
-                    self.is_running = False
-                    break
+                    # [수정] 자정 로그 로테이션이나 네트워크 재접속 시 일시적으로 발생할 수 있으므로 즉시 종료하지 않고 대기
+                    logger.warning("[Telegram] 409 Conflict 감지. 30초 대기 후 재시도합니다.")
+                    time.sleep(30)
                     
             except Exception as e:
                 if self.is_running: logger.error(f"[Telegram] Polling Error: {e}")
