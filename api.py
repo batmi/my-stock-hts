@@ -952,7 +952,7 @@ def fetch_sellable_quantity(stock_code):
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "01", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-sell", "domestic", "inquiry", "sellable", params=params)
     if data.get('rt_cd') == '0':
         for item in data.get('output1', []):
@@ -1043,14 +1043,9 @@ def _prepare_account_params(cano, acnt_prdt_cd):
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    # [수정] 공지사항 반영: INQR_DVSN '02'(종목별) 제한 -> '01'(대출일별)로 변경
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "01", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
-    
-    # [추가] OPSQ2001 에러(INQR_DVSN 관련) 발생 시 '01'(대출일별)로 재시도
-    if data.get('msg_cd') == 'OPSQ2001':
-        logger.warning("[API] 잔고 조회 '02' 실패(OPSQ2001). '01'로 재시도합니다.")
-        params["INQR_DVSN"] = "01"
-        data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
 
     if data.get('rt_cd') == '0':
         output1 = data.get('output1', [])
@@ -1064,18 +1059,6 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
             summary_eval = safe_int(summary_tmp.get('scts_evlu_amt'))
             
         logger.info(f"[API] 잔고 조회 결과: 종목수={count}, 총평가금={summary_eval:,}원 (RT_CD={data.get('rt_cd')})")
-        
-        # [보정] 리스트는 비어있는데 총 평가금액이 있는 경우 (데이터 불일치), 조회 구분 변경 시도
-        if not output1 and output2:
-            summary = output2[0] if isinstance(output2, list) and output2 else (output2 if isinstance(output2, dict) else {})
-            total_eval = safe_int(summary.get('scts_evlu_amt'))
-            
-            if total_eval > 0 and params["INQR_DVSN"] == "02":
-                logger.info(f"[API] 잔고 불일치 감지(평가금:{total_eval}, 종목수:0). INQR_DVSN='01'로 재조회 시도.")
-                params["INQR_DVSN"] = "01"
-                retry_data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
-                if retry_data.get('rt_cd') == '0':
-                    return retry_data.get('output1', []), retry_data.get('output2', [])
         
         return output1, output2
     
