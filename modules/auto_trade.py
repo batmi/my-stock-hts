@@ -300,7 +300,8 @@ class ConclusionMonitor:
 
                                     # 알림 발송
                                     msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{reason_msg}{cur_info}{strategy_info}"
-                                    api.send_telegram_message(msg)
+                                    with utils.AccountContext(cano):
+                                        api.send_telegram_message(msg)
                                     
                                     # 로그 기록 (시스템 로거 활용)
                                     if config.SYSTEM_LOGGER:
@@ -705,7 +706,7 @@ class AutoTrader:
                     self.log(f"종료 시 자산/잔고 조회 실패: {e}")
                     msg += "\n(자산 조회 실패)"
             
-            api.send_telegram_message(msg)
+                api.send_telegram_message(msg)
         else:
             msg += "\n(시스템 응답 지연으로 최종 자산 정보 생략)"
             self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
