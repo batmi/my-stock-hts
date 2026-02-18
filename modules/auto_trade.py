@@ -461,6 +461,7 @@ class AutoTrader:
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
             cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
             cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
+            cls._instance.file_logger = config.get_autotrade_logger() # [추가] 파일 로거 초기화
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -772,17 +773,9 @@ class AutoTrader:
         self.logs.append(log_msg)
         if len(self.logs) > 300: self.logs.pop(0)
         
-        # [추가] 파일에 로그 저장 (날짜별 분리)
-        try:
-            log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
-            date_str = now.strftime("%Y-%m-%d")
-            filename = f"system_trade_{date_str}.log"
-            
-            daily_log_path = os.path.join(log_dir, filename)
-            
-            with open(daily_log_path, 'a', encoding='utf-8') as f:
-                f.write(log_msg + "\n")
-        except Exception: pass
+        # [수정] 로거를 통해 파일 기록 (자동 로테이션)
+        if self.file_logger:
+            self.file_logger.info(log_msg)
 
     def get_recent_logs(self, count=10):
         """최근 로그 반환 (텔레그램용)"""
@@ -1338,8 +1331,7 @@ class AutoTrader:
     def view_log_file(self):
         """현재 날짜의 시스템 트레이딩 로그 파일을 실시간으로 출력합니다."""
         log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        filename = f"system_trade_{date_str}.log"
+        filename = "autotrade.log" # [수정] 고정 파일명 사용
         filepath = os.path.join(log_dir, filename)
 
         # [추가] 파일이 생성될 때까지 잠시 대기 (최대 10초) - 부팅 직후 실행 시 필요
@@ -1348,7 +1340,7 @@ class AutoTrader:
             time.sleep(1)
 
         if not os.path.exists(filepath):
-            console.print(f"\n[yellow]오늘 날짜({date_str})의 로그 파일이 없습니다.[/yellow]")
+            console.print(f"\n[yellow]로그 파일({filename})이 없습니다.[/yellow]")
             return
 
         console.print(f"\n[bold cyan]=== 실시간 로그 모니터링 ({filename}) ===[/bold cyan]")
@@ -1389,17 +1381,6 @@ class AutoTrader:
     def _run_loop(self):
         while self.is_running:
             try:
-                # [추가] 날짜 변경 시 시스템 로그 파일 갱신 (자정 경과 확인)
-                current_date = datetime.now().date()
-                if current_date != self.last_log_date:
-                    self.log(f"날짜 변경 감지 ({self.last_log_date} -> {current_date}). 시스템 로그 파일을 갱신합니다.")
-                    try:
-                        config.setup_logging()
-                        logger.info("날짜 변경으로 인해 새로운 로그 파일이 생성되었습니다.")
-                    except Exception as e:
-                        self.log(f"로그 핸들러 갱신 실패: {e}")
-                    self.last_log_date = current_date
-
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
                     self.log("모니터링 주기 시작...")

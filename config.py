@@ -4,7 +4,7 @@ import threading
 from rich.console import Console
 import logging
 from datetime import datetime, timedelta
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from session import SessionManager
 
 console = Console()
@@ -279,6 +279,21 @@ session = SessionManager()
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
 REAL_URL = "https://openapi.koreainvestment.com:9443"
 
+# [추가] 로그 파일명 변경을 위한 Namer 함수
+def _log_namer(name):
+    """
+    로테이션된 로그 파일명을 '파일명_YYYYMMDD.log' 형태로 변경
+    예: mystock.log.20260218 -> mystock_20260218.log
+    """
+    try:
+        base, date_part = name.rsplit('.', 1) # logs/mystock.log, 20260218
+        dir_name = os.path.dirname(base)
+        file_name = os.path.basename(base) # mystock.log
+        root, ext = os.path.splitext(file_name) # mystock, .log
+        return os.path.join(dir_name, f"{root}_{date_part}{ext}")
+    except:
+        return name
+
 # [추가] 로깅 설정 초기화 함수
 def setup_logging():
     # 기존 핸들러 제거
@@ -295,25 +310,15 @@ def setup_logging():
         try: os.makedirs(LOG_DIR)
         except: pass
 
-    # [추가] 오래된 디버그 로그 파일 정리 (LOG_RETENTION_DAYS 적용)
+    # [수정] 오래된 로그 파일 정리 (핸들러가 관리하지 않는 과거 패턴 파일만 정리)
     try:
         if LOG_RETENTION_DAYS > 0:
             cutoff_date = datetime.now().date() - timedelta(days=LOG_RETENTION_DAYS)
             for filename in os.listdir(LOG_DIR):
                 file_path = os.path.join(LOG_DIR, filename)
                 
-                # mystock_YYYYMMDD.log 형식 확인 (system_trade_... 제외)
-                if filename.startswith("mystock_") and filename.endswith(".log") and "trade" not in filename:
-                    try:
-                        date_part = filename.replace("mystock_", "").replace(".log", "")
-                        if len(date_part) == 8 and date_part.isdigit():
-                            file_date = datetime.strptime(date_part, "%Y%m%d").date()
-                            if file_date < cutoff_date:
-                                os.remove(file_path)
-                    except: pass
-                
-                # [추가] 트레이딩 로그 (system_trade_YYYY-MM-DD.log) 정리 통합
-                elif filename.startswith("system_trade_") and filename.endswith(".log"):
+                # 기존 system_trade_YYYY-MM-DD.log 정리 (새로운 autotrade.log는 핸들러가 관리)
+                if filename.startswith("system_trade_") and filename.endswith(".log"):
                     try:
                         date_part = filename.replace("system_trade_", "").replace(".log", "")
                         file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
@@ -322,11 +327,16 @@ def setup_logging():
                     except: pass
     except: pass
 
-    log_filename = f"mystock_{datetime.now().strftime('%Y%m%d')}.log"
+    log_filename = "mystock.log" # [수정] 고정 파일명 사용
     log_filepath = os.path.join(LOG_DIR, log_filename)
 
-    # [수정] RotatingFileHandler 적용 (10MB, 백업 5개)
-    file_handler = RotatingFileHandler(log_filepath, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+    # [수정] TimedRotatingFileHandler 적용 (매일 자정 로테이션, mystock_YYYYMMDD.log 백업)
+    file_handler = TimedRotatingFileHandler(
+        log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8'
+    )
+    file_handler.suffix = "%Y%m%d"
+    file_handler.namer = _log_namer
+
     # [수정] 로그 포맷에 파일명과 라인 번호 추가
     file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] [%(threadName)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
     
@@ -336,4 +346,28 @@ def setup_logging():
 
     logging.basicConfig(level=numeric_level, handlers=[file_handler], force=True)
 
-# setup_logging() # main.py에서 명시적으로 호출하도록 변경
+# [추가] 시스템 트레이딩 전용 로거 설정 함수
+def get_autotrade_logger():
+    """시스템 트레이딩 로그(autotrade.log)를 위한 로거 반환"""
+    logger = logging.getLogger("autotrade")
+    if logger.hasHandlers():
+        return logger
+        
+    logger.setLevel(logging.INFO)
+    logger.propagate = False # 루트 로거로 전파 방지
+    
+    log_filename = "autotrade.log"
+    log_filepath = os.path.join(LOG_DIR, log_filename)
+    
+    # 매일 자정 로테이션, autotrade_YYYYMMDD.log 백업
+    handler = TimedRotatingFileHandler(
+        log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8'
+    )
+    handler.suffix = "%Y%m%d"
+    handler.namer = _log_namer
+    
+    # 메시지만 출력 (타임스탬프는 AutoTrader가 메시지에 포함해서 보냄)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    
+    logger.addHandler(handler)
+    return logger
