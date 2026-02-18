@@ -338,7 +338,7 @@ def setup_logging():
     file_handler.namer = _log_namer
 
     # [수정] 로그 포맷에 파일명과 라인 번호 추가
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] [%(threadName)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
+    file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d [%(levelname)s] [%(threadName)s] %(filename)s:%(lineno)d - %(message)s', datefmt='%H:%M:%S'))
     
     # 파일 로그 레벨 설정
     level_name = FILE_DEBUG_LEVEL.upper()
@@ -350,18 +350,26 @@ def setup_logging():
 def get_autotrade_logger():
     """시스템 트레이딩 로그(autotrade.log)를 위한 로거 반환"""
     logger = logging.getLogger("autotrade")
+    
+    # [수정] 기존 핸들러가 있다면 모두 제거하고 새로 설정 (파일 생성 보장 및 중복 방지)
     if logger.hasHandlers():
-        return logger
+        for h in list(logger.handlers):
+            logger.removeHandler(h)
         
     logger.setLevel(logging.INFO)
     logger.propagate = False # 루트 로거로 전파 방지
     
+    # [추가] 로그 디렉토리 확인 및 생성 (파일 생성 에러 방지)
+    if not os.path.exists(LOG_DIR):
+        try: os.makedirs(LOG_DIR)
+        except: pass
+
     log_filename = "autotrade.log"
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
     # 매일 자정 로테이션, autotrade_YYYYMMDD.log 백업
     handler = TimedRotatingFileHandler(
-        log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8'
+        log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8', delay=False
     )
     handler.suffix = "%Y%m%d"
     handler.namer = _log_namer

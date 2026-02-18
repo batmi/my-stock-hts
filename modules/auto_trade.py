@@ -472,10 +472,19 @@ class AutoTrader:
                     console.print(f"[red]로그 디렉토리 생성 실패: {e}[/red]")
         return cls._instance
 
+    def __init__(self):
+        # [추가] 로거 초기화 보장 (인스턴스 호출 시마다 확인)
+        # 로거 객체가 없거나 핸들러가 연결되지 않은 경우 재설정
+        if not getattr(self, 'file_logger', None) or not self.file_logger.handlers:
+            self.file_logger = config.get_autotrade_logger()
+
     def start(self, interactive=True):
         if self.is_running:
             console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
+        
+        # [추가] 로그 파일 생성을 보장하기 위해 시작 즉시 로그 기록
+        self.log("=== 자동매매 시스템 시작 프로세스 진입 ===")
         
         # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.session.is_simulation:
@@ -773,9 +782,17 @@ class AutoTrader:
         self.logs.append(log_msg)
         if len(self.logs) > 300: self.logs.pop(0)
         
+        # [추가] 로거가 없으면 재할당 시도 (안전장치)
+        if not getattr(self, 'file_logger', None) or not self.file_logger.handlers:
+            self.file_logger = config.get_autotrade_logger()
+
         # [수정] 로거를 통해 파일 기록 (자동 로테이션)
         if self.file_logger:
-            self.file_logger.info(log_msg)
+            try:
+                self.file_logger.info(log_msg)
+            except Exception as e:
+                # 파일 쓰기 실패 시 콘솔에만 출력하고 중단하지 않음
+                console.print(f"[dim red]로그 파일 기록 실패: {e}[/dim red]")
 
     def get_recent_logs(self, count=10):
         """최근 로그 반환 (텔레그램용)"""

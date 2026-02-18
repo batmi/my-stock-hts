@@ -303,6 +303,9 @@ def main():
     # [추가] 로깅 설정 초기화
     config.setup_logging()
 
+    # [추가] 프로그램 구동 시작 로그 기록 (mystock.log 생성 보장)
+    logging.info("=== MyStock HTS 프로그램 구동 시작 ===")
+
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
     config.MAIN_THREAD_ID = threading.get_ident()
 
