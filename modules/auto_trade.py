@@ -2122,9 +2122,20 @@ class AutoTrader:
                 return odno
             else:
                 err_msg = res_json.get('msg1', 'Unknown Error')
-                self.log(f"결과: 실패 ({err_msg}) [Code: {res_json.get('msg_cd')}]")
+                msg_cd = res_json.get('msg_cd')
+                self.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
+                
+                # [추가] 주문 실패 알림
+                stock_display = f"{name}({code})" if name else code
+                fail_msg = f"🚫 [주문 실패] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
+                api.send_telegram_message(fail_msg)
         except Exception as e:
             self.log(f"결과: 에러 발생 ({str(e)})")
+            
+            # [추가] 주문 에러 알림
+            stock_display = f"{name}({code})" if name else code
+            fail_msg = f"🚫 [주문 에러] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
+            api.send_telegram_message(fail_msg)
         finally:
             self.log("========================================")
         return None
