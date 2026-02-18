@@ -602,6 +602,7 @@ def run_backtest():
         t_table.add_column("수익금", justify="right")
         t_table.add_column("수익률", justify="right")
         t_table.add_column("누적손익", justify="right")
+        t_table.add_column("보유기간", justify="right")
 
         for t in trades:
             p_str = f"{t['profit']:+.2f}%" if t['type'].startswith("매도") else "-"
@@ -677,6 +678,10 @@ def run_backtest():
             if cum_val > 0: cum_p_str = f"[red]+{cum_p_str}[/]"
             elif cum_val < 0: cum_p_str = f"[blue]-{cum_p_str}[/]"
             
+            days_str = "-"
+            if t['type'].startswith("매도"):
+                days_str = f"{t.get('days', 0)}일"
+
             t_table.add_row(
                 date_str[:10], 
                 f"{type_color}{t['type']}[/]", 
@@ -689,7 +694,8 @@ def run_backtest():
                 price_str, 
                 amt_str, 
                 profit_display, 
-                cum_p_str
+                cum_p_str,
+                days_str
             )
         config.console.print(t_table)
 
@@ -885,7 +891,7 @@ def run_backtest():
     best_return_rsi = 0
     best_return = -999.0
     
-    rsi_candidates = [45, 50, 55, 60, 65, 70]
+    rsi_candidates = [45, 50, 55, 60, 65, 70, 75, 80]
     
     with config.console.status("[green]RSI 기준별 시뮬레이션 진행 중...[/]"):
         for rsi_limit in rsi_candidates:
