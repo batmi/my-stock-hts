@@ -513,40 +513,37 @@ class AutoTrader:
                 # [최적화] 자산 조회 로직 통합 (중복 API 호출 제거)
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 
-                for attempt in range(5): # [수정] 재시도 횟수 증가 (3 -> 5)
-                    try:
-                        # 1. 잔고 및 평가금 조회
-                        holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                        
-                        # [추가] 스레드 첫 실행 시 재사용을 위해 저장
-                        self.initial_holdings = holdings
-                        self.initial_summary = summary
-                        
-                        # 2. 예수금 조회
-                        # 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
-                        if config.session.is_simulation and summary:
-                            deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                try:
+                    # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도(MAX_RETRIES) 활용
+                    # 1. 잔고 및 평가금 조회
+                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                    
+                    # [추가] 스레드 첫 실행 시 재사용을 위해 저장
+                    self.initial_holdings = holdings
+                    self.initial_summary = summary
+                    
+                    # 2. 예수금 조회
+                    if config.session.is_simulation and summary:
+                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                    else:
+                        # 실전투자거나 데이터가 없으면 정석대로 조회
+                        res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                        if res:
+                            deposit = res['deposit'] + res['foreign_deposit']
                         else:
-                            # 실전투자거나 데이터가 없으면 정석대로 조회
-                            # [최적화] 이미 get_domestic_balance를 시도했으므로 내부 재호출 방지
-                            res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                            if res:
-                                deposit = res['deposit'] + res['foreign_deposit']
-                            else:
-                                deposit = 0
-                        
-                        # 3. 총 자산 계산
-                        stock_eval = 0
-                        if summary:
-                            stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
-                        
-                        self.initial_asset = deposit + stock_eval
-                        asset_check_failed = False
-                        break # 성공 시 루프 탈출
-                    except Exception as e:
-                        logger.error(f"시작 자산 조회 실패({attempt+1}/3): {e}")
-                        asset_check_failed = True
-                        time.sleep(2) # [수정] 대기 시간 증가
+                            deposit = 0
+                    
+                    # 3. 총 자산 계산
+                    stock_eval = 0
+                    if summary:
+                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+                    
+                    self.initial_asset = deposit + stock_eval
+                    asset_check_failed = False
+
+                except Exception as e:
+                    logger.error(f"시작 자산 조회 실패: {e}")
+                    asset_check_failed = True
                 
                 # [수정] 시작 시 불필요한 집중 감시 모드 진입 방지 (IDLE_INTERVAL=0 설정 존중)
                 # ConclusionMonitor().check_now()
@@ -1653,37 +1650,33 @@ class AutoTrader:
 
     def _get_total_estimated_asset(self):
         """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
-        # [추가] 일시적 오류 대비 재시도 로직 (최대 3회)
-        for attempt in range(3):
-            try:
-                cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                
-                # [최적화] 모의투자일 경우 잔고 조회만으로 해결 (예수금 포함됨)
-                if config.session.is_simulation:
-                    _, summary = api.get_domestic_balance(cano, acnt)
-                    if summary and len(summary) > 0:
-                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                        cash = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                        return cash + stock_eval
-                    return 0
-
-                # 실전투자: 예수금 별도 조회 필요
-                # [최적화] 내부 재호출 방지
-                res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
-                if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
-                
-                cash = res['deposit'] + res['foreign_deposit']
-                
+        try:
+            # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도 활용
+            cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            
+            # [최적화] 모의투자일 경우 잔고 조회만으로 해결 (예수금 포함됨)
+            if config.session.is_simulation:
                 _, summary = api.get_domestic_balance(cano, acnt)
-                stock_eval = 0
-                if summary and len(summary) > 0: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
-                
-                return cash + stock_eval
-            except Exception as e:
-                # [추가] 예외 로그 기록
-                logger.debug(f"자산 조회 중 예외 발생({attempt+1}/3): {str(e)}")
-                time.sleep(1)
+                if summary and len(summary) > 0:
+                    stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                    cash = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                    return cash + stock_eval
+                return 0
+
+            # 실전투자: 예수금 별도 조회 필요
+            res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
+            if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
+            
+            cash = res['deposit'] + res['foreign_deposit']
+            
+            _, summary = api.get_domestic_balance(cano, acnt)
+            stock_eval = 0
+            if summary and len(summary) > 0: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+            
+            return cash + stock_eval
+        except Exception as e:
+            logger.debug(f"자산 조회 중 예외 발생: {str(e)}")
         
         self.log(f"⚠️ 자산 조회 최종 실패. (KIS 서버 응답 지연)")
         return None

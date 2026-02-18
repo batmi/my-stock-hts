@@ -304,10 +304,8 @@ class ThrottledSession(requests.Session):
                             
                             # 그 외 모든 API 에러 (성공이 아닌 경우)
                             elif rt_cd is not None and rt_cd != '0':
-                                # [수정] OPSQ2000 에러만 재시도 적용
-                                if msg_cd == 'OPSQ2000':
-                                    should_retry = True
-                                    retry_reason = f"API Error {msg_cd}: {msg1}"
+                                # [수정] OPSQ2000 등 API 에러는 재시도하지 않음
+                                pass
                                 
                                 # [추가] API 에러 상세 로깅 (모든 에러에 대해 기록)
                                 rt_disp = rt_cd if rt_cd else "(Empty)"
@@ -724,19 +722,19 @@ def get_chart_data(code, is_overseas=False):
         for i in range(5):
             params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
             page_success = False
-            for retry in range(3):
-                data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
-                if data.get('rt_cd') == '0':
-                    items = data.get('output2')
-                    if items:
-                        all_items.extend(items)
-                        temp_dates = sorted([x['stck_bsop_date'] for x in items])
-                        current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                        page_success = True
-                    else: page_success = True
-                    break
-                elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
-                else: time.sleep(0.2)
+            data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
+            if data.get('rt_cd') == '0':
+                items = data.get('output2')
+                if items:
+                    all_items.extend(items)
+                    temp_dates = sorted([x['stck_bsop_date'] for x in items])
+                    current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                    page_success = True
+                else: page_success = True
+            elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
+            else: time.sleep(0.2)
+            
+            if not page_success: break
             if page_success and len(all_items) >= 250: break
             
         if not all_items: return pd.DataFrame()
@@ -764,21 +762,20 @@ def get_chart_data(code, is_overseas=False):
             for i in range(4):
                 params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "0", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
                 sub_success = False
-                for retry in range(2):
-                    data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
-                    if data.get('rt_cd') == '0':
-                        items = data.get('output2')
-                        if items:
-                            if not all_items: 
-                                if cached_ex != excd: config.session.update_cache_and_save(code, excd)
-                            all_items.extend(items)
-                            last = items[-1]['xymd']
-                            next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                            sub_success = True
-                        else: sub_success = True
-                        break
-                    elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
-                    else: time.sleep(0.1)
+                data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
+                if data.get('rt_cd') == '0':
+                    items = data.get('output2')
+                    if items:
+                        if not all_items: 
+                            if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                        all_items.extend(items)
+                        last = items[-1]['xymd']
+                        next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        sub_success = True
+                    else: sub_success = True
+                elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
+                else: time.sleep(0.1)
+                
                 if not sub_success: break
                 if len(all_items) >= 250: break
             
@@ -871,7 +868,7 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     if is_overseas: return None
     
     for _ in range(3):
-        data = call_api("uapi/domestic-stock/v1/quotations/inquire-ccnl", "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2)
+        data = call_api("uapi/domestic-stock/v1/quotations/inquire-ccnl", "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
         if data.get('rt_cd') == '0':
             items = data.get('output', [])
             if items and items[0].get('tday_rltv'): return float(str(items[0].get('tday_rltv')).replace(',', ''))
@@ -1043,17 +1040,17 @@ def _prepare_account_params(cano, acnt_prdt_cd):
         
     return cano, acnt_prdt_cd
 
-def get_domestic_balance(cano=None, acnt_prdt_cd=None):
+def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
+    data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
     
     # [추가] OPSQ2001 에러(INQR_DVSN 관련) 발생 시 '01'(대출일별)로 재시도
     if data.get('msg_cd') == 'OPSQ2001':
         logger.warning("[API] 잔고 조회 '02' 실패(OPSQ2001). '01'로 재시도합니다.")
         params["INQR_DVSN"] = "01"
-        data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params)
+        data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
 
     if data.get('rt_cd') == '0':
         output1 = data.get('output1', [])
@@ -1090,7 +1087,7 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None):
         
     return None, None
 
-def get_overseas_balance(cano=None, acnt_prdt_cd=None):
+def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """해외 주식 잔고 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     target_exchanges = ["NASD", "NYSE", "AMEX"]
@@ -1099,7 +1096,7 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None):
     for exc in target_exchanges:
         if config.session.is_simulation: time.sleep(0.2)
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params)
+        data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params, retries=retries)
         
         # Rate Limit 발생 시 잠시 대기 후 재시도 (call_api 내부 재시도와 별개로 루프 내 처리)
         if data.get('msg_cd') == 'EGW00201':
@@ -1240,7 +1237,7 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     # action 파라미터는 TR_ID 조회를 위해 사용됨 (modify/cancel)
     return call_api(url_path, market, "modify", action, data=data, method="POST")
 
-def get_deposit(cano=None, acnt_prdt_cd=None):
+def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """예수금(주문가능현금) 조회 (국내/모의)"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {
@@ -1248,9 +1245,9 @@ def get_deposit(cano=None, acnt_prdt_cd=None):
         "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01", 
         "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"
     }
-    return call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "deposit", params=params)
+    return call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "deposit", params=params, retries=retries)
 
-def get_foreign_deposit(cano=None, acnt_prdt_cd=None):
+def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """외화 예수금 등 실전투자 계좌 잔고 상세 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {
@@ -1261,9 +1258,9 @@ def get_foreign_deposit(cano=None, acnt_prdt_cd=None):
         "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
         "BSPR_BF_DT_APLY_YN": "N"
     }
-    return call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params)
+    return call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params, retries=retries)
 
-def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False):
+def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, retries=None):
     """예수금 및 자산 현황 조회 (모의/실전 자동 분기)"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0}
@@ -1272,7 +1269,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False):
     if config.session.is_simulation:
         # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
         # skip_balance_check가 True이면(이미 외부에서 조회했다면) 건너뜀
-        holdings, summary_list = ([], []) if skip_balance_check else get_domestic_balance(cano, acnt_prdt_cd)
+        holdings, summary_list = ([], []) if skip_balance_check else get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
         
         if summary_list and len(summary_list) > 0:
             summary = summary_list[0]
@@ -1283,7 +1280,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False):
         
         # 잔고조회에서 예수금을 못 가져왔거나 0인 경우, 기존 방식(주문가능금액) 시도
         if res['deposit'] == 0:
-            data = get_deposit(cano, acnt_prdt_cd)
+            data = get_deposit(cano, acnt_prdt_cd, retries=retries)
             if data.get('rt_cd') == '0':
                 output = data.get('output', {})
                 cash = safe_int(output.get('ord_psbl_cash'))
@@ -1299,7 +1296,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False):
                     res['deposit'] = res['d2_deposit']
                     success = True
     else:
-        data = get_foreign_deposit(cano, acnt_prdt_cd)
+        data = get_foreign_deposit(cano, acnt_prdt_cd, retries=retries)
         if data.get('rt_cd') == '0' and data.get('output2'):
             out2 = data['output2'][0] if isinstance(data['output2'], list) else data['output2']
             res['foreign_deposit'] = int(float(out2.get('frcr_evlu_tota', 0)))
