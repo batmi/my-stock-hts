@@ -8,8 +8,12 @@ import indicators
 import api
 from datetime import datetime, timedelta
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 def show_market_indices():
+    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
     # [변경] config.DEBUG_LEVEL 참조
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")

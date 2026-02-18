@@ -564,7 +564,7 @@ def view_trade_history():
     
     menu_map = {"1": "전체 내역", "2": "최근 30일", "3": "종목 검색", "4": "엑셀 저장"}
     if choice in menu_map:
-        logger.info(f"운영자 입력 (거래내역조회): [{choice}] {menu_map[choice]}")
+        config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
     if choice.lower() == 'q': return
 
@@ -574,15 +574,19 @@ def view_trade_history():
 
     trades = []
     if choice == "1":
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         trades = db_manager.db.get_trades(limit=50)
     elif choice == "2":
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         trades = db_manager.db.get_trades(start_date=start_dt)
     elif choice == "3":
         keyword = Prompt.ask("검색할 종목코드(티커) 입력")
-        logger.info(f"운영자 입력 (거래내역검색): {keyword}")
+        config.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         trades = db_manager.db.get_trades(code=keyword)
     elif choice == "4":
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         export_trade_history_to_excel()
         return
 
@@ -716,13 +720,15 @@ def asset_management_menu():
     
     menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
     if choice in menu_map:
-        logger.info(f"운영자 서브메뉴 선택 (자산관리): [{choice}] {menu_map[choice]}")
+        config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
     if choice.lower() == 'q': return
 
     if choice == "1":
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         get_deposit_balance()
     elif choice == "2":
+        logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
         get_account_balance()
     elif choice == "3":
         view_trade_history()

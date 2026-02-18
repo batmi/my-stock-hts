@@ -4,14 +4,17 @@ from rich.prompt import Prompt
 from rich import box
 import config
 import api
+import logging
 import indicators
 import utils
+
+logger = logging.getLogger(__name__)
 
 def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
     """기술적 지표를 바탕으로 매수 점수를 계산하여 반환"""
     score = 0
     details = []
-    
+
     if ema20 is not None and price > ema20: 
         score += 1
         details.append("이동평균: 현재가 > 20일선 (+1)")
@@ -107,6 +110,8 @@ def diagnose_stock():
     # 종목 선택 (utils 활용)
     code, name, is_overseas = utils.select_target_stock()
     if not code: return
+
+    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
     with config.console.status(f"[bold green]{name}({code}) 데이터 분석 중...[/]"):
         # 1. 데이터 조회 (실시간 시세 반영된 일봉)
@@ -585,6 +590,15 @@ def show_stock_analysis():
     valid_choices = ["1", "2", "3", "4", "5", "6", "12", "34", "11", "22", "33", "44", "55", "q", "Q"]
     config.console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=valid_choices, default="5", show_choices=True)
+    
+    menu_map = {
+        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별진단",
+        "12": "국내전체", "34": "미국전체", 
+        "11": "국내주식(반복)", "22": "국내ETF(반복)", "33": "미국주식(반복)", "44": "미국ETF(반복)", "55": "전체(반복)"
+    }
+    if choice in menu_map:
+        config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+
     if choice.lower() == 'q': return
     
     if choice == "6":
@@ -611,6 +625,8 @@ def show_stock_analysis():
     elif real_choice == "12": target_list = [("국내 주식 기술적 분석", stocks_kr, False), ("국내 ETF 기술적 분석", etfs_kr, False)]
     elif real_choice == "34": target_list = [("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
     else: target_list = [("국내 주식 기술적 분석", stocks_kr, False), ("국내 ETF 기술적 분석", etfs_kr, False), ("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
+
+    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
     try:
         while True:

@@ -10,6 +10,9 @@ import api
 import utils
 import indicators
 from modules import analysis
+import logging
+
+logger = logging.getLogger(__name__)
 
 def calculate_daily_status(row, prev_row):
     """
@@ -385,6 +388,8 @@ def run_backtest():
         initial_capital = initial_capital_krw / exchange_rate
     else:
         initial_capital = initial_capital_krw
+
+    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
     # 3. 데이터 준비
     with config.console.status(f"[green]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/]"):

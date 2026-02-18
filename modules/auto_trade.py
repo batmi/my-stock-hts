@@ -2147,11 +2147,18 @@ def system_trading_menu():
     
     try:
         choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="3")
+        
+        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그"}
+        if choice in menu_map:
+            config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+            
     except KeyboardInterrupt:
         console.print()
         return
 
     if choice.lower() == 'q': return
+    
+    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
     
     if choice == "1":
         trader.start()

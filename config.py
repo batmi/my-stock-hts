@@ -271,6 +271,9 @@ trade_context = threading.local()
 MAIN_THREAD_ID = None
 TOKEN_EXPIRED = False
 
+# [추가] 사용자 입력 경로 추적용 (Breadcrumb)
+USER_ACTION_BREADCRUMB = []
+
 session = SessionManager()
 
 # 서버 URL 상수 정의

@@ -372,6 +372,9 @@ def main():
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
                 
+                # [추가] 루프 시작 시 입력 경로 초기화
+                config.USER_ACTION_BREADCRUMB = []
+                
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
                     "0": "자산 관리", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
@@ -379,13 +382,18 @@ def main():
                     "7": "매수 주문", "8": "매도 주문", "9": "정정/취소 주문",
                     "q": "종료", "h": "도움말"
                 }
-                logging.info(f"운영자 메뉴 선택: [{choice}] {menu_map.get(choice.lower(), '')}")
-
-                if choice.lower() == "q": break
+                menu_name = menu_map.get(choice.lower(), '')
+                
+                if choice.lower() == "q": 
+                    logging.info(f"운영자 실행: [{choice}] {menu_name}")
+                    break
                 
                 if choice.lower() == "h": 
+                    logging.info(f"운영자 실행: [{choice}] {menu_name}")
                     show_help()
                     continue
+
+                config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
                     
                 last_choice = choice
                 if choice == "0": 
@@ -394,7 +402,9 @@ def main():
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
                     code, name, is_ovs = utils.select_stock_for_chart()
-                    if code: chart.generate_visual_chart(code, name, is_ovs)
+                    if code: 
+                        logging.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+                        chart.generate_visual_chart(code, name, is_ovs)
                 elif choice == "4": manage.manage_stock_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
