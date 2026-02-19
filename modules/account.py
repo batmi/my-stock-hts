@@ -520,43 +520,92 @@ def export_trade_history_to_excel():
         # DataFrame 생성
         df = pd.DataFrame(trades)
         
-        # [추가] 수익률 및 스냅샷 데이터 소수점 포맷팅 (2자리)
+        # [추가] 단가 포맷팅 (국내 주식 소수점 제거)
+        if 'price' in df.columns and 'code' in df.columns:
+            def _format_price(row):
+                try:
+                    val = float(row['price'])
+                    code = str(row['code'])
+                    # 국내 주식 (6자리 숫자)
+                    if code.isdigit() and len(code) == 6:
+                        return int(val)
+                    return val
+                except: return row['price']
+            df['price'] = df.apply(_format_price, axis=1)
+
+        # [추가] 수익률 및 손익금 포맷팅 (+/- 기호 추가)
         if 'profit_rate' in df.columns:
-            df['profit_rate'] = df['profit_rate'].apply(lambda x: round(float(x), 2) if x is not None and x != '' else 0.0)
+            def _format_rate(val):
+                try:
+                    if val is None or val == '': return "0.00"
+                    f = float(val)
+                    return f"{f:+.2f}"
+                except: return val
+            df['profit_rate'] = df['profit_rate'].apply(_format_rate)
+
+        if 'profit_amt' in df.columns and 'code' in df.columns:
+            def _format_amt(row):
+                val = row.get('profit_amt')
+                code = str(row.get('code', ''))
+                try:
+                    if val is None or val == '': return "0"
+                    f = float(val)
+                    # 국내 주식 (6자리 숫자)
+                    if code.isdigit() and len(code) == 6:
+                        return f"{int(f):+,}"
+                    # 해외 주식
+                    return f"{f:+,.2f}"
+                except: return val
+            df['profit_amt'] = df.apply(_format_amt, axis=1)
 
         if 'snapshot' in df.columns:
-            def _format_snapshot(val):
-                if not val: return val
+            def _process_snapshot(row):
+                val = row.get('snapshot')
+                score = row.get('strategy_score')
+                
+                data = {}
+                # 점수 정보 병합 (가장 앞에 추가)
+                if score is not None and score != '':
+                    try:
+                        data['score'] = float(score)
+                    except: pass
+
                 try:
-                    data = json.loads(val)
-                    def _recursive_round(obj):
-                        if isinstance(obj, float): return round(obj, 2)
-                        if isinstance(obj, dict): return {k: _recursive_round(v) for k, v in obj.items()}
-                        if isinstance(obj, list): return [_recursive_round(v) for v in obj]
-                        return obj
-                    return json.dumps(_recursive_round(data), ensure_ascii=False)
-                except: return val
+                    if val:
+                        loaded = json.loads(val)
+                        if isinstance(loaded, dict):
+                            data.update(loaded)
+                except: pass
+
+                if not data: return val
             
-            df['snapshot'] = df['snapshot'].apply(_format_snapshot)
+                def _recursive_round(obj):
+                    if isinstance(obj, float): return round(obj, 2)
+                    if isinstance(obj, dict): return {k: _recursive_round(v) for k, v in obj.items()}
+                    if isinstance(obj, list): return [_recursive_round(v) for v in obj]
+                    return obj
+                return json.dumps(_recursive_round(data), ensure_ascii=False)
+            
+            # 행 단위(axis=1)로 처리하여 점수 컬럼 접근
+            df['snapshot'] = df.apply(_process_snapshot, axis=1)
 
         # 컬럼 순서 및 이름 변경 (사용자 친화적)
         columns_map = {
             'time': '일시',
+            'account': '계좌번호',
+            'is_sim': '종류',
+            'odno': '주문번호',
+            'org_odno': '원주문',
             'type': '유형',
+            'order_status': '상태',
             'name': '종목명',
             'code': '종목코드',
             'qty': '수량',
             'price': '단가',
             'profit_amt': '손익금',
-            'profit_rate': '수익률(%)',
+            'profit_rate': '수익률',
             'reason': '매매사유',
-            'strategy_score': '점수',
-            'order_status': '상태',
-            'odno': '주문번호',
-            'org_odno': '원주문번호',
-            'account': '계좌번호',
-            'is_sim': '모의투자여부',
-            'snapshot': '스냅샷(JSON)'
+            'snapshot': '스냅샷'
         }
         
         # 존재하는 컬럼만 선택하여 순서대로 정렬 (없는 컬럼은 제외)
@@ -565,12 +614,12 @@ def export_trade_history_to_excel():
         df.rename(columns=columns_map, inplace=True)
         
         # 모의투자여부 가독성 좋게 변경
-        if '모의투자여부' in df.columns:
+        if '종류' in df.columns:
             if '유형' in df.columns:
                 # 실전(0)이면서 유형에 'AUTO'나 '자동'이 포함되면 '자동'으로 표시
-                df['모의투자여부'] = df.apply(lambda row: '모의' if row['모의투자여부'] == 1 else ('자동' if 'AUTO' in str(row['유형']) or '자동' in str(row['유형']) else '실전'), axis=1)
+                df['종류'] = df.apply(lambda row: '모의' if row['종류'] == 1 else ('자동' if 'AUTO' in str(row['유형']) or '자동' in str(row['유형']) else '실전'), axis=1)
             else:
-                df['모의투자여부'] = df['모의투자여부'].apply(lambda x: '모의' if x == 1 else '실전')
+                df['종류'] = df['종류'].apply(lambda x: '모의' if x == 1 else '실전')
 
         # 파일명 생성
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -703,6 +752,7 @@ def view_trade_history():
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
         table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("시간", justify="center", style="dim", width=15)
+        table.add_column("주문번호", justify="center", style="dim", no_wrap=True)
         # 계좌 컬럼 제거됨
         table.add_column("유형", justify="center", no_wrap=True)
         table.add_column("상태", justify="center", width=6)
@@ -710,9 +760,7 @@ def view_trade_history():
         table.add_column("수량", justify="right")
         table.add_column("단가", justify="right", no_wrap=True)
         table.add_column("손익(수익률)", justify="right", no_wrap=True)
-        table.add_column("점수", justify="center")
-        table.add_column("사유", justify="left", no_wrap=True, overflow="ellipsis")
-        table.add_column("주문번호", justify="center", style="dim", no_wrap=True)
+        table.add_column("사유", justify="left", no_wrap=True, width=60, overflow="ellipsis")
 
         for i, t in enumerate(t_list):
             type_str = t['type']
@@ -738,10 +786,19 @@ def view_trade_history():
             price_display = t['price']
             try:
                 p_val = float(t['price'])
+                code = str(t.get('code', ''))
+                is_domestic = code.isdigit() and len(code) == 6
+
                 if p_val > 0:
-                    price_display = f"{int(p_val):,}" if p_val >= 1000 else f"{p_val:,.2f}"
+                    if is_domestic:
+                        price_display = f"{int(p_val):,}"
+                    else:
+                        price_display = f"{p_val:,.2f}"
                 elif p_val == 0:
-                    price_display = "시장가"
+                    if "취소" in t['type'] or "cancel" in t['type'].lower():
+                        price_display = "-"
+                    else:
+                        price_display = "시장가"
             except: pass
             
             # 손익 정보
@@ -753,21 +810,38 @@ def view_trade_history():
                     color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
                     profit_display = f"[{color}]{amt:+,}원 ({rate:+.2f}%)[/]"
 
-            # 점수
-            score = t.get('strategy_score', 0)
-            score_str = str(score) if score else "-"
+            # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
+            reason_display = t.get('reason') or "-"
+            snapshot_str = t.get('snapshot')
+            
+            # 사유에 이미 상세 정보(RSI 등)가 포함되지 않은 경우에만 스냅샷 데이터 추가
+            if snapshot_str and snapshot_str != '{}' and "RSI" not in reason_display:
+                try:
+                    snap = json.loads(snapshot_str)
+                    ind = snap.get('indicators', {})
+                    if ind:
+                        add_info = []
+                        score = t.get('strategy_score')
+                        if score and float(score) > 0: add_info.append(f"점수:{score}")
+                        rsi = ind.get('rsi')
+                        if rsi is not None: add_info.append(f"RSI:{rsi:.1f}")
+                        adx = ind.get('adx')
+                        if adx is not None: add_info.append(f"ADX:{adx:.1f}")
+                        cci = ind.get('cci')
+                        if cci is not None: add_info.append(f"CCI:{cci:.1f}")
+                        if add_info: reason_display += f" [{', '.join(add_info)}]"
+                except: pass
 
             table.add_row(
                 t['time'][5:], # MM-DD HH:MM:SS
+                t['odno'],
                 type_str,
                 status_str,
                 f"{t['name']}({t['code']})",
                 f"{t['qty']}",
                 price_display,
                 profit_display,
-                score_str,
-                t.get('reason') or "-",
-                t['odno']
+                reason_display
             )
             
             # [추가] 5개마다 실선 추가
