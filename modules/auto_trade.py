@@ -312,25 +312,6 @@ class ConclusionMonitor:
                                     if config.SYSTEM_LOGGER:
                                         config.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
                                     
-                                    # [추가] 체결 시 차트 이미지 전송 (텔레그램)
-                                    if config.ENABLE_TELEGRAM:
-                                        try:
-                                            # 해외 여부 판단 (단순 로직: 6자리 숫자가 아니면 해외로 간주)
-                                            is_overseas = not (code.isdigit() and len(code) == 6)
-                                            
-                                            # 차트 생성 (파일로 저장, 화면 출력 안함)
-                                            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100)
-                                            
-                                            # 파일 경로 구성
-                                            safe_code = re.sub(r'[=\-\.\^]', '', code)
-                                            filename = f"analysis_{safe_code}.png"
-                                            file_path = os.path.join(config.CHART_DIR, filename)
-                                            
-                                            if os.path.exists(file_path):
-                                                caption = f"📊 {name}({code}) 체결 시점 차트"
-                                                api.send_telegram_photo(file_path, caption)
-                                        except Exception as e:
-                                            logger.error(f"체결 차트 전송 실패: {e}")
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
                                 
