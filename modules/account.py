@@ -488,7 +488,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
         border_style="green"
     )
 
-    config.console.print("\n")
+    config.console.print()
     config.console.print(panel)
     config.console.print("\n")
 
