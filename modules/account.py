@@ -520,6 +520,25 @@ def export_trade_history_to_excel():
         # DataFrame 생성
         df = pd.DataFrame(trades)
         
+        # [추가] 수익률 및 스냅샷 데이터 소수점 포맷팅 (2자리)
+        if 'profit_rate' in df.columns:
+            df['profit_rate'] = df['profit_rate'].apply(lambda x: round(float(x), 2) if x is not None and x != '' else 0.0)
+
+        if 'snapshot' in df.columns:
+            def _format_snapshot(val):
+                if not val: return val
+                try:
+                    data = json.loads(val)
+                    def _recursive_round(obj):
+                        if isinstance(obj, float): return round(obj, 2)
+                        if isinstance(obj, dict): return {k: _recursive_round(v) for k, v in obj.items()}
+                        if isinstance(obj, list): return [_recursive_round(v) for v in obj]
+                        return obj
+                    return json.dumps(_recursive_round(data), ensure_ascii=False)
+                except: return val
+            
+            df['snapshot'] = df['snapshot'].apply(_format_snapshot)
+
         # 컬럼 순서 및 이름 변경 (사용자 친화적)
         columns_map = {
             'time': '일시',
@@ -534,8 +553,10 @@ def export_trade_history_to_excel():
             'strategy_score': '점수',
             'order_status': '상태',
             'odno': '주문번호',
+            'org_odno': '원주문번호',
             'account': '계좌번호',
-            'is_sim': '모의투자여부'
+            'is_sim': '모의투자여부',
+            'snapshot': '스냅샷(JSON)'
         }
         
         # 존재하는 컬럼만 선택하여 순서대로 정렬 (없는 컬럼은 제외)
@@ -545,7 +566,11 @@ def export_trade_history_to_excel():
         
         # 모의투자여부 가독성 좋게 변경
         if '모의투자여부' in df.columns:
-            df['모의투자여부'] = df['모의투자여부'].apply(lambda x: '모의' if x == 1 else '실전')
+            if '유형' in df.columns:
+                # 실전(0)이면서 유형에 'AUTO'나 '자동'이 포함되면 '자동'으로 표시
+                df['모의투자여부'] = df.apply(lambda row: '모의' if row['모의투자여부'] == 1 else ('자동' if 'AUTO' in str(row['유형']) or '자동' in str(row['유형']) else '실전'), axis=1)
+            else:
+                df['모의투자여부'] = df['모의투자여부'].apply(lambda x: '모의' if x == 1 else '실전')
 
         # 파일명 생성
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -554,8 +579,22 @@ def export_trade_history_to_excel():
         # 엑셀 저장
         try:
             with config.console.status(f"[bold green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]"):
-                df.to_excel(filename_xlsx, index=False)
+                with pd.ExcelWriter(filename_xlsx, engine='openpyxl') as writer:
+                    if '계좌번호' in df.columns:
+                        # 계좌번호가 없는 데이터 처리
+                        df['계좌번호'] = df['계좌번호'].fillna('기타')
+                        
+                        # 계좌번호별로 시트 분리 저장
+                        for acc in df['계좌번호'].unique():
+                            # 시트 이름 정제 (특수문자 제거 및 길이 제한 31자)
+                            sheet_name = str(acc).replace(':', '').replace('\\', '').replace('/', '').replace('?', '').replace('*', '').replace('[', '').replace(']', '')[:31]
+                            if not sheet_name: sheet_name = "Unknown"
+                            df[df['계좌번호'] == acc].to_excel(writer, sheet_name=sheet_name, index=False)
+                    else:
+                        df.to_excel(writer, sheet_name='전체내역', index=False)
+
             config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_xlsx)}[/bold green]")
+            config.console.print("[dim]  - 탭 구분: 계좌번호[/dim]")
         except ImportError:
             config.console.print("\n[yellow]openpyxl 라이브러리가 설치되지 않아 엑셀(.xlsx) 저장이 불가능합니다.[/yellow]")
             if Prompt.ask("대신 CSV 파일로 저장하시겠습니까?", choices=["y", "n"], default="y") == "y":
@@ -679,7 +718,6 @@ def view_trade_history():
             type_str = t['type']
             
             # [수정] 유형 표기 한글화 및 태그 변경
-            type_str = type_str.replace("*", "") # 기존 데이터의 * 제거
             if "buy" in type_str.lower(): type_str = type_str.replace("buy", "매수").replace("BUY", "매수")
             if "sell" in type_str.lower(): type_str = type_str.replace("sell", "매도").replace("SELL", "매도")
             type_str = type_str.replace("AUTO", "자동")
