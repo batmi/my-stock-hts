@@ -26,8 +26,8 @@ def select_account():
     # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
     if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
         config.console.print("\n[bold]주문을 수행할 계좌를 선택하세요:[/bold]")
-        config.console.print(f"[1] {acc_label} (메인): {config.session.cano}-{config.session.acnt_prdt_cd}")
-        config.console.print(f"[2] 자동매매 (시스템): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
+        config.console.print(f"[1] {acc_label}: {config.session.cano}-{config.session.acnt_prdt_cd}")
+        config.console.print(f"[2] 자동투자: {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
         config.console.print()
         
         choice = Prompt.ask("선택 [dim](기본값: 1, 취소: q)[/dim]", choices=["1", "2", "q"], default="1")
@@ -37,7 +37,7 @@ def select_account():
         if choice == "2":
             target_cano = config.session.auto_cano
             target_acnt = config.session.auto_acnt_prdt_cd
-            acc_label = "자동매매"
+            acc_label = "자동투자"
             
     return target_cano, target_acnt, acc_label
 
@@ -47,10 +47,10 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     (메뉴 4번 잔고 조회와 동일한 상세 정보를 출력)
     """
     config.console.print("\n[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
-    config.console.print("[1] 국내 주식 잔고")
-    config.console.print("[2] 해외 주식 잔고")
+    config.console.print("[1] 국내 주식")
+    config.console.print("[2] 해외 주식")
     config.console.print()
-    market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1", show_choices=False, show_default=False)
     
     if market_choice == 'q':
         return None, None, False, None, None
