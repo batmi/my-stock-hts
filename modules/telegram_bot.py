@@ -237,15 +237,13 @@ class TelegramCommander:
                 if data.get('ovrs_eval_krw', 0) > 0:
                     msg += f"  └ 해외주식(원화): {data['ovrs_eval_krw']:,}원\n"
 
-                icon = "🔴" if data['sec_pl'] > 0 else ("🔵" if data['sec_pl'] < 0 else "⚪️")
-                msg += f"평가손익(보유): {icon} {data['sec_pl']:+,}원 ({roi:.2f}%)\n\n"
+                msg += f"평가손익(보유): {data['sec_pl']:+,}원 ({roi:.2f}%)\n\n"
                 
                 msg += f"금일매수: {data['buy_today']:,}원\n"
                 msg += f"금일매도: {data['sell_today']:,}원\n"
                 msg += f"금일비용: {data['total_cost']:,}원\n"
                 
-                realized_icon = "🔴" if data['realized_pl'] > 0 else ("🔵" if data['realized_pl'] < 0 else "⚪️")
-                msg += f"실현손익: {realized_icon} {data['realized_pl']:+,}원"
+                msg += f"실현손익: {data['realized_pl']:+,}원"
 
                 return msg
 
@@ -279,13 +277,13 @@ class TelegramCommander:
                 qty = int(item['hldg_qty'])
                 cur_price = int(item['prpr'])
                 buy_price = float(item['pchs_avg_pric'])
+                eval_amt = int(item['evlu_amt'])
                 profit = int(item['evlu_pfls_amt'])
                 rate = float(item['evlu_pfls_rt'])
                 
                 calc_total_pchs += int(qty * buy_price)
                 
-                icon = "🔴" if profit > 0 else ("🔵" if profit < 0 else "⚪️")
-                msg += f"\n{icon} {name} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   손익: {profit:+,}원 ({rate:+.2f}%)"
+                msg += f"\n{name} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
             
             # [추가] 총 평가금액 및 손익 요약
             if summary and len(summary) > 0:
@@ -311,10 +309,8 @@ class TelegramCommander:
                 if tot_pchs > 0:
                     total_rate = (tot_profit / tot_pchs) * 100
                 
-                profit_icon = "🔴" if tot_profit > 0 else ("🔵" if tot_profit < 0 else "⚪️")
-                
-                msg += f"\n\n 총 평가금액: ⚪️ {tot_evlu:,}원"
-                msg += f"\n 총 평가손익: {profit_icon} {tot_profit:+,}원 ({total_rate:+.2f}%)"
+                msg += f"\n\n 총 평가금액: {tot_evlu:,}원"
+                msg += f"\n 총 평가손익: {tot_profit:+,}원 ({total_rate:+.2f}%)"
 
             return msg
         except Exception as e:
@@ -629,17 +625,19 @@ class TelegramCommander:
             price = float(t['price'])
             price_str = f"{price:,.2f}" if price < 1000 and "." in str(price) else f"{int(price):,}"
             
+            total_val = price * float(qty)
+            total_str = f"{total_val:,.2f}" if price < 1000 and "." in str(price) else f"{int(total_val):,}"
+            
             # 손익
             profit_msg = ""
             if "매도" in type_str:
                 amt = t.get('profit_amt', 0)
                 rate = t.get('profit_rate', 0.0)
                 if amt is not None:
-                    icon = "🔴" if amt > 0 else "🔵"
-                    profit_msg = f"\n   └ {icon} {amt:+,}원 ({rate:+.2f}%)"
+                    profit_msg = f"\n   └ {amt:+,}원 ({rate:+.2f}%)"
             
             date_str = t['time'][5:16] # MM-DD HH:MM
-            item_msg = f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}{profit_msg}"
+            item_msg = f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
             
             # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
             if len(msg) + len(item_msg) > 4000:
