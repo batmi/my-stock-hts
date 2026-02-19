@@ -1448,6 +1448,34 @@ class AutoTrader:
         end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
         return start_time <= current_time <= end_time
 
+    def _get_holdings_message(self, target_cano):
+        """보유 종목 현황 메시지 생성 (장 시작/마감 알림용)"""
+        msg = ""
+        try:
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            holdings, _ = api.get_domestic_balance(target_cano, acnt)
+            
+            # [수정] 보유수량 0 초과인 종목만 필터링
+            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+            if valid_holdings:
+                msg += "\n\n📋 [보유 종목 현황]"
+                for item in valid_holdings:
+                    name = item['prdt_name']
+                    qty = int(item['hldg_qty'])
+                    cur_price = int(item['prpr'])
+                    eval_amt = int(item['evlu_amt'])
+                    rate = float(item['evlu_pfls_rt'])
+                    profit = int(item['evlu_pfls_amt'])
+                    msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
+            else:
+                msg += "\n\n📋 [보유 종목] 없음"
+        except Exception as e:
+            logger.error(f"보유 종목 조회 실패: {e}")
+            msg += "\n\n(보유 종목 조회 실패)"
+            
+        return msg
+
     def _run_loop(self):
         while self.is_running:
             try:
@@ -1468,12 +1496,18 @@ class AutoTrader:
                             self.log("=" * 80)
                             self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
                             self.log("=" * 80)
-                            api.send_telegram_message("🔔 [장 시작] 거래 가능 시간이 되었습니다.")
+                            
+                            msg = "🔔 [장 시작] 거래 가능 시간이 되었습니다."
+                            msg += self._get_holdings_message(target_cano)
+                            api.send_telegram_message(msg)
                         elif self.was_market_open and not current_market_status:
                             self.log("=" * 80)
                             self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
                             self.log("=" * 80)
-                            api.send_telegram_message("🌙 [장 마감] 거래 시간이 종료되었습니다.")
+                            
+                            msg = "🌙 [장 마감] 거래 시간이 종료되었습니다."
+                            msg += self._get_holdings_message(target_cano)
+                            api.send_telegram_message(msg)
                     
                     # [변경] 장 마감 시 분석 중단 (트래픽 감소)
                     if not current_market_status:
