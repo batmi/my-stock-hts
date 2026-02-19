@@ -262,7 +262,7 @@ class TelegramCommander:
 
         try:
             with utils.AccountContext(target_cano):
-                holdings, _ = api.get_domestic_balance(target_cano, acnt)
+                holdings, summary = api.get_domestic_balance(target_cano, acnt)
             
             # [수정] 보유수량 0 초과인 종목만 필터링
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -272,6 +272,8 @@ class TelegramCommander:
             
             msg = f"📋 [보유 종목 현황] ({len(valid_holdings)}종목)\n"
             
+            calc_total_pchs = 0 # [추가] 총 매입금액 직접 계산용 (API 0일 경우 대비)
+            
             for item in valid_holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
@@ -280,9 +282,40 @@ class TelegramCommander:
                 profit = int(item['evlu_pfls_amt'])
                 rate = float(item['evlu_pfls_rt'])
                 
+                calc_total_pchs += int(qty * buy_price)
+                
                 icon = "🔴" if profit > 0 else ("🔵" if profit < 0 else "⚪️")
                 msg += f"\n{icon} {name} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   손익: {profit:+,}원 ({rate:+.2f}%)"
             
+            # [추가] 총 평가금액 및 손익 요약
+            if summary and len(summary) > 0:
+                s_data = summary[0]
+                
+                # 총 평가금액 (주식 + 예수금)
+                tot_evlu = api.safe_int(s_data.get('tot_evlu_amt'))
+                if tot_evlu == 0:
+                    # API가 0을 줄 경우 직접 계산 (모의투자 등)
+                    stock_evlu = api.safe_int(s_data.get('scts_evlu_amt'))
+                    deposit = api.safe_int(s_data.get('prvs_rcdl_excc_amt'))
+                    if deposit == 0: deposit = api.safe_int(s_data.get('dnca_tot_amt'))
+                    tot_evlu = stock_evlu + deposit
+                
+                # 총 평가손익
+                tot_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+                
+                # [추가] 수익률 계산
+                tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
+                if tot_pchs == 0: tot_pchs = calc_total_pchs
+                
+                total_rate = 0.0
+                if tot_pchs > 0:
+                    total_rate = (tot_profit / tot_pchs) * 100
+                
+                profit_icon = "🔴" if tot_profit > 0 else ("🔵" if tot_profit < 0 else "⚪️")
+                
+                msg += f"\n\n 총 평가금액: ⚪️ {tot_evlu:,}원"
+                msg += f"\n 총 평가손익: {profit_icon} {tot_profit:+,}원 ({total_rate:+.2f}%)"
+
             return msg
         except Exception as e:
             return f"⚠️ 보유 종목 조회 중 오류 발생: {str(e)}"
