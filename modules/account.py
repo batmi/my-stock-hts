@@ -229,11 +229,11 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     total_rate = (tot_profit / api_tot_pchs) * 100
                 
                 profit_color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
-                config.console.print(f"[bold]  총 추정자산:[/bold] {tot_evlu:,}원 (주식: {stock_evlu:,}원)  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {stock_evlu:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
-            config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]\n")
+            config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
 
-    config.console.print("\n")
+    config.console.print()
 
     # ---------------------------
     # [해외 주식 잔고]
@@ -304,7 +304,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
             profit_color = "[red]" if tot_ovrs_profit > 0 else ("[blue]" if tot_ovrs_profit < 0 else "[white]")
             config.console.print(f"[bold]  해외 총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
         else:
-            config.console.print("[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
+            config.console.print("\n[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
 
 def get_account_balance():
     """보유 잔고 조회 (메인/자동 계좌 순차 조회)"""
@@ -319,7 +319,8 @@ def get_account_balance():
            (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
             accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
     
-    for cano, acnt, label in accounts:
+    for i, (cano, acnt, label) in enumerate(accounts):
+        if i > 0: config.console.print("\n")
         config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}-{acnt})[/]")
         _display_balance_details(cano, acnt)
 
