@@ -239,12 +239,15 @@ class TelegramCommander:
             with utils.AccountContext(target_cano):
                 holdings, _ = api.get_domestic_balance(target_cano, acnt)
             
-            if not holdings:
+            # [수정] 보유수량 0 초과인 종목만 필터링
+            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+            if not valid_holdings:
                 return "📋 [보유 종목] 없음"
             
-            msg = f"📋 [보유 종목 현황] ({len(holdings)}종목)\n"
+            msg = f"📋 [보유 종목 현황] ({len(valid_holdings)}종목)\n"
             
-            for item in holdings:
+            for item in valid_holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
                 cur_price = int(item['prpr'])

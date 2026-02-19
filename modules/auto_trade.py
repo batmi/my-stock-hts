@@ -596,9 +596,12 @@ class AutoTrader:
             total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
             msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
             
-        if holdings:
+        # [수정] 보유수량 0 초과인 종목만 필터링
+        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+        if valid_holdings:
             msg += "\n\n📋 [보유 종목 현황]"
-            for item in holdings:
+            for item in valid_holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
                 cur_price = int(item['prpr'])
@@ -675,9 +678,12 @@ class AutoTrader:
                     else:
                         msg += "\n(⚠️ 종료 시 자산 정보 조회 실패 - 서버 응답 없음)"
 
-                    if holdings:
+                    # [수정] 보유수량 0 초과인 종목만 필터링
+                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+                    if valid_holdings:
                         msg += "\n\n📋 [최종 보유 종목 현황]"
-                        for item in holdings:
+                        for item in valid_holdings:
                             name = item['prdt_name']
                             qty = int(item['hldg_qty'])
                             cur_price = int(item['prpr'])
@@ -748,9 +754,12 @@ class AutoTrader:
         else:
             msg += "자산 정보 조회 실패\n"
             
-        if holdings:
+        # [수정] 보유수량 0 초과인 종목만 필터링
+        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+        if valid_holdings:
             msg += "\n📋 [보유 종목 현황]"
-            for item in holdings:
+            for item in valid_holdings:
                 name = item['prdt_name']
                 qty = int(item['hldg_qty'])
                 cur_price = int(item['prpr'])
