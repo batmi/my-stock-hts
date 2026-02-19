@@ -1983,7 +1983,12 @@ class AutoTrader:
                 self.log(f"매수 중단: 최대 보유 종목 수({max_holdings}개) 도달")
                 break
 
-            invest_amt = self._allocate_budget(avail_cash, invest_ratio)
+            # [수정] 자산 배분 로직 개선: 마지막 슬롯인 경우 남은 예수금 전액 투자
+            remaining_slots = max_holdings - current_holdings_count
+            if remaining_slots == 1:
+                invest_amt = avail_cash
+            else:
+                invest_amt = self._allocate_budget(avail_cash, invest_ratio)
 
             # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
             if invest_amt < cand['price']: invest_amt = avail_cash
