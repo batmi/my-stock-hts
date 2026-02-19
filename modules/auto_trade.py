@@ -522,15 +522,14 @@ class AutoTrader:
                     self.initial_summary = summary
                     
                     # 2. 예수금 조회
-                    if config.session.is_simulation and summary:
+                    # [수정] 실전/모의 모두 summary 정보 우선 활용 (안정성 확보)
+                    if summary:
                         deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                    else:
-                        # 실전투자거나 데이터가 없으면 정석대로 조회
+                    
+                    if deposit == 0 and not config.session.is_simulation:
                         res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         if res:
                             deposit = res['deposit'] + res['foreign_deposit']
-                        else:
-                            deposit = 0
                     
                     # 3. 총 자산 계산
                     stock_eval = 0
@@ -830,16 +829,22 @@ class AutoTrader:
                 # [추가] 보유 종목 확인
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 try:
-                    holdings, _ = api.get_domestic_balance(target_cano, acnt)
-                except: pass
+                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                except: 
+                    holdings = []
+                    summary = []
                 
                 # 예수금 별도 조회 (매수 여력 확인용)
                 try:
-                    res = api.get_deposit_balance(target_cano, acnt)
-                    if res:
-                        deposit = res['d2_deposit']
-                    else:
-                        deposit = 0
+                    if summary and len(summary) > 0:
+                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        if config.session.is_simulation:
+                            deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                    
+                    if deposit == 0:
+                        res = api.get_deposit_balance(target_cano, acnt)
+                        if res:
+                            deposit = res['d2_deposit']
                 except: pass
                 
                 # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
@@ -972,7 +977,10 @@ class AutoTrader:
         console.print(table)
         
         # [추가] 보유 종목 리스트 출력
-        if holdings:
+        # [수정] 보유수량 0 초과인 종목만 필터링
+        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+        if valid_holdings:
             console.print("\n[bold]보유 종목 리스트[/bold]")
             h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
             h_table.add_column("종목명(코드)", justify="left")
@@ -983,7 +991,7 @@ class AutoTrader:
             h_table.add_column("평가손익", justify="right")
             h_table.add_column("수익률", justify="right")
             
-            for item in holdings:
+            for item in valid_holdings:
                 name = item['prdt_name']
                 code = item['pdno']
                 market_type = self._get_stock_market_type(code)
@@ -1486,13 +1494,14 @@ class AutoTrader:
                         # 2. 예수금 조회
                         # [최적화] 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
                         deposit_res = None
-                        if config.session.is_simulation and summary:
+                        # [수정] 실전/모의 모두 summary 정보 우선 활용
+                        if summary:
                             dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                            # [수정] 주문가능금액은 가수도금(prvs_rcdl_excc_amt) 사용 (매도 대금 포함)
                             d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                             deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
-                        else:
-                            # [최적화] 이미 get_domestic_balance를 시도했으므로 내부 재호출 방지
+                        
+                        # 예수금이 0이거나 실전투자에서 정밀 조회가 필요한 경우 Fallback
+                        if (not deposit_res or deposit_res['deposit'] == 0) and not config.session.is_simulation:
                             deposit_res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         
                         # API 호출 간격 조절 (Rate Limit 방지)
@@ -1602,7 +1611,10 @@ class AutoTrader:
     def _monitor_account_status(self, holdings, summary, deposit_res):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
         try:
-            if not holdings:
+            # [수정] 보유수량 0 초과인 종목만 필터링
+            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+            
+            if not valid_holdings:
                 self.log("보유 종목: 없음")
             else:
                 # 한글 정렬 보정 헬퍼 함수
@@ -1630,7 +1642,7 @@ class AutoTrader:
                 self.log(header)
                 self.log("-" * 125)
                 
-                for item in holdings:
+                for item in valid_holdings:
                     name = f"{item['prdt_name']} ({item['pdno']})"
                     qty = int(item['hldg_qty'])
                     buy_price = float(item['pchs_avg_pric'])
@@ -1684,27 +1696,27 @@ class AutoTrader:
             cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
             
-            # [최적화] 모의투자일 경우 잔고 조회만으로 해결 (예수금 포함됨)
-            if config.session.is_simulation:
-                _, summary = api.get_domestic_balance(cano, acnt)
-                if summary and len(summary) > 0:
-                    stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                    # [수정] 총 자산 계산 시 D+2 예수금(가수도금) 사용 (매도 대금 반영)
-                    cash = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                    return cash + stock_eval
-                return 0
-
-            # 실전투자: 예수금 별도 조회 필요
-            res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
-            if res is None: raise Exception("예수금 조회 실패 (API 응답 없음)")
-            
-            cash = res['deposit'] + res['foreign_deposit']
-            
+            # 1. 잔고 및 평가금 조회
             _, summary = api.get_domestic_balance(cano, acnt)
-            stock_eval = 0
-            if summary and len(summary) > 0: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
             
-            return cash + stock_eval
+            stock_eval = 0
+            deposit = 0
+            
+            if summary and len(summary) > 0: 
+                stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                
+                # 모의투자는 D+2 예수금 사용
+                if config.session.is_simulation:
+                    deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+
+            # 2. 예수금이 0이고 실전투자면 별도 API 시도
+            if deposit == 0 and not config.session.is_simulation:
+                res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
+                if res:
+                    deposit = res['deposit'] + res['foreign_deposit']
+            
+            return deposit + stock_eval
         except Exception as e:
             logger.debug(f"자산 조회 중 예외 발생: {str(e)}")
         
@@ -1896,7 +1908,12 @@ class AutoTrader:
         else:
             return # 조회 실패 시 매수 중단
 
-        if avail_cash < 50000: return # 최소 주문 가능 금액 설정
+        # [수정] 최소 주문 가능 금액 하향 조정 (50,000 -> 1,000) 및 로그 추가
+        min_cash = 1000
+        if avail_cash < min_cash:
+            if self.consecutive_errors == 0: # 로그 도배 방지
+                 self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원)")
+            return 
 
         # 1. 후보 분석
         candidates = self._analyze_candidates(targets, holding_codes)
@@ -1999,7 +2016,11 @@ class AutoTrader:
     def _execute_buy_orders(self, candidates, avail_cash, invest_ratio, current_holdings_count, max_holdings):
         for cand in candidates:
             if not self.is_running: break
-            if avail_cash < 50000: break
+            
+            # [수정] 최소 주문 가능 금액 하향 조정
+            if avail_cash < 1000:
+                self.log(f"매수 중단: 잔여 예수금 부족 ({avail_cash:,}원)")
+                break
             
             # [추가] 최대 보유 종목 수 도달 시 추가 매수 중단
             if current_holdings_count >= max_holdings:
