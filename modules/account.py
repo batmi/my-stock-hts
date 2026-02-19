@@ -119,16 +119,23 @@ def sync_today_trades():
                                 type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
                                 
                                 # 원 주문 유형 조회 (수동/자동 태그 반영)
-                                origin_type = db_manager.db.get_original_order_type(odno)
-                                if origin_type:
-                                    if "(수동)" in origin_type: type_str += "(수동)"
-                                    elif "(AUTO)" in origin_type or "(자동)" in origin_type: type_str += "(자동)"
+                                origin_trade = db_manager.db.get_trade_by_odno(odno)
+                                profit_amt = 0
+                                profit_rate = 0.0
+                                score = 0
+                                
+                                if origin_trade:
+                                    type_str = origin_trade['type'] # 기존 타입 유지
+                                    profit_amt = origin_trade.get('profit_amt', 0)
+                                    profit_rate = origin_trade.get('profit_rate', 0.0)
+                                    score = origin_trade.get('strategy_score', 0)
                                 
                                 db_manager.db.insert_trade(
                                     type_str, item.get('pdno'), item.get('prdt_name'), 
                                     tot_qty, avg_price, odno, 
                                     order_status="체결", custom_time=trade_time,
-                                    reason="체결 확인"
+                                    reason="체결 확인",
+                                    profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score
                                 )
                                 # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                 db_manager.db.update_trade(odno, price=avg_price)
@@ -200,7 +207,14 @@ def _display_balance_details(cano, acnt_prdt_cd):
             
             # 요약 정보 출력
             if summary:
-                tot_evlu = api.safe_int(summary.get('scts_evlu_amt'))
+                stock_evlu = api.safe_int(summary.get('scts_evlu_amt'))
+                tot_evlu = api.safe_int(summary.get('tot_evlu_amt'))
+                
+                # API에서 총평가금액이 0으로 오는 경우 직접 계산 (예수금 + 주식평가금)
+                if tot_evlu == 0:
+                    deposit = api.safe_int(summary.get('dnca_tot_amt'))
+                    tot_evlu = stock_evlu + deposit
+
                 tot_profit = api.safe_int(summary.get('evlu_pfls_smtl_amt'))
                 api_tot_pchs = api.safe_int(summary.get('pchs_amt_smtl'))
                 
@@ -213,7 +227,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     total_rate = (tot_profit / api_tot_pchs) * 100
                 
                 profit_color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
-                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {tot_evlu:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                config.console.print(f"[bold]  총 추정자산:[/bold] {tot_evlu:,}원 (주식: {stock_evlu:,}원)  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
             config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]\n")
 

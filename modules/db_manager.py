@@ -227,6 +227,16 @@ class DBManager:
             row = cursor.fetchone()
             return row[0] if row else None
         except: return None
+
+    def get_trade_by_odno(self, odno):
+        """주문번호로 원 주문(접수) 내역 조회"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status = '접수' ORDER BY id DESC LIMIT 1", (odno,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except: return None
             
     def update_highest_price(self, code, price):
         """트레일링 스탑용 최고가 갱신"""

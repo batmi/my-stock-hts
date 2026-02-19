@@ -213,11 +213,16 @@ class ConclusionMonitor:
                                 
                                 # 원 주문 유형 조회 (수동/자동 태그 반영)
                                 try:
-                                    origin_type = db_manager.db.get_original_order_type(odno)
+                                    origin_trade = db_manager.db.get_trade_by_odno(odno)
                                     db_type_name = type_name
-                                    if origin_type:
-                                        if "(수동)" in origin_type: db_type_name += "(수동)"
-                                        elif "(AUTO)" in origin_type or "(자동)" in origin_type: db_type_name += "(자동)"
+                                    profit_amt = 0
+                                    profit_rate = 0.0
+                                    score = 0
+                                    if origin_trade:
+                                        db_type_name = origin_trade['type']
+                                        profit_amt = origin_trade.get('profit_amt', 0)
+                                        profit_rate = origin_trade.get('profit_rate', 0.0)
+                                        score = origin_trade.get('strategy_score', 0)
                                 except Exception:
                                     db_type_name = type_name
                                 
@@ -337,7 +342,7 @@ class ConclusionMonitor:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
-                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str)
+                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score)
                                     
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                     db_manager.db.update_trade(odno, price=avg_price)

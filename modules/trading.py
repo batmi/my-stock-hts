@@ -53,7 +53,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     
     if market_choice == 'q':
-        return None, None, False, None
+        return None, None, False, None, None
 
     is_overseas = (market_choice == "2")
     candidates = []
@@ -122,7 +122,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     # ---------------------------
     if not candidates:
         config.console.print("\n[yellow]매도 가능한 잔고가 없습니다.[/yellow]")
-        return None, None, False, None
+        return None, None, False, None, None
 
     title = f"\n[{'해외' if is_overseas else '국내'}] 매도 가능 종목 리스트"
     table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -170,7 +170,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     config.console.print(table)
     
     sel_idx = Prompt.ask("\n매도할 종목 번호를 입력하세요 [dim](취소: q)[/dim]")
-    if sel_idx.lower() == 'q': return None, None, False, None
+    if sel_idx.lower() == 'q': return None, None, False, None, None
 
     try:
         idx = int(sel_idx) - 1
@@ -182,13 +182,13 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
                 ex_map = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}
                 mapped_excd = ex_map.get(selected['excd'], "NAS")
                 
-            return selected['code'], selected['name'], is_overseas, mapped_excd
+            return selected['code'], selected['name'], is_overseas, mapped_excd, selected
         else:
             config.console.print("[red]잘못된 번호입니다.[/red]")
-            return None, None, False, None
+            return None, None, False, None, None
     except ValueError:
         config.console.print("[red]숫자를 입력해주세요.[/red]")
-        return None, None, False, None
+        return None, None, False, None, None
 
 
 def show_open_orders():
@@ -324,13 +324,18 @@ def send_order(order_type):
     with utils.AccountContext(target_cano):
         # 2. 종목 선택 (매수: 검색 / 매도: 잔고에서 선택)
         pre_selected_excd = None
+        stock_info = {}
         
         if order_type == 'sell':
             # 매도 시 상세 잔고 리스트에서 선택
-            stock_code, stock_name, is_overseas, pre_selected_excd = select_stock_from_balance(target_cano, target_acnt)
+            res = select_stock_from_balance(target_cano, target_acnt)
+            if not res or res[0] is None: return
+            stock_code, stock_name, is_overseas, pre_selected_excd, stock_info = res
         else:
             # 매수 시 기존 검색 기능 사용
-            stock_code, stock_name, is_overseas = utils.select_target_stock()
+            res = utils.select_target_stock()
+            if not res or res[0] is None: return
+            stock_code, stock_name, is_overseas = res
         
         if not stock_code: 
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
@@ -475,7 +480,23 @@ def send_order(order_type):
                 
                 # DB 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
-                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문")
+                
+                # [추가] 매도 시 예상 손익 계산 및 저장
+                profit_amt = 0
+                profit_rate = 0.0
+                if order_type == 'sell' and stock_info:
+                    try:
+                        buy_price = float(stock_info.get('buy_price', 0))
+                        if buy_price > 0:
+                            # calc_price: 주문 단가 (시장가인 경우 현재가)
+                            est_sell_amt = float(qty) * calc_price
+                            est_buy_amt = float(qty) * buy_price
+                            # 단순 차익 계산 (수수료/세금 제외)
+                            profit_amt = int(est_sell_amt - est_buy_amt)
+                            profit_rate = ((calc_price - buy_price) / buy_price) * 100
+                    except: pass
+
+                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate)
                 
                 # 매도 시 트레일링 스탑 초기화
                 if order_type == 'sell':
