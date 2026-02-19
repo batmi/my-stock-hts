@@ -555,9 +555,10 @@ class TelegramCommander:
 
     def _get_trade_history(self, limit=10):
         """최근 체결 내역 조회"""
-        trades = db_manager.db.get_trades(limit=limit)
+        # [수정] 체결 상태인 내역만 조회하도록 필터링 추가
+        trades = db_manager.db.get_trades(limit=limit, order_status="체결")
         if not trades:
-            return "📭 거래 내역이 없습니다."
+            return "📭 체결된 거래 내역이 없습니다."
         
         msg = f"📜 [최근 체결 내역 ({len(trades)}건)]"
         for t in trades:
