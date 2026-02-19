@@ -78,14 +78,6 @@ class ConclusionMonitor:
         initial_delay = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5) * 3
         time.sleep(initial_delay)
         
-        # [이동] 초기화 로직을 스레드 내부에서 수행 (메인 스레드와 부하 분산)
-        if not self.initialized:
-            try:
-                self._check_conclusions(initial=True)
-                self.initialized = True
-            except Exception as e:
-                logger.error(f"체결 감시 초기화 중 오류: {e}")
-
         while self.is_running:
             # [추가] 장 운영 시간 외에는 모니터링 중단 (트래픽 감소)
             if not self._is_market_open():
@@ -116,8 +108,18 @@ class ConclusionMonitor:
 
             is_rate_limited = False
             has_error = False # [추가] 에러 발생 여부 플래그
+            
+            # [수정] 초기화 상태에 따라 모드 결정 (초기화 실패 시 재시도 보장)
+            is_initial_run = not self.initialized
+
             try:
-                is_rate_limited, has_error = self._check_conclusions() # [수정] 반환값 변경
+                # 초기화가 안 되었다면 initial=True로 호출하여 알림 없이 상태만 동기화
+                is_rate_limited, has_error = self._check_conclusions(initial=is_initial_run)
+                
+                # 에러 없이 수행되었다면 초기화 완료 처리
+                if is_initial_run and not has_error:
+                    self.initialized = True
+                    logger.info("[ConclusionMonitor] 체결 내역 초기화 완료 (알림 모드 전환)")
             except Exception as e:
                 logger.error(f"체결 감시 중 오류: {e}")
                 has_error = True
@@ -909,29 +911,50 @@ class AutoTrader:
                 table.add_row("누적 손익", "-")
             
             table.add_row("현재 예수금", f"{deposit:,}원")
-            
-            # 일일 손실 제한 체크 (초기 자산이 있을 때만)
-            if self.initial_asset > 0:
-                loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
-                if loss_limit > 0:
-                    safety_msg = "[green]안전[/green]"
-                    if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
-                    elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
-                    table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
         else:
             table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
                 table.add_row("초기 자산", f"{self.initial_asset:,}원")
 
-        # [추가] 투자 설정 정보 표시
+        table.add_section()
+
+        # 4. 설정 및 상태 정보 (재구성)
+        # 매수 조건
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        table.add_row("매수 조건", f"{buy_score}점 이상 / RSI {buy_rsi} 미만")
+
+        # 매도 조건 (2줄)
+        sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+        tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        
+        table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
+        table.add_row("", f"익절 (+{tp}%) / 손절 ({sl}%) / 트레일링스탑 (+{ts_act}%/-{ts_call}%)")
+
+        # 투자 설정
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
         if invest_ratio <= 0: invest_ratio = 0.1
         max_holdings = int(1 / invest_ratio)
         table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목)")
 
-        table.add_section()
+        # 손실 제한
+        loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+        if loss_limit > 0:
+            safety_msg = "[green]안전[/green]"
+            if current_asset is not None and self.initial_asset > 0:
+                profit = current_asset - self.initial_asset
+                rate = (profit / self.initial_asset) * 100
+                if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
+                elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
+            table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
+        else:
+            table.add_row("손실 제한", "미사용")
 
-        # 4. 시스템 안정성
+        # 연속 에러
         err_cnt = self.consecutive_errors
         max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
         if err_cnt == 0:
@@ -941,7 +964,7 @@ class AutoTrader:
             err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
         table.add_row("연속 에러", err_display)
         
-        # 5. 매매 요약
+        # 금일 매매
         buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
         sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
         table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
