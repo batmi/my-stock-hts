@@ -760,7 +760,7 @@ def view_trade_history():
         table.add_column("수량", justify="right")
         table.add_column("단가", justify="right", no_wrap=True)
         table.add_column("손익(수익률)", justify="right", no_wrap=True)
-        table.add_column("사유", justify="left", no_wrap=True, width=60, overflow="ellipsis")
+        table.add_column("사유", justify="left", no_wrap=True, width=55, overflow="ellipsis")
 
         for i, t in enumerate(t_list):
             type_str = t['type']
