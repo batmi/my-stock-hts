@@ -212,7 +212,9 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 
                 # API에서 총평가금액이 0으로 오는 경우 직접 계산 (예수금 + 주식평가금)
                 if tot_evlu == 0:
-                    deposit = api.safe_int(summary.get('dnca_tot_amt'))
+                    # [수정] D+2 예수금 사용 (모의투자 일관성 확보)
+                    deposit = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
+                    if deposit == 0: deposit = api.safe_int(summary.get('dnca_tot_amt'))
                     tot_evlu = stock_evlu + deposit
 
                 tot_profit = api.safe_int(summary.get('evlu_pfls_smtl_amt'))

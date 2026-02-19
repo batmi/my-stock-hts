@@ -536,10 +536,16 @@ class AutoTrader:
                     
                     # 3. 총 자산 계산
                     stock_eval = 0
+                    tot_evlu = 0
                     if summary:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+                        tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt'))
                     
-                    self.initial_asset = deposit + stock_eval
+                    if tot_evlu > 0:
+                        self.initial_asset = tot_evlu
+                    else:
+                        self.initial_asset = deposit + stock_eval
+                        
                     asset_check_failed = False
 
                 except Exception as e:
@@ -739,9 +745,16 @@ class AutoTrader:
                 # 2. 예수금 및 총 자산 계산
                 if config.session.is_simulation:
                     if summary:
-                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        # [수정] D+2 예수금(가수도금) 사용 (매도 대금 포함, /balance와 통일)
+                        deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                        current_asset = deposit + stock_eval
+                        tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0))
+                        
+                        # 총 자산: API 제공값 우선, 없으면 계산
+                        if tot_evlu > 0:
+                            current_asset = tot_evlu
+                        else:
+                            current_asset = deposit + stock_eval
                 else:
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
@@ -1759,6 +1772,11 @@ class AutoTrader:
                 # 모의투자는 D+2 예수금 사용
                 if config.session.is_simulation:
                     deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+
+            # [추가] API 제공 총자산 우선 사용
+            tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
+            if tot_evlu > 0:
+                return tot_evlu
 
             # 2. 예수금이 0이고 실전투자면 별도 API 시도
             if deposit == 0 and not config.session.is_simulation:
