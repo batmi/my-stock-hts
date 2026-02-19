@@ -8,7 +8,7 @@ venv/
 
 # 시스템 및 설정 관련
 .DS_Store
-json/token_cache.json
+json/
 chart/
 db/
 logs/
