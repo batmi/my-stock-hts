@@ -258,6 +258,12 @@ def show_help():
     score_table.add_row("매수 (진입)", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
+    
+    # [추가] 주문 집행 상세 섹션
+    score_table.add_section()
+    score_table.add_row("주문 집행", "매수 주문 시", "[red]+1호가[/]", "체결 확률 확보 (현재가 + 1호가)")
+    score_table.add_row("", "매도 주문 시", "[blue]-1호가[/]", "즉시 체결 유도 (현재가 - 1호가)")
+    score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
 
     # [추가] 매도 규칙 섹션
     score_table.add_section()
