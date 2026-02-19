@@ -1043,8 +1043,11 @@ def _prepare_account_params(cano, acnt_prdt_cd):
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
-    # [수정] 공지사항 반영: INQR_DVSN '02'(종목별) 제한 -> '01'(대출일별)로 변경
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "01", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    
+    # [수정] 조회 구분: 모의투자는 '02'(종목별), 실전투자는 '01'(대출일별 - API 제한 대응)
+    inqr_dvsn = "02" if config.session.is_simulation else "01"
+    
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": inqr_dvsn, "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
 
     if data.get('rt_cd') == '0':

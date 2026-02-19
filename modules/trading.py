@@ -41,7 +41,7 @@ def select_account():
             
     return target_cano, target_acnt, acc_label
 
-def select_stock_from_balance():
+def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     """
     매도 시 보유 잔고에서 종목을 선택하는 함수
     (메뉴 4번 잔고 조회와 동일한 상세 정보를 출력)
@@ -63,7 +63,7 @@ def select_stock_from_balance():
     # ---------------------------
     if not is_overseas:
         with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
-            holdings, _ = account.fetch_domestic_balance()
+            holdings, _ = account.fetch_domestic_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = int(item.get('hldg_qty', 0))
                 buy_price = float(item.get('pchs_avg_pric', 0))
@@ -90,7 +90,7 @@ def select_stock_from_balance():
     # ---------------------------
     else:
         with config.console.status("[bold green]해외 잔고 조회 중...[/]"):
-            holdings = account.fetch_overseas_balance()
+            holdings = account.fetch_overseas_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
                 if qty > 0:
@@ -327,7 +327,7 @@ def send_order(order_type):
         
         if order_type == 'sell':
             # 매도 시 상세 잔고 리스트에서 선택
-            stock_code, stock_name, is_overseas, pre_selected_excd = select_stock_from_balance()
+            stock_code, stock_name, is_overseas, pre_selected_excd = select_stock_from_balance(target_cano, target_acnt)
         else:
             # 매수 시 기존 검색 기능 사용
             stock_code, stock_name, is_overseas = utils.select_target_stock()
