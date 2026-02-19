@@ -297,9 +297,9 @@ def get_current_price(mode='add'):
         if Prompt.ask("\n이 종목을 관심 종목 리스트에 추가하시겠습니까?", choices=["y", "n"], default="n") == "y":
             input_name = Prompt.ask("저장할 종목명 입력", default=stock_name)
             config.console.print("\n[bold]어떤 그룹에 추가할까요?[/bold]")
-            config.console.print("[1] 한국주식")
+            config.console.print("[1] 국내 주식")
             config.console.print("[2] 국내 ETF")
-            config.console.print("[3] 미국주식")
+            config.console.print("[3] 미국 주식")
             config.console.print("[4] 미국 ETF")
             config.console.print()
             cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
@@ -330,9 +330,9 @@ def delete_stock():
         config.console.print(f"[dim cyan][TRACE] 종목 삭제 메뉴 진입[/dim cyan]")
 
     config.console.print("\n[bold]어떤 그룹에서 삭제하시겠습니까?[/bold]")
-    config.console.print("[1] 한국주식")
+    config.console.print("[1] 국내 주식")
     config.console.print("[2] 국내 ETF")
-    config.console.print("[3] 미국주식")
+    config.console.print("[3] 미국 주식")
     config.console.print("[4] 미국 ETF")
     config.console.print()
     
@@ -341,7 +341,7 @@ def delete_stock():
         config.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
     if cat_choice.lower() == 'q': return
 
-    group_map = {"1": ("stocks_kr", "한국주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국주식"), "4": ("etfs_us", "미국 ETF")}
+    group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = group_map[cat_choice]
     
     # [로그] 그룹 선택

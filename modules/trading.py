@@ -17,6 +17,30 @@ from modules import auto_trade # [추가] 체결 감시자 호출용
 
 logger = logging.getLogger(__name__)
 
+def select_account():
+    """주문 수행할 계좌를 선택합니다."""
+    target_cano = config.session.cano
+    target_acnt = config.session.acnt_prdt_cd
+    acc_label = "실전투자" if not config.session.is_simulation else "모의투자"
+
+    # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
+    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+        config.console.print("\n[bold]주문을 수행할 계좌를 선택하세요:[/bold]")
+        config.console.print(f"[1] {acc_label} (메인): {config.session.cano}-{config.session.acnt_prdt_cd}")
+        config.console.print(f"[2] 자동매매 (시스템): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
+        config.console.print()
+        
+        choice = Prompt.ask("선택 [dim](기본값: 1, 취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+        if choice.lower() == 'q':
+            return None, None, None
+            
+        if choice == "2":
+            target_cano = config.session.auto_cano
+            target_acnt = config.session.auto_acnt_prdt_cd
+            acc_label = "자동매매"
+            
+    return target_cano, target_acnt, acc_label
+
 def select_stock_from_balance():
     """
     매도 시 보유 잔고에서 종목을 선택하는 함수
@@ -167,289 +191,313 @@ def select_stock_from_balance():
         return None, None, False, None
 
 
-# =========================================================================
-# [공통] 미체결 내역 조회 및 출력 함수 (재사용)
-# =========================================================================
-def _get_domestic_open_orders():
-    return api.get_domestic_open_orders(config.session.cano, config.session.acnt_prdt_cd)
-
-def _get_us_open_orders():
-    return api.get_overseas_open_orders(config.session.cano, config.session.acnt_prdt_cd)
-
 def show_open_orders():
-    """미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
-    with config.console.status("[bold green]미체결 내역 조회 중...[/]"):
-        dom_orders = _get_domestic_open_orders()
-        us_orders = _get_us_open_orders()
+    """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
     
-    if not dom_orders and not us_orders:
-        config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
-        return []
-
-    table = Table(title="\n미체결 내역", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table.add_column("No", justify="right")
-    table.add_column("국가", justify="center")
-    table.add_column("주문시간", justify="center")
-    table.add_column("주문번호")
-    table.add_column("종목명(코드)")
-    table.add_column("구분", justify="center")
-    table.add_column("주문수량", justify="right")
-    table.add_column("주문단가", justify="right")
-    table.add_column("현재가", justify="right", style="bold")
-    table.add_column("잔량", justify="right")
+    # 계좌 목록 구성
+    accounts = []
+    # 1. 메인 계좌
+    if config.session.cano:
+        label = "모의" if config.session.is_simulation else "실전"
+        accounts.append({"cano": config.session.cano, "acnt": config.session.acnt_prdt_cd, "label": label})
+    
+    # 2. 자동매매 계좌 (실전 모드이고 별도 설정된 경우)
+    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+        accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "label": "자동"})
 
     selectable_orders = []
-    
-    # --- [A] 국내 주문 처리 ---
-    for order in dom_orders:
-        rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
-        if api.safe_int(rmn_qty) <= 0: continue
+
+    with config.console.status("[bold green]전체 계좌 미체결 내역 조회 중...[/]"):
+        table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        table.add_column("No", justify="right")
+        table.add_column("계좌", justify="center")
+        table.add_column("국가", justify="center")
+        table.add_column("주문시간", justify="center")
+        table.add_column("주문번호")
+        table.add_column("종목명(코드)")
+        table.add_column("구분", justify="center")
+        table.add_column("주문수량", justify="right")
+        table.add_column("주문단가", justify="right")
+        table.add_column("현재가", justify="right", style="bold")
+        table.add_column("잔량", justify="right")
+
+        idx = 1
         
-        order['_origin'] = 'KR'
-        selectable_orders.append(order)
-        idx = len(selectable_orders)
-        
-        sll_buy = order.get('sll_buy_dvsn_cd_name', '').strip()
-        if not sll_buy:
-            cd = order.get('sll_buy_dvsn_cd', '')
-            sll_buy = "매도" if cd == '01' else ("매수" if cd == '02' else cd)
-        
-        sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
-        
-        cur_price_str = "-"
-        if order.get('pdno'):
-            price = api.get_current_price(order.get('pdno'), False)
-            if price > 0:
-                cur_price_str = f"{price:,}원"
-        
-        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
-        ord_tmd = order.get('ord_tmd', '')
-        ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
+        for acc in accounts:
+            cano = acc['cano']
+            acnt = acc['acnt']
+            acc_label = acc['label']
+            
+            # [수정] 계좌 라벨 스타일링 (실전: 노랑, 자동: 주황)
+            acc_disp = acc_label
+            if "실전" in acc_label:
+                acc_disp = f"[bold yellow]{acc_label}[/]"
+            elif "자동" in acc_label:
+                acc_disp = f"[bold orange3]{acc_label}[/]"
+            
+            # 해당 계좌 컨텍스트로 API 호출
+            with utils.AccountContext(cano):
+                # [A] 국내 주문
+                dom_orders = api.get_domestic_open_orders(cano, acnt)
+                for order in dom_orders:
+                    rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
+                    if api.safe_int(rmn_qty) <= 0: continue
+                    
+                    order['_origin'] = 'KR'
+                    order['_account'] = acc # 계좌 정보 저장
+                    selectable_orders.append(order)
+                    
+                    sll_buy = order.get('sll_buy_dvsn_cd_name', '').strip()
+                    if not sll_buy:
+                        cd = order.get('sll_buy_dvsn_cd', '')
+                        sll_buy = "매도" if cd == '01' else ("매수" if cd == '02' else cd)
+                    sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
+                    
+                    cur_price_str = "-"
+                    if order.get('pdno'):
+                        price = api.get_current_price(order.get('pdno'), False)
+                        if price > 0: cur_price_str = f"{price:,}원"
+                    
+                    display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
+                    ord_tmd = order.get('ord_tmd', '')
+                    ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
 
-        table.add_row(str(idx), "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), acc_disp, "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+                    idx += 1
 
-    # --- [B] 해외 주문 처리 ---
-    for order in us_orders:
-        rmn_qty = order.get('nccs_qty', '0')
-        if float(rmn_qty) <= 0: continue
+                # [B] 해외 주문
+                us_orders = api.get_overseas_open_orders(cano, acnt)
+                for order in us_orders:
+                    rmn_qty = order.get('nccs_qty', '0')
+                    if float(rmn_qty) <= 0: continue
 
-        order['_origin'] = 'US'
-        selectable_orders.append(order)
-        idx = len(selectable_orders)
+                    order['_origin'] = 'US'
+                    order['_account'] = acc
+                    selectable_orders.append(order)
 
-        sll_buy_code = order.get('sll_buy_dvsn_cd')
-        sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
-        sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
+                    sll_buy_code = order.get('sll_buy_dvsn_cd')
+                    sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
+                    sll_buy_colored = f"[red]{sll_buy}[/]" if "매수" in sll_buy else f"[blue]{sll_buy}[/]"
 
-        ord_unpr = 0.0
-        for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
-            if order.get(key) and float(order.get(key)) > 0:
-                ord_unpr = float(order.get(key))
-                break
-        
-        cur_price_str = "-"
-        if order.get('pdno'):
-            price = api.get_current_price(order.get('pdno'), True)
-            if price > 0:
-                cur_price_str = f"${price:,.2f}"
+                    ord_unpr = 0.0
+                    for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
+                        if order.get(key) and float(order.get(key)) > 0:
+                            ord_unpr = float(order.get(key))
+                            break
+                    
+                    cur_price_str = "-"
+                    if order.get('pdno'):
+                        price = api.get_current_price(order.get('pdno'), True)
+                        if price > 0: cur_price_str = f"${price:,.2f}"
 
-        display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
-        ord_dt = order.get('ord_dt', '')
-        ord_tmd = order.get('ord_tmd', '')
-        ord_time = "-"
-        if len(ord_tmd) == 6:
-            t_str = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
-            ord_time = f"{ord_dt[4:6]}/{ord_dt[6:]} {t_str}" if len(ord_dt) == 8 else t_str
+                    display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
+                    ord_dt = order.get('ord_dt', '')
+                    ord_tmd = order.get('ord_tmd', '')
+                    ord_time = "-"
+                    if len(ord_tmd) == 6:
+                        t_str = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                        ord_time = f"{ord_dt[4:6]}/{ord_dt[6:]} {t_str}" if len(ord_dt) == 8 else t_str
 
-        table.add_row(str(idx), "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
+                    idx += 1
+
+    if not selectable_orders:
+        config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
+        return []
 
     config.console.print(table)
     return selectable_orders
 
 
 def send_order(order_type):
+    # 0. 계좌 선택
+    target_cano, target_acnt, acc_label = select_account()
+    if not target_cano: return # 취소 시 복귀
+
     # 1. 타이틀 출력
     title_color = 'red' if order_type == 'buy' else 'blue'
     title_text = "매수" if order_type == 'buy' else "매도"
     config.console.print(f"\n[bold {title_color}]=== 주식 {title_text.upper()} 주문 (현금 전용) ===[/]")
-    config.console.print(f"주문 계좌: [bold]{config.session.cano}-{config.session.acnt_prdt_cd}[/bold]")
+    config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
-    # 2. 종목 선택 (매수: 검색 / 매도: 잔고에서 선택)
-    pre_selected_excd = None
-    
-    if order_type == 'sell':
-        # 매도 시 상세 잔고 리스트에서 선택
-        stock_code, stock_name, is_overseas, pre_selected_excd = select_stock_from_balance()
-    else:
-        # 매수 시 기존 검색 기능 사용
-        stock_code, stock_name, is_overseas = utils.select_target_stock()
-    
-    if not stock_code: 
-        config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
-        return
-
-    # 3. 거래소 확인 (해외)
-    excd = ""
-    if is_overseas:
-        if pre_selected_excd:
-            excd = pre_selected_excd
+    # 컨텍스트 적용 (이후 모든 API 호출은 이 계좌 기준)
+    with utils.AccountContext(target_cano):
+        # 2. 종목 선택 (매수: 검색 / 매도: 잔고에서 선택)
+        pre_selected_excd = None
+        
+        if order_type == 'sell':
+            # 매도 시 상세 잔고 리스트에서 선택
+            stock_code, stock_name, is_overseas, pre_selected_excd = select_stock_from_balance()
         else:
-            found_excd = api.find_best_exchange_code(stock_code)
-            excd = found_excd if found_excd else Prompt.ask("거래소 코드 수동 입력 (NAS/NYS/AMS)", default="NAS").upper()
-        config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan] (거래소: {excd})")
-    else:
-        config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan]")
+            # 매수 시 기존 검색 기능 사용
+            stock_code, stock_name, is_overseas = utils.select_target_stock()
+        
+        if not stock_code: 
+            config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
+            return
 
-    # 4. 현재가 및 최대 수량 조회
-    curr_price = api.get_current_price(stock_code, is_overseas)
-    
-    if curr_price > 0:
-        price_fmt = f"${curr_price:,.2f}" if is_overseas else f"{curr_price:,}원"
-        config.console.print(f"\n[bold green]현재가: {price_fmt}[/bold green]")
-
-    default_qty = "1"
-    if order_type == 'buy':
-        if curr_price > 0:
-            if is_overseas:
-                max_qty = api.fetch_overseas_buyable_quantity(stock_code, curr_price, excd)
+        # 3. 거래소 확인 (해외)
+        excd = ""
+        if is_overseas:
+            if pre_selected_excd:
+                excd = pre_selected_excd
             else:
-                max_qty = api.fetch_buyable_quantity(stock_code, curr_price)
+                found_excd = api.find_best_exchange_code(stock_code)
+                excd = found_excd if found_excd else Prompt.ask("거래소 코드 수동 입력 (NAS/NYS/AMS)", default="NAS").upper()
+            config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan] (거래소: {excd})")
+        else:
+            config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan]")
+
+        # 4. 현재가 및 최대 수량 조회
+        curr_price = api.get_current_price(stock_code, is_overseas)
+        
+        if curr_price > 0:
+            price_fmt = f"${curr_price:,.2f}" if is_overseas else f"{curr_price:,}원"
+            config.console.print(f"\n[bold green]현재가: {price_fmt}[/bold green]")
+
+        default_qty = "1"
+        if order_type == 'buy':
+            if curr_price > 0:
+                if is_overseas:
+                    max_qty = api.fetch_overseas_buyable_quantity(stock_code, curr_price, excd)
+                else:
+                    max_qty = api.fetch_buyable_quantity(stock_code, curr_price)
+                
+                if max_qty > 0:
+                    default_qty = str(max_qty)
+                    config.console.print(f"[green]최대 {max_qty}주 매수 가능[/green]")
+                else:
+                    config.console.print(f"[yellow]매수 가능 수량이 0입니다.[/yellow]")
+        elif order_type == 'sell':
+            if is_overseas:
+                max_qty = api.fetch_overseas_sellable_quantity(stock_code, excd)
+            else:
+                max_qty = api.fetch_sellable_quantity(stock_code)
             
             if max_qty > 0:
                 default_qty = str(max_qty)
-                config.console.print(f"[green]최대 {max_qty}주 매수 가능[/green]")
+                config.console.print(f"[blue]보유 잔고: {max_qty}주 매도 가능[/blue]")
             else:
-                config.console.print(f"[yellow]매수 가능 수량이 0입니다.[/yellow]")
-    elif order_type == 'sell':
+                config.console.print("[yellow]매도 가능 수량이 0입니다.[/yellow]")
+
+        # 5. 수량 및 단가 입력
+        qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
+        if qty.lower() == 'q': return
+        config.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
+        qty = qty.replace(',', '')
+
+        unit = "달러" if is_overseas else "원"
+        price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: q[/dim]"
+        price = Prompt.ask(price_prompt, default="0")
+        if price.lower() == 'q': return
+        config.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
+        if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
+        price = price.replace(',', '')
+
+        # 6. 가격 처리 및 주문 구분 설정
+        ord_dvsn = "00"
+        calc_price = 0
+        display_price = ""
+        is_market_order = (price == "0")
+
         if is_overseas:
-            max_qty = api.fetch_overseas_sellable_quantity(stock_code, excd)
-        else:
-            max_qty = api.fetch_sellable_quantity(stock_code)
-        
-        if max_qty > 0:
-            default_qty = str(max_qty)
-            config.console.print(f"[blue]보유 잔고: {max_qty}주 매도 가능[/blue]")
-        else:
-            config.console.print("[yellow]매도 가능 수량이 0입니다.[/yellow]")
-
-    # 5. 수량 및 단가 입력
-    qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
-    if qty.lower() == 'q': return
-    config.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
-    qty = qty.replace(',', '')
-
-    unit = "달러" if is_overseas else "원"
-    price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: q[/dim]"
-    price = Prompt.ask(price_prompt, default="0")
-    if price.lower() == 'q': return
-    config.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
-    if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
-    price = price.replace(',', '')
-
-    # 6. 가격 처리 및 주문 구분 설정
-    ord_dvsn = "00"
-    calc_price = 0
-    display_price = ""
-    is_market_order = (price == "0")
-
-    if is_overseas:
-        # [해외] 시장가(0) 입력 시 현재가 기준 지정가로 변환
-        if is_market_order:
-            if curr_price > 0:
-                if curr_price >= 1.0:
-                    price = f"{curr_price:.2f}"
+            # [해외] 시장가(0) 입력 시 현재가 기준 지정가로 변환
+            if is_market_order:
+                if curr_price > 0:
+                    if curr_price >= 1.0:
+                        price = f"{curr_price:.2f}"
+                    else:
+                        price = f"{curr_price:.4f}"
+                    config.console.print(f"[yellow]안내: 0(시장가)을 입력하여 현재가(${price}) 기준 지정가로 주문을 접수합니다.[/yellow]")
                 else:
-                    price = f"{curr_price:.4f}"
-                config.console.print(f"[yellow]안내: 0(시장가)을 입력하여 현재가(${price}) 기준 지정가로 주문을 접수합니다.[/yellow]")
+                    config.console.print("[red]오류: 현재가 정보를 가져오지 못해 0(시장가) 주문을 수행할 수 없습니다.[/red]")
+                    return
+            
+            calc_price = float(price)
+            display_price = f"${price}" + (" (현재가)" if is_market_order else " (지정가)")
+        else:
+            # [국내] 시장가 주문 처리
+            if is_market_order:
+                ord_dvsn = "01"
+                display_price = "시장가(0)"
+                if curr_price == 0:
+                     p = api.get_current_price(stock_code, False)
+                     if p > 0: curr_price = int(p)
+                calc_price = curr_price
             else:
-                config.console.print("[red]오류: 현재가 정보를 가져오지 못해 0(시장가) 주문을 수행할 수 없습니다.[/red]")
-                return
+                ord_dvsn = "00"
+                calc_price = int(price)
+                display_price = f"{int(price):,}원"
+
+        # 7. 예상 금액 계산 및 확인 메시지
+        total_amt = float(qty) * calc_price
+        est_tag = " (예상)" if is_market_order else ""
         
-        calc_price = float(price)
-        display_price = f"${price}" + (" (현재가)" if is_market_order else " (지정가)")
-    else:
-        # [국내] 시장가 주문 처리
-        if is_market_order:
-            ord_dvsn = "01"
-            display_price = "시장가(0)"
-            if curr_price == 0:
-                 p = api.get_current_price(stock_code, False)
-                 if p > 0: curr_price = int(p)
-            calc_price = curr_price
+        if is_overseas:
+            amt_str = f"${total_amt:,.2f}{est_tag}"
         else:
-            ord_dvsn = "00"
-            calc_price = int(price)
-            display_price = f"{int(price):,}원"
+            amt_str = f"{int(total_amt):,}원{est_tag}"
 
-    # 7. 예상 금액 계산 및 확인 메시지
-    total_amt = float(qty) * calc_price
-    est_tag = " (예상)" if is_market_order else ""
-    
-    if is_overseas:
-        amt_str = f"${total_amt:,.2f}{est_tag}"
-    else:
-        amt_str = f"{int(total_amt):,}원{est_tag}"
-
-    market_label = "해외" if is_overseas else "국내"
-    excd_info = f" (거래소: {excd})" if is_overseas else ""
-    
-    confirm_msg = (
-        f"\n[bold white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
-        f" 종목: [bold]{stock_name} ({stock_code})[/bold]{excd_info}\n"
-        f" 수량: [bold]{qty}주[/bold]\n"
-        f" 단가: [bold]{display_price}[/bold]\n"
-        f" 총액: [bold]{amt_str}[/bold]\n"
-    )
-    config.console.print(Panel(confirm_msg, expand=False, width=60))
-    
-    if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
-        config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
-        return
-
-    # 8. 주문 전송
-    market_api_param = "overseas" if is_overseas else "domestic"
-    
-    if config.FILE_DEBUG_LEVEL == "DEBUG":
-        logger.debug(f"REQ (Order-{market_label}) | {order_type} | {stock_code} {qty}ea")
-
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
-
-    try:
-        result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
+        market_label = "해외" if is_overseas else "국내"
+        excd_info = f" (거래소: {excd})" if is_overseas else ""
         
-        if result['rt_cd'] == '0':
-            odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
-            config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+        confirm_msg = (
+            f"\n[bold white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
+            f" 종목: [bold]{stock_name} ({stock_code})[/bold]{excd_info}\n"
+            f" 수량: [bold]{qty}주[/bold]\n"
+            f" 단가: [bold]{display_price}[/bold]\n"
+            f" 총액: [bold]{amt_str}[/bold]\n"
+        )
+        config.console.print(Panel(confirm_msg, expand=False, width=60))
+        
+        if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
+            return
+
+        # 8. 주문 전송
+        market_api_param = "overseas" if is_overseas else "domestic"
+        
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"REQ (Order-{market_label}) | {order_type} | {stock_code} {qty}ea")
+
+        logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+
+        try:
+            result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
             
-            # 텔레그램 알림
-            t_type = "매수" if order_type == 'buy' else "매도"
-            api.send_telegram_message(f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}")
-            
-            # DB 저장
-            snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
-            db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문")
-            
-            # 매도 시 트레일링 스탑 초기화
-            if order_type == 'sell':
-                db_manager.db.delete_trailing_stop(stock_code)
-                auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
-            
-            # 체결 감시 및 미체결 조회
-            auto_trade.ConclusionMonitor().check_now()
-            
-            config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
-            show_open_orders()
-        else:
-            msg1 = result.get('msg1', '알 수 없는 오류')
-            config.console.print(f"[bold red]주문 실패: {msg1} (Code: {result.get('msg_cd')})[/bold red]")
-            if "장운영일자가" in msg1: config.console.print("[yellow]오늘은 휴장일이거나 주문 가능한 시간이 아닐 수 있습니다.[/yellow]")
-            
-    except Exception as e:
-        config.console.print(f"[bold red]통신/시스템 에러: {str(e)}[/bold red]")
+            if result['rt_cd'] == '0':
+                odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
+                config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+                
+                # 텔레그램 알림
+                t_type = "매수" if order_type == 'buy' else "매도"
+                api.send_telegram_message(f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}")
+                
+                # DB 저장
+                snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
+                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문")
+                
+                # 매도 시 트레일링 스탑 초기화
+                if order_type == 'sell':
+                    db_manager.db.delete_trailing_stop(stock_code)
+                    auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
+                
+                # 체결 감시 및 미체결 조회
+                auto_trade.ConclusionMonitor().check_now()
+                
+                config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
+            else:
+                msg1 = result.get('msg1', '알 수 없는 오류')
+                config.console.print(f"[bold red]주문 실패: {msg1} (Code: {result.get('msg_cd')})[/bold red]")
+                if "장운영일자가" in msg1: config.console.print("[yellow]오늘은 휴장일이거나 주문 가능한 시간이 아닐 수 있습니다.[/yellow]")
+                
+        except Exception as e:
+            config.console.print(f"[bold red]통신/시스템 에러: {str(e)}[/bold red]")
 
 def modify_order():
     config.console.print("\n[bold magenta]=== 통합 정정/취소 주문 ===[/]")
-    config.console.print(f"주문 계좌: [bold]{config.session.cano}-{config.session.acnt_prdt_cd}[/bold]")
+    # config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})") # 계좌 선택 제거로 주석 처리
 
     # [추가] 메뉴 진입 시점 로깅 (미체결 내역이 없어도 기록 남기기 위함)
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
@@ -473,6 +521,14 @@ def modify_order():
         
     target_order = selectable_orders[int(choice)-1]
     origin = target_order['_origin']
+    
+    # [추가] 선택된 주문의 계좌 정보 추출
+    acc_info = target_order.get('_account', {})
+    target_cano = acc_info.get('cano') or config.session.cano
+    target_acnt = acc_info.get('acnt') or config.session.acnt_prdt_cd
+    acc_label = acc_info.get('label', '메인')
+    
+    config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
     config.console.print("[1] 정정 (Modify)")
@@ -512,7 +568,7 @@ def modify_order():
         if price.lower() == 'q': return
         config.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: 
-             config.console.print("[red]가격 입력 필요[/]"); return
+            config.console.print("[red]가격 입력 필요[/]"); return
     else: # 취소
         rvse_cncl_dvsn_cd = "02"
         qty = Prompt.ask(f"\n[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
@@ -581,25 +637,27 @@ def modify_order():
 
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
-    try:
-        res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
-        
-        if res_json['rt_cd'] == '0':
-            odno = res_json.get('output', {}).get('ODNO') or res_json.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
-            if not odno and 'output' in res_json and 'ODNO' in res_json['output']:
-                 odno = res_json['output']['ODNO']
+    # 컨텍스트 적용 (선택된 주문의 계좌 사용)
+    with utils.AccountContext(target_cano):
+        try:
+            res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
             
-            config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
-            
-            api.send_telegram_message(f"🚀 [수동 주문] {action_name} 접수\n종목: {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {odno}")
-            
-            db_manager.db.insert_trade(f"{action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
-            
-            auto_trade.ConclusionMonitor().check_now()
-            
-            config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
-            show_open_orders()
-        else:
-            config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
-    except Exception as e:
-        config.console.print(f"[red]에러: {e}[/]")
+            if res_json['rt_cd'] == '0':
+                odno = res_json.get('output', {}).get('ODNO') or res_json.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
+                if not odno and 'output' in res_json and 'ODNO' in res_json['output']:
+                    odno = res_json['output']['ODNO']
+                
+                config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
+                
+                api.send_telegram_message(f"🚀 [수동 주문] {action_name} 접수\n종목: {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {odno}")
+                
+                db_manager.db.insert_trade(f"{action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
+                
+                auto_trade.ConclusionMonitor().check_now()
+                
+                config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
+                show_open_orders()
+            else:
+                config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
+        except Exception as e:
+            config.console.print(f"[red]에러: {e}[/]")

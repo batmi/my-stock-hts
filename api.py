@@ -1149,7 +1149,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
             "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
         }
-        res = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", "domestic", "inquiry", "unfilled", params=params)
+        res = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", "domestic", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':
             return res.get('output', [])
     return []

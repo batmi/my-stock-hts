@@ -594,6 +594,12 @@ def view_trade_history():
         config.console.print("\n[yellow]검색된 거래 내역이 없습니다.[/yellow]")
         return
 
+    # [추가] 현재 설정된 계좌 정보 확인 (그룹핑용)
+    current_main_acc = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+    current_auto_acc = ""
+    if config.session.auto_cano:
+        current_auto_acc = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+
     # [수정] 데이터 분류 및 그룹핑 (계좌 종류/번호별 분리)
     grouped_trades = {} # (category, account) -> list
     
@@ -603,14 +609,20 @@ def view_trade_history():
         if config.session.is_simulation and not is_sim_data: continue
         if not config.session.is_simulation and is_sim_data: continue
         
+        acc_no = t.get('account', '')
+
         # 2. 카테고리 결정
         category = "모의"
         if not is_sim_data:
-            if "AUTO" in t['type']: category = "자동"
-            else: category = "실전"
+            # [수정] 자동매매 계좌가 별도로 설정되어 있고, 해당 계좌의 내역인 경우 '자동'으로 통합
+            if current_auto_acc and current_auto_acc != current_main_acc and acc_no == current_auto_acc:
+                category = "자동"
+            else:
+                if "AUTO" in t['type']: category = "자동"
+                else: category = "실전"
             
         # 3. 그룹핑
-        key = (category, t['account'])
+        key = (category, acc_no)
         if key not in grouped_trades:
             grouped_trades[key] = []
         grouped_trades[key].append(t)
