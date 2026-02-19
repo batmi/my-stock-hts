@@ -210,18 +210,43 @@ class TelegramCommander:
                 if not data:
                      return "⚠️ 자산 조회 실패 (데이터 없음)"
                 
+                # 수익률 계산
+                roi = 0.0
+                if data['sec_buy'] > 0:
+                    roi = (data['sec_pl'] / data['sec_buy']) * 100
+                
+                # 총 예수금 계산
+                total_deposit = data['dep_dom'] + data['dep_ovs']
+
                 msg = f"💰 [계좌 자산 현황]\n"
-                msg += f"총 자산: {data['tot_asset']:,}원\n"
-                msg += f"평가 손익: {data['sec_pl']:+,}원\n"
-                msg += "\n"
-                msg += f"예수금(원화): {data['dep_dom']:,}원\n"
-                msg += f"예수금(외화): {data['dep_ovs']:,}원\n"
-                msg += f"주문가능(D+2): {data['d2_dep']:,}원\n"
-                msg += f"주식 평가: {data['sec_eval']:,}원"
+                msg += f"총 평가금액: {data['tot_asset']:,}원\n"
+                msg += f"총 예수금(D+0): {total_deposit:,}원\n"
+                msg += f"  • 원화: {data['dep_dom']:,}원\n"
                 
-                if data['ovrs_eval_krw'] > 0:
-                    msg += f"\n(해외주식 포함: {data['ovrs_eval_krw']:,}원)"
+                if not config.session.is_simulation:
+                    msg += f"    └ D+1: {data['d1_dep']:,}원\n"
+                    msg += f"    └ D+2: {data['d2_dep']:,}원\n"
+                else:
+                    msg += f"    └ D+2(주문가능): {data['d2_dep']:,}원\n"
+
+                msg += f"  • 외화: {data['dep_ovs']:,}원\n"
+                msg += f"출금가능금액: {data['withdraw']:,}원\n\n"
                 
+                msg += f"유가증권매입: {data['sec_buy']:,}원\n"
+                msg += f"유가증권평가: {data['sec_eval']:,}원\n"
+                if data.get('ovrs_eval_krw', 0) > 0:
+                    msg += f"  └ 해외주식(원화): {data['ovrs_eval_krw']:,}원\n"
+
+                icon = "🔴" if data['sec_pl'] > 0 else ("🔵" if data['sec_pl'] < 0 else "⚪️")
+                msg += f"평가손익(보유): {icon} {data['sec_pl']:+,}원 ({roi:.2f}%)\n\n"
+                
+                msg += f"금일매수: {data['buy_today']:,}원\n"
+                msg += f"금일매도: {data['sell_today']:,}원\n"
+                msg += f"금일비용: {data['total_cost']:,}원\n"
+                
+                realized_icon = "🔴" if data['realized_pl'] > 0 else ("🔵" if data['realized_pl'] < 0 else "⚪️")
+                msg += f"실현손익: {realized_icon} {data['realized_pl']:+,}원"
+
                 return msg
 
         except Exception as e:
