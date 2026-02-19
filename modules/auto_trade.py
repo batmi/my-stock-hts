@@ -1484,7 +1484,9 @@ class AutoTrader:
                         deposit_res = None
                         if config.session.is_simulation and summary:
                             dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                            deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': dnca}
+                            # [수정] 주문가능금액은 가수도금(prvs_rcdl_excc_amt) 사용 (매도 대금 포함)
+                            d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                            deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
                         else:
                             # [최적화] 이미 get_domestic_balance를 시도했으므로 내부 재호출 방지
                             deposit_res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
@@ -1683,7 +1685,8 @@ class AutoTrader:
                 _, summary = api.get_domestic_balance(cano, acnt)
                 if summary and len(summary) > 0:
                     stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                    cash = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                    # [수정] 총 자산 계산 시 D+2 예수금(가수도금) 사용 (매도 대금 반영)
+                    cash = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                     return cash + stock_eval
                 return 0
 
@@ -2012,7 +2015,7 @@ class AutoTrader:
             
             # [추가] 예수금 부족 로그
             if qty < 1:
-                self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty})")
+                self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty}) | 예수금:{avail_cash:,}원, 필요:{order_price:,}원(1주)")
                 continue
 
             rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
