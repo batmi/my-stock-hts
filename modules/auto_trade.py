@@ -574,6 +574,14 @@ class AutoTrader:
         msg += f"초기 자산: {self.initial_asset:,}원"
         msg += f"\n현재 예수금: {deposit:,}원"
         
+        # [추가] 현재 평가금액 정보 (전략 정보 위로 이동)
+        total_eval = 0
+        if summary and len(summary) > 0:
+            s_data = summary[0]
+            total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
+            total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+            msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
+
         # [추가] 전략 설정 요약 정보 추가
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
@@ -581,20 +589,16 @@ class AutoTrader:
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+        tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
         
         msg += "\n\n⚙️ [적용 전략]"
-        msg += f"\n• 매수: {buy_score}점↑ & RSI<{buy_rsi}"
+        msg += f"\n• 매수: {buy_score}점 이상 & RSI {buy_rsi} 미만"
+        msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
         msg += f"\n• 익절: +{tp}% / 손절: {sl}%"
         msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
         msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
-
-        total_eval = 0 # [추가] 초기화
-        if summary and len(summary) > 0:
-            s_data = summary[0]
-            total_eval = api.safe_int(s_data.get('scts_evlu_amt')) # 값 저장
-            total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
-            msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
             
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
