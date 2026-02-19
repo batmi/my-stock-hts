@@ -525,6 +525,9 @@ class AutoTrader:
                     # [수정] 실전/모의 모두 summary 정보 우선 활용 (안정성 확보)
                     if summary:
                         deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        # [추가] 모의투자는 D+2 예수금(가수도금) 사용 (매도 대금 포함)
+                        if config.session.is_simulation:
+                             deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                     
                     if deposit == 0 and not config.session.is_simulation:
                         res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
