@@ -568,6 +568,11 @@ def modify_order():
     is_overseas = (origin == 'US')
     market = "overseas" if is_overseas else "domestic"
     action_name = "정정" if action == "1" else "취소"
+    
+    # [추가] 매수/매도 구분 식별 (정정/취소 시 명확한 표기를 위함)
+    sb_cd = target_order.get('sll_buy_dvsn_cd')
+    sb_label = "매수" if sb_cd == '02' else ("매도" if sb_cd == '01' else "")
+    full_action_name = f"{sb_label}{action_name}"
 
     # 시장별 변수 설정
     if is_overseas:
@@ -670,9 +675,9 @@ def modify_order():
                 
                 config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
                 
-                api.send_telegram_message(f"🚀 [수동 주문] {action_name} 접수\n종목: {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {odno}")
+                api.send_telegram_message(f"🚀 [수동 주문] {full_action_name} 접수\n종목: {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {odno}")
                 
-                db_manager.db.insert_trade(f"{action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
+                db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
                 
                 auto_trade.ConclusionMonitor().check_now()
                 

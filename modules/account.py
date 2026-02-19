@@ -679,6 +679,7 @@ def view_trade_history():
             type_str = t['type']
             
             # [수정] 유형 표기 한글화 및 태그 변경
+            type_str = type_str.replace("*", "") # 기존 데이터의 * 제거
             if "buy" in type_str.lower(): type_str = type_str.replace("buy", "매수").replace("BUY", "매수")
             if "sell" in type_str.lower(): type_str = type_str.replace("sell", "매도").replace("SELL", "매도")
             type_str = type_str.replace("AUTO", "자동")
