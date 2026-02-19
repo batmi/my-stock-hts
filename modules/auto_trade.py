@@ -1905,7 +1905,7 @@ class AutoTrader:
                      self.log(f"   - {cand['name']} ({cand['score']}점)")
                 return
 
-            self._execute_buy_orders(candidates, avail_cash, invest_ratio)
+            self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
     def _analyze_candidates(self, targets, holding_codes):
         candidates = []
@@ -1962,8 +1962,18 @@ class AutoTrader:
         if skipped_stocks:
             self.log(f"[시장 필터링] 하락장 매수 보류 ({len(skipped_stocks)}종목): {', '.join(skipped_stocks)}")
 
-        # [수정] 우선순위 정렬 (점수 높은 순 -> RSI 낮은 순)
+        # [수정] 우선순위 정렬 (1. 점수 높은 순, 2. RSI 낮은 순)
+        # 점수가 같다면 RSI가 낮을수록 상승 여력이 있다고 판단하여 우선순위를 둡니다.
         candidates.sort(key=lambda x: (-x['score'], x['rsi']))
+        
+        # [추가] 선정된 후보군 우선순위 로그 출력
+        if candidates:
+            log_cnt = min(len(candidates), 3)
+            self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 중 우선순위 상위 {log_cnt}개:")
+            for i in range(log_cnt):
+                c = candidates[i]
+                rsi_disp = f"{c['rsi']:.1f}" if c['rsi'] is not None else "-"
+                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, RSI:{rsi_disp})")
         
         return candidates
 
@@ -1982,10 +1992,15 @@ class AutoTrader:
             
         return invest_amt
 
-    def _execute_buy_orders(self, candidates, avail_cash, invest_ratio):
+    def _execute_buy_orders(self, candidates, avail_cash, invest_ratio, current_holdings_count, max_holdings):
         for cand in candidates:
             if not self.is_running: break
             if avail_cash < 50000: break
+            
+            # [추가] 최대 보유 종목 수 도달 시 추가 매수 중단
+            if current_holdings_count >= max_holdings:
+                self.log(f"매수 중단: 최대 보유 종목 수({max_holdings}개) 도달")
+                break
 
             invest_amt = self._allocate_budget(avail_cash, invest_ratio)
 
@@ -2028,6 +2043,7 @@ class AutoTrader:
             odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price)
             if odno: 
                 avail_cash -= (qty * order_price)
+                current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
                 record = {
                     "type": "buy",
                     "code": cand['code'],
