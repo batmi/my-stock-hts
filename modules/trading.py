@@ -333,10 +333,58 @@ def send_order(order_type):
             if not res or res[0] is None: return
             stock_code, stock_name, is_overseas, pre_selected_excd, stock_info = res
         else:
-            # 매수 시 기존 검색 기능 사용
-            res = utils.select_target_stock()
-            if not res or res[0] is None: return
-            stock_code, stock_name, is_overseas = res
+            # [수정] 매수 시 종목 선택 메뉴 확장 ([5] 직접 입력 추가)
+            config.console.print("\n[bold]매수할 종목을 선택하세요:[/bold]")
+            config.console.print("[1] 국내 주식")
+            config.console.print("[2] 국내 ETF")
+            config.console.print("[3] 미국 주식")
+            config.console.print("[4] 미국 ETF")
+            config.console.print("[5] 직접 입력 (코드 검색)")
+            config.console.print()
+            
+            choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+            if choice.lower() == 'q': return
+
+            stock_code, stock_name, is_overseas = None, None, False
+
+            if choice == '5':
+                raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+                if not raw_input or raw_input.lower() == 'q': return
+                
+                # 간단 검색 로직
+                if raw_input.isdigit() and len(raw_input) == 6:
+                    stock_code = raw_input
+                    stock_name = api.get_stock_name_by_code(stock_code, False) or stock_code
+                    is_overseas = False
+                elif all(ord(c) < 128 for c in raw_input) and not raw_input.isdigit():
+                    stock_code = raw_input.upper()
+                    stock_name = api.get_stock_name_by_code(stock_code, True) or stock_code
+                    is_overseas = True
+                else:
+                    # 한글명 검색 등은 생략하거나 utils 활용 필요하나 여기선 코드로 유도
+                    config.console.print("[yellow]정확한 종목 코드를 입력해주세요.[/yellow]")
+                    return
+            else:
+                # 리스트 선택
+                key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+                target_key = key_map.get(choice)
+                stock_list = config.session.stock_data.get(target_key, [])
+                
+                if not stock_list:
+                    config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
+                    return
+                    
+                for i, s in enumerate(stock_list):
+                    config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+                
+                config.console.print()
+                sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                if sel.lower() == 'q': return
+                if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
+                    item = stock_list[int(sel)-1]
+                    stock_code, stock_name = item['code'], item['name']
+                    is_overseas = (choice in ["3", "4"])
+                else: return
         
         if not stock_code: 
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")

@@ -167,12 +167,88 @@ def _load_analysis_result(market_type):
         config.console.print(f"[dim red]분석 결과 로드 실패: {e}[/dim red]")
     return None
 
-def diagnose_stock():
+def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
     config.console.print("\n[bold cyan]=== 개별 종목 진단 (Diagnosis) ===[/]")
     
-    # 종목 선택 (utils 활용)
-    code, name, is_overseas = utils.select_target_stock()
+    code, name, is_overseas = None, None, False
+
+    if target_code:
+        code, name, is_overseas = target_code, target_name, target_is_overseas
+    else:
+        # [수정] 종목 선택 메뉴 확장 ([5] 직접 입력 추가 및 기본값 설정)
+        config.console.print("\n[bold]진단할 종목을 선택하세요:[/bold]")
+        config.console.print("[1] 국내 주식")
+        config.console.print("[2] 국내 ETF")
+        config.console.print("[3] 미국 주식")
+        config.console.print("[4] 미국 ETF")
+        config.console.print("[5] 직접 입력 (코드 검색)")
+        config.console.print()
+        
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+        if choice.lower() == 'q': return
+
+        if choice == '5':
+            # 직접 입력 로직
+            from modules import manage
+            # manage.get_current_price는 출력을 포함하므로, 여기서는 간단히 입력만 받음
+            raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+            if not raw_input or raw_input.lower() == 'q': return
+            
+            # manage 모듈의 _resolve_stock 로직과 유사하게 처리하거나 utils 활용
+            # 여기서는 utils가 없으므로 telegram_bot의 로직을 참고하여 간단히 구현
+            if raw_input.isdigit() and len(raw_input) == 6:
+                code = raw_input
+                name = api.get_stock_name_by_code(code, False) or code
+                is_overseas = False
+            elif all(ord(c) < 128 for c in raw_input) and not raw_input.isdigit(): # 해외 티커 가정
+                code = raw_input.upper()
+                name = api.get_stock_name_by_code(code, True) or code
+                is_overseas = True
+            else:
+                # 한글 종목명 검색 시도 (config.session.stock_data 활용)
+                found = False
+                for key in ['stocks_kr', 'etfs_kr']:
+                    for item in config.session.stock_data.get(key, []):
+                        if item['name'] == raw_input:
+                            code, name, is_overseas = item['code'], item['name'], False
+                            found = True; break
+                    if found: break
+                if not found:
+                    for key in ['stocks_us', 'etfs_us']:
+                        for item in config.session.stock_data.get(key, []):
+                            if item['name'].lower() == raw_input.lower():
+                                code, name, is_overseas = item['code'], item['name'], True
+                                found = True; break
+                        if found: break
+                
+                if not found:
+                    config.console.print(f"[red]'{raw_input}'을(를) 찾을 수 없습니다. 코드로 입력해주세요.[/red]")
+                    return
+        else:
+            # 리스트 선택
+            key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+            target_key = key_map.get(choice)
+            stock_list = config.session.stock_data.get(target_key, [])
+            
+            if not stock_list:
+                config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
+                return
+                
+            # 간이 리스트 출력 및 선택
+            for i, s in enumerate(stock_list):
+                config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+            
+            config.console.print()
+            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+            if sel.lower() == 'q': return
+            if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
+                item = stock_list[int(sel)-1]
+                code, name = item['code'], item['name']
+                is_overseas = (choice in ["3", "4"])
+            else:
+                return
+
     if not code: return
 
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
@@ -675,7 +751,9 @@ def analyze_market_stocks(market_type):
         config.console.print(f"• 분석 조건: 매수 {c_params.get('BUY_SCORE')}점, RSI {c_params.get('BUY_RSI_MAX')}, 상승 {c_params.get('RISE_SCORE')}점")
         
         config.console.print()
-        if Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n"], default="y") == "y":
+        choice = Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n", "q"], default="y")
+        if choice == 'q': return
+        if choice == "y":
             buy_candidates = cached_data['data']
             params = c_params
             use_cache = True
@@ -878,7 +956,7 @@ def analyze_market_stocks(market_type):
     from modules import chart
     
     while True:
-        config.console.print("\n[dim]상세 차트 분석을 보려면 종목 번호를 입력하세요 (메뉴 복귀: Enter)[/dim]")
+        config.console.print("\n[dim]개별 진단 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (메뉴 복귀: Enter)[/dim]")
         choice = Prompt.ask("선택", default="q", show_default=False)
         
         if choice.lower() == 'q':
@@ -891,7 +969,10 @@ def analyze_market_stocks(market_type):
                 code = selected['code']
                 name = selected['name']
                 
-                config.console.print(f"\n[bold green]>> {name}({code}) 상세 차트 분석 실행[/bold green]")
+                # [수정] 차트 분석 전 개별 종목 진단 결과 출력
+                config.console.print(f"\n[bold green]>> {name}({code}) 개별 진단 및 차트 분석 실행[/bold green]")
+                diagnose_stock(code, name, target_is_overseas=False)
+                
                 chart.generate_visual_chart(code, name, is_overseas=False)
             else:
                 config.console.print("[red]잘못된 번호입니다. 리스트에 있는 번호를 입력해주세요.[/red]")

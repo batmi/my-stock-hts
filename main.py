@@ -282,6 +282,19 @@ def show_help():
     
     config.console.print(score_table)
 
+def flush_input():
+    """입력 버퍼를 비워 의도치 않은 입력을 방지합니다."""
+    try:
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getch()
+    except ImportError:
+        import sys, termios
+        try:
+            termios.tcflush(sys.stdin, termios.TCIOFLUSH)
+        except:
+            pass
+
 def check_and_refresh_tokens():
     """토큰 만료 플래그가 설정되어 있으면 메인 스레드에서 토큰을 갱신합니다."""
     if config.TOKEN_EXPIRED:
@@ -354,6 +367,9 @@ def main():
     
     try:
         while True:
+            # [추가] 입력 버퍼 비우기 (이전 작업 중 눌린 키 무시)
+            flush_input()
+
             # [추가] 루프 시작 시 토큰 만료 여부 확인 및 갱신
             check_and_refresh_tokens()
 
@@ -410,10 +426,68 @@ def main():
                 elif choice == "1": market.show_market_indices()
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
-                    code, name, is_ovs = utils.select_stock_for_chart()
-                    if code: 
+                    # [수정] 차트 분석 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
+                    config.console.print("\n[bold]차트 분석할 대상을 선택하세요:[/bold]")
+                    config.console.print("[1] 국내 주식")
+                    config.console.print("[2] 국내 ETF")
+                    config.console.print("[3] 미국 주식")
+                    config.console.print("[4] 미국 ETF")
+                    config.console.print("[5] 시장 지수")
+                    config.console.print("[6] 직접 입력 (코드 검색)")
+                    config.console.print()
+                    
+                    sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
+                    
+                    target_code, target_name, target_ovs = None, None, False
+                    
+                    if sub_choice == '6':
+                        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+                        if raw_input and raw_input.lower() != 'q':
+                            if raw_input.isdigit() and len(raw_input) == 6:
+                                target_code = raw_input
+                                target_name = api.get_stock_name_by_code(target_code, False) or target_code
+                                target_ovs = False
+                            else:
+                                target_code = raw_input.upper()
+                                target_name = api.get_stock_name_by_code(target_code, True) or target_code
+                                target_ovs = True
+                    elif sub_choice == '5':
+                        indices_list = [
+                            ("코스피", "^KS11"), ("코스닥", "^KQ11"),
+                            ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"),
+                            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
+                            ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("밀", "ZW=F"),
+                            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
+                            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX")
+                        ]
+                        config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
+                        for i, (name, code) in enumerate(indices_list):
+                            config.console.print(f"[{i+1}] {name}")
+                        
+                        config.console.print()
+                        sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                        if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(indices_list):
+                            target_name, target_code = indices_list[int(sel)-1]
+                            target_ovs = True
+                    elif sub_choice in ["1", "2", "3", "4"]:
+                        key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+                        s_list = config.session.stock_data.get(key_map[sub_choice], [])
+                        if s_list:
+                            for i, s in enumerate(s_list):
+                                config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+                            
+                            config.console.print()
+                            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                            if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
+                                item = s_list[int(sel)-1]
+                                target_code, target_name = item['code'], item['name']
+                                target_ovs = (sub_choice in ["3", "4"])
+                        else:
+                            config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
+
+                    if target_code: 
                         logging.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
-                        chart.generate_visual_chart(code, name, is_ovs)
+                        chart.generate_visual_chart(target_code, target_name, target_ovs)
                 elif choice == "4": manage.manage_stock_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
@@ -422,7 +496,11 @@ def main():
                 elif choice == "9": trading.modify_order()
             except KeyboardInterrupt:
                 config.console.print() # 줄바꿈 추가
-                break
+                try:
+                    if Prompt.ask("프로그램을 종료하시겠습니까?", choices=["y", "n"], default="n") == "y":
+                        break
+                except KeyboardInterrupt:
+                    break
             except Exception as e:
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
