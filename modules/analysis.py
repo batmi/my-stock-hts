@@ -763,7 +763,13 @@ def analyze_market_stocks(market_type):
     if not use_cache:
         stock_list = _get_master_stock_list(market_type)
         config.console.print(f"\n[bold]{market_type} 전체 종목 수: {len(stock_list)}개[/bold]")
-            
+        
+        c_buy = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        c_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        c_rise = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 상승 {c_rise}점")
+
+        config.console.print()
         # 파라미터 설정
         change_settings = Prompt.ask("분석 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
         if change_settings == 'q': return

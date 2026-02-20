@@ -495,7 +495,8 @@ def main():
                 elif choice == "8": trading.send_order("sell")
                 elif choice == "9": trading.modify_order()
             except KeyboardInterrupt:
-                config.console.print() # 줄바꿈 추가
+                config.console.print()
+                config.console.print()
                 try:
                     if Prompt.ask("프로그램을 종료하시겠습니까?", choices=["y", "n"], default="n") == "y":
                         break
