@@ -1133,6 +1133,9 @@ class AutoTrader:
     def _calculate_statistics(self, records=None):
         if records is None: records = self.trade_records
         
+        # [추가] 통계 계산 시 '체결 확인' 건 제외 (전략적 매매만 집계)
+        records = [r for r in records if r.get('reason') != '체결 확인']
+        
         total_trades = len(records)
         buy_trades = [r for r in records if r['type'] == 'buy']
         sell_trades = [r for r in records if r['type'] == 'sell']
@@ -1251,7 +1254,10 @@ class AutoTrader:
         stock_stats = {}
         buy_times_per_stock = {} # 종목별 매수 시간 추적 (FIFO)
 
-        for r in self.trade_records:
+        # [추가] 분석 대상 레코드 필터링 ('체결 확인' 제외)
+        filtered_records = [r for r in self.trade_records if r.get('reason') != '체결 확인']
+
+        for r in filtered_records:
             code = r['code']
             if code not in stock_stats:
                 stock_stats[code] = {
@@ -1370,7 +1376,9 @@ class AutoTrader:
         detail_table.add_column("손익(수익률)", justify="right")
         detail_table.add_column("사유", justify="left")
         
-        records = list(reversed(self.trade_records))
+        # [수정] 필터링된 레코드 사용 (최신순 정렬)
+        records = list(reversed(filtered_records))
+        
         for i, r in enumerate(records):
             type_str = "[red]매수[/]" if r['type'] == 'buy' else "[blue]매도[/]"
             
