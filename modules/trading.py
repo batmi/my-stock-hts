@@ -210,7 +210,8 @@ def show_open_orders():
     with config.console.status("[bold green]전체 계좌 미체결 내역 조회 중...[/]"):
         table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No", justify="right")
-        table.add_column("계좌", justify="center")
+        table.add_column("계좌번호", justify="center")
+        table.add_column("종류", justify="center")
         table.add_column("국가", justify="center")
         table.add_column("주문시간", justify="center")
         table.add_column("주문번호")
@@ -262,7 +263,7 @@ def show_open_orders():
                     ord_tmd = order.get('ord_tmd', '')
                     ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
 
-                    table.add_row(str(idx), acc_disp, "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
                     idx += 1
 
                 # [B] 해외 주문
@@ -298,7 +299,7 @@ def show_open_orders():
                         t_str = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
                         ord_time = f"{ord_dt[4:6]}/{ord_dt[6:]} {t_str}" if len(ord_dt) == 8 else t_str
 
-                    table.add_row(str(idx), acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
                     idx += 1
 
     if not selectable_orders:
