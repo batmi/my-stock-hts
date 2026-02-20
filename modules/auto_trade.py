@@ -1309,7 +1309,6 @@ class AutoTrader:
             s_table.add_column("승률", justify="right")
             s_table.add_column("총 손익", justify="right")
             s_table.add_column("평균 수익률", justify="right")
-            s_table.add_column("총 매수금액", justify="right") # [추가]
             # [추가] 상세 정보 컬럼
             s_table.add_column("최대/최소", justify="right")
             s_table.add_column("주요 사유", justify="center")
@@ -1349,7 +1348,6 @@ class AutoTrader:
                     f"{win_rate:.1f}%",
                     f"{p_color}{stat['profit']:+,}원[/]",
                     f"{r_color}{avg_rate:+.2f}%[/]",
-                    f"{stat['total_buy_amt']:,}원", # [추가]
                     range_str,
                     reason_str,
                     hold_str
