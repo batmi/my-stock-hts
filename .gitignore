@@ -10,6 +10,7 @@ venv/
 .DS_Store
 json/
 chart/
+data/
 db/
 logs/
 

@@ -312,7 +312,8 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n"], default="n")
+    change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
+    if change_settings == 'q': return
     
     # 기본값 설정
     days = 365

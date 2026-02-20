@@ -1,6 +1,7 @@
 # modules/analysis.py
 from rich.table import Table
 from rich.prompt import Prompt
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from rich import box
 import config
 import api
@@ -9,6 +10,12 @@ import indicators
 import utils
 import time
 from datetime import datetime
+import urllib.request
+import zipfile
+import os
+import pandas as pd
+import concurrent.futures
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +37,13 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
         score += 1
         details.append("SAR: 주가 아래 (상승 추세) (+1)")
     
-    if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): 
-        score += 2
-        details.append(f"RSI: {rsi:.1f} (이상적 매수 구간 40~55) (+2)")
-    elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): 
-        score += 1
-        details.append(f"RSI: {rsi:.1f} (강세/반등 구간) (+1)")
+    if rsi is not None:
+        if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): 
+            score += 2
+            details.append(f"RSI: {rsi:.1f} (이상적 매수 구간 40~55) (+2)")
+        elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): 
+            score += 1
+            details.append(f"RSI: {rsi:.1f} (강세/반등 구간) (+1)")
     
     if adx is not None and adx >= 25: 
         score += 1
@@ -335,6 +343,597 @@ def diagnose_stock():
     config.console.print(table_logic)
     config.console.print()
 
+def diagnose_group_stocks(market_filter=None):
+    """등록된 종목들에 대해 일괄 진단을 수행합니다."""
+    # 대상: 국내 주식 + 국내 ETF
+    targets = config.session.stock_data.get('stocks_kr', []) + config.session.stock_data.get('etfs_kr', [])
+    
+    if not targets:
+        config.console.print("[yellow]등록된 국내 종목이 없습니다.[/yellow]")
+        return
+
+    results = []
+    
+    title_suffix = f" ({market_filter})" if market_filter else " (전체)"
+    
+    with config.console.status(f"[bold green]등록된 종목 일괄 진단 중{title_suffix}...[/]"):
+        for item in targets:
+            code = item['code']
+            name = item['name']
+            
+            # 1. 시장 구분 확인 (필터링이 필요한 경우)
+            if market_filter:
+                try:
+                    # 현재가 조회로 시장 구분 확인
+                    cp_data = api.get_current_price_data(code, is_overseas=False)
+                    if cp_data.get('rt_cd') != '0': continue
+                    
+                    mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
+                    # 유가증권(KOSPI), 코스닥(KOSDAQ)
+                    is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
+                    is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
+                    
+                    if market_filter == "KOSPI" and not is_kospi: continue
+                    if market_filter == "KOSDAQ" and not is_kosdaq: continue
+                except:
+                    continue
+
+            # 2. 차트 데이터 및 지표 계산
+            df = api.get_chart_data(code, is_overseas=False)
+            if df is None or df.empty: continue
+            
+            ind = indicators.calculate_indicators(df)
+            current_price = float(df.iloc[-1]['close'])
+            
+            # 전일 RSI (상태 분류용)
+            prev_rsi = None
+            if len(df) >= 16:
+                delta = df['close'].diff()
+                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                except: pass
+
+            # 3. 점수 및 상태 계산
+            state, state_color, state_reason = classify_stock_state(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+            )
+            
+            score, _ = calculate_score(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+            )
+            
+            results.append({
+                'code': code, 'name': name, 'price': current_price,
+                'score': score, 'state': state, 'state_color': state_color,
+                'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci']
+            })
+            
+            # [최적화] API 호출 간격 조절은 api.py의 ThrottledSession에서 전담하므로
+            # 이곳의 강제 대기(time.sleep)를 제거하여 처리 속도를 최적화합니다.
+
+    # 결과 출력
+    if not results:
+        config.console.print(f"[yellow]해당 조건({market_filter})에 맞는 종목이 없거나 데이터를 불러올 수 없습니다.[/yellow]")
+        return
+
+    # 정렬 기준 개선: 1. 점수 높은 순, 2. RSI 낮은 순 (상승 여력)
+    # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
+    results.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
+    
+    table = Table(title=f"전체 종목 진단 결과{title_suffix}", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("현재가", justify="right")
+    table.add_column("점수", justify="center")
+    table.add_column("상태", justify="center")
+    table.add_column("RSI", justify="right")
+    table.add_column("ADX", justify="right")
+    table.add_column("CCI", justify="right")
+    
+    for r in results:
+        s_color = r['state_color'].replace('[', '').replace(']', '')
+        score_str = f"[{s_color}]{r['score']}점[/]"
+        state_str = f"[{s_color}]{r['state']}[/]"
+        
+        rsi_val = r['rsi']
+        rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+        if rsi_val is not None:
+            if rsi_val >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
+            elif rsi_val <= 30: rsi_str = f"[blue]{rsi_str}[/]"
+            
+        adx_str = f"{r['adx']:.1f}" if r['adx'] is not None else "-"
+        cci_str = f"{r['cci']:.1f}" if r['cci'] is not None else "-"
+        
+        table.add_row(
+            f"{r['name']}({r['code']})",
+            f"{int(r['price']):,}원",
+            score_str,
+            state_str,
+            rsi_str,
+            adx_str,
+            cci_str
+        )
+        
+    config.console.print(table)
+    config.console.print()
+
+def get_analysis_params():
+    """분석에 사용할 파라미터를 사용자로부터 입력받습니다."""
+    params = {
+        "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+        "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+    }
+    
+    config.console.print("\n[bold]분석 파라미터 설정 (Enter: 기본값 사용, q: 취소)[/bold]")
+    
+    val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})", default=str(params['BUY_SCORE']))
+    if val.lower() == 'q': return None
+    if val.isdigit(): params['BUY_SCORE'] = int(val)
+    
+    val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})", default=str(params['BUY_RSI_MAX']))
+    if val.lower() == 'q': return None
+    if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
+    
+    val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
+    if val.lower() == 'q': return None
+    if val.isdigit(): params['RISE_SCORE'] = int(val)
+    
+    filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
+    if filter_choice.lower() == 'q': return None
+    if filter_choice == '1': params['OUTPUT_FILTER'] = 'BUY'
+    elif filter_choice == '2': params['OUTPUT_FILTER'] = 'RISE'
+    else: params['OUTPUT_FILTER'] = 'ALL'
+    
+    return params
+
+def _get_master_stock_list(market_type):
+    """(내부함수) 마스터 파일 다운로드 및 파싱하여 종목 리스트 반환"""
+    base_dir = getattr(config, 'DATA_DIR', 'data')
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+
+    if market_type == 'KOSPI':
+        url = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
+        filename = "kospi_code.mst"
+    else:
+        url = "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"
+        filename = "kosdaq_code.mst"
+
+    zip_path = os.path.join(base_dir, f"{filename}.zip")
+    extract_path = os.path.join(base_dir, filename)
+    
+    stock_list = []
+
+    try:
+        # [수정] 파일이 존재하고 오늘 다운로드된 것이라면 다운로드 스킵
+        need_download = True
+        if os.path.exists(zip_path):
+            file_time = datetime.fromtimestamp(os.path.getmtime(zip_path))
+            if file_time.date() == datetime.now().date():
+                need_download = False
+                config.console.print(f"[dim]{market_type} 마스터 파일이 최신입니다. (기존 파일 사용)[/dim]")
+
+        with config.console.status(f"[green]{market_type} 종목 리스트 {'다운로드 및 ' if need_download else ''}준비 중...[/]"):
+            if need_download:
+                urllib.request.urlretrieve(url, zip_path)
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(base_dir)
+            
+            with open(extract_path, 'rb') as f:
+                for line in f:
+                    try:
+                        code = line[0:9].decode('cp949').strip()
+                        name = line[21:61].decode('cp949').strip()
+                        
+                        if len(code) == 6:
+                            stock_list.append({'code': code, 'name': name})
+                    except Exception:
+                        continue
+    except Exception as e:
+        config.console.print(f"[red]{market_type} 마스터 파일 처리 실패: {e}[/red]")
+        
+    return stock_list
+
+def _analyze_stock_worker(stock, params=None):
+    """(내부함수) 단일 종목 분석 워커 (멀티스레드용)"""
+    code = stock['code']
+    name = stock['name']
+    
+    try:
+        # API 호출 (api.py 내부에서 Rate Limit 처리됨)
+        df = api.get_chart_data(code, is_overseas=False)
+        if df is None or df.empty: return None
+        
+        current_price = float(df.iloc[-1]['close'])
+        ind = indicators.calculate_indicators(df)
+        
+        # 전일 RSI 계산
+        prev_rsi = None
+        if len(df) >= 16:
+            delta = df['close'].diff()
+            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+            try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+            except: pass
+
+        # 상태 분류 및 점수 계산
+        state, state_color, state_reason = classify_stock_state(
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+        )
+        
+        if state == "-": return None # 데이터 부족
+
+        score, _ = calculate_score(
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+        )
+        
+        # 52주 위치 계산 (최근 250일 기준)
+        w52_pos = 0.0
+        if len(df) > 0:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
+
+        # 필터링 조건 확인
+        is_target = False
+        if params:
+            filter_mode = params.get("OUTPUT_FILTER", "BUY")
+            target_states = []
+            if filter_mode == "BUY": target_states = ["매수"]
+            elif filter_mode == "RISE": target_states = ["상승"]
+            elif filter_mode == "ALL": target_states = ["매수", "상승"]
+            if state in target_states:
+                is_target = True
+        else:
+            is_target = True # params가 없으면(엑셀 저장 등) 모두 유효
+
+        return {
+            'code': code, 'name': name, 'price': current_price,
+            'score': score, 'state': state, 'state_color': state_color, 'state_reason': state_reason,
+            'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': ind.get('obv_trend'),
+            'is_target': is_target,
+            'w52_pos': w52_pos
+        }
+    except Exception: return None
+
+def analyze_market_stocks(market_type):
+    """선택한 시장의 전체 종목을 분석하고 매수 가능 종목을 출력합니다."""
+    stock_list = _get_master_stock_list(market_type)
+
+    config.console.print(f"\n[bold]{market_type} 전체 종목 수: {len(stock_list)}개[/bold]")
+        
+    # 4. 파라미터 설정
+    change_settings = Prompt.ask("분석 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
+    if change_settings == 'q': return
+
+    if change_settings == 'y':
+        params = get_analysis_params()
+        if params is None: return
+    else:
+        params = {
+            "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+            "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+            "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+            "OUTPUT_FILTER": "BUY"
+        }
+        config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 상승: {params['RISE_SCORE']}점)[/dim]")
+    
+    # 설정 백업 및 적용
+    original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
+    config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
+    config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
+    config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
+
+    buy_candidates = []
+    
+    config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=config.console
+        ) as progress:
+            task = progress.add_task(f"[cyan]{market_type} 분석 중...[/cyan]", total=len(stock_list))
+            
+            # [최적화] 멀티스레딩 적용 (API Rate Limit 고려하여 워커 수 조정)
+            # 실전: 20TPS -> 워커 20개, 모의: 2TPS -> 워커 5개
+            max_workers = 20 if not config.session.is_simulation else 5
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Future 객체 생성 및 매핑
+                futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
+                
+                completed_count = 0
+                for future in concurrent.futures.as_completed(futures):
+                    completed_count += 1
+                    stock = futures[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            rsi_val = result['rsi']
+                            rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+                            adx_str = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
+                            cci_str = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
+                            obv_trend = result.get('obv_trend')
+                            obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
+                            
+                            log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}"
+                            
+                            if result['is_target']:
+                                log_style = "bold green" if result['state'] == "매수" else "bold orange3"
+                                progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
+                                buy_candidates.append(result)
+                            else:
+                                progress.console.print(f"[dim]{log_msg}[/dim]")
+                        else:
+                            # 데이터 부족 등으로 분석 실패 시 로그 생략 또는 간단 표시
+                            pass
+                    except Exception: pass
+                    
+                    progress.advance(task)
+                
+    except KeyboardInterrupt:
+        config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
+    finally:
+        # 설정 복구
+        config.ANALYSIS_THRESHOLDS = original_thresholds
+
+    # 결과 테이블 출력
+    if not buy_candidates:
+        config.console.print("\n[yellow]조건을 만족하는 종목이 없습니다.[/yellow]")
+        return
+
+    # [추가] 선별된 종목에 대해 업종 정보 보강 (API 호출 최소화)
+    with config.console.status("[bold green]선별된 종목의 업종 정보를 조회 중...[/]"):
+        # 병렬 처리로 업종 정보 조회
+        def fetch_sector(item):
+            try:
+                res = api.get_current_price_data(item['code'], is_overseas=False)
+                if res.get('rt_cd') == '0':
+                    return res['output'].get('bstp_kor_isnm', '-')
+            except: pass
+            return '-'
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
+            for future in concurrent.futures.as_completed(future_to_idx):
+                buy_candidates[future_to_idx[future]]['sector'] = future.result()
+
+    # 정렬 기준 개선: 1. 점수 높은 순, 2. RSI 낮은 순 (상승 여력)
+    # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
+    buy_candidates.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
+    
+    filter_mode = params.get("OUTPUT_FILTER", "BUY")
+    if filter_mode == "BUY": filter_str = "매수"
+    elif filter_mode == "RISE": filter_str = "상승"
+    else: filter_str = "매수/상승"
+    config.console.print(f"\n[bold]분석 결과: {filter_str} 종목 {len(buy_candidates)}개[/bold]")
+    
+    # [수정] 페이징 처리 및 컬럼 포맷 변경 (한 줄 출력, 말줄임 방지)
+    # 터미널 높이에 따라 페이지 크기 자동 조절
+    try:
+        terminal_lines = shutil.get_terminal_size().lines
+        # 테이블 헤더, 타이틀, 여백, 프롬프트 공간 등을 고려하여 제외 (약 12줄)
+        page_size = max(5, terminal_lines - 12)
+    except:
+        page_size = 15
+
+    total_items = len(buy_candidates)
+    total_pages = (total_items + page_size - 1) // page_size
+    
+    for page in range(total_pages):
+        start_idx = page * page_size
+        end_idx = min((page + 1) * page_size, total_items)
+        page_items = buy_candidates[start_idx:end_idx]
+        
+        table = Table(title=f"{market_type} 유망 종목 ({filter_str}) - 페이지 {page+1}/{total_pages}", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        table.add_column("No.", justify="right", width=4)
+        table.add_column("종목명(코드)", justify="left", no_wrap=True)
+        table.add_column("업종", justify="center", no_wrap=True)
+        table.add_column("현재가", justify="right")
+        table.add_column("52주(위치)", justify="right")
+        table.add_column("점수", justify="center")
+        table.add_column("상태", justify="center")
+        table.add_column("RSI", justify="right")
+        table.add_column("ADX", justify="right")
+        table.add_column("CCI", justify="right")
+        table.add_column("OBV", justify="center")
+        
+        for i, item in enumerate(page_items):
+            rsi_str = f"{item['rsi']:.1f}" if item['rsi'] is not None else "-"
+            adx_str = f"{item['adx']:.1f}" if item['adx'] is not None else "-"
+            cci_str = f"{item['cci']:.1f}" if item['cci'] is not None else "-"
+            
+            s_color = item.get('state_color', '[white]').replace('[', '').replace(']', '')
+            
+            # 52주 위치 색상
+            pos = item.get('w52_pos', 0)
+            w_color = "[white]"
+            if pos >= 90: w_color = "[red]"
+            elif pos >= 80: w_color = "[orange3]"
+            elif pos <= 20: w_color = "[blue]"
+            
+            obv_trend = item.get('obv_trend')
+            obv_str = "-"
+            if obv_trend is True: obv_str = "[red]상승[/]"
+            elif obv_trend is False: obv_str = "[blue]하락[/]"
+            
+            table.add_row(
+                str(start_idx + i + 1),
+                f"{item['name']} [dim]({item['code']})[/dim]",
+                item.get('sector', '-'),
+                f"{int(item['price']):,}원",
+                f"{w_color}{pos:.1f}%[/]",
+                f"[{s_color}]{item['score']}[/]",
+                f"[{s_color}]{item['state']}[/]",
+                rsi_str,
+                adx_str,
+                cci_str,
+                obv_str
+            )
+            
+            # 5개마다 실선 추가
+            if (i + 1) % 5 == 0 and (i + 1) < len(page_items):
+                table.add_section()
+                
+        config.console.print(table)
+        
+        if page < total_pages - 1:
+            if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (Enter: 예, q: 중단)[/dim]", choices=["", "y", "n", "q"], default="").lower() == 'q':
+                break
+
+    # 상세 분석 이동 기능
+    from modules import chart
+    
+    while True:
+        config.console.print("\n[dim]상세 차트 분석을 보려면 종목 번호를 입력하세요 (메뉴 복귀: Enter)[/dim]")
+        choice = Prompt.ask("선택", default="q", show_default=False)
+        
+        if choice.lower() == 'q':
+            break
+            
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(buy_candidates):
+                selected = buy_candidates[idx]
+                code = selected['code']
+                name = selected['name']
+                
+                config.console.print(f"\n[bold green]>> {name}({code}) 상세 차트 분석 실행[/bold green]")
+                chart.generate_visual_chart(code, name, is_overseas=False)
+            else:
+                config.console.print("[red]잘못된 번호입니다. 리스트에 있는 번호를 입력해주세요.[/red]")
+        else:
+            config.console.print("[red]올바른 번호를 입력해주세요.[/red]")
+
+def save_all_market_analysis():
+    """코스피/코스닥 전 종목 진단 결과를 엑셀로 저장"""
+    
+    config.console.print("\n[bold cyan]=== 전체 종목 진단 결과 저장 (Excel) ===[/bold cyan]")
+    config.console.print("[dim]코스피 및 코스닥 전 종목을 분석하여 파일로 저장합니다.[/dim]")
+    config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
+    
+    if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        return
+
+    markets = ["KOSPI", "KOSDAQ"]
+    results = {} # market -> list of dict
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=config.console
+        ) as progress:
+            
+            for market_type in markets:
+                stock_list = _get_master_stock_list(market_type)
+                if not stock_list: continue
+                
+                results[market_type] = []
+                
+                # 1. 기술적 분석 (Chart Data)
+                analyzed_data = []
+                task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
+
+                # [최적화] 멀티스레딩 적용
+                max_workers = 20 if not config.session.is_simulation else 5
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(_analyze_stock_worker, stock, None): stock for stock in stock_list}
+                    
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            result = future.result()
+                            if result:
+                                analyzed_data.append(result)
+                        except Exception: pass
+                        
+                        progress.advance(task)
+                
+                # 2. 업종 정보 조회 (Price Data) 및 데이터 정제
+                if analyzed_data:
+                    task_sector = progress.add_task(f"[green]{market_type} 업종 정보 조회 및 정리 중...[/green]", total=len(analyzed_data))
+                    
+                    def fetch_sector_and_format(item):
+                        sector = "-"
+                        try:
+                            res = api.get_current_price_data(item['code'], is_overseas=False)
+                            if res.get('rt_cd') == '0':
+                                sector = res['output'].get('bstp_kor_isnm', '-')
+                        except: pass
+                        
+                        # 데이터 포맷팅 (소수점 2자리)
+                        rsi = round(item['rsi'], 2) if item['rsi'] is not None else None
+                        adx = round(item['adx'], 2) if item['adx'] is not None else None
+                        cci = round(item['cci'], 2) if item['cci'] is not None else None
+                        w52 = round(item['w52_pos'], 2) if item['w52_pos'] is not None else 0.0
+                        
+                        return {
+                            "종목코드": item['code'],
+                            "종목명": item['name'],
+                            "업종": sector,
+                            "현재가": item['price'],
+                            "52주위치(%)": w52,
+                            "점수": item['score'],
+                            "상태": item['state'],
+                            "상태사유": item['state_reason'],
+                            "RSI": rsi,
+                            "ADX": adx,
+                            "CCI": cci,
+                            "OBV추세": "상승" if item['obv_trend'] else "하락"
+                        }
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures_sector = {executor.submit(fetch_sector_and_format, item): item for item in analyzed_data}
+                        
+                        for future in concurrent.futures.as_completed(futures_sector):
+                            try:
+                                formatted_result = future.result()
+                                results[market_type].append(formatted_result)
+                            except Exception: pass
+                            progress.advance(task_sector)
+
+        # 엑셀 저장
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = os.path.join(config.DATA_DIR, f"market_analysis_{timestamp}.xlsx")
+        
+        with config.console.status(f"[bold green]엑셀 파일 저장 중... ({filename})[/]"):
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                for market_type, data in results.items():
+                    if data:
+                        # 점수 높은 순 정렬
+                        data.sort(key=lambda x: (-x['점수'], x['RSI'] if x['RSI'] is not None else 999))
+                        df = pd.DataFrame(data)
+                        df.to_excel(writer, sheet_name=market_type, index=False)
+        
+        config.console.print(f"\n[bold green]저장 완료: {filename}[/bold green]")
+        
+        # 샘플 출력
+        if results.get("KOSPI"):
+            config.console.print("\n[bold]저장 데이터 샘플 (KOSPI 상위 3개):[/bold]")
+            sample_df = pd.DataFrame(results["KOSPI"][:3])
+            config.console.print(sample_df.to_string(index=False))
+        
+    except KeyboardInterrupt:
+        config.console.print("\n[yellow]작업이 중단되었습니다.[/yellow]")
+    except Exception as e:
+        config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
+
 def print_table(title, data_list, is_overseas=False):
     is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
@@ -589,12 +1188,13 @@ def show_stock_analysis():
     config.console.print("[4] 미국 ETF")
     config.console.print("[5] 전체 보기")
     config.console.print("[6] 개별 종목 진단")
-    valid_choices = ["1", "2", "3", "4", "5", "6", "12", "34", "11", "22", "33", "44", "55", "q", "Q"]
+    config.console.print("[7] 전체 종목 진단")
+    valid_choices = ["1", "2", "3", "4", "5", "6", "7", "12", "34", "11", "22", "33", "44", "55", "q", "Q"]
     config.console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=valid_choices, default="5", show_choices=True)
     
     menu_map = {
-        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별진단",
+        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별진단", "7": "전체진단",
         "12": "국내전체", "34": "미국전체", 
         "11": "국내주식(반복)", "22": "국내ETF(반복)", "33": "미국주식(반복)", "44": "미국ETF(반복)", "55": "전체(반복)"
     }
@@ -605,6 +1205,26 @@ def show_stock_analysis():
     
     if choice == "6":
         diagnose_stock()
+        return
+
+    if choice == "7":
+        config.console.print("\n[bold]진단할 시장을 선택하세요:[/bold]")
+        config.console.print("[1] 코스피 (KOSPI)")
+        config.console.print("[2] 코스닥 (KOSDAQ)")
+        config.console.print("[3] 전체 종목 진단 결과 저장 (Excel)")
+        config.console.print()
+        sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+        
+        if sub_choice.lower() == 'q': return
+        
+        if sub_choice == "3":
+            save_all_market_analysis()
+            return
+
+        market_type = "KOSPI" if sub_choice == "1" else "KOSDAQ"
+        config.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
+        
+        analyze_market_stocks(market_type)
         return
 
     interval = 0
