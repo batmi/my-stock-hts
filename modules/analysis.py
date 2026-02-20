@@ -16,6 +16,8 @@ import os
 import pandas as pd
 import concurrent.futures
 import shutil
+import sqlite3
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,58 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]", "매수 조건 충족"
     elif score >= rise_score: return "상승", "[orange3]", "상승 추세 (점수 양호)"
     else: return "관망", "[white]", "방향성 탐색 구간"
+
+def _get_db_connection():
+    return sqlite3.connect(config.DB_FILE_PATH)
+
+def _init_analysis_db():
+    try:
+        with _get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS market_analysis_cache (
+                    market_type TEXT PRIMARY KEY,
+                    updated_at TEXT,
+                    params TEXT,
+                    data TEXT
+                )
+            """)
+            conn.commit()
+    except Exception: pass
+
+def _save_analysis_result(market_type, results, params):
+    try:
+        _init_analysis_db()
+        with _get_db_connection() as conn:
+            cursor = conn.cursor()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data_json = json.dumps(results, ensure_ascii=False)
+            params_json = json.dumps(params, ensure_ascii=False)
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO market_analysis_cache (market_type, updated_at, params, data)
+                VALUES (?, ?, ?, ?)
+            """, (market_type, now_str, params_json, data_json))
+            conn.commit()
+    except Exception as e:
+        config.console.print(f"[dim red]분석 결과 저장 실패: {e}[/dim red]")
+
+def _load_analysis_result(market_type):
+    try:
+        _init_analysis_db()
+        with _get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT updated_at, params, data FROM market_analysis_cache WHERE market_type = ?", (market_type,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'updated_at': row[0],
+                    'params': json.loads(row[1]),
+                    'data': json.loads(row[2])
+                }
+    except Exception as e:
+        config.console.print(f"[dim red]분석 결과 로드 실패: {e}[/dim red]")
+    return None
 
 def diagnose_stock():
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
@@ -605,110 +659,137 @@ def _analyze_stock_worker(stock, params=None):
 
 def analyze_market_stocks(market_type):
     """선택한 시장의 전체 종목을 분석하고 매수 가능 종목을 출력합니다."""
-    stock_list = _get_master_stock_list(market_type)
-
-    config.console.print(f"\n[bold]{market_type} 전체 종목 수: {len(stock_list)}개[/bold]")
-        
-    # 4. 파라미터 설정
-    change_settings = Prompt.ask("분석 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
-    if change_settings == 'q': return
-
-    if change_settings == 'y':
-        params = get_analysis_params()
-        if params is None: return
-    else:
-        params = {
-            "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
-            "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-            "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
-            "OUTPUT_FILTER": "BUY"
-        }
-        config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 상승: {params['RISE_SCORE']}점)[/dim]")
     
-    # 설정 백업 및 적용
-    original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
-    config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
-    config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
-    config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
-
+    # 1. DB에서 기존 분석 결과 확인
+    cached_data = _load_analysis_result(market_type)
     buy_candidates = []
+    params = None
+    use_cache = False
     
-    config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
+    if cached_data:
+        updated_at = cached_data['updated_at']
+        c_params = cached_data['params']
+        
+        config.console.print(f"\n[bold cyan]기존 분석 결과가 존재합니다.[/bold cyan]")
+        config.console.print(f"• 분석 일시: {updated_at}")
+        config.console.print(f"• 분석 조건: 매수 {c_params.get('BUY_SCORE')}점, RSI {c_params.get('BUY_RSI_MAX')}, 상승 {c_params.get('RISE_SCORE')}점")
+        
+        config.console.print()
+        if Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n"], default="y") == "y":
+            buy_candidates = cached_data['data']
+            params = c_params
+            use_cache = True
+            config.console.print(f"[dim]DB에서 {len(buy_candidates)}개의 종목 정보를 로드했습니다.[/dim]")
 
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=config.console
-        ) as progress:
-            task = progress.add_task(f"[cyan]{market_type} 분석 중...[/cyan]", total=len(stock_list))
+    # 2. 새로 분석 (캐시 미사용 시)
+    if not use_cache:
+        stock_list = _get_master_stock_list(market_type)
+        config.console.print(f"\n[bold]{market_type} 전체 종목 수: {len(stock_list)}개[/bold]")
             
-            # [최적화] 멀티스레딩 적용 (API Rate Limit 고려하여 워커 수 조정)
-            # 실전: 20TPS -> 워커 20개, 모의: 2TPS -> 워커 5개
-            max_workers = 20 if not config.session.is_simulation else 5
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Future 객체 생성 및 매핑
-                futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
+        # 파라미터 설정
+        change_settings = Prompt.ask("분석 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
+        if change_settings == 'q': return
+
+        if change_settings == 'y':
+            params = get_analysis_params()
+            if params is None: return
+        else:
+            params = {
+                "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+                "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+                "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+                "OUTPUT_FILTER": "BUY"
+            }
+            config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 상승: {params['RISE_SCORE']}점)[/dim]")
+        
+        # 설정 백업 및 적용
+        original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
+        config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
+        config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
+        config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
+
+        config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
+
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=config.console
+            ) as progress:
+                task = progress.add_task(f"[cyan]{market_type} 분석 중...[/cyan]", total=len(stock_list))
                 
-                completed_count = 0
-                for future in concurrent.futures.as_completed(futures):
-                    completed_count += 1
-                    stock = futures[future]
-                    try:
-                        result = future.result()
-                        if result:
-                            rsi_val = result['rsi']
-                            rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
-                            adx_str = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
-                            cci_str = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
-                            obv_trend = result.get('obv_trend')
-                            obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
-                            
-                            log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}"
-                            
-                            if result['is_target']:
-                                log_style = "bold green" if result['state'] == "매수" else "bold orange3"
-                                progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
-                                buy_candidates.append(result)
-                            else:
-                                progress.console.print(f"[dim]{log_msg}[/dim]")
-                        else:
-                            # 데이터 부족 등으로 분석 실패 시 로그 생략 또는 간단 표시
-                            pass
-                    except Exception: pass
+                # [최적화] 멀티스레딩 적용 (API Rate Limit 고려하여 워커 수 조정)
+                # 실전: 20TPS -> 워커 20개, 모의: 2TPS -> 워커 5개
+                max_workers = 20 if not config.session.is_simulation else 5
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Future 객체 생성 및 매핑
+                    futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
                     
-                    progress.advance(task)
-                
-    except KeyboardInterrupt:
-        config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
-    finally:
-        # 설정 복구
-        config.ANALYSIS_THRESHOLDS = original_thresholds
+                    completed_count = 0
+                    for future in concurrent.futures.as_completed(futures):
+                        completed_count += 1
+                        stock = futures[future]
+                        try:
+                            result = future.result()
+                            if result:
+                                rsi_val = result['rsi']
+                                rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+                                adx_str = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
+                                cci_str = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
+                                obv_trend = result.get('obv_trend')
+                                obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
+                                
+                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}"
+                                
+                                if result['is_target']:
+                                    log_style = "bold green" if result['state'] == "매수" else "bold orange3"
+                                    progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
+                                    buy_candidates.append(result)
+                                else:
+                                    progress.console.print(f"[dim]{log_msg}[/dim]")
+                        except Exception: pass
+                        
+                        progress.advance(task)
+                    
+        except KeyboardInterrupt:
+            config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
+        finally:
+            # 설정 복구
+            config.ANALYSIS_THRESHOLDS = original_thresholds
 
     # 결과 테이블 출력
     if not buy_candidates:
         config.console.print("\n[yellow]조건을 만족하는 종목이 없습니다.[/yellow]")
         return
 
-    # [추가] 선별된 종목에 대해 업종 정보 보강 (API 호출 최소화)
-    with config.console.status("[bold green]선별된 종목의 업종 정보를 조회 중...[/]"):
-        # 병렬 처리로 업종 정보 조회
-        def fetch_sector(item):
-            try:
-                res = api.get_current_price_data(item['code'], is_overseas=False)
-                if res.get('rt_cd') == '0':
-                    return res['output'].get('bstp_kor_isnm', '-')
-            except: pass
-            return '-'
+    # [추가] 선별된 종목에 대해 업종 정보 보강 (캐시에 없거나 새로 분석한 경우)
+    need_sector_fetch = False
+    if buy_candidates and 'sector' not in buy_candidates[0]:
+        need_sector_fetch = True
+        
+    if need_sector_fetch:
+        with config.console.status("[bold green]선별된 종목의 업종 정보를 조회 중...[/]"):
+            # 병렬 처리로 업종 정보 조회
+            def fetch_sector(item):
+                try:
+                    res = api.get_current_price_data(item['code'], is_overseas=False)
+                    if res.get('rt_cd') == '0':
+                        return res['output'].get('bstp_kor_isnm', '-')
+                except: pass
+                return '-'
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
-            for future in concurrent.futures.as_completed(future_to_idx):
-                buy_candidates[future_to_idx[future]]['sector'] = future.result()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    buy_candidates[future_to_idx[future]]['sector'] = future.result()
+        
+        # 새로 분석했거나 sector 정보가 추가된 경우 DB 저장
+        if not use_cache:
+            _save_analysis_result(market_type, buy_candidates, params)
 
     # 정렬 기준 개선: 1. 점수 높은 순, 2. RSI 낮은 순 (상승 여력)
     # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
@@ -820,7 +901,7 @@ def analyze_market_stocks(market_type):
 def save_all_market_analysis():
     """코스피/코스닥 전 종목 진단 결과를 엑셀로 저장"""
     
-    config.console.print("\n[bold cyan]=== 전체 종목 진단 결과 저장 (Excel) ===[/bold cyan]")
+    config.console.print("\n[bold cyan]=== 전체종목 진단결과 저장 (Excel) ===[/bold cyan]")
     config.console.print("[dim]코스피 및 코스닥 전 종목을 분석하여 파일로 저장합니다.[/dim]")
     config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
     
@@ -922,12 +1003,6 @@ def save_all_market_analysis():
                         df.to_excel(writer, sheet_name=market_type, index=False)
         
         config.console.print(f"\n[bold green]저장 완료: {filename}[/bold green]")
-        
-        # 샘플 출력
-        if results.get("KOSPI"):
-            config.console.print("\n[bold]저장 데이터 샘플 (KOSPI 상위 3개):[/bold]")
-            sample_df = pd.DataFrame(results["KOSPI"][:3])
-            config.console.print(sample_df.to_string(index=False))
         
     except KeyboardInterrupt:
         config.console.print("\n[yellow]작업이 중단되었습니다.[/yellow]")
