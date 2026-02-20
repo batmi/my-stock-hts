@@ -1260,7 +1260,8 @@ class AutoTrader:
                     'profit': 0, 'rates': [], 'wins': 0,
                     'reasons': [], # 매도 사유 리스트
                     'holding_secs': [], # 보유 기간 리스트
-                    'max_rate': -999.0, 'min_rate': 999.0
+                    'max_rate': -999.0, 'min_rate': 999.0,
+                    'total_buy_amt': 0 # [추가] 총 매수 금액
                 }
             if code not in buy_times_per_stock:
                 buy_times_per_stock[code] = []
@@ -1271,6 +1272,7 @@ class AutoTrader:
             
             if r['type'] == 'buy':
                 stock_stats[code]['buy'] += 1
+                stock_stats[code]['total_buy_amt'] += int(r['price'] * r['qty']) # [추가] 매수 금액 누적
                 buy_times_per_stock[code].append(dt)
             elif r['type'] == 'sell':
                 stock_stats[code]['sell'] += 1
@@ -1307,12 +1309,13 @@ class AutoTrader:
             s_table.add_column("승률", justify="right")
             s_table.add_column("총 손익", justify="right")
             s_table.add_column("평균 수익률", justify="right")
+            s_table.add_column("총 매수금액", justify="right") # [추가]
             # [추가] 상세 정보 컬럼
             s_table.add_column("최대/최소", justify="right")
             s_table.add_column("주요 사유", justify="center")
             s_table.add_column("평균 보유", justify="right")
 
-            for code, stat in stock_stats.items():
+            for i, (code, stat) in enumerate(stock_stats.items()):
                 s_cnt = stat['sell']
                 win_rate = (stat['wins'] / s_cnt * 100) if s_cnt > 0 else 0.0
                 avg_rate = (sum(stat['rates']) / s_cnt) if s_cnt > 0 else 0.0
@@ -1346,10 +1349,15 @@ class AutoTrader:
                     f"{win_rate:.1f}%",
                     f"{p_color}{stat['profit']:+,}원[/]",
                     f"{r_color}{avg_rate:+.2f}%[/]",
+                    f"{stat['total_buy_amt']:,}원", # [추가]
                     range_str,
                     reason_str,
                     hold_str
                 )
+                
+                # [추가] 5개마다 실선 추가
+                if (i + 1) % 5 == 0 and (i + 1) < len(stock_stats):
+                    s_table.add_section()
             console.print(s_table)
         
         # 상세 내역 테이블
@@ -1360,9 +1368,12 @@ class AutoTrader:
         detail_table.add_column("종목명", justify="left")
         detail_table.add_column("수량", justify="right")
         detail_table.add_column("단가", justify="right")
-        detail_table.add_column("손익/비고", justify="right")
+        detail_table.add_column("매매금액", justify="right") # [추가]
+        detail_table.add_column("손익(수익률)", justify="right")
+        detail_table.add_column("사유", justify="left")
         
-        for r in reversed(self.trade_records):
+        records = list(reversed(self.trade_records))
+        for i, r in enumerate(records):
             type_str = "[red]매수[/]" if r['type'] == 'buy' else "[blue]매도[/]"
             
             # 단가 포맷팅 (정수/실수 구분)
@@ -1372,14 +1383,16 @@ class AutoTrader:
             else:
                 price_str = f"{price_val:,.2f}"
             
-            note = "-"
+            trade_amt = int(r['price'] * r['qty']) # [추가] 매매 총액 계산
+            
+            profit_display = "-"
+            reason_display = r.get('reason', '-')
+
             if r['type'] == 'sell':
                 p_amt = r.get('profit_amt', 0)
                 p_rate = r.get('profit_rate', 0.0)
                 color = "[red]" if p_amt > 0 else "[blue]"
-                note = f"{color}{p_amt:+,}원 ({p_rate:+.2f}%)[/]"
-            else:
-                note = r.get('reason', '-')
+                profit_display = f"{color}{p_amt:+,}원 ({p_rate:+.2f}%)[/]"
             
             detail_table.add_row(
                 r['time'][5:], # MM-DD HH:MM:SS
@@ -1387,8 +1400,14 @@ class AutoTrader:
                 f"{r['name']}",
                 f"{r['qty']}",
                 price_str,
-                note
+                f"{trade_amt:,}", # [추가]
+                profit_display,
+                reason_display
             )
+            
+            # [추가] 5개마다 실선 추가
+            if (i + 1) % 5 == 0 and (i + 1) < len(records):
+                detail_table.add_section()
             
         console.print(detail_table)
 
