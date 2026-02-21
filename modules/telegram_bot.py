@@ -155,7 +155,7 @@ class TelegramCommander:
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
-            "• /profit [기간] : 기간별 실현 손익 조회 (daily/weekly/monthly)\n"
+            "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
