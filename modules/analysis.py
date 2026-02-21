@@ -889,8 +889,8 @@ def analyze_market_stocks(market_type):
     # 터미널 높이에 따라 페이지 크기 자동 조절
     try:
         terminal_lines = shutil.get_terminal_size().lines
-        # 테이블 헤더, 타이틀, 여백, 프롬프트 공간 등을 고려하여 제외 (약 12줄)
-        page_size = max(5, terminal_lines - 12)
+        # 테이블 헤더, 타이틀, 여백, 프롬프트 공간 등을 고려하여 제외 (약 13줄)
+        page_size = max(5, terminal_lines - 13)
     except:
         page_size = 15
 
@@ -955,14 +955,14 @@ def analyze_market_stocks(market_type):
         config.console.print(table)
         
         if page < total_pages - 1:
-            if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (Enter: 예, q: 중단)[/dim]", choices=["", "y", "n", "q"], default="").lower() == 'q':
+            if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (q: 중단)[/dim]", choices=["y", "n", "q"], default="y").lower() in ['q', 'n']:
                 break
 
     # 상세 분석 이동 기능
     from modules import chart
     
     while True:
-        config.console.print("\n[dim]개별 진단 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (메뉴 복귀: Enter)[/dim]")
+        config.console.print("\n[dim]개별 진단 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (Enter: 메뉴복귀)[/dim]")
         choice = Prompt.ask("선택", default="q", show_default=False)
         
         if choice.lower() == 'q':
