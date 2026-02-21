@@ -141,6 +141,11 @@ class ConclusionMonitor:
         """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
         rate_limit_hit = False
         has_error = False # [추가]
+        
+        # [추가] 개별 룰 로드 (체결 알림 시 정보 표시용)
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: r for r in custom_rules}
+        
         try:
             # 모니터링 대상 계좌 목록 구성
             accounts_to_check = []
@@ -270,6 +275,9 @@ class ConclusionMonitor:
                                             cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                     except: pass
                                     
+                                    # [추가] 개별 룰 조회
+                                    rule = rules_map.get(code)
+                                    
                                     # [추가] 매수 체결 시 전략 점수 및 지표 추가
                                     strategy_info = ""
                                     if type_name and "매수" in type_name:
@@ -286,10 +294,20 @@ class ConclusionMonitor:
                                                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                                                 prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
 
-                                                # [수정] 상태 및 사유 조회
+                                                thresholds = None
+                                                rule_tag = ""
+                                                if rule:
+                                                    thresholds = {
+                                                        "BUY_SCORE": rule['buy_score'],
+                                                        "BUY_RSI_MAX": rule['buy_rsi']
+                                                    }
+                                                    rule_tag = " [개별 룰 적용]"
+
+                                                # [수정] 상태 및 사유 조회 (thresholds 적용)
                                                 state, _, state_reason = analysis.classify_stock_state(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                                                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                                                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'),
+                                                    thresholds=thresholds
                                                 )
 
                                                 score, _ = analysis.calculate_score(
@@ -301,12 +319,20 @@ class ConclusionMonitor:
                                                 adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
                                                 cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
                                                 
-                                                strategy_info = f"\n\n📊 [전략 지표]\n• 점수: {score}점 ({state})\n• 상태: {state_reason}\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                                strategy_info = f"\n\n📊 [전략 지표]{rule_tag}\n• 점수: {score}점 ({state})\n• 상태: {state_reason}\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                         except Exception as e:
                                             logger.error(f"체결 지표 계산 중 오류: {e}")
 
                                     # 알림 발송
-                                    msg = f"✅ [체결 알림] {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{reason_msg}{cur_info}{strategy_info}"
+                                    title_tag = "[체결 알림]"
+                                    rule_info = ""
+                                    if rule:
+                                        title_tag += " [개별]"
+                                        rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                                        if rule.get('ts_activation'):
+                                            rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                                    
+                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
@@ -344,7 +370,7 @@ class DefaultStrategy:
     def __init__(self):
         self.trailing_stop_cache = {}
 
-    def analyze_buy(self, code, name, df, current_price):
+    def analyze_buy(self, code, name, df, current_price, thresholds=None):
         """매수 진입 여부 판단"""
         if df is None or df.empty:
             return None
@@ -358,7 +384,7 @@ class DefaultStrategy:
 
         state, _, state_reason = analysis.classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), thresholds=thresholds
         )
         
         score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
@@ -372,17 +398,23 @@ class DefaultStrategy:
             'cci': ind['cci']
         }
 
-    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg=""):
+    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None):
         """매도 청산 여부 판단"""
         reason = ""
         ind = {}
         score = 0
         state = ""
         
+        # 설정값 로드 (thresholds가 있으면 우선 사용)
+        tp_rate = thresholds.get("TAKE_PROFIT_RATE", config.SELL_STRATEGY["TAKE_PROFIT_RATE"]) if thresholds else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        sl_rate = thresholds.get("STOP_LOSS_RATE", config.SELL_STRATEGY["STOP_LOSS_RATE"]) if thresholds else config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        tp_rsi = thresholds.get("TAKE_PROFIT_RSI", config.SELL_STRATEGY["TAKE_PROFIT_RSI"]) if thresholds else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        sell_score_limit = thresholds.get("SELL_SCORE", config.SELL_STRATEGY["SELL_SCORE"]) if thresholds else config.SELL_STRATEGY["SELL_SCORE"]
+
         # 1. 고정 익절/손절
-        if profit_rate >= config.SELL_STRATEGY["TAKE_PROFIT_RATE"]:
+        if profit_rate >= tp_rate:
             reason = f"익절({profit_rate}%)"
-        elif profit_rate <= config.SELL_STRATEGY["STOP_LOSS_RATE"]:
+        elif profit_rate <= sl_rate:
             reason = f"손절({profit_rate}%)"
         # 2. 트레일링 스탑 (외부에서 계산된 메시지 반영)
         elif ts_msg:
@@ -399,16 +431,16 @@ class DefaultStrategy:
 
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), thresholds=thresholds
             )
             score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
 
             # 4. RSI 과열 익절
-            if not reason and ind.get('rsi') is not None and ind['rsi'] > config.SELL_STRATEGY["TAKE_PROFIT_RSI"]:
+            if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
                 reason = f"RSI 과열 익절 (RSI: {ind['rsi']:.1f})"
             
             # 5. 추세 이탈
-            if not reason and (state == "위험" or score < config.SELL_STRATEGY["SELL_SCORE"]):
+            if not reason and (state == "위험" or score < sell_score_limit):
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
@@ -908,6 +940,7 @@ class AutoTrader:
         
         # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
         if getattr(config, 'USE_MARKET_FILTER', True):
+            # ... existing code ...
             kospi_stat = self.market_index_status.get("KOSPI")
             kosdaq_stat = self.market_index_status.get("KOSDAQ")
             
@@ -928,6 +961,48 @@ class AutoTrader:
                 table.add_row("시장 필터링", f"[bold blue]{self.skipped_by_market_filter_count}종목 매수 보류[/] (하락장)")
 
         table.add_section()
+        
+        # [추가] 개별 종목 룰 설정 현황
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rule_table = None
+        
+        # 보유 종목 코드 집합 생성 (강조 표시용)
+        held_codes = set()
+        if holdings:
+            for h in holdings:
+                if int(h.get('hldg_qty', 0)) > 0:
+                    held_codes.add(h.get('pdno'))
+
+        if custom_rules:
+            rule_summary = f"총 {len(custom_rules)}개 종목 개별 설정됨"
+            table.add_row("개별 룰 설정", rule_summary)
+            
+            # 별도 테이블로 상세 표시
+            rule_table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            rule_table.add_column("종목명(코드)", justify="left")
+            rule_table.add_column("매수(점수/RSI)", justify="center")
+            rule_table.add_column("매도(점수/RSI)", justify="center")
+            rule_table.add_column("익절/손절", justify="center")
+            rule_table.add_column("트레일링", justify="center")
+            rule_table.add_column("수정일", justify="center", style="dim")
+            
+            for i, r in enumerate(custom_rules):
+                # 보유 중인 종목이면 종목명 강조 (bold cyan)
+                name_disp = f"{r['name']}({r['code']})"
+                if r['code'] in held_codes:
+                    name_disp = f"[bold cyan]{name_disp}[/]"
+                
+                rule_table.add_row(
+                    name_disp,
+                    f"{r['buy_score']}점 / {r['buy_rsi']}",
+                    f"{r['sell_score']}점 / {r['take_profit_rsi']}",
+                    f"+{r['take_profit']}% / {r['stop_loss']}%",
+                    f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+                    r.get('updated_at', '-')
+                )
+                if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
+                    rule_table.add_section()
+            table.add_section()
 
         # 3. 자산 현황
         if current_asset is not None:
@@ -1004,6 +1079,11 @@ class AutoTrader:
         table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
 
         console.print(table)
+        
+        if rule_table:
+            console.print()
+            console.print(rule_table)
+            console.print()
         
         # [추가] 보유 종목 리스트 출력
         # [수정] 보유수량 0 초과인 종목만 필터링
@@ -1845,14 +1925,9 @@ class AutoTrader:
         # [최적화] 인자로 전달받은 holdings 사용
         if not holdings: return
 
-        stop_loss_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        take_profit_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-        
-        # [추가] 트레일링 스탑 설정 로드
-        ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 5.0)
-        ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        # [추가] 개별 룰 로드
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: r for r in custom_rules}
 
         # [추가] Rate Limit 준수를 위한 딜레이 설정
         # 모의투자: 초당 2건 -> 0.5초 + 여유 / 실전투자: 초당 20건 -> 0.05초 + 여유
@@ -1876,6 +1951,25 @@ class AutoTrader:
             if qty <= 0: 
                 continue # 주문 가능 수량이 없으면 스킵
             
+            # [추가] 종목별 룰 적용
+            rule = rules_map.get(code)
+            
+            # 기본값 설정
+            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            
+            thresholds = None
+            if rule:
+                ts_activation = rule['ts_activation']
+                ts_callback = rule['ts_callback']
+                # Strategy에 전달할 임계값 딕셔너리 구성 (키 이름 매핑)
+                thresholds = {
+                    "TAKE_PROFIT_RATE": rule['take_profit'],
+                    "STOP_LOSS_RATE": rule['stop_loss'],
+                    "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
+                    "SELL_SCORE": rule['sell_score']
+                }
+
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
             ts_msg = ""
             # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
@@ -1904,7 +1998,7 @@ class AutoTrader:
 
             # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
-            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg)
+            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds)
             
             # [로그] 분석 결과 기록
             ind = result['ind']
@@ -1912,11 +2006,17 @@ class AutoTrader:
             adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
             cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
             action_str = "매도" if result['action'] == 'sell' else "보유"
-            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, 판단={action_str}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
+            
+            rule_msg = " [개별 룰 적용]" if rule else ""
+            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, 판단={action_str}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}{rule_msg}")
 
             if result['action'] == 'sell':
                 reason = result['reason']
                 score = result['score']
+                
+                # [추가] 개별 룰 적용 시 사유에 표시
+                if rule:
+                    reason += " [개별 룰 적용]"
                 
                 # [추가] 매도 체결 확률을 높이기 위해 -1호가 적용
                 tick_size = self._get_tick_size(current_price)
@@ -1939,7 +2039,7 @@ class AutoTrader:
 
                 self.log(f"매도 실행: {name} - {reason}")
                 # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
-                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price)
+                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
@@ -2007,9 +2107,13 @@ class AutoTrader:
             if self.consecutive_errors == 0: # 로그 도배 방지
                  self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원)")
             return 
+            
+        # [추가] 개별 룰 로드
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: r for r in custom_rules}
 
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map)
         
         # 2. 매수 집행
         if candidates:
@@ -2021,7 +2125,7 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidates(self, targets, holding_codes):
+    def _analyze_candidates(self, targets, holding_codes, rules_map):
         candidates = []
         skipped_stocks = []
         
@@ -2058,18 +2162,31 @@ class AutoTrader:
             current_price = float(df.iloc[-1]['close'])
             
             # [Refactoring] Use Strategy for analysis
-            result = self.strategy.analyze_buy(code, name, df, current_price)
+            # [추가] 개별 룰 적용
+            rule = rules_map.get(code)
+            thresholds = None
+            if rule:
+                thresholds = {
+                    "BUY_SCORE": rule['buy_score'],
+                    "BUY_RSI_MAX": rule['buy_rsi']
+                }
+            
+            result = self.strategy.analyze_buy(code, name, df, current_price, thresholds=thresholds)
             if not result: continue
             
             rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
             adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
             cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
-            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}")
+            
+            rule_msg = " [개별 룰 적용]" if rule else ""
+            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}{rule_msg}")
             
             if result['action'] == "buy":
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
-                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci']
+                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'],
+                    'is_custom_rule': bool(rule),
+                    'rule': rule
                 })
 
         # [추가] 시장 필터링 보류 종목 로그 기록
@@ -2161,9 +2278,12 @@ class AutoTrader:
             cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
             reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             
+            if cand.get('is_custom_rule'):
+                reason += " [개별 룰 적용]"
+            
             self.log(f"매수 실행: {cand['name']} - {reason}")
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
-            odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price)
+            odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'))
             if odno: 
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
@@ -2243,7 +2363,7 @@ class AutoTrader:
         
         return "KOSPI" # 기본값
 
-    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0):
+    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None):
         # [수정] 지정가/시장가 구분 (price > 0 이면 지정가)
         ord_dvsn = "00" if price > 0 else "01"
         
@@ -2262,9 +2382,20 @@ class AutoTrader:
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
                 stock_display = f"{name}({code})" if name else code
-                msg = f"🚀 [주문 접수] {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
+                
+                title_tag = "[주문 접수]"
+                if rule:
+                    title_tag += " [개별]"
+                
+                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
                 if reason:
                     msg += f"\n사유: {reason}"
+                
+                if rule:
+                    msg += f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                    if rule.get('ts_activation'):
+                        msg += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                
                 api.send_telegram_message(msg)
                 
                 # [DB] 시스템 트레이딩 주문 기록 (스냅샷 및 상세 정보 포함)
@@ -2298,6 +2429,290 @@ class AutoTrader:
             self.log("========================================")
         return None
 
+def _select_stock_for_rules():
+    """룰 설정을 위한 종목 선택 헬퍼"""
+    console.print("\n[bold]개별 설정할 대상을 선택하세요:[/bold]")
+    console.print("[1] 국내 주식")
+    console.print("[2] 국내 ETF")
+    console.print("[3] 미국 주식")
+    console.print("[4] 미국 ETF")
+    console.print("[5] 시장 지수")
+    console.print("[6] 직접 입력 (코드 검색)")
+    console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
+    if choice.lower() == 'q': return None, None, False
+
+    code, name, is_overseas = None, None, False
+    
+    if choice == '6':
+        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+        if raw_input and raw_input.lower() != 'q':
+            if raw_input.isdigit() and len(raw_input) == 6:
+                code = raw_input
+                name = api.get_stock_name_by_code(code, False) or code
+                is_overseas = False
+            else:
+                code = raw_input.upper()
+                name = api.get_stock_name_by_code(code, True) or code
+                is_overseas = True
+    elif choice == '5':
+        console.print("[yellow]시장 지수는 매매 대상이 아니므로 룰 설정이 불가능합니다.[/yellow]")
+        return None, None, False
+    elif choice in ["1", "2", "3", "4"]:
+        key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+        s_list = config.session.stock_data.get(key_map[choice], [])
+        if s_list:
+            for i, s in enumerate(s_list):
+                console.print(f"[{i+1}] {s['name']} ({s['code']})")
+            console.print()
+            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+            if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
+                item = s_list[int(sel)-1]
+                code, name = item['code'], item['name']
+                is_overseas = (choice in ["3", "4"])
+        else:
+            console.print("[yellow]목록이 비어있습니다.[/yellow]")
+            return None, None, False
+            
+    return code, name, is_overseas
+
+def _view_stock_rules():
+    """설정된 룰 조회"""
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    if not custom_rules:
+        console.print("\n[yellow]설정된 개별 룰이 없습니다.[/yellow]")
+        return
+
+    table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("매수(점수/RSI)", justify="center")
+    table.add_column("매도(점수/RSI)", justify="center")
+    table.add_column("익절/손절", justify="center")
+    table.add_column("트레일링", justify="center")
+    table.add_column("메모", justify="left", style="dim")
+    table.add_column("수정일", justify="center", style="dim")
+    
+    for i, r in enumerate(custom_rules):
+        table.add_row(
+            f"{r['name']}({r['code']})",
+            f"{r['buy_score']}점 / {r['buy_rsi']}",
+            f"{r['sell_score']}점 / {r['take_profit_rsi']}",
+            f"+{r['take_profit']}% / {r['stop_loss']}%",
+            f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            r.get('memo', ''),
+            r['updated_at']
+        )
+        if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
+            table.add_section()
+    console.print(table)
+
+def _input_and_save_rule(code, name):
+    """(내부함수) 룰 입력 및 저장 공통 로직"""
+    console.print(f"\n[bold green]선택 종목: {name} ({code})[/bold green]")
+    
+    # [추가] 현재가 조회 (예상 가격 계산용)
+    is_overseas = not (code.isdigit() and len(code) == 6)
+    current_price = api.get_current_price(code, is_overseas)
+    if current_price > 0:
+        p_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+        console.print(f"[dim]현재가: {p_fmt} (기준)[/dim]")
+    
+    # 기존 설정 로드
+    existing = db_manager.db.get_stock_strategy(code)
+    defaults = {
+        "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+        "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "sell_score": config.SELL_STRATEGY["SELL_SCORE"],
+        "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
+        "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
+        "take_profit_rsi": config.SELL_STRATEGY["TAKE_PROFIT_RSI"],
+        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0),
+        "memo": ""
+    }
+    
+    current = existing if existing else defaults
+    # DB에서 가져온 값이 None일 경우 빈 문자열로 처리
+    if 'memo' not in current or current['memo'] is None:
+        current['memo'] = ""
+    
+    console.print("\n[설정값 입력 (Enter: 현재값 유지)]")
+    
+    new_strategy = {}
+    
+    class QuitInput(Exception): pass
+
+    def ask_val(key, desc, type_func):
+        val = Prompt.ask(f"{desc} [dim](현재: {current[key]})[/dim]", default=str(current[key]))
+        if val.lower() == 'q': raise QuitInput()
+        return type_func(val)
+
+    try:
+        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수", int)
+        new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한", float)
+        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준", float)
+        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수", int)
+        new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%)", float)
+        
+        if current_price > 0:
+            sl_price = current_price * (1 + new_strategy['stop_loss'] / 100)
+            p_str = f"${sl_price:,.2f}" if is_overseas else f"{int(sl_price):,}원"
+            console.print(f"   └ [cyan]예상 손절 가격: {p_str}[/cyan]")
+            
+        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%)", float)
+        
+        if current_price > 0:
+            tp_price = current_price * (1 + new_strategy['take_profit'] / 100)
+            p_str = f"${tp_price:,.2f}" if is_overseas else f"{int(tp_price):,}원"
+            console.print(f"   └ [cyan]예상 익절 가격: {p_str}[/cyan]")
+            
+        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%)", float)
+        
+        # [추가] 발동 가격 계산 및 표시
+        if current_price > 0:
+            act_price = current_price * (1 + new_strategy['ts_activation'] / 100)
+            p_str = f"${act_price:,.2f}" if is_overseas else f"{int(act_price):,}원"
+            console.print(f"   └ [cyan]예상 발동 가격: {p_str}[/cyan]")
+            
+        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%)", float)
+        
+        # [추가] 매도 가격 계산 및 표시
+        if current_price > 0:
+            act_price = current_price * (1 + new_strategy['ts_activation'] / 100)
+            sell_price = act_price * (1 - new_strategy['ts_callback'] / 100)
+            p_str = f"${sell_price:,.2f}" if is_overseas else f"{int(sell_price):,}원"
+            console.print(f"   └ [cyan]예상 매도 가격: {p_str} (발동 직후 하락 시)[/cyan]")
+        
+        # [추가] 메모 입력
+        new_strategy['memo'] = ask_val('memo', "메모 (Memo)", str)
+        
+        # [추가] 기본값과 동일 여부 확인
+        if new_strategy == defaults:
+            console.print(f"\n[yellow]입력된 설정이 시스템 기본값과 동일합니다.[/yellow]")
+            if existing:
+                console.print("[dim]변경된 내용이 없어 저장하지 않았습니다. (기존 룰 유지)[/dim]")
+                console.print("[dim]기본값을 적용하려면 '삭제' 기능을 이용해주세요.[/dim]")
+            else:
+                console.print("[dim]별도의 개별 룰로 저장하지 않습니다. (기본 설정 자동 적용)[/dim]")
+            return
+
+        db_manager.db.save_stock_strategy(code, name, new_strategy)
+        console.print(f"\n[bold green]'{name}' 종목의 트레이딩 룰이 저장되었습니다.[/bold green]")
+        
+        console.print()
+        table = Table(title=f"[{name}] 설정 결과 요약", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table.add_column("구분", justify="center", style="cyan")
+        table.add_column("설정값", justify="left")
+        
+        table.add_row("매수 조건", f"점수 {new_strategy['buy_score']}점 이상 / RSI {new_strategy['buy_rsi']} 미만")
+        table.add_row("매도 조건", f"점수 {new_strategy['sell_score']}점 미만 (추세이탈)")
+        table.add_row("익절/손절", f"익절 +{new_strategy['take_profit']}% / 손절 {new_strategy['stop_loss']}%")
+        table.add_row("RSI 익절", f"RSI {new_strategy['take_profit_rsi']} 초과")
+        table.add_row("트레일링 스탑", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
+        table.add_row("메모", new_strategy['memo'])
+        
+        console.print(table)
+        
+    except QuitInput:
+        console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
+        return
+    except ValueError:
+        console.print("\n[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+
+def _set_stock_rules():
+    """룰 설정 (신규/검색)"""
+    code, name, _ = _select_stock_for_rules()
+    if not code: return
+    _input_and_save_rule(code, name)
+
+def _modify_stock_rules():
+    """룰 변경 (기존 목록에서 선택)"""
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    if not custom_rules:
+        console.print("\n[yellow]저장된 개별 룰이 없습니다.[/yellow]")
+        return
+
+    console.print("\n[bold]변경할 룰을 선택하세요:[/bold]")
+    
+    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("No.", justify="right", style="cyan", width=4)
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("매수(점수/RSI)", justify="center")
+    table.add_column("매도(점수/RSI)", justify="center")
+    table.add_column("익절/손절", justify="center")
+    table.add_column("트레일링", justify="center")
+    table.add_column("수정일", justify="center", style="dim")
+    
+    for i, r in enumerate(custom_rules):
+        table.add_row(
+            str(i+1),
+            f"{r['name']} ({r['code']})",
+            f"{r['buy_score']}점 / {r['buy_rsi']}",
+            f"{r['sell_score']}점 / {r['take_profit_rsi']}",
+            f"+{r['take_profit']}% / {r['stop_loss']}%",
+            f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            r['updated_at']
+        )
+        if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
+            table.add_section()
+            
+    console.print(table)
+    
+    sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]", default="q")
+    if sel.lower() == 'q': return
+    
+    if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
+        target = custom_rules[int(sel)-1]
+        _input_and_save_rule(target['code'], target['name'])
+    else:
+        console.print("[red]잘못된 번호입니다.[/red]")
+
+def _delete_stock_rules():
+    """룰 삭제"""
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    if not custom_rules:
+        console.print("\n[yellow]삭제할 룰이 없습니다.[/yellow]")
+        return
+
+    console.print("\n[bold]삭제할 룰을 선택하세요:[/bold]")
+    for i, r in enumerate(custom_rules):
+        console.print(f"[{i+1}] {r['name']} ({r['code']})")
+    
+    console.print()
+    sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+    if sel.lower() == 'q': return
+    
+    if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
+        target = custom_rules[int(sel)-1]
+        if Prompt.ask(f"정말 '{target['name']}'의 룰을 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
+            db_manager.db.delete_stock_strategy(target['code'])
+            console.print(f"\n[bold green]삭제되었습니다.[/bold green]")
+    else:
+        console.print("[red]잘못된 번호입니다.[/red]")
+
+def manage_stock_rules():
+    """종목별 트레이딩 룰 관리 메뉴"""
+    while True:
+        console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 ===[/]")
+        console.print("[1] 룰 조회 (View)")
+        console.print("[2] 룰 설정 (Set)")
+        console.print("[3] 룰 변경 (Modify)")
+        console.print("[4] 룰 삭제 (Delete)")
+        console.print()
+        
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+        if choice.lower() == 'q': return
+
+        if choice == "1":
+            _view_stock_rules()
+        elif choice == "2":
+            _set_stock_rules()
+        elif choice == "3":
+            _modify_stock_rules()
+        elif choice == "4":
+            _delete_stock_rules()
+
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 
@@ -2312,12 +2727,13 @@ def system_trading_menu():
     console.print("[3] 트레이딩 상태 (Status)")
     console.print("[4] 트레이딩 평가 (Report)")
     console.print("[5] 트레이딩 로그 (Log Viewer)")
+    console.print("[6] 종목별 트레이딩 룰 (Rule)")
     console.print()
     
     try:
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="3")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="3")
         
-        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그"}
+        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정"}
         if choice in menu_map:
             config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
             
@@ -2339,3 +2755,5 @@ def system_trading_menu():
         trader.print_report()
     elif choice == "5":
         trader.view_log_file()
+    elif choice == "6":
+        manage_stock_rules()

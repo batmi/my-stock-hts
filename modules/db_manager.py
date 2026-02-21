@@ -58,6 +58,24 @@ class DBManager:
                     )
                 ''')
                 
+                # [추가] 종목별 개별 트레이딩 룰 테이블 생성
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS stock_strategies (
+                        code TEXT PRIMARY KEY,
+                        name TEXT,
+                        buy_score INTEGER,
+                        buy_rsi REAL,
+                        sell_score INTEGER,
+                        stop_loss REAL,
+                        take_profit REAL,
+                        take_profit_rsi REAL,
+                        ts_activation REAL,
+                        ts_callback REAL,
+                        updated_at TEXT,
+                        memo TEXT
+                    )
+                ''')
+                
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [info[1] for info in cursor.fetchall()]
@@ -78,6 +96,17 @@ class DBManager:
                                 config.console.print(f"[dim green][DB] 컬럼 추가됨: {col}[/dim green]")
                         except Exception as e:
                             config.console.print(f"[red][DB] 컬럼 추가 실패({col}): {e}[/red]")
+
+                # stock_strategies 테이블 컬럼 확장 (memo 추가)
+                cursor.execute("PRAGMA table_info(stock_strategies)")
+                strat_columns = [info[1] for info in cursor.fetchall()]
+                if "memo" not in strat_columns:
+                    try:
+                        cursor.execute("ALTER TABLE stock_strategies ADD COLUMN memo TEXT")
+                        if config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] stock_strategies 테이블에 memo 컬럼이 추가되었습니다.[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(memo): {e}[/red]")
 
                 conn.commit()
                 conn.close()
@@ -308,6 +337,53 @@ class DBManager:
                         continue
                     break
                 except: break
+
+    def save_stock_strategy(self, code, name, strategy):
+        """종목별 매매 전략 저장"""
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            memo = strategy.get('memo', '')
+            cursor.execute('''
+                INSERT OR REPLACE INTO stock_strategies 
+                (code, name, buy_score, buy_rsi, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (code, name, 
+                  strategy['buy_score'], strategy['buy_rsi'], 
+                  strategy['sell_score'], strategy['stop_loss'], 
+                  strategy['take_profit'], strategy['take_profit_rsi'], 
+                  strategy['ts_activation'], strategy['ts_callback'], 
+                  now, memo))
+            conn.commit()
+
+    def get_stock_strategy(self, code):
+        """특정 종목의 매매 전략 조회"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM stock_strategies WHERE code = ?", (code,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except: return None
+
+    def get_all_stock_strategies(self):
+        """모든 종목별 매매 전략 조회"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM stock_strategies ORDER BY updated_at DESC")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except: return []
+
+    def delete_stock_strategy(self, code):
+        """종목별 매매 전략 삭제"""
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM stock_strategies WHERE code = ?", (code,))
+            conn.commit()
 
     def cleanup_old_data(self, days_to_keep):
         """보존 기간이 지난 오래된 거래 내역 삭제"""
