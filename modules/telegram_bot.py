@@ -4,6 +4,7 @@ import time
 import requests
 import re
 import os
+from datetime import datetime, timedelta
 
 import config
 import api
@@ -40,7 +41,9 @@ class TelegramCommander:
             "/history": self._cmd_history,
             "/log": self._cmd_log,
             "/balance": self._cmd_balance,
-            "/holdings": self._cmd_holdings
+            "/holdings": self._cmd_holdings,
+            "/rules": self._cmd_rules,
+            "/profit": self._cmd_profit
         }
 
     def start(self):
@@ -151,6 +154,8 @@ class TelegramCommander:
             "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /config : 현재 매매 전략 설정값 조회\n"
+            "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
+            "• /profit [기간] : 기간별 실현 손익 조회 (daily/weekly/monthly)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
@@ -179,6 +184,107 @@ class TelegramCommander:
 
     def _cmd_config(self, args):
         return self._get_strategy_config()
+
+    def _cmd_rules(self, args):
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        if not custom_rules:
+            return "📭 설정된 개별 종목 룰이 없습니다."
+
+        target = " ".join(args).strip()
+        filtered_rules = []
+
+        if target:
+            for r in custom_rules:
+                if target.upper() == r['code'] or target in r['name']:
+                    filtered_rules.append(r)
+            
+            if not filtered_rules:
+                return f"📭 '{target}'에 대한 개별 룰 설정이 없습니다."
+        else:
+            filtered_rules = custom_rules
+
+        msg = f"🔧 [개별 종목 룰 ({len(filtered_rules)}개)]\n"
+        for r in filtered_rules:
+            memo_part = f"   📝 {r.get('memo', '')}\n" if r.get('memo') else ""
+            msg += (f"\n• {r['name']}({r['code']})\n"
+                    f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']}\n"
+                    f"   매도: {r['sell_score']}점\n"
+                    f"   익절: +{r['take_profit']}% / RSI {r['take_profit_rsi']}\n"
+                    f"   손절: {r['stop_loss']}%\n"
+                    f"   TS: +{r['ts_activation']}% / -{r['ts_callback']}%\n"
+                    f"{memo_part}")
+        return msg
+
+    def _cmd_profit(self, args):
+        mode = "daily"
+        if args:
+            arg = args[0].lower()
+            if arg in ["week", "weekly", "주간", "w"]: mode = "weekly"
+            elif arg in ["month", "monthly", "월간", "m"]: mode = "monthly"
+        
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
+        if mode == "daily":
+            start_dt = today_str
+            end_dt = today_str
+            title = "📅 [일간 실현 손익]"
+        elif mode == "weekly":
+            # 이번 주 월요일부터 오늘까지
+            start_of_week = now - timedelta(days=now.weekday())
+            start_dt = start_of_week.strftime("%Y-%m-%d")
+            end_dt = today_str
+            title = "📅 [주간 실현 손익]"
+        elif mode == "monthly":
+            # 이번 달 1일부터 오늘까지
+            start_dt = now.strftime("%Y-%m-01")
+            end_dt = today_str
+            title = "📅 [월간 실현 손익]"
+            
+        trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
+        
+        # 매도(청산) 내역만 필터링하여 손익 합산
+        sell_trades = [t for t in trades if "매도" in t.get('type', '') or "sell" in t.get('type', '').lower()]
+        
+        total_profit = 0
+        win_count = 0
+        loss_count = 0
+        
+        best_trade = None
+        worst_trade = None
+        
+        for t in sell_trades:
+            p = int(t.get('profit_amt') or 0)
+            total_profit += p
+            if p > 0: win_count += 1
+            elif p < 0: loss_count += 1
+            
+            if best_trade is None or p > int(best_trade.get('profit_amt') or 0):
+                best_trade = t
+            
+            if worst_trade is None or p < int(worst_trade.get('profit_amt') or 0):
+                worst_trade = t
+            
+        msg = f"{title}\n기간: {start_dt} ~ {end_dt}\n\n"
+        
+        if not sell_trades:
+            msg += "실현된 손익이 없습니다."
+        else:
+            icon = "🔴" if total_profit > 0 else ("🔵" if total_profit < 0 else "⚪️")
+            msg += f"총 손익: {icon} {total_profit:+,}원\n"
+            msg += f"매매 횟수: {len(sell_trades)}건 (익절 {win_count} / 손절 {loss_count})"
+            
+            if best_trade and int(best_trade.get('profit_amt') or 0) > 0:
+                p = int(best_trade.get('profit_amt'))
+                r = float(best_trade.get('profit_rate') or 0)
+                msg += f"\n\n🏆 최고 수익: {best_trade['name']} (+{p:,}원 / {r:+.2f}%)"
+            
+            if worst_trade and int(worst_trade.get('profit_amt') or 0) < 0:
+                p = int(worst_trade.get('profit_amt'))
+                r = float(worst_trade.get('profit_rate') or 0)
+                msg += f"\n💧 최다 손실: {worst_trade['name']} ({p:,}원 / {r:+.2f}%)"
+
+        return msg
 
     def _cmd_history(self, args):
         count = 10
@@ -404,6 +510,10 @@ class TelegramCommander:
         if not code:
             return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.\n관심 종목에 등록된 종목명이나 코드를 입력해주세요."
 
+        # [추가] 개별 룰 존재 여부 확인
+        custom_rule = db_manager.db.get_stock_strategy(code)
+        rule_tag = " [개별]" if custom_rule else ""
+
         try:
             # 3. 데이터 조회 및 분석
             df = api.get_chart_data(code, is_overseas)
@@ -489,7 +599,7 @@ class TelegramCommander:
             else:
                 sell_result = "보유 (추세유지)"
 
-            msg = f"🔍 [종목 진단] {name}({code})\n"
+            msg = f"🔍 [종목 진단{rule_tag}] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 11점\n"
@@ -607,6 +717,13 @@ class TelegramCommander:
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
         msg += f"\n[기타]\n"
         msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}%\n"
+        
+        # [추가] 개별 종목 룰 정보
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        if custom_rules:
+            msg += f"\n🔧 [개별 종목 룰 ({len(custom_rules)}개)]\n"
+            for r in custom_rules:
+                msg += f"• {r['name']}({r['code']})\n"
         
         return msg
 

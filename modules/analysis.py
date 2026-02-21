@@ -64,7 +64,7 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
         details.append("OBV: 이동평균 상회 (수급 양호) (+1)")
     return score, details
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, thresholds=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     reasons = []
@@ -107,9 +107,14 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
-    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-    buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    if thresholds:
+        buy_score = thresholds.get("BUY_SCORE", config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
+        rise_score = thresholds.get("RISE_SCORE", config.ANALYSIS_THRESHOLDS["RISE_SCORE"])
+        buy_rsi_max = thresholds.get("BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
+    else:
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
 
     if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]", "매수 조건 충족"
     elif score >= rise_score: return "상승", "[orange3]", "상승 추세 (점수 양호)"

@@ -405,6 +405,11 @@ def run_backtest():
         if val.lower() == 'q': return
         buy_rsi = float(val)
         
+        def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+        val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]설명: RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
+        if val.lower() == 'q': return
+        take_profit_rsi = float(val)
+        
         # 매도 조건
         def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]설명: 점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
@@ -420,11 +425,6 @@ def run_backtest():
         val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]설명: 수익이 이 비율에 도달하면 이익 실현[/dim]", default=str(def_tp))
         if val.lower() == 'q': return
         take_profit = float(val)
-        
-        def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]설명: RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
-        if val.lower() == 'q': return
-        take_profit_rsi = float(val)
         
         def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]설명: 수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
