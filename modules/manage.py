@@ -88,15 +88,21 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
             config.console.print(table)
 
-        # [수정] 국내 주식 기간별 시세 출력 (역순 정렬 적용)
-        daily_list = api.fetch_domestic_period_price(code)
+        # [수정] 기간별 시세 출력 (analysis.py와 동일한 형식 및 로직 적용)
+        df = api.get_chart_data(code, is_overseas=False)
         
-        # [로그] 기간별 시세 수신 결과
-        if config.FILE_DEBUG_LEVEL == "DEBUG":
-             cnt = len(daily_list) if daily_list else 0
-             logger.debug(f"국내 기간별 시세 수신: {cnt}건")
+        if df is not None and not df.empty:
+            # 이동평균선 계산
+            for w in [5, 20, 60, 120]:
+                df[f'ma{w}'] = df['close'].rolling(window=w).mean()
 
-        if daily_list:
+            # 등락폭/등락률 계산
+            df['diff'] = df['close'].diff()
+            df['rate'] = df['close'].pct_change() * 100
+
+            # 최신순 정렬 및 10개 추출
+            recent_df = df.sort_values('date', ascending=False).head(10)
+
             config.console.print()
             table_d = Table(title="[국내주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
@@ -106,31 +112,61 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
             table_d.add_column("거래량", justify="right")
+            table_d.add_column("5일선", justify="right")
+            table_d.add_column("20일선", justify="right")
+            table_d.add_column("60일선", justify="right")
+            table_d.add_column("120일선", justify="right")
             
-            # [중요] 최신순 정렬: 앞에서 10개 (최신 데이터)
-            recent_data = daily_list[:10]
-            
-            for i, item in enumerate(recent_data):
-                date = item.get('stck_bsop_date', '')
-                if len(date) == 8 and date.isdigit(): date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
+            for i, (idx, row) in enumerate(recent_df.iterrows()):
+                date_str = str(row['date'])
+                if len(date_str) == 8: date_str = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
                 
-                # 안전한 형변환
-                def s_int(val): return int(val) if val else 0
+                close = row['close']
+                diff = row['diff'] if not pd.isna(row['diff']) else 0
+                rate = row['rate'] if not pd.isna(row['rate']) else 0
                 
-                close = s_int(item.get('stck_clpr'))
-                diff = s_int(item.get('prdy_vrss'))
-                open_p = s_int(item.get('stck_oprc'))
-                high = s_int(item.get('stck_hgpr'))
-                low = s_int(item.get('stck_lwpr'))
-                vol = s_int(item.get('acml_vol'))
+                def fmt_p(val): return f"{int(val):,}"
+                def fmt_diff(val): return f"{int(val):+}"
+                
+                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
+                
+                ma5_val, ma20_val = row['ma5'], row['ma20']
+                ma60_val, ma120_val = row['ma60'], row['ma120']
 
-                # 등락률 계산
-                prev_close = close - diff
-                rate = 0.0
-                if prev_close != 0: rate = (diff / prev_close) * 100
+                def get_ma_color(val, ma_type):
+                    if pd.isna(val): return "white"
+                    if pd.isna(ma5_val) or pd.isna(ma20_val) or pd.isna(ma60_val) or pd.isna(ma120_val): return "white"
+                    if ma_type == 5:
+                        if ma5_val > ma20_val and ma5_val > ma60_val and ma5_val > ma120_val: return "red"
+                        if ma5_val < ma20_val and ma5_val < ma60_val and ma5_val < ma120_val: return "blue"
+                        if (ma20_val < ma5_val < ma60_val) or (ma60_val < ma5_val < ma20_val): return "yellow"
+                        if (ma60_val < ma5_val < ma120_val) or (ma120_val < ma5_val < ma60_val): return "orange3"
+                    elif ma_type == 20:
+                        if ma20_val > ma60_val and ma20_val > ma120_val: return "red"
+                        if ma20_val < ma60_val and ma20_val < ma120_val: return "blue"
+                        if (ma60_val < ma20_val < ma120_val) or (ma120_val < ma20_val < ma60_val): return "yellow"
+                    elif ma_type == 60:
+                        if ma120_val > ma60_val and ma60_val > ma5_val and ma60_val > ma20_val: return "blue"
+                        if ma120_val < ma60_val and ma60_val < ma5_val and ma60_val < ma20_val: return "red"
+                        return "yellow"
+                    elif ma_type == 120:
+                        if ma60_val > ma120_val: return "red"
+                        if ma60_val < ma120_val: return "blue"
+                    return "white"
+
+                def fmt_ma(val, color):
+                    if pd.isna(val): return "-"
+                    return f"[{color}]{fmt_p(val)}[/]"
+
+                table_d.add_row(
+                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), _fmt_vol(row['volume']),
+                    fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
+                    fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
+                )
                 
-                color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                table_d.add_row(f"{date}", f"{close:,}", f"{color}{diff:+} ({rate:+.2f}%)[/]", f"{open_p:,}", f"{high:,}", f"{low:,}", _fmt_vol(vol))
+                if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
+                    table_d.add_section()
             config.console.print(table_d)
         else:
             config.console.print("[yellow]기간별 시세 데이터가 없습니다.[/yellow]")
@@ -199,14 +235,21 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
             config.console.print(table)
         
-        daily_df = api.fetch_overseas_period_price(code, excd)
+        # [수정] 해외 주식 기간별 시세 출력 (analysis.py와 동일한 형식 및 로직 적용)
+        df = api.get_chart_data(code, is_overseas=True)
         
-        # [로그] 해외 기간별 시세 수신 결과
-        if config.FILE_DEBUG_LEVEL == "DEBUG":
-            cnt = len(daily_df) if daily_df is not None else 0
-            logger.debug(f"해외 기간별 시세 수신: {cnt}건")
-            
-        if daily_df is not None and not daily_df.empty:
+        if df is not None and not df.empty:
+            # 이동평균선 계산
+            for w in [5, 20, 60, 120]:
+                df[f'ma{w}'] = df['close'].rolling(window=w).mean()
+
+            # 등락폭/등락률 계산
+            df['diff'] = df['close'].diff()
+            df['rate'] = df['close'].pct_change() * 100
+
+            # 최신순 정렬 및 10개 추출
+            recent_df = df.sort_values('date', ascending=False).head(10)
+
             config.console.print()
             table_d = Table(title="[해외주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
@@ -216,25 +259,61 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
             table_d.add_column("거래량", justify="right")
-            
-            recent_df = daily_df.tail(10).iloc[::-1]
+            table_d.add_column("5일선", justify="right")
+            table_d.add_column("20일선", justify="right")
+            table_d.add_column("60일선", justify="right")
+            table_d.add_column("120일선", justify="right")
             
             for i, (idx, row) in enumerate(recent_df.iterrows()):
-                date = str(row.get('date', ''))
-                if len(date) == 8 and date.isdigit(): date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
-                close = float(row.get('close', 0))
-                open_p = float(row.get('open', 0))
-                high = float(row.get('high', 0))
-                low = float(row.get('low', 0))
-                vol = float(row.get('volume', 0))
-                diff = float(row.get('diff', 0))
-                rate = float(row.get('rate', 0))
-                sign = str(row.get('sign', ''))
+                date_str = str(row['date'])
+                if len(date_str) == 8: date_str = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
                 
-                if sign in ['4', '5'] or rate < 0: diff = -abs(diff)
+                close = row['close']
+                diff = row['diff'] if not pd.isna(row['diff']) else 0
+                rate = row['rate'] if not pd.isna(row['rate']) else 0
                 
-                color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                table_d.add_row(f"{date}", f"{close:,.2f}", f"{color}{diff:+.2f} ({rate:+.2f}%)[/]", f"{open_p:,.2f}", f"{high:,.2f}", f"{low:,.2f}", _fmt_vol(vol))
+                def fmt_p(val): return f"{val:,.2f}"
+                def fmt_diff(val): return f"{val:+.2f}"
+                
+                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
+                
+                ma5_val, ma20_val = row['ma5'], row['ma20']
+                ma60_val, ma120_val = row['ma60'], row['ma120']
+
+                def get_ma_color(val, ma_type):
+                    if pd.isna(val): return "white"
+                    if pd.isna(ma5_val) or pd.isna(ma20_val) or pd.isna(ma60_val) or pd.isna(ma120_val): return "white"
+                    if ma_type == 5:
+                        if ma5_val > ma20_val and ma5_val > ma60_val and ma5_val > ma120_val: return "red"
+                        if ma5_val < ma20_val and ma5_val < ma60_val and ma5_val < ma120_val: return "blue"
+                        if (ma20_val < ma5_val < ma60_val) or (ma60_val < ma5_val < ma20_val): return "yellow"
+                        if (ma60_val < ma5_val < ma120_val) or (ma120_val < ma5_val < ma60_val): return "orange3"
+                    elif ma_type == 20:
+                        if ma20_val > ma60_val and ma20_val > ma120_val: return "red"
+                        if ma20_val < ma60_val and ma20_val < ma120_val: return "blue"
+                        if (ma60_val < ma20_val < ma120_val) or (ma120_val < ma20_val < ma60_val): return "yellow"
+                    elif ma_type == 60:
+                        if ma120_val > ma60_val and ma60_val > ma5_val and ma60_val > ma20_val: return "blue"
+                        if ma120_val < ma60_val and ma60_val < ma5_val and ma60_val < ma20_val: return "red"
+                        return "yellow"
+                    elif ma_type == 120:
+                        if ma60_val > ma120_val: return "red"
+                        if ma60_val < ma120_val: return "blue"
+                    return "white"
+
+                def fmt_ma(val, color):
+                    if pd.isna(val): return "-"
+                    return f"[{color}]{fmt_p(val)}[/]"
+
+                table_d.add_row(
+                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), _fmt_vol(row['volume']),
+                    fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
+                    fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
+                )
+                
+                if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
+                    table_d.add_section()
             config.console.print(table_d)
 
 def get_current_price(mode='add'):

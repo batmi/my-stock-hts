@@ -892,9 +892,10 @@ def fetch_overseas_detail_price(code, excd):
                 return output
     return {}
 
-def fetch_domestic_period_price(code):
+def fetch_domestic_period_price(code, days=100):
+    """국내 주식 기간별 시세 조회 (기본 100일, 단일 호출 최대 약 100건 반환)"""
     today = datetime.now().strftime("%Y%m%d")
-    past = (datetime.now() - timedelta(days=100)).strftime("%Y%m%d")
+    past = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     
     params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": past, "FID_INPUT_DATE_2": today, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
     data = call_api("uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "domestic", "quotations", "chart", params=params)
