@@ -46,7 +46,7 @@
 
 ### 2. 라이브러리 설치
 ```bash
-pip install requests pandas yfinance rich openpyxl
+pip install requests pandas yfinance ta rich matplotlib numpy beautifulsoup4 openpyxl
 ```
 
 ### 3. 설정 (Configuration)
