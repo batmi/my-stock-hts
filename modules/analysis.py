@@ -1,7 +1,7 @@
 # modules/analysis.py
 from rich.table import Table
 from rich.prompt import Prompt
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 from rich import box
 import config
 import api
@@ -18,6 +18,7 @@ import concurrent.futures
 import shutil
 import sqlite3
 import json
+from openpyxl.styles import Font
 
 logger = logging.getLogger(__name__)
 
@@ -648,18 +649,38 @@ def _get_master_stock_list(market_type):
     try:
         # [수정] 파일이 존재하고 오늘 다운로드된 것이라면 다운로드 스킵
         need_download = True
-        if os.path.exists(zip_path):
+        if os.path.exists(zip_path) and os.path.exists(extract_path):
             file_time = datetime.fromtimestamp(os.path.getmtime(zip_path))
             if file_time.date() == datetime.now().date():
                 need_download = False
                 config.console.print(f"[dim]{market_type} 마스터 파일이 최신입니다. (기존 파일 사용)[/dim]")
 
-        with config.console.status(f"[green]{market_type} 종목 리스트 {'다운로드 및 ' if need_download else ''}준비 중...[/]"):
-            if need_download:
-                urllib.request.urlretrieve(url, zip_path)
+        if need_download:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                "•",
+                DownloadColumn(),
+                "•",
+                TransferSpeedColumn(),
+                "•",
+                TimeRemainingColumn(),
+                console=config.console
+            ) as progress:
+                task_id = progress.add_task(f"[green]{market_type} 마스터 파일 다운로드...", total=None)
+                
+                def report_hook(block_num, block_size, total_size):
+                    progress.update(task_id, total=total_size, completed=block_num * block_size)
+                
+                urllib.request.urlretrieve(url, zip_path, reporthook=report_hook)
+
+            with config.console.status(f"[green]{market_type} 데이터 압축 해제 중...[/]"):
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(base_dir)
             
+        with config.console.status(f"[green]{market_type} 종목 리스트 로딩 및 파싱 중...[/]"):
             with open(extract_path, 'rb') as f:
                 for line in f:
                     try:
@@ -1053,17 +1074,17 @@ def save_all_market_analysis():
                                 sector = res['output'].get('bstp_kor_isnm', '-')
                         except: pass
                         
-                        # 데이터 포맷팅 (소수점 2자리)
-                        rsi = round(item['rsi'], 2) if item['rsi'] is not None else None
-                        adx = round(item['adx'], 2) if item['adx'] is not None else None
-                        cci = round(item['cci'], 2) if item['cci'] is not None else None
-                        w52 = round(item['w52_pos'], 2) if item['w52_pos'] is not None else 0.0
+                        # 데이터 포맷팅 (소수점 1자리, 정수 등)
+                        rsi = round(item['rsi'], 1) if item['rsi'] is not None else None
+                        adx = round(item['adx'], 1) if item['adx'] is not None else None
+                        cci = round(item['cci'], 1) if item['cci'] is not None else None
+                        w52 = int(item['w52_pos']) if item['w52_pos'] is not None else 0
                         
                         return {
                             "종목코드": item['code'],
                             "종목명": item['name'],
                             "업종": sector,
-                            "현재가": item['price'],
+                            "현재가(원)": item['price'],
                             "52주위치(%)": w52,
                             "점수": item['score'],
                             "상태": item['state'],
@@ -1071,7 +1092,7 @@ def save_all_market_analysis():
                             "RSI": rsi,
                             "ADX": adx,
                             "CCI": cci,
-                            "OBV추세": "상승" if item['obv_trend'] else "하락"
+                            "OBV": "상승" if item['obv_trend'] else "하락"
                         }
 
                     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1088,6 +1109,10 @@ def save_all_market_analysis():
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = os.path.join(config.DATA_DIR, f"market_analysis_{timestamp}.xlsx")
         
+        if not any(results.values()):
+            config.console.print("\n[red]저장할 데이터가 없습니다. (마스터 파일 오류 또는 분석 실패)[/red]")
+            return
+
         with config.console.status(f"[bold green]엑셀 파일 저장 중... ({filename})[/]"):
             with pd.ExcelWriter(filename, engine='openpyxl') as writer:
                 for market_type, data in results.items():
@@ -1096,6 +1121,29 @@ def save_all_market_analysis():
                         data.sort(key=lambda x: (-x['점수'], x['RSI'] if x['RSI'] is not None else 999))
                         df = pd.DataFrame(data)
                         df.to_excel(writer, sheet_name=market_type, index=False)
+                        
+                        # 엑셀 서식 적용 (필터, 컬럼 너비, 색상 등)
+                        ws = writer.sheets[market_type]
+                        ws.auto_filter.ref = ws.dimensions
+                        
+                        # 헤더에서 컬럼 인덱스 찾기
+                        header = [c.value for c in ws[1]]
+                        try:
+                            col_price = header.index("현재가(원)") + 1
+                            col_state = header.index("상태") + 1
+                            
+                            for row in range(2, ws.max_row + 1):
+                                # 현재가 쉼표 포맷
+                                ws.cell(row=row, column=col_price).number_format = '#,##0'
+                                
+                                # 상태 컬럼 색상 적용
+                                cell = ws.cell(row=row, column=col_state)
+                                val = cell.value
+                                if val == "매수": cell.font = Font(color="FF0000", bold=True)
+                                elif val == "상승": cell.font = Font(color="FF8C00", bold=True)
+                                elif val == "주의": cell.font = Font(color="DAA520", bold=True)
+                                elif val == "위험": cell.font = Font(color="0000FF", bold=True)
+                        except ValueError: pass
         
         config.console.print(f"\n[bold green]저장 완료: {filename}[/bold green]")
         
