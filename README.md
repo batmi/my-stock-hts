@@ -110,7 +110,35 @@ python main.py --mode 1 --auto
 *   **과열 매도**: RSI가 **75** (`TAKE_PROFIT_RSI`)를 초과하면 과매수 구간으로 판단하여 선제적 매도.
 *   **추세 이탈 매도**: 종합 점수가 **5점** (`SELL_SCORE`) 미만으로 떨어지면 매도.
 
-## 📂 프로젝트 구조 (Project Structure)
+## 📱 텔레그램 알림 및 제어 설정 (Telegram Bot)
+
+시스템 트레이딩의 매매 내역 알림을 받고 원격으로 제어하기 위해 텔레그램 봇 연동을 권장합니다.
+
+### 1. 봇 생성 (BotFather)
+1. 텔레그램에서 **@BotFather** 검색 후 대화 시작.
+2. `/newbot` 입력 후 안내에 따라 봇 이름과 ID 설정.
+3. 발급된 **API Token** 복사.
+
+### 2. Chat ID 확인
+1. 생성한 봇에게 아무 메시지나 전송 (예: "start").
+2. 프로젝트 폴더의 `get_telegram_chat_id.py` 실행:
+   ```bash
+   python get_telegram_chat_id.py
+   ```
+3. 토큰을 입력하면 **Chat ID**가 출력됩니다.
+
+### 3. 환경 변수 등록
+`config.py` 또는 시스템 환경 변수에 설정합니다.
+*   `TELEGRAM_BOT_TOKEN`: API Token
+*   `TELEGRAM_CHAT_ID`: Chat ID
+
+### 4. 주요 명령어
+*   **상태 확인**: `/status`, `/balance`, `/holdings`
+*   **제어**: `/start`, `/stop`, `/restart`
+*   **분석**: `/signal <종목>`, `/chart <종목>`, `/market`
+*   **정보**: `/history`, `/profit`, `/log`
+
+## � 프로젝트 구조 (Project Structure)
 
 ```text
 stock_project/
