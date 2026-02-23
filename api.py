@@ -385,12 +385,15 @@ def get_access_token(force_refresh=False):
 
 def _get_access_token_internal(force_refresh=False):
     # [수정] 메인 스레드가 아니면 신규 발급 금지 (캐시된 토큰만 허용)
+    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
     if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
         if not force_refresh:
             token = config.session.get_valid_token("SIMULATION")
             if token: return token
-        logger.error("[Token] 백그라운드 스레드에서 토큰 발급이 요청되었습니다. (발급 거부)")
-        return None
+            logger.error("[Token] 백그라운드 스레드에서 토큰 발급이 요청되었습니다. (발급 거부)")
+            return None
+        else:
+            logger.debug("[Token] 백그라운드 스레드에서 토큰 강제 갱신을 수행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지: 최근 발급된 토큰이 있으면 강제 갱신 요청이 와도 무시하고 캐시 반환
     if force_refresh:
@@ -455,12 +458,15 @@ def get_real_access_token(force_refresh=False):
 
 def _get_real_access_token_internal(force_refresh=False):
     # [수정] 메인 스레드가 아니면 신규 발급 금지
+    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
     if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
         if not force_refresh:
             token = config.session.get_valid_token("REAL")
             if token: return token
-        logger.error("[Token] 백그라운드 스레드에서 실전 토큰 발급이 요청되었습니다. (발급 거부)")
-        return None
+            logger.error("[Token] 백그라운드 스레드에서 실전 토큰 발급이 요청되었습니다. (발급 거부)")
+            return None
+        else:
+            logger.debug("[Token] 백그라운드 스레드에서 실전 토큰 강제 갱신을 수행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
@@ -526,12 +532,15 @@ def _get_auto_access_token_internal(force_refresh=False):
         return get_real_access_token(force_refresh)
 
     # [수정] 메인 스레드가 아니면 신규 발급 금지
+    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
     if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
         if not force_refresh:
             token = config.session.get_valid_token("AUTO")
             if token: return token
-        logger.error("[Token] 백그라운드 스레드에서 자동매매 토큰 발급이 요청되었습니다. (발급 거부)")
-        return None
+            logger.error("[Token] 백그라운드 스레드에서 자동매매 토큰 발급이 요청되었습니다. (발급 거부)")
+            return None
+        else:
+            logger.debug("[Token] 백그라운드 스레드에서 자동매매 토큰 강제 갱신을 수행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
@@ -610,47 +619,61 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
         if timeout is None: timeout = config.DEFAULT_TIMEOUT
         if retries is None: retries = config.MAX_RETRIES
         
-        token_to_use = get_current_token()
-        base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
-        
-        # [수정] 컨텍스트에 따라 키 선택
-        use_auto = getattr(config.trade_context, 'use_auto_account', False)
-        if use_auto and not config.session.is_simulation:
-            key = config.session.auto_app_key
-            secret = config.session.auto_app_secret
-            if not key: # Fallback
-                key = config.session.real_app_key; secret = config.session.real_app_secret
-        else:
-            key = config.session.app_key if config.session.is_simulation else config.session.real_app_key
-            secret = config.session.app_secret if config.session.is_simulation else config.session.real_app_secret
-
-        env_key = "sim" if config.session.is_simulation else "real"
-        if tr_id is None:
+        # [추가] 토큰 만료 시 재시도를 위한 루프 (최대 1회 재시도)
+        for attempt in range(2):
             try:
-                tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
-            except KeyError:
-                return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
+                token_to_use = get_current_token()
+                base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
+                
+                # [수정] 컨텍스트에 따라 키 선택
+                use_auto = getattr(config.trade_context, 'use_auto_account', False)
+                if use_auto and not config.session.is_simulation:
+                    key = config.session.auto_app_key
+                    secret = config.session.auto_app_secret
+                    if not key: # Fallback
+                        key = config.session.real_app_key; secret = config.session.real_app_secret
+                else:
+                    key = config.session.app_key if config.session.is_simulation else config.session.real_app_key
+                    secret = config.session.app_secret if config.session.is_simulation else config.session.real_app_secret
 
-        headers = {
-            "Content-Type": "application/json",
-            "authorization": f"Bearer {token_to_use}",
-            "appKey": key,
-            "appSecret": secret,
-            "tr_id": tr_id
-        }
-        
-        full_url = f"{base_url}/{url_path}"
-        
-        # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
-        try:
-            if method == "GET":
-                res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout, retries=retries)
-            else:
-                res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout, retries=retries)
-            
-            return res.json()
-        except Exception as e:
-            return {'rt_cd': '9999', 'msg1': str(e)}
+                env_key = "sim" if config.session.is_simulation else "real"
+                current_tr_id = tr_id
+                if current_tr_id is None:
+                    try:
+                        current_tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
+                    except KeyError:
+                        return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
+
+                headers = {
+                    "Content-Type": "application/json",
+                    "authorization": f"Bearer {token_to_use}",
+                    "appKey": key,
+                    "appSecret": secret,
+                    "tr_id": current_tr_id
+                }
+                
+                full_url = f"{base_url}/{url_path}"
+                
+                # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
+                if method == "GET":
+                    res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout, retries=retries)
+                else:
+                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout, retries=retries)
+                
+                return res.json()
+            except Exception as e:
+                # [추가] 토큰 만료 예외 감지 시 갱신 후 재시도
+                if "Token Expired" in str(e) and attempt == 0:
+                    logger.warning(f"[API] 토큰 만료 감지({str(e)}). 갱신 후 재시도합니다.")
+                    if getattr(config.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
+                        get_auto_access_token(force_refresh=True)
+                    elif config.session.is_simulation:
+                        get_access_token(force_refresh=True)
+                    else:
+                        get_real_access_token(force_refresh=True)
+                    continue
+                
+                return {'rt_cd': '9999', 'msg1': str(e)}
     finally:
         if use_lock:
             config.SYSTEM_TRADING_LOCK.release()
