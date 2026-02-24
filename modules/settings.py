@@ -43,6 +43,7 @@ def _save_dynamic_config():
 
 def view_system_config():
     """현재 시스템 설정 조회"""
+    console.print()
     table = Table(title="현재 시스템 설정 (System Configuration)", box=box.HORIZONTALS, show_header=True, header_style="bold cyan", border_style="dim")
     table.add_column("그룹", style="bold yellow", justify="left")
     table.add_column("항목", style="white", justify="left")
