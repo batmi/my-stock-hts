@@ -384,28 +384,21 @@ def get_access_token(force_refresh=False):
         return _get_access_token_internal(force_refresh)
 
 def _get_access_token_internal(force_refresh=False):
-    # [수정] 메인 스레드가 아니면 신규 발급 금지 (캐시된 토큰만 허용)
-    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
-    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
-        if not force_refresh:
-            token = config.session.get_valid_token("SIMULATION")
-            if token: return token
-            logger.error("[Token] 백그라운드 스레드에서 토큰 발급이 요청되었습니다. (발급 거부)")
-            return None
-        else:
-            logger.debug("[Token] 백그라운드 스레드에서 토큰 강제 갱신을 수행합니다.")
+    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
+    # (자정 이후 세션 만료 등으로 인한 재발급 필요성 대응)
+    if not force_refresh:
+        token = config.session.get_valid_token("SIMULATION")
+        if token:
+            logger.debug("모의 캐시 토큰 사용")
+            return token
+        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
+        logger.info("[Token] 유효한 모의 토큰이 없어 신규 발급을 진행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지: 최근 발급된 토큰이 있으면 강제 갱신 요청이 와도 무시하고 캐시 반환
     if force_refresh:
         if config.session.is_token_recently_issued("SIMULATION", seconds=60):
             logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
             return config.session.get_valid_token("SIMULATION", force_disk_reload=True)
-
-    if not force_refresh:
-        token = config.session.get_valid_token("SIMULATION")
-        if token:
-            logger.debug("모의 캐시 토큰 사용")
-            return token
 
     # [추가] 키 누락 시 조기 리턴 (불필요한 서버 요청 방지)
     if not config.session.app_key or not config.session.app_secret:
@@ -457,16 +450,14 @@ def get_real_access_token(force_refresh=False):
         return _get_real_access_token_internal(force_refresh)
 
 def _get_real_access_token_internal(force_refresh=False):
-    # [수정] 메인 스레드가 아니면 신규 발급 금지
-    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
-    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
-        if not force_refresh:
-            token = config.session.get_valid_token("REAL")
-            if token: return token
-            logger.error("[Token] 백그라운드 스레드에서 실전 토큰 발급이 요청되었습니다. (발급 거부)")
-            return None
-        else:
-            logger.debug("[Token] 백그라운드 스레드에서 실전 토큰 강제 갱신을 수행합니다.")
+    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
+    if not force_refresh:
+        token = config.session.get_valid_token("REAL")
+        if token:
+            logger.debug("실전 캐시 토큰 사용")
+            return token
+        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
+        logger.info("[Token] 유효한 실전 토큰이 없어 신규 발급을 진행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
@@ -475,12 +466,6 @@ def _get_real_access_token_internal(force_refresh=False):
             return config.session.get_valid_token("REAL", force_disk_reload=True)
 
     if not config.session.real_app_key: return None
-
-    if not force_refresh:
-        token = config.session.get_valid_token("REAL")
-        if token:
-            logger.debug("실전 캐시 토큰 사용")
-            return token
 
     headers = {"content-type": "application/json"}
     # [수정] session에서 키 사용
@@ -531,16 +516,14 @@ def _get_auto_access_token_internal(force_refresh=False):
        config.session.auto_app_key == config.session.real_app_key:
         return get_real_access_token(force_refresh)
 
-    # [수정] 메인 스레드가 아니면 신규 발급 금지
-    # 단, force_refresh=True(만료 감지 후 갱신)인 경우는 백그라운드 스레드라도 허용
-    if config.MAIN_THREAD_ID and threading.get_ident() != config.MAIN_THREAD_ID:
-        if not force_refresh:
-            token = config.session.get_valid_token("AUTO")
-            if token: return token
-            logger.error("[Token] 백그라운드 스레드에서 자동매매 토큰 발급이 요청되었습니다. (발급 거부)")
-            return None
-        else:
-            logger.debug("[Token] 백그라운드 스레드에서 자동매매 토큰 강제 갱신을 수행합니다.")
+    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
+    if not force_refresh:
+        token = config.session.get_valid_token("AUTO")
+        if token:
+            logger.debug("자동매매 캐시 토큰 사용")
+            return token
+        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
+        logger.info("[Token] 유효한 자동매매 토큰이 없어 신규 발급을 진행합니다.")
 
     # [추가] 빈도 제한(EGW00133) 방지
     if force_refresh:
@@ -549,12 +532,6 @@ def _get_auto_access_token_internal(force_refresh=False):
             return config.session.get_valid_token("AUTO", force_disk_reload=True)
 
     if not config.session.auto_app_key: return None
-
-    if not force_refresh:
-        token = config.session.get_valid_token("AUTO")
-        if token:
-            logger.debug("자동매매 캐시 토큰 사용")
-            return token
 
     headers = {"content-type": "application/json"}
     # [수정] session에서 키 사용

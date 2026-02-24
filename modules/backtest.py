@@ -134,6 +134,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
+    # [추가] 리스크 관리 설정 로드
+    risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+    
+    # [추가] ATR 기반 손절 설정 로드
+    use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+    atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+    use_vol_target = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+
     peak_asset = initial_capital
     mdd = 0.0
     win_trades = 0
@@ -187,7 +195,33 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         tick = get_tick_size(price)
                         buy_price = int(price + tick)
 
-                    qty = int(balance / buy_price)
+                    # [추가] ATR 기반 동적 손절률 계산
+                    current_sl_rate = stop_loss_limit
+                    atr_val = row.get('ATR', 0) # indicators.py에서 계산된 ATR 컬럼 필요 (현재는 없음)
+                    # indicators.py의 get_atr_full_series 결과를 df에 병합해야 함 (아래 get_backtest_data 수정 필요)
+                    
+                    # 임시: ATR 컬럼이 없으면 고정 손절률 사용
+                    # (실제로는 get_backtest_data에서 ATR 계산 후 병합하는 로직이 선행되어야 함)
+                    
+                    # [추가] 리스크 기반 포지션 사이징 적용 (백테스팅)
+                    invest_amt = balance
+                    if risk_per_trade > 0 and current_sl_rate and abs(current_sl_rate) > 0:
+                        # 현재 자산(balance) 기준 리스크 계산
+                        max_loss_amt = balance * (risk_per_trade / 100.0)
+                        sl_ratio = abs(current_sl_rate) / 100.0
+                        risk_based_amt = int(max_loss_amt / sl_ratio)
+                        invest_amt = min(balance, risk_based_amt)
+                        
+                    # [추가] 변동성 타겟팅 스케일링 (간이 구현)
+                    # ATR 데이터가 있다면 적용 가능
+                    # if use_vol_target and atr_val > 0:
+                    #     daily_vol = atr_val / buy_price
+                    #     annual_vol = daily_vol * (252 ** 0.5)
+                    #     scale = config.TARGET_VOLATILITY / annual_vol
+                    #     invest_amt = int(invest_amt * scale)
+
+                    qty = int(invest_amt / buy_price)
+                    
                     if qty > 0:
                         cost = qty * buy_price
                         balance -= cost
@@ -492,6 +526,7 @@ def run_backtest():
         df['CCI'] = indicators.get_cci_full_series(df)
         df['OBV'] = indicators.get_obv_full_series(df)
         df['OBV_MA'] = df['OBV'].rolling(window=config.INDICATOR_PARAMS["OBV_MA_PERIOD"]).mean()
+        df['ATR'] = indicators.get_atr_full_series(df) # [추가] ATR 계산
         df['MACD'], df['MACD_Signal'], _ = indicators.get_macd_full_series(df)
 
         # 분석 기간 필터링

@@ -93,7 +93,7 @@ def show_market_indices():
         table.add_column("EMA(20)", justify="right")
         table.add_column("EMA(60)", justify="right")
         table.add_column("EMA(120)", justify="right")
-        table.add_column("SAR", justify="right")
+        table.add_column("추세SMO", justify="center")
         table.add_column("RSI", justify="right")
         table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
@@ -144,7 +144,7 @@ def show_market_indices():
 
                 # 지표 계산
                 ema5, ema20, ema60, ema120 = None, None, None, None
-                val_psar, val_rsi, val_adx, val_cci = None, None, None, None
+                val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
                 high_52_daily = 0.0
 
                 if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
@@ -158,6 +158,8 @@ def show_market_indices():
                     val_rsi = ind.get('rsi')
                     val_adx = ind.get('adx')
                     val_cci = ind.get('cci')
+                    val_macd = ind.get('macd')
+                    val_macd_sig = ind.get('macd_signal')
                     high_52_daily = float(df_calc['close'].tail(250).max())
 
                 # --- B. 가격 결정 로직 (Prioritize: fast_info > Intraday > Daily) ---
@@ -358,10 +360,24 @@ def show_market_indices():
                     if ema60 > ema120: ema120_color = "[red]" 
                     elif ema60 < ema120: ema120_color = "[blue]"
 
-                sar_str = "-"
+                # 추세(S/M/O) 통합
+                # S (SAR)
+                sar_icon = "-"
                 if val_psar is not None:
-                    s_val = f"{val_psar:,.2f}"
-                    sar_str = f"[red]{s_val}[/]" if current > val_psar else f"[blue]{s_val}[/]"
+                    sar_icon = "[red]⬆[/]" if current > val_psar else "[blue]⬇[/]"
+                
+                # M (MACD)
+                macd_icon = "-"
+                if val_macd is not None and val_macd_sig is not None:
+                    zero_sign = "+" if val_macd > 0 else "-"
+                    cross_char = "G" if val_macd > val_macd_sig else "D"
+                    m_color = "red" if val_macd > val_macd_sig else "blue"
+                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+                
+                # O (OBV) - 지수는 거래량 데이터가 부정확할 수 있어 생략하거나 '-' 처리
+                obv_icon = "-" 
+                
+                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
                 rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "-"
                 if val_rsi is not None:
@@ -435,7 +451,7 @@ def show_market_indices():
                     elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
                     elif current < 400: display_name = f"[blue]{name}[/]"
 
-                table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), sar_str, rsi_str, adx_str, cci_str)
+                table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str)
 
             except Exception as e:
                 # [변경] config.DEBUG_LEVEL 참조

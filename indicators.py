@@ -81,6 +81,17 @@ def get_adx_full_series(df, n=None):
     dx = 100 * (di_p - di_m).abs() / (di_p + di_m)
     return dx.ewm(com=n-1, adjust=False).mean()
 
+def get_atr_full_series(df, period=None):
+    """ATR (Average True Range) 계산"""
+    if period is None: period = config.INDICATOR_PARAMS.get("ATR_PERIOD", 14)
+    
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.ewm(alpha=1/period, adjust=False).mean()
+
 def get_obv_full_series(df):
     obv = (np.sign(df['close'].diff()).fillna(0) * df['volume']).cumsum()
     return obv
@@ -106,7 +117,7 @@ def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     return psar[-1] if psar else None
 
 def calculate_indicators(df):
-    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
+    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
     
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
@@ -145,6 +156,9 @@ def calculate_indicators(df):
 
     if len(df) >= 28:
         indicators['adx'] = get_adx_full_series(df).iloc[-1]
+        
+    if len(df) >= 15:
+        indicators['atr'] = get_atr_full_series(df).iloc[-1]
         
     if len(df) >= 5:
         indicators['psar'] = calculate_psar_series(df)

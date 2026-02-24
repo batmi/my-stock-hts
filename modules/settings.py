@@ -15,6 +15,7 @@ def _save_dynamic_config():
         "SELL_STRATEGY": config.SELL_STRATEGY,
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5),
+        "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 5),
         "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config, 'USE_MARKET_FILTER', True),
@@ -22,14 +23,20 @@ def _save_dynamic_config():
         "CONCLUSION_CHECK_INTERVAL": getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
         "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100),
+        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600),
         "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
         "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
         "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
         "SCREEN_DEBUG_LEVEL": getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"),
-        "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "INFO"),
+        "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
         "SYSTEM_TRADING_START_TIME": getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"),
-        "SYSTEM_TRADING_END_TIME": getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
+        "SYSTEM_TRADING_END_TIME": getattr(config, 'SYSTEM_TRADING_END_TIME', "1515"),
+        "SYSTEM_RISK_PER_TRADE": getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0),
+        "USE_VOLATILITY_TARGETING": getattr(config, 'USE_VOLATILITY_TARGETING', True),
+        "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
+        "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
+        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
     }
     
     try:
@@ -51,6 +58,7 @@ def view_system_config():
 
     # 1. 시스템 트레이딩 일반
     table.add_row("트레이딩 일반", "종목당 투자 비중", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)}")
+    table.add_row("", "최대 보유 종목 수", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)}개")
     table.add_row("", "모니터링 주기 (초)", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
     table.add_row("", "일일 손실 제한 (%)", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
     table.add_row("", "시장 필터링 사용", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
@@ -58,6 +66,15 @@ def view_system_config():
     table.add_row("", "연속 에러 허용", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
     table.add_row("", "거래 시작 시간", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0915')}")
     table.add_row("", "거래 종료 시간", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
+    table.add_row("", "1회 최대 리스크", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}% (계좌대비)")
+    table.add_row("", "변동성 타겟팅", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
+    if getattr(config, 'USE_VOLATILITY_TARGETING', True):
+        table.add_row("", "  목표 변동성", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
+        table.add_row("", "  스케일링 범위", f"{getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)} ~ {getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)}배")
+    table.add_row("", "체결 감시 주기", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}초 (대기 {getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}초)")
+    table.add_row("", "집중 감시 시간", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100)}초")
+    table.add_row("", "미체결 취소 대기", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)}초")
+
     table.add_section()
 
     # 2. 매수/분석 임계값
@@ -76,6 +93,8 @@ def view_system_config():
     table.add_row("", "과열 매도 RSI", f"{sell.get('TAKE_PROFIT_RSI')}")
     table.add_row("", "TS 발동 수익률", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
     table.add_row("", "TS 하락 감지율", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
+    table.add_row("", "ATR 손절 사용", f"{sell.get('USE_ATR_STOP', False)}")
+    table.add_row("", "ATR 손절 배수", f"{sell.get('ATR_STOP_MULTIPLIER', 2.0)}배")
     table.add_section()
 
     # 4. 기술적 지표
@@ -88,6 +107,7 @@ def view_system_config():
     table.add_row("", "CCI (Window/Up/Low)", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
     table.add_row("", "MACD (Fast/Slow/Sig)", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
     table.add_row("", "OBV MA 기간", f"{ind.get('OBV_MA_PERIOD')}")
+    table.add_row("", "ATR 기간", f"{ind.get('ATR_PERIOD')}")
     table.add_section()
 
     # 5. 텔레그램
@@ -98,7 +118,7 @@ def view_system_config():
 
     # 6. 로그 레벨
     table.add_row("로그 레벨", "화면 (Screen)", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
-    table.add_row("", "파일 (File)", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'INFO')}")
+    table.add_row("", "파일 (File)", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
 
     console.print(table)
     console.print()
@@ -169,6 +189,17 @@ def modify_sell_strategy():
     val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (현재: {curr_cb})", default=str(curr_cb))
     if val.lower() == 'q': return
     try: config.SELL_STRATEGY["TRAILING_STOP_CALLBACK_RATE"] = float(val)
+    except: pass
+
+    curr_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+    val = Prompt.ask(f"ATR 기반 동적 손절 사용 (현재: {curr_atr})", choices=["y", "n"], default="y" if curr_atr else "n")
+    if val.lower() == 'q': return
+    config.SELL_STRATEGY["USE_ATR_STOP"] = (val == "y")
+
+    curr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+    val = Prompt.ask(f"ATR 손절 배수 (현재: {curr_mult})", default=str(curr_mult))
+    if val.lower() == 'q': return
+    try: config.SELL_STRATEGY["ATR_STOP_MULTIPLIER"] = float(val)
     except: pass
 
     _save_dynamic_config()
@@ -276,6 +307,13 @@ def modify_indicator_params():
     if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["OBV_MA_PERIOD"] = int(val)
 
+    # 7. ATR
+    console.print("\n[bold cyan][7] ATR (변동성)[/]")
+    curr = config.INDICATOR_PARAMS.get("ATR_PERIOD", 14)
+    val = Prompt.ask(f"ATR 계산 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["ATR_PERIOD"] = int(val)
+
     _save_dynamic_config()
 
 def modify_telegram_settings():
@@ -308,7 +346,7 @@ def modify_log_settings():
     if val.lower() == 'q': return
     config.SCREEN_DEBUG_LEVEL = val
     
-    curr_file = getattr(config, 'FILE_DEBUG_LEVEL', "INFO")
+    curr_file = getattr(config, 'FILE_DEBUG_LEVEL', "WARNING")
     val = Prompt.ask(f"파일 로그 레벨 (DEBUG/INFO/WARNING/ERROR) (현재: {curr_file})", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default=curr_file)
     if val.lower() == 'q': return
     config.FILE_DEBUG_LEVEL = val
@@ -338,6 +376,12 @@ def modify_system_trading_general():
         if 0 < new_val <= 1.0: config.SYSTEM_INVEST_PER_STOCK = new_val
     except: pass
 
+    # SYSTEM_MAX_HOLDINGS
+    curr = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
+    val = Prompt.ask(f"최대 보유 종목 수 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.SYSTEM_MAX_HOLDINGS = int(val)
+
     # SYSTEM_TRADING_INTERVAL
     curr = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
     val = Prompt.ask(f"자동매매 모니터링 주기(초) (현재: {curr})", default=str(curr))
@@ -350,6 +394,58 @@ def modify_system_trading_general():
     if val.lower() == 'q': return
     try: config.SYSTEM_DAILY_LOSS_LIMIT = float(val)
     except: pass
+
+    # USE_VOLATILITY_TARGETING
+    curr = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+    val = Prompt.ask(f"변동성 타겟팅 사용 (현재: {curr})", choices=["y", "n"], default="y" if curr else "n")
+    if val.lower() == 'q': return
+    config.USE_VOLATILITY_TARGETING = (val == "y")
+
+    if config.USE_VOLATILITY_TARGETING:
+        # TARGET_VOLATILITY
+        curr = getattr(config, 'TARGET_VOLATILITY', 0.20)
+        val = Prompt.ask(f"목표 연간 변동성 (0.1=10%) (현재: {curr})", default=str(curr))
+        if val.lower() == 'q': return
+        try: config.TARGET_VOLATILITY = float(val)
+        except: pass
+        
+        # VOLATILITY_SCALING_MAX
+        curr = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
+        val = Prompt.ask(f"변동성 스케일링 최대 배수 (현재: {curr})", default=str(curr))
+        if val.lower() == 'q': return
+        try: config.VOLATILITY_SCALING_MAX = float(val)
+        except: pass
+        
+        # [추가] VOLATILITY_SCALING_MIN
+        curr = getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
+        val = Prompt.ask(f"변동성 스케일링 최소 배수 (현재: {curr})", default=str(curr))
+        if val.lower() == 'q': return
+        try: config.VOLATILITY_SCALING_MIN = float(val)
+        except: pass
+
+    # CONCLUSION_CHECK_INTERVAL
+    curr = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)
+    val = Prompt.ask(f"체결 집중 감시 주기(초) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.CONCLUSION_CHECK_INTERVAL = int(val)
+
+    # CONCLUSION_CHECK_IDLE_INTERVAL
+    curr = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)
+    val = Prompt.ask(f"체결 대기 감시 주기(초) (현재: {curr}, 0:미사용)", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.CONCLUSION_CHECK_IDLE_INTERVAL = int(val)
+
+    # CONCLUSION_CHECK_ACTIVE_DURATION
+    curr = getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100)
+    val = Prompt.ask(f"주문 후 집중 감시 유지 시간(초) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.CONCLUSION_CHECK_ACTIVE_DURATION = int(val)
+
+    # UNFILLED_ORDER_CANCEL_SECONDS
+    curr = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)
+    val = Prompt.ask(f"미체결 주문 자동 취소 대기 시간(초) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.UNFILLED_ORDER_CANCEL_SECONDS = int(val)
 
     # USE_MARKET_FILTER
     curr = getattr(config, 'USE_MARKET_FILTER', True)
@@ -368,6 +464,13 @@ def modify_system_trading_general():
     val = Prompt.ask(f"연속 에러 허용 횟수 (현재: {curr})", default=str(curr))
     if val.lower() == 'q': return
     if val.isdigit(): config.SYSTEM_MAX_CONSECUTIVE_ERRORS = int(val)
+
+    # SYSTEM_RISK_PER_TRADE
+    curr = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+    val = Prompt.ask(f"1회 트레이드 최대 허용 손실률(%) (현재: {curr}, 0:미사용)", default=str(curr))
+    if val.lower() == 'q': return
+    try: config.SYSTEM_RISK_PER_TRADE = float(val)
+    except: pass
 
     # SYSTEM_TRADING_START_TIME
     curr = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
@@ -410,15 +513,18 @@ def reset_to_default():
     config.SELL_STRATEGY.update({
         "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
         "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
+        ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0
     })
     config.INDICATOR_PARAMS.update({
         "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
         "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
         "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
-        "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30
+        "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
+        "ATR_PERIOD": 14
     })
     
     config.SYSTEM_INVEST_PER_STOCK = 0.5
+    config.SYSTEM_MAX_HOLDINGS = 5
     config.SYSTEM_TRADING_INTERVAL = 180
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
     config.USE_MARKET_FILTER = True
@@ -430,10 +536,16 @@ def reset_to_default():
     config.TELEGRAM_INSTANCE_NAME = "HTS"
     config.TELEGRAM_POLLING_TIMEOUT = 10
     config.SCREEN_DEBUG_LEVEL = "OFF"
-    config.FILE_DEBUG_LEVEL = "INFO"
+    config.FILE_DEBUG_LEVEL = "WARNING"
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
     config.SYSTEM_TRADING_START_TIME = "0915"
     config.SYSTEM_TRADING_END_TIME = "1515"
+    config.SYSTEM_RISK_PER_TRADE = 5.0
+    config.USE_VOLATILITY_TARGETING = True
+    config.TARGET_VOLATILITY = 0.20
+    config.VOLATILITY_SCALING_MAX = 2.0
+    config.VOLATILITY_SCALING_MIN = 0.3
+    config.UNFILLED_ORDER_CANCEL_SECONDS = 600
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 

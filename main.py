@@ -143,6 +143,11 @@ def show_help():
     table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
     table.add_section()
 
+    table.add_row("추세SMO", "S (SAR)", "[red]⬆[/] / [blue]⬇[/]", "상승 / 하락")
+    table.add_row("", "M (MACD)", "[red]+G[/] / [blue]-D[/]", "골든/데드 (0선 위/아래)")
+    table.add_row("", "O (OBV)", "[red]▲[/] / [blue]▼[/]", "수급 상승 / 하락")
+    table.add_section()
+
     rsi_upper = config.INDICATOR_PARAMS["RSI_UPPER"]
     rsi_lower = config.INDICATOR_PARAMS["RSI_LOWER"]
 
@@ -368,30 +373,51 @@ def main():
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
     config.MAIN_THREAD_ID = threading.get_ident()
 
-    # 1. 환경 설정 로드
-    config.session.initialize(mode=args.mode)
-    
-    # [추가] CLI 인자로 봇 비활성화 요청 시 설정 변경
-    if args.no_bot:
-        config.ENABLE_TELEGRAM = False
-        config.console.print()
-        config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
+    # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
+    if args.mode:
+        with config.console.status("[bold green]시스템 초기화 및 환경 설정 로드 중...[/]") as status:
+            # 1. 환경 설정 로드
+            config.session.initialize(mode=args.mode)
+            
+            if args.no_bot:
+                config.ENABLE_TELEGRAM = False
+                config.console.print()
+                config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
 
-    # 2. 종목 데이터 로드
-    config.session.load_stock_config()
-    
-    # 3. 토큰 발급 (초기 실행 시 모드에 따라 즉시 발급)
-    if config.session.is_simulation:
-        api.get_access_token()
+            status.update("[bold green]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/]")
+            time.sleep(1) # 인지용 대기
+
+            # 2. 종목 데이터 로드
+            config.session.load_stock_config()
+            
+            # 3. 토큰 발급
+            if config.session.is_simulation:
+                api.get_access_token()
+            else:
+                api.get_real_access_token()
+
+            # 백그라운드 서비스 시작
+            auto_trade.ConclusionMonitor().start()
+            telegram_cmd = telegram_bot.TelegramCommander()
+            telegram_cmd.start()
     else:
-        api.get_real_access_token()
+        # 대화형 모드 (사용자 입력 대기 필요하므로 status 나중에 시작)
+        config.session.initialize(mode=args.mode)
+        
+        if args.no_bot:
+            config.ENABLE_TELEGRAM = False
+            config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
 
-    # [추가] 체결 감시자 시작 (백그라운드)
-    auto_trade.ConclusionMonitor().start()
-
-    # [추가] 텔레그램 명령어 수신 시작 (백그라운드)
-    telegram_cmd = telegram_bot.TelegramCommander()
-    telegram_cmd.start()
+        with config.console.status("[bold green]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/]"):
+            time.sleep(1)
+            config.session.load_stock_config()
+            if config.session.is_simulation:
+                api.get_access_token()
+            else:
+                api.get_real_access_token()
+            auto_trade.ConclusionMonitor().start()
+            telegram_cmd = telegram_bot.TelegramCommander()
+            telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"

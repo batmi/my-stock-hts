@@ -18,6 +18,7 @@ import concurrent.futures
 import shutil
 import sqlite3
 import json
+import math
 from openpyxl.styles import Font
 
 logger = logging.getLogger(__name__)
@@ -394,6 +395,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         adx_str = f"[white]{adx_str}[/]"
         adx_desc = "추세 없음 (횡보)"
     table_tech.add_row("ADX (14)", f"{adx_str} [dim]({adx_desc})[/dim]", "추세 강도 (25 이상 강세)")
+
+    # ATR (변동성)
+    atr_val = ind.get('atr', 0)
+    vol_str = "-"
+    if atr_val > 0 and current_price > 0:
+        annual_vol = (atr_val / current_price) * math.sqrt(252) * 100
+        vol_str = f"{annual_vol:.1f}%"
+    
+    table_tech.add_row("변동성 (ATR)", f"{int(atr_val):,} ({vol_str})", "연환산 변동성 (리스크)")
 
     # CCI
     cci_val = ind['cci']
@@ -1073,29 +1083,52 @@ def analyze_market_stocks(market_type):
         table.add_column("52주(위치)", justify="right")
         table.add_column("점수", justify="center")
         table.add_column("상태", justify="center")
+        table.add_column("추세SMO", justify="center")
         table.add_column("RSI", justify="right")
         table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
-        table.add_column("SAR", justify="center")
-        table.add_column("MACD", justify="center")
-        table.add_column("OBV", justify="center")
         table.add_column("체결강도", justify="right")
         
         for i, item in enumerate(page_items):
-            rsi_str = f"{item['rsi']:.1f}" if item['rsi'] is not None else "-"
-            adx_str = f"{item['adx']:.1f}" if item['adx'] is not None else "-"
-            cci_str = f"{item['cci']:.1f}" if item['cci'] is not None else "-"
+            rsi_val = item['rsi']
+            rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+            if rsi_val is not None:
+                if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
+                elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                else: rsi_str = f"[blue]{rsi_str}[/]"
+
+            adx_val = item['adx']
+            adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
+            if adx_val is not None:
+                if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
+                elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
+                else: adx_str = f"[white]{adx_str}[/]"
+
+            cci_val = item['cci']
+            cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
+            if cci_val is not None:
+                if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                else: cci_str = f"[blue]{cci_str}[/]"
             
             # SAR 상태
             sar_val = item.get('psar')
-            sar_str = "[red]상승[/]" if sar_val and item['price'] > sar_val else "[blue]하락[/]"
+            sar_icon = "[red]⬆[/]" if sar_val and item['price'] > sar_val else "[blue]⬇[/]"
             
             # MACD 상태
             macd_val = item.get('macd')
             sig_val = item.get('macd_signal')
-            macd_str = "-"
+            macd_icon = "-"
             if macd_val is not None and sig_val is not None:
-                macd_str = "[red]골든[/]" if macd_val > sig_val else "[blue]데드[/]"
+                zero_sign = "+" if macd_val > 0 else "-"
+                cross_char = "G" if macd_val > sig_val else "D"
+                m_color = "red" if macd_val > sig_val else "blue"
+                macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
 
             s_color = item.get('state_color', '[white]').replace('[', '').replace(']', '')
             
@@ -1107,9 +1140,11 @@ def analyze_market_stocks(market_type):
             elif pos <= 20: w_color = "[blue]"
             
             obv_trend = item.get('obv_trend')
-            obv_str = "-"
-            if obv_trend is True: obv_str = "[red]상승[/]"
-            elif obv_trend is False: obv_str = "[blue]하락[/]"
+            obv_icon = "-"
+            if obv_trend is True: obv_icon = "[red]▲[/]"
+            elif obv_trend is False: obv_icon = "[blue]▼[/]"
+            
+            trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
             
             vol_val = item.get('vol_strength')
             vol_str = "-"
@@ -1126,12 +1161,10 @@ def analyze_market_stocks(market_type):
                 f"{w_color}{pos:.1f}%[/]",
                 f"[{s_color}]{item['score']}[/]",
                 f"[{s_color}]{item['state']}[/]",
+                trend_str,
                 rsi_str,
                 adx_str,
                 cci_str,
-                sar_str,
-                macd_str,
-                obv_str,
                 vol_str
             )
             
@@ -1342,7 +1375,7 @@ def print_table(title, data_list, is_overseas=False):
     table.add_column("EMA(20)", justify="right")
     table.add_column("EMA(60)", justify="right")
     table.add_column("EMA(120)", justify="right")
-    table.add_column("SAR", justify="right") 
+    table.add_column("추세SMO", justify="center")
     table.add_column("RSI", justify="right")
     table.add_column("ADX", justify="right")
     table.add_column("CCI", justify="right")
@@ -1354,7 +1387,6 @@ def print_table(title, data_list, is_overseas=False):
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
         if use_investor_data: table.add_column("개인/외인/기관", justify="center")
-        else: table.add_column("OBV", justify="right")
     else:
         table.add_column("52주", justify="right")
         if is_us_stock:
@@ -1510,10 +1542,31 @@ def print_table(title, data_list, is_overseas=False):
                 elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
             ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
 
-            sar_str = "-"
-            if ind['psar'] is not None:
-                sar_val_str = fmt_idx_float(ind['psar']) if is_overseas else fmt_idx(ind['psar'])
-                sar_str = f"[red]{sar_val_str}[/]" if curr > ind['psar'] else f"[blue]{sar_val_str}[/]"
+            # SAR 상태
+            sar_val = ind.get('psar')
+            if sar_val is not None:
+                sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
+            else:
+                sar_icon = "-"
+            
+            # MACD 상태
+            macd_val = ind.get('macd')
+            sig_val = ind.get('macd_signal')
+            macd_icon = "-"
+            if macd_val is not None and sig_val is not None:
+                zero_sign = "+" if macd_val > 0 else "-"
+                cross_char = "G" if macd_val > sig_val else "D"
+                m_color = "red" if macd_val > sig_val else "blue"
+                macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+
+            # OBV 상태
+            obv_trend = ind.get('obv_trend')
+            if obv_trend is not None:
+                obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
+            else:
+                obv_icon = "-"
+            
+            trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             if ind['rsi'] is not None:
@@ -1548,12 +1601,11 @@ def print_table(title, data_list, is_overseas=False):
                 elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
                 elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
 
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, sar_str, rsi_str, adx_str, cci_str]
+            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
                 row_data.append(w52_pos_str)
                 if not is_domestic_etf: row_data.append(foreign_rate_str)
-                obv_display = f"{'[red]' if ind.get('obv_trend') else '[blue]'}{int(ind['obv']/1000):,}K[/]"
-                row_data.append(inv_str if use_investor_data else obv_display)
+                if use_investor_data: row_data.append(inv_str)
             else:
                 row_data.append(w52_pos_str)
                 if is_us_stock: row_data.extend([per_str, pbr_str])

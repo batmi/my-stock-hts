@@ -107,12 +107,32 @@ SYSTEM_TRADING_INTERVAL = 180  # 자동매매 모니터링 주기 (초)
 # - 너무 길면(예: 300초) 급변하는 시세에 대응하기 어렵습니다.
 SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉토리
 # (파일명은 system_trade_YYYY-MM-DD.log 형태로 자동 생성됩니다)
-SYSTEM_INVEST_PER_STOCK = 0.5  # [수정] 종목당 투자 비중 (50%로 상향 조정)
+
+# [종목당 최대 투자 비중]
+# 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.5 = 50%)
+# - 리스크 기반 포지션 사이징(SYSTEM_RISK_PER_TRADE)과 함께 사용될 경우,
+#   두 방식 중 '더 적은 금액'이 최종 투자 금액으로 결정됩니다. (이중 안전장치: 몰빵 방지 + 리스크 관리)
+# - 만약 리스크 기반 사이징만 전적으로 따르고 싶다면 이 값을 1.0(100%)으로 설정하세요.
+SYSTEM_INVEST_PER_STOCK = 0.5
+
+# [최대 보유 종목 수]
+# 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 5)
+SYSTEM_MAX_HOLDINGS = 5
 
 USE_MARKET_FILTER = True       # [추가] 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
 MARKET_FILTER_MA = 20          # [추가] 시장 필터링 기준 이동평균선 (일)
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
 SYSTEM_DAILY_LOSS_LIMIT = 10.0     # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
+SYSTEM_RISK_PER_TRADE = 5.0        # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
+
+# [설정] 변동성 타겟팅 (Volatility Targeting)
+USE_VOLATILITY_TARGETING = True    # 변동성 타겟팅 사용 여부
+TARGET_VOLATILITY = 0.20           # 목표 연간 변동성 (20%)
+                                   # - 0.10 ~ 0.15: 보수적/안정적 (생존 우선, MDD 최소화)
+                                   # - 0.15 ~ 0.20: 적극적 (시장 수익률 추구) -> 현재 설정
+VOLATILITY_SCALING_MAX = 2.0       # 최대 확대 배수 (2배) - 변동성이 낮을 때 포지션 확대 제한
+VOLATILITY_SCALING_MIN = 0.3       # 최소 축소 배수 (0.3배) - 변동성이 높을 때 최소 포지션 유지
+
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
@@ -128,8 +148,8 @@ CONCLUSION_CHECK_IDLE_INTERVAL = 300
 CONCLUSION_CHECK_ACTIVE_DURATION = 100
 
 # [추가] 미체결 주문 자동 취소 대기 시간 (초)
-# 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 900초 = 15분)
-UNFILLED_ORDER_CANCEL_SECONDS = 900
+# 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 600초 = 10분)
+UNFILLED_ORDER_CANCEL_SECONDS = 600
 
 # ==========================================================
 # [설정] 종목 분석 및 상태 분류 임계값
@@ -201,7 +221,13 @@ SELL_STRATEGY = {
     "TRAILING_STOP_ACTIVATION_RATE": 10.0,
     
     # 2. 매도 조건: 최고가 대비 이 비율만큼 하락하면 이익 실현 매도를 수행합니다. (기본값: 3.0%)
-    "TRAILING_STOP_CALLBACK_RATE": 3.0
+    "TRAILING_STOP_CALLBACK_RATE": 3.0,
+
+    # [ATR 기반 손절 설정]
+    # 고정 손절률(STOP_LOSS_RATE) 대신 ATR(변동성)을 기반으로 손절폭을 동적으로 설정합니다.
+    # True로 설정 시, 매수 시점의 ATR * Multiplier 만큼의 비율이 손절률로 적용됩니다.
+    "USE_ATR_STOP": True,          # ATR 기반 손절 사용 여부 (기본값: True - 권장)
+    "ATR_STOP_MULTIPLIER": 2.0     # ATR 배수 (기본값: 2.0 - 보통 1.5~3.0 사용)
 }
 
 # ==========================================================
@@ -256,7 +282,12 @@ INDICATOR_PARAMS = {
     "RSI_SIGNAL": 14,              # RSI의 이동평균선(시그널) 계산 기간 (참고용)
     "RSI_UPPER": 70,               # 과매수 기준선 (이 값 이상이면 매도 고려)
     "RSI_MID": 50,                 # 기준선 (50 이상이면 강세, 이하면 약세)
-    "RSI_LOWER": 30                # 과매도 기준선 (이 값 이하면 매수 고려)
+    "RSI_LOWER": 30,               # 과매도 기준선 (이 값 이하면 매수 고려)
+
+    # [ATR] Average True Range (평균 진폭)
+    # - 변동성 지표로, 손절폭 계산이나 변동성 타겟팅에 사용됩니다.
+    # - 기간이 짧을수록 최근 변동성을 민감하게 반영합니다.
+    "ATR_PERIOD": 14               # ATR 계산 기간 (기본 14일)
 }
 
 
@@ -415,9 +446,12 @@ def load_dynamic_config():
             global ENABLE_TELEGRAM
             global TELEGRAM_INSTANCE_NAME, TELEGRAM_POLLING_TIMEOUT
             global SCREEN_DEBUG_LEVEL, FILE_DEBUG_LEVEL
-            global SYSTEM_MAX_CONSECUTIVE_ERRORS, SYSTEM_TRADING_START_TIME, SYSTEM_TRADING_END_TIME
+            global SYSTEM_MAX_CONSECUTIVE_ERRORS, SYSTEM_TRADING_START_TIME, SYSTEM_TRADING_END_TIME, SYSTEM_MAX_TRADES_PER_DAY, SYSTEM_RISK_PER_TRADE
+            global USE_VOLATILITY_TARGETING, TARGET_VOLATILITY, VOLATILITY_SCALING_MAX, VOLATILITY_SCALING_MIN
+            global UNFILLED_ORDER_CANCEL_SECONDS
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
+            if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
             if "SYSTEM_TRADING_INTERVAL" in data: SYSTEM_TRADING_INTERVAL = data["SYSTEM_TRADING_INTERVAL"]
             if "SYSTEM_DAILY_LOSS_LIMIT" in data: SYSTEM_DAILY_LOSS_LIMIT = data["SYSTEM_DAILY_LOSS_LIMIT"]
             
@@ -427,6 +461,7 @@ def load_dynamic_config():
             if "CONCLUSION_CHECK_INTERVAL" in data: CONCLUSION_CHECK_INTERVAL = data["CONCLUSION_CHECK_INTERVAL"]
             if "CONCLUSION_CHECK_IDLE_INTERVAL" in data: CONCLUSION_CHECK_IDLE_INTERVAL = data["CONCLUSION_CHECK_IDLE_INTERVAL"]
             if "CONCLUSION_CHECK_ACTIVE_DURATION" in data: CONCLUSION_CHECK_ACTIVE_DURATION = data["CONCLUSION_CHECK_ACTIVE_DURATION"]
+            if "UNFILLED_ORDER_CANCEL_SECONDS" in data: UNFILLED_ORDER_CANCEL_SECONDS = data["UNFILLED_ORDER_CANCEL_SECONDS"]
             
             if "ENABLE_TELEGRAM" in data: ENABLE_TELEGRAM = data["ENABLE_TELEGRAM"]
             if "TELEGRAM_INSTANCE_NAME" in data: TELEGRAM_INSTANCE_NAME = data["TELEGRAM_INSTANCE_NAME"]
@@ -438,6 +473,11 @@ def load_dynamic_config():
             if "SYSTEM_MAX_CONSECUTIVE_ERRORS" in data: SYSTEM_MAX_CONSECUTIVE_ERRORS = data["SYSTEM_MAX_CONSECUTIVE_ERRORS"]
             if "SYSTEM_TRADING_START_TIME" in data: SYSTEM_TRADING_START_TIME = data["SYSTEM_TRADING_START_TIME"]
             if "SYSTEM_TRADING_END_TIME" in data: SYSTEM_TRADING_END_TIME = data["SYSTEM_TRADING_END_TIME"]
+            if "SYSTEM_RISK_PER_TRADE" in data: SYSTEM_RISK_PER_TRADE = data["SYSTEM_RISK_PER_TRADE"]
+            if "USE_VOLATILITY_TARGETING" in data: USE_VOLATILITY_TARGETING = data["USE_VOLATILITY_TARGETING"]
+            if "TARGET_VOLATILITY" in data: TARGET_VOLATILITY = data["TARGET_VOLATILITY"]
+            if "VOLATILITY_SCALING_MAX" in data: VOLATILITY_SCALING_MAX = data["VOLATILITY_SCALING_MAX"]
+            if "VOLATILITY_SCALING_MIN" in data: VOLATILITY_SCALING_MIN = data["VOLATILITY_SCALING_MIN"]
             
 
         except Exception as e:
