@@ -487,9 +487,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_logic.add_row("보유 판단", sell_result, sell_reason)
     
     # [추가] 체결강도 행 추가
-    vol_str = f"{vol_strength:.1f}%" if vol_strength is not None else "-"
+    vol_str = "-"
     vol_eval = ""
     if vol_strength is not None:
+        v_color = "[red]" if is_buy_vol else "[blue]"
+        vol_str = f"{v_color}{vol_strength:.1f}%[/]"
         vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
     table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
 
@@ -592,7 +594,6 @@ def diagnose_group_stocks(market_filter=None):
     table.add_column("ADX", justify="right")
     table.add_column("CCI", justify="right")
     table.add_column("체결강도", justify="right")
-    table.add_column("체결강도", justify="right")
     
     for r in results:
         s_color = r['state_color'].replace('[', '').replace(']', '')
@@ -644,7 +645,7 @@ def get_analysis_params():
     
     # [추가] 체결강도 입력
     current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol})", default=str(current_vol))
+    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)", default=str(current_vol))
     if val.lower() == 'q': return None
     try: params['BUY_VOL_STRENGTH'] = float(val)
     except: params['BUY_VOL_STRENGTH'] = current_vol
@@ -760,6 +761,10 @@ def _analyze_stock_worker(stock, params=None):
         
         if state == "-": return None # 데이터 부족
 
+        # [추가] 초기 상태 보존 (로그 출력 시 체결강도 미달로 관망으로 변경되더라도 원본 상태 표시)
+        initial_state = state
+        initial_state_color = state_color
+
         score, _ = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
@@ -774,19 +779,35 @@ def _analyze_stock_worker(stock, params=None):
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
-        # [추가] 매수 상태일 경우 체결강도 체크
+        # [수정] 체결강도 조회 최적화: 필터 조건에 맞는 종목만 조회
         vol_strength = None
-        if state == "매수":
+        
+        # 조회 대상 상태 정의 (기본: 매수, 상승)
+        target_vol_states = ["매수", "상승"]
+        
+        if params:
+            filter_mode = params.get("OUTPUT_FILTER", "ALL")
+            if filter_mode == "BUY": target_vol_states = ["매수"]
+            elif filter_mode == "RISE": target_vol_states = ["상승"]
+        
+        # 현재 상태가 조회 대상에 포함될 때만 체결강도 API 호출
+        if state in target_vol_states:
+            # [추가] 조회 실패 시 재시도 로직 (최대 2회)
+            for _ in range(2):
+                try:
+                    vol_strength = api.get_realtime_vol_strength(code)
+                    if vol_strength is not None: break
+                except: time.sleep(0.1)
+
+        # [수정] 매수 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
+        if state in ["매수", "상승"] and vol_strength is not None:
             try:
-                # 실시간 체결강도 조회 (국내주식만 해당)
-                vol_strength = api.get_realtime_vol_strength(code)
-                
                 if params and 'BUY_VOL_STRENGTH' in params:
                     min_vol = params['BUY_VOL_STRENGTH']
                 else:
                     min_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
                 
-                if vol_strength is not None and vol_strength < min_vol:
+                if min_vol > 0 and vol_strength < min_vol:
                     state = "관망"
                     state_color = "[white]"
                     state_reason = f"체결강도 미달({vol_strength:.1f}% < {min_vol}%)"
@@ -807,7 +828,7 @@ def _analyze_stock_worker(stock, params=None):
 
         return {
             'code': code, 'name': name, 'price': current_price,
-            'score': score, 'state': state, 'state_color': state_color, 'state_reason': state_reason,
+            'score': score, 'state': initial_state, 'state_color': initial_state_color, 'state_reason': state_reason,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': ind.get('obv_trend'),
             'is_target': is_target, 
             'vol_strength': vol_strength,
@@ -913,7 +934,7 @@ def analyze_market_stocks(market_type):
                                 obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
                                 
                                 vol_str = ""
-                                if result.get('vol_strength'): vol_str = f", 체결={result['vol_strength']:.0f}%"
+                                if result.get('vol_strength') is not None: vol_str = f", 체결={result['vol_strength']:.0f}%"
                                 
                                 log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}{vol_str}"
                                 
@@ -1002,6 +1023,7 @@ def analyze_market_stocks(market_type):
         table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
         table.add_column("OBV", justify="center")
+        table.add_column("체결강도", justify="right")
         
         for i, item in enumerate(page_items):
             rsi_str = f"{item['rsi']:.1f}" if item['rsi'] is not None else "-"
@@ -1022,6 +1044,13 @@ def analyze_market_stocks(market_type):
             if obv_trend is True: obv_str = "[red]상승[/]"
             elif obv_trend is False: obv_str = "[blue]하락[/]"
             
+            vol_val = item.get('vol_strength')
+            vol_str = "-"
+            if vol_val is not None:
+                std_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+                v_color = "[red]" if vol_val >= std_vol else "[blue]"
+                vol_str = f"{v_color}{vol_val:.1f}%[/]"
+            
             table.add_row(
                 str(start_idx + i + 1),
                 f"{item['name']} [dim]({item['code']})[/dim]",
@@ -1033,7 +1062,8 @@ def analyze_market_stocks(market_type):
                 rsi_str,
                 adx_str,
                 cci_str,
-                obv_str
+                obv_str,
+                vol_str
             )
             
             # 5개마다 실선 추가
