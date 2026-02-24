@@ -351,6 +351,7 @@ def main():
     # [추가] CLI 인자로 봇 비활성화 요청 시 설정 변경
     if args.no_bot:
         config.ENABLE_TELEGRAM = False
+        config.console.print()
         config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
 
     # 2. 종목 데이터 로드
