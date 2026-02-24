@@ -434,26 +434,25 @@ def reset_to_default():
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 
 def system_config_menu():
-    while True:
-        console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
-        console.print("[1] 시스템 설정 조회 (View Config)")
-        console.print("[2] 시스템 트레이딩 일반설정 (Trading General)")
-        console.print("[3] 매수/분석 임계값 (Analysis Thresholds)")
-        console.print("[4] 매도 전략 (Sell Strategy)")
-        console.print("[5] 기술적 지표 파라미터 (Indicators)")
-        console.print("[6] 텔레그램 설정 (Telegram)")
-        console.print("[7] 로그 레벨 설정 (Log Level)")
-        console.print("[8] 설정 초기화 (Reset to Default)")
-        console.print()
-        
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "q", "Q"], default="1")
-        if choice.lower() == 'q': return
-        
-        if choice == "1": view_system_config()
-        elif choice == "2": modify_system_trading_general()
-        elif choice == "3": modify_analysis_thresholds()
-        elif choice == "4": modify_sell_strategy()
-        elif choice == "5": modify_indicator_params()
-        elif choice == "6": modify_telegram_settings()
-        elif choice == "7": modify_log_settings()
-        elif choice == "8": reset_to_default()
+    console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
+    console.print("[1] 시스템 설정 조회 (View Config)")
+    console.print("[2] 시스템 트레이딩 일반설정 (Trading General)")
+    console.print("[3] 매수/분석 임계값 (Analysis Thresholds)")
+    console.print("[4] 매도 전략 (Sell Strategy)")
+    console.print("[5] 기술적 지표 파라미터 (Indicators)")
+    console.print("[6] 텔레그램 설정 (Telegram)")
+    console.print("[7] 로그 레벨 설정 (Log Level)")
+    console.print("[8] 설정 초기화 (Reset to Default)")
+    console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "q", "Q"], default="1")
+    if choice.lower() == 'q': return
+    
+    if choice == "1": view_system_config()
+    elif choice == "2": modify_system_trading_general()
+    elif choice == "3": modify_analysis_thresholds()
+    elif choice == "4": modify_sell_strategy()
+    elif choice == "5": modify_indicator_params()
+    elif choice == "6": modify_telegram_settings()
+    elif choice == "7": modify_log_settings()
+    elif choice == "8": reset_to_default()
