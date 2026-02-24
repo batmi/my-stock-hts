@@ -601,7 +601,7 @@ class TelegramCommander:
             msg = f"🔍 [종목 진단{rule_tag}] {name}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
-            msg += f"종합 점수: {score}점 / 11점\n"
+            msg += f"종합 점수: {score}점 / 10점\n"
             msg += f"상태 분류: {state} ({reason})\n"
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
