@@ -109,12 +109,14 @@ def modify_analysis_thresholds():
     curr = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     val = Prompt.ask(f"매수 기준 점수 (현재: {curr})", default=str(curr))
     if val.lower() == 'q': return
-    if val.isdigit(): config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = int(val)
+    try: config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = float(val)
+    except: pass
 
     curr = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     val = Prompt.ask(f"상승 추세 점수 (현재: {curr})", default=str(curr))
     if val.lower() == 'q': return
-    if val.isdigit(): config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = int(val)
+    try: config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = float(val)
+    except: pass
 
     curr = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
     val = Prompt.ask(f"매수 허용 RSI 상한 (현재: {curr})", default=str(curr))
@@ -148,7 +150,8 @@ def modify_sell_strategy():
     curr = config.SELL_STRATEGY["SELL_SCORE"]
     val = Prompt.ask(f"매도(추세이탈) 기준 점수 (현재: {curr})", default=str(curr))
     if val.lower() == 'q': return
-    if val.isdigit(): config.SELL_STRATEGY["SELL_SCORE"] = int(val)
+    try: config.SELL_STRATEGY["SELL_SCORE"] = float(val)
+    except: pass
 
     curr = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     val = Prompt.ask(f"과열 매도 RSI 기준 (현재: {curr})", default=str(curr))
@@ -401,11 +404,11 @@ def reset_to_default():
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
-        "BUY_SCORE": 8, "RISE_SCORE": 6, "BUY_RSI_MAX": 60, "BUY_VOL_STRENGTH": 100.0,
+        "BUY_SCORE": 8.0, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90
     })
     config.SELL_STRATEGY.update({
-        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5,
+        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
         "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
     })
     config.INDICATOR_PARAMS.update({

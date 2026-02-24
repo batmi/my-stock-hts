@@ -92,7 +92,9 @@ def show_help():
     table.add_row("", "이평선 20선 > 60선 > 5선 & ADX ≥ 30 & RSI ≤ 30 & CCI ≤ 100", "[blue]파란색[/]", "하락 심화/매도 우위")
     table.add_section()
 
-    table.add_row("종목 분류", "8점 이상 & RSI<60 (보수적)", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     table.add_row("", "6~8점 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
@@ -141,11 +143,14 @@ def show_help():
     table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
     table.add_section()
 
-    table.add_row("RSI", "RSI ≥ 70", "[magenta]보라색[/]", "과열 (추격금지)")
-    table.add_row("", "55 ≤ RSI < 70", "[red]빨간색[/]", "강세 유지 구간")
+    rsi_upper = config.INDICATOR_PARAMS["RSI_UPPER"]
+    rsi_lower = config.INDICATOR_PARAMS["RSI_LOWER"]
+
+    table.add_row("RSI", f"RSI ≥ {rsi_upper}", "[magenta]보라색[/]", "과열 (추격금지)")
+    table.add_row("", f"55 ≤ RSI < {rsi_upper}", "[red]빨간색[/]", "강세 유지 구간")
     table.add_row("", "45 ≤ RSI < 55", "[orange3]주황색[/]", "강세 조정 구간 (진입후보)")
-    table.add_row("", "30 < RSI < 45", "[yellow]노란색[/]", "단기하락 전환가능")
-    table.add_row("", "RSI ≤ 30", "[blue]파란색[/]", "하락")
+    table.add_row("", f"{rsi_lower} < RSI < 45", "[yellow]노란색[/]", "단기하락 전환가능")
+    table.add_row("", f"RSI ≤ {rsi_lower}", "[blue]파란색[/]", "하락")
     table.add_row("", "", "", "")
     table.add_row("", "SAR이 알려주는 전환이 과열/과매도 구간인지 확인", "", "SAR 전환 해석")
     table.add_row("", "RSI 70 이상 / 과매수구간", "", "SAR 전환시 단기고점/매수금지/분할매도 ")
@@ -168,10 +173,13 @@ def show_help():
     table.add_row("", "ADX 20 이상", "", "SAR 사용가능")
     table.add_section()
 
-    table.add_row("CCI", "CCI ≥ 100", "[red]빨간색[/]", "과열 (추격 금물)")
-    table.add_row("", "0 < CCI < 100", "[orange3]주황색[/]", "상승 방향시 (추세 매매)")
-    table.add_row("", "-100 < CCI < 0", "[yellow]노란색[/]", "상승 방향시 (반등 시도)")
-    table.add_row("", "CCI ≤ -100", "[blue]파란색[/]", "과매도 (저점 탐색)")
+    cci_upper = config.INDICATOR_PARAMS["CCI_UPPER"]
+    cci_lower = config.INDICATOR_PARAMS["CCI_LOWER"]
+
+    table.add_row("CCI", f"CCI ≥ {cci_upper}", "[red]빨간색[/]", "과열 (추격 금물)")
+    table.add_row("", f"0 < CCI < {cci_upper}", "[orange3]주황색[/]", "상승 방향시 (추세 매매)")
+    table.add_row("", f"{cci_lower} < CCI < 0", "[yellow]노란색[/]", "상승 방향시 (반등 시도)")
+    table.add_row("", f"CCI ≤ {cci_lower}", "[blue]파란색[/]", "과매도 (저점 탐색)")
     table.add_row("", "", "", "")
     table.add_row("", "SAR 타이밍 정밀화 용도로 사용", "", "SAR 해석")
     table.add_row("", "+100선 이상", "", "SAR 추세 연장")
@@ -215,28 +223,43 @@ def show_help():
     
     # [추가] 매수 점수 산정 기준 테이블 (README 내용 반영)
     config.console.print()
-    score_table = Table(title="매매 전략 가이드 (매수/매도 기준)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    score_table = Table(title="스코어링 및 매매 전략 가이드", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     score_table.add_column("구분", style="cyan", justify="center")
     score_table.add_column("조건", justify="left")
     score_table.add_column("점수/행동", justify="center", style="red")
     score_table.add_column("의미", justify="left")
 
-    score_table.add_row("이동평균 점수", "현재가 > 20일선", "+1", "단기 상승세")
-    score_table.add_row("", "20일선 > 60일선", "+1", "정배열 초기/지속")
-    score_table.add_row("", "60일선 > 120일선", "+1", "중장기 정배열")
-    score_table.add_row("","", "", "")
-    score_table.add_row("SAR 점수", "SAR < 현재가 (주가 아래)", "+1", "상승 추세 진행 중")
-    score_table.add_row("","", "", "")
-    score_table.add_row("RSI 점수", "40 ≤ RSI ≤ 55", "+2", "이상적인 매수 구간 (무릎~허리)")
-    score_table.add_row("", "55 < RSI ≤ 65", "+1", "상승 지속 (강세)")
-    score_table.add_row("", "30 ≤ RSI < 40", "+1", "바닥 탈출 시도 (반등)")
-    score_table.add_row("","", "", "")
-    score_table.add_row("ADX 점수", "ADX ≥ 25", "+1", "추세 강도 확보")
-    score_table.add_row("","", "", "")
-    score_table.add_row("CCI 점수", "CCI > 0", "+1", "상승 국면 진입")
-    score_table.add_row("", "CCI > 100", "+1", "강한 상승 탄력 (중복 적용)")
-    score_table.add_row("","", "", "")
-    score_table.add_row("OBV 점수", "OBV > OBV 이동평균", "+1", "수급 양호 (거래량 뒷받침)")
+    # 1. Trend Factor
+    score_table.add_row("Trend Factor", "현재가 > 20일선", "+0.5", "단기 지지")
+    score_table.add_row("(추세)", "20일선 > 60일선", "+0.5", "수급선 정배열")
+    score_table.add_row("", "60일선 > 120일선", "+0.5", "경기선 정배열")
+    score_table.add_row("", "MACD > Signal", "+1.0", "골든크로스 (강력)")
+    score_table.add_row("", "MACD > 0", "+0.5", "상승 국면 진입")
+    score_table.add_row("", "주가 > SAR", "+1.0", "파라볼릭 매수")
+    score_table.add_section()
+
+    # 2. Momentum Factor
+    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", "+1.5", "강세 구간 (주도주)")
+    score_table.add_row("(모멘텀)", "30 ≤ RSI < 50", "+0.5", "반등/회복 시도")
+    score_table.add_row("", "CCI > 0", "+0.5", "상승 추세")
+    score_table.add_row("", f"CCI > {cci_upper}", "+0.5", "강한 상승 탄력")
+    score_table.add_section()
+
+    # 3. Strength & Volume
+    score_table.add_row("Strength/Volume", "ADX ≥ 20", "+0.5", "추세 형성 확인")
+    score_table.add_row("(강도/수급)", "OBV > OBV 이동평균", "+1.0", "수급 양호")
+    score_table.add_section()
+
+    # 4. Synergy Bonus
+    score_table.add_row("Synergy Bonus", "정배열 + MACD양수 + ADX", "+1.0", "추세 확증 (Trend)")
+    score_table.add_row("(가산점)", "MACD골든 + RSI강세 + OBV", "+1.0", "모멘텀 폭발 (Thrust)")
+
+   # [병합] 점수대별 의미
+    score_table.add_section()
+    score_table.add_row("점수대별 의미", "8.5 ~ 10.0점", "[red]매수[/]", "강력 매수. 모든 지표 상승 및 상관관계 완벽. 비중 확대 가능.")
+    score_table.add_row("", "7.0 ~ 8.0점", "[orange3]상승[/]", "매수. 추세 확실하나 일부 지표 후행. 분할 매수 권장.")
+    score_table.add_row("", "5.5 ~ 6.5점", "[white]관망[/]", "관망/준비. 상승 초입 또는 추세 약화. 7점대 진입 대기.")
+    score_table.add_row("", "5.0점 미만", "[blue]매도[/]", "매도/진입 금지. 하락 추세 또는 방향성 없는 횡보장.")
     
     # [추가] 시장 필터링 섹션
     score_table.add_section()
@@ -247,7 +270,7 @@ def show_help():
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
     score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
-    score_table.add_row("필터링 (주의)", "60일선 or 120일선 이탈, SAR 매도, RSI ≥ 80 or RSI ≤ 30", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
+    score_table.add_row("필터링 (주의)", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
 
     # [추가] 매수 타이밍 섹션
     score_table.add_section()
@@ -260,12 +283,6 @@ def show_help():
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
-    # [추가] 주문 집행 상세 섹션
-    score_table.add_section()
-    score_table.add_row("주문 집행", "매수 주문 시", "[red]+1호가[/]", "체결 확률 확보 (현재가 + 1호가)")
-    score_table.add_row("", "매도 주문 시", "[blue]-1호가[/]", "즉시 체결 유도 (현재가 - 1호가)")
-    score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
-
     # [추가] 매도 규칙 섹션
     score_table.add_section()
     sell_score = config.SELL_STRATEGY["SELL_SCORE"]
@@ -280,6 +297,12 @@ def show_help():
     score_table.add_row("매도 (트레일링)", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
     score_table.add_row("매도 (과열)", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 (추세이탈)", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
+
+    # [추가] 주문 집행 상세 섹션
+    score_table.add_section()
+    score_table.add_row("주문 집행", "매수 주문 시", "[red]+1호가[/]", "체결 확률 확보 (현재가 + 1호가)")
+    score_table.add_row("", "매도 주문 시", "[blue]-1호가[/]", "즉시 체결 유도 (현재가 - 1호가)")
+    score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
     
     config.console.print(score_table)
 

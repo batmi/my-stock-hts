@@ -22,50 +22,74 @@ from openpyxl.styles import Font
 
 logger = logging.getLogger(__name__)
 
-def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend):
-    """기술적 지표를 바탕으로 매수 점수를 계산하여 반환"""
+def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None):
+    """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     score = 0
     details = []
 
+    # 1. Trend Factor (4.0점)
     if ema20 is not None and price > ema20: 
-        score += 1
-        details.append("이동평균: 현재가 > 20일선 (+1)")
+        score += 0.5
+        details.append("EMA: 현재가 > 20일선 (+0.5)")
     if ema20 is not None and ema60 is not None and ema20 > ema60: 
-        score += 1
-        details.append("이동평균: 20일선 > 60일선 (+1)")
+        score += 0.5
+        details.append("EMA: 20일선 > 60일선 (+0.5)")
     if ema60 is not None and ema120 is not None and ema60 > ema120: 
-        score += 1
-        details.append("이동평균: 60일선 > 120일선 (+1)")
-    if sar < price: 
-        score += 1
-        details.append("SAR: 주가 아래 (상승 추세) (+1)")
+        score += 0.5
+        details.append("EMA: 60일선 > 120일선 (+0.5)")
     
+    if macd is not None and macd_signal is not None:
+        if macd > macd_signal:
+            score += 1.0
+            details.append("MACD: 골든크로스 (매수 우위) (+1.0)")
+        if macd > 0:
+            score += 0.5
+            details.append("MACD: 0선 상회 (상승 국면) (+0.5)")
+
+    if sar is not None and price > sar: 
+        score += 1.0
+        details.append("SAR: 주가 아래 (상승 추세) (+1.0)")
+    
+    # 2. Momentum Factor (2.5점)
     if rsi is not None:
-        if (config.INDICATOR_PARAMS["RSI_MID"] - 10) <= rsi <= (config.INDICATOR_PARAMS["RSI_MID"] + 5): 
-            score += 2
-            details.append(f"RSI: {rsi:.1f} (이상적 매수 구간 40~55) (+2)")
-        elif (config.INDICATOR_PARAMS["RSI_MID"] + 5 < rsi <= config.INDICATOR_PARAMS["RSI_UPPER"] - 5) or (config.INDICATOR_PARAMS["RSI_LOWER"] <= rsi < config.INDICATOR_PARAMS["RSI_MID"] - 10): 
-            score += 1
-            details.append(f"RSI: {rsi:.1f} (강세/반등 구간) (+1)")
-    
-    if adx is not None and adx >= 25: 
-        score += 1
-        details.append(f"ADX: {adx:.1f} (25 이상 추세 강도) (+1)")
+        if 50 <= rsi <= 75: 
+            score += 1.5
+            details.append(f"RSI: {rsi:.1f} (강세 구간) (+1.5)")
+        elif 30 <= rsi < 50: 
+            score += 0.5
+            details.append(f"RSI: {rsi:.1f} (반등/회복) (+0.5)")
     
     if cci is not None:
         if cci > 0: 
-            score += 1
-            details.append(f"CCI: {cci:.1f} (0 이상 상승 국면) (+1)")
-        if cci > config.INDICATOR_PARAMS["CCI_UPPER"]: 
-            score += 1
-            details.append(f"CCI: {cci:.1f} (100 이상 강한 상승) (+1)")
-    
+            score += 0.5
+            details.append(f"CCI: {cci:.1f} (상승 추세) (+0.5)")
+        if cci > 100: 
+            score += 0.5
+            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+0.5)")
+
+    # 3. Strength & Volume Factor (1.5점)
+    if adx is not None and adx >= 20: 
+        score += 0.5
+        details.append(f"ADX: {adx:.1f} (추세 형성) (+0.5)")
+
     if obv_trend: 
-        score += 1
-        details.append("OBV: 이동평균 상회 (수급 양호) (+1)")
+        score += 1.0
+        details.append("OBV: 이동평균 상회 (수급 양호) (+1.0)")
+
+    # 4. Synergy Bonus (2.0점)
+    # Trend Confirmation
+    if (ema20 and ema60 and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
+        score += 1.0
+        details.append("★ 추세 확증: 정배열+MACD양수+ADX (+1.0)")
+        
+    # Momentum Thrust
+    if (macd is not None and macd_signal is not None and macd > macd_signal) and (rsi is not None and rsi >= 50) and obv_trend:
+        score += 1.0
+        details.append("★ 모멘텀 폭발: MACD골든+RSI강세+OBV (+1.0)")
+
     return score, details
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, thresholds=None):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     reasons = []
@@ -102,10 +126,15 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: 
         is_caution = True
         reasons.append(f"ADX과열({adx:.1f})+RSI하락")
+
+    # [추가] MACD 데드크로스 (매도/조정 신호)
+    if macd is not None and macd_signal is not None and macd < macd_signal:
+        is_caution = True
+        reasons.append("MACD 데드크로스")
         
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
     
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend)
+    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -283,12 +312,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
         )
         
         score, details = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
         )
 
     # [추가] 체결강도 조회 (국내주식인 경우만)
@@ -301,7 +330,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     # [테이블 1] 기술적 지표 분석
     table_tech = Table(title=f"기술적 지표 분석: {name} ({code})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table_tech.add_column("지표", justify="left", style="cyan", width=12)
+    table_tech.add_column("지표", justify="left", style="cyan", width=15)
     table_tech.add_column("값 (상태)", justify="left")
     table_tech.add_column("해석/기준", justify="left", style="dim")
 
@@ -383,6 +412,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         cci_str = f"[blue]{cci_str}[/]"
         cci_desc = "과매도 (저점 탐색)"
     table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
+
+    # MACD
+    macd_val = ind.get('macd')
+    sig_val = ind.get('macd_signal')
+    
+    macd_str = "-"
+    macd_desc = "추세 확인"
+    if macd_val is not None and sig_val is not None:
+        m_color = "[red]" if macd_val >= sig_val else "[blue]"
+        macd_str = f"{m_color}{macd_val:.2f}[/] / {sig_val:.2f}"
+        macd_desc = "골든크로스 (매수 우위)" if macd_val >= sig_val else "데드크로스 (매도 우위)"
+            
+    table_tech.add_row("MACD (12/26/9)", macd_str, macd_desc)
 
     # OBV
     obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
@@ -467,7 +509,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
     if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
-    buy_reason = "\n".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
+    buy_reason = ", ".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
     
     table_logic.add_row("매수 판단", buy_result, buy_reason)
     
@@ -555,12 +597,12 @@ def diagnose_group_stocks(market_filter=None):
             # 3. 점수 및 상태 계산
             state, state_color, state_reason = classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
             )
             
             score, _ = calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
             )
             
             # [추가] 체결강도 조회
@@ -637,7 +679,8 @@ def get_analysis_params():
     
     val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})", default=str(params['BUY_SCORE']))
     if val.lower() == 'q': return None
-    if val.isdigit(): params['BUY_SCORE'] = int(val)
+    try: params['BUY_SCORE'] = float(val)
+    except: pass
     
     val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})", default=str(params['BUY_RSI_MAX']))
     if val.lower() == 'q': return None
@@ -652,7 +695,8 @@ def get_analysis_params():
 
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
     if val.lower() == 'q': return None
-    if val.isdigit(): params['RISE_SCORE'] = int(val)
+    try: params['RISE_SCORE'] = float(val)
+    except: pass
     
     filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
     if filter_choice.lower() == 'q': return None
@@ -755,7 +799,7 @@ def _analyze_stock_worker(stock, params=None):
         # 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'),
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
             thresholds=params
         )
         
@@ -767,7 +811,7 @@ def _analyze_stock_worker(stock, params=None):
 
         score, _ = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
         )
         
         # 52주 위치 계산 (최근 250일 기준)
@@ -830,6 +874,7 @@ def _analyze_stock_worker(stock, params=None):
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': initial_state, 'state_color': initial_state_color, 'state_reason': state_reason,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': ind.get('obv_trend'),
+            'psar': ind['psar'], 'macd': ind.get('macd'), 'macd_signal': ind.get('macd_signal'),
             'is_target': is_target, 
             'vol_strength': vol_strength,
             'w52_pos': w52_pos
@@ -933,10 +978,19 @@ def analyze_market_stocks(market_type):
                                 obv_trend = result.get('obv_trend')
                                 obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
                                 
+                                # SAR 상태
+                                sar_val = result.get('psar')
+                                sar_str = "상승" if sar_val and result['price'] > sar_val else "하락"
+                                
+                                # MACD 상태
+                                macd_val = result.get('macd')
+                                sig_val = result.get('macd_signal')
+                                macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
+                                
                                 vol_str = ""
                                 if result.get('vol_strength') is not None: vol_str = f", 체결={result['vol_strength']:.0f}%"
                                 
-                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}{vol_str}"
+                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                                 
                                 if result['is_target']:
                                     log_style = "bold green" if result['state'] == "매수" else "bold orange3"
@@ -1022,6 +1076,8 @@ def analyze_market_stocks(market_type):
         table.add_column("RSI", justify="right")
         table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
+        table.add_column("SAR", justify="center")
+        table.add_column("MACD", justify="center")
         table.add_column("OBV", justify="center")
         table.add_column("체결강도", justify="right")
         
@@ -1030,6 +1086,17 @@ def analyze_market_stocks(market_type):
             adx_str = f"{item['adx']:.1f}" if item['adx'] is not None else "-"
             cci_str = f"{item['cci']:.1f}" if item['cci'] is not None else "-"
             
+            # SAR 상태
+            sar_val = item.get('psar')
+            sar_str = "[red]상승[/]" if sar_val and item['price'] > sar_val else "[blue]하락[/]"
+            
+            # MACD 상태
+            macd_val = item.get('macd')
+            sig_val = item.get('macd_signal')
+            macd_str = "-"
+            if macd_val is not None and sig_val is not None:
+                macd_str = "[red]골든[/]" if macd_val > sig_val else "[blue]데드[/]"
+
             s_color = item.get('state_color', '[white]').replace('[', '').replace(']', '')
             
             # 52주 위치 색상
@@ -1062,6 +1129,8 @@ def analyze_market_stocks(market_type):
                 rsi_str,
                 adx_str,
                 cci_str,
+                sar_str,
+                macd_str,
                 obv_str,
                 vol_str
             )
@@ -1170,6 +1239,13 @@ def save_all_market_analysis():
                         w52 = int(item['w52_pos']) if item['w52_pos'] is not None else 0
                         vol = round(item['vol_strength'], 1) if item.get('vol_strength') else None
                         
+                        # SAR/MACD 상태
+                        sar_state = "상승" if item['psar'] and item['price'] > item['psar'] else "하락"
+                        
+                        macd_state = "-"
+                        if item.get('macd') is not None and item.get('macd_signal') is not None:
+                            macd_state = "골든" if item['macd'] > item['macd_signal'] else "데드"
+
                         return {
                             "종목코드": item['code'],
                             "종목명": item['name'],
@@ -1182,6 +1258,8 @@ def save_all_market_analysis():
                             "RSI": rsi,
                             "ADX": adx,
                             "CCI": cci,
+                            "SAR": sar_state,
+                            "MACD": macd_state,
                             "OBV": "상승" if item['obv_trend'] else "하락",
                             "체결강도": vol
                         }

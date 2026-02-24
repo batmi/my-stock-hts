@@ -63,9 +63,9 @@ class DBManager:
                     CREATE TABLE IF NOT EXISTS stock_strategies (
                         code TEXT PRIMARY KEY,
                         name TEXT,
-                        buy_score INTEGER,
+                        buy_score REAL,
                         buy_rsi REAL,
-                        sell_score INTEGER,
+                        sell_score REAL,
                         stop_loss REAL,
                         take_profit REAL,
                         take_profit_rsi REAL,

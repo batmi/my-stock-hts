@@ -106,7 +106,7 @@ def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     return psar[-1] if psar else None
 
 def calculate_indicators(df):
-    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'psar': None, 'obv_trend': False}
+    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
     
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
@@ -148,5 +148,11 @@ def calculate_indicators(df):
         
     if len(df) >= 5:
         indicators['psar'] = calculate_psar_series(df)
+
+    if len(df) >= 26:
+        macd, signal, hist = get_macd_full_series(df)
+        indicators['macd'] = macd.iloc[-1]
+        indicators['macd_signal'] = signal.iloc[-1]
+        indicators['macd_hist'] = hist.iloc[-1]
 
     return indicators

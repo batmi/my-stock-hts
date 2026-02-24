@@ -541,11 +541,11 @@ class TelegramCommander:
 
             state, _, reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
             )
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
             )
             
             # 4. 메시지 구성

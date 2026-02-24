@@ -307,13 +307,13 @@ class ConclusionMonitor:
                                                 # [수정] 상태 및 사유 조회 (thresholds 적용)
                                                 state, _, state_reason = analysis.classify_stock_state(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                                                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'),
+                                                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
                                                     thresholds=thresholds
                                                 )
 
                                                 score, _ = analysis.calculate_score(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
+                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
                                                 )
                                                 
                                                 rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
@@ -385,10 +385,10 @@ class DefaultStrategy:
 
         state, _, state_reason = analysis.classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), thresholds=thresholds
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
         )
         
-        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
+        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
         
         # [추가] 체결강도 조건 체크
         min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]) if thresholds else config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
@@ -405,6 +405,10 @@ class DefaultStrategy:
             'rsi': ind['rsi'],
             'adx': ind['adx'],
             'cci': ind['cci'],
+            'psar': ind['psar'],
+            'macd': ind.get('macd'),
+            'macd_signal': ind.get('macd_signal'),
+            'obv_trend': ind.get('obv_trend'),
             'vol_strength': vol_strength
         }
 
@@ -441,9 +445,9 @@ class DefaultStrategy:
 
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), thresholds=thresholds
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
             )
-            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
+            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
 
             # 4. RSI 과열 익절
             if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
@@ -2194,10 +2198,22 @@ class AutoTrader:
             rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
             adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
             cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
+            
+            # SAR/MACD 상태
+            sar_val = result.get('psar')
+            sar_str = "상승" if sar_val and current_price > sar_val else "하락"
+            
+            macd_val = result.get('macd')
+            sig_val = result.get('macd_signal')
+            macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
+            
+            obv_trend = result.get('obv_trend')
+            obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
+            
             vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             
             rule_msg = " [개별 룰 적용]" if rule else ""
-            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, 체결강도={vol_val}{rule_msg}")
+            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}")
             
             if result['action'] == "buy":
                 candidates.append({
@@ -2576,11 +2592,11 @@ def _input_and_save_rule(code, name):
         return type_func(val)
 
     try:
-        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수", int)
+        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수", float)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한", float)
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%)", float) # [추가] 입력
         new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준", float)
-        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수", int)
+        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수", float)
         new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%)", float)
         
         if current_price > 0:
@@ -2721,25 +2737,24 @@ def _delete_stock_rules():
 
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
-    while True:
-        console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 ===[/]")
-        console.print("[1] 룰 조회 (View)")
-        console.print("[2] 룰 설정 (Set)")
-        console.print("[3] 룰 변경 (Modify)")
-        console.print("[4] 룰 삭제 (Delete)")
-        console.print()
-        
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
-        if choice.lower() == 'q': return
+    console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 ===[/]")
+    console.print("[1] 룰 조회 (View)")
+    console.print("[2] 룰 설정 (Set)")
+    console.print("[3] 룰 변경 (Modify)")
+    console.print("[4] 룰 삭제 (Delete)")
+    console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    if choice.lower() == 'q': return
 
-        if choice == "1":
-            _view_stock_rules()
-        elif choice == "2":
-            _set_stock_rules()
-        elif choice == "3":
-            _modify_stock_rules()
-        elif choice == "4":
-            _delete_stock_rules()
+    if choice == "1":
+        _view_stock_rules()
+    elif choice == "2":
+        _set_stock_rules()
+    elif choice == "3":
+        _modify_stock_rules()
+    elif choice == "4":
+        _delete_stock_rules()
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""

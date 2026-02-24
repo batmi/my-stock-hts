@@ -14,7 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def calculate_daily_status(row, prev_row):
+def calculate_daily_status(row, prev_row, thresholds=None):
     """
     analysis.py의 로직을 기반으로 일별 상태 및 점수 계산
     반환값: (raw_score, sell_check_score, can_buy_state, state, reason)
@@ -28,6 +28,8 @@ def calculate_daily_status(row, prev_row):
     adx = row['ADX']
     cci = row['CCI']
     
+    macd = row.get('MACD')
+    macd_signal = row.get('MACD_Signal')
     # OBV Trend
     obv = row['OBV']
     obv_ma = row['OBV_MA']
@@ -39,12 +41,13 @@ def calculate_daily_status(row, prev_row):
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
     state, _, reason = analysis.classify_stock_state(
-        price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend
+        price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
+        thresholds=thresholds
     )
     
     # 2. 점수 계산
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal
     )
     
     # 3. 백테스팅용 플래그 변환
@@ -143,6 +146,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     ts_highest_price = 0
     prev_row = prev_row_init
     
+    # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
+    current_thresholds = {
+        "BUY_SCORE": buy_score_limit,
+        "BUY_RSI_MAX": buy_rsi_limit,
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"] # 기본값 유지
+    }
+
     for i in range(len(sim_df)):
         row = sim_df.iloc[i]
         date = row['date']
@@ -157,7 +167,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if dd < mdd: mdd = dd
         
         # 상태 및 점수 계산
-        raw_score, sell_check_score, can_buy_state, state, reason = calculate_daily_status(row, prev_row)
+        raw_score, sell_check_score, can_buy_state, state, reason = calculate_daily_status(row, prev_row, thresholds=current_thresholds)
         
         if raw_score > max_score_observed: max_score_observed = raw_score
         if raw_score >= buy_score_limit: score_8_count += 1
@@ -398,7 +408,8 @@ def run_backtest():
         def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         val = Prompt.ask(f"매수 기준 점수 (기본: {def_buy_score}점)\n[dim]설명: 이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(def_buy_score))
         if val.lower() == 'q': return
-        buy_score = int(val)
+        try: buy_score = float(val)
+        except: buy_score = float(def_buy_score)
         
         def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]설명: RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
@@ -414,7 +425,8 @@ def run_backtest():
         def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]설명: 점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
         if val.lower() == 'q': return
-        sell_score = int(val)
+        try: sell_score = float(val)
+        except: sell_score = float(def_sell_score)
         
         def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]설명: 손실이 이 비율에 도달하면 손절매[/dim]", default=str(def_sl))
@@ -480,6 +492,7 @@ def run_backtest():
         df['CCI'] = indicators.get_cci_full_series(df)
         df['OBV'] = indicators.get_obv_full_series(df)
         df['OBV_MA'] = df['OBV'].rolling(window=config.INDICATOR_PARAMS["OBV_MA_PERIOD"]).mean()
+        df['MACD'], df['MACD_Signal'], _ = indicators.get_macd_full_series(df)
 
         # 분석 기간 필터링
         # [수정] 행 개수 기준이 아닌 날짜 기준으로 필터링
@@ -643,7 +656,7 @@ def run_backtest():
     # [추가] 매매가 없을 경우 진단 정보 출력
     if len(trades) == 0:
         config.console.print("\n[yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/yellow]")
-        config.console.print(f"  - 기간 내 최고 점수: {max_score_observed}점 (매수 기준: {buy_score}점)")
+        config.console.print(f"  - 기간 내 최고 점수: {max_score_observed:.1f}점 (매수 기준: {buy_score}점)")
         config.console.print(f"  - {buy_score}점 이상 도달 횟수: {score_8_count}회")
         config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score}점 이상 & RSI<{buy_rsi})이 엄격하여 진입 기회가 없었습니다.")
         config.console.print("  [Tip] 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
@@ -746,7 +759,7 @@ def run_backtest():
             t_table.add_row(
                 date_str[:10], 
                 f"{type_color}{t['type']}[/]", 
-                str(t.get('score', 0)),
+                f"{t.get('score', 0):.1f}",
                 f"[{rsi_c}]{rsi_str}[/]",
                 f"[{adx_c}]{adx_str}[/]",
                 f"[{cci_c}]{cci_str}[/]",
@@ -874,7 +887,7 @@ def run_backtest():
             adx_str = f"{m.get('adx', 0):.1f}"
             cci_str = f"{m.get('cci', 0):.1f}"
             price_str = fmt_money(m.get('price', 0))
-            m_table.add_row(date_str, str(m['score']), f"[{state_color}]{m['state']}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+            m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{m['state']}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
             
         config.console.print(m_table)
 
@@ -897,7 +910,9 @@ def run_backtest():
     best_win_rate = -1.0
     
     with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
-        for score in range(4, 10): # 4, 5, 6, 7, 8, 9
+        # [수정] 0.5점 단위로 시뮬레이션 (4.0 ~ 9.5)
+        scores = [x * 0.5 for x in range(8, 20)]
+        for score in scores:
             res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, buy_rsi, is_overseas,
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                                     take_profit_rsi=take_profit_rsi, sell_score=sell_score,
