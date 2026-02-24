@@ -205,7 +205,7 @@ class TelegramCommander:
 
         msg = f"🔧 [개별 종목 룰 ({len(filtered_rules)}개)]\n"
         for r in filtered_rules:
-            memo_part = f"   📝 {r.get('memo', '')}\n" if r.get('memo') else ""
+            memo_part = f"   메모: {r.get('memo', '')}\n" if r.get('memo') else ""
             msg += (f"\n• {r['name']}({r['code']})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']} / 체결 {r.get('buy_vol_strength', '기본')}%\n" # [수정]
                     f"   매도: {r['sell_score']}점\n"
@@ -270,19 +270,18 @@ class TelegramCommander:
         if not sell_trades:
             msg += "실현된 손익이 없습니다."
         else:
-            icon = "🔴" if total_profit > 0 else ("🔵" if total_profit < 0 else "⚪️")
-            msg += f"총 손익: {icon} {total_profit:+,}원\n"
+            msg += f"총 손익: {total_profit:+,}원\n"
             msg += f"매매 횟수: {len(sell_trades)}건 (익절 {win_count} / 손절 {loss_count})"
             
             if best_trade and int(best_trade.get('profit_amt') or 0) > 0:
                 p = int(best_trade.get('profit_amt'))
                 r = float(best_trade.get('profit_rate') or 0)
-                msg += f"\n\n🏆 최고 수익: {best_trade['name']} (+{p:,}원 / {r:+.2f}%)"
+                msg += f"\n\n최고 수익: {best_trade['name']} (+{p:,}원 / {r:+.2f}%)"
             
             if worst_trade and int(worst_trade.get('profit_amt') or 0) < 0:
                 p = int(worst_trade.get('profit_amt'))
                 r = float(worst_trade.get('profit_rate') or 0)
-                msg += f"\n💧 최다 손실: {worst_trade['name']} ({p:,}원 / {r:+.2f}%)"
+                msg += f"\n최다 손실: {worst_trade['name']} ({p:,}원 / {r:+.2f}%)"
 
         return msg
 
