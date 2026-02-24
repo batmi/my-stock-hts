@@ -123,6 +123,26 @@ chmod +x run.sh
     3.  **추세 이탈**: 종합 점수 하락 또는 주요 지지선(60일선 등) 붕괴 시
     4.  **과열**: RSI가 과매수 구간(70 이상)에 진입 후 꺾일 때
 
+### 스코어링 기준 (Scoring System)
+매수 여부를 판단하는 종합 점수는 다음 항목들의 합산으로 계산됩니다. (총점 11점 만점)
+
+1.  **이동평균 (Moving Average)**
+    *   현재가 > 20일선: **+1점**
+    *   20일선 > 60일선 (정배열 초기): **+1점**
+    *   60일선 > 120일선 (중장기 정배열): **+1점**
+2.  **Parabolic SAR**
+    *   SAR 지표가 주가 아래 위치 (상승 추세): **+1점**
+3.  **RSI (상대강도지수)**
+    *   40 ≤ RSI ≤ 55 (이상적인 매수 구간): **+2점**
+    *   55 < RSI ≤ 65 (강세 지속) 또는 30 ≤ RSI < 40 (반등 시도): **+1점**
+4.  **ADX (추세 강도)**
+    *   ADX ≥ 25 (추세가 형성됨): **+1점**
+5.  **CCI (상품채널지수)**
+    *   CCI > 0 (상승 국면): **+1점**
+    *   CCI > 100 (강한 상승 탄력): **+1점** (중복 적용 가능)
+6.  **OBV (거래량)**
+    *   OBV > OBV 이동평균 (수급 양호): **+1점**
+
 ## ⚙️ 전략 파라미터 상세 (Configuration)
 
 `config.py` 파일에서 **기본 전략(Global Strategy)**을 설정할 수 있으며, 프로그램 내 **'시스템 트레이딩 > 종목별 트레이딩 룰'** 메뉴를 통해 종목별로 개별 설정을 적용할 수 있습니다.
@@ -165,32 +185,35 @@ chmod +x run.sh
 ## � 프로젝트 구조 (Project Structure)
 
 ```text
-stock_project/
+my-stock-hts/
+├── run.sh              # [Mac/Linux] 실행 스크립트
+├── run.bat             # [Windows] 실행 스크립트
 ├── config.py           # 설정, 환경변수, 데이터 로드
-├── api.py              # 모든 서버 통신 (기간별 시세 조회 포함)
+├── api.py              # KIS API 통신 및 데이터 조회
 ├── constants.py        # 상수 정의 (TR ID, 필드 매핑 등)
-├── indicators.py       # 보조지표 계산 (ADX, RSI, 파라볼릭 등)
-├── utils.py            # 공통 유틸리티 (API 헤더, 종목 선택 등)
+├── indicators.py       # 보조지표 계산 (RSI, ADX, MACD 등)
+├── utils.py            # 공통 유틸리티 (날짜, 포맷팅 등)
 ├── session.py          # 세션 및 토큰 관리
-├── main.py             # 메인 실행 (도움말 포함)
+├── main.py             # 메인 실행 파일 (메뉴 및 라우팅)
 ├── get_telegram_chat_id.py # 텔레그램 Chat ID 조회 도구
-├── db/                 # [자동 생성] DB 파일 저장소
+├── LICENSE.md          # 라이선스 파일
+├── db/                 # [자동 생성] SQLite DB 파일 저장소
 ├── json/               # [자동 생성] 설정 및 캐시 파일 저장소
-├── logs/               # [자동 생성] 로그 저장소
+├── logs/               # [자동 생성] 로그 파일 저장소
 ├── chart/              # [자동 생성] 차트 이미지 저장소
-├── data/               # [자동 생성] 데이터 내보내기 저장소
-└── modules/            # 기능 모듈 폴더
-    ├── db_manager.py   # SQLite DB 관리
-    ├── telegram_bot.py # 텔레그램 봇
-    ├── settings.py     # [0] 시스템 설정
-    ├── market.py       # [1] 시장 지수
-    ├── analysis.py     # [2] 종목 시세 분석
-    ├── chart.py        # [3] 종목 차트 분석
+├── data/               # [자동 생성] 엑셀/CSV 내보내기 저장소
+└── modules/            # 기능별 모듈 폴더
+    ├── db_manager.py   # DB 연결 및 쿼리 관리
+    ├── telegram_bot.py # 텔레그램 봇 연동 및 알림
+    ├── settings.py     # [0] 시스템 설정 관리
+    ├── market.py       # [1] 시장 지수 조회
+    ├── analysis.py     # [2] 종목 시세 및 기술적 분석
+    ├── chart.py        # [3] 차트 시각화 및 분석
     ├── manage.py       # [4] 관심 종목 관리
-    ├── auto_trade.py   # [5] 시스템 트레이딩
+    ├── auto_trade.py   # [5] 시스템 트레이딩 (자동매매)
     ├── backtest.py     # [6] 전략 백테스팅
-    ├── trading.py      # [7,8] 주문 관리
-    └── account.py      # [9] 자산 관리
+    ├── trading.py      # [7,8] 주문(매수/매도/정정/취소) 관리
+    └── account.py      # [9] 자산 및 잔고 관리
 ```
 
 ## � 라이선스
