@@ -6,10 +6,13 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl"
 MISSING_LIBS=""
 
-# 2. 실행할 파이썬 및 핍(PIP) 경로 찾기
+# 2. 운영체제 확인 (macOS vs Linux)
+OS_NAME=$(uname -s)
+
+# 3. 실행할 파이썬 및 핍(PIP) 경로 찾기
 if [ -d "./.venv" ]; then
     PYTHON_PATH="./.venv/bin/python"
     PIP_PATH="./.venv/bin/pip"
@@ -26,15 +29,26 @@ fi
 
 echo "--- 환경 확인: $($PYTHON_PATH --version) ---"
 
-# 3. macOS LibreSSL 충돌 해결 (urllib3 v2.x -> v1.x 강제 적용)
-# 라이브러리가 설치되어 있고, 메이저 버전이 2 이상인지 확인합니다.
-$PYTHON_PATH -c "import urllib3; import sys; sys.exit(0) if int(urllib3.__version__.split('.')[0]) >= 2 else sys.exit(1)" > /dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo "[알림] macOS 환경과의 호환성을 위해 urllib3 라이브러리를 조정(다운그레이드)합니다..."
-    $PIP_PATH install "urllib3<2"
+# 4. 최신 리눅스 환경의 PEP 668 외부 관리 환경 에러 우회
+PIP_FLAGS=""
+if [[ "$PYTHON_PATH" != *"venv"* ]]; then
+    # pip 설치 옵션에 break-system-packages가 지원되는지 확인 후 동적 추가
+    $PIP_PATH help install 2>/dev/null | grep -q "break-system-packages"
+    if [ $? -eq 0 ]; then
+        PIP_FLAGS="--break-system-packages"
+    fi
 fi
 
-# 4. 미설치 라이브러리 스캔
+# 5. macOS LibreSSL 충돌 해결 (Darwin - macOS일 때만 동작)
+if [ "$OS_NAME" = "Darwin" ]; then
+    $PYTHON_PATH -c "import urllib3; import sys; sys.exit(0) if int(urllib3.__version__.split('.')[0]) >= 2 else sys.exit(1)" > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "[알림] macOS 환경 호환성을 위해 urllib3 패키지 버전을 조정합니다..."
+        $PIP_PATH install "urllib3<2" $PIP_FLAGS > /dev/null 2>&1
+    fi
+fi
+
+# 6. 미설치 라이브러리 스캔
 for lib in $REQUIRED_LIBS; do
     $PYTHON_PATH -c "import $lib" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
@@ -42,7 +56,7 @@ for lib in $REQUIRED_LIBS; do
     fi
 done
 
-# 5. 사용자 확인 및 설치 진행
+# 7. 사용자 확인 및 설치 진행
 if [ -n "$MISSING_LIBS" ]; then
     echo "[알림] 다음 라이브러리가 설치되어 있지 않습니다: [$MISSING_LIBS ]"
     read -p "설치하시겠습니까? (y/n): " confirm
@@ -50,7 +64,7 @@ if [ -n "$MISSING_LIBS" ]; then
     if [[ "$confirm" == [yY] || "$confirm" == "yes" ]]; then
         echo "[진행] 설치를 시작합니다..."
         for lib in $MISSING_LIBS; do
-            $PIP_PATH install $lib
+            $PIP_PATH install $lib $PIP_FLAGS
         done
         echo "[완료] 모든 라이브러리 설치가 끝났습니다."
     else
@@ -59,6 +73,7 @@ if [ -n "$MISSING_LIBS" ]; then
     fi
 fi
 
-# 6. 프로그램 실행
+# 8. 프로그램 실행
 echo "--- 프로그램 실행 ---"
 $PYTHON_PATH main.py "$@"
+
