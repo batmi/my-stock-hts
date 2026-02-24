@@ -391,3 +391,27 @@ def get_autotrade_logger():
     
     logger.addHandler(handler)
     return logger
+
+# [추가] 동적 설정 로드 함수 (사용자가 변경한 설정을 덮어씌움)
+def load_dynamic_config():
+    import json
+    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if "ANALYSIS_THRESHOLDS" in data:
+                ANALYSIS_THRESHOLDS.update(data["ANALYSIS_THRESHOLDS"])
+            
+            if "SELL_STRATEGY" in data:
+                SELL_STRATEGY.update(data["SELL_STRATEGY"])
+                
+            if "SYSTEM_INVEST_PER_STOCK" in data:
+                global SYSTEM_INVEST_PER_STOCK
+                SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
+        except Exception as e:
+            print(f"[Config] 동적 설정 로드 실패: {e}")
+
+# 모듈 로드 시 자동 실행
+load_dynamic_config()

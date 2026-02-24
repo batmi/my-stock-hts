@@ -393,12 +393,13 @@ class DefaultStrategy:
         # [추가] 체결강도 조건 체크
         min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]) if thresholds else config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         
-        # 체결강도 데이터가 있고 기준 미달이면 매수 보류 (데이터 없으면 패스)
+        # [수정] 체결강도 미달 시 None 반환 대신 action을 wait로 처리하여 로그 출력 보장
+        is_vol_ok = True
         if vol_strength is not None and vol_strength < min_vol:
-            return None
+            is_vol_ok = False
 
         return {
-            'action': 'buy' if state == "매수" else 'wait',
+            'action': 'buy' if (state == "매수" and is_vol_ok) else 'wait',
             'state': state,
             'score': score,
             'rsi': ind['rsi'],
@@ -1004,7 +1005,7 @@ class AutoTrader:
                 
                 rule_table.add_row(
                     name_disp,
-                    f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정] 체결강도 표시
+                    f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정] 체결강도 표시
                     f"{r['sell_score']}점 / {r['take_profit_rsi']}",
                     f"+{r['take_profit']}% / {r['stop_loss']}%",
                     f"+{r['ts_activation']}% / -{r['ts_callback']}%",
@@ -2196,7 +2197,7 @@ class AutoTrader:
             vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             
             rule_msg = " [개별 룰 적용]" if rule else ""
-            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, 체결강도={vol_val}{rule_msg}")
+            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, 체결강도={vol_val}{rule_msg}")
             
             if result['action'] == "buy":
                 candidates.append({
@@ -2514,7 +2515,7 @@ def _view_stock_rules():
     for i, r in enumerate(custom_rules):
         table.add_row(
             f"{r['name']}({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정]
+            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
@@ -2541,7 +2542,7 @@ def _input_and_save_rule(code, name):
     defaults = {
         "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-        "buy_vol_strength": config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"], # [추가] 기본값
+        "buy_vol_strength": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), # [수정] 안전한 접근
         "sell_score": config.SELL_STRATEGY["SELL_SCORE"],
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
@@ -2551,7 +2552,13 @@ def _input_and_save_rule(code, name):
         "memo": ""
     }
     
-    current = existing if existing else defaults
+    current = existing if existing else defaults.copy()
+    
+    # [추가] 기존 데이터에 신규 필드가 누락된 경우 기본값으로 채움 (DB 스키마 변경 대응)
+    for key, val in defaults.items():
+        if key not in current:
+            current[key] = val
+            
     # DB에서 가져온 값이 None일 경우 빈 문자열로 처리
     if 'memo' not in current or current['memo'] is None:
         current['memo'] = ""
@@ -2668,7 +2675,7 @@ def _modify_stock_rules():
         table.add_row(
             str(i+1),
             f"{r['name']} ({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정]
+            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
@@ -2733,6 +2740,85 @@ def manage_stock_rules():
         elif choice == "4":
             _delete_stock_rules()
 
+def _save_dynamic_config():
+    """현재 메모리 상의 설정을 파일로 저장 (영구 반영)"""
+    data = {
+        "ANALYSIS_THRESHOLDS": config.ANALYSIS_THRESHOLDS,
+        "SELL_STRATEGY": config.SELL_STRATEGY,
+        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+    }
+    
+    try:
+        path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        console.print(f"\n[bold green]설정이 저장되었습니다. (재시작 시에도 유지됨)[/bold green]")
+        console.print(f"[dim]저장 경로: {path}[/dim]")
+    except Exception as e:
+        console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
+
+def modify_system_settings():
+    """시스템 트레이딩 전역 설정 변경"""
+    console.print("\n[bold cyan]=== 시스템 트레이딩 설정 변경 ===[/]")
+    console.print("[dim]여기서 변경한 값은 모든 종목(개별 룰 제외)에 적용되며, 즉시 반영됩니다.[/dim]")
+    
+    # 1. 매수 조건
+    console.print("\n[bold]1. 매수 조건 설정[/bold]")
+    current_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    val = Prompt.ask(f"매수 기준 점수 (현재: {current_buy_score})", default=str(current_buy_score))
+    if val.isdigit(): config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = int(val)
+    
+    current_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    val = Prompt.ask(f"매수 허용 RSI 상한 (현재: {current_buy_rsi})", default=str(current_buy_rsi))
+    try: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = float(val)
+    except: pass
+
+    current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+    val = Prompt.ask(f"매수 체결강도 기준(%) (현재: {current_vol})", default=str(current_vol))
+    try: config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = float(val)
+    except: pass
+
+    # 2. 매도 조건
+    console.print("\n[bold]2. 매도 조건 설정[/bold]")
+    current_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    val = Prompt.ask(f"익절 수익률(%) (현재: {current_tp})", default=str(current_tp))
+    try: config.SELL_STRATEGY["TAKE_PROFIT_RATE"] = float(val)
+    except: pass
+    
+    current_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    val = Prompt.ask(f"손절 수익률(%) (현재: {current_sl})", default=str(current_sl))
+    try: config.SELL_STRATEGY["STOP_LOSS_RATE"] = float(val)
+    except: pass
+    
+    current_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+    val = Prompt.ask(f"매도(추세이탈) 기준 점수 (현재: {current_sell_score})", default=str(current_sell_score))
+    if val.isdigit(): config.SELL_STRATEGY["SELL_SCORE"] = int(val)
+
+    # 3. 트레일링 스탑
+    console.print("\n[bold]3. 트레일링 스탑 설정[/bold]")
+    current_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    val = Prompt.ask(f"발동 수익률(%) (현재: {current_ts_act})", default=str(current_ts_act))
+    try: config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = float(val)
+    except: pass
+    
+    current_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    val = Prompt.ask(f"하락 감지율(%) (현재: {current_ts_call})", default=str(current_ts_call))
+    try: config.SELL_STRATEGY["TRAILING_STOP_CALLBACK_RATE"] = float(val)
+    except: pass
+
+    # 4. 기타
+    console.print("\n[bold]4. 기타 설정[/bold]")
+    current_invest = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+    val = Prompt.ask(f"종목당 투자 비중 (0.1~1.0) (현재: {current_invest})", default=str(current_invest))
+    try: 
+        new_invest = float(val)
+        if 0 < new_invest <= 1.0:
+            config.SYSTEM_INVEST_PER_STOCK = new_invest
+    except: pass
+
+    # 변경된 설정 저장
+    _save_dynamic_config()
+
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 
@@ -2748,12 +2834,13 @@ def system_trading_menu():
     console.print("[4] 트레이딩 평가 (Report)")
     console.print("[5] 트레이딩 로그 (Log Viewer)")
     console.print("[6] 종목별 트레이딩 룰 (Rule)")
+    console.print("[7] 시스템 설정 변경 (Config)")
     console.print()
     
     try:
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="3")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "q"], default="3")
         
-        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정"}
+        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정", "7": "설정변경"}
         if choice in menu_map:
             config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
             
@@ -2777,3 +2864,5 @@ def system_trading_menu():
         trader.view_log_file()
     elif choice == "6":
         manage_stock_rules()
+    elif choice == "7":
+        modify_system_settings()
