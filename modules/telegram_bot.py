@@ -562,6 +562,17 @@ class TelegramCommander:
             if ind['psar'] is not None:
                 sar_state = "상승" if ind['psar'] < current_price else "하락"
 
+            # OBV 상태
+            obv_trend = ind.get('obv_trend')
+            obv_state = "상승" if obv_trend else "하락"
+
+            # MACD 상태
+            macd_val = ind.get('macd')
+            sig_val = ind.get('macd_signal')
+            macd_state = "-"
+            if macd_val is not None and sig_val is not None:
+                macd_state = "골든" if macd_val > sig_val else "데드"
+
             # 이평선 상태
             ema_state = "혼조/역배열"
             if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
@@ -610,7 +621,9 @@ class TelegramCommander:
             msg += f"• SAR: {sar_state}\n"
             msg += f"• RSI: {rsi_str}\n"
             msg += f"• ADX: {adx_str}\n"
-            msg += f"• CCI: {cci_str}"
+            msg += f"• CCI: {cci_str}\n"
+            msg += f"• OBV: {obv_state}\n"
+            msg += f"• MACD: {macd_state}"
             
             return msg
         except Exception as e:
@@ -692,10 +705,11 @@ class TelegramCommander:
         
         # 매수 관련
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         msg += f"\n[매수 조건]\n"
-        msg += f"• 종합 점수: {buy_score}점 이상\n"
+        msg += f"• 종합 점수: {buy_score}점 이상 (상승: {rise_score}점)\n"
         msg += f"• RSI 상한: {buy_rsi} 미만\n"
         msg += f"• 체결강도: {buy_vol}% 이상\n"
         
@@ -708,16 +722,31 @@ class TelegramCommander:
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         
         msg += f"\n[매도 조건]\n"
-        msg += f"• 익절(TP): +{tp}%\n"
-        msg += f"• 손절(SL): {sl}%\n"
+        msg += f"• 익절: +{tp}%\n"
+        msg += f"• 손절: {sl}%\n"
         msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시\n"
         msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
         msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
         
+        # [추가] 기술적 지표 설정
+        ind = config.INDICATOR_PARAMS
+        msg += f"\n[기술적 지표]\n"
+        msg += f"• RSI: {ind.get('RSI_PERIOD')} (Signal {ind.get('RSI_SIGNAL')})\n"
+        msg += f"• MACD: {ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}\n"
+        msg += f"• CCI: {ind.get('CCI_WINDOW')} ({ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')})\n"
+        msg += f"• ADX: {ind.get('ADX_PERIOD')}\n"
+        msg += f"• SAR: {ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}\n"
+        msg += f"• OBV: MA {ind.get('OBV_MA_PERIOD')}\n"
+
         # 기타
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        use_filter = getattr(config, 'USE_MARKET_FILTER', True)
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 20)
+        filter_str = f"ON ({filter_ma}일선)" if use_filter else "OFF"
+
         msg += f"\n[기타]\n"
         msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}%\n"
+        msg += f"• 시장 필터링: {filter_str}\n"
         
         # [추가] 개별 종목 룰 정보
         custom_rules = db_manager.db.get_all_stock_strategies()
