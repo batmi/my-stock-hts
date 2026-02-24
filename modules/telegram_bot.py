@@ -207,7 +207,7 @@ class TelegramCommander:
         for r in filtered_rules:
             memo_part = f"   📝 {r.get('memo', '')}\n" if r.get('memo') else ""
             msg += (f"\n• {r['name']}({r['code']})\n"
-                    f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']}\n"
+                    f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']} / 체결 {r.get('buy_vol_strength', '기본')}%\n" # [수정]
                     f"   매도: {r['sell_score']}점\n"
                     f"   익절: +{r['take_profit']}% / RSI {r['take_profit_rsi']}\n"
                     f"   손절: {r['stop_loss']}%\n"
@@ -694,9 +694,11 @@ class TelegramCommander:
         # 매수 관련
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         msg += f"\n[매수 조건]\n"
         msg += f"• 종합 점수: {buy_score}점 이상\n"
         msg += f"• RSI 상한: {buy_rsi} 미만\n"
+        msg += f"• 체결강도: {buy_vol}% 이상\n"
         
         # 매도 관련
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]

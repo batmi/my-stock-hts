@@ -291,6 +291,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
         )
 
+    # [추가] 체결강도 조회 (국내주식인 경우만)
+    vol_strength = None
+    if not is_overseas:
+        vol_strength = api.get_realtime_vol_strength(code)
+
     # 4. 결과 출력
     config.console.print()
     
@@ -446,17 +451,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # 매수 조건 체크
     buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
     
     is_buy_score = score >= buy_score_limit
     is_buy_rsi = ind['rsi'] < buy_rsi_limit
     is_safe_state = state not in ["위험", "주의"]
+    is_buy_vol = True
+    if vol_strength is not None:
+        is_buy_vol = vol_strength >= buy_vol_limit
     
-    buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state) else "[bold blue]매수 불가[/]"
+    buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
     
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
     if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
     if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
+    if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
     buy_reason = "\n".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
     
     table_logic.add_row("매수 판단", buy_result, buy_reason)
@@ -476,6 +486,13 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     table_logic.add_row("보유 판단", sell_result, sell_reason)
     
+    # [추가] 체결강도 행 추가
+    vol_str = f"{vol_strength:.1f}%" if vol_strength is not None else "-"
+    vol_eval = ""
+    if vol_strength is not None:
+        vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
+    table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
+
     config.console.print(table_logic)
     config.console.print()
 
@@ -544,10 +561,14 @@ def diagnose_group_stocks(market_filter=None):
                 ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend')
             )
             
+            # [추가] 체결강도 조회
+            vol_strength = api.get_realtime_vol_strength(code)
+            
             results.append({
                 'code': code, 'name': name, 'price': current_price,
                 'score': score, 'state': state, 'state_color': state_color,
-                'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci']
+                'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
+                'vol_strength': vol_strength
             })
             
             # [최적화] API 호출 간격 조절은 api.py의 ThrottledSession에서 전담하므로
@@ -570,6 +591,8 @@ def diagnose_group_stocks(market_filter=None):
     table.add_column("RSI", justify="right")
     table.add_column("ADX", justify="right")
     table.add_column("CCI", justify="right")
+    table.add_column("체결강도", justify="right")
+    table.add_column("체결강도", justify="right")
     
     for r in results:
         s_color = r['state_color'].replace('[', '').replace(']', '')
@@ -584,6 +607,9 @@ def diagnose_group_stocks(market_filter=None):
             
         adx_str = f"{r['adx']:.1f}" if r['adx'] is not None else "-"
         cci_str = f"{r['cci']:.1f}" if r['cci'] is not None else "-"
+        
+        vol_val = r.get('vol_strength')
+        vol_str = f"{vol_val:.1f}%" if vol_val else "-"
         
         table.add_row(
             f"{r['name']}({r['code']})",
@@ -616,6 +642,13 @@ def get_analysis_params():
     if val.lower() == 'q': return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
+    # [추가] 체결강도 입력
+    current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol})", default=str(current_vol))
+    if val.lower() == 'q': return None
+    try: params['BUY_VOL_STRENGTH'] = float(val)
+    except: params['BUY_VOL_STRENGTH'] = current_vol
+
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
     if val.lower() == 'q': return None
     if val.isdigit(): params['RISE_SCORE'] = int(val)
@@ -721,7 +754,8 @@ def _analyze_stock_worker(stock, params=None):
         # 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend')
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'),
+            thresholds=params
         )
         
         if state == "-": return None # 데이터 부족
@@ -740,6 +774,24 @@ def _analyze_stock_worker(stock, params=None):
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
+        # [추가] 매수 상태일 경우 체결강도 체크
+        vol_strength = None
+        if state == "매수":
+            try:
+                # 실시간 체결강도 조회 (국내주식만 해당)
+                vol_strength = api.get_realtime_vol_strength(code)
+                
+                if params and 'BUY_VOL_STRENGTH' in params:
+                    min_vol = params['BUY_VOL_STRENGTH']
+                else:
+                    min_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+                
+                if vol_strength is not None and vol_strength < min_vol:
+                    state = "관망"
+                    state_color = "[white]"
+                    state_reason = f"체결강도 미달({vol_strength:.1f}% < {min_vol}%)"
+            except: pass
+
         # 필터링 조건 확인
         is_target = False
         if params:
@@ -757,7 +809,8 @@ def _analyze_stock_worker(stock, params=None):
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': state, 'state_color': state_color, 'state_reason': state_reason,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': ind.get('obv_trend'),
-            'is_target': is_target,
+            'is_target': is_target, 
+            'vol_strength': vol_strength,
             'w52_pos': w52_pos
         }
     except Exception: return None
@@ -777,7 +830,7 @@ def analyze_market_stocks(market_type):
         
         config.console.print(f"\n[bold cyan]기존 분석 결과가 존재합니다.[/bold cyan]")
         config.console.print(f"• 분석 일시: {updated_at}")
-        config.console.print(f"• 분석 조건: 매수 {c_params.get('BUY_SCORE')}점, RSI {c_params.get('BUY_RSI_MAX')}, 상승 {c_params.get('RISE_SCORE')}점")
+        config.console.print(f"• 분석 조건: 매수 {c_params.get('BUY_SCORE')}점, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {c_params.get('BUY_VOL_STRENGTH', 100)}%, 상승 {c_params.get('RISE_SCORE')}점")
         
         config.console.print()
         choice = Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n", "q"], default="y")
@@ -796,7 +849,8 @@ def analyze_market_stocks(market_type):
         c_buy = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         c_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         c_rise = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-        config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 상승 {c_rise}점")
+        c_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점")
 
         config.console.print()
         # 파라미터 설정
@@ -810,16 +864,18 @@ def analyze_market_stocks(market_type):
             params = {
                 "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
                 "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+                "BUY_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0),
                 "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
                 "OUTPUT_FILTER": "BUY"
             }
-            config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 상승: {params['RISE_SCORE']}점)[/dim]")
+            config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
         # 설정 백업 및 적용
         original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
         config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
         config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
         config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
+        config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = params["BUY_VOL_STRENGTH"]
 
         config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
 
@@ -856,7 +912,10 @@ def analyze_market_stocks(market_type):
                                 obv_trend = result.get('obv_trend')
                                 obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
                                 
-                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}"
+                                vol_str = ""
+                                if result.get('vol_strength'): vol_str = f", 체결={result['vol_strength']:.0f}%"
+                                
+                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}{vol_str}"
                                 
                                 if result['is_target']:
                                     log_style = "bold green" if result['state'] == "매수" else "bold orange3"
@@ -1079,6 +1138,7 @@ def save_all_market_analysis():
                         adx = round(item['adx'], 1) if item['adx'] is not None else None
                         cci = round(item['cci'], 1) if item['cci'] is not None else None
                         w52 = int(item['w52_pos']) if item['w52_pos'] is not None else 0
+                        vol = round(item['vol_strength'], 1) if item.get('vol_strength') else None
                         
                         return {
                             "종목코드": item['code'],
@@ -1092,7 +1152,8 @@ def save_all_market_analysis():
                             "RSI": rsi,
                             "ADX": adx,
                             "CCI": cci,
-                            "OBV": "상승" if item['obv_trend'] else "하락"
+                            "OBV": "상승" if item['obv_trend'] else "하락",
+                            "체결강도": vol
                         }
 
                     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

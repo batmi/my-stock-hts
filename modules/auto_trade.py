@@ -299,7 +299,8 @@ class ConclusionMonitor:
                                                 if rule:
                                                     thresholds = {
                                                         "BUY_SCORE": rule['buy_score'],
-                                                        "BUY_RSI_MAX": rule['buy_rsi']
+                                                        "BUY_RSI_MAX": rule['buy_rsi'],
+                                                        "BUY_VOL_STRENGTH": rule.get('buy_vol_strength') # [추가] 개별 체결강도
                                                     }
                                                     rule_tag = " [개별 룰 적용]"
 
@@ -370,7 +371,7 @@ class DefaultStrategy:
     def __init__(self):
         self.trailing_stop_cache = {}
 
-    def analyze_buy(self, code, name, df, current_price, thresholds=None):
+    def analyze_buy(self, code, name, df, current_price, vol_strength=None, thresholds=None):
         """매수 진입 여부 판단"""
         if df is None or df.empty:
             return None
@@ -389,13 +390,21 @@ class DefaultStrategy:
         
         score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'))
         
+        # [추가] 체결강도 조건 체크
+        min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]) if thresholds else config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
+        
+        # 체결강도 데이터가 있고 기준 미달이면 매수 보류 (데이터 없으면 패스)
+        if vol_strength is not None and vol_strength < min_vol:
+            return None
+
         return {
             'action': 'buy' if state == "매수" else 'wait',
             'state': state,
             'score': score,
             'rsi': ind['rsi'],
             'adx': ind['adx'],
-            'cci': ind['cci']
+            'cci': ind['cci'],
+            'vol_strength': vol_strength
         }
 
     def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None):
@@ -626,6 +635,7 @@ class AutoTrader:
         # [추가] 전략 설정 요약 정보 추가
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
@@ -635,7 +645,7 @@ class AutoTrader:
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
         
         msg += "\n\n⚙️ [적용 전략]"
-        msg += f"\n• 매수: {buy_score}점 이상 & RSI {buy_rsi} 미만"
+        msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
         msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
         msg += f"\n• 익절: +{tp}% / 손절: {sl}%"
         msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
@@ -980,7 +990,7 @@ class AutoTrader:
             # 별도 테이블로 상세 표시
             rule_table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             rule_table.add_column("종목명(코드)", justify="left")
-            rule_table.add_column("매수(점수/RSI)", justify="center")
+            rule_table.add_column("매수(점수/RSI/체결)", justify="center") # [수정] 헤더 변경
             rule_table.add_column("매도(점수/RSI)", justify="center")
             rule_table.add_column("익절/손절", justify="center")
             rule_table.add_column("트레일링", justify="center")
@@ -994,7 +1004,7 @@ class AutoTrader:
                 
                 rule_table.add_row(
                     name_disp,
-                    f"{r['buy_score']}점 / {r['buy_rsi']}",
+                    f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정] 체결강도 표시
                     f"{r['sell_score']}점 / {r['take_profit_rsi']}",
                     f"+{r['take_profit']}% / {r['stop_loss']}%",
                     f"+{r['ts_activation']}% / -{r['ts_callback']}%",
@@ -1031,7 +1041,8 @@ class AutoTrader:
         # 매수 조건
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        table.add_row("매수 조건", f"{buy_score}점 이상 / RSI {buy_rsi} 미만")
+        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
+        table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑")
 
         # 매도 조건 (2줄)
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
@@ -2161,6 +2172,9 @@ class AutoTrader:
             
             current_price = float(df.iloc[-1]['close'])
             
+            # [추가] 실시간 체결강도 조회
+            vol_strength = api.get_realtime_vol_strength(code)
+            
             # [Refactoring] Use Strategy for analysis
             # [추가] 개별 룰 적용
             rule = rules_map.get(code)
@@ -2168,23 +2182,26 @@ class AutoTrader:
             if rule:
                 thresholds = {
                     "BUY_SCORE": rule['buy_score'],
-                    "BUY_RSI_MAX": rule['buy_rsi']
+                    "BUY_RSI_MAX": rule['buy_rsi'],
+                    # [수정] 개별 룰에 체결강도가 있으면 사용, 없으면 전역 설정 사용
+                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"])
                 }
             
-            result = self.strategy.analyze_buy(code, name, df, current_price, thresholds=thresholds)
+            result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds)
             if not result: continue
             
             rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
             adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
             cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
+            vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             
             rule_msg = " [개별 룰 적용]" if rule else ""
-            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}{rule_msg}")
+            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, 체결강도={vol_val}{rule_msg}")
             
             if result['action'] == "buy":
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
-                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'],
+                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'vol_strength': result.get('vol_strength'),
                     'is_custom_rule': bool(rule),
                     'rule': rule
                 })
@@ -2276,7 +2293,8 @@ class AutoTrader:
             rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
             adx_val = f"{cand['adx']:.1f}" if cand['adx'] else "-"
             cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
-            reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
+            vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') else "-"
+            reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
             
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
@@ -2486,7 +2504,7 @@ def _view_stock_rules():
 
     table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI)", justify="center")
+    table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
     table.add_column("트레일링", justify="center")
@@ -2496,7 +2514,7 @@ def _view_stock_rules():
     for i, r in enumerate(custom_rules):
         table.add_row(
             f"{r['name']}({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']}",
+            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
@@ -2523,6 +2541,7 @@ def _input_and_save_rule(code, name):
     defaults = {
         "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "buy_vol_strength": config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"], # [추가] 기본값
         "sell_score": config.SELL_STRATEGY["SELL_SCORE"],
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
@@ -2551,6 +2570,7 @@ def _input_and_save_rule(code, name):
     try:
         new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수", int)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한", float)
+        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%)", float) # [추가] 입력
         new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준", float)
         new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수", int)
         new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%)", float)
@@ -2605,7 +2625,7 @@ def _input_and_save_rule(code, name):
         table.add_column("구분", justify="center", style="cyan")
         table.add_column("설정값", justify="left")
         
-        table.add_row("매수 조건", f"점수 {new_strategy['buy_score']}점 이상 / RSI {new_strategy['buy_rsi']} 미만")
+        table.add_row("매수 조건", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑") # [수정]
         table.add_row("매도 조건", f"점수 {new_strategy['sell_score']}점 미만 (추세이탈)")
         table.add_row("익절/손절", f"익절 +{new_strategy['take_profit']}% / 손절 {new_strategy['stop_loss']}%")
         table.add_row("RSI 익절", f"RSI {new_strategy['take_profit_rsi']} 초과")
@@ -2638,7 +2658,7 @@ def _modify_stock_rules():
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No.", justify="right", style="cyan", width=4)
     table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI)", justify="center")
+    table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
     table.add_column("트레일링", justify="center")
@@ -2648,7 +2668,7 @@ def _modify_stock_rules():
         table.add_row(
             str(i+1),
             f"{r['name']} ({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']}",
+            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', '기본')}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",

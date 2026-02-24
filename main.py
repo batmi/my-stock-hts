@@ -254,8 +254,9 @@ def show_help():
     buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
 
-    score_table.add_row("매수 (진입)", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    score_table.add_row("매수 (진입)", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max} & 체결강도 > {buy_vol}%", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
