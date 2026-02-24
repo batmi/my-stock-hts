@@ -2010,7 +2010,7 @@ class AutoTrader:
                 if max_profit_rate >= ts_activation:
                     drop_rate = ((highest_price - current_price) / highest_price) * 100
                     if drop_rate >= ts_callback:
-                        ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%)"
+                        ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 최고가 대비 하락률:-{drop_rate:.1f}%)"
 
             # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
@@ -2443,6 +2443,19 @@ class AutoTrader:
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청
                 ConclusionMonitor().check_now()
+                
+                # [추가] 매수 성공 시 트레일링 스탑 감시 시작가(최고가) 즉시 초기화
+                # (전문가 조언 반영: 매수 직후부터 추적 시작하여 사각지대 해소)
+                if type_str == "buy":
+                    init_price = float(price)
+                    # 시장가(0)인 경우 현재가 조회 시도 (국내주식 기준)
+                    if init_price <= 0:
+                        init_price = api.get_current_price(code, is_overseas=False)
+                    
+                    if init_price > 0:
+                        db_manager.db.update_highest_price(code, init_price)
+                        self.trailing_stop_cache[code] = init_price
+                        self.log(f"[TrailingStop] 감시 시작가 설정: {name} {init_price:,.0f}원")
                 
                 return odno
             else:

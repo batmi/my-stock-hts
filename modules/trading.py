@@ -552,6 +552,15 @@ def send_order(order_type):
                     db_manager.db.delete_trailing_stop(stock_code)
                     auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
                 
+                # [추가] 매수 시 트레일링 스탑 감시 시작가 설정
+                elif order_type == 'buy':
+                    init_price = float(calc_price) # calc_price는 시장가일 경우 현재가로 이미 계산됨
+                    if init_price > 0:
+                        db_manager.db.update_highest_price(stock_code, init_price)
+                        # AutoTrader 캐시도 갱신 (실행 중일 경우)
+                        auto_trade.AutoTrader().trailing_stop_cache[stock_code] = init_price
+                        config.console.print(f"[dim green]트레일링 스탑 감시 시작가 설정: {init_price:,.0f}원[/dim green]")
+                
                 # 체결 감시 및 미체결 조회
                 auto_trade.ConclusionMonitor().check_now()
                 
