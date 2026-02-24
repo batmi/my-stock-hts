@@ -2,6 +2,8 @@ import json
 import os
 from rich.prompt import Prompt
 from rich.console import Console
+from rich.table import Table
+from rich import box
 import config
 
 console = config.console
@@ -39,8 +41,69 @@ def _save_dynamic_config():
     except Exception as e:
         console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
 
+def view_system_config():
+    """현재 시스템 설정 조회"""
+    table = Table(title="현재 시스템 설정 (System Configuration)", box=box.HORIZONTALS, show_header=True, header_style="bold cyan", border_style="dim")
+    table.add_column("그룹", style="bold yellow", justify="left")
+    table.add_column("항목", style="white", justify="left")
+    table.add_column("설정값", style="green", justify="right")
+
+    # 1. 시스템 트레이딩 일반
+    table.add_row("트레이딩 일반", "종목당 투자 비중", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)}")
+    table.add_row("", "모니터링 주기 (초)", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
+    table.add_row("", "일일 손실 제한 (%)", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
+    table.add_row("", "시장 필터링 사용", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
+    table.add_row("", "시장 필터링 MA (일)", f"{getattr(config, 'MARKET_FILTER_MA', 20)}")
+    table.add_row("", "연속 에러 허용", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
+    table.add_row("", "거래 시작 시간", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0915')}")
+    table.add_row("", "거래 종료 시간", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
+    table.add_section()
+
+    # 2. 매수/분석 임계값
+    thresholds = config.ANALYSIS_THRESHOLDS
+    table.add_row("매수/분석", "매수 기준 점수", f"{thresholds.get('BUY_SCORE')}")
+    table.add_row("", "상승 추세 점수", f"{thresholds.get('RISE_SCORE')}")
+    table.add_row("", "매수 허용 RSI 상한", f"{thresholds.get('BUY_RSI_MAX')}")
+    table.add_row("", "매수 체결강도 기준", f"{thresholds.get('BUY_VOL_STRENGTH')}%")
+    table.add_section()
+
+    # 3. 매도 전략
+    sell = config.SELL_STRATEGY
+    table.add_row("매도 전략", "익절 수익률", f"{sell.get('TAKE_PROFIT_RATE')}%")
+    table.add_row("", "손절 수익률", f"{sell.get('STOP_LOSS_RATE')}%")
+    table.add_row("", "매도(추세이탈) 점수", f"{sell.get('SELL_SCORE')}")
+    table.add_row("", "과열 매도 RSI", f"{sell.get('TAKE_PROFIT_RSI')}")
+    table.add_row("", "TS 발동 수익률", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
+    table.add_row("", "TS 하락 감지율", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
+    table.add_section()
+
+    # 4. 기술적 지표
+    ind = config.INDICATOR_PARAMS
+    table.add_row("기술적 지표", "데이터 조회 기간", f"{ind.get('CHART_LOOKBACK_DAYS')}일")
+    table.add_row("", "SAR (Start/Step/Max)", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
+    table.add_row("", "RSI (Period/Signal)", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
+    table.add_row("", "RSI (Up/Mid/Low)", f"{ind.get('RSI_UPPER')}/{ind.get('RSI_MID')}/{ind.get('RSI_LOWER')}")
+    table.add_row("", "ADX 기간", f"{ind.get('ADX_PERIOD')}")
+    table.add_row("", "CCI (Window/Up/Low)", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
+    table.add_row("", "MACD (Fast/Slow/Sig)", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
+    table.add_row("", "OBV MA 기간", f"{ind.get('OBV_MA_PERIOD')}")
+    table.add_section()
+
+    # 5. 텔레그램
+    table.add_row("텔레그램", "사용 여부", f"{getattr(config, 'ENABLE_TELEGRAM', True)}")
+    table.add_row("", "인스턴스 이름", f"{getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
+    table.add_row("", "폴링 타임아웃", f"{getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
+    table.add_section()
+
+    # 6. 로그 레벨
+    table.add_row("로그 레벨", "화면 (Screen)", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
+    table.add_row("", "파일 (File)", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'INFO')}")
+
+    console.print(table)
+    console.print()
+
 def modify_analysis_thresholds():
-    console.print("\n[bold]2. 매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)[/bold]")
+    console.print("\n[bold]3. 매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)[/bold]")
     
     curr = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     val = Prompt.ask(f"매수 기준 점수 (현재: {curr})", default=str(curr))
@@ -67,7 +130,7 @@ def modify_analysis_thresholds():
     _save_dynamic_config()
 
 def modify_sell_strategy():
-    console.print("\n[bold]3. 매도 전략 설정 (SELL_STRATEGY)[/bold]")
+    console.print("\n[bold]4. 매도 전략 설정 (SELL_STRATEGY)[/bold]")
     
     curr = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     val = Prompt.ask(f"익절 수익률(%) (현재: {curr})", default=str(curr))
@@ -107,7 +170,7 @@ def modify_sell_strategy():
     _save_dynamic_config()
 
 def modify_indicator_params():
-    console.print("\n[bold]4. 기술적 지표 파라미터 (Indicators)[/bold]")
+    console.print("\n[bold]5. 기술적 지표 파라미터 (Indicators)[/bold]")
     
     curr = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
     val = Prompt.ask(f"데이터 조회 기간(일) (현재: {curr})", default=str(curr))
@@ -212,7 +275,7 @@ def modify_indicator_params():
     _save_dynamic_config()
 
 def modify_telegram_settings():
-    console.print("\n[bold]5. 텔레그램 설정 (Telegram)[/bold]")
+    console.print("\n[bold]6. 텔레그램 설정 (Telegram)[/bold]")
     
     curr = getattr(config, 'ENABLE_TELEGRAM', True)
     val = Prompt.ask(f"텔레그램 알림 사용 (현재: {curr})", choices=["y", "n"], default="y" if curr else "n")
@@ -234,7 +297,7 @@ def modify_telegram_settings():
     _save_dynamic_config()
 
 def modify_log_settings():
-    console.print("\n[bold]6. 로그 레벨 설정 (Log Level)[/bold]")
+    console.print("\n[bold]7. 로그 레벨 설정 (Log Level)[/bold]")
     
     curr_screen = getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF")
     val = Prompt.ask(f"화면 로그 레벨 (OFF/TRACE/DEBUG) (현재: {curr_screen})", choices=["OFF", "TRACE", "DEBUG"], default=curr_screen)
@@ -260,7 +323,7 @@ def _validate_time_format(val):
     return False
 
 def modify_system_trading_general():
-    console.print("\n[bold]1. 시스템 트레이딩 일반설정 (Trading General)[/bold]")
+    console.print("\n[bold]2. 시스템 트레이딩 일반설정 (Trading General)[/bold]")
     
     # SYSTEM_TRADING_INTERVAL
     curr = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
@@ -373,23 +436,24 @@ def reset_to_default():
 def system_config_menu():
     while True:
         console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
-        console.print("[1] 시스템 트레이딩 일반설정 (Trading General)")
-        console.print("[2] 매수/분석 임계값 (Analysis Thresholds)")
-        console.print("[3] 매도 전략 (Sell Strategy)")
-        console.print("[4] 기술적 지표 파라미터 (Indicators)")
-        console.print("[5] 텔레그램 설정 (Telegram)")
-        console.print("[6] 로그 레벨 설정 (Log Level)")
-        console.print("[7] 설정 초기화 (Reset to Default)")
-        console.print("[Q] 뒤로 가기")
+        console.print("[1] 시스템 설정 조회 (View Config)")
+        console.print("[2] 시스템 트레이딩 일반설정 (Trading General)")
+        console.print("[3] 매수/분석 임계값 (Analysis Thresholds)")
+        console.print("[4] 매도 전략 (Sell Strategy)")
+        console.print("[5] 기술적 지표 파라미터 (Indicators)")
+        console.print("[6] 텔레그램 설정 (Telegram)")
+        console.print("[7] 로그 레벨 설정 (Log Level)")
+        console.print("[8] 설정 초기화 (Reset to Default)")
         console.print()
         
-        choice = Prompt.ask("선택", choices=["1", "2", "3", "4", "5", "6", "7", "q", "Q"], default="q")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "q", "Q"], default="1")
         if choice.lower() == 'q': return
         
-        if choice == "1": modify_system_trading_general()
-        elif choice == "2": modify_analysis_thresholds()
-        elif choice == "3": modify_sell_strategy()
-        elif choice == "4": modify_indicator_params()
-        elif choice == "5": modify_telegram_settings()
-        elif choice == "6": modify_log_settings()
-        elif choice == "7": reset_to_default()
+        if choice == "1": view_system_config()
+        elif choice == "2": modify_system_trading_general()
+        elif choice == "3": modify_analysis_thresholds()
+        elif choice == "4": modify_sell_strategy()
+        elif choice == "5": modify_indicator_params()
+        elif choice == "6": modify_telegram_settings()
+        elif choice == "7": modify_log_settings()
+        elif choice == "8": reset_to_default()

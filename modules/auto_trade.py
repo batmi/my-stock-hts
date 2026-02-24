@@ -2222,7 +2222,8 @@ class AutoTrader:
             for i in range(log_cnt):
                 c = candidates[i]
                 rsi_disp = f"{c['rsi']:.1f}" if c['rsi'] is not None else "-"
-                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, RSI:{rsi_disp})")
+                vol_disp = f"{c['vol_strength']:.1f}%" if c.get('vol_strength') else "-"
+                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, RSI:{rsi_disp}, 체결:{vol_disp})")
         
         return candidates
 
