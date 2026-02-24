@@ -19,7 +19,15 @@ def _save_dynamic_config():
         "MARKET_FILTER_MA": getattr(config, 'MARKET_FILTER_MA', 20),
         "CONCLUSION_CHECK_INTERVAL": getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
-        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100)
+        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100),
+        "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
+        "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
+        "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
+        "SCREEN_DEBUG_LEVEL": getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"),
+        "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "INFO"),
+        "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
+        "SYSTEM_TRADING_START_TIME": getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"),
+        "SYSTEM_TRADING_END_TIME": getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
     }
     
     try:
@@ -32,109 +40,285 @@ def _save_dynamic_config():
         console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
 
 def modify_analysis_thresholds():
-    console.print("\n[bold]1. 매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)[/bold]")
+    console.print("\n[bold]2. 매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)[/bold]")
     
     curr = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     val = Prompt.ask(f"매수 기준 점수 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = int(val)
 
     curr = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     val = Prompt.ask(f"상승 추세 점수 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = int(val)
 
     curr = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
     val = Prompt.ask(f"매수 허용 RSI 상한 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = float(val)
     except: pass
 
     curr = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
     val = Prompt.ask(f"매수 체결강도 기준(%) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = float(val)
     except: pass
     
     _save_dynamic_config()
 
 def modify_sell_strategy():
-    console.print("\n[bold]2. 매도 전략 설정 (SELL_STRATEGY)[/bold]")
+    console.print("\n[bold]3. 매도 전략 설정 (SELL_STRATEGY)[/bold]")
     
     curr = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     val = Prompt.ask(f"익절 수익률(%) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.SELL_STRATEGY["TAKE_PROFIT_RATE"] = float(val)
     except: pass
 
     curr = config.SELL_STRATEGY["STOP_LOSS_RATE"]
     val = Prompt.ask(f"손절 수익률(%) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.SELL_STRATEGY["STOP_LOSS_RATE"] = float(val)
     except: pass
 
     curr = config.SELL_STRATEGY["SELL_SCORE"]
     val = Prompt.ask(f"매도(추세이탈) 기준 점수 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.SELL_STRATEGY["SELL_SCORE"] = int(val)
 
     curr = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     val = Prompt.ask(f"과열 매도 RSI 기준 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.SELL_STRATEGY["TAKE_PROFIT_RSI"] = float(val)
     except: pass
 
     curr_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (현재: {curr_act})", default=str(curr_act))
+    if val.lower() == 'q': return
     try: config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = float(val)
     except: pass
 
     curr_cb = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
     val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (현재: {curr_cb})", default=str(curr_cb))
+    if val.lower() == 'q': return
     try: config.SELL_STRATEGY["TRAILING_STOP_CALLBACK_RATE"] = float(val)
     except: pass
 
     _save_dynamic_config()
 
 def modify_indicator_params():
-    console.print("\n[bold]3. 기술적 지표 설정 (INDICATOR_PARAMS)[/bold]")
+    console.print("\n[bold]4. 기술적 지표 파라미터 (Indicators)[/bold]")
     
     curr = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
     val = Prompt.ask(f"데이터 조회 기간(일) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = int(val)
 
+    # 1. SAR
+    console.print("\n[bold cyan][1] Parabolic SAR (추세 반전)[/]")
+    curr = config.INDICATOR_PARAMS["SAR_AF_START"]
+    val = Prompt.ask(f"가속변수 시작값(AF Start) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    try: config.INDICATOR_PARAMS["SAR_AF_START"] = float(val)
+    except: pass
+    
+    curr = config.INDICATOR_PARAMS["SAR_AF_STEP"]
+    val = Prompt.ask(f"가속변수 증가값(AF Step) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    try: config.INDICATOR_PARAMS["SAR_AF_STEP"] = float(val)
+    except: pass
+
+    curr = config.INDICATOR_PARAMS["SAR_AF_MAX"]
+    val = Prompt.ask(f"가속변수 최대값(AF Max) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    try: config.INDICATOR_PARAMS["SAR_AF_MAX"] = float(val)
+    except: pass
+
+    # 2. RSI
+    console.print("\n[bold cyan][2] RSI (상대강도지수)[/]")
     curr = config.INDICATOR_PARAMS["RSI_PERIOD"]
     val = Prompt.ask(f"RSI 계산 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["RSI_PERIOD"] = int(val)
+
+    curr = config.INDICATOR_PARAMS["RSI_SIGNAL"]
+    val = Prompt.ask(f"RSI 시그널 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["RSI_SIGNAL"] = int(val)
 
     curr_up = config.INDICATOR_PARAMS["RSI_UPPER"]
     val = Prompt.ask(f"RSI 과매수 기준 (현재: {curr_up})", default=str(curr_up))
+    if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["RSI_UPPER"] = int(val)
+
+    curr = config.INDICATOR_PARAMS["RSI_MID"]
+    val = Prompt.ask(f"RSI 중심선 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["RSI_MID"] = int(val)
 
     curr_low = config.INDICATOR_PARAMS["RSI_LOWER"]
     val = Prompt.ask(f"RSI 과매도 기준 (현재: {curr_low})", default=str(curr_low))
+    if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["RSI_LOWER"] = int(val)
 
+    # 3. ADX
+    console.print("\n[bold cyan][3] ADX (추세 강도)[/]")
+    curr = config.INDICATOR_PARAMS["ADX_PERIOD"]
+    val = Prompt.ask(f"ADX 계산 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["ADX_PERIOD"] = int(val)
+
+    # 4. CCI
+    console.print("\n[bold cyan][4] CCI (상품채널지수)[/]")
     curr = config.INDICATOR_PARAMS["CCI_WINDOW"]
     val = Prompt.ask(f"CCI 계산 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.INDICATOR_PARAMS["CCI_WINDOW"] = int(val)
+    
+    curr = config.INDICATOR_PARAMS["CCI_UPPER"]
+    val = Prompt.ask(f"CCI 과매수 기준 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["CCI_UPPER"] = int(val)
+
+    curr = config.INDICATOR_PARAMS["CCI_LOWER"]
+    val = Prompt.ask(f"CCI 과매도 기준 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["CCI_LOWER"] = int(val)
+
+    # 5. MACD
+    console.print("\n[bold cyan][5] MACD (이동평균수렴확산)[/]")
+    curr = config.INDICATOR_PARAMS["MACD_FAST"]
+    val = Prompt.ask(f"Fast EMA 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["MACD_FAST"] = int(val)
+
+    curr = config.INDICATOR_PARAMS["MACD_SLOW"]
+    val = Prompt.ask(f"Slow EMA 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["MACD_SLOW"] = int(val)
+
+    curr = config.INDICATOR_PARAMS["MACD_SIGNAL"]
+    val = Prompt.ask(f"Signal 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["MACD_SIGNAL"] = int(val)
+
+    # 6. OBV
+    console.print("\n[bold cyan][6] OBV (거래량 추세)[/]")
+    curr = config.INDICATOR_PARAMS["OBV_MA_PERIOD"]
+    val = Prompt.ask(f"OBV 이동평균 기간 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.INDICATOR_PARAMS["OBV_MA_PERIOD"] = int(val)
 
     _save_dynamic_config()
 
-def modify_system_general():
-    console.print("\n[bold]4. 시스템 일반 설정[/bold]")
+def modify_telegram_settings():
+    console.print("\n[bold]5. 텔레그램 설정 (Telegram)[/bold]")
     
+    curr = getattr(config, 'ENABLE_TELEGRAM', True)
+    val = Prompt.ask(f"텔레그램 알림 사용 (현재: {curr})", choices=["y", "n"], default="y" if curr else "n")
+    if val.lower() == 'q': return
+    config.ENABLE_TELEGRAM = (val == "y")
+    
+    curr_name = getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS")
+    val = Prompt.ask(f"텔레그램 인스턴스 이름 (현재: {curr_name})", default=curr_name)
+    if val.lower() == 'q': return
+    config.TELEGRAM_INSTANCE_NAME = val
+
+    curr_timeout = getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)
+    val = Prompt.ask(f"폴링 타임아웃(초) (현재: {curr_timeout})", default=str(curr_timeout))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.TELEGRAM_POLLING_TIMEOUT = int(val)
+    
+    console.print("[dim]※ 봇 토큰 및 Chat ID는 보안상 config.py 또는 환경변수에서 설정해주세요.[/dim]")
+    
+    _save_dynamic_config()
+
+def modify_log_settings():
+    console.print("\n[bold]6. 로그 레벨 설정 (Log Level)[/bold]")
+    
+    curr_screen = getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF")
+    val = Prompt.ask(f"화면 로그 레벨 (OFF/TRACE/DEBUG) (현재: {curr_screen})", choices=["OFF", "TRACE", "DEBUG"], default=curr_screen)
+    if val.lower() == 'q': return
+    config.SCREEN_DEBUG_LEVEL = val
+    
+    curr_file = getattr(config, 'FILE_DEBUG_LEVEL', "INFO")
+    val = Prompt.ask(f"파일 로그 레벨 (DEBUG/INFO/WARNING/ERROR) (현재: {curr_file})", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default=curr_file)
+    if val.lower() == 'q': return
+    config.FILE_DEBUG_LEVEL = val
+    
+    # 로깅 설정 즉시 적용
+    config.setup_logging()
+    
+    _save_dynamic_config()
+
+def _validate_time_format(val):
+    if len(val) == 4 and val.isdigit():
+        hh = int(val[:2])
+        mm = int(val[2:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return True
+    return False
+
+def modify_system_trading_general():
+    console.print("\n[bold]1. 시스템 트레이딩 일반설정 (Trading General)[/bold]")
+    
+    # SYSTEM_TRADING_INTERVAL
     curr = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
     val = Prompt.ask(f"종목당 투자 비중 (0.1~1.0) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: 
         new_val = float(val)
         if 0 < new_val <= 1.0: config.SYSTEM_INVEST_PER_STOCK = new_val
     except: pass
 
+    # SYSTEM_TRADING_INTERVAL
     curr = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
     val = Prompt.ask(f"자동매매 모니터링 주기(초) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     if val.isdigit(): config.SYSTEM_TRADING_INTERVAL = int(val)
 
+    # SYSTEM_DAILY_LOSS_LIMIT
     curr = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
     val = Prompt.ask(f"일일 손실 제한율(%) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
     try: config.SYSTEM_DAILY_LOSS_LIMIT = float(val)
     except: pass
 
+    # USE_MARKET_FILTER
     curr = getattr(config, 'USE_MARKET_FILTER', True)
-    val = Prompt.ask(f"시장 지수 필터링 사용 (현재: {curr})", choices=["y", "n"], default="y" if curr else "n")
+    val = Prompt.ask(f"장세 판단 필터 사용 (현재: {curr})", choices=["y", "n"], default="y" if curr else "n")
+    if val.lower() == 'q': return
     config.USE_MARKET_FILTER = (val == "y")
+
+    # MARKET_FILTER_MA
+    curr = getattr(config, 'MARKET_FILTER_MA', 20)
+    val = Prompt.ask(f"시장 필터링 기준 이동평균선(일) (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.MARKET_FILTER_MA = int(val)
+
+    # SYSTEM_MAX_CONSECUTIVE_ERRORS
+    curr = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
+    val = Prompt.ask(f"연속 에러 허용 횟수 (현재: {curr})", default=str(curr))
+    if val.lower() == 'q': return
+    if val.isdigit(): config.SYSTEM_MAX_CONSECUTIVE_ERRORS = int(val)
+
+    # SYSTEM_TRADING_START_TIME
+    curr = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
+    val = Prompt.ask(f"거래 시작 시간(HHMM) (현재: {curr})", default=curr)
+    if val.lower() == 'q': return
+    if _validate_time_format(val):
+        config.SYSTEM_TRADING_START_TIME = val
+    else:
+        console.print("[red]잘못된 시간 형식입니다. (0000~2359)[/red]")
+
+    # SYSTEM_TRADING_END_TIME
+    curr = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
+    val = Prompt.ask(f"거래 종료 시간(HHMM) (현재: {curr})", default=curr)
+    if val.lower() == 'q': return
+    if _validate_time_format(val):
+        config.SYSTEM_TRADING_END_TIME = val
+    else:
+        console.print("[red]잘못된 시간 형식입니다. (0000~2359)[/red]")
 
     _save_dynamic_config()
 
@@ -175,25 +359,37 @@ def reset_to_default():
     config.CONCLUSION_CHECK_INTERVAL = 5
     config.CONCLUSION_CHECK_IDLE_INTERVAL = 300
     config.CONCLUSION_CHECK_ACTIVE_DURATION = 100
+    config.ENABLE_TELEGRAM = True
+    config.TELEGRAM_INSTANCE_NAME = "HTS"
+    config.TELEGRAM_POLLING_TIMEOUT = 10
+    config.SCREEN_DEBUG_LEVEL = "OFF"
+    config.FILE_DEBUG_LEVEL = "INFO"
+    config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
+    config.SYSTEM_TRADING_START_TIME = "0915"
+    config.SYSTEM_TRADING_END_TIME = "1515"
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 
 def system_config_menu():
     while True:
         console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
-        console.print("[1] 매수/분석 임계값 (Analysis Thresholds)")
-        console.print("[2] 매도 전략 (Sell Strategy)")
-        console.print("[3] 기술적 지표 파라미터 (Indicators)")
-        console.print("[4] 시스템 일반 설정 (General)")
-        console.print("[5] 설정 초기화 (Reset to Default)")
+        console.print("[1] 시스템 트레이딩 일반설정 (Trading General)")
+        console.print("[2] 매수/분석 임계값 (Analysis Thresholds)")
+        console.print("[3] 매도 전략 (Sell Strategy)")
+        console.print("[4] 기술적 지표 파라미터 (Indicators)")
+        console.print("[5] 텔레그램 설정 (Telegram)")
+        console.print("[6] 로그 레벨 설정 (Log Level)")
+        console.print("[7] 설정 초기화 (Reset to Default)")
         console.print("[Q] 뒤로 가기")
         console.print()
         
-        choice = Prompt.ask("선택", choices=["1", "2", "3", "4", "5", "q", "Q"], default="q")
+        choice = Prompt.ask("선택", choices=["1", "2", "3", "4", "5", "6", "7", "q", "Q"], default="q")
         if choice.lower() == 'q': return
         
-        if choice == "1": modify_analysis_thresholds()
-        elif choice == "2": modify_sell_strategy()
-        elif choice == "3": modify_indicator_params()
-        elif choice == "4": modify_system_general()
-        elif choice == "5": reset_to_default()
+        if choice == "1": modify_system_trading_general()
+        elif choice == "2": modify_analysis_thresholds()
+        elif choice == "3": modify_sell_strategy()
+        elif choice == "4": modify_indicator_params()
+        elif choice == "5": modify_telegram_settings()
+        elif choice == "6": modify_log_settings()
+        elif choice == "7": reset_to_default()

@@ -736,3 +736,18 @@ def modify_order():
                 config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
+
+def order_menu():
+    """매수/매도 주문 선택 메뉴"""
+    config.console.print("\n[bold]주문 유형을 선택하세요:[/bold]")
+    config.console.print("[1] 매수 주문 (Buy)")
+    config.console.print("[2] 매도 주문 (Sell)")
+    config.console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    if choice.lower() == 'q': return
+
+    if choice == "1":
+        send_order("buy")
+    elif choice == "2":
+        send_order("sell")

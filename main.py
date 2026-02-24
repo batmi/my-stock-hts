@@ -13,7 +13,7 @@ import argparse
 import config
 import api
 import utils  
-from modules import market, analysis, chart, account, manage, trading, backtest
+from modules import market, analysis, chart, account, manage, trading, backtest, settings
 from modules import auto_trade, telegram_bot
 
 def show_help():
@@ -380,7 +380,7 @@ def main():
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)
-            config.console.print("[0] 자산 관리"); config.console.print("[1] 시장 지수 조회")
+            config.console.print("[0] 시스템 설정"); config.console.print("[1] 시장 지수 조회")
             config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
             
             trader_status = ""
@@ -391,8 +391,8 @@ def main():
                     trader_status = " [bold yellow](WAITING)[/]"
                 
             config.console.print("[4] 관심 종목 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
-            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red] 주문")
-            config.console.print("[8] [blue]매도[/blue] 주문"); config.console.print("[9] [magenta]정정/취소[/magenta] 주문")
+            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red]/[blue]매도[/blue] 주문")
+            config.console.print("[8] [magenta]정정/취소[/magenta] 주문"); config.console.print("[9] 자산 관리")
             config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
             print("─" * 50); config.console.print()
             try:
@@ -403,9 +403,9 @@ def main():
                 
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
-                    "0": "자산 관리", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
+                    "0": "시스템 설정", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
                     "4": "관심 종목 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
-                    "7": "매수 주문", "8": "매도 주문", "9": "정정/취소 주문",
+                    "7": "매수/매도 주문", "8": "정정/취소 주문", "9": "자산 관리",
                     "q": "종료", "h": "도움말"
                 }
                 menu_name = menu_map.get(choice.lower(), '')
@@ -422,8 +422,7 @@ def main():
                 config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
                     
                 last_choice = choice
-                if choice == "0": 
-                    account.asset_management_menu()
+                if choice == "0": settings.system_config_menu()
                 elif choice == "1": market.show_market_indices()
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
@@ -492,9 +491,9 @@ def main():
                 elif choice == "4": manage.manage_stock_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
-                elif choice == "7": trading.send_order("buy")
-                elif choice == "8": trading.send_order("sell")
-                elif choice == "9": trading.modify_order()
+                elif choice == "7": trading.order_menu()
+                elif choice == "8": trading.modify_order()
+                elif choice == "9": account.asset_management_menu()
             except KeyboardInterrupt:
                 config.console.print()
                 config.console.print()

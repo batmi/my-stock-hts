@@ -117,7 +117,7 @@ python main.py --mode 1 --auto
 ## ⚙️ 전략 파라미터 상세 (Configuration)
 
 `config.py` 파일에서 **기본 전략(Global Strategy)**을 설정할 수 있으며, 프로그램 내 **'시스템 트레이딩 > 종목별 트레이딩 룰'** 메뉴를 통해 종목별로 개별 설정을 적용할 수 있습니다.
-또한, **'시스템 트레이딩 > 시스템 설정 변경'** 메뉴를 통해 실행 중에도 전역 설정을 실시간으로 수정할 수 있습니다. (재시작 시에도 유지됨)
+또한, **'메인 메뉴 > [0] 시스템 설정'** 메뉴를 통해 실행 중에도 전역 설정을 실시간으로 수정할 수 있습니다. (재시작 시에도 유지됨)
 
 ### 1. 기술적 지표 설정 (`INDICATOR_PARAMS`)
 *   **데이터 조회 기간 (`CHART_LOOKBACK_DAYS`)**: 730일 (2년). 이동평균선(120일선 등)의 정확한 계산을 위해 충분한 과거 데이터를 조회합니다.
@@ -173,14 +173,15 @@ stock_project/
 └── modules/            # 기능 모듈 폴더
     ├── db_manager.py   # SQLite DB 관리
     ├── telegram_bot.py # 텔레그램 봇
+    ├── settings.py     # [0] 시스템 설정
     ├── market.py       # [1] 시장 지수
     ├── analysis.py     # [2] 종목 시세 분석
     ├── chart.py        # [3] 종목 차트 분석
     ├── manage.py       # [4] 관심 종목 관리
     ├── auto_trade.py   # [5] 시스템 트레이딩
     ├── backtest.py     # [6] 전략 백테스팅
-    ├── trading.py      # [7,8,9] 주문 관리
-    └── account.py      # [0] 계좌 잔고
+    ├── trading.py      # [7,8] 주문 관리
+    └── account.py      # [9] 자산 관리
 ```
 
 ## � 라이선스
