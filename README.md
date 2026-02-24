@@ -46,8 +46,11 @@
 *   Python 3.9 이상
 
 ### 2. 라이브러리 설치
+**[권장]** `run.sh` (macOS/Linux) 또는 `run.bat` (Windows) 스크립트를 실행하면 필요한 라이브러리를 확인하고 **자동으로 설치를 안내**합니다.
+
+수동으로 설치하려면 아래 명령어를 사용하세요.
 ```bash
-pip install requests pandas yfinance ta rich matplotlib numpy beautifulsoup4 openpyxl
+pip install requests pandas yfinance rich matplotlib numpy openpyxl
 ```
 
 ### 3. 설정 (Configuration)
@@ -66,11 +69,17 @@ pip install requests pandas yfinance ta rich matplotlib numpy beautifulsoup4 ope
 
 ### 4. 실행
 ```bash
-# 메인 프로그램 실행
-python main.py
+# 실행 권한 부여 (최초 1회)
+chmod +x run.sh
+
+# 메인 프로그램 실행 (대화형 메뉴)
+./run.sh
+
+# 도움말 및 옵션 확인
+./run.sh --help
 
 # 자동매매 모드로 바로 시작 (예: 모의투자)
-python main.py --mode 1 --auto
+./run.sh --mode 1 --auto
 ```
 
 ## 📱 텔레그램 알림 및 제어 설정 (Telegram Bot)

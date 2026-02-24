@@ -299,7 +299,7 @@ def flush_input():
 def check_and_refresh_tokens():
     """토큰 만료 플래그가 설정되어 있으면 메인 스레드에서 토큰을 갱신합니다."""
     if config.TOKEN_EXPIRED:
-        config.console.print("\n[bold yellow]⚠️ 토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
+        config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
         try:
             if config.session.is_simulation:
                 api.get_access_token(force_refresh=True)
@@ -308,16 +308,32 @@ def check_and_refresh_tokens():
                 if config.session.auto_app_key:
                     api.get_auto_access_token(force_refresh=True)
             config.TOKEN_EXPIRED = False
-            config.console.print("[bold green]✅ 토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
+            config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
         except Exception as e:
-            config.console.print(f"[bold red]❌ 토큰 갱신 실패: {e}[/bold red]")
+            config.console.print(f"[bold red]토큰 갱신 실패: {e}[/bold red]")
 
 def main():
-    # [추가] 커맨드 라인 인자 파싱
-    parser = argparse.ArgumentParser(description='Stock Trading System')
-    parser.add_argument('--mode', choices=['1', '2'], help='투자 모드 (1: 모의투자, 2: 실전투자)')
-    parser.add_argument('--auto', action='store_true', help='시스템 트레이딩 자동 시작 및 로그 뷰어 실행')
-    parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송은 유지)')
+    # [수정] 커맨드 라인 인자 파싱 설정 개선 (상세 도움말 추가)
+    parser = argparse.ArgumentParser(
+        prog='run.sh / run.bat',
+        description='[MyStock HTS] 한국투자증권 API 기반 주식 자동매매 시스템',
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog="""
+[사용 예시]
+  1. 기본 실행 (대화형 메뉴 모드):
+     ./run.sh        (macOS/Linux)
+     run.bat         (Windows)
+
+  2. 모의투자 모드로 자동매매 바로 시작:
+     ./run.sh --mode 1 --auto
+
+  3. 실전투자 모드로 바로 시작 (텔레그램 봇 수신 비활성화):
+     ./run.sh --mode 2 --no-bot  (또는 run.bat ...)
+"""
+    )
+    parser.add_argument('--mode', choices=['1', '2'], help='투자 모드 선택 (1: 모의투자, 2: 실전투자)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
+    parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
+    parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
     args = parser.parse_args()
 
     # [추가] 로깅 설정 초기화
