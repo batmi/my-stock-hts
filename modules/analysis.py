@@ -1387,6 +1387,7 @@ def print_table(title, data_list, is_overseas=False):
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
         if use_investor_data: table.add_column("개인/외인/기관", justify="center")
+        else: table.add_column("OBV", justify="right")
     else:
         table.add_column("52주", justify="right")
         if is_us_stock:
@@ -1568,6 +1569,13 @@ def print_table(title, data_list, is_overseas=False):
             
             trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
+            # OBV Value
+            obv_val = ind.get('obv')
+            obv_disp = "-"
+            if obv_val:
+                obv_c = "red" if ind.get('obv_trend') else "blue"
+                obv_disp = f"[{obv_c}]{int(obv_val/1000):,}K[/]"
+
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             if ind['rsi'] is not None:
                 if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
@@ -1606,6 +1614,7 @@ def print_table(title, data_list, is_overseas=False):
                 row_data.append(w52_pos_str)
                 if not is_domestic_etf: row_data.append(foreign_rate_str)
                 if use_investor_data: row_data.append(inv_str)
+                else: row_data.append(obv_disp)
             else:
                 row_data.append(w52_pos_str)
                 if is_us_stock: row_data.extend([per_str, pbr_str])

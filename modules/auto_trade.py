@@ -24,6 +24,24 @@ console = config.console
 
 logger = logging.getLogger(__name__)
 
+# [추가] 거래 제한 종목 파일 경로 및 관리 함수
+RESTRICTED_FILE = os.path.join(config.JSON_DIR, "restricted_stocks.json")
+
+def load_restricted_stocks():
+    if os.path.exists(RESTRICTED_FILE):
+        try:
+            with open(RESTRICTED_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+def save_restricted_stocks(data):
+    try:
+        with open(RESTRICTED_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        console.print(f"[red]저장 실패: {e}[/red]")
+
 # [추가] 주문 상태 상수 정의 (Order State Machine)
 class OrderStatus:
     IDLE = "IDLE"
@@ -544,6 +562,7 @@ class AutoTrader:
             cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
             cls._instance.file_logger = config.get_autotrade_logger() # [추가] 파일 로거 초기화
             cls._instance.pending_orders = {} # [추가] 진행 중인 주문 관리 {code: {odno: status}}
+            cls._instance.restricted_notified = {} # [추가] 거래 제한 알림 스로틀링 (종목별 타임스탬프)
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -2021,6 +2040,9 @@ class AutoTrader:
         # [추가] 개별 룰 로드
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: r for r in custom_rules}
+        
+        # [추가] 거래 제한 종목 로드
+        restricted_stocks = load_restricted_stocks()
 
         # [추가] Rate Limit 준수를 위한 딜레이 설정
         # 모의투자: 초당 2건 -> 0.5초 + 여유 / 실전투자: 초당 20건 -> 0.05초 + 여유
@@ -2033,6 +2055,11 @@ class AutoTrader:
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매도 방지)
             if code in self.pending_orders:
+                continue
+            
+            # [추가] 거래 제한 종목 스킵
+            if code in restricted_stocks:
+                # 매도 제한: 사용자가 수동으로 관리하겠다는 의도로 간주하여 자동 매도 로직 스킵
                 continue
 
             # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
@@ -2227,6 +2254,9 @@ class AutoTrader:
         candidates = []
         skipped_stocks = []
         
+        # [추가] 거래 제한 종목 로드
+        restricted_stocks = load_restricted_stocks()
+        
         # [추가] Rate Limit 준수를 위한 딜레이 설정
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
         safe_delay = (1.0 / tps) * 1.2  # 20% 여유 버퍼
@@ -2302,6 +2332,22 @@ class AutoTrader:
             self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}")
             
             if result['action'] == "buy":
+                # [추가] 거래 제한 종목 체크 (매수 시그널 발생 시 알림)
+                if code in restricted_stocks:
+                    memo = restricted_stocks[code].get('memo', 'No Memo')
+                    self.log(f"매수 스킵 (거래제한): {name} - {memo}")
+                    
+                    # 알림 스로틀링 (1시간에 1번)
+                    last_noti = self.restricted_notified.get(code, 0)
+                    if time.time() - last_noti > 3600:
+                        msg = f"🚫 [매수 제한] {name}({code}) 매수 시그널 감지\n"
+                        msg += f"설정된 제한으로 인해 매수를 건너뜁니다.\n"
+                        msg += f"사유: {memo}\n"
+                        msg += f"점수: {result['score']}점 / RSI: {rsi_val}"
+                        api.send_telegram_message(msg)
+                        self.restricted_notified[code] = time.time()
+                    continue
+
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
@@ -2646,16 +2692,15 @@ def _select_stock_for_rules():
     console.print("[2] 국내 ETF")
     console.print("[3] 미국 주식")
     console.print("[4] 미국 ETF")
-    console.print("[5] 시장 지수")
-    console.print("[6] 직접 입력 (코드 검색)")
+    console.print("[5] 직접 입력 (코드 검색)")
     console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
     if choice.lower() == 'q': return None, None, False
 
     code, name, is_overseas = None, None, False
     
-    if choice == '6':
+    if choice == '5':
         raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
         if raw_input and raw_input.lower() != 'q':
             if raw_input.isdigit() and len(raw_input) == 6:
@@ -2666,9 +2711,6 @@ def _select_stock_for_rules():
                 code = raw_input.upper()
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
-    elif choice == '5':
-        console.print("[yellow]시장 지수는 매매 대상이 아니므로 룰 설정이 불가능합니다.[/yellow]")
-        return None, None, False
     elif choice in ["1", "2", "3", "4"]:
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
         s_list = config.session.stock_data.get(key_map[choice], [])
@@ -2909,6 +2951,291 @@ def _delete_stock_rules():
     else:
         console.print("[red]잘못된 번호입니다.[/red]")
 
+def _view_restricted_stocks():
+    """거래 제한 종목 목록 및 후행지표 조회"""
+    data = load_restricted_stocks()
+    if not data:
+        console.print("\n[yellow]거래 제한 종목이 없습니다.[/yellow]")
+        return
+
+    console.print()
+    table = Table(title="거래 제한 종목", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("현재가", justify="right")
+    table.add_column("메모", justify="left")
+    table.add_column("점수", justify="center")
+    table.add_column("상태", justify="center")
+    table.add_column("추세SMO", justify="center")
+    table.add_column("RSI", justify="right")
+    table.add_column("ADX", justify="right")
+    table.add_column("CCI", justify="right")
+    table.add_column("등록일", justify="center", style="dim")
+
+    with console.status("[bold green]데이터 조회 및 지표 계산 중...[/]"):
+        for code, info in data.items():
+            name = info.get('name', code)
+            memo = info.get('memo', '')
+            reg_date = info.get('date', '-')
+            
+            # 데이터 조회 및 지표 계산
+            is_overseas = info.get('is_overseas')
+            if is_overseas is None:
+                is_overseas = (len(code) != 6)
+            df = api.get_chart_data(code, is_overseas)
+            
+            price_str = "-"
+            score_str = "-"
+            state_str = "-"
+            trend_str = "-"
+            rsi_str = "-"
+            adx_str = "-"
+            cci_str = "-"
+            
+            if df is not None and not df.empty:
+                current_price = float(df.iloc[-1]['close'])
+                price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
+                
+                ind = indicators.calculate_indicators(df)
+                
+                # 전일 RSI 계산 (상태 분류용)
+                prev_rsi = None
+                if len(df) >= 16:
+                    delta = df['close'].diff()
+                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                    try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                    except: pass
+
+                # 상태 및 점수 계산
+                state, state_color, _ = analysis.classify_stock_state(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                score, _ = analysis.calculate_score(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                s_color = state_color.replace('[', '').replace(']', '')
+                score_str = f"[{s_color}]{score}점[/]"
+                state_str = f"[{s_color}]{state}[/]"
+                
+                # 추세SMO (SAR/MACD/OBV)
+                sar_val = ind.get('psar')
+                sar_icon = "[red]⬆[/]" if sar_val and current_price > sar_val else "[blue]⬇[/]"
+                
+                macd_val = ind.get('macd')
+                sig_val = ind.get('macd_signal')
+                macd_icon = "-"
+                if macd_val is not None and sig_val is not None:
+                    zero_sign = "+" if macd_val > 0 else "-"
+                    cross_char = "G" if macd_val > sig_val else "D"
+                    m_color = "red" if macd_val > sig_val else "blue"
+                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+                
+                obv_trend = ind.get('obv_trend')
+                obv_icon = "-"
+                if obv_trend is True: obv_icon = "[red]▲[/]"
+                elif obv_trend is False: obv_icon = "[blue]▼[/]"
+                
+                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+
+                # 지표 포맷팅
+                rsi_val = ind['rsi']
+                rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+                if rsi_val is not None:
+                    if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                    elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
+                    elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                    elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                    else: rsi_str = f"[blue]{rsi_str}[/]"
+
+                adx_val = ind['adx']
+                adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
+                if adx_val is not None:
+                    if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                    elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
+                    elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                    elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
+                    else: adx_str = f"[white]{adx_str}[/]"
+
+                cci_val = ind['cci']
+                cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
+                if cci_val is not None:
+                    if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                    elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                    elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                    else: cci_str = f"[blue]{cci_str}[/]"
+            
+            table.add_row(f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+
+    console.print(table)
+
+def _add_restricted_stock():
+    """거래 제한 종목 추가"""
+    code, name, is_overseas = _select_stock_for_rules()
+    if not code: return
+    
+    data = load_restricted_stocks()
+    if code in data:
+        console.print(f"\n[yellow]이미 제한 목록에 있는 종목입니다.[/yellow]")
+        if Prompt.ask("메모를 수정하시겠습니까?", choices=["y", "n"], default="y") == "n":
+            return
+            
+    memo = Prompt.ask("제한 사유(메모) 입력")
+    
+    data[code] = {
+        "name": name,
+        "memo": memo,
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "is_overseas": is_overseas
+    }
+    save_restricted_stocks(data)
+    console.print(f"\n[green]'{name}' 종목이 거래 제한 목록에 추가되었습니다.[/green]")
+    
+    console.print("\n[bold cyan]>> 현재 설정된 거래 제한 종목 리스트입니다.[/bold cyan]")
+    _view_restricted_stocks()
+
+def _remove_restricted_stock():
+    """거래 제한 종목 해제"""
+    data = load_restricted_stocks()
+    if not data:
+        console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
+        return
+
+    console.print()
+    table = Table(title="거래 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("No.", justify="right", style="cyan", width=4)
+    table.add_column("종목명(코드)", justify="left")
+    table.add_column("현재가", justify="right")
+    table.add_column("메모", justify="left")
+    table.add_column("점수", justify="center")
+    table.add_column("상태", justify="center")
+    table.add_column("추세SMO", justify="center")
+    table.add_column("RSI", justify="right")
+    table.add_column("ADX", justify="right")
+    table.add_column("CCI", justify="right")
+    table.add_column("등록일", justify="center", style="dim")
+
+    codes = list(data.keys())
+    
+    with console.status("[bold green]데이터 조회 및 지표 계산 중...[/]"):
+        for i, code in enumerate(codes):
+            info = data[code]
+            name = info.get('name', code)
+            memo = info.get('memo', '')
+            reg_date = info.get('date', '-')
+            
+            # 데이터 조회 및 지표 계산
+            is_overseas = info.get('is_overseas')
+            if is_overseas is None:
+                is_overseas = (len(code) != 6)
+            df = api.get_chart_data(code, is_overseas)
+            
+            price_str = "-"
+            score_str = "-"
+            state_str = "-"
+            trend_str = "-"
+            rsi_str = "-"
+            adx_str = "-"
+            cci_str = "-"
+            
+            if df is not None and not df.empty:
+                current_price = float(df.iloc[-1]['close'])
+                price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
+                
+                ind = indicators.calculate_indicators(df)
+                
+                # 전일 RSI 계산 (상태 분류용)
+                prev_rsi = None
+                if len(df) >= 16:
+                    delta = df['close'].diff()
+                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                    try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                    except: pass
+
+                # 상태 및 점수 계산
+                state, state_color, _ = analysis.classify_stock_state(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                score, _ = analysis.calculate_score(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                s_color = state_color.replace('[', '').replace(']', '')
+                score_str = f"[{s_color}]{score}점[/]"
+                state_str = f"[{s_color}]{state}[/]"
+                
+                # 추세SMO (SAR/MACD/OBV)
+                sar_val = ind.get('psar')
+                sar_icon = "[red]⬆[/]" if sar_val and current_price > sar_val else "[blue]⬇[/]"
+                
+                macd_val = ind.get('macd')
+                sig_val = ind.get('macd_signal')
+                macd_icon = "-"
+                if macd_val is not None and sig_val is not None:
+                    zero_sign = "+" if macd_val > 0 else "-"
+                    cross_char = "G" if macd_val > sig_val else "D"
+                    m_color = "red" if macd_val > sig_val else "blue"
+                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+                
+                obv_trend = ind.get('obv_trend')
+                obv_icon = "-"
+                if obv_trend is True: obv_icon = "[red]▲[/]"
+                elif obv_trend is False: obv_icon = "[blue]▼[/]"
+                
+                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+
+                # 지표 포맷팅
+                rsi_val = ind['rsi']
+                rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+                if rsi_val is not None:
+                    if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                    elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
+                    elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                    elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                    else: rsi_str = f"[blue]{rsi_str}[/]"
+
+                adx_val = ind['adx']
+                adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
+                if adx_val is not None:
+                    if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                    elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
+                    elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                    elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
+                    else: adx_str = f"[white]{adx_str}[/]"
+
+                cci_val = ind['cci']
+                cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
+                if cci_val is not None:
+                    if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                    elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                    elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                    else: cci_str = f"[blue]{cci_str}[/]"
+            
+            table.add_row(str(i+1), f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+        
+    console.print(table)
+    console.print()
+    
+    choice = Prompt.ask("해제할 번호 선택 [dim](취소: q)[/dim]")
+    if choice.lower() == 'q': return
+    
+    if choice.isdigit() and 1 <= int(choice) <= len(codes):
+        target_code = codes[int(choice)-1]
+        target_name = data[target_code]['name']
+        del data[target_code]
+        save_restricted_stocks(data)
+        console.print(f"\n[green]'{target_name}' 종목이 제한 목록에서 해제되었습니다.[/green]")
+        
+        console.print("\n[bold cyan]>> 현재 설정된 거래 제한 종목 리스트입니다.[/bold cyan]")
+        _view_restricted_stocks()
+
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
     console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 ===[/]")
@@ -2930,6 +3257,21 @@ def manage_stock_rules():
     elif choice == "4":
         _delete_stock_rules()
 
+def manage_restricted_stocks_menu():
+    """거래 제한 종목 관리 메뉴"""
+    console.print("\n[bold cyan]=== 거래 제한 종목 관리 ===[/]")
+    console.print("[1] 제한 종목 조회 (List)")
+    console.print("[2] 제한 종목 추가 (Add)")
+    console.print("[3] 제한 종목 해제 (Remove)")
+    console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q", "Q"], default="1")
+    if choice.lower() == 'q': return
+    
+    if choice == "1": _view_restricted_stocks()
+    elif choice == "2": _add_restricted_stock()
+    elif choice == "3": _remove_restricted_stock()
+
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 
@@ -2937,7 +3279,7 @@ def system_trading_menu():
 
     console.print("\n[bold yellow]=== 시스템 트레이딩 ===[/]")
     console.print("[dim]안내: 시스템 트레이딩은 현재 '국내주식' 리스트를 대상으로만 작동합니다.[/dim]")
-    console.print(f"현재 상���: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
+    console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
     console.print("[1] 트레이딩 실행 (Start)")
     console.print("[2] 트레이딩 중단 (Stop)")
@@ -2945,12 +3287,13 @@ def system_trading_menu():
     console.print("[4] 트레이딩 평가 (Report)")
     console.print("[5] 트레이딩 로그 (Log Viewer)")
     console.print("[6] 종목별 트레이딩 룰 (Rule)")
+    console.print("[7] 거래 제한 종목 (Restrict)")
     console.print()
     
     try:
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="3")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "q"], default="3")
         
-        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정"}
+        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정", "7": "거래제한"}
         if choice in menu_map:
             config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
             
@@ -2974,3 +3317,5 @@ def system_trading_menu():
         trader.view_log_file()
     elif choice == "6":
         manage_stock_rules()
+    elif choice == "7":
+        manage_restricted_stocks_menu()
