@@ -1133,21 +1133,44 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     
     if config.session.is_simulation:
-        # 모의투자: 주식일별체결조회(CCLD_DVSN=02:미체결)
+        # [수정] 모의투자: 주식일별체결조회(VTTC8001R) 사용
+        # inquire-psbl-rvsecncl(주식정정취소가능주문조회)는 모의투자 미지원 오류(90000000) 발생
+        # 전략: 1. 미체결(02) 전용 조회(표준) -> 2. 전체(00) 조회 후 필터링(Fallback)
         today = datetime.now().strftime("%Y%m%d")
+        
+        # 1. 미체결(02) 조회 (표준 방식)
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
             "INQR_STRT_DT": today, "INQR_END_DT": today,
-            "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00",
-            "PDNO": "", "CCLD_DVSN": "02",
+            "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
+            "PDNO": "", "CCLD_DVSN": "02", 
             "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
             "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
         }
+        
         res = call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
-        if res.get('rt_cd') == '0':
-            return res.get('output1', [])
+        output1 = res.get('output1', [])
+        
+        if output1:
+            return output1
+            
+        # 2. 결과가 없다면 전체(00) 조회 후 잔량 필터링 (Fallback)
+        # (모의투자 서버 이슈로 02 조회 시 누락되는 경우 대비)
+        if safe_int(res.get('output2', {}).get('tot_ord_qty')) > 0:
+            params["CCLD_DVSN"] = "00"
+            res = call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
+            output1 = res.get('output1', [])
+
+        open_orders = []
+        for order in output1:
+            # 잔량(rmn_qty)이 0보다 큰 경우만 미체결로 간주
+            if safe_int(order.get('rmn_qty')) > 0:
+                open_orders.append(order)
+                
+        return open_orders
+
     else:
-        # 실전투자: 주식정정취소가능주문조회
+        # 실전투자: 주식정정취소가능주문조회 (TTTC8036R)
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
@@ -1156,6 +1179,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
         res = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", "domestic", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':
             return res.get('output', [])
+            
     return []
 
 def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
