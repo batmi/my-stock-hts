@@ -759,6 +759,7 @@ def view_trade_history():
         table.add_column("종목명(코드)", justify="left", no_wrap=True)
         table.add_column("수량", justify="right")
         table.add_column("단가", justify="right", no_wrap=True)
+        table.add_column("금액", justify="right", no_wrap=True)
         table.add_column("손익(수익률)", justify="right", no_wrap=True)
         table.add_column("사유", justify="left", no_wrap=True, width=55, overflow="ellipsis")
 
@@ -801,6 +802,21 @@ def view_trade_history():
                         price_display = "시장가"
             except: pass
             
+            # [추가] 체결금액 계산 (단가 * 수량)
+            total_amt_display = "-"
+            try:
+                p_val = float(t['price'])
+                q_val = float(t['qty'])
+                if p_val > 0 and q_val > 0:
+                    tot = p_val * q_val
+                    code = str(t.get('code', ''))
+                    is_domestic = code.isdigit() and len(code) == 6
+                    if is_domestic:
+                        total_amt_display = f"{int(tot):,}"
+                    else:
+                        total_amt_display = f"{tot:,.2f}"
+            except: pass
+            
             # 손익 정보
             profit_display = "-"
             if "매도" in type_str:
@@ -838,8 +854,9 @@ def view_trade_history():
                 type_str,
                 status_str,
                 f"{t['name']}({t['code']})",
-                f"{t['qty']}",
+                f"{int(float(t['qty'])):,}",
                 price_display,
+                total_amt_display,
                 profit_display,
                 reason_display
             )
