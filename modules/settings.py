@@ -121,12 +121,12 @@ def view_system_config():
     ind = config.INDICATOR_PARAMS
     table.add_row("[bold]4. 기술적 지표[/]", "", "")
     table.add_row("데이터 조회 기간\n[dim]일봉 데이터 조회 범위[/dim]", "INDICATOR_PARAMS['CHART_LOOKBACK_DAYS']", f"{ind.get('CHART_LOOKBACK_DAYS')}일")
-    table.add_row("SAR (Start/Step/Max)\n[dim]파라볼릭 SAR 가속변수[/dim]", "INDICATOR_PARAMS['SAR_AF_...']", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
-    table.add_row("RSI (Period/Signal)\n[dim]상대강도지수 기간[/dim]", "INDICATOR_PARAMS['RSI_...']", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
-    table.add_row("RSI (Up/Mid/Low)\n[dim]과매수/중심/과매도 기준[/dim]", "INDICATOR_PARAMS['RSI_...']", f"{ind.get('RSI_UPPER')}/{ind.get('RSI_MID')}/{ind.get('RSI_LOWER')}")
+    table.add_row("SAR (Start/Step/Max)\n[dim]파라볼릭 SAR 가속변수[/dim]", "INDICATOR_PARAMS['SAR_AF_START', 'SAR_AF_STEP', 'SAR_AF_MAX']", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
+    table.add_row("RSI (Period/Signal)\n[dim]상대강도지수 기간[/dim]", "INDICATOR_PARAMS['RSI_PERIOD', 'RSI_SIGNAL']", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
+    table.add_row("RSI (Up/Mid/Low)\n[dim]과매수/중심/과매도 기준[/dim]", "INDICATOR_PARAMS['RSI_UPPER', 'RSI_MID', 'RSI_LOWER']", f"{ind.get('RSI_UPPER')}/{ind.get('RSI_MID')}/{ind.get('RSI_LOWER')}")
     table.add_row("ADX 기간\n[dim]추세 강도 지표[/dim]", "INDICATOR_PARAMS['ADX_PERIOD']", f"{ind.get('ADX_PERIOD')}")
-    table.add_row("CCI (Window/Up/Low)\n[dim]상품채널지수[/dim]", "INDICATOR_PARAMS['CCI_...']", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
-    table.add_row("MACD (Fast/Slow/Sig)\n[dim]이동평균수렴확산[/dim]", "INDICATOR_PARAMS['MACD_...']", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
+    table.add_row("CCI (Window/Up/Low)\n[dim]상품채널지수[/dim]", "INDICATOR_PARAMS['CCI_WINDOW', 'CCI_UPPER', 'CCI_LOWER']", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
+    table.add_row("MACD (Fast/Slow/Sig)\n[dim]이동평균수렴확산[/dim]", "INDICATOR_PARAMS['MACD_FAST', 'MACD_SLOW', 'MACD_SIGNAL']", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
     table.add_row("OBV MA 기간\n[dim]거래량 추세 이동평균[/dim]", "INDICATOR_PARAMS['OBV_MA_PERIOD']", f"{ind.get('OBV_MA_PERIOD')}")
     table.add_row("ATR 기간\n[dim]평균 진폭 (변동성)[/dim]", "INDICATOR_PARAMS['ATR_PERIOD']", f"{ind.get('ATR_PERIOD')}")
 

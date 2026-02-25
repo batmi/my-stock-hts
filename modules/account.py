@@ -757,7 +757,7 @@ def view_trade_history():
         table.add_column("유형", justify="center", no_wrap=True)
         table.add_column("상태", justify="center", width=6)
         table.add_column("종목명(코드)", justify="left", no_wrap=True)
-        table.add_column("수량", justify="right")
+        table.add_column("수량", justify="right", width=8)
         table.add_column("단가", justify="right", no_wrap=True)
         table.add_column("금액", justify="right", no_wrap=True)
         table.add_column("손익(수익률)", justify="right", no_wrap=True)
