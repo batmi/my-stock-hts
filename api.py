@@ -1157,6 +1157,10 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
         # 2. 결과가 없다면 전체(00) 조회 후 잔량 필터링 (Fallback)
         # (모의투자 서버 이슈로 02 조회 시 누락되는 경우 대비)
         if safe_int(res.get('output2', {}).get('tot_ord_qty')) > 0:
+            # [추가] Fallback 실행 로그 기록
+            if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
+                config.console.print("[dim yellow][API] 모의투자 미체결 조회 Fallback 실행 (02 -> 00)[/dim yellow]")
+
             params["CCLD_DVSN"] = "00"
             res = call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
             output1 = res.get('output1', [])
@@ -1305,6 +1309,7 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
                 # 잔고 조회(get_domestic_balance)에서 가져온 d2_deposit이 있다면 이를 deposit으로 대체 사용
                 if res['d2_deposit'] > 0:
                     res['deposit'] = res['d2_deposit']
+                    logger.info(f"[API] 모의투자 예수금 조회 폴백: D+2 예수금({res['d2_deposit']:,}원)을 사용합니다.")
                     success = True
     else:
         data = get_foreign_deposit(cano, acnt_prdt_cd, retries=retries)
