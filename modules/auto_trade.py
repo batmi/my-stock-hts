@@ -2074,11 +2074,15 @@ class AutoTrader:
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매도 방지)
             if code in self.pending_orders:
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 continue
             
             # [추가] 거래 제한 종목 스킵
             if code in restricted_stocks:
                 # 매도 제한: 사용자가 수동으로 관리하겠다는 의도로 간주하여 자동 매도 로직 스킵
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    self.log(f"[분석스킵] {name}: 거래 제한 종목")
                 continue
 
             # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
@@ -2092,6 +2096,8 @@ class AutoTrader:
             time.sleep(safe_delay)
             
             if qty <= 0: 
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    self.log(f"[분석스킵] {name}: 주문 가능 수량 0 (미체결 매도 주문 존재 가능성)")
                 continue # 주문 가능 수량이 없으면 스킵
             
             # [추가] 종목별 룰 적용
