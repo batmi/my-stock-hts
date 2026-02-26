@@ -407,7 +407,7 @@ def modify_system_trading_general():
         if getattr(config, 'USE_VOLATILITY_TARGETING', True):
             items.extend([
                 {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%", "name": "TARGET_VOLATILITY", "type": "float", "section": "Volatility",
-                 "get": lambda: getattr(config, 'TARGET_VOLATILITY', 0.20), "set": lambda v: setattr(config, 'TARGET_VOLATILITY', v)},
+                 "get": lambda: getattr(config, 'TARGET_VOLATILITY', 0.30), "set": lambda v: setattr(config, 'TARGET_VOLATILITY', v)},
                 {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "Volatility",
                  "get": lambda: getattr(config, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MAX', v)},
                 {"desc": "스케일링 최소 배수", "help": "비중 축소 제한", "name": "VOLATILITY_SCALING_MIN", "type": "float", "section": "Volatility",
@@ -490,7 +490,7 @@ def reset_to_default():
     config.SYSTEM_TRADING_END_TIME = "1515"
     config.SYSTEM_RISK_PER_TRADE = 5.0
     config.USE_VOLATILITY_TARGETING = True
-    config.TARGET_VOLATILITY = 0.20
+    config.TARGET_VOLATILITY = 0.30
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.3
     config.UNFILLED_ORDER_CANCEL_SECONDS = 600

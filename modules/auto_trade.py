@@ -2439,9 +2439,12 @@ class AutoTrader:
         else:
             target_invest_amt = int(avail_cash * invest_ratio)
         
+        base_amt = target_invest_amt # [추가] 로깅용 변수
+        
         # 2. 리스크 기반 포지션 사이징 (Risk-Based Position Sizing) - 변동성 리스크 제어 역할
         # 공식: 포지션크기 = (총자산 * 리스크비율) / 손절률
         risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+        risk_based_amt = 0 # [추가] 로깅용 변수
         
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
             total_equity = self.initial_asset if self.initial_asset > 0 else avail_cash
@@ -2450,14 +2453,11 @@ class AutoTrader:
             
             risk_based_amt = int(max_loss_amt / sl_ratio) # 예: 100만 / 0.07 = 약 1428만원
             
-            # 비중 기반 금액과 리스크 기반 금액 중 작은 값 선택 (안전장치)
-            if config.FILE_DEBUG_LEVEL == "DEBUG":
-                logger.debug(f"[자산배분] 목표금액 산출 | 비중({invest_ratio*100:.0f}%): {target_invest_amt:,}원 vs 리스크({risk_per_trade}%): {risk_based_amt:,}원 (손절 {stop_loss_rate}%)")
-            
             target_invest_amt = min(target_invest_amt, risk_based_amt)
         
         # 3. 변동성 타겟팅 (Volatility Targeting)
         # 목표 변동성에 맞춰 포지션 크기 조절 (변동성 크면 축소, 작으면 확대)
+        scale = 1.0 # [추가] 로깅용 변수
         if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
@@ -2471,15 +2471,21 @@ class AutoTrader:
                 # [수정] 스케일링 범위 제한 (안전장치)
                 scale = max(scale_min, min(scale_max, scale))
                 
-                # 비중 기반 금액에 스케일링 적용
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    logger.debug(f"[자산배분] 변동성 타겟팅: ATR={atr:.0f}, 연변동성={annual_vol*100:.1f}%, Scale={scale:.2f} -> 기존:{target_invest_amt:,}원")
-                
                 # [수정] 스케일링 적용 (기존 금액 * scale)
                 target_invest_amt = int(target_invest_amt * scale)
 
         # 실제 집행 금액은 목표 금액과 현재 예수금 중 작은 값 (예수금 초과 불가)
         invest_amt = min(target_invest_amt, avail_cash)
+        
+        # [추가] 자산 배분 상세 로그 출력 (매수 시점에 계산 내역 확인용)
+        log_msg = f"[자산배분] 기초:{base_amt:,}원"
+        if risk_based_amt > 0:
+            log_msg += f" -> 리스크조정:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
+        if scale != 1.0:
+            log_msg += f" -> 변동성조정(x{scale:.2f}):{target_invest_amt:,}원"
+        log_msg += f" -> 최종:{invest_amt:,}원"
+        
+        self.log(log_msg)
             
         return invest_amt
 
@@ -2558,6 +2564,11 @@ class AutoTrader:
             vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') else "-"
             reason = f"조건 만족 [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
             
+            # [추가] ATR 및 변동성 정보 추가 (텔레그램 알림용)
+            if atr_val > 0 and price_val > 0:
+                annual_vol = (atr_val / price_val) * math.sqrt(252) * 100
+                reason += f" [ATR:{int(atr_val):,}/변동성:{annual_vol:.1f}%]"
+
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
             
