@@ -579,6 +579,29 @@ class AutoTrader:
         if not getattr(self, 'file_logger', None) or not self.file_logger.handlers:
             self.file_logger = config.get_autotrade_logger()
 
+    def _refine_trade_records(self, records):
+        """거래 내역 중복 제거 및 우선순위 적용 (전략 사유 > 체결 확인)"""
+        unique_records = {}
+        
+        for r in records:
+            odno = r.get('odno')
+            # odno가 없으면 고유 키 생성하여 포함
+            if not odno:
+                key = f"NO_ODNO_{r['time']}_{r['code']}_{r['type']}_{len(unique_records)}"
+                unique_records[key] = r
+                continue
+                
+            if odno not in unique_records:
+                unique_records[odno] = r
+            else:
+                existing = unique_records[odno]
+                # 기존 기록이 '체결 확인'이고, 현재 기록이 구체적 사유가 있다면 교체 (정보 보강)
+                if existing.get('reason') == '체결 확인' and r.get('reason') != '체결 확인':
+                    unique_records[odno] = r
+                # 현재 기록이 '체결 확인'이면 무시 (기존의 구체적 사유 유지)
+        
+        return list(unique_records.values())
+
     def update_order_status(self, code, odno, status):
         """체결 모니터에서 호출하여 주문 상태 업데이트"""
         if code in self.pending_orders and odno in self.pending_orders[code]:
@@ -1244,8 +1267,9 @@ class AutoTrader:
         with console.status("[bold green]DB에서 매매 내역 조회 및 분석 중...[/]"):
             time.sleep(0.5)
             
-            # [수정] DB에서 시스템 트레이딩 내역 조회 (현재 모드에 맞는 내역만)
-            db_records = db_manager.db.get_trades(is_auto=True, is_sim=config.session.is_simulation, limit=500)
+            # [수정] DB에서 매매 내역 조회 (수동 매매 포함을 위해 is_auto 필터 제거)
+            # 시스템 매매와 수동 매매를 모두 포함하여 평가
+            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=500)
             
             # DB 레코드를 내부 포맷으로 변환
             self.trade_records = []
@@ -1266,11 +1290,15 @@ class AutoTrader:
                     "time": r['time'],
                     "odno": r['odno']
                 })
+            
+            # [추가] 중복 제거 및 정제 (시스템 주문과 체결 확인 병합)
+            self.trade_records = self._refine_trade_records(self.trade_records)
 
     def get_performance_report(self):
         """텔레그램용 성과 리포트 생성"""
         # DB에서 조회 (로그 출력 없이)
-        db_records = db_manager.db.get_trades(is_auto=True, is_sim=config.session.is_simulation, limit=500)
+        # [수정] 수동 매매 포함을 위해 is_auto 필터 제거
+        db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=500)
         
         temp_records = []
         for r in reversed(db_records):
@@ -1290,10 +1318,13 @@ class AutoTrader:
                 "odno": r['odno']
             })
             
-        if not temp_records:
+        # [추가] 중복 제거 및 정제
+        refined_records = self._refine_trade_records(temp_records)
+            
+        if not refined_records:
             return "📭 매매 기록이 없습니다."
             
-        stats = self._calculate_statistics(temp_records)
+        stats = self._calculate_statistics(refined_records)
         
         msg = "📊 [시스템 트레이딩 성과 리포트]\n"
         msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
@@ -1316,8 +1347,8 @@ class AutoTrader:
     def _calculate_statistics(self, records=None):
         if records is None: records = self.trade_records
         
-        # [추가] 통계 계산 시 '체결 확인' 건 제외 (전략적 매매만 집계)
-        records = [r for r in records if r.get('reason') != '체결 확인']
+        # [수정] 이미 정제된 레코드를 사용하므로 필터링 제거
+        # 수동 매매('체결 확인')도 통계에 포함
         
         total_trades = len(records)
         buy_trades = [r for r in records if r['type'] == 'buy']
@@ -1437,8 +1468,8 @@ class AutoTrader:
         stock_stats = {}
         buy_times_per_stock = {} # 종목별 매수 시간 추적 (FIFO)
 
-        # [추가] 분석 대상 레코드 필터링 ('체결 확인' 제외)
-        filtered_records = [r for r in self.trade_records if r.get('reason') != '체결 확인']
+        # [수정] 이미 정제된 레코드를 사용하므로 필터링 제거
+        filtered_records = self.trade_records
 
         for r in filtered_records:
             code = r['code']
