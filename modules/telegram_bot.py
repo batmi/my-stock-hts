@@ -10,7 +10,7 @@ import config
 import api
 import utils
 import indicators
-from modules import analysis, account, chart, db_manager
+from modules import analysis, account, chart, db_manager, auto_trade
 from modules.auto_trade import AutoTrader
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,8 @@ class TelegramCommander:
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
             "/rules": self._cmd_rules,
-            "/profit": self._cmd_profit
+            "/profit": self._cmd_profit,
+            "/restrict": self._cmd_restricted
         }
 
     def start(self):
@@ -155,6 +156,7 @@ class TelegramCommander:
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
+            "• /restrict : 거래 제한 종목 리스트 조회\n"
             "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
@@ -213,6 +215,18 @@ class TelegramCommander:
                     f"   손절: {r['stop_loss']}%\n"
                     f"   TS: +{r['ts_activation']}% / -{r['ts_callback']}%\n"
                     f"{memo_part}")
+        return msg
+
+    def _cmd_restricted(self, args):
+        data = auto_trade.load_restricted_stocks()
+        if not data:
+            return "📭 거래 제한 종목이 없습니다."
+
+        msg = f"🚫 [거래 제한 종목 ({len(data)}개)]\n"
+        for code, info in data.items():
+            name = info.get('name', code)
+            memo = info.get('memo', '-')
+            msg += f"\n• {name}({code})\n   메모: {memo}"
         return msg
 
     def _cmd_profit(self, args):
