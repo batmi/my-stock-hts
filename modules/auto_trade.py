@@ -805,7 +805,8 @@ class AutoTrader:
                     acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
-                        deposit = res['deposit'] + res['foreign_deposit']
+                        # [수정] 자산 계산 시 D+2 예수금(가수도금) 사용 (매도 대금 포함) - start()와 통일
+                        deposit = res['d2_deposit'] + res['foreign_deposit']
                         is_data_valid = True
                     else:
                         deposit = 0

@@ -1290,6 +1290,11 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
             summary = summary_list[0]
             res['deposit'] = int(float(summary.get('dnca_tot_amt', 0)))
             res['d2_deposit'] = int(float(summary.get('prvs_rcdl_excc_amt', 0)))
+            
+            # [추가] 모의투자에서 D+2 예수금이 0인 경우 일반 예수금으로 대체 (데이터 누락 대응)
+            if res['d2_deposit'] == 0 and res['deposit'] > 0:
+                res['d2_deposit'] = res['deposit']
+                
             res['withdraw'] = res['d2_deposit']
             success = True
         
