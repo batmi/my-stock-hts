@@ -653,10 +653,10 @@ class AutoTrader:
                     # 2. 예수금 조회
                     # [수정] 실전/모의 모두 summary 정보 우선 활용 (안정성 확보)
                     if summary:
-                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                        # [추가] 모의투자는 D+2 예수금(가수도금) 사용 (매도 대금 포함)
-                        if config.session.is_simulation:
-                             deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                        # [수정] 자산 계산 시 D+2 예수금(가수도금)을 사용하여 매도 대금 미결제분 반영
+                        deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                        if deposit == 0: # Fallback
+                            deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
                     
                     if deposit == 0 and not config.session.is_simulation:
                         res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
@@ -670,7 +670,8 @@ class AutoTrader:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
                         tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt'))
                     
-                    if tot_evlu > 0:
+                    # [수정] 모의투자는 API 총평가금 대신 (주식평가 + D+2예수금) 계산값 사용
+                    if not config.session.is_simulation and tot_evlu > 0:
                         self.initial_asset = tot_evlu
                     else:
                         self.initial_asset = deposit + stock_eval
@@ -881,7 +882,7 @@ class AutoTrader:
                         tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0))
                         
                         # 총 자산: API 제공값 우선, 없으면 계산
-                        if tot_evlu > 0:
+                        if not config.session.is_simulation and tot_evlu > 0:
                             current_asset = tot_evlu
                         else:
                             current_asset = deposit + stock_eval
@@ -1951,7 +1952,8 @@ class AutoTrader:
                     current_total = 0
                     if deposit_res:
                         # 총 자산 계산 시에는 원화+외화 예수금 합산
-                        cash = deposit_res['deposit'] + deposit_res['foreign_deposit']
+                        # [수정] 자산 왜곡 방지를 위해 D+2 예수금 사용 (매도 대금 포함)
+                        cash = deposit_res['d2_deposit'] + deposit_res['foreign_deposit']
                         current_total = cash + total_eval
                     
                     # [추가] 일일 손실 제한 체크
@@ -1980,15 +1982,14 @@ class AutoTrader:
             
             if summary and len(summary) > 0: 
                 stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                
-                # 모의투자는 D+2 예수금 사용
-                if config.session.is_simulation:
-                    deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                # [수정] 자산 계산 시 D+2 예수금(가수도금) 우선 사용
+                deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                if deposit == 0:
+                    deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
 
             # [추가] API 제공 총자산 우선 사용
             tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
-            if tot_evlu > 0:
+            if not config.session.is_simulation and tot_evlu > 0:
                 return tot_evlu
 
             # 2. 예수금이 0이고 실전투자면 별도 API 시도
@@ -2007,11 +2008,17 @@ class AutoTrader:
     def _check_loss_limit(self, current_total):
         """자산 변동을 체크하여 손실 한도 초과 시 비상 정지"""
         loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+        
+        # 설정이 0이거나 초기 자산이 0이면 체크하지 않음
         if loss_limit_pct <= 0 or self.initial_asset <= 0: return
-
         if current_total <= 0: return
 
+        # [계산 공식] 수익률 = (현재 총자산 - 시작 시점 총자산) / 시작 시점 총자산 * 100
         loss_rate = (current_total - self.initial_asset) / self.initial_asset * 100
+        
+        # [디버그] 자산 변동 상태 모니터링 (DEBUG 레벨일 때 로그 기록)
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[LossCheck] 시작자산:{self.initial_asset:,} -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
         
         if loss_rate <= -loss_limit_pct:
             self.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
