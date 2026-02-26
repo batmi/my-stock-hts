@@ -714,12 +714,14 @@ class AutoTrader:
         msg += f"\n현재 예수금: {deposit:,}원"
         
         # [추가] 현재 평가금액 정보 (전략 정보 위로 이동)
-        total_eval = 0
+        stock_eval_amt = 0
         if summary and len(summary) > 0:
             s_data = summary[0]
-            total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
+            # [수정] 현재 평가 금액 = 주식 평가금 + 예수금 (총 자산)
+            stock_eval_amt = api.safe_int(s_data.get('scts_evlu_amt'))
+            current_total_asset = stock_eval_amt + deposit
             total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
-            msg += f"\n현재 평가: {total_eval:,}원 (손익: {total_profit:+,}원)"
+            msg += f"\n현재 평가(자산): {current_total_asset:,}원 (손익: {total_profit:+,}원)"
 
         # [추가] 전략 설정 요약 정보 추가
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -755,7 +757,7 @@ class AutoTrader:
                 msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
         else:
             msg += "\n\n📋 [보유 종목] 없음"
-            if total_eval > 0:
+            if stock_eval_amt > 0:
                 msg += " (⚠️ 평가금액 존재 - API 데이터 불일치)"
 
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
@@ -1946,14 +1948,15 @@ class AutoTrader:
                     s_data = summary[0]
                     total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
                     total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
-                    self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
                     # 총 자산 계산 (예수금 + 평가금)
                     current_total = 0
+                    deposit_d2 = 0
                     if deposit_res:
+                        deposit_d2 = deposit_res['d2_deposit']
                         # 총 자산 계산 시에는 원화+외화 예수금 합산
                         # [수정] 자산 왜곡 방지를 위해 D+2 예수금 사용 (매도 대금 포함)
-                        cash = deposit_res['d2_deposit'] + deposit_res['foreign_deposit']
+                        cash = deposit_d2 + deposit_res['foreign_deposit']
                         current_total = cash + total_eval
                     
                     # [추가] 일일 손실 제한 체크
@@ -1963,7 +1966,15 @@ class AutoTrader:
                             self.initial_asset = current_total
                             self.log(f"[시스템 보정] 초기 자산 정보 갱신: {self.initial_asset:,}원")
 
+                        profit_diff = current_total - self.initial_asset
+                        profit_rate = (profit_diff / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+                        
+                        self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 손익: {profit_diff:+,}원 ({profit_rate:+.2f}%)")
+                        self.log(f"              예수금(D+2): {deposit_d2:,}원 | 주식평가: {total_eval:,}원")
+
                         self._check_loss_limit(current_total)
+                    else:
+                        self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
         except Exception: pass
 
