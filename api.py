@@ -394,11 +394,12 @@ def _get_access_token_internal(force_refresh=False):
         # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
         logger.info("[Token] 유효한 모의 토큰이 없어 신규 발급을 진행합니다.")
 
-    # [추가] 빈도 제한(EGW00133) 방지: 최근 발급된 토큰이 있으면 강제 갱신 요청이 와도 무시하고 캐시 반환
-    if force_refresh:
-        if config.session.is_token_recently_issued("SIMULATION", seconds=60):
-            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-            return config.session.get_valid_token("SIMULATION", force_disk_reload=True)
+    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
+    # (API 호출 시 EGW00123 토큰 만료 에러를 확인하고 요청하는 것이므로)
+    # if force_refresh:
+    #     if config.session.is_token_recently_issued("SIMULATION", seconds=60):
+    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+    #         return config.session.get_valid_token("SIMULATION", force_disk_reload=True)
 
     # [추가] 키 누락 시 조기 리턴 (불필요한 서버 요청 방지)
     if not config.session.app_key or not config.session.app_secret:
@@ -459,11 +460,11 @@ def _get_real_access_token_internal(force_refresh=False):
         # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
         logger.info("[Token] 유효한 실전 토큰이 없어 신규 발급을 진행합니다.")
 
-    # [추가] 빈도 제한(EGW00133) 방지
-    if force_refresh:
-        if config.session.is_token_recently_issued("REAL", seconds=60):
-            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-            return config.session.get_valid_token("REAL", force_disk_reload=True)
+    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
+    # if force_refresh:
+    #     if config.session.is_token_recently_issued("REAL", seconds=60):
+    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+    #         return config.session.get_valid_token("REAL", force_disk_reload=True)
 
     if not config.session.real_app_key: return None
 
@@ -525,11 +526,11 @@ def _get_auto_access_token_internal(force_refresh=False):
         # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
         logger.info("[Token] 유효한 자동매매 토큰이 없어 신규 발급을 진행합니다.")
 
-    # [추가] 빈도 제한(EGW00133) 방지
-    if force_refresh:
-        if config.session.is_token_recently_issued("AUTO", seconds=60):
-            logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-            return config.session.get_valid_token("AUTO", force_disk_reload=True)
+    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
+    # if force_refresh:
+    #     if config.session.is_token_recently_issued("AUTO", seconds=60):
+    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
+    #         return config.session.get_valid_token("AUTO", force_disk_reload=True)
 
     if not config.session.auto_app_key: return None
 
