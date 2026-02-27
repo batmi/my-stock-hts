@@ -175,7 +175,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if dd < mdd: mdd = dd
         
         # 상태 및 점수 계산
-        raw_score, sell_check_score, can_buy_state, state, reason = calculate_daily_status(row, prev_row, thresholds=current_thresholds)
+        raw_score, sell_check_score, can_buy_state, state, state_reason = calculate_daily_status(row, prev_row, thresholds=current_thresholds)
         
         if raw_score > max_score_observed: max_score_observed = raw_score
         if raw_score >= buy_score_limit: score_8_count += 1
@@ -241,9 +241,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     elif state == "매도": missed_danger_count += 1
                     
                     # [추가] 보류 사유 상세화
-                    missed_reason = reason
+                    missed_reason = state_reason
                     if not can_buy_state:
-                        missed_reason = f"{state}: {reason}"
+                        missed_reason = f"{state}: {state_reason}"
                     elif not is_rsi_ok:
                         missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {buy_rsi_limit})"
 
@@ -317,7 +317,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 buy_date = None
                 ts_highest_price = 0
                 
-                if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = "매도"
+                if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = state_reason
                     
                 trades.append({
                     "date": date, "type": f"매도({reason})", "price": sell_price, "qty": sold_qty, "balance": balance, 
@@ -623,7 +623,8 @@ def run_backtest():
         avg_profit = sum(profits) / len(profits) if profits else 0.0
         avg_loss = sum(losses) / len(losses) if losses else 0.0
         
-        summary_table.add_row("평균 수익률", f"[red]{avg_profit:+.2f}%[/] / 평균 손실률: [blue]{avg_loss:+.2f}%[/]")
+        summary_table.add_row("평균 수익률", f"[red]{avg_profit:+.2f}%[/]")
+        summary_table.add_row("평균 손실률", f"[blue]{avg_loss:+.2f}%[/]")
         
         # [추가] 손익 구조 분석 (평균 손익비 기반)
         structure_msg = "-"
