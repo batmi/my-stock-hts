@@ -98,7 +98,7 @@ def show_help():
     table.add_row("", "6~8점 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
-    table.add_row("", "장기추세 붕괴 및 과열", "[blue]위험[/]", "적극 매도/손절 고려")
+    table.add_row("", "장기추세 붕괴 및 과열", "[blue]매도[/]", "적극 매도/손절 고려 (위험)")
     table.add_section()
 
     table.add_row("현재가 (이평선)", "[정배열] 현재가 > 5일선", "[red]빨간색[/]", "강세 지속")
@@ -274,7 +274,7 @@ def show_help():
     
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
-    score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]위험[/]", "매수 금지 / 즉시 매도 (점수 무관)")
+    score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (점수 무관)")
     score_table.add_row("필터링 (주의)", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
 
     # [추가] 매수 타이밍 섹션

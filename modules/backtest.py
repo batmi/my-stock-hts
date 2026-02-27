@@ -51,8 +51,8 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     )
     
     # 3. 백테스팅용 플래그 변환
-    can_buy_state = (state not in ["위험", "주의"]) # 위험/주의 상태가 아니면 매수 후보
-    sell_check_score = 0 if state == "위험" else raw_score # 위험 상태면 점수 0점 처리 (매도 유도)
+    can_buy_state = (state not in ["매도", "주의"]) # 매도/주의 상태가 아니면 매수 후보
+    sell_check_score = 0 if state == "매도" else raw_score # 매도 상태면 점수 0점 처리 (매도 유도)
     
     return raw_score, sell_check_score, can_buy_state, state, reason
 
@@ -238,7 +238,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     # [추가] 매수 보류 카운팅
                     if state == "주의": missed_caution_count += 1
-                    elif state == "위험": missed_danger_count += 1
+                    elif state == "매도": missed_danger_count += 1
                     
                     # [추가] 보류 사유 상세화
                     missed_reason = reason
@@ -317,7 +317,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 buy_date = None
                 ts_highest_price = 0
                 
-                if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = "위험"
+                if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = "매도"
                     
                 trades.append({
                     "date": date, "type": f"매도({reason})", "price": sell_price, "qty": sold_qty, "balance": balance, 
@@ -611,7 +611,7 @@ def run_backtest():
     
     # [추가] 매수 보류 통계 출력
     if missed_caution > 0 or missed_danger > 0:
-        summary_table.add_row("매수 보류 (상태)", f"[yellow]주의 {missed_caution}회[/] / [blue]위험 {missed_danger}회[/] (점수 충족했으나 진입 불가)")
+        summary_table.add_row("매수 보류 (상태)", f"[yellow]주의 {missed_caution}회[/] / [blue]매도 {missed_danger}회[/] (점수 충족했으나 진입 불가)")
     
     if sell_count > 0:
         summary_table.add_row("승률 (Win Rate)", f"{win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
@@ -917,7 +917,7 @@ def run_backtest():
             elif state == "상승": state_color = "orange3"
             elif state == "관망": state_color = "white"
             elif state == "주의": state_color = "yellow"
-            elif state == "위험": state_color = "blue"
+            elif state == "매도": state_color = "blue"
 
             adx_str = f"{m.get('adx', 0):.1f}"
             cci_str = f"{m.get('cci', 0):.1f}"

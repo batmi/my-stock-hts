@@ -518,12 +518,12 @@ class DefaultStrategy:
                 reason = f"RSI 과열 익절 (RSI: {ind['rsi']:.1f})"
             
             # 5. 추세 이탈
-            if not reason and (state == "위험" or score < sell_score_limit):
+            if not reason and (state == "매도" or score < sell_score_limit):
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
-                if state == "위험":
-                    reason = f"위험진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
+                if state == "매도":
+                    reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                 else:
                     reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             

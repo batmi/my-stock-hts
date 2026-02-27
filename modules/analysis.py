@@ -105,7 +105,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
         reasons.append(f"RSI 초과매도({rsi:.1f})")
         
     # [수정] ADX 과열 중 RSI 하락은 '위험'보다는 '주의'로 이동
-    if is_severe_danger: return "위험", "[blue]", ", ".join(reasons)
+    if is_severe_danger: return "매도", "[blue]", ", ".join(reasons)
     
     is_caution = False
     # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 중 하나라도 해당되면 '주의' (완충 구간)
@@ -525,12 +525,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     # 매도(추세 이탈) 조건 체크
     sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-    is_sell_signal = (score < sell_score_limit) or (state == "위험")
+    is_sell_signal = (score < sell_score_limit) or (state == "매도")
     
     sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
     
-    if state == "위험":
-        sell_reason = "위험 상태 진입 (필터링 조건)"
+    if state == "매도":
+        sell_reason = "매도 상태 진입 (필터링 조건)"
     elif score < sell_score_limit:
         sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)"
     else:
@@ -1344,7 +1344,7 @@ def save_all_market_analysis():
                                 if val == "매수": cell.font = Font(color="FF0000", bold=True)
                                 elif val == "상승": cell.font = Font(color="FF8C00", bold=True)
                                 elif val == "주의": cell.font = Font(color="DAA520", bold=True)
-                                elif val == "위험": cell.font = Font(color="0000FF", bold=True)
+                                elif val == "매도": cell.font = Font(color="0000FF", bold=True)
                         except ValueError: pass
         
         config.console.print(f"\n[bold green]저장 완료: {filename}[/bold green]")
