@@ -2151,6 +2151,22 @@ class AutoTrader:
                 }
 
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
+            # [추가] ATR 손절 사용 여부 확인 및 적용
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            applied_sl_rate = None
+            
+            if use_atr_stop:
+                last_buy = db_manager.db.get_latest_buy_trade(code)
+                if last_buy and last_buy.get('stop_loss_rate'):
+                    val = float(last_buy['stop_loss_rate'])
+                    if val != 0.0: applied_sl_rate = val
+            
+            # [추가] ATR 손절률이 있으면 thresholds에 반영 (개별 룰보다 우선 적용)
+            if applied_sl_rate is not None:
+                if thresholds is None:
+                    thresholds = {}
+                thresholds["STOP_LOSS_RATE"] = applied_sl_rate
+
             ts_msg = ""
             # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
             cached_highest = self.trailing_stop_cache.get(code)
@@ -2197,6 +2213,10 @@ class AutoTrader:
                 # [추가] 개별 룰 적용 시 사유에 표시
                 if rule:
                     reason += " [개별 룰 적용]"
+                
+                # [추가] ATR 손절 적용 시 사유에 표시
+                if applied_sl_rate is not None and "손절" in reason:
+                    reason += " (ATR손절)"
                 
                 # [추가] 매도 체결 확률을 높이기 위해 -1호가 적용
                 tick_size = self._get_tick_size(current_price)
@@ -2578,7 +2598,7 @@ class AutoTrader:
 
             self.log(f"매수 실행: {cand['name']} - {reason}")
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
-            odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'))
+            odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
             if odno: 
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
@@ -2659,7 +2679,7 @@ class AutoTrader:
         
         return "KOSPI" # 기본값
 
-    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None):
+    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
         # [수정] 지정가/시장가 구분 (price > 0 이면 지정가)
         ord_dvsn = "00" if price > 0 else "01"
         
@@ -2705,7 +2725,7 @@ class AutoTrader:
                 
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
-                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score)
+                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score, stop_loss_rate=stop_loss_rate)
                 
                 # [추가] 체결 감시자에게 즉시 확인 요청
                 ConclusionMonitor().check_now()

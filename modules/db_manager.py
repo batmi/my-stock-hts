@@ -85,7 +85,8 @@ class DBManager:
                     "profit_rate": "REAL DEFAULT 0.0",
                     "reason": "TEXT",
                     "strategy_score": "REAL DEFAULT 0",
-                    "order_status": "TEXT DEFAULT '접수'"
+                    "order_status": "TEXT DEFAULT '접수'",
+                    "stop_loss_rate": "REAL DEFAULT 0.0"
                 }
                 
                 for col, dtype in new_columns.items():
@@ -114,7 +115,7 @@ class DBManager:
                 if config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Init Error: {e}[/red]")
 
-    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None):
+    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
         """거래 내역 및 스냅샷 저장"""
         # 쓰기 작업은 락으로 보호하여 순차 처리 (SQLite 특성상 안전)
         with self.lock:
@@ -136,9 +137,9 @@ class DBManager:
                     snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                     
                     cursor.execute('''
-                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status))
+                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate))
                     
                     conn.commit()
                     
@@ -268,6 +269,16 @@ class DBManager:
             conn = self._get_conn()
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status = '접수' ORDER BY id DESC LIMIT 1", (odno,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except: return None
+
+    def get_latest_buy_trade(self, code):
+        """특정 종목의 가장 최근 매수 내역 조회 (ATR 손절률 확인용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC LIMIT 1", (code,))
             row = cursor.fetchone()
             return dict(row) if row else None
         except: return None
