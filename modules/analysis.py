@@ -1397,236 +1397,244 @@ def print_table(title, data_list, is_overseas=False):
             table.add_column("상장주수", justify="right", style="dim")
 
     for i, (name, code) in enumerate(data_list):
-        curr_data = api.get_current_price_data(code, is_overseas)
-        chart_df = api.get_chart_data(code, is_overseas)
-        
-        ind = indicators.calculate_indicators(chart_df)
-        w52_pos_str, per_str, pbr_str, shar_str = "-", "-", "-", "-"
-        foreign_rate_str = "-"
-        inv_str = "-"
-        cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
-        strength_display = ""
-
-        if not is_overseas:
-            if use_investor_data:
-                inv_list = api.get_investor_trend(code)
-                if inv_list:
-                    p = api.safe_int(inv_list[0].get('prsn_ntby_qty'))
-                    f = api.safe_int(inv_list[0].get('frgn_ntby_qty'))
-                    i = api.safe_int(inv_list[0].get('orgn_ntby_qty'))
-                    def fmt_inv(val):
-                        if val == 0: return "[dim]-[/dim]"
-                        abs_val = abs(val)
-                        if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
-                        elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
-                        else: s = f"{val:,}"
-                        return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
-                    inv_str = f"{fmt_inv(p)} {fmt_inv(f)} {fmt_inv(i)}"
-            if not use_investor_data:
-                try:
-                    rt_strength = api.get_realtime_vol_strength(code, is_overseas, cached_ex)
-                    if rt_strength is not None:
-                        s_color = "[red]" if rt_strength >= 100 else "[blue]"
-                        strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
-                    else: strength_display = " [dim][0%][/dim]"
-                except: strength_display = " [dim][0%][/dim]"
-            if curr_data.get('rt_cd') == '0':
-                out = curr_data.get('output', {})
-                foreign_rate_str = f"{out.get('hts_frgn_ehrt', '-')}%"
-                try:
-                    h52, l52, c = float(out.get('w52_hgpr', 0)), float(out.get('w52_lwpr', 0)), float(out.get('stck_prpr', 0))
-                    if h52 > l52:
-                        pos = (c - l52)/(h52 - l52)*100
-                        if pos >= 90: w_color = "[red]"
-                        elif pos >= 80: w_color = "[orange3]"
-                        elif pos <= 30: w_color = "[blue]"
-                        elif pos <= 50: w_color = "[yellow]"
-                        else: w_color = "[white]"
-                        w52_pos_str = f"{w_color}{pos:.1f}%[/]"
-                except: pass
-        else:
-            detail = api.fetch_overseas_detail_price(code, cached_ex)
-            if detail:
-                if is_us_stock: 
-                    per_str = detail.get('perx', '-')
-                    pbr_str = detail.get('pbrx', '-') if detail.get('pbrx') != '-' else '-'
-                if is_us_etf:
-                    try:
-                        shar_val = float(detail.get('shar', 0))
-                        shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
-                    except: pass
-                try:
-                    h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
-                    if h52 > l52:
-                        pos = (c - l52)/(h52 - l52)*100
-                        if pos >= 90: w_color = "[red]"
-                        elif pos >= 80: w_color = "[orange3]"
-                        elif pos <= 30: w_color = "[blue]"
-                        elif pos <= 50: w_color = "[yellow]"
-                        else: w_color = "[white]"
-                        w52_pos_str = f"{w_color}{pos:.1f}%[/]"
-                except: pass
-
-        if curr_data.get('rt_cd') == '0':
-            out = curr_data['output']
-            if is_overseas:
-                curr = float(out.get('last', 0) or 0)
-                rate = float(out.get('rate', 0) or 0)
-                diff = float(out.get('diff', 0) or 0)
-                if rate < 0 and diff > 0: diff = -diff
-                curr_fmt = f"${curr:,.2f}"
-                diff_str = f"{diff:+.2f}"
-            else:
-                curr = int(out['stck_prpr'])
-                rate = float(out['prdy_ctrt'])
-                diff = int(out['prdy_vrss'])
-                curr_fmt = f"{curr:,}"
-                diff_str = f"{diff:+}"
-
-            rate_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
-            rate_str = f"{rate_color}{diff_str} ({rate:+.2f}%)[/]{strength_display}"
-
-            prev_rsi_val = None
-            if chart_df is not None and not chart_df.empty and len(chart_df) >= 16:
-                delta = chart_df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
-
-            class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
+        try:
+            curr_data = api.get_current_price_data(code, is_overseas)
+            chart_df = api.get_chart_data(code, is_overseas)
             
-            def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
-            def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
-            def fmt_idx_float(val): return f"{val:,.2f}" if val is not None else "-"
+            ind = indicators.calculate_indicators(chart_df)
+            w52_pos_str, per_str, pbr_str, shar_str = "-", "-", "-", "-"
+            foreign_rate_str = "-"
+            inv_str = "-"
+            cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
+            strength_display = ""
 
-            curr_price_color = "[white]"
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60']:
-                if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
-                    if curr > ind['ema_5']: curr_price_color = "[red]"
-                    elif curr < ind['ema_60']: curr_price_color = "[blue]"
-                    elif curr < ind['ema_5'] or curr < ind['ema_20']: curr_price_color = "[dim]"
-                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60']:
-                    if curr < ind['ema_5']: curr_price_color = "[blue]"
-                    elif curr > ind['ema_20'] or curr > ind['ema_60']: curr_price_color = "[orange3]"
-                    elif curr > ind['ema_5']: curr_price_color = "[white]"
-                else:
-                    if curr < ind['ema_5']: curr_price_color = "[blue]"
-                    elif curr > ind['ema_20']: curr_price_color = "[orange3]"
-                    elif curr < ind['ema_20']: curr_price_color = "[white]"
-            curr_str = f"{curr_price_color}{curr_fmt}[/]"
-
-            ema_5_color = "[white]"
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
-                if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[red]"
-                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[blue]"
-                elif (ind['ema_20'] < ind['ema_5'] < ind['ema_60']) or (ind['ema_60'] < ind['ema_5'] < ind['ema_20']): ema_5_color = "[yellow]"
-                elif (ind['ema_60'] < ind['ema_5'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_5'] < ind['ema_60']): ema_5_color = "[orange3]"
-            ema_5_str = f"{ema_5_color}{fmt_idx(ind['ema_5'])}[/]"
-
-            ema_20_color = "[white]"
-            if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
-                if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[red]"
-                elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[blue]"
-                elif (ind['ema_60'] < ind['ema_20'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_20'] < ind['ema_60']): ema_20_color = "[yellow]"
-            ema_20_str = f"{ema_20_color}{fmt_idx(ind['ema_20'])}[/]"
-
-            ema_60_color = "[yellow]"
-            if ind['ema_60'] and ind['ema_5'] and ind['ema_20'] and ind['ema_120']:
-                if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[blue]"
-                elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[red]"
-            ema_60_str = f"{ema_60_color}{fmt_idx(ind['ema_60'])}[/]"
-            
-            ema_120_color = "[white]"
-            if ind['ema_120'] and ind['ema_60']:
-                if ind['ema_60'] > ind['ema_120']: ema_120_color = "[red]" 
-                elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
-            ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
-
-            # SAR 상태
-            sar_val = ind.get('psar')
-            if sar_val is not None:
-                sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
-            else:
-                sar_icon = "-"
-            
-            # MACD 상태
-            macd_val = ind.get('macd')
-            sig_val = ind.get('macd_signal')
-            macd_icon = "-"
-            if macd_val is not None and sig_val is not None:
-                zero_sign = "+" if macd_val > 0 else "-"
-                cross_char = "G" if macd_val > sig_val else "D"
-                m_color = "red" if macd_val > sig_val else "blue"
-                macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
-
-            # OBV 상태
-            obv_trend = ind.get('obv_trend')
-            if obv_trend is not None:
-                obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
-            else:
-                obv_icon = "-"
-            
-            trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
-
-            # OBV Value
-            obv_val = ind.get('obv')
-            obv_disp = "-"
-            if obv_val:
-                obv_c = "red" if ind.get('obv_trend') else "blue"
-                obv_disp = f"[{obv_c}]{int(obv_val/1000):,}K[/]"
-
-            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
-            if ind['rsi'] is not None:
-                if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
-                elif 55 <= ind['rsi'] < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
-                elif 45 <= ind['rsi'] < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
-                else: rsi_str = f"[blue]{rsi_str}[/]"
-
-            adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
-            if ind['adx'] is not None:
-                if ind['adx'] >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                elif ind['adx'] >= 30: adx_str = f"[red]{adx_str}[/]"     
-                elif ind['adx'] >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                elif ind['adx'] >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                else: adx_str = f"[white]{adx_str}[/]"
-
-            cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
-            if ind['cci'] is not None:
-                if ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
-                elif 0 < ind['cci'] < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
-                elif config.INDICATOR_PARAMS["CCI_LOWER"] < ind['cci'] <= 0: cci_str = f"[yellow]{cci_str}[/]"
-                else: cci_str = f"[blue]{cci_str}[/]"
-
-            final_name_str = name
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['adx'] and ind['rsi'] and ind['cci']:
-                all_ema_green = (ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60'])
-                all_ema_red = (ind['ema_5'] < ind['ema_20'] and ind['ema_20'] < ind['ema_60'])
-                price_above_ema5 = (curr > ind['ema_5'])
-                if ind['adx'] >= 40 and ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
-                elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
-                elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
-                elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
-
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
-                row_data.append(w52_pos_str)
-                if not is_domestic_etf: row_data.append(foreign_rate_str)
-                if use_investor_data: row_data.append(inv_str)
-                else: row_data.append(obv_disp)
+                if use_investor_data:
+                    inv_list = api.get_investor_trend(code)
+                    if inv_list:
+                        p = api.safe_int(inv_list[0].get('prsn_ntby_qty'))
+                        f = api.safe_int(inv_list[0].get('frgn_ntby_qty'))
+                        i = api.safe_int(inv_list[0].get('orgn_ntby_qty'))
+                        def fmt_inv(val):
+                            if val == 0: return "[dim]-[/dim]"
+                            abs_val = abs(val)
+                            if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                            elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
+                            else: s = f"{val:,}"
+                            return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
+                        inv_str = f"{fmt_inv(p)} {fmt_inv(f)} {fmt_inv(i)}"
+                if not use_investor_data:
+                    try:
+                        rt_strength = api.get_realtime_vol_strength(code, is_overseas, cached_ex)
+                        if rt_strength is not None:
+                            s_color = "[red]" if rt_strength >= 100 else "[blue]"
+                            strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
+                        else: strength_display = " [dim][0%][/dim]"
+                    except: strength_display = " [dim][0%][/dim]"
+                if curr_data.get('rt_cd') == '0':
+                    out = curr_data.get('output', {})
+                    foreign_rate_str = f"{out.get('hts_frgn_ehrt', '-')}%"
+                    try:
+                        h52, l52, c = float(out.get('w52_hgpr', 0)), float(out.get('w52_lwpr', 0)), float(out.get('stck_prpr', 0))
+                        if h52 > l52:
+                            pos = (c - l52)/(h52 - l52)*100
+                            if pos >= 90: w_color = "[red]"
+                            elif pos >= 80: w_color = "[orange3]"
+                            elif pos <= 30: w_color = "[blue]"
+                            elif pos <= 50: w_color = "[yellow]"
+                            else: w_color = "[white]"
+                            w52_pos_str = f"{w_color}{pos:.1f}%[/]"
+                    except: pass
             else:
-                row_data.append(w52_pos_str)
-                if is_us_stock: row_data.extend([per_str, pbr_str])
-                elif is_us_etf: row_data.append(shar_str)
-            table.add_row(*row_data)
-        else:
-            table.add_row(name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11)))
+                detail = api.fetch_overseas_detail_price(code, cached_ex)
+                if detail:
+                    if is_us_stock: 
+                        per_str = detail.get('perx', '-')
+                        pbr_str = detail.get('pbrx', '-') if detail.get('pbrx') != '-' else '-'
+                    if is_us_etf:
+                        try:
+                            shar_val = float(detail.get('shar', 0))
+                            shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
+                        except: pass
+                    try:
+                        h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
+                        if h52 > l52:
+                            pos = (c - l52)/(h52 - l52)*100
+                            if pos >= 90: w_color = "[red]"
+                            elif pos >= 80: w_color = "[orange3]"
+                            elif pos <= 30: w_color = "[blue]"
+                            elif pos <= 50: w_color = "[yellow]"
+                            else: w_color = "[white]"
+                            w52_pos_str = f"{w_color}{pos:.1f}%[/]"
+                    except: pass
+
+            if curr_data.get('rt_cd') == '0':
+                out = curr_data['output']
+                if is_overseas:
+                    curr = float(out.get('last', 0) or 0)
+                    rate = float(out.get('rate', 0) or 0)
+                    diff = float(out.get('diff', 0) or 0)
+                    if rate < 0 and diff > 0: diff = -diff
+                    curr_fmt = f"${curr:,.2f}"
+                    diff_str = f"{diff:+.2f}"
+                else:
+                    curr = int(out['stck_prpr'])
+                    rate = float(out['prdy_ctrt'])
+                    diff = int(out['prdy_vrss'])
+                    curr_fmt = f"{curr:,}"
+                    diff_str = f"{diff:+}"
+
+                rate_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
+                rate_str = f"{rate_color}{diff_str} ({rate:+.2f}%)[/]{strength_display}"
+
+                prev_rsi_val = None
+                if chart_df is not None and not chart_df.empty and len(chart_df) >= 16:
+                    delta = chart_df['close'].diff()
+                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                    try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                    except: pass
+
+                class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
+                
+                def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
+                def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
+                def fmt_idx_float(val): return f"{val:,.2f}" if val is not None else "-"
+
+                curr_price_color = "[white]"
+                if ind['ema_5'] and ind['ema_20'] and ind['ema_60']:
+                    if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
+                        if curr > ind['ema_5']: curr_price_color = "[red]"
+                        elif curr < ind['ema_60']: curr_price_color = "[blue]"
+                        elif curr < ind['ema_5'] or curr < ind['ema_20']: curr_price_color = "[dim]"
+                    elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60']:
+                        if curr < ind['ema_5']: curr_price_color = "[blue]"
+                        elif curr > ind['ema_20'] or curr > ind['ema_60']: curr_price_color = "[orange3]"
+                        elif curr > ind['ema_5']: curr_price_color = "[white]"
+                    else:
+                        if curr < ind['ema_5']: curr_price_color = "[blue]"
+                        elif curr > ind['ema_20']: curr_price_color = "[orange3]"
+                        elif curr < ind['ema_20']: curr_price_color = "[white]"
+                curr_str = f"{curr_price_color}{curr_fmt}[/]"
+
+                ema_5_color = "[white]"
+                if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+                    if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[red]"
+                    elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[blue]"
+                    elif (ind['ema_20'] < ind['ema_5'] < ind['ema_60']) or (ind['ema_60'] < ind['ema_5'] < ind['ema_20']): ema_5_color = "[yellow]"
+                    elif (ind['ema_60'] < ind['ema_5'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_5'] < ind['ema_60']): ema_5_color = "[orange3]"
+                ema_5_str = f"{ema_5_color}{fmt_idx(ind['ema_5'])}[/]"
+
+                ema_20_color = "[white]"
+                if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+                    if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[red]"
+                    elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[blue]"
+                    elif (ind['ema_60'] < ind['ema_20'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_20'] < ind['ema_60']): ema_20_color = "[yellow]"
+                ema_20_str = f"{ema_20_color}{fmt_idx(ind['ema_20'])}[/]"
+
+                ema_60_color = "[yellow]"
+                if ind['ema_60'] and ind['ema_5'] and ind['ema_20'] and ind['ema_120']:
+                    if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[blue]"
+                    elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[red]"
+                ema_60_str = f"{ema_60_color}{fmt_idx(ind['ema_60'])}[/]"
+                
+                ema_120_color = "[white]"
+                if ind['ema_120'] and ind['ema_60']:
+                    if ind['ema_60'] > ind['ema_120']: ema_120_color = "[red]" 
+                    elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
+                ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
+
+                # SAR 상태
+                sar_val = ind.get('psar')
+                if sar_val is not None:
+                    sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
+                else:
+                    sar_icon = "-"
+                
+                # MACD 상태
+                macd_val = ind.get('macd')
+                sig_val = ind.get('macd_signal')
+                macd_icon = "-"
+                if macd_val is not None and sig_val is not None:
+                    zero_sign = "+" if macd_val > 0 else "-"
+                    cross_char = "G" if macd_val > sig_val else "D"
+                    m_color = "red" if macd_val > sig_val else "blue"
+                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+
+                # OBV 상태
+                obv_trend = ind.get('obv_trend')
+                if obv_trend is not None:
+                    obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
+                else:
+                    obv_icon = "-"
+                
+                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+
+                # OBV Value
+                obv_val = ind.get('obv')
+                obv_disp = "-"
+                if obv_val:
+                    obv_c = "red" if ind.get('obv_trend') else "blue"
+                    obv_disp = f"[{obv_c}]{int(obv_val/1000):,}K[/]"
+
+                rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+                if ind['rsi'] is not None:
+                    if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                    elif 55 <= ind['rsi'] < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
+                    elif 45 <= ind['rsi'] < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                    elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                    else: rsi_str = f"[blue]{rsi_str}[/]"
+
+                adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+                if ind['adx'] is not None:
+                    if ind['adx'] >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                    elif ind['adx'] >= 30: adx_str = f"[red]{adx_str}[/]"     
+                    elif ind['adx'] >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                    elif ind['adx'] >= 15: adx_str = f"[yellow]{adx_str}[/]"
+                    else: adx_str = f"[white]{adx_str}[/]"
+
+                cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+                if ind['cci'] is not None:
+                    if ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                    elif 0 < ind['cci'] < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                    elif config.INDICATOR_PARAMS["CCI_LOWER"] < ind['cci'] <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                    else: cci_str = f"[blue]{cci_str}[/]"
+
+                final_name_str = name
+                if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['adx'] and ind['rsi'] and ind['cci']:
+                    all_ema_green = (ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60'])
+                    all_ema_red = (ind['ema_5'] < ind['ema_20'] and ind['ema_20'] < ind['ema_60'])
+                    price_above_ema5 = (curr > ind['ema_5'])
+                    if ind['adx'] >= 40 and ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
+                    elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
+                    elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
+                    elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
+
+                row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
+                if not is_overseas:
+                    row_data.append(w52_pos_str)
+                    if not is_domestic_etf: row_data.append(foreign_rate_str)
+                    if use_investor_data: row_data.append(inv_str)
+                    else: row_data.append(obv_disp)
+                else:
+                    row_data.append(w52_pos_str)
+                    if is_us_stock: row_data.extend([per_str, pbr_str])
+                    elif is_us_etf: row_data.append(shar_str)
+                table.add_row(*row_data)
+            else:
+                table.add_row(name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11)))
+        except Exception as e:
+            logger.error(f"[{code}] 분석 출력 오류: {e}")
+            table.add_row(name, code, "[red]Error[/]", "-", *["-"] * (len(table.columns) - 4))
         
         if table.row_count % 5 == 0 and table.row_count < len(data_list):
             table.add_section()
 
-    config.console.print(table)
+    try:
+        config.console.print(table)
+    except Exception as e:
+        logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
+        config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
 def show_stock_analysis():
     config.console.print("\n[bold]분석할 종목 그룹을 선택하세요:[/bold]")
@@ -1703,10 +1711,16 @@ def show_stock_analysis():
             if interval > 0:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
-            with config.console.status("[bold green]종목 분석 중 (KIS API 데이터 수신)...[/bold green]"):
-                for title, d_list, is_ovs in target_list:
-                    if d_list: print_table(title, d_list, is_ovs)
-            if interval == 0: break
+            
+            try:
+                with config.console.status("[bold green]종목 분석 중 (KIS API 데이터 수신)...[/bold green]"):
+                    for title, d_list, is_ovs in target_list:
+                        if d_list: print_table(title, d_list, is_ovs)
+            except Exception as e:
+                logger.error(f"분석 루프 실행 중 오류: {e}")
+                config.console.print(f"[red]분석 중 오류 발생: {e}[/red]")
+            
+            if interval == 0: break 
             config.console.print() 
             try:
                 for remaining in range(interval, -1, -1):
@@ -1716,6 +1730,9 @@ def show_stock_analysis():
                 config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
                 break
     except KeyboardInterrupt: config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+    except Exception as e:
+        logger.error(f"분석 기능 실행 중 치명적 오류: {e}")
+        config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
 
 def get_snapshot(code, is_overseas):
     """주문 시점의 종목 상태 스냅샷 생성 (DB 저장용)"""
