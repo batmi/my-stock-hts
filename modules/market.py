@@ -30,12 +30,11 @@ def show_market_indices():
     yf_tickers = None
 
     try:
-        # [변경] 전체 과정을 Progress Context로 통합하여 상태바 제거 및 진행률 표시 즉시 시작
+        # [변경] 1. 히스토리 데이터 다운로드 (Progress 분리: Percentage 제거)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
             transient=True
         ) as progress:
@@ -87,31 +86,37 @@ def show_market_indices():
                         if "database" in str(e).lower(): api.clear_yfinance_cache()
                         else: break
 
-            progress.update(task_dl, visible=False)
+        # 2. Tickers 객체 생성 (fast_info 접근용)
+        all_tickers_list = list(indices_map.values())
+        yf_tickers = yf.Tickers(" ".join(all_tickers_list))
 
-            # 2. Tickers 객체 생성 (fast_info 접근용)
-            all_tickers_list = list(indices_map.values())
-            yf_tickers = yf.Tickers(" ".join(all_tickers_list))
+        # 테이블 생성
+        table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table.add_column("지수명", justify="left", style="white")
+        table.add_column("지수", justify="right")
+        table.add_column("등락폭 (등락률)", justify="right")
+        table.add_column("52주 고점", justify="right")
+        table.add_column("EMA(5)", justify="right")
+        table.add_column("EMA(20)", justify="right")
+        table.add_column("EMA(60)", justify="right")
+        table.add_column("EMA(120)", justify="right")
+        table.add_column("추세SMO", justify="center")
+        table.add_column("RSI", justify="right")
+        table.add_column("ADX", justify="right")
+        table.add_column("CCI", justify="right")
 
-            # 테이블 생성
-            table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-            table.add_column("지수명", justify="left", style="white")
-            table.add_column("지수", justify="right")
-            table.add_column("등락폭 (등락률)", justify="right")
-            table.add_column("52주 고점", justify="right")
-            table.add_column("EMA(5)", justify="right")
-            table.add_column("EMA(20)", justify="right")
-            table.add_column("EMA(60)", justify="right")
-            table.add_column("EMA(120)", justify="right")
-            table.add_column("추세SMO", justify="center")
-            table.add_column("RSI", justify="right")
-            table.add_column("ADX", justify="right")
-            table.add_column("CCI", justify="right")
+        patched_tickers = []
+        missing_tickers = []
 
-            patched_tickers = []
-            missing_tickers = []
-
-            # 3. 지표 분석 및 테이블 구성
+        # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
             for name, ticker in indices_map.items():

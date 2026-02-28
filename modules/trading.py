@@ -221,15 +221,8 @@ def show_open_orders():
 
     selectable_orders = []
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=config.console,
-        transient=True
-    ) as progress:
-        task = progress.add_task("[green]전체 계좌 미체결 내역 조회 중...[/]", total=len(accounts))
+    # [수정] Progress -> status 변경
+    with config.console.status("[bold green]전체 계좌 미체결 내역 조회 중...[/]"):
         table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No", justify="right")
         table.add_column("계좌번호", justify="center")
@@ -323,8 +316,6 @@ def show_open_orders():
 
                     table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
                     idx += 1
-            
-            progress.advance(task)
 
     if not selectable_orders:
         config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
