@@ -13,6 +13,7 @@ import utils
 from modules import db_manager
 import json
 import pandas as pd
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +900,20 @@ def view_trade_history():
                         if cci is not None: add_info.append(f"CCI:{cci:.1f}")
                             
                         if add_info: reason_display += f"\n[{', '.join(add_info)}]"
+                        
+                        # [추가] ATR 정보 표시
+                        atr = ind.get('atr')
+                        if atr and float(atr) > 0:
+                            try:
+                                price = float(t.get('price', 0))
+                                if price > 0:
+                                    annual_vol = (float(atr) / price) * math.sqrt(252) * 100
+                                    reason_display += f"\n[ATR:{int(float(atr)):,}/변동성:{annual_vol:.1f}%]"
+                            except: pass
+                        
+                        sl_rate = t.get('stop_loss_rate')
+                        if sl_rate and float(sl_rate) != 0:
+                            reason_display += f" [ATR손절:{float(sl_rate):.2f}%]"
                 except: pass
 
             table.add_row(
