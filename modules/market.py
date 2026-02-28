@@ -471,7 +471,7 @@ def show_market_indices():
                     progress.advance(task)
         
         # [추가] tmux 환경 렌더링 안정화를 위한 대기 (Progress 바 정리 시간 확보)
-        time.sleep(0.2)
+        time.sleep(0.5)
 
         # 테이블 출력 (Progress Context 밖에서 실행)
         try:

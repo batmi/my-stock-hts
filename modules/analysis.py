@@ -337,7 +337,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             vol_strength = api.get_realtime_vol_strength(code)
 
     # [추가] 렌더링 안정화 대기
-    time.sleep(0.2)
+    time.sleep(0.5)
 
     # 4. 결과 출력
     config.console.print()
@@ -652,7 +652,7 @@ def diagnose_group_stocks(market_filter=None):
                 progress.advance(task)
 
     # [추가] 렌더링 안정화 대기
-    time.sleep(0.2)
+    time.sleep(0.5)
 
     # 결과 출력
     if not results:
@@ -1711,7 +1711,7 @@ def print_table(title, data_list, is_overseas=False):
         logger.error(f"데이터 분석 중 오류: {e}")
 
     # [추가] 렌더링 안정화 대기
-    time.sleep(0.2)
+    time.sleep(0.5)
 
     try:
         config.console.print(table)
