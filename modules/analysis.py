@@ -336,6 +336,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             progress.update(task, description="[green]실시간 체결강도 조회 중...[/]")
             vol_strength = api.get_realtime_vol_strength(code)
 
+    # [추가] 렌더링 안정화 대기
+    time.sleep(0.2)
+
     # 4. 결과 출력
     config.console.print()
     
@@ -647,6 +650,9 @@ def diagnose_group_stocks(market_filter=None):
                 })
             finally:
                 progress.advance(task)
+
+    # [추가] 렌더링 안정화 대기
+    time.sleep(0.2)
 
     # 결과 출력
     if not results:
@@ -1703,6 +1709,9 @@ def print_table(title, data_list, is_overseas=False):
                 progress.advance(task)
     except Exception as e:
         logger.error(f"데이터 분석 중 오류: {e}")
+
+    # [추가] 렌더링 안정화 대기
+    time.sleep(0.2)
 
     try:
         config.console.print(table)
