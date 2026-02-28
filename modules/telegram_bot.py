@@ -149,7 +149,7 @@ class TelegramCommander:
             "• /stop : 시스템 트레이딩 중단\n"
             "• /restart : 시스템 트레이딩 재시작\n"
             "• /status : 시스템 트레이딩 상태 조회\n"
-            "• /report : 매매 성과 리포트 조회\n"
+            "• /report [기간] : 매매 성과 리포트 조회 (d/w/m/숫자)\n"
             "• /market : 주요 시장 지수 현황\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
             "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
@@ -157,7 +157,7 @@ class TelegramCommander:
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
             "• /restrict : 거래 제한 종목 리스트 조회\n"
-            "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m)\n"
+            "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/숫자)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
@@ -165,7 +165,14 @@ class TelegramCommander:
         )
 
     def _cmd_report(self, args):
-        return self.trader.get_performance_report()
+        days = None
+        if args:
+            arg = args[0].lower()
+            if arg in ["d", "day", "daily", "일간"]: days = 0
+            elif arg in ["w", "week", "weekly", "주간"]: days = 7
+            elif arg in ["m", "month", "monthly", "월간"]: days = 30
+            elif arg.isdigit(): days = int(arg)
+        return self.trader.get_performance_report(days=days)
 
     def _cmd_market(self, args):
         return self._get_market_status()
@@ -230,30 +237,27 @@ class TelegramCommander:
         return msg
 
     def _cmd_profit(self, args):
-        mode = "daily"
+        days = 0
         if args:
             arg = args[0].lower()
-            if arg in ["week", "weekly", "주간", "w"]: mode = "weekly"
-            elif arg in ["month", "monthly", "월간", "m"]: mode = "monthly"
+            if arg in ["d", "day", "daily", "일간"]: days = 0
+            elif arg in ["w", "week", "weekly", "주간"]: days = 7
+            elif arg in ["m", "month", "monthly", "월간"]: days = 30
+            elif arg.isdigit(): days = int(arg)
         
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
+        start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        end_dt = today_str
         
-        if mode == "daily":
-            start_dt = today_str
-            end_dt = today_str
+        if days == 0:
             title = "📅 [일간 실현 손익]"
-        elif mode == "weekly":
-            # 이번 주 월요일부터 오늘까지
-            start_of_week = now - timedelta(days=now.weekday())
-            start_dt = start_of_week.strftime("%Y-%m-%d")
-            end_dt = today_str
-            title = "📅 [주간 실현 손익]"
-        elif mode == "monthly":
-            # 이번 달 1일부터 오늘까지
-            start_dt = now.strftime("%Y-%m-01")
-            end_dt = today_str
-            title = "📅 [월간 실현 손익]"
+        elif days == 7:
+            title = "📅 [주간 실현 손익 (최근 7일)]"
+        elif days == 30:
+            title = "📅 [월간 실현 손익 (최근 30일)]"
+        else:
+            title = f"📅 [기간별 실현 손익 (최근 {days}일)]"
             
         trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
         

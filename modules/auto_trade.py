@@ -1281,16 +1281,38 @@ class AutoTrader:
 
     def print_report(self):
         console.print("\n[bold yellow]=== 시스템 트레이딩 리포트 ===[/]")
-        self._load_trade_records()
+        
+        # [수정] 기간 선택 메뉴 변경
+        console.print("[1] 일간 (오늘)")
+        console.print("[2] 주간 (최근 7일)")
+        console.print("[3] 월간 (최근 30일)")
+        console.print("[4] 기간 직접 입력 (일 단위)")
+        console.print()
+        
+        choice = Prompt.ask("조회할 기간을 선택하세요 [dim](Enter: 4)[/dim]", choices=["1", "2", "3", "4"], default="4")
+        
+        days = None
+        if choice == "1": days = 0
+        elif choice == "2": days = 7
+        elif choice == "3": days = 30
+        elif choice == "4":
+            val = Prompt.ask("조회할 기간(일) 입력 [dim](Enter: 전체 내역)[/dim]", default="")
+            if val.strip() and val.isdigit():
+                days = int(val)
+            else:
+                days = None # 전체 내역
+
+        self._load_trade_records(days=days)
+        
         if not self.trade_records:
-            console.print("\n[yellow]저장된 시스템 트레이딩 기록이 없습니다.[/yellow]")
+            console.print("\n[yellow]선택한 기간에 해당하는 매매 기록이 없습니다.[/yellow]")
             return
         stats = self._calculate_statistics()
         self._print_summary_table(stats)
         self._print_current_holdings()
         self._print_stock_details()
 
-    def _load_trade_records(self):
+    def _load_trade_records(self, days=None):
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1302,7 +1324,14 @@ class AutoTrader:
             
             # [수정] DB에서 매매 내역 조회 (수동 매매 포함을 위해 is_auto 필터 제거)
             # 시스템 매매와 수동 매매를 모두 포함하여 평가
-            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=500)
+            limit = 500
+            start_date = None
+            
+            if days is not None:
+                limit = None
+                start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            
+            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
             
             # DB 레코드를 내부 포맷으로 변환
             self.trade_records = []
@@ -1326,12 +1355,23 @@ class AutoTrader:
             
             # [추가] 중복 제거 및 정제 (시스템 주문과 체결 확인 병합)
             self.trade_records = self._refine_trade_records(self.trade_records)
+            
+            # [추가] 시간순 정렬 (통계 계산 및 기간 표시 정확성 확보)
+            if self.trade_records:
+                self.trade_records.sort(key=lambda x: x['time'])
 
-    def get_performance_report(self):
+    def get_performance_report(self, days=None):
         """텔레그램용 성과 리포트 생성"""
         # DB에서 조회 (로그 출력 없이)
         # [수정] 수동 매매 포함을 위해 is_auto 필터 제거
-        db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=500)
+        limit = 500
+        start_date = None
+        
+        if days is not None:
+            limit = None
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            
+        db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
         
         temp_records = []
         for r in reversed(db_records):
@@ -1376,14 +1416,12 @@ class AutoTrader:
             total_profit = stats['total_profit']
             avg_profit_rate = stats['avg_profit_rate']
             
-            icon = "🔴" if total_profit > 0 else ("🔵" if total_profit < 0 else "⚪️")
-            
-            msg += f"💰 [수익 현황]\n"
-            msg += f"총 손익: {icon} {total_profit:+,}원\n"
+            msg += f"[수익 현황]\n"
+            msg += f"총 손익: {total_profit:+,}원\n"
             msg += f"평균 수익률: {avg_profit_rate:+.2f}%\n"
             msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n\n"
             
-            msg += f"🏆 [최고/최악 거래]\n"
+            msg += f"[최고/최악 거래]\n"
             if stats.get('best_trade'):
                 b = stats['best_trade']
                 msg += f"Best: {b['name']} ({b['profit_amt']:+,}원 / {b['profit_rate']:+.2f}%)\n"
@@ -1391,7 +1429,7 @@ class AutoTrader:
                 w = stats['worst_trade']
                 msg += f"Worst: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n\n"
             
-            msg += f"📉 [매도 사유 분포]\n"
+            msg += f"[매도 사유 분포]\n"
             reasons = stats.get('sell_reasons', {})
             total_sells = stats['sell_count']
             if total_sells > 0:
@@ -1399,7 +1437,7 @@ class AutoTrader:
                     msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
             msg += "\n"
             
-            msg += f"⏳ [기타 통계]\n"
+            msg += f"[기타 통계]\n"
             msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
             msg += f"평균 보유: {stats['avg_holding_str']}"
         else:
