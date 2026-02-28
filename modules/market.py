@@ -1,6 +1,7 @@
 # modules/market.py
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import yfinance as yf
 import pandas as pd
 import config
@@ -18,36 +19,33 @@ def show_market_indices():
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
-    # [변경] console.status의 범위를 테이블 출력 직전까지 확장
-    with config.console.status("[bold green]지수 분석 중(yfinance 데이터 수신)...[/bold green]"):
-        indices_map = {
-            "코스피": "^KS11", "코스닥": "^KQ11", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI",
-            "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
-            "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX"
-        }
-        
-        # 1. 히스토리 데이터 다운로드 (차트 분석 및 Fallback용)
+    indices_map = {
+        "코스피": "^KS11", "코스닥": "^KQ11", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI",
+        "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
+        "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX"
+    }
+    
+    data_storage = {}
+    yf_tickers = None
+
+    # 1. 히스토리 데이터 다운로드 (Status 유지)
+    with config.console.status("[bold green]지수 데이터 수신 중(yfinance)...[/bold green]"):
         kr_tickers = ["^KS11", "^KQ11"]
         global_tickers = [t for t in indices_map.values() if t not in kr_tickers]
         tickers_sets = [("KR", kr_tickers), ("GL", global_tickers)]
         
-        data_storage = {} 
-
         for label, t_list in tickers_sets:
             if not t_list: continue
             tickers_str = " ".join(t_list)
             
             for attempt in range(2):
                 try:
-                    # [변경] config.DEBUG_LEVEL 참조
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim cyan][TRACE] REQ ({label}) | Attempt: {attempt+1} | Tickers: {tickers_str}[/dim cyan]")
 
-                    # 일봉과 분봉 동시 요청
                     d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
                     i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
                     
-                    # [변경] config.DEBUG_LEVEL 참조
                     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         d_shape = d_data.shape if not d_data.empty else "Empty"
                         i_shape = i_data.shape if not i_data.empty else "Empty"
@@ -57,7 +55,6 @@ def show_market_indices():
                         d_df = pd.DataFrame()
                         i_df = pd.DataFrame()
                         
-                        # Daily
                         try:
                             if not d_data.empty:
                                 if isinstance(d_data.columns, pd.MultiIndex):
@@ -65,7 +62,6 @@ def show_market_indices():
                                 elif 'Close' in d_data.columns: d_df = d_data.copy()
                         except: pass
 
-                        # Intraday
                         try:
                             if not i_data.empty:
                                 if isinstance(i_data.columns, pd.MultiIndex):
@@ -83,24 +79,34 @@ def show_market_indices():
         all_tickers_list = list(indices_map.values())
         yf_tickers = yf.Tickers(" ".join(all_tickers_list))
 
-        # [이동] 테이블 생성 및 데이터 처리 로직을 status 블록 안으로 이동
-        table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-        table.add_column("지수명", justify="left", style="white")
-        table.add_column("지수", justify="right")
-        table.add_column("등락폭 (등락률)", justify="right")
-        table.add_column("52주 고점", justify="right")
-        table.add_column("EMA(5)", justify="right")
-        table.add_column("EMA(20)", justify="right")
-        table.add_column("EMA(60)", justify="right")
-        table.add_column("EMA(120)", justify="right")
-        table.add_column("추세SMO", justify="center")
-        table.add_column("RSI", justify="right")
-        table.add_column("ADX", justify="right")
-        table.add_column("CCI", justify="right")
+    # 테이블 생성
+    table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+    table.add_column("지수명", justify="left", style="white")
+    table.add_column("지수", justify="right")
+    table.add_column("등락폭 (등락률)", justify="right")
+    table.add_column("52주 고점", justify="right")
+    table.add_column("EMA(5)", justify="right")
+    table.add_column("EMA(20)", justify="right")
+    table.add_column("EMA(60)", justify="right")
+    table.add_column("EMA(120)", justify="right")
+    table.add_column("추세SMO", justify="center")
+    table.add_column("RSI", justify="right")
+    table.add_column("ADX", justify="right")
+    table.add_column("CCI", justify="right")
 
-        # 경고 관리를 위한 리스트
-        patched_tickers = []   # 분봉 보정 성공
-        missing_tickers = []   # 데이터 지연/누락 확인
+    patched_tickers = []
+    missing_tickers = []
+
+    # 3. 지표 분석 및 테이블 구성 (Progress 적용)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
         for name, ticker in indices_map.items():
             if name in ["나스닥", "금", "달러인덱스", "VIX (변동성)"]: 
@@ -117,12 +123,9 @@ def show_market_indices():
                 if not df_intraday.empty:
                     df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
-                # [DEBUG] 상세 데이터 로깅
-                # [변경] config.DEBUG_LEVEL 참조
                 if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
                     
-                    # Daily Tail 출력
                     if not df_daily.empty:
                         cols_to_show = [c for c in ['open', 'close'] if c in df_daily.columns]
                         if cols_to_show:
@@ -132,7 +135,6 @@ def show_market_indices():
                     else:
                         config.console.print(f"[dim red][DEBUG]    [Daily] Empty[/dim red]")
                     
-                    # Intra Tail 출력
                     if not df_intraday.empty:
                         cols_to_show = [c for c in ['open', 'close'] if c in df_intraday.columns]
                         if cols_to_show:
@@ -187,16 +189,13 @@ def show_market_indices():
                             high_52 = max(high_52, current)
                         
                         use_fast_info = True
-                        # [변경] config.DEBUG_LEVEL 참조
                         if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                             config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
                     else:
-                        # [변경] config.DEBUG_LEVEL 참조
                         if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                             config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
 
                 except Exception as e:
-                    # [변경] config.DEBUG_LEVEL 참조
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
@@ -204,6 +203,7 @@ def show_market_indices():
                 if not use_fast_info:
                     if df_daily.empty:
                         table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                        progress.advance(task)
                         continue
                     
                     daily_last_date = df_daily.index[-1].date()
@@ -291,7 +291,6 @@ def show_market_indices():
                         else:
                             missing_tickers.append(f"{name}(Last:{prev_date_src})")
 
-                    # [변경] config.DEBUG_LEVEL 참조
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim magenta][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: Fallback DF, Date: {target_date} vs {prev_date_src})[/dim magenta]")
 
@@ -452,14 +451,19 @@ def show_market_indices():
                     elif current < 400: display_name = f"[blue]{name}[/]"
 
                 table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str)
+                progress.advance(task)
 
             except Exception as e:
-                # [변경] config.DEBUG_LEVEL 참조
                 if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                     config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
                 table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                progress.advance(task)
     
-    config.console.print(table)
+    try:
+        config.console.print(table)
+    except Exception as e:
+        logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
+        config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
     
     # [하단 경고 출력]
     if patched_tickers:
