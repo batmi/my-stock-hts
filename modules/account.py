@@ -816,19 +816,23 @@ def view_trade_history():
         table.add_column("사유", justify="left")
 
         for i, t in enumerate(t_list):
-            type_str = t['type']
+            # [수정] 유형 표기 개선 (줄바꿈 및 색상 적용)
+            raw_type = t['type']
+            clean_type = raw_type.replace("buy", "매수").replace("BUY", "매수").replace("sell", "매도").replace("SELL", "매도").replace("AUTO", "자동")
             
-            # [수정] 유형 표기 한글화 및 태그 변경
-            if "buy" in type_str.lower(): type_str = type_str.replace("buy", "매수").replace("BUY", "매수")
-            if "sell" in type_str.lower(): type_str = type_str.replace("sell", "매도").replace("SELL", "매도")
-            type_str = type_str.replace("AUTO", "자동")
+            base_type = "기타"
+            if "매수" in clean_type: base_type = "매수"
+            elif "매도" in clean_type: base_type = "매도"
             
-            # [수정] 색상 적용 (매수/매도, 자동/수동 분리)
-            if "매수" in type_str: type_str = type_str.replace("매수", "[red]매수[/]")
-            elif "매도" in type_str: type_str = type_str.replace("매도", "[blue]매도[/]")
+            type_disp = base_type
+            if base_type == "매수": type_disp = "[red]매수[/]"
+            elif base_type == "매도": type_disp = "[blue]매도[/]"
             
-            if "자동" in type_str: type_str = type_str.replace("자동", "[yellow]자동[/]")
-            if "수동" in type_str: type_str = type_str.replace("수동", "[green]수동[/]")
+            tag_disp = ""
+            if "자동" in clean_type: tag_disp = "\n([yellow]자동[/])"
+            elif "수동" in clean_type: tag_disp = "\n([green]수동[/])"
+            
+            type_str = f"{type_disp}{tag_disp}"
 
             # 상태 표시
             status_str = t.get('order_status', '접수') # 기본값 접수
@@ -871,12 +875,12 @@ def view_trade_history():
             
             # 손익 정보
             profit_display = "-"
-            if "매도" in type_str:
+            if base_type == "매도":
                 amt = t.get('profit_amt', 0)
                 rate = t.get('profit_rate', 0.0)
                 if amt is not None and rate is not None:
                     color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
-                    profit_display = f"[{color}]{amt:+,}원 ({rate:+.2f}%)[/]"
+                    profit_display = f"[{color}]{amt:+,}원\n({rate:+.2f}%)[/]"
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
@@ -921,7 +925,7 @@ def view_trade_history():
                 t['odno'],
                 type_str,
                 status_str,
-                f"{t['name']}({t['code']})",
+                f"{t['name']}\n({t['code']})",
                 f"{int(float(t['qty'])):,}",
                 price_display,
                 total_amt_display,
