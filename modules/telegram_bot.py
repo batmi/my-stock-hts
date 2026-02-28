@@ -149,7 +149,7 @@ class TelegramCommander:
             "• /stop : 시스템 트레이딩 중단\n"
             "• /restart : 시스템 트레이딩 재시작\n"
             "• /status : 시스템 트레이딩 상태 조회\n"
-            "• /report [기간] : 매매 성과 리포트 조회 (d/w/m/숫자)\n"
+            "• /report [기간] : 매매 성과 리포트 조회 (d/w/m/n)\n"
             "• /market : 주요 시장 지수 현황\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
             "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
@@ -157,7 +157,7 @@ class TelegramCommander:
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
             "• /restrict : 거래 제한 종목 리스트 조회\n"
-            "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/숫자)\n"
+            "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/n)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
@@ -165,7 +165,7 @@ class TelegramCommander:
         )
 
     def _cmd_report(self, args):
-        days = None
+        days = 0 # 기본값: 당일(0)
         if args:
             arg = args[0].lower()
             if arg in ["d", "day", "daily", "일간"]: days = 0

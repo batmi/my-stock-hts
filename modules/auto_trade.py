@@ -1366,10 +1366,14 @@ class AutoTrader:
         # [수정] 수동 매매 포함을 위해 is_auto 필터 제거
         limit = 500
         start_date = None
+        period_msg = "전체 (최근 500건)"
         
         if days is not None:
             limit = None
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            start_dt = datetime.now() - timedelta(days=days)
+            start_date = start_dt.strftime("%Y-%m-%d")
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            period_msg = f"{start_date} ~ {end_date}"
             
         db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
         
@@ -1399,7 +1403,7 @@ class AutoTrader:
             refined_records.sort(key=lambda x: x['time'])
             
         if not refined_records:
-            return "📭 매매 기록이 없습니다."
+            return f"📭 매매 기록이 없습니다.\n기간: {period_msg}"
             
         stats = self._calculate_statistics(refined_records)
         
