@@ -128,335 +128,335 @@ def show_market_indices():
                     if not df_intraday.empty:
                         df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
-                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                    config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
-                    
-                    if not df_daily.empty:
-                        cols_to_show = [c for c in ['open', 'close'] if c in df_daily.columns]
-                        if cols_to_show:
-                            tail_d = df_daily[cols_to_show].tail(2)
-                            tail_str = tail_d.to_string(header=True, index=True).replace('\n', '\n[DEBUG]      ')
-                            config.console.print(f"[dim][DEBUG]    [Daily Tail]\n[DEBUG]      {tail_str}[/dim]")
-                    else:
-                        config.console.print(f"[dim red][DEBUG]    [Daily] Empty[/dim red]")
-                    
-                    if not df_intraday.empty:
-                        cols_to_show = [c for c in ['open', 'close'] if c in df_intraday.columns]
-                        if cols_to_show:
-                            tail_i = df_intraday[cols_to_show].tail(2)
-                            tail_str = tail_i.to_string(header=True, index=True).replace('\n', '\n[DEBUG]      ')
-                            config.console.print(f"[dim][DEBUG]    [Intra Tail]\n[DEBUG]      {tail_str}[/dim]")
-                    else:
-                        config.console.print(f"[dim red][DEBUG]    [Intra] Empty[/dim red]")
-
-                # 지표 계산
-                ema5, ema20, ema60, ema120 = None, None, None, None
-                val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
-                high_52_daily = 0.0
-
-                if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
-                    df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
-                    df_calc.dropna(subset=['close'], inplace=True)
-                    ind = indicators.calculate_indicators(df_calc)
-                    
-                    ema5, ema20 = ind['ema_5'], ind['ema_20']
-                    ema60, ema120 = ind['ema_60'], ind['ema_120']
-                    val_psar = ind.get('psar')
-                    val_rsi = ind.get('rsi')
-                    val_adx = ind.get('adx')
-                    val_cci = ind.get('cci')
-                    val_macd = ind.get('macd')
-                    val_macd_sig = ind.get('macd_signal')
-                    high_52_daily = float(df_calc['close'].tail(250).max())
-
-                # --- B. 가격 결정 로직 (Prioritize: fast_info > Intraday > Daily) ---
-                current = 0.0
-                prev = 0.0
-                high_52 = high_52_daily
-                
-                # 1. fast_info 시도 (가장 정확)
-                use_fast_info = False
-                try:
-                    ticker_obj = yf_tickers.tickers[ticker]
-                    fi = ticker_obj.fast_info
-                    last_price = fi.last_price
-                    prev_close = fi.regular_market_previous_close # 공식 전일 종가
-                    
-                    if (last_price is not None and prev_close is not None and 
-                        not math.isnan(last_price) and not math.isnan(prev_close)):
-                        
-                        current = float(last_price)
-                        prev = float(prev_close)
-                        
-                        if hasattr(fi, 'year_high') and fi.year_high is not None and not math.isnan(fi.year_high):
-                            high_52 = max(high_52, float(fi.year_high))
-                        else:
-                            high_52 = max(high_52, current)
-                        
-                        use_fast_info = True
-                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                            config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
-                    else:
-                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                            config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
-
-                except Exception as e:
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                        config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
+                        config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
+                        
+                        if not df_daily.empty:
+                            cols_to_show = [c for c in ['open', 'close'] if c in df_daily.columns]
+                            if cols_to_show:
+                                tail_d = df_daily[cols_to_show].tail(2)
+                                tail_str = tail_d.to_string(header=True, index=True).replace('\n', '\n[DEBUG]      ')
+                                config.console.print(f"[dim][DEBUG]    [Daily Tail]\n[DEBUG]      {tail_str}[/dim]")
+                        else:
+                            config.console.print(f"[dim red][DEBUG]    [Daily] Empty[/dim red]")
+                        
+                        if not df_intraday.empty:
+                            cols_to_show = [c for c in ['open', 'close'] if c in df_intraday.columns]
+                            if cols_to_show:
+                                tail_i = df_intraday[cols_to_show].tail(2)
+                                tail_str = tail_i.to_string(header=True, index=True).replace('\n', '\n[DEBUG]      ')
+                                config.console.print(f"[dim][DEBUG]    [Intra Tail]\n[DEBUG]      {tail_str}[/dim]")
+                        else:
+                            config.console.print(f"[dim red][DEBUG]    [Intra] Empty[/dim red]")
 
-                # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
-                if not use_fast_info:
-                    if df_daily.empty:
-                        table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
-                        progress.advance(task)
-                        continue
+                    # 지표 계산
+                    ema5, ema20, ema60, ema120 = None, None, None, None
+                    val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
+                    high_52_daily = 0.0
+
+                    if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
+                        df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
+                        df_calc.dropna(subset=['close'], inplace=True)
+                        ind = indicators.calculate_indicators(df_calc)
+                        
+                        ema5, ema20 = ind['ema_5'], ind['ema_20']
+                        ema60, ema120 = ind['ema_60'], ind['ema_120']
+                        val_psar = ind.get('psar')
+                        val_rsi = ind.get('rsi')
+                        val_adx = ind.get('adx')
+                        val_cci = ind.get('cci')
+                        val_macd = ind.get('macd')
+                        val_macd_sig = ind.get('macd_signal')
+                        high_52_daily = float(df_calc['close'].tail(250).max())
+
+                    # --- B. 가격 결정 로직 (Prioritize: fast_info > Intraday > Daily) ---
+                    current = 0.0
+                    prev = 0.0
+                    high_52 = high_52_daily
                     
-                    daily_last_date = df_daily.index[-1].date()
-                    today = datetime.now().date()
-                    
-                    # (1) 기본값: 일봉 마지막 값
-                    current = float(df_daily['close'].iloc[-1])
-                    # 전일 종가 기본값: 데이터가 2개 이상이면 -2, 아니면 current
-                    if len(df_daily) >= 2:
-                        prev = float(df_daily['close'].iloc[-2])
-                        prev_date_src = df_daily.index[-2].date()
-                    else:
-                        prev = current
-                        prev_date_src = daily_last_date
+                    # 1. fast_info 시도 (가장 정확)
+                    use_fast_info = False
+                    try:
+                        ticker_obj = yf_tickers.tickers[ticker]
+                        fi = ticker_obj.fast_info
+                        last_price = fi.last_price
+                        prev_close = fi.regular_market_previous_close # 공식 전일 종가
+                        
+                        if (last_price is not None and prev_close is not None and 
+                            not math.isnan(last_price) and not math.isnan(prev_close)):
+                            
+                            current = float(last_price)
+                            prev = float(prev_close)
+                            
+                            if hasattr(fi, 'year_high') and fi.year_high is not None and not math.isnan(fi.year_high):
+                                high_52 = max(high_52, float(fi.year_high))
+                            else:
+                                high_52 = max(high_52, current)
+                            
+                            use_fast_info = True
+                            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
+                        else:
+                            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
 
-                    # (2) 현재가 보정: 분봉이 일봉보다 최신이면 교체
-                    intra_last_date = None
-                    if not df_intraday.empty:
-                        try:
-                            valid_intra = df_intraday['close'].dropna()
-                            if not valid_intra.empty:
-                                intra_last_ts = valid_intra.index[-1]
-                                intra_last_date = intra_last_ts.date()
-                                if intra_last_date >= daily_last_date:
-                                    current = float(valid_intra.iloc[-1])
-                        except: pass
+                    except Exception as e:
+                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                            config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
-                    # (3) Target Date 결정 (현재가가 기준이 되는 날짜)
-                    target_date = intra_last_date if (intra_last_date and intra_last_date >= daily_last_date) else daily_last_date
-
-                    # (4) 전일 종가 보정 및 Gap Check
-                    # 일봉 마지막 날짜가 타겟 날짜보다 이전인 경우 (오늘 데이터 없음)
-                    if daily_last_date < target_date:
-                        # 현재가가 분봉에서 왔다면(오늘자), daily_last_date(어제)가 prev가 됨
-                        prev = float(df_daily['close'].iloc[-1])
-                        prev_date_src = daily_last_date
-                    elif daily_last_date == target_date:
-                        # 일봉이 오늘자까지 갱신됨
+                    # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
+                    if not use_fast_info:
+                        if df_daily.empty:
+                            table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                            progress.advance(task)
+                            continue
+                        
+                        daily_last_date = df_daily.index[-1].date()
+                        today = datetime.now().date()
+                        
+                        # (1) 기본값: 일봉 마지막 값
+                        current = float(df_daily['close'].iloc[-1])
+                        # 전일 종가 기본값: 데이터가 2개 이상이면 -2, 아니면 current
                         if len(df_daily) >= 2:
                             prev = float(df_daily['close'].iloc[-2])
                             prev_date_src = df_daily.index[-2].date()
-
-                    # Gap 감지 (평일 기준 2일 이상 차이 시 누락 의심)
-                    # target_date(오늘) - prev_date_src(전일종가일)
-                    gap_days = (target_date - prev_date_src).days
-                    weekday = target_date.weekday()
-                    is_gap = False
-                    
-                    if weekday == 0: # 월요일이면 3일(금) 차이는 정상, 4일 이상이면 Gap
-                        if gap_days > 3: is_gap = True
-                    elif weekday < 5: # 화~금이면 1일 차이는 정상, 2일 이상이면 Gap
-                        if gap_days > 1: is_gap = True
-                    
-                    # [강화] 오늘 날짜가 아닌 경우 강제로 Gap/Stale로 처리 (사용자 요청 반영)
-                    if target_date < today:
-                        is_gap = True
-
-                    # 분봉으로 전일 종가 찾기 시도
-                    patched = False
-                    if is_gap and not df_intraday.empty:
-                        try:
-                            # 타겟 날짜보다 이전인 데이터 검색
-                            intra_dates = df_intraday.index.date
-                            mask = intra_dates < target_date
-                            past_intra = df_intraday.loc[mask]
-                            
-                            if not past_intra.empty:
-                                last_past = past_intra.iloc[-1]
-                                last_past_date = past_intra.index[-1].date()
-                                
-                                # 일봉 전일보다 분봉 과거가 더 최신이면 교체
-                                if last_past_date > prev_date_src:
-                                    prev = float(last_past['close'])
-                                    prev_date_src = last_past_date
-                                    patched = True
-                                    is_gap = False # 보정 성공
-                        except: pass
-                    
-                    # 경고 리스트 추가
-                    if patched: 
-                        patched_tickers.append(name)
-                    elif is_gap: 
-                        if target_date < today:
-                            missing_tickers.append(f"{name}(Old:{target_date})")
                         else:
-                            missing_tickers.append(f"{name}(Last:{prev_date_src})")
+                            prev = current
+                            prev_date_src = daily_last_date
 
-                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                        config.console.print(f"[dim magenta][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: Fallback DF, Date: {target_date} vs {prev_date_src})[/dim magenta]")
+                        # (2) 현재가 보정: 분봉이 일봉보다 최신이면 교체
+                        intra_last_date = None
+                        if not df_intraday.empty:
+                            try:
+                                valid_intra = df_intraday['close'].dropna()
+                                if not valid_intra.empty:
+                                    intra_last_ts = valid_intra.index[-1]
+                                    intra_last_date = intra_last_ts.date()
+                                    if intra_last_date >= daily_last_date:
+                                        current = float(valid_intra.iloc[-1])
+                            except: pass
 
-                # C. 결과 계산
-                diff = current - prev
-                rate = 0.0
-                if prev != 0: rate = (diff / prev) * 100
-                
-                high_52_rate = 0.0
-                if high_52 != 0: high_52_rate = ((current - high_52) / high_52) * 100
+                        # (3) Target Date 결정 (현재가가 기준이 되는 날짜)
+                        target_date = intra_last_date if (intra_last_date and intra_last_date >= daily_last_date) else daily_last_date
 
-                # --- 서식 ---
-                diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
+                        # (4) 전일 종가 보정 및 Gap Check
+                        # 일봉 마지막 날짜가 타겟 날짜보다 이전인 경우 (오늘 데이터 없음)
+                        if daily_last_date < target_date:
+                            # 현재가가 분봉에서 왔다면(오늘자), daily_last_date(어제)가 prev가 됨
+                            prev = float(df_daily['close'].iloc[-1])
+                            prev_date_src = daily_last_date
+                        elif daily_last_date == target_date:
+                            # 일봉이 오늘자까지 갱신됨
+                            if len(df_daily) >= 2:
+                                prev = float(df_daily['close'].iloc[-2])
+                                prev_date_src = df_daily.index[-2].date()
 
-                curr_price_color = "[white]"
-                if ema5 and ema20 and ema60:
-                    if ema5 > ema20 and ema20 > ema60:
-                        if current > ema5: curr_price_color = "[red]"
-                        elif current < ema60: curr_price_color = "[blue]"
-                        else: curr_price_color = "[dim]"
-                    elif ema5 < ema20 and ema5 < ema60:
-                        if current < ema5: curr_price_color = "[blue]"
-                        elif current > ema20: curr_price_color = "[orange3]"
-                        else: curr_price_color = "[white]"
-                    else:
-                        if current < ema5: curr_price_color = "[blue]"
-                        elif current > ema20: curr_price_color = "[orange3]"
-                        else: curr_price_color = "[white]"
-                
-                curr_fmt = f"{current:,.2f}"
-                if name == "달러환율": curr_fmt += "원"
-                curr_str = f"{curr_price_color}{curr_fmt}[/]"
+                        # Gap 감지 (평일 기준 2일 이상 차이 시 누락 의심)
+                        # target_date(오늘) - prev_date_src(전일종가일)
+                        gap_days = (target_date - prev_date_src).days
+                        weekday = target_date.weekday()
+                        is_gap = False
+                        
+                        if weekday == 0: # 월요일이면 3일(금) 차이는 정상, 4일 이상이면 Gap
+                            if gap_days > 3: is_gap = True
+                        elif weekday < 5: # 화~금이면 1일 차이는 정상, 2일 이상이면 Gap
+                            if gap_days > 1: is_gap = True
+                        
+                        # [강화] 오늘 날짜가 아닌 경우 강제로 Gap/Stale로 처리 (사용자 요청 반영)
+                        if target_date < today:
+                            is_gap = True
 
-                h_color = "[white]"
-                if high_52_rate > -3.0: h_color = "[red]"
-                elif high_52_rate < -20.0: h_color = "[blue]"
-                high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
+                        # 분봉으로 전일 종가 찾기 시도
+                        patched = False
+                        if is_gap and not df_intraday.empty:
+                            try:
+                                # 타겟 날짜보다 이전인 데이터 검색
+                                intra_dates = df_intraday.index.date
+                                mask = intra_dates < target_date
+                                past_intra = df_intraday.loc[mask]
+                                
+                                if not past_intra.empty:
+                                    last_past = past_intra.iloc[-1]
+                                    last_past_date = past_intra.index[-1].date()
+                                    
+                                    # 일봉 전일보다 분봉 과거가 더 최신이면 교체
+                                    if last_past_date > prev_date_src:
+                                        prev = float(last_past['close'])
+                                        prev_date_src = last_past_date
+                                        patched = True
+                                        is_gap = False # 보정 성공
+                            except: pass
+                        
+                        # 경고 리스트 추가
+                        if patched: 
+                            patched_tickers.append(name)
+                        elif is_gap: 
+                            if target_date < today:
+                                missing_tickers.append(f"{name}(Old:{target_date})")
+                            else:
+                                missing_tickers.append(f"{name}(Last:{prev_date_src})")
 
-                def fmt_val(val, color_tag):
-                    if val is None: return "-"
-                    s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
-                    return f"{color_tag}{s}[/]" if color_tag else s
+                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                            config.console.print(f"[dim magenta][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: Fallback DF, Date: {target_date} vs {prev_date_src})[/dim magenta]")
 
-                # EMA Colors
-                ema5_color = "[white]"
-                if ema5 and ema20 and ema60 and ema120:
-                    if ema5 > ema20 and ema5 > ema60 and ema5 > ema120: ema5_color = "[red]"
-                    elif ema5 < ema20 and ema5 < ema60 and ema5 < ema120: ema5_color = "[blue]"
-                    elif (ema20 < ema5 < ema60) or (ema60 < ema5 < ema20): ema5_color = "[yellow]"
-                    elif (ema60 < ema5 < ema120) or (ema120 < ema5 < ema60): ema5_color = "[orange3]"
-                
-                ema20_color = "[white]"
-                if ema20 and ema60 and ema120:
-                    if ema20 > ema60 and ema20 > ema120: ema20_color = "[red]"
-                    elif ema20 < ema60 and ema20 < ema120: ema20_color = "[blue]"
-                    elif (ema60 < ema20 < ema120) or (ema120 < ema20 < ema60): ema20_color = "[yellow]"
+                    # C. 결과 계산
+                    diff = current - prev
+                    rate = 0.0
+                    if prev != 0: rate = (diff / prev) * 100
+                    
+                    high_52_rate = 0.0
+                    if high_52 != 0: high_52_rate = ((current - high_52) / high_52) * 100
 
-                ema60_color = "[yellow]"
-                if ema60 and ema5 and ema20 and ema120:
-                    if ema120 > ema60 and ema60 > ema5 and ema60 > ema20: ema60_color = "[blue]"
-                    elif ema120 < ema60 and ema60 < ema5 and ema60 < ema20: ema60_color = "[red]"
+                    # --- 서식 ---
+                    diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                    change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
 
-                ema120_color = "[white]"
-                if ema120 and ema60:
-                    if ema60 > ema120: ema120_color = "[red]" 
-                    elif ema60 < ema120: ema120_color = "[blue]"
+                    curr_price_color = "[white]"
+                    if ema5 and ema20 and ema60:
+                        if ema5 > ema20 and ema20 > ema60:
+                            if current > ema5: curr_price_color = "[red]"
+                            elif current < ema60: curr_price_color = "[blue]"
+                            else: curr_price_color = "[dim]"
+                        elif ema5 < ema20 and ema5 < ema60:
+                            if current < ema5: curr_price_color = "[blue]"
+                            elif current > ema20: curr_price_color = "[orange3]"
+                            else: curr_price_color = "[white]"
+                        else:
+                            if current < ema5: curr_price_color = "[blue]"
+                            elif current > ema20: curr_price_color = "[orange3]"
+                            else: curr_price_color = "[white]"
+                    
+                    curr_fmt = f"{current:,.2f}"
+                    if name == "달러환율": curr_fmt += "원"
+                    curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
-                # 추세(S/M/O) 통합
-                # S (SAR)
-                sar_icon = "-"
-                if val_psar is not None:
-                    sar_icon = "[red]⬆[/]" if current > val_psar else "[blue]⬇[/]"
-                
-                # M (MACD)
-                macd_icon = "-"
-                if val_macd is not None and val_macd_sig is not None:
-                    zero_sign = "+" if val_macd > 0 else "-"
-                    cross_char = "G" if val_macd > val_macd_sig else "D"
-                    m_color = "red" if val_macd > val_macd_sig else "blue"
-                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
-                
-                # O (OBV) - 지수는 거래량 데이터가 부정확할 수 있어 생략하거나 '-' 처리
-                obv_icon = "-" 
-                
-                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+                    h_color = "[white]"
+                    if high_52_rate > -3.0: h_color = "[red]"
+                    elif high_52_rate < -20.0: h_color = "[blue]"
+                    high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
-                rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "-"
-                if val_rsi is not None:
-                    if val_rsi >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
-                    elif 55 <= val_rsi < 70: rsi_str = f"[red]{rsi_str}[/]"
-                    elif 45 <= val_rsi < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                    elif 30 < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
-                    else: rsi_str = f"[blue]{rsi_str}[/]"
+                    def fmt_val(val, color_tag):
+                        if val is None: return "-"
+                        s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
+                        return f"{color_tag}{s}[/]" if color_tag else s
 
-                adx_str = f"{val_adx:.1f}" if val_adx is not None else "-"
-                if val_adx is not None:
-                    if val_adx >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                    elif val_adx >= 30: adx_str = f"[red]{adx_str}[/]"     
-                    elif val_adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                    elif val_adx >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                    else: adx_str = f"[white]{adx_str}[/]"
+                    # EMA Colors
+                    ema5_color = "[white]"
+                    if ema5 and ema20 and ema60 and ema120:
+                        if ema5 > ema20 and ema5 > ema60 and ema5 > ema120: ema5_color = "[red]"
+                        elif ema5 < ema20 and ema5 < ema60 and ema5 < ema120: ema5_color = "[blue]"
+                        elif (ema20 < ema5 < ema60) or (ema60 < ema5 < ema20): ema5_color = "[yellow]"
+                        elif (ema60 < ema5 < ema120) or (ema120 < ema5 < ema60): ema5_color = "[orange3]"
+                    
+                    ema20_color = "[white]"
+                    if ema20 and ema60 and ema120:
+                        if ema20 > ema60 and ema20 > ema120: ema20_color = "[red]"
+                        elif ema20 < ema60 and ema20 < ema120: ema20_color = "[blue]"
+                        elif (ema60 < ema20 < ema120) or (ema120 < ema20 < ema60): ema20_color = "[yellow]"
 
-                cci_str = f"{val_cci:.1f}" if val_cci is not None else "-"
-                if val_cci is not None:
-                    if val_cci >= 100: cci_str = f"[red]{cci_str}[/]"
-                    elif 0 < val_cci < 100: cci_str = f"[orange3]{cci_str}[/]"
-                    elif -100 < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
-                    else: cci_str = f"[blue]{cci_str}[/]"
+                    ema60_color = "[yellow]"
+                    if ema60 and ema5 and ema20 and ema120:
+                        if ema120 > ema60 and ema60 > ema5 and ema60 > ema20: ema60_color = "[blue]"
+                        elif ema120 < ema60 and ema60 < ema5 and ema60 < ema20: ema60_color = "[red]"
 
-                display_name = name
-                if name == "SOX (반도체)":
-                    if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
-                    elif -15.0 < high_52_rate <= -10.0: display_name = f"[orange3]{name}[/]"
-                    elif -20.0 <= high_52_rate <= -15.0: display_name = f"[yellow]{name}[/]"
-                    elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
-                elif name == "VIX (변동성)":
-                    if current <= 20: display_name = f"[green]{name}[/]"
-                    elif 20 < current < 30: display_name = f"[white]{name}[/]"
-                    elif 30 <= current < 40: display_name = f"[yellow]{name}[/]"
-                    elif 40 <= current < 50: display_name = f"[orange3]{name}[/]"
-                    elif current >= 50: display_name = f"[red]{name}[/]"
-                elif name == "달러인덱스":
-                    if current >= 120: display_name = f"[magenta]{name}[/]"
-                    elif 110 <= current < 120: display_name = f"[red]{name}[/]"
-                    elif 100 <= current < 110: display_name = f"[orange3]{name}[/]"
-                    elif 90 <= current < 100: display_name = f"[green]{name}[/]"
-                    elif 80 <= current < 90: display_name = f"[yellow]{name}[/]"
-                    elif current < 80: display_name = f"[blue]{name}[/]"
-                elif name == "달러환율":
-                    if current >= 1600: display_name = f"[magenta]{name}[/]"
-                    elif 1500 <= current < 1600: display_name = f"[red]{name}[/]"
-                    elif 1400 <= current < 1500: display_name = f"[orange3]{name}[/]"
-                    elif 1300 <= current < 1400: display_name = f"[yellow]{name}[/]"
-                    elif 1200 <= current < 1300: display_name = f"[green]{name}[/]"
-                    elif 1100 <= current < 1200: display_name = f"[cyan]{name}[/]"
-                    elif current < 1100: display_name = f"[blue]{name}[/]"
-                elif name == "WTI 원유":
-                    if current >= 120: display_name = f"[magenta]{name}[/]"
-                    elif 100 <= current < 120: display_name = f"[red]{name}[/]"
-                    elif 80 <= current < 100: display_name = f"[orange3]{name}[/]"
-                    elif 60 <= current < 80: display_name = f"[green]{name}[/]"
-                    elif 40 <= current < 60: display_name = f"[yellow]{name}[/]"
-                    elif current < 40: display_name = f"[blue]{name}[/]"
-                elif name == "천연가스":
-                    if current >= 10: display_name = f"[magenta]{name}[/]"
-                    elif 6 <= current < 10: display_name = f"[red]{name}[/]"
-                    elif 4 <= current < 6: display_name = f"[orange3]{name}[/]"
-                    elif 2.5 <= current < 4: display_name = f"[green]{name}[/]"
-                    elif 1.5 <= current < 2.5: display_name = f"[yellow]{name}[/]"
-                    elif current < 1.5: display_name = f"[blue]{name}[/]"
-                elif name == "밀":
-                    if current >= 900: display_name = f"[magenta]{name}[/]"
-                    elif 750 <= current < 900: display_name = f"[red]{name}[/]"
-                    elif 650 <= current < 750: display_name = f"[orange3]{name}[/]"
-                    elif 500 <= current < 650: display_name = f"[green]{name}[/]"
-                    elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
-                    elif current < 400: display_name = f"[blue]{name}[/]"
+                    ema120_color = "[white]"
+                    if ema120 and ema60:
+                        if ema60 > ema120: ema120_color = "[red]" 
+                        elif ema60 < ema120: ema120_color = "[blue]"
 
-                table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str)
-                progress.advance(task)
+                    # 추세(S/M/O) 통합
+                    # S (SAR)
+                    sar_icon = "-"
+                    if val_psar is not None:
+                        sar_icon = "[red]⬆[/]" if current > val_psar else "[blue]⬇[/]"
+                    
+                    # M (MACD)
+                    macd_icon = "-"
+                    if val_macd is not None and val_macd_sig is not None:
+                        zero_sign = "+" if val_macd > 0 else "-"
+                        cross_char = "G" if val_macd > val_macd_sig else "D"
+                        m_color = "red" if val_macd > val_macd_sig else "blue"
+                        macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+                    
+                    # O (OBV) - 지수는 거래량 데이터가 부정확할 수 있어 생략하거나 '-' 처리
+                    obv_icon = "-" 
+                    
+                    trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+
+                    rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "-"
+                    if val_rsi is not None:
+                        if val_rsi >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
+                        elif 55 <= val_rsi < 70: rsi_str = f"[red]{rsi_str}[/]"
+                        elif 45 <= val_rsi < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                        elif 30 < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+                        else: rsi_str = f"[blue]{rsi_str}[/]"
+
+                    adx_str = f"{val_adx:.1f}" if val_adx is not None else "-"
+                    if val_adx is not None:
+                        if val_adx >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                        elif val_adx >= 30: adx_str = f"[red]{adx_str}[/]"     
+                        elif val_adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                        elif val_adx >= 15: adx_str = f"[yellow]{adx_str}[/]"
+                        else: adx_str = f"[white]{adx_str}[/]"
+
+                    cci_str = f"{val_cci:.1f}" if val_cci is not None else "-"
+                    if val_cci is not None:
+                        if val_cci >= 100: cci_str = f"[red]{cci_str}[/]"
+                        elif 0 < val_cci < 100: cci_str = f"[orange3]{cci_str}[/]"
+                        elif -100 < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
+                        else: cci_str = f"[blue]{cci_str}[/]"
+
+                    display_name = name
+                    if name == "SOX (반도체)":
+                        if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
+                        elif -15.0 < high_52_rate <= -10.0: display_name = f"[orange3]{name}[/]"
+                        elif -20.0 <= high_52_rate <= -15.0: display_name = f"[yellow]{name}[/]"
+                        elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+                    elif name == "VIX (변동성)":
+                        if current <= 20: display_name = f"[green]{name}[/]"
+                        elif 20 < current < 30: display_name = f"[white]{name}[/]"
+                        elif 30 <= current < 40: display_name = f"[yellow]{name}[/]"
+                        elif 40 <= current < 50: display_name = f"[orange3]{name}[/]"
+                        elif current >= 50: display_name = f"[red]{name}[/]"
+                    elif name == "달러인덱스":
+                        if current >= 120: display_name = f"[magenta]{name}[/]"
+                        elif 110 <= current < 120: display_name = f"[red]{name}[/]"
+                        elif 100 <= current < 110: display_name = f"[orange3]{name}[/]"
+                        elif 90 <= current < 100: display_name = f"[green]{name}[/]"
+                        elif 80 <= current < 90: display_name = f"[yellow]{name}[/]"
+                        elif current < 80: display_name = f"[blue]{name}[/]"
+                    elif name == "달러환율":
+                        if current >= 1600: display_name = f"[magenta]{name}[/]"
+                        elif 1500 <= current < 1600: display_name = f"[red]{name}[/]"
+                        elif 1400 <= current < 1500: display_name = f"[orange3]{name}[/]"
+                        elif 1300 <= current < 1400: display_name = f"[yellow]{name}[/]"
+                        elif 1200 <= current < 1300: display_name = f"[green]{name}[/]"
+                        elif 1100 <= current < 1200: display_name = f"[cyan]{name}[/]"
+                        elif current < 1100: display_name = f"[blue]{name}[/]"
+                    elif name == "WTI 원유":
+                        if current >= 120: display_name = f"[magenta]{name}[/]"
+                        elif 100 <= current < 120: display_name = f"[red]{name}[/]"
+                        elif 80 <= current < 100: display_name = f"[orange3]{name}[/]"
+                        elif 60 <= current < 80: display_name = f"[green]{name}[/]"
+                        elif 40 <= current < 60: display_name = f"[yellow]{name}[/]"
+                        elif current < 40: display_name = f"[blue]{name}[/]"
+                    elif name == "천연가스":
+                        if current >= 10: display_name = f"[magenta]{name}[/]"
+                        elif 6 <= current < 10: display_name = f"[red]{name}[/]"
+                        elif 4 <= current < 6: display_name = f"[orange3]{name}[/]"
+                        elif 2.5 <= current < 4: display_name = f"[green]{name}[/]"
+                        elif 1.5 <= current < 2.5: display_name = f"[yellow]{name}[/]"
+                        elif current < 1.5: display_name = f"[blue]{name}[/]"
+                    elif name == "밀":
+                        if current >= 900: display_name = f"[magenta]{name}[/]"
+                        elif 750 <= current < 900: display_name = f"[red]{name}[/]"
+                        elif 650 <= current < 750: display_name = f"[orange3]{name}[/]"
+                        elif 500 <= current < 650: display_name = f"[green]{name}[/]"
+                        elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
+                        elif current < 400: display_name = f"[blue]{name}[/]"
+
+                    table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str)
+                    progress.advance(task)
 
             except Exception as e:
                 if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
