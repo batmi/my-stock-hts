@@ -28,104 +28,105 @@ def show_market_indices():
     data_storage = {}
     yf_tickers = None
 
-    # [변경] 전체 과정을 Progress Context로 통합하여 상태바 제거 및 진행률 표시 즉시 시작
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=config.console,
-        transient=True
-    ) as progress:
-        # 1. 히스토리 데이터 다운로드
-        task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
+    try:
+        # [변경] 전체 과정을 Progress Context로 통합하여 상태바 제거 및 진행률 표시 즉시 시작
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            # 1. 히스토리 데이터 다운로드
+            task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
 
-        kr_tickers = ["^KS11", "^KQ11"]
-        global_tickers = [t for t in indices_map.values() if t not in kr_tickers]
-        tickers_sets = [("KR", kr_tickers), ("GL", global_tickers)]
-        
-        for label, t_list in tickers_sets:
-            if not t_list: continue
-            tickers_str = " ".join(t_list)
+            kr_tickers = ["^KS11", "^KQ11"]
+            global_tickers = [t for t in indices_map.values() if t not in kr_tickers]
+            tickers_sets = [("KR", kr_tickers), ("GL", global_tickers)]
             
-            for attempt in range(2):
-                try:
-                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                        config.console.print(f"[dim cyan][TRACE] REQ ({label}) | Attempt: {attempt+1} | Tickers: {tickers_str}[/dim cyan]")
-
-                    d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
-                    i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
-                    
-                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                        d_shape = d_data.shape if not d_data.empty else "Empty"
-                        i_shape = i_data.shape if not i_data.empty else "Empty"
-                        config.console.print(f"[dim magenta][TRACE] RES ({label}) | Daily: {d_shape}, Intra: {i_shape}[/dim magenta]")
-
-                    for t in t_list:
-                        d_df = pd.DataFrame()
-                        i_df = pd.DataFrame()
-                        
-                        try:
-                            if not d_data.empty:
-                                if isinstance(d_data.columns, pd.MultiIndex):
-                                    if t in d_data.columns.levels[0]: d_df = d_data[t].copy()
-                                elif 'Close' in d_data.columns: d_df = d_data.copy()
-                        except: pass
-
-                        try:
-                            if not i_data.empty:
-                                if isinstance(i_data.columns, pd.MultiIndex):
-                                    if t in i_data.columns.levels[0]: i_df = i_data[t].copy()
-                                elif 'Close' in i_data.columns: i_df = i_data.copy()
-                        except: pass
-                        
-                        data_storage[t] = {'daily': d_df, 'intra': i_df}
-                    break
-                except Exception as e:
-                    if "database" in str(e).lower(): api.clear_yfinance_cache()
-                    else: break
-
-        progress.update(task_dl, visible=False)
-
-        # 2. Tickers 객체 생성 (fast_info 접근용)
-        all_tickers_list = list(indices_map.values())
-        yf_tickers = yf.Tickers(" ".join(all_tickers_list))
-
-        # 테이블 생성
-        table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-        table.add_column("지수명", justify="left", style="white")
-        table.add_column("지수", justify="right")
-        table.add_column("등락폭 (등락률)", justify="right")
-        table.add_column("52주 고점", justify="right")
-        table.add_column("EMA(5)", justify="right")
-        table.add_column("EMA(20)", justify="right")
-        table.add_column("EMA(60)", justify="right")
-        table.add_column("EMA(120)", justify="right")
-        table.add_column("추세SMO", justify="center")
-        table.add_column("RSI", justify="right")
-        table.add_column("ADX", justify="right")
-        table.add_column("CCI", justify="right")
-
-        patched_tickers = []
-        missing_tickers = []
-
-        # 3. 지표 분석 및 테이블 구성
-        task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
-
-        for name, ticker in indices_map.items():
-            if name in ["나스닥", "금", "달러인덱스", "VIX (변동성)"]: 
-                table.add_section()
-
-            try:
-                # --- A. DataFrame 준비 및 지표 계산 ---
-                stored = data_storage.get(ticker, {'daily': pd.DataFrame(), 'intra': pd.DataFrame()})
-                df_daily = stored['daily']
-                df_intraday = stored['intra']
+            for label, t_list in tickers_sets:
+                if not t_list: continue
+                tickers_str = " ".join(t_list)
                 
-                if not df_daily.empty:
-                    df_daily.columns = [c.lower() for c in df_daily.columns]
-                if not df_intraday.empty:
-                    df_intraday.columns = [c.lower() for c in df_intraday.columns]
+                for attempt in range(2):
+                    try:
+                        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                            config.console.print(f"[dim cyan][TRACE] REQ ({label}) | Attempt: {attempt+1} | Tickers: {tickers_str}[/dim cyan]")
+
+                        d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
+                        i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
+                        
+                        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                            d_shape = d_data.shape if not d_data.empty else "Empty"
+                            i_shape = i_data.shape if not i_data.empty else "Empty"
+                            config.console.print(f"[dim magenta][TRACE] RES ({label}) | Daily: {d_shape}, Intra: {i_shape}[/dim magenta]")
+
+                        for t in t_list:
+                            d_df = pd.DataFrame()
+                            i_df = pd.DataFrame()
+                            
+                            try:
+                                if not d_data.empty:
+                                    if isinstance(d_data.columns, pd.MultiIndex):
+                                        if t in d_data.columns.levels[0]: d_df = d_data[t].copy()
+                                    elif 'Close' in d_data.columns: d_df = d_data.copy()
+                            except: pass
+
+                            try:
+                                if not i_data.empty:
+                                    if isinstance(i_data.columns, pd.MultiIndex):
+                                        if t in i_data.columns.levels[0]: i_df = i_data[t].copy()
+                                    elif 'Close' in i_data.columns: i_df = i_data.copy()
+                            except: pass
+                            
+                            data_storage[t] = {'daily': d_df, 'intra': i_df}
+                        break
+                    except Exception as e:
+                        if "database" in str(e).lower(): api.clear_yfinance_cache()
+                        else: break
+
+            progress.update(task_dl, visible=False)
+
+            # 2. Tickers 객체 생성 (fast_info 접근용)
+            all_tickers_list = list(indices_map.values())
+            yf_tickers = yf.Tickers(" ".join(all_tickers_list))
+
+            # 테이블 생성
+            table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+            table.add_column("지수명", justify="left", style="white")
+            table.add_column("지수", justify="right")
+            table.add_column("등락폭 (등락률)", justify="right")
+            table.add_column("52주 고점", justify="right")
+            table.add_column("EMA(5)", justify="right")
+            table.add_column("EMA(20)", justify="right")
+            table.add_column("EMA(60)", justify="right")
+            table.add_column("EMA(120)", justify="right")
+            table.add_column("추세SMO", justify="center")
+            table.add_column("RSI", justify="right")
+            table.add_column("ADX", justify="right")
+            table.add_column("CCI", justify="right")
+
+            patched_tickers = []
+            missing_tickers = []
+
+            # 3. 지표 분석 및 테이블 구성
+            task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
+
+            for name, ticker in indices_map.items():
+                if name in ["나스닥", "금", "달러인덱스", "VIX (변동성)"]: 
+                    table.add_section()
+
+                try:
+                    # --- A. DataFrame 준비 및 지표 계산 ---
+                    stored = data_storage.get(ticker, {'daily': pd.DataFrame(), 'intra': pd.DataFrame()})
+                    df_daily = stored['daily']
+                    df_intraday = stored['intra']
+                    
+                    if not df_daily.empty:
+                        df_daily.columns = [c.lower() for c in df_daily.columns]
+                    if not df_intraday.empty:
+                        df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
                 if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
@@ -462,12 +463,19 @@ def show_market_indices():
                     config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
                 table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                 progress.advance(task)
-    
-    try:
-        config.console.print(table)
+        
+        # 테이블 출력 (Progress Context 밖에서 실행)
+        try:
+            config.console.print(table)
+        except Exception as e:
+            logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
+            config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
+
+    except KeyboardInterrupt:
+        config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
     except Exception as e:
-        logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
-        config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
+        logger.error(f"지수 분석 중 치명적 오류: {e}")
+        config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
     
     # [하단 경고 출력]
     if patched_tickers:
