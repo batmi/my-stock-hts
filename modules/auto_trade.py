@@ -1353,6 +1353,10 @@ class AutoTrader:
             
         # [추가] 중복 제거 및 정제
         refined_records = self._refine_trade_records(temp_records)
+        
+        # [추가] 시간순 정렬 (통계 계산 및 기간 표시 정확성 확보)
+        if refined_records:
+            refined_records.sort(key=lambda x: x['time'])
             
         if not refined_records:
             return "📭 매매 기록이 없습니다."
@@ -1360,7 +1364,12 @@ class AutoTrader:
         stats = self._calculate_statistics(refined_records)
         
         msg = "📊 [시스템 트레이딩 성과 리포트]\n"
-        msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
+        
+        # [추가] 기간 정보
+        if refined_records:
+            start_date = refined_records[0]['time'][:10]
+            end_date = refined_records[-1]['time'][:10]
+            msg += f"기간: {start_date} ~ {end_date}\n\n"
         
         if stats['sell_trades_exist']:
             win_rate = stats['win_rate']
@@ -1368,11 +1377,33 @@ class AutoTrader:
             avg_profit_rate = stats['avg_profit_rate']
             
             icon = "🔴" if total_profit > 0 else ("🔵" if total_profit < 0 else "⚪️")
-            msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
+            
+            msg += f"💰 [수익 현황]\n"
             msg += f"총 손익: {icon} {total_profit:+,}원\n"
             msg += f"평균 수익률: {avg_profit_rate:+.2f}%\n"
+            msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n\n"
+            
+            msg += f"🏆 [최고/최악 거래]\n"
+            if stats.get('best_trade'):
+                b = stats['best_trade']
+                msg += f"Best: {b['name']} ({b['profit_amt']:+,}원 / {b['profit_rate']:+.2f}%)\n"
+            if stats.get('worst_trade'):
+                w = stats['worst_trade']
+                msg += f"Worst: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n\n"
+            
+            msg += f"📉 [매도 사유 분포]\n"
+            reasons = stats.get('sell_reasons', {})
+            total_sells = stats['sell_count']
+            if total_sells > 0:
+                for r, count in reasons.most_common():
+                    msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
+            msg += "\n"
+            
+            msg += f"⏳ [기타 통계]\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
             msg += f"평균 보유: {stats['avg_holding_str']}"
         else:
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
             msg += "\n(청산된 내역이 없어 수익률 산출 불가)"
             
         return msg
@@ -1391,6 +1422,11 @@ class AutoTrader:
         loss_trades = 0
         total_profit = 0
         total_profit_rate = 0.0
+        
+        # [추가] Best/Worst 및 사유 분석 변수
+        best_trade = None
+        worst_trade = None
+        sell_reasons = Counter()
         
         # [추가] 보유 기간 계산
         total_holding_seconds = 0
@@ -1423,6 +1459,23 @@ class AutoTrader:
             if profit > 0: win_trades += 1
             else: loss_trades += 1
             
+            # [추가] Best/Worst 갱신
+            if best_trade is None or profit > best_trade.get('profit_amt', 0):
+                best_trade = t
+            if worst_trade is None or profit < worst_trade.get('profit_amt', 0):
+                worst_trade = t
+            
+            # [추가] 매도 사유 분석
+            reason = t.get('reason', '기타')
+            reason_key = "기타"
+            if "익절" in reason: reason_key = "익절"
+            elif "손절" in reason: reason_key = "손절"
+            elif "트레일링" in reason: reason_key = "TS"
+            elif "추세" in reason: reason_key = "추세이탈"
+            elif "과열" in reason: reason_key = "과열"
+            elif "ATR" in reason: reason_key = "ATR손절"
+            sell_reasons[reason_key] += 1
+            
         avg_profit_rate = (total_profit_rate / len(sell_trades)) if sell_trades else 0.0
         win_rate = (win_trades / len(sell_trades) * 100) if sell_trades else 0.0
 
@@ -1444,7 +1497,10 @@ class AutoTrader:
             "avg_profit_rate": avg_profit_rate,
             "win_rate": win_rate,
             "avg_holding_str": avg_holding_str,
-            "sell_trades_exist": len(sell_trades) > 0
+            "sell_trades_exist": len(sell_trades) > 0,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "sell_reasons": sell_reasons
         }
 
     def _print_summary_table(self, stats):

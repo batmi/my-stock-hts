@@ -734,10 +734,14 @@ class TelegramCommander:
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+        atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         
         msg += f"\n[매도 조건]\n"
         msg += f"• 익절: +{tp}%\n"
         msg += f"• 손절: {sl}%\n"
+        atr_str = f"ON (x{atr_mult})" if use_atr else "OFF"
+        msg += f"• ATR 손절: {atr_str}\n"
         msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시\n"
         msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
         msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
