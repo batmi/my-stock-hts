@@ -566,67 +566,77 @@ def diagnose_group_stocks(market_filter=None):
     
     title_suffix = f" ({market_filter})" if market_filter else " (전체)"
     
-    with config.console.status(f"[bold green]등록된 종목 일괄 진단 중{title_suffix}...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task(f"[green]등록된 종목 일괄 진단 중{title_suffix}...[/]", total=len(targets))
+        
         for item in targets:
-            code = item['code']
-            name = item['name']
-            
-            # 1. 시장 구분 확인 (필터링이 필요한 경우)
-            if market_filter:
-                try:
-                    # 현재가 조회로 시장 구분 확인
-                    cp_data = api.get_current_price_data(code, is_overseas=False)
-                    if cp_data.get('rt_cd') != '0': continue
-                    
-                    mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
-                    # 유가증권(KOSPI), 코스닥(KOSDAQ)
-                    is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
-                    is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
-                    
-                    if market_filter == "KOSPI" and not is_kospi: continue
-                    if market_filter == "KOSDAQ" and not is_kosdaq: continue
-                except:
-                    continue
+            try:
+                code = item['code']
+                name = item['name']
+                
+                # 1. 시장 구분 확인 (필터링이 필요한 경우)
+                if market_filter:
+                    try:
+                        # 현재가 조회로 시장 구분 확인
+                        cp_data = api.get_current_price_data(code, is_overseas=False)
+                        if cp_data.get('rt_cd') != '0': continue
+                        
+                        mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
+                        # 유가증권(KOSPI), 코스닥(KOSDAQ)
+                        is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
+                        is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
+                        
+                        if market_filter == "KOSPI" and not is_kospi: continue
+                        if market_filter == "KOSDAQ" and not is_kosdaq: continue
+                    except:
+                        continue
 
-            # 2. 차트 데이터 및 지표 계산
-            df = api.get_chart_data(code, is_overseas=False)
-            if df is None or df.empty: continue
-            
-            ind = indicators.calculate_indicators(df)
-            current_price = float(df.iloc[-1]['close'])
-            
-            # 전일 RSI (상태 분류용)
-            prev_rsi = None
-            if len(df) >= 16:
-                delta = df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
+                # 2. 차트 데이터 및 지표 계산
+                df = api.get_chart_data(code, is_overseas=False)
+                if df is None or df.empty: continue
+                
+                ind = indicators.calculate_indicators(df)
+                current_price = float(df.iloc[-1]['close'])
+                
+                # 전일 RSI (상태 분류용)
+                prev_rsi = None
+                if len(df) >= 16:
+                    delta = df['close'].diff()
+                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                    try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                    except: pass
 
-            # 3. 점수 및 상태 계산
-            state, state_color, state_reason = classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            )
-            
-            score, _ = calculate_score(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            )
-            
-            # [추가] 체결강도 조회
-            vol_strength = api.get_realtime_vol_strength(code)
-            
-            results.append({
-                'code': code, 'name': name, 'price': current_price,
-                'score': score, 'state': state, 'state_color': state_color,
-                'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
-                'vol_strength': vol_strength
-            })
-            
-            # [최적화] API 호출 간격 조절은 api.py의 ThrottledSession에서 전담하므로
-            # 이곳의 강제 대기(time.sleep)를 제거하여 처리 속도를 최적화합니다.
+                # 3. 점수 및 상태 계산
+                state, state_color, state_reason = classify_stock_state(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                score, _ = calculate_score(
+                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                )
+                
+                # [추가] 체결강도 조회
+                vol_strength = api.get_realtime_vol_strength(code)
+                
+                results.append({
+                    'code': code, 'name': name, 'price': current_price,
+                    'score': score, 'state': state, 'state_color': state_color,
+                    'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
+                    'vol_strength': vol_strength
+                })
+            finally:
+                progress.advance(task)
 
     # 결과 출력
     if not results:
