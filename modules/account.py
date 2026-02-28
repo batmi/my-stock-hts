@@ -13,7 +13,6 @@ import utils
 from modules import db_manager
 import json
 import pandas as pd
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -806,14 +805,14 @@ def view_trade_history():
         table.add_column("시간", justify="center", style="dim", width=15)
         table.add_column("주문번호", justify="center", style="dim")
         # 계좌 컬럼 제거됨
-        table.add_column("유형", justify="center")
+        table.add_column("유형", justify="center", no_wrap=True)
         table.add_column("상태", justify="center", width=6)
-        table.add_column("종목명(코드)", justify="left")
+        table.add_column("종목명(코드)", justify="left", no_wrap=True)
         table.add_column("수량", justify="right", width=8)
         table.add_column("단가", justify="right")
         table.add_column("금액", justify="right")
-        table.add_column("손익(수익률)", justify="right")
-        table.add_column("사유", justify="left")
+        table.add_column("손익(수익률)", justify="right", no_wrap=True)
+        table.add_column("사유", justify="left", no_wrap=True, overflow="ellipsis")
 
         for i, t in enumerate(t_list):
             # [수정] 유형 표기 개선 (줄바꿈 및 색상 적용)
@@ -829,8 +828,9 @@ def view_trade_history():
             elif base_type == "매도": type_disp = "[blue]매도[/]"
             
             tag_disp = ""
-            if "자동" in clean_type: tag_disp = "\n([yellow]자동[/])"
-            elif "수동" in clean_type: tag_disp = "\n([green]수동[/])"
+            if "자동" in clean_type: tag_disp = "([yellow]자동[/])"
+            elif "수동" in clean_type: tag_disp = "([green]수동[/])"
+            else: tag_disp = "([dim]외부[/])"
             
             type_str = f"{type_disp}{tag_disp}"
 
@@ -880,54 +880,19 @@ def view_trade_history():
                 rate = t.get('profit_rate', 0.0)
                 if amt is not None and rate is not None:
                     color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
-                    profit_display = f"[{color}]{amt:+,}원\n({rate:+.2f}%)[/]"
+                    profit_display = f"[{color}]{amt:+,}원 ({rate:+.2f}%)[/]"
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
             # [수정] 사유 내 강제 줄바꿈 제거 (2줄 내 유동적 출력 지원)
             reason_display = reason_display.replace('\n', ' ')
-            snapshot_str = t.get('snapshot')
-            
-            # 사유에 이미 상세 정보(RSI 등)가 포함되지 않은 경우에만 스냅샷 데이터 추가
-            if snapshot_str and snapshot_str != '{}' and "RSI" not in reason_display:
-                try:
-                    snap = json.loads(snapshot_str)
-                    ind = snap.get('indicators', {})
-                    if ind:
-                        add_info = []
-                        score = t.get('strategy_score')
-                        if score and float(score) > 0: add_info.append(f"점수:{score}")
-                        
-                        rsi = ind.get('rsi')
-                        if rsi is not None: add_info.append(f"RSI:{rsi:.1f}")
-                        adx = ind.get('adx')
-                        if adx is not None: add_info.append(f"ADX:{adx:.1f}")
-                        cci = ind.get('cci')
-                        if cci is not None: add_info.append(f"CCI:{cci:.1f}")
-                            
-                        if add_info: reason_display += f" [{', '.join(add_info)}]"
-                        
-                        # [추가] ATR 정보 표시
-                        atr = ind.get('atr')
-                        if atr and float(atr) > 0:
-                            try:
-                                price = float(t.get('price', 0))
-                                if price > 0:
-                                    annual_vol = (float(atr) / price) * math.sqrt(252) * 100
-                                    reason_display += f" [ATR:{int(float(atr)):,}/변동성:{annual_vol:.1f}%]"
-                            except: pass
-                        
-                        sl_rate = t.get('stop_loss_rate')
-                        if sl_rate and float(sl_rate) != 0:
-                            reason_display += f" [ATR손절:{float(sl_rate):.2f}%]"
-                except: pass
 
             table.add_row(
                 t['time'][5:], # MM-DD HH:MM:SS
                 t['odno'],
                 type_str,
                 status_str,
-                f"{t['name']}\n({t['code']})",
+                f"{t['name']}({t['code']})",
                 f"{int(float(t['qty'])):,}",
                 price_display,
                 total_amt_display,
