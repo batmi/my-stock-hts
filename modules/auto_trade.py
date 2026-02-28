@@ -1402,12 +1402,14 @@ class AutoTrader:
         if refined_records:
             refined_records.sort(key=lambda x: x['time'])
             
+        msg = "📊 [시스템 트레이딩 성과 리포트]\n"
+
         if not refined_records:
-            return f"📭 매매 기록이 없습니다.\n기간: {period_msg}"
+            msg += f"기간: {period_msg}\n\n"
+            msg += "매매 기록이 없습니다."
+            return msg
             
         stats = self._calculate_statistics(refined_records)
-        
-        msg = "📊 [시스템 트레이딩 성과 리포트]\n"
         
         # [추가] 기간 정보
         if refined_records:
