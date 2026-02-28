@@ -4,6 +4,7 @@ from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import json
 import time
 from datetime import datetime
@@ -63,7 +64,13 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     # 1. 국내 잔고 조회
     # ---------------------------
     if not is_overseas:
-        with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]국내 잔고 조회 중...[/]", total=None)
             holdings, _ = account.fetch_domestic_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = int(item.get('hldg_qty', 0))
@@ -90,7 +97,13 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     # 2. 해외 잔고 조회
     # ---------------------------
     else:
-        with config.console.status("[bold green]해외 잔고 조회 중...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]해외 잔고 조회 중...[/]", total=None)
             holdings = account.fetch_overseas_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
@@ -208,7 +221,15 @@ def show_open_orders():
 
     selectable_orders = []
 
-    with config.console.status("[bold green]전체 계좌 미체결 내역 조회 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]전체 계좌 미체결 내역 조회 중...[/]", total=len(accounts))
         table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No", justify="right")
         table.add_column("계좌번호", justify="center")
@@ -302,6 +323,8 @@ def show_open_orders():
 
                     table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
                     idx += 1
+            
+            progress.advance(task)
 
     if not selectable_orders:
         config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
@@ -577,7 +600,10 @@ def send_order(order_type):
         logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
         try:
-            result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
+            result = None
+            # [수정] 단일 API 호출이므로 status 사용
+            with config.console.status("[bold green]주문 전송 중...[/]"):
+                result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
             
             if result['rt_cd'] == '0':
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
@@ -794,7 +820,10 @@ def modify_order():
     # 컨텍스트 적용 (선택된 주문의 계좌 사용)
     with utils.AccountContext(target_cano):
         try:
-            res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
+            res_json = None
+            # [수정] 단일 API 호출이므로 status 사용
+            with config.console.status(f"[bold green]주문 {action_name} 요청 전송 중...[/]"):
+                res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
             
             if res_json['rt_cd'] == '0':
                 odno = res_json.get('output', {}).get('ODNO') or res_json.get('output', {}).get('KRX_FWDG_ORD_ORGNO')

@@ -4,6 +4,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from rich.prompt import Prompt
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from datetime import datetime, timedelta
 import os
 import time
@@ -87,66 +88,77 @@ def sync_today_trades():
     total_count = 0
     original_context = getattr(config.trade_context, 'use_auto_account', False)
     
-    try:
-        for acc in accounts:
-            cano = acc['cano']
-            acnt = acc['acnt']
-            
-            try:
-                data = api.get_today_history(cano, acnt)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]최신 체결 내역 동기화 중...[/]", total=len(accounts))
+        
+        try:
+            for acc in accounts:
+                cano = acc['cano']
+                acnt = acc['acnt']
                 
-                if data.get('rt_cd') == '0':
-                    trades = data.get('output1', [])
-                    for item in trades:
-                        odno = item.get('odno')
-                        avg_price = float(item.get('avg_prvs', 0))
-                        tot_qty = int(item.get('tot_ccld_qty', 0))
-                        
-                        if odno and avg_price > 0:
-                            # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
-                            if not db_manager.db.check_trade_exists(odno, "체결"):
-                                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                    logger.debug(f"[Account] 신규 체결 DB 저장 시도: {odno}")
-                                
-                                # 체결 시간 포맷팅
-                                ord_dt = item.get('ord_dt', '')
-                                ord_tmd = item.get('ord_tmd', '')
-                                trade_time = None
-                                if len(ord_dt) == 8 and len(ord_tmd) == 6:
-                                    trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
-                                
-                                type_cd = item.get('sll_buy_dvsn_cd')
-                                type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
-                                
-                                # 원 주문 유형 조회 (수동/자동 태그 반영)
-                                origin_trade = db_manager.db.get_trade_by_odno(odno)
-                                profit_amt = 0
-                                profit_rate = 0.0
-                                score = 0
-                                
-                                if origin_trade:
-                                    type_str = origin_trade['type'] # 기존 타입 유지
-                                    profit_amt = origin_trade.get('profit_amt', 0)
-                                    profit_rate = origin_trade.get('profit_rate', 0.0)
-                                    score = origin_trade.get('strategy_score', 0)
-                                
-                                db_manager.db.insert_trade(
-                                    type_str, item.get('pdno'), item.get('prdt_name'), 
-                                    tot_qty, avg_price, odno, 
-                                    order_status="체결", custom_time=trade_time,
-                                    reason="체결 확인",
-                                    profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score
-                                )
-                                # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
-                                db_manager.db.update_trade(odno, price=avg_price)
-                                
-                                total_count += 1
-                            else:
-                                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                    logger.debug(f"[Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})")
-            except: pass
-    finally:
-        config.trade_context.use_auto_account = original_context
+                try:
+                    data = api.get_today_history(cano, acnt)
+                    
+                    if data.get('rt_cd') == '0':
+                        trades = data.get('output1', [])
+                        for item in trades:
+                            odno = item.get('odno')
+                            avg_price = float(item.get('avg_prvs', 0))
+                            tot_qty = int(item.get('tot_ccld_qty', 0))
+                            
+                            if odno and avg_price > 0:
+                                # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
+                                if not db_manager.db.check_trade_exists(odno, "체결"):
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[Account] 신규 체결 DB 저장 시도: {odno}")
+                                    
+                                    # 체결 시간 포맷팅
+                                    ord_dt = item.get('ord_dt', '')
+                                    ord_tmd = item.get('ord_tmd', '')
+                                    trade_time = None
+                                    if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                                        trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                                    
+                                    type_cd = item.get('sll_buy_dvsn_cd')
+                                    type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
+                                    
+                                    # 원 주문 유형 조회 (수동/자동 태그 반영)
+                                    origin_trade = db_manager.db.get_trade_by_odno(odno)
+                                    profit_amt = 0
+                                    profit_rate = 0.0
+                                    score = 0
+                                    
+                                    if origin_trade:
+                                        type_str = origin_trade['type'] # 기존 타입 유지
+                                        profit_amt = origin_trade.get('profit_amt', 0)
+                                        profit_rate = origin_trade.get('profit_rate', 0.0)
+                                        score = origin_trade.get('strategy_score', 0)
+                                    
+                                    db_manager.db.insert_trade(
+                                        type_str, item.get('pdno'), item.get('prdt_name'), 
+                                        tot_qty, avg_price, odno, 
+                                        order_status="체결", custom_time=trade_time,
+                                        reason="체결 확인",
+                                        profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score
+                                    )
+                                    # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
+                                    db_manager.db.update_trade(odno, price=avg_price)
+                                    
+                                    total_count += 1
+                                else:
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})")
+                except: pass
+                progress.advance(task)
+        finally:
+            config.trade_context.use_auto_account = original_context
         
     return total_count
 
@@ -156,7 +168,13 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # [국내 주식 잔고]
     # ---------------------------
     
-    with config.console.status("[bold green]국내 잔고 조회 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[green]국내 잔고 조회 중...[/]", total=None)
         # [수정] api.get_domestic_balance 직접 호출
         raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
         
@@ -264,7 +282,13 @@ def _display_balance_details(cano, acnt_prdt_cd):
     # ---------------------------
     # [해외 주식 잔고]
     # ---------------------------
-    with config.console.status("[bold green]해외 잔고 조회 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[green]해외 잔고 조회 중...[/]", total=None)
         # [수정] api.get_overseas_balance 직접 호출
         all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd)
 
@@ -375,7 +399,7 @@ def get_account_balance():
         config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}-{acnt})[/]")
         _display_balance_details(cano, acnt)
 
-def get_asset_status_data(cano, acnt_prdt_cd):
+def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     """자산 현황 데이터 조회 및 계산 (UI 로직 없음)"""
     summary_data = {
         "withdraw": 0,      "tot_asset": 0,
@@ -389,6 +413,7 @@ def get_asset_status_data(cano, acnt_prdt_cd):
     }
     
     # 1. 금일 데이터 조회
+    if progress: progress.update(task, description="[green]금일 매매 손익 조회 중...[/]")
     try:
         profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
         summary_data['buy_today'] = profit_data['buy_amt']
@@ -404,6 +429,7 @@ def get_asset_status_data(cano, acnt_prdt_cd):
     except: pass
 
     # 2. 국내 주식 잔고 및 자산
+    if progress: progress.update(task, description="[green]국내 주식 잔고 및 평가금 조회 중...[/]")
     try:
         # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
         output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
@@ -433,6 +459,7 @@ def get_asset_status_data(cano, acnt_prdt_cd):
         pass
         
     # [추가] 해외 주식 잔고 합산 (원화 환산)
+    if progress: progress.update(task, description="[green]해외 주식 잔고 및 환산액 계산 중...[/]")
     try:
         ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
         ovrs_buy_usd = 0.0
@@ -468,6 +495,7 @@ def get_asset_status_data(cano, acnt_prdt_cd):
         pass
 
     # 3. 예수금 조회
+    if progress: progress.update(task, description="[green]예수금 조회 및 최종 집계 중...[/]")
     try:
         with utils.AccountContext(cano):
             dep_data = api.get_deposit_balance(cano, acnt_prdt_cd)
@@ -490,8 +518,15 @@ def get_asset_status_data(cano, acnt_prdt_cd):
 def _display_asset_status(cano, acnt_prdt_cd):
     """특정 계좌의 자산 현황 출력 (UI)"""
     
-    with config.console.status("[bold green]자산 현황 조회 및 분석 중...[/]"):
-        summary_data = get_asset_status_data(cano, acnt_prdt_cd)
+    summary_data = None
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]자산 현황 조회 시작...[/]", total=None)
+        summary_data = get_asset_status_data(cano, acnt_prdt_cd, progress, task)
         time.sleep(0.5) # UX Pacing
 
     display_tot_deposit = summary_data['dep_dom'] + summary_data['dep_ovs']
@@ -678,20 +713,35 @@ def export_trade_history_to_excel():
         
         # 엑셀 저장
         try:
-            with config.console.status(f"[bold green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=config.console,
+                transient=True
+            ) as progress:
+                task = progress.add_task(f"[green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]", total=None)
+                
                 with pd.ExcelWriter(filename_xlsx, engine='openpyxl') as writer:
                     if '계좌번호' in df.columns:
                         # 계좌번호가 없는 데이터 처리
                         df['계좌번호'] = df['계좌번호'].fillna('기타')
                         
                         # 계좌번호별로 시트 분리 저장
-                        for acc in df['계좌번호'].unique():
+                        accounts = df['계좌번호'].unique()
+                        progress.update(task, total=len(accounts))
+                        
+                        for acc in accounts:
                             # 시트 이름 정제 (특수문자 제거 및 길이 제한 31자)
                             sheet_name = str(acc).replace(':', '').replace('\\', '').replace('/', '').replace('?', '').replace('*', '').replace('[', '').replace(']', '')[:31]
                             if not sheet_name: sheet_name = "Unknown"
                             df[df['계좌번호'] == acc].to_excel(writer, sheet_name=sheet_name, index=False)
+                            progress.advance(task)
                     else:
+                        progress.update(task, total=1)
                         df.to_excel(writer, sheet_name='전체내역', index=False)
+                        progress.advance(task)
 
             config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_xlsx)}[/bold green]")
             config.console.print("[dim]  - 탭 구분: 계좌번호[/dim]")
@@ -725,8 +775,7 @@ def view_trade_history():
     if choice.lower() == 'q': return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
-    with config.console.status("[bold green]최신 체결 내역 동기화 중...[/]"):
-        sync_today_trades()
+    sync_today_trades()
 
     trades = []
     if choice == "1":

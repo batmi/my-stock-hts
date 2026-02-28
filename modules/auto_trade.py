@@ -10,6 +10,7 @@ from rich.prompt import Prompt
 from rich.markup import escape
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import config
 import api
 import utils
@@ -650,7 +651,14 @@ class AutoTrader:
         deposit = 0
         asset_check_failed = False # [추가] 자산 조회 실패 여부 플래그
 
-        with console.status("[bold green]시스템 시작 준비 중 (자산 조회 및 스레드 시작)...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[green]시스템 시작 준비 중...[/]", total=None)
+            
             self.is_running = True
             self.start_time = datetime.now()
             self.consecutive_errors = 0
@@ -666,6 +674,7 @@ class AutoTrader:
                 
                 try:
                     # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도(MAX_RETRIES) 활용
+                    progress.update(task, description="[green]자산 및 잔고 조회 중...[/]")
                     # 1. 잔고 및 평가금 조회
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                     
@@ -717,6 +726,7 @@ class AutoTrader:
             # [추가] API 모듈에서 로그를 남길 수 있도록 연결
             config.SYSTEM_LOGGER = self.log
             
+            progress.update(task, description="[green]트레이딩 스레드 시작 중...[/]")
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
 
@@ -798,7 +808,13 @@ class AutoTrader:
                 self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
 
         if use_status:
-            with console.status("[bold red]시스템 중단 요청 처리 중...[/]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True
+            ) as progress:
+                progress.add_task("[red]시스템 중단 요청 처리 중...[/]", total=None)
                 _stop_logic()
         else:
             _stop_logic()
@@ -1009,9 +1025,18 @@ class AutoTrader:
         # [추가] 상태 조회 시에도 시스템 트레이딩 컨텍스트 사용
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
-            with console.status("[bold green]트레이딩 상태 및 자산 정보 조회 중...[/]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("[green]트레이딩 상태 및 자산 정보 조회 중...[/]", total=None)
+                
+                progress.update(task, description="[green]총 추정 자산 계산 중...[/]")
                 current_asset = self._get_total_estimated_asset()
                 
+                progress.update(task, description="[green]보유 종목 및 잔고 조회 중...[/]")
                 # [추가] 보유 종목 확인
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 try:
@@ -1020,6 +1045,7 @@ class AutoTrader:
                     holdings = []
                     summary = []
                 
+                progress.update(task, description="[green]예수금 정보 확인 중...[/]")
                 # 예수금 별도 조회 (매수 여력 확인용)
                 try:
                     if summary and len(summary) > 0:
@@ -1044,6 +1070,7 @@ class AutoTrader:
                         need_update = True
                     
                     if need_update:
+                        progress.update(task, description="[green]시장 지수(KOSPI/KOSDAQ) 상태 업데이트 중...[/]")
                         self._update_market_indices_status()
 
         console.print()
@@ -1264,7 +1291,13 @@ class AutoTrader:
         self._print_stock_details()
 
     def _load_trade_records(self):
-        with console.status("[bold green]DB에서 매매 내역 조회 및 분석 중...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]DB에서 매매 내역 조회 및 분석 중...[/]", total=None)
             time.sleep(0.5)
             
             # [수정] DB에서 매매 내역 조회 (수동 매매 포함을 위해 is_auto 필터 제거)
@@ -1649,7 +1682,13 @@ class AutoTrader:
         console.print(f"\n[bold cyan]=== 실시간 로그 모니터링 ({filename}) ===[/bold cyan]")
         console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
 
-        with console.status("[bold green]로그 파일 로딩 중...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]로그 파일 로딩 중...[/]", total=None)
             time.sleep(0.5)
 
         f = None
@@ -2858,7 +2897,11 @@ def _input_and_save_rule(code, name):
     
     # [추가] 현재가 조회 (예상 가격 계산용)
     is_overseas = not (code.isdigit() and len(code) == 6)
-    current_price = api.get_current_price(code, is_overseas)
+    current_price = 0
+    # [수정] 단순 조회이므로 status 사용
+    with console.status("[bold green]현재가 조회 중...[/]"):
+        current_price = api.get_current_price(code, is_overseas)
+
     if current_price > 0:
         p_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
         console.print(f"[dim]현재가: {p_fmt} (기준)[/dim]")
@@ -3064,7 +3107,17 @@ def _view_restricted_stocks():
     table.add_column("CCI", justify="right")
     table.add_column("등록일", justify="center", style="dim")
 
-    with console.status("[bold green]데이터 조회 및 지표 계산 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(data))
+
         for code, info in data.items():
             name = info.get('name', code)
             memo = info.get('memo', '')
@@ -3162,6 +3215,7 @@ def _view_restricted_stocks():
                     else: cci_str = f"[blue]{cci_str}[/]"
             
             table.add_row(f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+            progress.advance(task)
 
     console.print(table)
 
@@ -3213,7 +3267,17 @@ def _remove_restricted_stock():
 
     codes = list(data.keys())
     
-    with console.status("[bold green]데이터 조회 및 지표 계산 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(codes))
+
         for i, code in enumerate(codes):
             info = data[code]
             name = info.get('name', code)
@@ -3312,6 +3376,7 @@ def _remove_restricted_stock():
                     else: cci_str = f"[blue]{cci_str}[/]"
             
             table.add_row(str(i+1), f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+            progress.advance(task)
         
     console.print(table)
     console.print()

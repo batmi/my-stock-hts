@@ -289,14 +289,23 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
-    with config.console.status(f"[bold green]{name}({code}) 데이터 분석 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task(f"[green]{name}({code}) 데이터 분석 중...[/]", total=None)
+
         # 1. 데이터 조회 (실시간 시세 반영된 일봉)
+        progress.update(task, description=f"[green]{name}({code}) 차트 데이터 조회 중...[/]")
         df = api.get_chart_data(code, is_overseas=is_overseas)
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
 
         # 2. 지표 계산
+        progress.update(task, description="[green]기술적 지표 계산 및 상태 분류 중...[/]")
         ind = indicators.calculate_indicators(df)
         
         # 전일 RSI 계산
@@ -321,10 +330,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
         )
 
-    # [추가] 체결강도 조회 (국내주식인 경우만)
-    vol_strength = None
-    if not is_overseas:
-        vol_strength = api.get_realtime_vol_strength(code)
+        # [추가] 체결강도 조회 (국내주식인 경우만)
+        vol_strength = None
+        if not is_overseas:
+            progress.update(task, description="[green]실시간 체결강도 조회 중...[/]")
+            vol_strength = api.get_realtime_vol_strength(code)
 
     # 4. 결과 출력
     config.console.print()
@@ -774,13 +784,31 @@ def _get_master_stock_list(market_type):
                 
                 urllib.request.urlretrieve(url, zip_path, reporthook=report_hook)
 
-            with config.console.status(f"[green]{market_type} 데이터 압축 해제 중...[/]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task(f"[green]{market_type} 데이터 압축 해제 중...[/]", total=None)
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(base_dir)
+        
+        # [수정] 파일 파싱 시 Progress Bar 적용 (파일 크기 기준)
+        file_size = os.path.getsize(extract_path)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(f"[green]{market_type} 종목 리스트 파싱 중...[/]", total=file_size)
             
-        with config.console.status(f"[green]{market_type} 종목 리스트 로딩 및 파싱 중...[/]"):
             with open(extract_path, 'rb') as f:
                 for line in f:
+                    progress.advance(task, advance=len(line))
                     try:
                         code = line[0:9].decode('cp949').strip()
                         name = line[21:61].decode('cp949').strip()
@@ -1039,7 +1067,16 @@ def analyze_market_stocks(market_type):
         need_sector_fetch = True
         
     if need_sector_fetch:
-        with config.console.status("[bold green]선별된 종목의 업종 정보를 조회 중...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[green]선별된 종목의 업종 정보를 조회 중...[/]", total=len(buy_candidates))
+            
             # 병렬 처리로 업종 정보 조회
             def fetch_sector(item):
                 try:
@@ -1053,6 +1090,7 @@ def analyze_market_stocks(market_type):
                 future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
                 for future in concurrent.futures.as_completed(future_to_idx):
                     buy_candidates[future_to_idx[future]]['sector'] = future.result()
+                    progress.advance(task)
         
         # 새로 분석했거나 sector 정보가 추가된 경우 DB 저장
         if not use_cache:
@@ -1325,7 +1363,16 @@ def save_all_market_analysis():
             config.console.print("\n[red]저장할 데이터가 없습니다. (마스터 파일 오류 또는 분석 실패)[/red]")
             return
 
-        with config.console.status(f"[bold green]엑셀 파일 저장 중... ({filename})[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(f"[green]엑셀 파일 저장 중... ({os.path.basename(filename)})[/]", total=len(results))
+            
             with pd.ExcelWriter(filename, engine='openpyxl') as writer:
                 for market_type, data in results.items():
                     if data:
@@ -1356,6 +1403,8 @@ def save_all_market_analysis():
                                 elif val == "주의": cell.font = Font(color="DAA520", bold=True)
                                 elif val == "매도": cell.font = Font(color="0000FF", bold=True)
                         except ValueError: pass
+                    
+                    progress.advance(task)
         
         config.console.print(f"\n[bold green]저장 완료: {filename}[/bold green]")
         
@@ -1787,8 +1836,11 @@ def _print_period_price_20(code, is_overseas):
         if val >= 1_000: return f"{val/1_000:,.0f}K"
         return f"{val:,.0f}"
 
-    # [수정] 통합 로직: api.get_chart_data 사용 (120일선 계산을 위해 충분한 데이터 확보)
-    df = api.get_chart_data(code, is_overseas)
+    # [수정] 단순 조회이므로 status 사용
+    df = None
+    with config.console.status("[bold green]기간별 시세 데이터 조회 중...[/]"):
+        df = api.get_chart_data(code, is_overseas)
+
     if df is None or df.empty: return
 
     # 이동평균선 계산
