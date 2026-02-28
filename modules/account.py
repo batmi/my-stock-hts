@@ -884,6 +884,21 @@ def view_trade_history():
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
+            
+            # 사용자 수동 주문인 경우 스냅샷에서 지표 정보 추출하여 표시
+            if "수동" in reason_display and t.get('snapshot'):
+                try:
+                    snap_data = json.loads(t['snapshot'])
+                    if 'indicators' in snap_data:
+                        ind = snap_data['indicators']
+                        add_info = []
+                        if ind.get('rsi') is not None: add_info.append(f"RSI:{ind['rsi']:.1f}")
+                        if ind.get('adx') is not None: add_info.append(f"ADX:{ind['adx']:.1f}")
+                        if ind.get('cci') is not None: add_info.append(f"CCI:{ind['cci']:.1f}")
+                        if add_info:
+                            reason_display += f" [{', '.join(add_info)}]"
+                except: pass
+
             # [수정] 사유 내 강제 줄바꿈 제거 (2줄 내 유동적 출력 지원)
             reason_display = reason_display.replace('\n', ' ')
 
