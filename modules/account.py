@@ -884,6 +884,8 @@ def view_trade_history():
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
+            # [수정] 사유 내 강제 줄바꿈 제거 (2줄 내 유동적 출력 지원)
+            reason_display = reason_display.replace('\n', ' ')
             snapshot_str = t.get('snapshot')
             
             # 사유에 이미 상세 정보(RSI 등)가 포함되지 않은 경우에만 스냅샷 데이터 추가
@@ -903,7 +905,7 @@ def view_trade_history():
                         cci = ind.get('cci')
                         if cci is not None: add_info.append(f"CCI:{cci:.1f}")
                             
-                        if add_info: reason_display += f"\n[{', '.join(add_info)}]"
+                        if add_info: reason_display += f" [{', '.join(add_info)}]"
                         
                         # [추가] ATR 정보 표시
                         atr = ind.get('atr')
@@ -912,7 +914,7 @@ def view_trade_history():
                                 price = float(t.get('price', 0))
                                 if price > 0:
                                     annual_vol = (float(atr) / price) * math.sqrt(252) * 100
-                                    reason_display += f"\n[ATR:{int(float(atr)):,}/변동성:{annual_vol:.1f}%]"
+                                    reason_display += f" [ATR:{int(float(atr)):,}/변동성:{annual_vol:.1f}%]"
                             except: pass
                         
                         sl_rate = t.get('stop_loss_rate')

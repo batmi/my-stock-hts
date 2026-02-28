@@ -2583,12 +2583,12 @@ class AutoTrader:
             cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
             vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') else "-"
             
-            # [수정] 사유 포맷 변경 (줄바꿈 적용)
+            # [수정] 사유 포맷 변경 (줄바꿈 제거)
             reason = "조건 만족"
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
             
-            reason += f"\n[점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
+            reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
             
             atr_msg = ""
             if atr_val > 0 and price_val > 0:
@@ -2600,9 +2600,9 @@ class AutoTrader:
                 atr_msg += f"[ATR손절:{sl_rate:.2f}%]"
             
             if atr_msg:
-                reason += f"\n{atr_msg}"
+                reason += f" {atr_msg}"
 
-            self.log(f"매수 실행: {cand['name']} - {reason.replace(chr(10), ' ')}")
+            self.log(f"매수 실행: {cand['name']} - {reason}")
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
             if odno: 
