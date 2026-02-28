@@ -803,16 +803,16 @@ def view_trade_history():
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
         table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("시간", justify="center", style="dim", width=15)
-        table.add_column("주문번호", justify="center", style="dim", no_wrap=True)
+        table.add_column("주문번호", justify="center", style="dim")
         # 계좌 컬럼 제거됨
-        table.add_column("유형", justify="center", no_wrap=True)
+        table.add_column("유형", justify="center")
         table.add_column("상태", justify="center", width=6)
-        table.add_column("종목명(코드)", justify="left", no_wrap=True)
+        table.add_column("종목명(코드)", justify="left")
         table.add_column("수량", justify="right", width=8)
-        table.add_column("단가", justify="right", no_wrap=True)
-        table.add_column("금액", justify="right", no_wrap=True)
-        table.add_column("손익(수익률)", justify="right", no_wrap=True)
-        table.add_column("사유", justify="left", no_wrap=True, width=55, overflow="ellipsis")
+        table.add_column("단가", justify="right")
+        table.add_column("금액", justify="right")
+        table.add_column("손익(수익률)", justify="right")
+        table.add_column("사유", justify="left")
 
         for i, t in enumerate(t_list):
             type_str = t['type']
@@ -890,13 +890,15 @@ def view_trade_history():
                         add_info = []
                         score = t.get('strategy_score')
                         if score and float(score) > 0: add_info.append(f"점수:{score}")
+                        
                         rsi = ind.get('rsi')
                         if rsi is not None: add_info.append(f"RSI:{rsi:.1f}")
                         adx = ind.get('adx')
                         if adx is not None: add_info.append(f"ADX:{adx:.1f}")
                         cci = ind.get('cci')
                         if cci is not None: add_info.append(f"CCI:{cci:.1f}")
-                        if add_info: reason_display += f" [{', '.join(add_info)}]"
+                            
+                        if add_info: reason_display += f"\n[{', '.join(add_info)}]"
                 except: pass
 
             table.add_row(
