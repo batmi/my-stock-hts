@@ -458,11 +458,11 @@ def show_market_indices():
                     table.add_row(display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str)
                     progress.advance(task)
 
-            except Exception as e:
-                if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
-                    config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
-                table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
-                progress.advance(task)
+                except Exception as e:
+                    if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
+                        config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
+                    table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                    progress.advance(task)
         
         # 테이블 출력 (Progress Context 밖에서 실행)
         try:
