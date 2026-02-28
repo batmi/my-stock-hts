@@ -11,6 +11,7 @@ import config
 import api
 import utils
 from modules import account
+import indicators # [추가] ATR 계산을 위해 추가
 from modules import db_manager
 from modules import analysis
 from modules import auto_trade # [추가] 체결 감시자 호출용
@@ -495,12 +496,71 @@ def send_order(order_type):
         market_label = "해외" if is_overseas else "국내"
         excd_info = f" (거래소: {excd})" if is_overseas else ""
         
+        # [추가] 예상 손절가 계산 (매수 시)
+        sl_msg = ""
+        stop_loss_rate_to_save = 0.0 # [추가] DB 저장용 변수
+        
+        # [추가] 지표 정보 저장을 위한 변수
+        calculated_score = 0
+        indicator_info = {}
+
+        if order_type == 'buy' and calc_price > 0:
+            try:
+                # 기본 손절률
+                sl_rate = config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)
+                
+                # 개별 룰 확인
+                custom_rule = db_manager.db.get_stock_strategy(stock_code)
+                if custom_rule:
+                    sl_rate = custom_rule.get('stop_loss', sl_rate)
+                
+                final_sl_rate = sl_rate
+                label = "고정"
+
+                # [수정] 차트 데이터 조회 및 지표 계산 (ATR 사용 여부와 무관하게 수행)
+                df = api.get_chart_data(stock_code, is_overseas)
+                if df is not None and not df.empty:
+                    ind = indicators.calculate_indicators(df)
+                    indicator_info = ind
+                    
+                    # 점수 계산
+                    current_price_val = float(df.iloc[-1]['close'])
+                    score, _ = analysis.calculate_score(
+                        current_price_val, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                        ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                    )
+                    calculated_score = score
+
+                    # [추가] ATR 손절 적용 (수동 매수 시에도 계산)
+                    if config.SELL_STRATEGY.get("USE_ATR_STOP", False):
+                        atr = ind.get('atr')
+                        if atr and atr > 0:
+                            atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+                            # ATR 손절률 = -(ATR * Multiplier / Price) * 100
+                            atr_sl_rate = -((atr * atr_mult) / calc_price) * 100
+                            
+                            final_sl_rate = atr_sl_rate
+                            label = "ATR"
+                            stop_loss_rate_to_save = final_sl_rate
+
+                # 예상 손절가 (주문 단가 기준)
+                sl_price = calc_price * (1 + final_sl_rate / 100)
+                
+                if is_overseas:
+                    sl_p_str = f"${sl_price:,.2f}"
+                else:
+                    sl_p_str = f"{int(sl_price):,}원"
+                    
+                sl_msg = f"\n 예상 손절: [bold blue]{sl_p_str}[/bold blue] ({final_sl_rate:.2f}%, {label})"
+            except: pass
+
         confirm_msg = (
             f"\n[bold white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
             f" 종목: [bold]{stock_name} ({stock_code})[/bold]{excd_info}\n"
             f" 수량: [bold]{qty}주[/bold]\n"
             f" 단가: [bold]{display_price}[/bold]\n"
-            f" 총액: [bold]{amt_str}[/bold]\n"
+            f" 총액: [bold]{amt_str}[/bold]"
+            f"{sl_msg}\n"
         )
         config.console.print(Panel(confirm_msg, expand=False, width=60))
         
@@ -525,7 +585,17 @@ def send_order(order_type):
                 
                 # 텔레그램 알림
                 t_type = "매수" if order_type == 'buy' else "매도"
-                api.send_telegram_message(f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}")
+                msg = f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}"
+                
+                if order_type == 'buy':
+                    if calculated_score > 0:
+                        rsi_str = f"{indicator_info.get('rsi', 0):.1f}" if indicator_info.get('rsi') is not None else "-"
+                        msg += f"\n📊 [지표] 점수:{calculated_score}점 / RSI:{rsi_str}"
+
+                    if stop_loss_rate_to_save != 0.0:
+                        msg += f"\n📉 [ATR 손절] {stop_loss_rate_to_save:.2f}% 설정 (ATR손절 적용)"
+                
+                api.send_telegram_message(msg)
                 
                 # DB 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
@@ -545,7 +615,7 @@ def send_order(order_type):
                             profit_rate = ((calc_price - buy_price) / buy_price) * 100
                     except: pass
 
-                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate)
+                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score)
                 
                 # 매도 시 트레일링 스탑 초기화
                 if order_type == 'sell':

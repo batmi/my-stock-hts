@@ -2216,7 +2216,7 @@ class AutoTrader:
                 
                 # [추가] ATR 손절 적용 시 사유에 표시
                 if applied_sl_rate is not None and "손절" in reason:
-                    reason += " (ATR손절)"
+                    reason = reason.replace("손절", "ATR손절")
                 
                 # [추가] 매도 체결 확률을 높이기 위해 -1호가 적용
                 tick_size = self._get_tick_size(current_price)

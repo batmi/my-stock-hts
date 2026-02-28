@@ -296,9 +296,16 @@ def show_help():
     take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+    atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
 
     score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
-    score_table.add_row("매도 (손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (Stop Loss)")
+    score_table.add_row("매도 (고정손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
+    
+    atr_desc = "변동성 기반 동적 손절"
+    if not use_atr:
+        atr_desc += " [dim](현재 미사용)[/dim]"
+    score_table.add_row("매도 (ATR손절)", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", atr_desc)
     score_table.add_row("매도 (트레일링)", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
     score_table.add_row("매도 (과열)", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 (추세이탈)", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
