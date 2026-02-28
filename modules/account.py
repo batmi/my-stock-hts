@@ -801,18 +801,18 @@ def view_trade_history():
 
         # 테이블 생성 (제목에 계좌번호 포함)
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
-        table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
-        table.add_column("시간", justify="center", style="dim", width=15)
-        table.add_column("주문번호", justify="center", style="dim")
+        table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim", show_lines=True)
+        table.add_column("시간", justify="center", style="dim", width=12, overflow="fold")
+        table.add_column("주문번호", justify="center", style="dim", width=10, overflow="fold")
         # 계좌 컬럼 제거됨
-        table.add_column("유형", justify="center", no_wrap=True)
-        table.add_column("상태", justify="center", width=6)
-        table.add_column("종목명(코드)", justify="left", no_wrap=True)
-        table.add_column("수량", justify="right", width=8)
-        table.add_column("단가", justify="right")
-        table.add_column("금액", justify="right")
-        table.add_column("손익(수익률)", justify="right", no_wrap=True)
-        table.add_column("사유", justify="left", no_wrap=True, overflow="ellipsis")
+        table.add_column("유형", justify="center", width=10, no_wrap=True)
+        table.add_column("상태", justify="center", width=6, overflow="fold")
+        table.add_column("종목명(코드)", justify="left", overflow="fold")
+        table.add_column("수량", justify="right", width=6, overflow="fold")
+        table.add_column("단가", justify="right", width=9, overflow="fold")
+        table.add_column("금액", justify="right", width=10, overflow="fold")
+        table.add_column("손익(수익률)", justify="right", overflow="fold")
+        table.add_column("사유", justify="left", overflow="fold")
 
         for i, t in enumerate(t_list):
             # [수정] 유형 표기 개선 (줄바꿈 및 색상 적용)
@@ -888,11 +888,11 @@ def view_trade_history():
             reason_display = reason_display.replace('\n', ' ')
 
             table.add_row(
-                t['time'][5:], # MM-DD HH:MM:SS
+                t['time'][5:16], # MM-DD HH:MM
                 t['odno'],
                 type_str,
                 status_str,
-                f"{t['name']}({t['code']})",
+                f"{t['name']}\n({t['code']})",
                 f"{int(float(t['qty'])):,}",
                 price_display,
                 total_amt_display,
