@@ -587,6 +587,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     risk_table.add_row("수익률 표준편차", f"{np.std(returns):.2f}%")
     risk_table.add_row("최악의 경우 (Min Return)", f"[blue]{np.min(returns):+.2f}%[/]")
     risk_table.add_row("VaR (95% 신뢰수준)", f"[magenta]{np.percentile(returns, 5):+.2f}%[/] [dim](하위 5% 수익률)[/dim]")
+    risk_table.add_section()
+    risk_table.add_row("양호 기준", "[dim]손익비 > 2.0, Sharpe > 0.7, MDD < -10%, VaR < -1%[/dim]")
     config.console.print(risk_table)
     
     # [추가] 텍스트 히스토그램 및 이미지 차트 생성
