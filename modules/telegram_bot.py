@@ -215,12 +215,24 @@ class TelegramCommander:
         msg = f"🔧 [개별 종목 룰 ({len(filtered_rules)}개)]\n"
         for r in filtered_rules:
             memo_part = f"   메모: {r.get('memo', '')}\n" if r.get('memo') else ""
+            
+            # [추가] 가중치 표시
+            w_str = "기본"
+            if r.get('weights'):
+                try:
+                    w = r['weights']
+                    if isinstance(w, str): w = json.loads(w)
+                    if isinstance(w, dict):
+                        w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+                except: pass
+
             msg += (f"\n• {r['name']}({r['code']})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']} / 체결 {r.get('buy_vol_strength', '기본')}%\n" # [수정]
                     f"   매도: {r['sell_score']}점\n"
                     f"   익절: +{r['take_profit']}% / RSI {r['take_profit_rsi']}\n"
                     f"   손절: {r['stop_loss']}%\n"
                     f"   TS: +{r['ts_activation']}% / -{r['ts_callback']}%\n"
+                    f"   가중치: {w_str}\n"
                     f"{memo_part}")
         return msg
 
@@ -791,6 +803,38 @@ class TelegramCommander:
         msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
         msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
         
+        # [추가] 스코어링 가중치
+        weights = config.SCORING_WEIGHTS
+        msg += f"\n[스코어링 가중치]\n"
+        msg += f"• 추세: {weights.get('TREND', 4.0)}\n"
+        msg += f"• 모멘텀: {weights.get('MOMENTUM', 2.5)}\n"
+        msg += f"• 강도: {weights.get('STRENGTH', 1.5)}\n"
+        msg += f"• 시너지: {weights.get('SYNERGY', 2.0)}\n"
+
+        # [추가] 적응형 임계값
+        regime = config.MARKET_REGIME_PARAMS
+        use_adaptive = "ON" if regime.get('USE_ADAPTIVE_THRESHOLD') else "OFF"
+        msg += f"\n[적응형 임계값 ({use_adaptive})]\n"
+        if regime.get('USE_ADAPTIVE_THRESHOLD'):
+            msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -1.0):+.1f}점\n"
+            msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 1.0):+.1f}점\n"
+            msg += f"• 횡보장 보정: {regime.get('SIDEWAYS_SCORE_ADJ', 0.0):+.1f}점\n"
+            msg += f"• 기준: {regime.get('REGIME_MA_PERIOD', 60)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
+            
+            # [추가] 현재 시장 국면 정보
+            try:
+                k_regime, k_adj = analysis.get_market_regime("KOSPI")
+                q_regime, q_adj = analysis.get_market_regime("KOSDAQ")
+                
+                r_map = {"Bull": "강세장", "Bear": "약세장", "Sideways": "횡보장"}
+                k_str = r_map.get(k_regime, k_regime)
+                q_str = r_map.get(q_regime, q_regime)
+                
+                msg += f"\n[현재 시장 국면]\n"
+                msg += f"• KOSPI: {k_str} (보정 {k_adj:+.1f}점)\n"
+                msg += f"• KOSDAQ: {q_str} (보정 {q_adj:+.1f}점)\n"
+            except Exception: pass
+
         # [추가] 기술적 지표 설정
         ind = config.INDICATOR_PARAMS
         msg += f"\n[기술적 지표]\n"
