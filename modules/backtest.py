@@ -219,12 +219,18 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         invest_amt = min(balance, risk_based_amt)
                         
                     # [추가] 변동성 타겟팅 스케일링 (간이 구현)
-                    # ATR 데이터가 있다면 적용 가능
-                    # if use_vol_target and atr_val > 0:
-                    #     daily_vol = atr_val / buy_price
-                    #     annual_vol = daily_vol * (252 ** 0.5)
-                    #     scale = config.TARGET_VOLATILITY / annual_vol
-                    #     invest_amt = int(invest_amt * scale)
+                    if use_vol_target and atr_val > 0:
+                        daily_vol = atr_val / buy_price
+                        annual_vol = daily_vol * np.sqrt(252)
+                        
+                        target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+                        scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
+                        scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
+                        
+                        if annual_vol > 0:
+                            scale = target_vol / annual_vol
+                            scale = max(scale_min, min(scale_max, scale))
+                            invest_amt = int(invest_amt * scale)
 
                     qty = int(invest_amt / buy_price)
                     

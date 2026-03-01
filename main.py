@@ -320,7 +320,13 @@ def show_help():
     else:
         score_table.add_row("주문 집행", "매수 주문 시", "[dim]미사용[/]", "현재가로 주문 (슬리피지 없음)")
         score_table.add_row("", "매도 주문 시", "[dim]미사용[/]", "현재가로 주문 (슬리피지 없음)")
-    score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
+    
+    use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+    use_risk = getattr(config, 'SYSTEM_RISK_PER_TRADE', 0) > 0
+    if use_vol or use_risk:
+        score_table.add_row("", "자산 배분 (마지막)", "[yellow]비중 조절[/]", "리스크/변동성 한도 내에서 집행")
+    else:
+        score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
     
     config.console.print(score_table)
 

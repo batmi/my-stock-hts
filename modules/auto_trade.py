@@ -2671,10 +2671,18 @@ class AutoTrader:
                 
             # [수정] 자산 배분 로직 개선: 마지막 슬롯인 경우 남은 예수금 전액 투자
             remaining_slots = max_holdings - current_holdings_count
+            
+            # 1. 예산 할당 계산 (변동성 타겟팅 및 리스크 관리 적용)
+            calc_amt = self._allocate_budget(avail_cash, invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
+            
             if remaining_slots == 1:
-                invest_amt = avail_cash
+                # 마지막 종목일 때: 변동성 타겟팅/리스크 관리가 꺼져있다면 잔여 예수금 전액 사용, 켜져 있다면 계산된 금액 준수
+                if not getattr(config, 'USE_VOLATILITY_TARGETING', True) and getattr(config, 'SYSTEM_RISK_PER_TRADE', 0) <= 0:
+                    invest_amt = avail_cash
+                else:
+                    invest_amt = calc_amt
             else:
-                invest_amt = self._allocate_budget(avail_cash, invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
+                invest_amt = calc_amt
 
             # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
             if invest_amt < cand['price']: invest_amt = avail_cash
