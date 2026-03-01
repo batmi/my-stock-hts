@@ -655,7 +655,7 @@ class AutoTrader:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
-            transient=True
+            transient=False
         ) as progress:
             task = progress.add_task("[green]시스템 시작 준비 중...[/]", total=None)
             
@@ -812,7 +812,7 @@ class AutoTrader:
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
-                transient=True
+                transient=False
             ) as progress:
                 progress.add_task("[red]시스템 중단 요청 처리 중...[/]", total=None)
                 _stop_logic()
@@ -1029,7 +1029,7 @@ class AutoTrader:
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 console=console,
-                transient=True
+                transient=False
             ) as progress:
                 task = progress.add_task("[green]트레이딩 상태 및 자산 정보 조회 중...[/]", total=None)
                 
@@ -1317,7 +1317,7 @@ class AutoTrader:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
-            transient=True
+            transient=False
         ) as progress:
             progress.add_task("[green]DB에서 매매 내역 조회 및 분석 중...[/]", total=None)
             time.sleep(0.5)
@@ -1786,7 +1786,7 @@ class AutoTrader:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
-            transient=True
+            transient=False
         ) as progress:
             progress.add_task("[green]로그 파일 로딩 중...[/]", total=None)
             time.sleep(0.5)
@@ -3214,7 +3214,7 @@ def _view_restricted_stocks():
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
         console=console,
-        transient=True
+        transient=False
     ) as progress:
         task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(data))
 
@@ -3374,7 +3374,7 @@ def _remove_restricted_stock():
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
         console=console,
-        transient=True
+        transient=False
     ) as progress:
         task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(codes))
 

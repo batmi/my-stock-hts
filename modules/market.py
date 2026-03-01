@@ -36,7 +36,7 @@ def show_market_indices():
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             console=config.console,
-            transient=True
+            transient=False
         ) as progress:
             # 1. 히스토리 데이터 다운로드
             task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
@@ -115,7 +115,7 @@ def show_market_indices():
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=True
+            transient=False
         ) as progress:
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
@@ -470,9 +470,6 @@ def show_market_indices():
                     table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                     progress.advance(task)
         
-        # [추가] tmux 환경 렌더링 안정화를 위한 대기 (Progress 바 정리 시간 확보)
-        time.sleep(0.5)
-
         # 테이블 출력 (Progress Context 밖에서 실행)
         try:
             config.console.print(table)
