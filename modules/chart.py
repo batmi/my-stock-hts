@@ -11,6 +11,7 @@ from matplotlib.ticker import MaxNLocator
 import config
 import api
 import indicators
+from datetime import datetime
 
 def setup_korean_font():
     current_os = platform.system()
@@ -187,6 +188,47 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
         plt.savefig(file_path, dpi=dpi); plt.close()
         
     config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
+    if open_file:
+        try:
+            if platform.system() == "Windows": os.startfile(file_path)
+            elif platform.system() == "Darwin": os.system(f"open {file_path}")
+            else: os.system(f"xdg-open {file_path}")
+        except: pass
+
+def generate_monte_carlo_histogram(returns, name, code, open_file=True):
+    """Monte Carlo 시뮬레이션 수익률 분포 히스토그램 생성"""
+    setup_korean_font()
+    
+    plt.figure(figsize=(10, 6))
+    # 히스토그램 그리기
+    n, bins, patches = plt.hist(returns, bins=30, color='skyblue', edgecolor='black', alpha=0.7)
+    
+    # 제목 및 레이블
+    plt.title(f"Monte Carlo 시뮬레이션 수익률 분포 (1,000회): {name}", fontsize=14)
+    plt.xlabel("수익률 (%)", fontsize=12)
+    plt.ylabel("빈도수 (Frequency)", fontsize=12)
+    plt.grid(True, alpha=0.3, linestyle='--')
+    
+    # 통계선 표시
+    avg_ret = np.mean(returns)
+    plt.axvline(avg_ret, color='red', linestyle='dashed', linewidth=1.5, label=f'평균: {avg_ret:.2f}%')
+    
+    var_95 = np.percentile(returns, 5)
+    plt.axvline(var_95, color='orange', linestyle='dashed', linewidth=1.5, label=f'VaR(95%): {var_95:.2f}%')
+    
+    plt.legend(loc='upper right')
+    
+    # 파일 저장
+    safe_code = re.sub(r'[=\-\.\^]', '', code)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    file_name = f"mc_dist_{safe_code}_{timestamp}.png"
+    file_path = os.path.join(config.CHART_DIR, file_name)
+    
+    plt.savefig(file_path, dpi=100)
+    plt.close()
+    
+    config.console.print(f"\n[bold green]수익률 분포 히스토그램이 저장되었습니다: {file_name}[/bold green]")
+    
     if open_file:
         try:
             if platform.system() == "Windows": os.startfile(file_path)

@@ -1,15 +1,18 @@
 # modules/backtest.py
 import pandas as pd
 import numpy as np
+import random
 from rich.table import Table
 from rich.prompt import Prompt
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from datetime import datetime, timedelta
 import config
 import api
 import utils
 import indicators
 from modules import analysis
+from modules import chart
 import logging
 
 logger = logging.getLogger(__name__)
@@ -96,7 +99,8 @@ def get_backtest_data(code, is_overseas, days):
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
-                      ts_activation_rate=None, ts_callback_rate=None):
+                      ts_activation_rate=None, ts_callback_rate=None,
+                      execution_noise=False):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
     
     # 시뮬레이션 변수
@@ -132,6 +136,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     use_vol_target = getattr(config, 'USE_VOLATILITY_TARGETING', True)
 
+    # [추가] 현재 적용 중인 손절률 (매수 시 결정됨)
+    current_sl_rate = stop_loss_limit
+
     peak_asset = initial_capital
     mdd = 0.0
     win_trades = 0
@@ -157,6 +164,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         price = row['close']
         high_price = row['high']
         
+        # [추가] 체결 노이즈: 1% 확률로 매매 기회 놓침 (체결 누락/지연 시뮬레이션)
+        if execution_noise and random.random() < 0.01:
+            prev_row = row
+            continue
+
         current_asset = balance + (holdings * price)
         daily_assets.append(current_asset)
         if current_asset > peak_asset: peak_asset = current_asset
@@ -179,17 +191,23 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             
             if is_score_ok:
                 if is_rsi_ok and can_buy_state:
-                    # [수정] 슬리피지 비율 적용 및 호가 정렬
-                    raw_buy_price = price * (1 + config.SLIPPAGE_RATE)
+                    # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
+                    slippage_mult = 1.0
+                    if execution_noise:
+                        # 슬리피지가 0.5배 ~ 1.5배 사이로 변동
+                        slippage_mult = random.uniform(0.5, 1.5)
+
+                    raw_buy_price = price * (1 + (config.SLIPPAGE_RATE * slippage_mult))
                     buy_price = utils.adjust_to_tick(raw_buy_price, is_overseas)
 
-                    # [추가] ATR 기반 동적 손절률 계산
-                    current_sl_rate = stop_loss_limit
-                    atr_val = row.get('ATR', 0) # indicators.py에서 계산된 ATR 컬럼 필요 (현재는 없음)
-                    # indicators.py의 get_atr_full_series 결과를 df에 병합해야 함 (아래 get_backtest_data 수정 필요)
+                    # [수정] ATR 기반 동적 손절률 계산 및 적용
+                    current_sl_rate = stop_loss_limit # 기본값으로 초기화
+                    atr_val = row.get('ATR', 0)
                     
-                    # 임시: ATR 컬럼이 없으면 고정 손절률 사용
-                    # (실제로는 get_backtest_data에서 ATR 계산 후 병합하는 로직이 선행되어야 함)
+                    if use_atr_stop and atr_val > 0:
+                        stop_distance = atr_val * atr_mult
+                        # 손절률(%) = -(손절폭 / 매수가 * 100)
+                        current_sl_rate = -((stop_distance / buy_price) * 100)
                     
                     # [추가] 리스크 기반 포지션 사이징 적용 (백테스팅)
                     invest_amt = balance
@@ -255,7 +273,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             reason = ""
 
             if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
-            elif loss_rate <= stop_loss_limit: sell_signal = True; reason = "손절"
+            elif loss_rate <= current_sl_rate: # [수정] 동적 손절률 사용
+                sell_signal = True
+                if use_atr_stop and current_sl_rate != stop_loss_limit:
+                    reason = "ATR손절"
+                else:
+                    reason = "손절"
             elif ts_highest_price > 0:
                 max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
                 if max_profit_rate >= ts_activation:
@@ -266,8 +289,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if not sell_signal and sell_check_score < sell_score_limit: sell_signal = True; reason = "점수하락"
             
             if sell_signal:
-                # [수정] 슬리피지 비율 적용 및 호가 정렬
-                raw_sell_price = price * (1 - config.SLIPPAGE_RATE)
+                # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
+                slippage_mult = 1.0
+                if execution_noise:
+                    # 슬리피지가 0.5배 ~ 1.5배 사이로 변동
+                    slippage_mult = random.uniform(0.5, 1.5)
+
+                raw_sell_price = price * (1 - (config.SLIPPAGE_RATE * slippage_mult))
                 sell_price = utils.adjust_to_tick(raw_sell_price, is_overseas)
                 if sell_price <= 0: sell_price = utils.adjust_to_tick(price, is_overseas)
 
@@ -334,6 +362,240 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "missed_trades": missed_trades
     }
 
+def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                               stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
+                               name="Unknown", code="Unknown", days=0):
+    """Monte Carlo 시뮬레이션 실행 (1,000회 반복)"""
+    config.console.print("\n[bold magenta]=== Monte Carlo Simulation (1,000 runs) ===[/]")
+    config.console.print("[dim]가격 데이터 노이즈(±1%) 및 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략의 견고성을 검증합니다.[/dim]\n")
+    
+    # 결과 저장용 리스트
+    returns = []
+    mdds = []
+    final_assets = []
+    win_rates = []
+    profit_factors = []
+    sharpe_ratios = []
+    trade_counts = []
+    
+    # [추가] 상세 통계 수집용
+    avg_trade_profits = []
+    avg_trade_losses = []
+    avg_holding_days = []
+    
+    # [추가] 추가 정보 수집
+    win_counts = []
+    loss_counts = []
+    gross_profits = []
+    gross_losses = []
+    missed_cautions = []
+    missed_dangers = []
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[green]시뮬레이션 진행 중...[/]", total=1000)
+        
+        for _ in range(1000):
+            # 1. 데이터 노이즈 주입 (복사본 사용)
+            noisy_df = sim_df.copy()
+            # 정규분포 노이즈 (평균 0, 표준편차 1%)
+            noise = np.random.normal(0, 0.01, len(noisy_df))
+            
+            # 가격 데이터에 노이즈 적용
+            for col in ['close', 'open', 'high', 'low']:
+                if col in noisy_df.columns:
+                    noisy_df[col] = noisy_df[col] * (1 + noise)
+            
+            # 2. 시뮬레이션 실행 (체결 노이즈 ON)
+            res = simulate_strategy(noisy_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas,
+                                    stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                    take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                    execution_noise=True)
+            
+            # 결과 수집
+            returns.append(res['total_return'])
+            mdds.append(res['mdd'])
+            final_assets.append(res['final_asset'])
+            
+            total_trades = len(res['trades'])
+            trade_counts.append(total_trades)
+            
+            # [추가] 추가 정보 수집
+            win_counts.append(res['win_trades'])
+            loss_counts.append(res['loss_trades'])
+            gross_profits.append(res['gross_profit'])
+            gross_losses.append(res['gross_loss'])
+            missed_cautions.append(res.get('missed_caution_count', 0))
+            missed_dangers.append(res.get('missed_danger_count', 0))
+            
+            # [추가] 상세 통계 수집
+            trades = res['trades']
+            actual_sell_trades = [t for t in trades if t['type'].startswith("매도")]
+            if actual_sell_trades:
+                profits = [t['profit'] for t in actual_sell_trades if t['profit'] > 0]
+                losses = [t['profit'] for t in actual_sell_trades if t['profit'] <= 0]
+                if profits: avg_trade_profits.append(sum(profits) / len(profits))
+                if losses: avg_trade_losses.append(sum(losses) / len(losses))
+                holding_days = [t['days'] for t in actual_sell_trades]
+                if holding_days: avg_holding_days.append(sum(holding_days) / len(holding_days))
+            
+            sell_trades = res['win_trades'] + res['loss_trades']
+            wr = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+            win_rates.append(wr)
+            
+            pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+            profit_factors.append(pf)
+            
+            # Sharpe Ratio 계산
+            daily_assets = res['daily_assets']
+            sr = 0.0
+            if len(daily_assets) > 1:
+                s = pd.Series(daily_assets).pct_change().dropna()
+                if not s.empty and s.std() > 0:
+                    sr = (s.mean() / s.std()) * np.sqrt(252)
+            sharpe_ratios.append(sr)
+            
+            progress.advance(task)
+            
+    # 통계 계산 (평균)
+    avg_return = np.mean(returns)
+    avg_mdd = np.mean(mdds)
+    avg_asset = np.mean(final_assets)
+    avg_wr = np.mean(win_rates)
+    avg_pf = np.mean(profit_factors)
+    avg_sr = np.mean(sharpe_ratios)
+    avg_trades = np.mean(trade_counts)
+    
+    # [추가] 상세 통계 평균
+    avg_trade_profit_val = np.mean(avg_trade_profits) if avg_trade_profits else 0.0
+    avg_trade_loss_val = np.mean(avg_trade_losses) if avg_trade_losses else 0.0
+    avg_holding_val = np.mean(avg_holding_days) if avg_holding_days else 0.0
+    
+    # [추가] 추가 통계 평균
+    avg_win_count = np.mean(win_counts)
+    avg_loss_count = np.mean(loss_counts)
+    avg_gross_profit = np.mean(gross_profits)
+    avg_gross_loss = np.mean(gross_losses)
+    avg_missed_caution = np.mean(missed_cautions)
+    avg_missed_danger = np.mean(missed_dangers)
+    
+    # 포맷팅 헬퍼
+    def fmt_money(val):
+        if is_overseas: return f"${val:,.2f}"
+        return f"{int(val):,}원"
+
+    # [추가] 테이블 위 공백 라인
+    config.console.print()
+
+    # 결과 리포트 테이블 출력 (단일 백테스팅과 유사한 형식)
+    summary_table = Table(title=f"Monte Carlo 시뮬레이션 결과: {name}", box=box.HORIZONTALS, show_header=False, border_style="dim")
+    summary_table.add_column("항목", style="cyan", justify="left")
+    summary_table.add_column("값 (평균)", justify="left")
+    
+    start_date_str = str(sim_df.iloc[0]['date'])
+    end_date_str = str(sim_df.iloc[-1]['date'])
+    if len(start_date_str) == 8: start_date_str = f"{start_date_str[:4]}-{start_date_str[4:6]}-{start_date_str[6:]}"
+    if len(end_date_str) == 8: end_date_str = f"{end_date_str[:4]}-{end_date_str[4:6]}-{end_date_str[6:]}"
+    
+    summary_table.add_row("기간", f"{days}일간 ({start_date_str} ~ {end_date_str})")
+    summary_table.add_row("초기 자본금", fmt_money(initial_capital))
+    summary_table.add_row("최종 평가액 (평균)", fmt_money(avg_asset))
+    
+    color = "red" if avg_return > 0 else "blue"
+    summary_table.add_row("누적 수익률 (평균)", f"[{color}]{avg_return:+.2f}%[/]")
+    
+    summary_table.add_section()
+    
+    # [수정] 매매 횟수 상세 표시
+    summary_table.add_row("총 매매 횟수 (평균)", f"{avg_trades:.1f}건 (익절 {avg_win_count:.1f} / 손절 {avg_loss_count:.1f})")
+    
+    # [추가] 매수 보류 표시
+    if avg_missed_caution > 0 or avg_missed_danger > 0:
+        summary_table.add_row("매수 보류 (상태)", f"[yellow]주의 {avg_missed_caution:.1f}회[/] / [blue]매도 {avg_missed_danger:.1f}회[/] (점수 충족했으나 진입 불가)")
+
+    summary_table.add_row("승률 (Win Rate)", f"{avg_wr:.1f}% ({avg_win_count:.1f}승 {avg_loss_count:.1f}패)")
+    
+    # [추가] 상세 분석 정보 출력
+    summary_table.add_row("평균 수익률 (건당)", f"[red]{avg_trade_profit_val:+.2f}%[/]")
+    summary_table.add_row("평균 손실률 (건당)", f"[blue]{avg_trade_loss_val:+.2f}%[/]")
+    
+    structure_msg = "-"
+    if avg_trade_loss_val == 0:
+        structure_msg = "[green]무손실 (완벽한 방어)[/]"
+    else:
+        pl_ratio = abs(avg_trade_profit_val / avg_trade_loss_val)
+        be_win_rate = (1 / (pl_ratio + 1)) * 100
+        if pl_ratio >= 2.0:
+            structure_msg = f"[green]매우 우수 (승률 {be_win_rate:.0f}%만 넘으면 수익)[/]"
+        elif pl_ratio >= 1.5:
+            structure_msg = f"[green]양호 (승률 {be_win_rate:.0f}%만 넘으면 수익)[/]"
+        elif pl_ratio >= 1.0:
+            structure_msg = f"[yellow]보통 (승률 {be_win_rate:.0f}% 이상 필요)[/]"
+        else:
+            structure_msg = f"[red]불리함 (승률 {be_win_rate:.0f}% 이상 필요)[/]"
+            
+    summary_table.add_row("손익 구조 분석", structure_msg)
+    summary_table.add_row("보유 기간", f"평균 {avg_holding_val:.1f}일")
+
+    # 손익비 (Profit Factor) 상세 표시
+    pf_str = "Inf"
+    pf_desc = ""
+    if avg_pf >= 2.0: pf_color = "red"; pf_desc = " (매우 훌륭)"
+    elif avg_pf >= 1.5: pf_color = "orange3"; pf_desc = " (우수)"
+    elif avg_pf >= 1.0: pf_color = "green"; pf_desc = " (평범)"
+    else: pf_color = "blue"; pf_desc = " (손실)"
+    pf_str = f"[{pf_color}]{avg_pf:.2f}[/]"
+    
+    summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 [red]+{fmt_money(avg_gross_profit)}[/] / 총 손실 [blue]-{fmt_money(avg_gross_loss)}[/])")
+    
+    # 샤프 지수 상세 표시
+    sharpe_desc = ""
+    if avg_sr >= 1.0: sr_color = "red"; sharpe_desc = " (매우 우수)"
+    elif avg_sr >= 0.5: sr_color = "green"; sharpe_desc = " (양호)"
+    else: sr_color = "blue"; sharpe_desc = " (미흡)"
+    summary_table.add_row("샤프 지수 (Sharpe)", f"[{sr_color}]{avg_sr:.2f}[/]{sharpe_desc}")
+    
+    # MDD 상세 표시
+    mdd_color = "red"; mdd_desc = " (위험)"
+    if avg_mdd >= -10: mdd_color = "green"; mdd_desc = " (안정)"
+    elif avg_mdd >= -20: mdd_color = "yellow"; mdd_desc = " (보통)"
+    elif avg_mdd >= -30: mdd_color = "orange3"; mdd_desc = " (주의)"
+    summary_table.add_row("최대 낙폭 (MDD)", f"[{mdd_color}]{avg_mdd:.2f}%[/]{mdd_desc}")
+    
+    config.console.print(summary_table)
+    
+    # [추가] 공백 라인
+    config.console.print()
+
+    # 추가 통계 (분포 정보)
+    risk_table = Table(title="리스크 분석 (분포)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    risk_table.add_column("항목", style="cyan"); risk_table.add_column("값", justify="right")
+    risk_table.add_row("수익률 표준편차", f"{np.std(returns):.2f}%")
+    risk_table.add_row("최악의 경우 (Min Return)", f"[blue]{np.min(returns):+.2f}%[/]")
+    risk_table.add_row("VaR (95% 신뢰수준)", f"[magenta]{np.percentile(returns, 5):+.2f}%[/] [dim](하위 5% 수익률)[/dim]")
+    config.console.print(risk_table)
+    
+    # [추가] 텍스트 히스토그램 및 이미지 차트 생성
+    hist, bin_edges = np.histogram(returns, bins=10)
+    max_count = max(hist)
+    
+    config.console.print("\n[bold]수익률 분포 (Text Histogram)[/bold]")
+    for i in range(len(hist)):
+        count = hist[i]
+        if count > 0:
+            bar_len = int((count / max_count) * 50)
+            bar = "█" * bar_len
+            range_str = f"{bin_edges[i]:>6.1f}% ~ {bin_edges[i+1]:>6.1f}%"
+            config.console.print(f"{range_str} : [cyan]{bar}[/] ({count})")
+            
 def run_backtest():
     config.console.print("\n[magenta]=== 전략 백테스팅 (Backtest) ===[/]")
     
@@ -484,6 +746,14 @@ def run_backtest():
 
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
+    # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
+    config.console.print("\n[bold]실행 모드를 선택하세요:[/bold]")
+    config.console.print("[1] 단일 백테스팅 (Single Run)")
+    config.console.print("[2] Monte Carlo 시뮬레이션 (1,000회 반복/노이즈 추가)")
+    mode_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+
+    if mode_choice.lower() == 'q': return
+
     # 3. 데이터 준비
     with config.console.status(f"[green]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
@@ -533,6 +803,12 @@ def run_backtest():
             actual_days = (datetime.strptime(str(sim_df.iloc[-1]['date']), "%Y%m%d") - datetime.strptime(str(sim_df.iloc[0]['date']), "%Y%m%d")).days
             if actual_days < days * 0.9: # 90% 미만일 때만 경고
                 config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
+
+    if mode_choice == "2":
+        run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                                   stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
+                                   name=name, code=code, days=days)
+        return
 
     # === 단일 실행 모드 (기존 로직) ===
     res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
