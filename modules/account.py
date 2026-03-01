@@ -850,7 +850,7 @@ def view_trade_history():
         # 테이블 생성 (제목에 계좌번호 포함)
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
         table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim", show_lines=True)
-        table.add_column("시간", justify="center", style="dim", width=12, overflow="fold")
+        table.add_column("시간", justify="center", style="dim", width=15, overflow="fold")
         table.add_column("주문번호", justify="center", style="dim", width=10, overflow="fold")
         # 계좌 컬럼 제거됨
         table.add_column("유형", justify="center", width=10, no_wrap=True)
@@ -951,7 +951,7 @@ def view_trade_history():
             reason_display = reason_display.replace('\n', ' ')
 
             table.add_row(
-                t['time'][5:16], # MM-DD HH:MM
+                t['time'][5:19], # MM-DD HH:MM:SS
                 t['odno'],
                 type_str,
                 status_str,
