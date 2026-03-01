@@ -1182,6 +1182,7 @@ class AutoTrader:
         
         # [추가] 개별 종목 룰 설정 현황
         custom_rules = db_manager.db.get_all_stock_strategies()
+        custom_rules = _enrich_rules_with_weights(custom_rules) # [Fix] 가중치 JSON 파싱
         rule_table = None
         
         # 보유 종목 코드 집합 생성 (강조 표시용)
@@ -1202,6 +1203,7 @@ class AutoTrader:
             rule_table.add_column("매도(점수/RSI)", justify="center")
             rule_table.add_column("익절/손절", justify="center")
             rule_table.add_column("트레일링", justify="center")
+            rule_table.add_column("가중치", justify="center", style="dim") # [추가]
             rule_table.add_column("수정일", justify="center", style="dim")
             
             for i, r in enumerate(custom_rules):
@@ -1210,12 +1212,18 @@ class AutoTrader:
                 if r['code'] in held_codes:
                     name_disp = f"[bold cyan]{name_disp}[/]"
                 
+                w_str = "기본"
+                if r.get('weights'):
+                    w = r['weights']
+                    w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+
                 rule_table.add_row(
                     name_disp,
                     f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정] 체결강도 표시
                     f"{r['sell_score']}점 / {r['take_profit_rsi']}",
                     f"+{r['take_profit']}% / {r['stop_loss']}%",
                     f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+                    w_str,
                     r.get('updated_at', '-')
                 )
                 if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
@@ -2921,7 +2929,7 @@ class AutoTrader:
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e}")
-                self.market_index_status[market_name] = True
+                self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
 
     def _get_stock_market_type(self, code):
         """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (캐싱 적용)"""
@@ -3091,8 +3099,8 @@ def _view_stock_rules():
     table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
-    table.add_column("가중치(T/M/S/Syn)", justify="center", style="dim") # [추가]
     table.add_column("트레일링", justify="center")
+    table.add_column("가중치(T/M/S/Syn)", justify="center", style="dim") # [이동]
     table.add_column("메모", justify="left", style="dim")
     table.add_column("수정일", justify="center", style="dim")
     
@@ -3107,8 +3115,8 @@ def _view_stock_rules():
             f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
-            w_str,
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            w_str,
             r.get('memo', ''),
             r['updated_at']
         )
@@ -3235,7 +3243,7 @@ def _input_and_save_rule(code, name):
 
             total_score = w_trend + w_mom + w_str + w_syn
             
-            if abs(total_score - 10.0) > 0.1:
+            if abs(total_score - 10.0) > 0.01:
                 console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (합계 10.0점)[/bold red]")
                 console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
                 # 입력한 값으로 임시 가중치 업데이트하여 재입력 시 보여줌
@@ -3312,8 +3320,8 @@ def _modify_stock_rules():
     table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
-    table.add_column("가중치", justify="center", style="dim") # [추가]
     table.add_column("트레일링", justify="center")
+    table.add_column("가중치", justify="center", style="dim") # [이동]
     table.add_column("수정일", justify="center", style="dim")
     
     for i, r in enumerate(custom_rules):
@@ -3328,8 +3336,8 @@ def _modify_stock_rules():
             f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
-            w_str,
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            w_str,
             r['updated_at']
         )
         if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
@@ -3376,8 +3384,25 @@ def _view_restricted_stocks():
         console.print("\n[yellow]거래 제한 종목이 없습니다.[/yellow]")
         return
 
+    # [추가] 적응형 임계값 준비
+    market_regime_adj = {}
+    use_adaptive = False
+    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+        try:
+            with console.status("[dim]시장 국면 분석 중...[/dim]"):
+                _, kospi_adj = analysis.get_market_regime("KOSPI")
+                _, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
+                market_regime_adj["KOSPI"] = kospi_adj
+                market_regime_adj["KOSDAQ"] = kosdaq_adj
+                use_adaptive = True
+        except:
+            use_adaptive = False
+
     console.print()
-    table = Table(title="거래 제한 종목", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    title = "거래 제한 종목"
+    if use_adaptive:
+        title += " [bold magenta](*)[/]"
+    table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
     table.add_column("현재가", justify="right")
     table.add_column("메모", justify="left")
@@ -3434,10 +3459,23 @@ def _view_restricted_stocks():
                     try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                     except: pass
 
+                # [추가] 적응형 임계값 적용
+                thresholds = None
+                if use_adaptive and not is_overseas:
+                    market_type = AutoTrader()._get_stock_market_type(code)
+                    score_adj = market_regime_adj.get(market_type, 0.0)
+                    
+                    if score_adj != 0:
+                        thresholds = {
+                            "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
+                            "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+                            "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+                        }
+
                 # 상태 및 점수 계산
                 state, state_color, _ = analysis.classify_stock_state(
                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
                 )
                 
                 score, _ = analysis.calculate_score(
@@ -3500,6 +3538,9 @@ def _view_restricted_stocks():
             progress.advance(task)
 
     console.print(table)
+    
+    if use_adaptive:
+        console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
 
 def _add_restricted_stock():
     """거래 제한 종목 추가"""

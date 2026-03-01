@@ -2,6 +2,7 @@
 #!/usr/bin/env python3
 import sys
 import time
+import os
 from datetime import datetime
 import threading
 import logging
@@ -13,7 +14,7 @@ import argparse
 import config
 import api
 import utils  
-from modules import market, analysis, chart, account, manage, trading, backtest, settings
+from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot
 
 def show_help():
@@ -646,8 +647,14 @@ def main():
             # [추가] 체결 감시자 및 텔레그램 봇 종료
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
+            
+            # [추가] DB 최적화 및 정리 (강제 종료 전 명시적 실행)
+            try:
+                db_manager.db.run_vacuum()
+            except Exception: pass
 
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
+        os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)
         
 if __name__ == "__main__":
     main()

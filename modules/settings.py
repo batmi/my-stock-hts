@@ -433,35 +433,43 @@ def modify_scoring_weights():
         
         console.print(table)
         
-        console.print("\n[bold]각 항목의 가중치를 순서대로 입력하세요.[/bold]")
-        console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (취소: q)[/dim]")
+        choice = Prompt.ask("\n수정할 여부 선택 [dim](a: 전체, q: 종료)[/dim]", choices=['a', 'q', 'A', 'Q'], default='q')
         
-        new_weights = {}
-        
-        try:
-            for key, label, detail in items_info:
-                current_val = weights[key]
-                # [수정] 입력 프롬프트에 상세 설명 추가
-                prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
-                val = Prompt.ask(prompt_msg, default=str(current_val))
-                if val.lower() == 'q': return
-                new_weights[key] = float(val)
-            
-            new_total = sum(new_weights.values())
-            
-            if abs(new_total - 10.0) > 0.1:
-                console.print(f"\n[bold red]경고: 입력한 값의 합계가 {new_total:.1f}점입니다.[/bold red]")
-                console.print("[yellow]가중치의 합은 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
-                continue
-            
-            config.SCORING_WEIGHTS.update(new_weights)
-            
-            _save_dynamic_config()
-            console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
+        if choice.lower() == 'q':
             break
             
-        except ValueError:
-            console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+        if choice.lower() == 'a':
+            console.print("\n[bold]각 항목의 가중치를 순서대로 입력하세요.[/bold]")
+            console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (취소: q)[/dim]")
+            
+            new_weights = {}
+            
+            try:
+                for key, label, detail in items_info:
+                    current_val = weights[key]
+                    prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
+                    val = Prompt.ask(prompt_msg, default=str(current_val))
+                    if val.lower() == 'q': 
+                        raise ValueError("canceled")
+                    new_weights[key] = float(val)
+                
+                new_total = sum(new_weights.values())
+                
+                if abs(new_total - 10.0) > 0.01:
+                    console.print(f"\n[bold red]경고: 입력한 값의 합계가 {new_total:.1f}점입니다.[/bold red]")
+                    console.print("[yellow]가중치의 합은 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
+                    continue
+                
+                config.SCORING_WEIGHTS.update(new_weights)
+                
+                _save_dynamic_config()
+                console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
+                
+            except ValueError as e:
+                if str(e) == "canceled":
+                    console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
+                else:
+                    console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
 
 def modify_market_regime_params():
     items = [

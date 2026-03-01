@@ -20,7 +20,9 @@ import shutil
 import sqlite3
 import json
 import math
+import re
 from openpyxl.styles import Font
+from modules import db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -40,77 +42,77 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
 
     # 1. Trend Factor (4.0점)
     if ema20 is not None and price > ema20: 
-        s = 0.5 * r_trend
+        s = round(0.5 * r_trend, 2)
         score += s
-        details.append(f"EMA: 현재가 > 20일선 (+{s:.1f})")
+        details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
     if ema20 is not None and ema60 is not None and ema20 > ema60: 
-        s = 0.5 * r_trend
+        s = round(0.5 * r_trend, 2)
         score += s
-        details.append(f"EMA: 20일선 > 60일선 (+{s:.1f})")
+        details.append(f"EMA: 20일선 > 60일선 (+{s:.2f})")
     if ema60 is not None and ema120 is not None and ema60 > ema120: 
-        s = 0.5 * r_trend
+        s = round(0.5 * r_trend, 2)
         score += s
-        details.append(f"EMA: 60일선 > 120일선 (+{s:.1f})")
+        details.append(f"EMA: 60일선 > 120일선 (+{s:.2f})")
     
     if macd is not None and macd_signal is not None:
         if macd > macd_signal:
-            s = 1.0 * r_trend
+            s = round(1.0 * r_trend, 2)
             score += s
-            details.append(f"MACD: 골든크로스 (매수 우위) (+{s:.1f})")
+            details.append(f"MACD: 골든크로스 (매수 우위) (+{s:.2f})")
         if macd > 0:
-            s = 0.5 * r_trend
+            s = round(0.5 * r_trend, 2)
             score += s
-            details.append(f"MACD: 0선 상회 (상승 국면) (+{s:.1f})")
+            details.append(f"MACD: 0선 상회 (상승 국면) (+{s:.2f})")
 
     if sar is not None and price > sar: 
-        s = 1.0 * r_trend
+        s = round(1.0 * r_trend, 2)
         score += s
-        details.append(f"SAR: 주가 아래 (상승 추세) (+{s:.1f})")
+        details.append(f"SAR: 주가 아래 (상승 추세) (+{s:.2f})")
     
     # 2. Momentum Factor (2.5점)
     if rsi is not None:
         if 50 <= rsi <= 75: 
-            s = 1.5 * r_mom
+            s = round(1.5 * r_mom, 2)
             score += s
-            details.append(f"RSI: {rsi:.1f} (강세 구간) (+{s:.1f})")
+            details.append(f"RSI: {rsi:.1f} (강세 구간) (+{s:.2f})")
         elif 30 <= rsi < 50: 
-            s = 0.5 * r_mom
+            s = round(0.5 * r_mom, 2)
             score += s
-            details.append(f"RSI: {rsi:.1f} (반등/회복) (+{s:.1f})")
+            details.append(f"RSI: {rsi:.1f} (반등/회복) (+{s:.2f})")
     
     if cci is not None:
         if cci > 0: 
-            s = 0.5 * r_mom
+            s = round(0.5 * r_mom, 2)
             score += s
-            details.append(f"CCI: {cci:.1f} (상승 추세) (+{s:.1f})")
+            details.append(f"CCI: {cci:.1f} (상승 추세) (+{s:.2f})")
         if cci > 100: 
-            s = 0.5 * r_mom
+            s = round(0.5 * r_mom, 2)
             score += s
-            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+{s:.1f})")
+            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+{s:.2f})")
 
     # 3. Strength & Volume Factor (1.5점)
     if adx is not None and adx >= 20: 
-        s = 0.5 * r_str
+        s = round(0.5 * r_str, 2)
         score += s
-        details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.1f})")
+        details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.2f})")
 
     if obv_trend: 
-        s = 1.0 * r_str
+        s = round(1.0 * r_str, 2)
         score += s
-        details.append(f"OBV: 이동평균 상회 (수급 양호) (+{s:.1f})")
+        details.append(f"OBV: 이동평균 상회 (수급 양호) (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
     # Trend Confirmation
     if (ema20 and ema60 and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
-        s = 1.0 * r_syn
+        s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"★ 추세 확증: 정배열+MACD양수+ADX (+{s:.1f})")
+        details.append(f"추세 확증: 정배열+MACD양수+ADX (+{s:.2f})")
         
     # Momentum Thrust
     if (macd is not None and macd_signal is not None and macd > macd_signal) and (rsi is not None and rsi >= 50) and obv_trend:
-        s = 1.0 * r_syn
+        s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"★ 모멘텀 폭발: MACD골든+RSI강세+OBV (+{s:.1f})")
+        details.append(f"모멘텀 폭발: MACD골든+RSI강세+OBV (+{s:.2f})")
 
     return score, details
 
@@ -392,7 +394,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # [추가] 적응형 임계값 적용 (시장 국면 보정)
     score_adj = 0.0
-    regime_msg = ""
     if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
         market_type = "KOSPI"
         try:
@@ -405,7 +406,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         regime, score_adj = get_market_regime(market_type)
         if score_adj != 0:
             buy_score += score_adj
-            regime_msg = f" [dim](시장국면 보정 {score_adj:+.1f}점)[/dim]"
 
     # [추가] 임계값 및 가중치 딕셔너리 구성
     thresholds = {
@@ -468,7 +468,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
     
     # [테이블 1] 기술적 지표 분석
-    table_tech = Table(title=f"기술적 지표 분석: {name} ({code})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    tech_title = f"기술적 지표 분석: {name} ({code})"
+
+    table_tech = Table(title=tech_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table_tech.add_column("지표", justify="left", style="cyan", width=15)
     table_tech.add_column("값 (상태)", justify="left")
     table_tech.add_column("해석/기준", justify="left", style="dim")
@@ -618,14 +620,62 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
     
     # [테이블 2] 시스템 트레이딩 판단 결과
-    table_logic = Table(title="시스템 트레이딩 판단 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    logic_title = "시스템 트레이딩 판단 결과"
+    changes_summary = None
+    if score_adj != 0:
+        logic_title += " [bold magenta](*)[/]"
+        
+    if rule_applied:
+        # [추가] 변경된 룰 요약
+        changes = []
+        
+        # 전역 설정값 가져오기
+        def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        def_buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+        def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+        def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+        
+        # 비교 및 요약
+        if custom_rule.get('buy_score') != def_buy_score:
+            changes.append(f"매수점수({def_buy_score}->{custom_rule['buy_score']})")
+        if custom_rule.get('buy_rsi') != def_buy_rsi:
+            changes.append(f"매수RSI({def_buy_rsi}->{custom_rule['buy_rsi']})")
+        if custom_rule.get('buy_vol_strength') and custom_rule['buy_vol_strength'] != def_buy_vol:
+            changes.append(f"체결강도({def_buy_vol}%->{custom_rule['buy_vol_strength']}%)")
+        
+        if custom_rule.get('sell_score') != def_sell_score:
+            changes.append(f"매도점수({def_sell_score}->{custom_rule['sell_score']})")
+        if custom_rule.get('take_profit') != def_tp:
+            changes.append(f"익절({def_tp}%->{custom_rule['take_profit']}%)")
+        if custom_rule.get('stop_loss') != def_sl:
+            changes.append(f"손절({def_sl}%->{custom_rule['stop_loss']}%)")
+            
+        if custom_rule.get('weights'):
+            changes.append("가중치")
+
+        if changes:
+            changes_summary = ", ".join(changes)
+
+    table_logic = Table(title=logic_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table_logic.add_column("항목", justify="center", style="cyan", width=15)
-    table_logic.add_column("결과", justify="center", width=20)
+    table_logic.add_column("결과", justify="center", width=30)
     table_logic.add_column("상세 내용 / 사유", justify="left", style="dim")
+
+    # [추가] 점수 검증 로직
+    calc_sum = 0.0
+    for d in details:
+        m = re.search(r'\(\+([\d\.]+)\)', d)
+        if m:
+            calc_sum += float(m.group(1))
+            
+    diff = abs(score - calc_sum)
+    valid_msg = " [dim green](검증됨)[/]" if diff < 0.01 else f" [dim red](상세합계 {calc_sum:.2f} 불일치)[/]"
 
     # 종합 점수
     s_color = state_color.replace('[', '').replace(']', '')
-    score_str = f"[bold {s_color}]{score}점[/]"
+    score_str = f"[bold {s_color}]{score:.2f}점[/]{valid_msg}"
     
     details_str = ""
     if details:
@@ -634,6 +684,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         details_str = "[dim]획득한 점수가 없습니다.[/dim]"
     
     table_logic.add_row("종합 점수", score_str, details_str)
+    
+    # [추가] 적용 가중치 정보 출력
+    w_val = f"{weights.get('TREND', 4.0):.1f} / {weights.get('MOMENTUM', 2.5):.1f} / {weights.get('STRENGTH', 1.5):.1f} / {weights.get('SYNERGY', 2.0):.1f}"
+    w_desc = "추세 / 모멘텀 / 강도 / 시너지"
+    if rule_applied and custom_rule.get('weights'):
+        w_desc += " [magenta](개별 설정)[/]"
+    else:
+        w_desc += " [dim](시스템 설정)[/dim]"
+    table_logic.add_row("적용 가중치", w_val, w_desc)
     
     # 상태 분류
     table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
@@ -656,7 +715,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
-    if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상){regime_msg}")
+    if not is_buy_score:
+        if score_adj != 0:
+            origin_score = round(buy_score_limit - score_adj, 2)
+            buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
+        else:
+            buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
     if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
     buy_reason = ", ".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
@@ -687,7 +751,16 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
     table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
 
+    # [수정] 개별 룰 적용 여부 및 상세 내용 출력
+    rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
+    rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
+    table_logic.add_row("개별 룰", rule_res, rule_desc)
+
     config.console.print(table_logic)
+    
+    if score_adj != 0:
+        config.console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
+
     config.console.print()
 
     # [추가] 기간별 시세 20일치 출력
@@ -701,6 +774,10 @@ def diagnose_group_stocks(market_filter=None):
     if not targets:
         config.console.print("[yellow]등록된 국내 종목이 없습니다.[/yellow]")
         return
+        
+    # [추가] 개별 룰 로드 (전체 조회 최적화)
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: True for r in custom_rules}
 
     results = []
     
@@ -769,11 +846,14 @@ def diagnose_group_stocks(market_filter=None):
                 # [추가] 체결강도 조회
                 vol_strength = api.get_realtime_vol_strength(code)
                 
+                # [추가] 개별 룰 여부 확인
+                is_custom_rule = code in rules_map
+                
                 results.append({
                     'code': code, 'name': name, 'price': current_price,
                     'score': score, 'state': state, 'state_color': state_color,
                     'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
-                    'vol_strength': vol_strength
+                    'vol_strength': vol_strength, 'is_custom_rule': is_custom_rule
                 })
             finally:
                 progress.advance(task)
@@ -787,7 +867,9 @@ def diagnose_group_stocks(market_filter=None):
     # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
     results.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
     
-    table = Table(title=f"전체 종목 진단 결과{title_suffix}", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table_title = f"전체 종목 진단 결과{title_suffix}"
+
+    table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
     table.add_column("현재가", justify="right")
     table.add_column("점수", justify="center")
@@ -814,8 +896,12 @@ def diagnose_group_stocks(market_filter=None):
         vol_val = r.get('vol_strength')
         vol_str = f"{vol_val:.1f}%" if vol_val else "-"
         
+        name_display = r['name']
+        if r.get('is_custom_rule'):
+            name_display += "*"
+        
         table.add_row(
-            f"{r['name']}({r['code']})",
+            f"{name_display}({r['code']})",
             f"{int(r['price']):,}원",
             score_str,
             state_str,
@@ -834,7 +920,7 @@ def get_analysis_params():
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
         "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
-        "WEIGHTS": config.SCORING_WEIGHTS # [추가] 가중치 포함
+        "WEIGHTS": config.SCORING_WEIGHTS.copy() # [추가] 가중치 포함 (복사본 사용)
     }
     
     config.console.print("\n[bold]분석 파라미터 설정 (Enter: 기본값 사용, q: 취소)[/bold]")
@@ -859,8 +945,41 @@ def get_analysis_params():
     if val.lower() == 'q': return None
     try: params['RISE_SCORE'] = float(val)
     except: pass
-    
-    filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
+
+    # [추가] 가중치 설정 입력
+    config.console.print("\n[스코어링 가중치 설정]")
+    if Prompt.ask("가중치를 변경하시겠습니까?", choices=["y", "n"], default="n") == "y":
+        curr_weights = params['WEIGHTS'].copy()
+        while True:
+            config.console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10점 권장)[/dim]")
+            
+            try:
+                def ask_w(key, desc, default_v):
+                    v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
+                    if v.lower() == 'q': raise ValueError("quit")
+                    return float(v)
+
+                w_trend = ask_w("TREND", "추세 (TREND)", curr_weights.get('TREND', 4.0))
+                w_mom = ask_w("MOMENTUM", "모멘텀 (MOMENTUM)", curr_weights.get('MOMENTUM', 2.5))
+                w_str = ask_w("STRENGTH", "강도 (STRENGTH)", curr_weights.get('STRENGTH', 1.5))
+                w_syn = ask_w("SYNERGY", "시너지 (SYNERGY)", curr_weights.get('SYNERGY', 2.0))
+                
+                total_score = w_trend + w_mom + w_str + w_syn
+                
+                if abs(total_score - 10.0) > 0.01:
+                    config.console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (권장: 10.0점)[/bold red]")
+                    config.console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
+                    curr_weights = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+                    continue
+                
+                params['WEIGHTS'] = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+                break
+            except ValueError as e:
+                if str(e) == "quit": return None
+                config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+                continue
+
+    filter_choice = Prompt.ask("\n출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
     if filter_choice.lower() == 'q': return None
     if filter_choice == '1': params['OUTPUT_FILTER'] = 'BUY'
     elif filter_choice == '2': params['OUTPUT_FILTER'] = 'RISE'
@@ -958,6 +1077,7 @@ def _analyze_stock_worker(stock, params=None):
     """(내부함수) 단일 종목 분석 워커 (멀티스레드용)"""
     code = stock['code']
     name = stock['name']
+    is_custom_rule = stock.get('is_custom_rule', False) # [추가]
     
     try:
         # API 호출 (api.py 내부에서 Rate Limit 처리됨)
@@ -1057,7 +1177,8 @@ def _analyze_stock_worker(stock, params=None):
             'psar': ind['psar'], 'macd': ind.get('macd'), 'macd_signal': ind.get('macd_signal'),
             'is_target': is_target, 
             'vol_strength': vol_strength,
-            'w52_pos': w52_pos
+            'w52_pos': w52_pos,
+            'is_custom_rule': is_custom_rule # [추가]
         }
     except Exception: return None
 
@@ -1070,13 +1191,27 @@ def analyze_market_stocks(market_type):
     params = None
     use_cache = False
     
+    # [추가] 개별 룰 로드
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: True for r in custom_rules}
+    
     if cached_data:
         updated_at = cached_data['updated_at']
         c_params = cached_data['params']
         
         config.console.print(f"\n[bold cyan]기존 분석 결과가 존재합니다.[/bold cyan]")
         config.console.print(f"• 분석 일시: {updated_at}")
-        config.console.print(f"• 분석 조건: 매수 {c_params.get('BUY_SCORE')}점, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {c_params.get('BUY_VOL_STRENGTH', 100)}%, 상승 {c_params.get('RISE_SCORE')}점")
+        
+        w = c_params.get('WEIGHTS', config.SCORING_WEIGHTS)
+        w_str = f"{w.get('TREND', 4.0)}/{w.get('MOMENTUM', 2.5)}/{w.get('STRENGTH', 1.5)}/{w.get('SYNERGY', 2.0)}"
+        
+        # [수정] 매수 점수 표시 (보정 정보 포함)
+        buy_score_val = c_params.get('BUY_SCORE')
+        buy_score_str = f"{buy_score_val}점"
+        if c_params.get('SCORE_ADJ'):
+            buy_score_str += f" (시장보정 {c_params['SCORE_ADJ']:+.1f}점)"
+
+        config.console.print(f"• 분석 조건: 매수 {buy_score_str}, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {c_params.get('BUY_VOL_STRENGTH', 100)}%, 상승 {c_params.get('RISE_SCORE')}점, 가중치 {w_str}")
         
         config.console.print()
         choice = Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n", "q"], default="y")
@@ -1092,21 +1227,19 @@ def analyze_market_stocks(market_type):
         stock_list = _get_master_stock_list(market_type)
         config.console.print(f"\n[bold]{market_type} 전체 종목 수: {len(stock_list)}개[/bold]")
         
+        # [추가] stock_list에 is_custom_rule 정보 주입
+        for s in stock_list:
+            s['is_custom_rule'] = s['code'] in rules_map
+        
         c_buy = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         c_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         c_rise = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         c_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
         
-        # [추가] 적응형 임계값 적용 안내
-        adj_msg = ""
-        score_adj = 0.0
-        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
-            regime, score_adj = get_market_regime(market_type)
-            if score_adj != 0:
-                adj_msg = f" (시장국면 보정 {score_adj:+.1f}점 적용)"
-                c_buy += score_adj # 표시용 보정
+        w = config.SCORING_WEIGHTS
+        w_str = f"{w.get('TREND', 4.0)}/{w.get('MOMENTUM', 2.5)}/{w.get('STRENGTH', 1.5)}/{w.get('SYNERGY', 2.0)}"
 
-        config.console.print(f"현재 설정: 매수 {c_buy}점{adj_msg} / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점")
+        config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점 / 가중치 {w_str}")
 
         config.console.print()
         # 파라미터 설정
@@ -1134,10 +1267,6 @@ def analyze_market_stocks(market_type):
         config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
         config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = params["BUY_VOL_STRENGTH"]
         
-        # [추가] 파라미터에 보정값 반영 (워커 전달용)
-        if score_adj != 0:
-            params["BUY_SCORE"] += score_adj
-
         config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
 
         try:
@@ -1411,6 +1540,10 @@ def save_all_market_analysis():
     if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
         return
 
+    # [추가] 개별 룰 로드 (전체 조회 최적화)
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: r for r in custom_rules}
+
     markets = ["KOSPI", "KOSDAQ"]
     results = {} # market -> list of dict
 
@@ -1475,9 +1608,41 @@ def save_all_market_analysis():
                         if item.get('macd') is not None and item.get('macd_signal') is not None:
                             macd_state = "골든" if item['macd'] > item['macd_signal'] else "데드"
 
+                        name_display = item['name']
+                        if item.get('is_custom_rule'):
+                            name_display += "*"
+
+                        # [추가] 비고 (개별 룰 요약)
+                        note = ""
+                        if item['code'] in rules_map:
+                            rule = rules_map[item['code']]
+                            changes = []
+                            
+                            # 전역 설정값
+                            def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+                            def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+                            def_buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+                            def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+                            def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+                            def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+
+                            # 비교
+                            if rule.get('buy_score') != def_buy_score: changes.append(f"매수점수({rule['buy_score']})")
+                            if rule.get('buy_rsi') != def_buy_rsi: changes.append(f"매수RSI({rule['buy_rsi']})")
+                            if rule.get('buy_vol_strength') and rule['buy_vol_strength'] != def_buy_vol: changes.append(f"체결({rule['buy_vol_strength']}%)")
+                            if rule.get('sell_score') != def_sell_score: changes.append(f"매도점수({rule['sell_score']})")
+                            if rule.get('take_profit') != def_tp: changes.append(f"익절({rule['take_profit']}%)")
+                            if rule.get('stop_loss') != def_sl: changes.append(f"손절({rule['stop_loss']}%)")
+                            if rule.get('weights'): changes.append("가중치")
+                            
+                            if changes:
+                                note = f"개별룰: {', '.join(changes)}"
+                            else:
+                                note = "개별룰 적용"
+
                         return {
                             "종목코드": item['code'],
-                            "종목명": item['name'],
+                            "종목명": name_display,
                             "업종": sector,
                             "현재가(원)": item['price'],
                             "52주위치(%)": w52,
@@ -1490,7 +1655,8 @@ def save_all_market_analysis():
                             "SAR": sar_state,
                             "MACD": macd_state,
                             "OBV": "상승" if item['obv_trend'] else "하락",
-                            "체결강도": vol
+                            "체결강도": vol,
+                            "비고": note # [추가]
                         }
 
                     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1570,7 +1736,21 @@ def print_table(title, data_list, is_overseas=False):
             sample = test_data[0]
             if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
     
-    table = Table(title=f"\n{title}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+    # [이동] 적응형 임계값 준비 (테이블 생성 전으로 이동)
+    market_regime_adj = {}
+    use_adaptive = False
+    if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+        use_adaptive = True
+        try:
+            _, kospi_adj = get_market_regime("KOSPI")
+            _, kosdaq_adj = get_market_regime("KOSDAQ")
+            market_regime_adj["KOSPI"] = kospi_adj
+            market_regime_adj["KOSDAQ"] = kosdaq_adj
+        except:
+            use_adaptive = False
+
+    display_title = f"\n{title}" + (" [bold magenta](*)[/]" if use_adaptive else "")
+    table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
     table.add_column("분류", justify="center") 
@@ -1589,6 +1769,12 @@ def print_table(title, data_list, is_overseas=False):
     
     is_us_stock = is_overseas and ("주식" in title)
     is_us_etf = is_overseas and ("ETF" in title)
+    
+    # [추가] 개별 룰 로드
+    rules_map = {}
+    if not is_overseas:
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: True for r in custom_rules}
     
     if not is_overseas:
         table.add_column("52주", justify="right")
@@ -1713,7 +1899,24 @@ def print_table(title, data_list, is_overseas=False):
                             try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
                             except: pass
 
-                        class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
+                        # [수정] 적응형 임계값 적용
+                        thresholds = None
+                        if use_adaptive and curr_data.get('rt_cd') == '0':
+                            mrkt_name = curr_data['output'].get('rprs_mrkt_kor_name', '')
+                            score_adj = 0.0
+                            if "코스닥" in mrkt_name:
+                                score_adj = market_regime_adj.get("KOSDAQ", 0.0)
+                            else:
+                                score_adj = market_regime_adj.get("KOSPI", 0.0)
+                            
+                            if score_adj != 0:
+                                thresholds = {
+                                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
+                                    "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+                                    "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+                                }
+
+                        class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds)
                         
                         def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
                         def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
@@ -1827,6 +2030,10 @@ def print_table(title, data_list, is_overseas=False):
                             elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
                             elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
                             elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
+                        
+                        # [추가] 개별 룰 적용 종목 표시
+                        if code in rules_map:
+                            final_name_str += "*"
 
                         row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
                         if not is_overseas:
@@ -1855,6 +2062,9 @@ def print_table(title, data_list, is_overseas=False):
     try:
         config.console.print(table, crop=False)
         sys.stdout.flush()
+        
+        if use_adaptive:
+            config.console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
     except Exception as e:
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
