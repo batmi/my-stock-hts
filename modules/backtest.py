@@ -14,6 +14,8 @@ import indicators
 from modules import analysis
 from modules import chart
 import logging
+from modules import db_manager # [추가]
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     
     # 2. 점수 계산
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=thresholds.get("WEIGHTS")
     )
     
     # 3. 백테스팅용 플래그 변환
@@ -100,6 +102,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
                       ts_activation_rate=None, ts_callback_rate=None,
+                      weights=None,
                       execution_noise=False):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
     
@@ -155,7 +158,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     current_thresholds = {
         "BUY_SCORE": buy_score_limit,
         "BUY_RSI_MAX": buy_rsi_limit,
-        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"] # 기본값 유지
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"], # 기본값 유지
+        "WEIGHTS": weights # [추가] 가중치 전달
     }
 
     for i in range(len(sim_df)):
@@ -675,16 +679,27 @@ def run_backtest():
     change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
     if change_settings == 'q': return
     
-    # 기본값 설정
+    # [추가] 개별 룰 로드
+    custom_rule = db_manager.db.get_stock_strategy(code)
+    
+    # 기본값 설정 (개별 룰 우선 적용)
     days = 365
-    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-    sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-    stop_loss = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-    take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-    take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    buy_score = custom_rule['buy_score'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    buy_rsi = custom_rule['buy_rsi'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    sell_score = custom_rule['sell_score'] if custom_rule else config.SELL_STRATEGY["SELL_SCORE"]
+    stop_loss = custom_rule['stop_loss'] if custom_rule else config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    take_profit = custom_rule['take_profit'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+    ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    
+    weights = config.SCORING_WEIGHTS
+    if custom_rule and custom_rule.get('weights'):
+        try:
+            w_data = custom_rule['weights']
+            if isinstance(w_data, str): weights = json.loads(w_data)
+            elif isinstance(w_data, dict): weights = w_data
+        except: pass
 
     if change_settings == "y":
         days_input = Prompt.ask("분석 기간 (일 단위)", default="365")
@@ -758,7 +773,8 @@ def run_backtest():
     config.console.print("\n[bold]실행 모드를 선택하세요:[/bold]")
     config.console.print("[1] 단일 백테스팅 (Single Run)")
     config.console.print("[2] Monte Carlo 시뮬레이션 (1,000회 반복/노이즈 추가)")
-    mode_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    config.console.print("[3] 가중치 최적화 (Weight Optimization)")
+    mode_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
 
     if mode_choice.lower() == 'q': return
 
@@ -817,12 +833,86 @@ def run_backtest():
                                    stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                    name=name, code=code, days=days)
         return
+        
+    if mode_choice == "3":
+        config.console.print("\n[bold magenta]=== 팩터 가중치 최적화 (Weight Optimization) ===[/]")
+        config.console.print("[dim]다양한 가중치 조합을 시뮬레이션하여 최적의 배점을 찾습니다.[/dim]\n")
+        
+        # [추가] 랜덤 조합 테스트 여부
+        use_random = Prompt.ask("랜덤 가중치 조합(10개)을 추가로 테스트하시겠습니까?", choices=["y", "n"], default="y") == "y"
+        
+        # 테스트할 가중치 조합 생성 (Grid Search)
+        # Trend, Momentum, Strength, Synergy
+        scenarios = [
+            {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "기본값"},
+            {"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "DESC": "추세 중시"},
+            {"TREND": 3.0, "MOMENTUM": 3.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "모멘텀 중시"},
+            {"TREND": 3.0, "MOMENTUM": 2.0, "STRENGTH": 3.0, "SYNERGY": 2.0, "DESC": "수급/강도 중시"},
+            {"TREND": 2.5, "MOMENTUM": 2.5, "STRENGTH": 2.5, "SYNERGY": 2.5, "DESC": "균등 배분"}
+        ]
+        
+        # [추가] 랜덤 시나리오 생성 및 정규화
+        if use_random:
+            for i in range(10):
+                t = random.uniform(1.0, 6.0)
+                m = random.uniform(1.0, 5.0)
+                s = random.uniform(0.5, 4.0)
+                syn = random.uniform(0.5, 4.0)
+                
+                # 정규화 (합을 10으로 맞춤)
+                total = t + m + s + syn
+                factor = 10.0 / total
+                t *= factor; m *= factor; s *= factor; syn *= factor
+                
+                scenarios.append({
+                    "TREND": round(t, 1), "MOMENTUM": round(m, 1), 
+                    "STRENGTH": round(s, 1), "SYNERGY": round(syn, 1), 
+                    "DESC": f"랜덤 조합 {i+1}"
+                })
+        
+        opt_table = Table(title=f"가중치 최적화 결과 ({name})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        opt_table.add_column("시나리오", justify="left")
+        opt_table.add_column("수익률", justify="right")
+        opt_table.add_column("MDD", justify="right")
+        opt_table.add_column("승률", justify="right")
+        opt_table.add_column("매매횟수", justify="right")
+        opt_table.add_column("가중치 (T/M/S/Syn)", justify="right", style="dim")
+        
+        with config.console.status("[green]시나리오별 시뮬레이션 진행 중...[/]"):
+            for sc in scenarios:
+                weights = {k: v for k, v in sc.items() if k != "DESC"}
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                                        stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                        take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                        weights=weights)
+                
+                total_trades = len(res['trades'])
+                sell_trades = res['win_trades'] + res['loss_trades']
+                win_rate = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
+                
+                r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+                w_str = f"{weights['TREND']:.1f}/{weights['MOMENTUM']:.1f}/{weights['STRENGTH']:.1f}/{weights['SYNERGY']:.1f}"
+                
+                opt_table.add_row(
+                    sc["DESC"],
+                    f"{r_color}{res['total_return']:+.2f}%[/]",
+                    f"{res['mdd']:.2f}%",
+                    f"{win_rate:.1f}%",
+                    f"{total_trades}건",
+                    w_str
+                )
+        
+        config.console.print()
+        config.console.print(opt_table)
+        return
 
     # === 단일 실행 모드 (기존 로직) ===
     res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
                             stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                             take_profit_rsi=take_profit_rsi, sell_score=sell_score,
-                            ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
+                            ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                            weights=weights) # [수정] 가중치 전달
     
     # 결과 변수 매핑 (기존 출력 로직 호환)
     final_asset = res['final_asset']

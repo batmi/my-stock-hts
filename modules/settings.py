@@ -14,6 +14,8 @@ def _save_dynamic_config():
         "ANALYSIS_THRESHOLDS": config.ANALYSIS_THRESHOLDS,
         "SELL_STRATEGY": config.SELL_STRATEGY,
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
+        "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
+        "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
         "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5),
         "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 5),
         "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
@@ -121,9 +123,30 @@ def view_system_config():
 
     table.add_section()
 
-    # 4. 기술적 지표
+    # 4. 스코어링 가중치
+    weights = config.SCORING_WEIGHTS
+    total_score = sum(weights.values())
+    table.add_row(f"[bold]4. 스코어링 가중치 (총점: {total_score:.1f})[/]", "", "")
+    table.add_row("추세 팩터\n[dim]이평선, MACD, SAR[/dim]", "SCORING_WEIGHTS['TREND']", f"{weights.get('TREND')}")
+    table.add_row("모멘텀 팩터\n[dim]RSI, CCI[/dim]", "SCORING_WEIGHTS['MOMENTUM']", f"{weights.get('MOMENTUM')}")
+    table.add_row("강도/수급 팩터\n[dim]ADX, OBV[/dim]", "SCORING_WEIGHTS['STRENGTH']", f"{weights.get('STRENGTH')}")
+    table.add_row("시너지 가산점\n[dim]지표 동조화 보너스[/dim]", "SCORING_WEIGHTS['SYNERGY']", f"{weights.get('SYNERGY')}")
+
+    table.add_section()
+
+    # 5. 적응형 임계값
+    regime = config.MARKET_REGIME_PARAMS
+    table.add_row("[bold]5. 적응형 임계값[/]", "", "")
+    table.add_row("사용 여부\n[dim]시장 국면 반영[/dim]", "MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD']", f"{regime.get('USE_ADAPTIVE_THRESHOLD')}")
+    table.add_row("강세장 보정\n[dim]기준 점수 완화값[/dim]", "MARKET_REGIME_PARAMS['BULL_SCORE_ADJ']", f"{regime.get('BULL_SCORE_ADJ')}")
+    table.add_row("약세장 보정\n[dim]기준 점수 강화값[/dim]", "MARKET_REGIME_PARAMS['BEAR_SCORE_ADJ']", f"{regime.get('BEAR_SCORE_ADJ')}")
+    table.add_row("횡보장 보정\n[dim]기준 점수 유지값[/dim]", "MARKET_REGIME_PARAMS['SIDEWAYS_SCORE_ADJ']", f"{regime.get('SIDEWAYS_SCORE_ADJ')}")
+
+    table.add_section()
+
+    # 6. 기술적 지표
     ind = config.INDICATOR_PARAMS
-    table.add_row("[bold]4. 기술적 지표[/]", "", "")
+    table.add_row("[bold]6. 기술적 지표[/]", "", "")
     table.add_row("데이터 조회 기간\n[dim]일봉 데이터 조회 범위[/dim]", "INDICATOR_PARAMS['CHART_LOOKBACK_DAYS']", f"{ind.get('CHART_LOOKBACK_DAYS')}일")
     table.add_row("SAR (Start/Step/Max)\n[dim]파라볼릭 SAR 가속변수[/dim]", "INDICATOR_PARAMS['SAR_AF_START', 'SAR_AF_STEP', 'SAR_AF_MAX']", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
     table.add_row("RSI (Period/Signal)\n[dim]상대강도지수 기간[/dim]", "INDICATOR_PARAMS['RSI_PERIOD', 'RSI_SIGNAL']", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
@@ -136,27 +159,30 @@ def view_system_config():
 
     table.add_section()
 
-    # 5. 텔레그램
-    table.add_row("[bold]5. 텔레그램[/]", "", "")
+    # 7. 텔레그램
+    table.add_row("[bold]7. 텔레그램[/]", "", "")
     table.add_row("사용 여부", "ENABLE_TELEGRAM", f"{getattr(config, 'ENABLE_TELEGRAM', True)}")
     table.add_row("인스턴스 이름\n[dim]알림 메시지 머리말[/dim]", "TELEGRAM_INSTANCE_NAME", f"{getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
     table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
 
     table.add_section()
 
-    # 6. 로그 레벨
-    table.add_row("[bold]6. 로그 레벨[/]", "", "")
+    # 8. 로그 레벨
+    table.add_row("[bold]8. 로그 레벨[/]", "", "")
     table.add_row("화면 (Screen)\n[dim]터미널 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
     table.add_row("파일 (File)\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
 
     console.print(table)
     console.print()
 
-def _edit_config_table(title, items_source):
+def _edit_config_table(title_source, items_source):
     """설정 변경을 위한 공통 테이블 UI 함수"""
     while True:
         # items_source가 함수면 호출하여 최신 리스트 가져오기 (동적 메뉴 지원)
         items = items_source() if callable(items_source) else items_source
+        
+        # [수정] title_source가 함수면 호출하여 동적 타이틀 지원 (총점 갱신용)
+        title = title_source() if callable(title_source) else title_source
         
         console.print()
         table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", expand=False)
@@ -381,6 +407,75 @@ def modify_log_settings():
     ]
     _edit_config_table("로그 레벨 설정 (Log Level)", items)
 
+def modify_scoring_weights():
+    while True:
+        weights = config.SCORING_WEIGHTS
+        total_score = sum(weights.values())
+        
+        console.print("\n[bold cyan]=== 스코어링 모델 가중치 설정 (Scoring Weights) ===[/]")
+        console.print(f"[dim]현재 총점: {total_score:.1f}점 (목표: 10.0점)[/dim]")
+        
+        table = Table(box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table.add_column("항목", justify="left")
+        table.add_column("현재값", justify="right")
+        table.add_column("설명", justify="left", style="dim")
+        
+        # [수정] 항목 정의 (키, 라벨, 설명)
+        items_info = [
+            ("TREND", "추세 (TREND)", "이평선, MACD, SAR"),
+            ("MOMENTUM", "모멘텀 (MOMENTUM)", "RSI, CCI"),
+            ("STRENGTH", "강도 (STRENGTH)", "ADX, OBV"),
+            ("SYNERGY", "시너지 (SYNERGY)", "지표 동조화 보너스")
+        ]
+
+        for key, label, detail in items_info:
+            table.add_row(label, f"{weights[key]}", detail)
+        
+        console.print(table)
+        
+        console.print("\n[bold]각 항목의 가중치를 순서대로 입력하세요.[/bold]")
+        console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (취소: q)[/dim]")
+        
+        new_weights = {}
+        
+        try:
+            for key, label, detail in items_info:
+                current_val = weights[key]
+                # [수정] 입력 프롬프트에 상세 설명 추가
+                prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
+                val = Prompt.ask(prompt_msg, default=str(current_val))
+                if val.lower() == 'q': return
+                new_weights[key] = float(val)
+            
+            new_total = sum(new_weights.values())
+            
+            if abs(new_total - 10.0) > 0.1:
+                console.print(f"\n[bold red]경고: 입력한 값의 합계가 {new_total:.1f}점입니다.[/bold red]")
+                console.print("[yellow]가중치의 합은 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
+                continue
+            
+            config.SCORING_WEIGHTS.update(new_weights)
+            
+            _save_dynamic_config()
+            console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
+            break
+            
+        except ValueError:
+            console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+
+def modify_market_regime_params():
+    items = [
+        {"desc": "적응형 임계값 사용", "help": "시장 국면에 따른 점수 조절", "name": "USE_ADAPTIVE_THRESHOLD", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: config.MARKET_REGIME_PARAMS["USE_ADAPTIVE_THRESHOLD"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"USE_ADAPTIVE_THRESHOLD": v})},
+        {"desc": "강세장 점수 보정", "help": "강세장일 때 기준 점수 조정값 (예: -1.0)", "name": "BULL_SCORE_ADJ", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS["BULL_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BULL_SCORE_ADJ": v})},
+        {"desc": "약세장 점수 보정", "help": "약세장일 때 기준 점수 조정값 (예: +1.0)", "name": "BEAR_SCORE_ADJ", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS["BEAR_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BEAR_SCORE_ADJ": v})},
+        {"desc": "횡보장 점수 보정", "help": "횡보장일 때 기준 점수 조정값 (예: 0.0)", "name": "SIDEWAYS_SCORE_ADJ", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})}
+    ]
+    _edit_config_table("시장 국면 및 적응형 임계값 (Adaptive Thresholds)", items)
+
 def _validate_time_format(val):
     if len(val) == 4 and val.isdigit():
         hh = int(val[:2])
@@ -476,6 +571,13 @@ def reset_to_default():
         "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
         "ATR_PERIOD": 14
     })
+    config.SCORING_WEIGHTS.update({
+        "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
+    })
+    config.MARKET_REGIME_PARAMS.update({
+        "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -1.0, "BEAR_SCORE_ADJ": 1.0,
+        "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 60, "REGIME_ADX_THRESHOLD": 20
+    })
     
     config.SYSTEM_INVEST_PER_STOCK = 0.5
     config.SYSTEM_MAX_HOLDINGS = 5
@@ -510,20 +612,24 @@ def system_config_menu():
     console.print("[2] 시스템 트레이딩 일반설정 (Trading General)")
     console.print("[3] 매수/분석 임계값 (Analysis Thresholds)")
     console.print("[4] 매도 전략 (Sell Strategy)")
-    console.print("[5] 기술적 지표 파라미터 (Indicators)")
-    console.print("[6] 텔레그램 설정 (Telegram)")
-    console.print("[7] 로그 레벨 설정 (Log Level)")
-    console.print("[8] 설정 초기화 (Reset to Default)")
+    console.print("[5] 스코어링 가중치 (Scoring Weights)")
+    console.print("[6] 적응형 임계값 (Adaptive Thresholds)")
+    console.print("[7] 기술적 지표 파라미터 (Indicators)")
+    console.print("[8] 텔레그램 설정 (Telegram)")
+    console.print("[9] 로그 레벨 설정 (Log Level)")
+    console.print("[0] 설정 초기화 (Reset to Default)")
     console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "q", "Q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "Q"], default="1")
     if choice.lower() == 'q': return
     
     if choice == "1": view_system_config()
     elif choice == "2": modify_system_trading_general()
     elif choice == "3": modify_analysis_thresholds()
     elif choice == "4": modify_sell_strategy()
-    elif choice == "5": modify_indicator_params()
-    elif choice == "6": modify_telegram_settings()
-    elif choice == "7": modify_log_settings()
-    elif choice == "8": reset_to_default()
+    elif choice == "5": modify_scoring_weights()
+    elif choice == "6": modify_market_regime_params()
+    elif choice == "7": modify_indicator_params()
+    elif choice == "8": modify_telegram_settings()
+    elif choice == "9": modify_log_settings()
+    elif choice == "0": reset_to_default()

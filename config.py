@@ -191,6 +191,33 @@ ANALYSIS_THRESHOLDS = {
 }
 
 # ==========================================================
+# [추가] 스코어링 모델 가중치 (Scoring Weights)
+# ==========================================================
+# 각 팩터별 배점을 설정합니다. (총점 10점 만점 기준)
+# ※ 주의: 이 값은 해당 팩터의 '만점'을 의미합니다.
+#         값을 변경하면 평가 항목 수가 바뀌는 것이 아니라,
+#         각 세부 항목의 배점이 비율에 맞춰 자동으로 스케일링됩니다.
+SCORING_WEIGHTS = {
+    "TREND": 4.0,       # 추세 팩터 (이평선, MACD, SAR)
+    "MOMENTUM": 2.5,    # 모멘텀 팩터 (RSI, CCI)
+    "STRENGTH": 1.5,    # 강도/수급 팩터 (ADX, OBV)
+    "SYNERGY": 2.0      # 시너지 가산점 (지표 간 동조화)
+}
+
+# ==========================================================
+# [추가] 적응형 임계값 및 시장 국면 설정 (Adaptive Thresholds)
+# ==========================================================
+# 시장 국면(강세/약세/횡보)에 따라 매수 기준 점수를 동적으로 조절합니다.
+MARKET_REGIME_PARAMS = {
+    "USE_ADAPTIVE_THRESHOLD": True,  # 적응형 임계값 사용 여부
+    "BULL_SCORE_ADJ": -1.0,          # 강세장: 기준 완화 (예: 8.0 -> 7.0)
+    "BEAR_SCORE_ADJ": 1.0,           # 약세장: 기준 강화 (예: 8.0 -> 9.0)
+    "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
+    "REGIME_MA_PERIOD": 60,          # 추세 판단용 이동평균선 (일)
+    "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
+}
+
+# ==========================================================
 # [설정] 매도 전략 임계값 (Backtest & Trading)
 # ==========================================================
 SELL_STRATEGY = {
@@ -447,6 +474,12 @@ def load_dynamic_config():
                 
             if "INDICATOR_PARAMS" in data:
                 INDICATOR_PARAMS.update(data["INDICATOR_PARAMS"])
+            
+            if "SCORING_WEIGHTS" in data:
+                SCORING_WEIGHTS.update(data["SCORING_WEIGHTS"])
+
+            if "MARKET_REGIME_PARAMS" in data:
+                MARKET_REGIME_PARAMS.update(data["MARKET_REGIME_PARAMS"])
             
             global SYSTEM_INVEST_PER_STOCK, SYSTEM_TRADING_INTERVAL, SYSTEM_DAILY_LOSS_LIMIT, USE_MARKET_FILTER, MARKET_FILTER_MA
             global CONCLUSION_CHECK_INTERVAL, CONCLUSION_CHECK_IDLE_INTERVAL, CONCLUSION_CHECK_ACTIVE_DURATION

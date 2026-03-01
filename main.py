@@ -226,6 +226,34 @@ def show_help():
 
     config.console.print(table)
     
+    # [추가] 스코어링 가중치 계산
+    weights = config.SCORING_WEIGHTS
+    r_trend = weights.get("TREND", 4.0) / 4.0
+    r_mom = weights.get("MOMENTUM", 2.5) / 2.5
+    r_str = weights.get("STRENGTH", 1.5) / 1.5
+    r_syn = weights.get("SYNERGY", 2.0) / 2.0
+
+    regime = config.MARKET_REGIME_PARAMS
+    ma_p = regime.get('REGIME_MA_PERIOD', 60)
+    adx_th = regime.get('REGIME_ADX_THRESHOLD', 20)
+    
+    market_status_info = None
+    try:
+        with config.console.status("[dim]현재 시장 국면(KOSPI/KOSDAQ) 분석 중...[/]"):
+            kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
+            kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
+        
+        r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
+        k_r_str = r_map.get(kospi_regime, kospi_regime)
+        q_r_str = r_map.get(kosdaq_regime, kosdaq_regime)
+
+        market_status_info = {
+            "kospi_str": k_r_str, "kospi_adj": kospi_adj,
+            "kosdaq_str": q_r_str, "kosdaq_adj": kosdaq_adj
+        }
+    except Exception:
+        pass
+
     # [추가] 매수 점수 산정 기준 테이블 (README 내용 반영)
     config.console.print()
     score_table = Table(title="스코어링 및 매매 전략 가이드", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -235,29 +263,29 @@ def show_help():
     score_table.add_column("의미", justify="left")
 
     # 1. Trend Factor
-    score_table.add_row("Trend Factor", "현재가 > 20일선", "+0.5", "단기 지지")
-    score_table.add_row("(추세)", "20일선 > 60일선", "+0.5", "수급선 정배열")
-    score_table.add_row("", "60일선 > 120일선", "+0.5", "경기선 정배열")
-    score_table.add_row("", "MACD > Signal", "+1.0", "골든크로스 (강력)")
-    score_table.add_row("", "MACD > 0", "+0.5", "상승 국면 진입")
-    score_table.add_row("", "주가 > SAR", "+1.0", "파라볼릭 매수")
+    score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
+    score_table.add_row("(추세 4.0)", "20일선 > 60일선", f"+{0.5 * r_trend:.1f}", "수급선 정배열")
+    score_table.add_row("", "60일선 > 120일선", f"+{0.5 * r_trend:.1f}", "경기선 정배열")
+    score_table.add_row("", "MACD > Signal", f"+{1.0 * r_trend:.1f}", "골든크로스 (강력)")
+    score_table.add_row("", "MACD > 0", f"+{0.5 * r_trend:.1f}", "상승 국면 진입")
+    score_table.add_row("", "주가 > SAR", f"+{1.0 * r_trend:.1f}", "파라볼릭 매수")
     score_table.add_section()
 
     # 2. Momentum Factor
-    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", "+1.5", "강세 구간 (주도주)")
-    score_table.add_row("(모멘텀)", "30 ≤ RSI < 50", "+0.5", "반등/회복 시도")
-    score_table.add_row("", "CCI > 0", "+0.5", "상승 추세")
-    score_table.add_row("", f"CCI > {cci_upper}", "+0.5", "강한 상승 탄력")
+    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", f"+{1.5 * r_mom:.1f}", "강세 구간 (주도주)")
+    score_table.add_row("(모멘텀 2.5)", "30 ≤ RSI < 50", f"+{0.5 * r_mom:.1f}", "반등/회복 시도")
+    score_table.add_row("", "CCI > 0", f"+{0.5 * r_mom:.1f}", "상승 추세")
+    score_table.add_row("", f"CCI > {cci_upper}", f"+{0.5 * r_mom:.1f}", "강한 상승 탄력")
     score_table.add_section()
 
     # 3. Strength & Volume
-    score_table.add_row("Strength/Volume", "ADX ≥ 20", "+0.5", "추세 형성 확인")
-    score_table.add_row("(강도/수급)", "OBV > OBV 이동평균", "+1.0", "수급 양호")
+    score_table.add_row("Strength/Volume", "ADX ≥ 20", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
+    score_table.add_row("(강도/수급 1.5)", "OBV > OBV 이동평균", f"+{1.0 * r_str:.1f}", "수급 양호")
     score_table.add_section()
 
     # 4. Synergy Bonus
-    score_table.add_row("Synergy Bonus", "정배열 + MACD양수 + ADX", "+1.0", "추세 확증 (Trend)")
-    score_table.add_row("(가산점)", "MACD골든 + RSI강세 + OBV", "+1.0", "모멘텀 폭발 (Thrust)")
+    score_table.add_row("Synergy Bonus", "정배열 + MACD양수 + ADX", f"+{1.0 * r_syn:.1f}", "추세 확증 (Trend)")
+    score_table.add_row("(가산점 2.0)", "MACD골든 + RSI강세 + OBV", f"+{1.0 * r_syn:.1f}", "모멘텀 폭발 (Thrust)")
 
    # [병합] 점수대별 의미
     score_table.add_section()
@@ -266,9 +294,28 @@ def show_help():
     score_table.add_row("", "5.5 ~ 6.5점", "[white]관망[/]", "관망/준비. 상승 초입 또는 추세 약화. 7점대 진입 대기.")
     score_table.add_row("", "5.0점 미만", "[blue]매도[/]", "매도/진입 금지. 하락 추세 또는 방향성 없는 횡보장.")
     
+    # [추가] 현재 설정 및 적응형 임계값, 시장 상태 정보
+    score_table.add_section()
+    score_table.add_row("현재 설정", "스코어링 가중치", f"{weights['TREND']} / {weights['MOMENTUM']} / {weights['STRENGTH']} / {weights['SYNERGY']}", "추세/모멘텀/강도/시너지")
+    
+    score_table.add_section()
+    adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
+    score_table.add_row(f"적응형 임계값 ({adaptive_status})", f"강세장: 지수 > {ma_p}일선 & 이평선우상향 & ADX≥{adx_th}", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row("", f"약세장: 지수 < {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row("", "횡보장: 그 외 구간", "[white]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
+    
+    score_table.add_section()
+    if market_status_info:
+        k_adj_str = f"보정: {market_status_info['kospi_adj']:+.1f}점"
+        q_adj_str = f"보정: {market_status_info['kosdaq_adj']:+.1f}점"
+        score_table.add_row("현재 시장 상태", f"KOSPI: {market_status_info['kospi_str']}", k_adj_str, "실시간 국면 분석")
+        score_table.add_row("", f"KOSDAQ: {market_status_info['kosdaq_str']}", q_adj_str, "")
+    else:
+        score_table.add_row("현재 시장 상태", "분석 실패", "-", "-")
+    
     # [추가] 시장 필터링 섹션
     score_table.add_section()
-    filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[dim]OFF[/dim]"
+    filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
     ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
     score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
@@ -327,7 +374,7 @@ def show_help():
         score_table.add_row("", "자산 배분 (마지막)", "[yellow]비중 조절[/]", "리스크/변동성 한도 내에서 집행")
     else:
         score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
-    
+
     config.console.print(score_table)
 
 def flush_input():

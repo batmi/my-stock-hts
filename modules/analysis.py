@@ -24,72 +24,146 @@ from openpyxl.styles import Font
 
 logger = logging.getLogger(__name__)
 
-def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None):
+def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
+    if weights is None: weights = config.SCORING_WEIGHTS
+    
+    # 기본 가중치 대비 비율 계산 (유연한 배점 적용)
+    # 기본값: TREND(4.0), MOMENTUM(2.5), STRENGTH(1.5), SYNERGY(2.0)
+    r_trend = weights.get("TREND", 4.0) / 4.0
+    r_mom = weights.get("MOMENTUM", 2.5) / 2.5
+    r_str = weights.get("STRENGTH", 1.5) / 1.5
+    r_syn = weights.get("SYNERGY", 2.0) / 2.0
+
     score = 0
     details = []
 
     # 1. Trend Factor (4.0점)
     if ema20 is not None and price > ema20: 
-        score += 0.5
-        details.append("EMA: 현재가 > 20일선 (+0.5)")
+        s = 0.5 * r_trend
+        score += s
+        details.append(f"EMA: 현재가 > 20일선 (+{s:.1f})")
     if ema20 is not None and ema60 is not None and ema20 > ema60: 
-        score += 0.5
-        details.append("EMA: 20일선 > 60일선 (+0.5)")
+        s = 0.5 * r_trend
+        score += s
+        details.append(f"EMA: 20일선 > 60일선 (+{s:.1f})")
     if ema60 is not None and ema120 is not None and ema60 > ema120: 
-        score += 0.5
-        details.append("EMA: 60일선 > 120일선 (+0.5)")
+        s = 0.5 * r_trend
+        score += s
+        details.append(f"EMA: 60일선 > 120일선 (+{s:.1f})")
     
     if macd is not None and macd_signal is not None:
         if macd > macd_signal:
-            score += 1.0
-            details.append("MACD: 골든크로스 (매수 우위) (+1.0)")
+            s = 1.0 * r_trend
+            score += s
+            details.append(f"MACD: 골든크로스 (매수 우위) (+{s:.1f})")
         if macd > 0:
-            score += 0.5
-            details.append("MACD: 0선 상회 (상승 국면) (+0.5)")
+            s = 0.5 * r_trend
+            score += s
+            details.append(f"MACD: 0선 상회 (상승 국면) (+{s:.1f})")
 
     if sar is not None and price > sar: 
-        score += 1.0
-        details.append("SAR: 주가 아래 (상승 추세) (+1.0)")
+        s = 1.0 * r_trend
+        score += s
+        details.append(f"SAR: 주가 아래 (상승 추세) (+{s:.1f})")
     
     # 2. Momentum Factor (2.5점)
     if rsi is not None:
         if 50 <= rsi <= 75: 
-            score += 1.5
-            details.append(f"RSI: {rsi:.1f} (강세 구간) (+1.5)")
+            s = 1.5 * r_mom
+            score += s
+            details.append(f"RSI: {rsi:.1f} (강세 구간) (+{s:.1f})")
         elif 30 <= rsi < 50: 
-            score += 0.5
-            details.append(f"RSI: {rsi:.1f} (반등/회복) (+0.5)")
+            s = 0.5 * r_mom
+            score += s
+            details.append(f"RSI: {rsi:.1f} (반등/회복) (+{s:.1f})")
     
     if cci is not None:
         if cci > 0: 
-            score += 0.5
-            details.append(f"CCI: {cci:.1f} (상승 추세) (+0.5)")
+            s = 0.5 * r_mom
+            score += s
+            details.append(f"CCI: {cci:.1f} (상승 추세) (+{s:.1f})")
         if cci > 100: 
-            score += 0.5
-            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+0.5)")
+            s = 0.5 * r_mom
+            score += s
+            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+{s:.1f})")
 
     # 3. Strength & Volume Factor (1.5점)
     if adx is not None and adx >= 20: 
-        score += 0.5
-        details.append(f"ADX: {adx:.1f} (추세 형성) (+0.5)")
+        s = 0.5 * r_str
+        score += s
+        details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.1f})")
 
     if obv_trend: 
-        score += 1.0
-        details.append("OBV: 이동평균 상회 (수급 양호) (+1.0)")
+        s = 1.0 * r_str
+        score += s
+        details.append(f"OBV: 이동평균 상회 (수급 양호) (+{s:.1f})")
 
     # 4. Synergy Bonus (2.0점)
     # Trend Confirmation
     if (ema20 and ema60 and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
-        score += 1.0
-        details.append("★ 추세 확증: 정배열+MACD양수+ADX (+1.0)")
+        s = 1.0 * r_syn
+        score += s
+        details.append(f"★ 추세 확증: 정배열+MACD양수+ADX (+{s:.1f})")
         
     # Momentum Thrust
     if (macd is not None and macd_signal is not None and macd > macd_signal) and (rsi is not None and rsi >= 50) and obv_trend:
-        score += 1.0
-        details.append("★ 모멘텀 폭발: MACD골든+RSI강세+OBV (+1.0)")
+        s = 1.0 * r_syn
+        score += s
+        details.append(f"★ 모멘텀 폭발: MACD골든+RSI강세+OBV (+{s:.1f})")
 
     return score, details
+
+def get_market_regime(market_type="KOSPI"):
+    """시장 국면 판단 (Bull/Bear/Sideways)"""
+    try:
+        # [보완] KIS API 우선 사용 (데이터 정합성 향상)
+        # KIS API 지수 코드: KOSPI(0001), KOSDAQ(1001)
+        kis_code = "0001" if market_type == "KOSPI" else "1001"
+        
+        # 1. KIS API 조회 시도
+        df = api.get_domestic_index_chart(kis_code)
+        
+        # 2. 실패 시 yfinance 조회 시도 (Fallback)
+        if df is None or df.empty or len(df) < 60:
+            yf_ticker = "^KS11" if market_type == "KOSPI" else "^KQ11"
+            df = api.get_chart_data(yf_ticker, is_overseas=True)
+        
+        if df is None or df.empty or len(df) < 60:
+            return "Sideways", 0.0 # 데이터 부족 시 횡보로 가정
+            
+        current_price = float(df.iloc[-1]['close'])
+        
+        # 지표 계산
+        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 60)
+        adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
+        
+        ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+        
+        # MA 기울기 (최근 5일)
+        ma_series = df['close'].rolling(window=ma_period).mean()
+        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
+        
+        # ADX 계산
+        ind = indicators.calculate_indicators(df)
+        adx = ind['adx']
+        
+        # 국면 판단 로직
+        # 1. 강세장: 지수 > MA & 기울기 > 0 & ADX > 기준
+        if current_price > ma_val and slope > 0 and adx >= adx_threshold:
+            return "Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -1.0)
+            
+        # 2. 약세장: 지수 < MA
+        elif current_price < ma_val:
+            return "Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 1.0)
+            
+        # 3. 횡보장: 그 외
+        else:
+            return "Sideways", config.MARKET_REGIME_PARAMS.get("SIDEWAYS_SCORE_ADJ", 0.0)
+            
+    except Exception as e:
+        logger.error(f"시장 국면 판단 오류: {e}")
+        return "Sideways", 0.0
 
 def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
@@ -136,7 +210,9 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
         
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
     
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal)
+    # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
+    weights = thresholds.get("WEIGHTS") if thresholds else None
+    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -290,6 +366,55 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
 
+    # [추가] 개별 룰 로드 및 설정 준비
+    custom_rule = db_manager.db.get_stock_strategy(code)
+    rule_applied = False
+    
+    # 기본값 설정
+    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+    buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+    weights = config.SCORING_WEIGHTS
+    
+    if custom_rule:
+        rule_applied = True
+        buy_score = custom_rule['buy_score']
+        buy_rsi = custom_rule['buy_rsi']
+        if custom_rule.get('weights'):
+            try:
+                w_data = custom_rule['weights']
+                if isinstance(w_data, str): weights = json.loads(w_data)
+                elif isinstance(w_data, dict): weights = w_data
+            except: pass
+        if custom_rule.get('buy_vol_strength'):
+            buy_vol = custom_rule['buy_vol_strength']
+
+    # [추가] 적응형 임계값 적용 (시장 국면 보정)
+    score_adj = 0.0
+    regime_msg = ""
+    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+        market_type = "KOSPI"
+        try:
+            # API로 시장 구분 확인
+            cp = api.get_current_price_data(code, False)
+            if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
+                market_type = "KOSDAQ"
+        except: pass
+        
+        regime, score_adj = get_market_regime(market_type)
+        if score_adj != 0:
+            buy_score += score_adj
+            regime_msg = f" [dim](시장국면 보정 {score_adj:+.1f}점)[/dim]"
+
+    # [추가] 임계값 및 가중치 딕셔너리 구성
+    thresholds = {
+        "BUY_SCORE": buy_score,
+        "BUY_RSI_MAX": buy_rsi,
+        "RISE_SCORE": rise_score,
+        "WEIGHTS": weights
+    }
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -323,12 +448,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+            thresholds=thresholds # [수정] 임계값 및 가중치 전달
         )
         
         score, details = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+            weights=weights
         )
 
         # [추가] 체결강도 조회 (국내주식인 경우만)
@@ -512,9 +639,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
     
     # 매수 조건 체크
-    buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+    buy_score_limit = buy_score
+    buy_rsi_limit = thresholds["BUY_RSI_MAX"]
     buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+    if rule_applied and custom_rule.get('buy_vol_strength'):
+        buy_vol_limit = custom_rule['buy_vol_strength']
     
     is_buy_score = score >= buy_score_limit
     is_buy_rsi = ind['rsi'] < buy_rsi_limit
@@ -527,7 +656,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
-    if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
+    if not is_buy_score: buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상){regime_msg}")
     if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
     buy_reason = ", ".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
@@ -704,7 +833,8 @@ def get_analysis_params():
     params = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+        "WEIGHTS": config.SCORING_WEIGHTS # [추가] 가중치 포함
     }
     
     config.console.print("\n[bold]분석 파라미터 설정 (Enter: 기본값 사용, q: 취소)[/bold]")
@@ -966,7 +1096,17 @@ def analyze_market_stocks(market_type):
         c_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         c_rise = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         c_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-        config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점")
+        
+        # [추가] 적응형 임계값 적용 안내
+        adj_msg = ""
+        score_adj = 0.0
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+            regime, score_adj = get_market_regime(market_type)
+            if score_adj != 0:
+                adj_msg = f" (시장국면 보정 {score_adj:+.1f}점 적용)"
+                c_buy += score_adj # 표시용 보정
+
+        config.console.print(f"현재 설정: 매수 {c_buy}점{adj_msg} / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점")
 
         config.console.print()
         # 파라미터 설정
@@ -982,7 +1122,8 @@ def analyze_market_stocks(market_type):
                 "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
                 "BUY_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0),
                 "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
-                "OUTPUT_FILTER": "BUY"
+                "OUTPUT_FILTER": "BUY",
+                "WEIGHTS": config.SCORING_WEIGHTS # [추가] 가중치 전달
             }
             config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
@@ -992,6 +1133,10 @@ def analyze_market_stocks(market_type):
         config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
         config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
         config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = params["BUY_VOL_STRENGTH"]
+        
+        # [추가] 파라미터에 보정값 반영 (워커 전달용)
+        if score_adj != 0:
+            params["BUY_SCORE"] += score_adj
 
         config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
 

@@ -531,6 +531,22 @@ class TelegramCommander:
         custom_rule = db_manager.db.get_stock_strategy(code)
         rule_tag = " [개별]" if custom_rule else ""
 
+        # [수정] 기본값 설정
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        weights = config.SCORING_WEIGHTS
+        
+        # [수정] 개별 룰 적용
+        if custom_rule:
+            buy_score = custom_rule['buy_score']
+            buy_rsi = custom_rule['buy_rsi']
+            if custom_rule.get('weights'):
+                try:
+                    w_data = custom_rule['weights']
+                    if isinstance(w_data, str): weights = json.loads(w_data)
+                    elif isinstance(w_data, dict): weights = w_data
+                except: pass
+
         try:
             # 3. 데이터 조회 및 분석
             df = api.get_chart_data(code, is_overseas)
@@ -557,13 +573,38 @@ class TelegramCommander:
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
+            # [수정] 적응형 임계값 적용
+            score_adj = 0.0
+            regime_msg = ""
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+                # 시장 구분 확인
+                market_type = "KOSPI"
+                try:
+                    cp = api.get_current_price_data(code, False)
+                    if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
+                        market_type = "KOSDAQ"
+                except: pass
+                
+                regime, score_adj = analysis.get_market_regime(market_type)
+                if score_adj != 0:
+                    buy_score += score_adj
+                    regime_msg = f" [시장국면 보정 {score_adj:+.1f}점]"
+
+            thresholds = {
+                "BUY_SCORE": buy_score,
+                "BUY_RSI_MAX": buy_rsi,
+                "WEIGHTS": weights
+            }
+
             state, _, reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                thresholds=thresholds # [수정] thresholds 전달
             )
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                weights=weights # [수정] weights 전달
             )
             
             # 4. 메시지 구성
@@ -597,20 +638,20 @@ class TelegramCommander:
                 if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
             
-            # 매수/보유 판단 로직
-            buy_score_limit = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-            buy_rsi_limit = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+            # [수정] 매수/보유 판단 로직 (보정된 기준 사용)
+            buy_score_limit = buy_score
+            buy_rsi_limit = buy_rsi
             
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
             is_safe_state = state not in ["위험", "주의"]
             
             if is_buy_score and is_buy_rsi and is_safe_state:
-                buy_result = "매수 가능 (조건 충족)"
+                buy_result = f"매수 가능 (조건 충족{regime_msg})"
             else:
                 reasons = []
                 if not is_safe_state: reasons.append(f"상태:{state}")
-                if not is_buy_score: reasons.append(f"점수미달({score}<{buy_score_limit})")
+                if not is_buy_score: reasons.append(f"점수미달({score}<{buy_score_limit}{regime_msg})")
                 if not is_buy_rsi:
                     rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "N/A"
                     reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")

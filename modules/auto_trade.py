@@ -4,6 +4,7 @@ import time
 import requests
 import json
 import os
+import sqlite3 # [추가] DB 직접 접근용
 from datetime import datetime, timedelta
 from collections import Counter
 from rich.prompt import Prompt
@@ -52,6 +53,67 @@ class OrderStatus:
     FILLED = "FILLED"               # 전량 체결
     CANCELED = "CANCELED"           # 취소
     REJECTED = "REJECTED"           # 거부/에러
+
+# [추가] DB 스키마 보정 및 가중치 관리 헬퍼 함수
+def _ensure_db_weights_column():
+    """stock_strategies 테이블에 weights 컬럼이 없으면 추가"""
+    try:
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
+            if not cursor.fetchone(): return
+
+            cursor.execute("PRAGMA table_info(stock_strategies)")
+            columns = [info[1] for info in cursor.fetchall()]
+            if 'weights' not in columns:
+                cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
+                conn.commit()
+    except Exception as e:
+        logger.error(f"DB 스키마 업데이트 실패: {e}")
+
+def _save_rule_weights(code, weights):
+    """가중치 정보를 DB에 직접 저장 (JSON 직렬화)"""
+    try:
+        _ensure_db_weights_column()
+        weights_json = json.dumps(weights) if weights else None
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE stock_strategies SET weights = ? WHERE code = ?", (weights_json, code))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"가중치 저장 실패: {e}")
+
+def _enrich_rules_with_weights(rules):
+    """DB에서 weights 컬럼을 조회하여 룰 리스트에 병합"""
+    if not rules: return rules
+    try:
+        _ensure_db_weights_column()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, weights FROM stock_strategies")
+            rows = cursor.fetchall()
+            
+            weights_map = {}
+            for row in rows:
+                if row['weights']:
+                    try:
+                        weights_map[row['code']] = json.loads(row['weights'])
+                    except: pass
+            
+            # Row 객체일 수 있으므로 dict로 변환하며 병합
+            new_rules = []
+            for r in rules:
+                r_dict = dict(r)
+                if r_dict['code'] in weights_map:
+                    r_dict['weights'] = weights_map[r_dict['code']]
+                elif 'weights' not in r_dict:
+                    r_dict['weights'] = None
+                new_rules.append(r_dict)
+            return new_rules
+    except Exception as e:
+        logger.error(f"가중치 로드 실패: {e}")
+        return rules
 
 class ConclusionMonitor:
     _instance = None
@@ -190,6 +252,7 @@ class ConclusionMonitor:
         
         # [추가] 개별 룰 로드 (체결 알림 시 정보 표시용)
         custom_rules = db_manager.db.get_all_stock_strategies()
+        custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
         rules_map = {r['code']: r for r in custom_rules}
         
         try:
@@ -452,7 +515,8 @@ class DefaultStrategy:
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
         )
         
-        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
+        # [수정] 가중치(WEIGHTS) 전달
+        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
         
         # [추가] 체결강도 조건 체크
         min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]) if thresholds else config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
@@ -512,7 +576,9 @@ class DefaultStrategy:
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
             )
-            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'))
+            
+            # [수정] 가중치(WEIGHTS) 전달
+            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
 
             # 4. RSI 과열 익절
             if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
@@ -2226,6 +2292,7 @@ class AutoTrader:
 
         # [추가] 개별 룰 로드
         custom_rules = db_manager.db.get_all_stock_strategies()
+        custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
         rules_map = {r['code']: r for r in custom_rules}
         
         # [추가] 거래 제한 종목 로드
@@ -2235,6 +2302,13 @@ class AutoTrader:
         # 모의투자: 초당 2건 -> 0.5초 + 여유 / 실전투자: 초당 20건 -> 0.05초 + 여유
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
         safe_delay = (1.0 / tps) * 1.2  # 20% 여유 버퍼
+        
+        # [추가] 시장 국면 판단 (적응형 임계값용) - 매도 분석 시에도 상태 분류를 위해 필요
+        market_regime_adj = {}
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+            for m_type in ["KOSPI", "KOSDAQ"]:
+                regime, adj = analysis.get_market_regime(m_type)
+                market_regime_adj[m_type] = adj
 
         for item in holdings:
             if not self.is_running: break
@@ -2271,6 +2345,10 @@ class AutoTrader:
             # [추가] 종목별 룰 적용
             rule = rules_map.get(code)
             
+            # [추가] 적응형 임계값 보정치 계산
+            market_type = self._get_stock_market_type(code)
+            score_adj = market_regime_adj.get(market_type, 0.0)
+            
             # 기본값 설정
             ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
             ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
@@ -2284,7 +2362,15 @@ class AutoTrader:
                     "TAKE_PROFIT_RATE": rule['take_profit'],
                     "STOP_LOSS_RATE": rule['stop_loss'],
                     "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
-                    "SELL_SCORE": rule['sell_score']
+                    "SELL_SCORE": rule['sell_score'],
+                    "WEIGHTS": rule.get('weights'), # [추가] 가중치 전달
+                    "BUY_SCORE": rule['buy_score'] + score_adj # [추가] 상태 분류용 보정된 매수 기준
+                }
+            else:
+                # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
+                thresholds = {
+                    "WEIGHTS": config.SCORING_WEIGHTS,
+                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj
                 }
 
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
@@ -2341,7 +2427,17 @@ class AutoTrader:
             action_str = "매도" if result['action'] == 'sell' else "보유"
             
             rule_msg = " [개별 룰 적용]" if rule else ""
-            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, 판단={action_str}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}{rule_msg}")
+            
+            # [추가] 가중치 및 보정된 매수 기준 점수 정보 로깅
+            extra_info = ""
+            if thresholds:
+                bs = thresholds.get('BUY_SCORE')
+                if bs is not None: extra_info += f", 기준={bs:.1f}"
+                
+                w = thresholds.get('WEIGHTS')
+                if w: extra_info += f", 가중치={w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+
+            self.log(f"[보유분석] {name}({code}): 수익률={profit_rate:.2f}%, 점수={result['score']}, 상태={result['state']}, 판단={action_str}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}{extra_info}{rule_msg}")
 
             if result['action'] == 'sell':
                 reason = result['reason']
@@ -2438,6 +2534,7 @@ class AutoTrader:
             
         # [추가] 개별 룰 로드
         custom_rules = db_manager.db.get_all_stock_strategies()
+        custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
         rules_map = {r['code']: r for r in custom_rules}
 
         # 1. 후보 분석
@@ -2463,6 +2560,15 @@ class AutoTrader:
         # [추가] Rate Limit 준수를 위한 딜레이 설정
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
         safe_delay = (1.0 / tps) * 1.2  # 20% 여유 버퍼
+        
+        # [추가] 시장 국면 판단 (적응형 임계값용)
+        market_regime_adj = {} # Market Type -> Score Adj
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+            for m_type in ["KOSPI", "KOSDAQ"]:
+                regime, adj = analysis.get_market_regime(m_type)
+                market_regime_adj[m_type] = adj
+                if self.consecutive_errors == 0:
+                    self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
 
         for item in targets:
             if not self.is_running: break
@@ -2503,12 +2609,27 @@ class AutoTrader:
             # [추가] 개별 룰 적용
             rule = rules_map.get(code)
             thresholds = None
+            
+            # [추가] 적응형 임계값 적용
+            market_type = self._get_stock_market_type(code)
+            score_adj = market_regime_adj.get(market_type, 0.0)
+            
+            base_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            
             if rule:
+                # 개별 룰이 있으면 개별 룰 기준에 보정값 적용
                 thresholds = {
-                    "BUY_SCORE": rule['buy_score'],
+                    "BUY_SCORE": rule['buy_score'] + score_adj,
                     "BUY_RSI_MAX": rule['buy_rsi'],
                     # [수정] 개별 룰에 체결강도가 있으면 사용, 없으면 전역 설정 사용
-                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"])
+                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]),
+                    "WEIGHTS": rule.get('weights') # [추가] 가중치 전달
+                }
+            else:
+                # 전역 설정에 보정값 적용
+                thresholds = {
+                    "BUY_SCORE": base_buy_score + score_adj,
+                    "WEIGHTS": config.SCORING_WEIGHTS # [추가] 명시적 전달
                 }
             
             result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds)
@@ -2960,6 +3081,7 @@ def _select_stock_for_rules():
 def _view_stock_rules():
     """설정된 룰 조회"""
     custom_rules = db_manager.db.get_all_stock_strategies()
+    custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
     if not custom_rules:
         console.print("\n[yellow]설정된 개별 룰이 없습니다.[/yellow]")
         return
@@ -2969,16 +3091,23 @@ def _view_stock_rules():
     table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
+    table.add_column("가중치(T/M/S/Syn)", justify="center", style="dim") # [추가]
     table.add_column("트레일링", justify="center")
     table.add_column("메모", justify="left", style="dim")
     table.add_column("수정일", justify="center", style="dim")
     
     for i, r in enumerate(custom_rules):
+        w_str = "기본"
+        if r.get('weights'):
+            w = r['weights']
+            w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+
         table.add_row(
             f"{r['name']}({r['code']})",
             f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
+            w_str,
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
             r.get('memo', ''),
             r['updated_at']
@@ -3004,6 +3133,9 @@ def _input_and_save_rule(code, name):
     
     # 기존 설정 로드
     existing = db_manager.db.get_stock_strategy(code)
+    if existing:
+        existing = _enrich_rules_with_weights([existing])[0] # [추가] 가중치 보강
+
     defaults = {
         "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
@@ -3014,7 +3146,8 @@ def _input_and_save_rule(code, name):
         "take_profit_rsi": config.SELL_STRATEGY["TAKE_PROFIT_RSI"],
         "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
         "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0),
-        "memo": ""
+        "memo": "",
+        "weights": None # [추가] 가중치 기본값 (None이면 전역 설정 사용)
     }
     
     current = existing if existing else defaults.copy()
@@ -3076,6 +3209,42 @@ def _input_and_save_rule(code, name):
             p_str = f"${sell_price:,.2f}" if is_overseas else f"{int(sell_price):,}원"
             console.print(f"   └ [cyan]예상 매도 가격: {p_str} (발동 직후 하락 시)[/cyan]")
         
+        # [추가] 가중치 설정 입력
+        console.print("\n[스코어링 가중치 설정]")
+        curr_weights = current.get('weights')
+        
+        while True:
+            # 현재 설정값 또는 전역 설정값 로드
+            temp_weights = curr_weights.copy() if curr_weights else config.SCORING_WEIGHTS.copy()
+            
+            console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10.0점 설정)[/dim]")
+            
+            def ask_weight(key, desc, default_val):
+                v = Prompt.ask(f"{desc} [dim](현재: {default_val})[/dim]", default=str(default_val))
+                if v.lower() == 'q': raise QuitInput()
+                return float(v)
+
+            try:
+                w_trend = ask_weight("TREND", "추세 (TREND)", temp_weights.get('TREND', 4.0))
+                w_mom = ask_weight("MOMENTUM", "모멘텀 (MOMENTUM)", temp_weights.get('MOMENTUM', 2.5))
+                w_str = ask_weight("STRENGTH", "강도 (STRENGTH)", temp_weights.get('STRENGTH', 1.5))
+                w_syn = ask_weight("SYNERGY", "시너지 (SYNERGY)", temp_weights.get('SYNERGY', 2.0))
+            except ValueError:
+                console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+                continue
+
+            total_score = w_trend + w_mom + w_str + w_syn
+            
+            if abs(total_score - 10.0) > 0.1:
+                console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (합계 10.0점)[/bold red]")
+                console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
+                # 입력한 값으로 임시 가중치 업데이트하여 재입력 시 보여줌
+                curr_weights = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+                continue
+            
+            new_strategy['weights'] = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+            break
+
         # [추가] 메모 입력
         new_strategy['memo'] = ask_val('memo', "메모 (Memo)", str)
         
@@ -3090,6 +3259,9 @@ def _input_and_save_rule(code, name):
             return
 
         db_manager.db.save_stock_strategy(code, name, new_strategy)
+        # [추가] 가중치 정보 별도 저장 (DB 스키마 보정)
+        _save_rule_weights(code, new_strategy.get('weights'))
+
         console.print(f"\n[bold green]'{name}' 종목의 트레이딩 룰이 저장되었습니다.[/bold green]")
         
         console.print()
@@ -3102,6 +3274,12 @@ def _input_and_save_rule(code, name):
         table.add_row("익절/손절", f"익절 +{new_strategy['take_profit']}% / 손절 {new_strategy['stop_loss']}%")
         table.add_row("RSI 익절", f"RSI {new_strategy['take_profit_rsi']} 초과")
         table.add_row("트레일링 스탑", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
+        
+        w_disp = "기본 설정"
+        if new_strategy.get('weights'):
+            w = new_strategy['weights']
+            w_disp = f"{w['TREND']:.1f}/{w['MOMENTUM']:.1f}/{w['STRENGTH']:.1f}/{w['SYNERGY']:.1f}"
+        table.add_row("가중치", w_disp)
         table.add_row("메모", new_strategy['memo'])
         
         console.print(table)
@@ -3121,6 +3299,7 @@ def _set_stock_rules():
 def _modify_stock_rules():
     """룰 변경 (기존 목록에서 선택)"""
     custom_rules = db_manager.db.get_all_stock_strategies()
+    custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
     if not custom_rules:
         console.print("\n[yellow]저장된 개별 룰이 없습니다.[/yellow]")
         return
@@ -3133,16 +3312,23 @@ def _modify_stock_rules():
     table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
     table.add_column("매도(점수/RSI)", justify="center")
     table.add_column("익절/손절", justify="center")
+    table.add_column("가중치", justify="center", style="dim") # [추가]
     table.add_column("트레일링", justify="center")
     table.add_column("수정일", justify="center", style="dim")
     
     for i, r in enumerate(custom_rules):
+        w_str = "기본"
+        if r.get('weights'):
+            w = r['weights']
+            w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+
         table.add_row(
             str(i+1),
             f"{r['name']} ({r['code']})",
             f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
             f"{r['sell_score']}점 / {r['take_profit_rsi']}",
             f"+{r['take_profit']}% / {r['stop_loss']}%",
+            w_str,
             f"+{r['ts_activation']}% / -{r['ts_callback']}%",
             r['updated_at']
         )
