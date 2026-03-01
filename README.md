@@ -245,6 +245,7 @@ my-stock-hts/
 ├── logs/               # [자동 생성] 로그 파일 저장소
 ├── chart/              # [자동 생성] 차트 이미지 저장소
 ├── data/               # [자동 생성] 엑셀/CSV 내보내기 저장소
+├── test/               # 테스트 스크립트 저장소
 └── modules/            # 기능별 모듈 폴더
     ├── db_manager.py   # DB 연결 및 쿼리 관리
     ├── telegram_bot.py # 텔레그램 봇 연동 및 알림

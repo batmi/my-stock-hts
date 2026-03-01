@@ -1122,8 +1122,30 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None):
     """금일 체결 내역 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = datetime.now().strftime("%Y%m%d")
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    return call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params, retries=retries)
+    
+    # [수정] 주식일별주문체결조회 (inquire-daily-ccld) 사용
+    # 실전: TTTC8001R, 모의: VTTC8001R
+    url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+    tr_id = "VTTC8001R" if config.session.is_simulation else "TTTC8001R"
+    
+    params = {
+        "CANO": cano,
+        "ACNT_PRDT_CD": acnt_prdt_cd,
+        "INQR_STRT_DT": today,
+        "INQR_END_DT": today,
+        "SLL_BUY_DVSN_CD": "00",
+        "INQR_DVSN": "00",
+        "PDNO": "",
+        "CCLD_DVSN": "01", # 01: 체결
+        "ORD_GNO_BRNO": "",
+        "ODNO": "",
+        "INQR_DVSN_3": "00",
+        "INQR_DVSN_1": "",
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": ""
+    }
+    
+    return call_api(url, "domestic", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
 
 def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     """미체결 내역 조회 (국내주식) - get_domestic_open_orders의 Alias"""
@@ -1134,54 +1156,48 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     
     if config.session.is_simulation:
-        # [수정] 모의투자: 주식일별체결조회(VTTC8001R) 사용
-        # inquire-psbl-rvsecncl(주식정정취소가능주문조회)는 모의투자 미지원 오류(90000000) 발생
-        # 전략: 1. 미체결(02) 전용 조회(표준) -> 2. 전체(00) 조회 후 필터링(Fallback)
+        # [수정] 모의투자: 주식일별주문체결조회(VTTC8001R) 사용하여 미체결(02) 조회
+        # 모의투자 환경에서 주식정정취소가능주문조회(VTTC8036R) 미지원 이슈 대응
+        url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        tr_id = "VTTC8001R"
         today = datetime.now().strftime("%Y%m%d")
         
-        # 1. 미체결(02) 조회 (표준 방식)
         params = {
-            "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
-            "INQR_STRT_DT": today, "INQR_END_DT": today,
-            "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
-            "PDNO": "", "CCLD_DVSN": "02", 
-            "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00", 
-            "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""
+            "CANO": cano,
+            "ACNT_PRDT_CD": acnt_prdt_cd,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "02", # 02: 미체결
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": ""
         }
         
-        res = call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
-        output1 = res.get('output1', [])
+        res = call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
         
-        if output1:
-            return output1
-            
-        # 2. 결과가 없다면 전체(00) 조회 후 잔량 필터링 (Fallback)
-        # (모의투자 서버 이슈로 02 조회 시 누락되는 경우 대비)
-        if safe_int(res.get('output2', {}).get('tot_ord_qty')) > 0:
-            # [추가] Fallback 실행 로그 기록
-            if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
-                config.console.print("[dim yellow][API] 모의투자 미체결 조회 Fallback 실행 (02 -> 00)[/dim yellow]")
-
-            params["CCLD_DVSN"] = "00"
-            res = call_api("uapi/domestic-stock/v1/trading/inquire-daily-ccld", "domestic", "inquiry", "history", params=params)
-            output1 = res.get('output1', [])
-
-        open_orders = []
-        for order in output1:
-            # 잔량(rmn_qty)이 0보다 큰 경우만 미체결로 간주
-            if safe_int(order.get('rmn_qty')) > 0:
-                open_orders.append(order)
-                
-        return open_orders
+        if res.get('rt_cd') == '0':
+            return res.get('output1', [])
+        return []
 
     else:
-        # 실전투자: 주식정정취소가능주문조회 (TTTC8036R)
+        # [수정] 실전투자: 주식정정취소가능주문조회(TTTC8036R) 사용
+        url = "uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        tr_id = "TTTC8036R"
+        
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
             "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
         }
-        res = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", "domestic", "inquiry", "open_orders", params=params)
+        
+        res = call_api(url, "domestic", "inquiry", "open_orders", params=params, tr_id=tr_id)
+        
         if res.get('rt_cd') == '0':
             return res.get('output', [])
             
