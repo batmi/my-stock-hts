@@ -93,16 +93,6 @@ def get_backtest_data(code, is_overseas, days):
     # 2. KIS API 시도 (Fallback)
     return api.get_chart_data(code, is_overseas)
 
-def get_tick_size(price):
-    """국내 주식 호가 단위 계산"""
-    if price < 2000: return 1
-    if price < 5000: return 5
-    if price < 20000: return 10
-    if price < 50000: return 50
-    if price < 200000: return 100
-    if price < 500000: return 500
-    return 1000
-
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
@@ -189,11 +179,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             
             if is_score_ok:
                 if is_rsi_ok and can_buy_state:
-                    # [수정] 슬리피지 적용 (국내 주식: 1호가 높게 매수)
-                    buy_price = price
-                    if not is_overseas:
-                        tick = get_tick_size(price)
-                        buy_price = int(price + tick)
+                    # [수정] 슬리피지 비율 적용 및 호가 정렬
+                    raw_buy_price = price * (1 + config.SLIPPAGE_RATE)
+                    buy_price = utils.adjust_to_tick(raw_buy_price, is_overseas)
 
                     # [추가] ATR 기반 동적 손절률 계산
                     current_sl_rate = stop_loss_limit
@@ -278,12 +266,10 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if not sell_signal and sell_check_score < sell_score_limit: sell_signal = True; reason = "점수하락"
             
             if sell_signal:
-                # [수정] 슬리피지 적용 (국내 주식: 1호가 낮게 매도)
-                sell_price = price
-                if not is_overseas:
-                    tick = get_tick_size(price)
-                    sell_price = int(price - tick)
-                    if sell_price <= 0: sell_price = int(price)
+                # [수정] 슬리피지 비율 적용 및 호가 정렬
+                raw_sell_price = price * (1 - config.SLIPPAGE_RATE)
+                sell_price = utils.adjust_to_tick(raw_sell_price, is_overseas)
+                if sell_price <= 0: sell_price = utils.adjust_to_tick(price, is_overseas)
 
                 sell_amt = holdings * sell_price
                 fee = sell_amt * 0.0023

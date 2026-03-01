@@ -36,7 +36,8 @@ def _save_dynamic_config():
         "USE_VOLATILITY_TARGETING": getattr(config, 'USE_VOLATILITY_TARGETING', True),
         "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
         "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
-        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
+        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.3),
+        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.001)
     }
     
     try:
@@ -82,6 +83,7 @@ def view_system_config():
     table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
     
+    table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", f"{getattr(config, 'SLIPPAGE_RATE', 0.001)}")
     table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
     if getattr(config, 'USE_VOLATILITY_TARGETING', True):
         table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
@@ -400,6 +402,8 @@ def modify_system_trading_general():
             {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "General",
              "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
             
+            {"desc": "슬리피지 비율", "help": "주문가 보정 비율 (0.001=0.1%)", "name": "SLIPPAGE_RATE", "type": "float", "section": "General",
+             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.001), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
             {"desc": "변동성 타겟팅 사용", "help": "ATR 기반 비중 조절 사용 여부", "name": "USE_VOLATILITY_TARGETING", "type": "bool", "choices": ["y", "n"], "section": "Volatility",
              "get": lambda: getattr(config, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config, 'USE_VOLATILITY_TARGETING', v)}
         ]
@@ -494,6 +498,7 @@ def reset_to_default():
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.3
     config.UNFILLED_ORDER_CANCEL_SECONDS = 600
+    config.SLIPPAGE_RATE = 0.001
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 

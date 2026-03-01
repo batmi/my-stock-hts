@@ -134,6 +134,12 @@ TARGET_VOLATILITY = 0.30           # 목표 연간 변동성 (30%)
 VOLATILITY_SCALING_MAX = 2.0       # 최대 확대 배수 (2배) - 변동성이 낮을 때 포지션 확대 제한
 VOLATILITY_SCALING_MIN = 0.3       # 최소 축소 배수 (0.3배) - 변동성이 높을 때 최소 포지션 유지
 
+# [추가] 슬리피지 비율 (Slippage Rate)
+# 매수/매도 주문 시 현재가 대비 불리한 가격으로 주문을 내어 체결 확률을 높이고,
+# 백테스팅 시 실제 체결 오차를 반영하기 위한 비율입니다.
+# (기본값: 0.001 = 0.1%)
+SLIPPAGE_RATE = 0.001
+
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
@@ -450,6 +456,7 @@ def load_dynamic_config():
             global SYSTEM_MAX_CONSECUTIVE_ERRORS, SYSTEM_TRADING_START_TIME, SYSTEM_TRADING_END_TIME, SYSTEM_MAX_TRADES_PER_DAY, SYSTEM_RISK_PER_TRADE
             global USE_VOLATILITY_TARGETING, TARGET_VOLATILITY, VOLATILITY_SCALING_MAX, VOLATILITY_SCALING_MIN
             global UNFILLED_ORDER_CANCEL_SECONDS
+            global SLIPPAGE_RATE
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
             if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
@@ -480,6 +487,7 @@ def load_dynamic_config():
             if "VOLATILITY_SCALING_MAX" in data: VOLATILITY_SCALING_MAX = data["VOLATILITY_SCALING_MAX"]
             if "VOLATILITY_SCALING_MIN" in data: VOLATILITY_SCALING_MIN = data["VOLATILITY_SCALING_MIN"]
             
+            if "SLIPPAGE_RATE" in data: SLIPPAGE_RATE = data["SLIPPAGE_RATE"]
 
         except Exception as e:
             print(f"[Config] 동적 설정 로드 실패: {e}")

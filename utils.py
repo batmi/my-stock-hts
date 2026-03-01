@@ -5,6 +5,7 @@ import logging
 import config
 import api
 import constants
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -250,3 +251,21 @@ class AccountContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         config.trade_context.use_auto_account = self.original_state
+
+def get_tick_size(price, is_overseas=False):
+    """호가 단위(Tick Size) 반환"""
+    if is_overseas:
+        return 0.01
+    
+    if price < 2000: return 1
+    if price < 5000: return 5
+    if price < 20000: return 10
+    if price < 50000: return 50
+    if price < 200000: return 100
+    if price < 500000: return 500
+    return 1000
+
+def adjust_to_tick(price, is_overseas=False):
+    """가격을 호가 단위에 맞춰 반올림 보정"""
+    tick = get_tick_size(price, is_overseas)
+    return round(price / tick) * tick

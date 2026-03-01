@@ -766,9 +766,11 @@ class TelegramCommander:
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_ma = getattr(config, 'MARKET_FILTER_MA', 20)
         filter_str = f"ON ({filter_ma}일선)" if use_filter else "OFF"
+        slippage = getattr(config, 'SLIPPAGE_RATE', 0.001)
 
         msg += f"\n[기타]\n"
         msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}% (최대 {max_holdings}종목)\n"
+        msg += f"• 슬리피지 비율: {slippage:.4f} ({slippage*100:.2f}%)\n"
         msg += f"• 시장 필터링: {filter_str}\n"
         
         # [추가] 개별 종목 룰 정보

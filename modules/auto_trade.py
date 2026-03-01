@@ -2355,9 +2355,9 @@ class AutoTrader:
                 if applied_sl_rate is not None and "손절" in reason:
                     reason = reason.replace("손절", "ATR손절")
                 
-                # [추가] 매도 체결 확률을 높이기 위해 -1호가 적용
-                tick_size = self._get_tick_size(current_price)
-                order_price = int(current_price - tick_size)
+                # [수정] 슬리피지 비율 적용 (매도 체결 확률 증대)
+                raw_order_price = current_price * (1 - config.SLIPPAGE_RATE)
+                order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
                 if order_price <= 0: order_price = int(current_price)
 
                 if not is_market_open:
@@ -2396,16 +2396,6 @@ class AutoTrader:
                     db_manager.db.delete_trailing_stop(code)
                     if code in self.trailing_stop_cache: # 캐시 삭제
                         del self.trailing_stop_cache[code]
-
-    def _get_tick_size(self, price):
-        """국내 주식 호가 단위 계산"""
-        if price < 2000: return 1
-        if price < 5000: return 5
-        if price < 20000: return 10
-        if price < 50000: return 50
-        if price < 200000: return 100
-        if price < 500000: return 500
-        return 1000
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
         targets = config.session.stock_data.get("stocks_kr", [])
@@ -2692,9 +2682,9 @@ class AutoTrader:
             # [수정] 지정가 주문을 위해 현재가(정수) 확보
             current_price = int(cand['price'])
 
-            # [추가] 매수 체결 확률을 높이기 위해 +1호가 적용
-            tick_size = self._get_tick_size(current_price)
-            order_price = current_price + tick_size
+            # [수정] 슬리피지 비율 적용 및 호가 정렬 (체결 확률 증대)
+            raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
+            order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
             
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
             # 지정가 주문 시 해당 가격 기준으로 조회
