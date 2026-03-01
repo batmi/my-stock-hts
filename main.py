@@ -312,8 +312,14 @@ def show_help():
 
     # [추가] 주문 집행 상세 섹션
     score_table.add_section()
-    score_table.add_row("주문 집행", "매수 주문 시", "[red]+1호가[/]", "체결 확률 확보 (현재가 + 1호가)")
-    score_table.add_row("", "매도 주문 시", "[blue]-1호가[/]", "즉시 체결 유도 (현재가 - 1호가)")
+    slippage_rate = getattr(config, 'SLIPPAGE_RATE', 0.001)
+    if slippage_rate > 0:
+        slippage_val = slippage_rate * 100
+        score_table.add_row("주문 집행", "매수 주문 시", f"[red]+{slippage_val:.2f}%[/]", "체결 확률 확보 (현재가 + 슬리피지)")
+        score_table.add_row("", "매도 주문 시", f"[blue]-{slippage_val:.2f}%[/]", "즉시 체결 유도 (현재가 - 슬리피지)")
+    else:
+        score_table.add_row("주문 집행", "매수 주문 시", "[dim]미사용[/]", "현재가로 주문 (슬리피지 없음)")
+        score_table.add_row("", "매도 주문 시", "[dim]미사용[/]", "현재가로 주문 (슬리피지 없음)")
     score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
     
     config.console.print(score_table)
