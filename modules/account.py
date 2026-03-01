@@ -94,7 +94,7 @@ def sync_today_trades():
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         task = progress.add_task("[green]최신 체결 내역 동기화 중...[/]", total=len(accounts))
         
@@ -172,7 +172,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         progress.add_task("[green]국내 잔고 조회 중...[/]", total=None)
         # [수정] api.get_domestic_balance 직접 호출
@@ -286,7 +286,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         progress.add_task("[green]해외 잔고 조회 중...[/]", total=None)
         # [수정] api.get_overseas_balance 직접 호출
@@ -523,11 +523,10 @@ def _display_asset_status(cano, acnt_prdt_cd):
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         task = progress.add_task("[green]자산 현황 조회 시작...[/]", total=None)
         summary_data = get_asset_status_data(cano, acnt_prdt_cd, progress, task)
-        time.sleep(0.5) # UX Pacing
 
     display_tot_deposit = summary_data['dep_dom'] + summary_data['dep_ovs']
     roi = 0.0
@@ -719,7 +718,7 @@ def export_trade_history_to_excel():
                 BarColumn(),
                 TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 console=config.console,
-                transient=False
+                transient=True
             ) as progress:
                 task = progress.add_task(f"[green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]", total=None)
                 

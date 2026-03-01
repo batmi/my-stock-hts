@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import math
 import logging
 import time
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def show_market_indices():
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             # 1. 히스토리 데이터 다운로드
             task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
@@ -115,7 +116,7 @@ def show_market_indices():
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
@@ -472,7 +473,8 @@ def show_market_indices():
         
         # 테이블 출력 (Progress Context 밖에서 실행)
         try:
-            config.console.print(table)
+            config.console.print(table, crop=False)
+            sys.stdout.flush()
         except Exception as e:
             logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
             config.console.print(f"[red]테이블 출력 실패: {e}[/red]")

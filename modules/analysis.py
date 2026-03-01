@@ -11,6 +11,7 @@ import utils
 import time
 from datetime import datetime
 import urllib.request
+import sys
 import zipfile
 import os
 import pandas as pd
@@ -293,7 +294,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         task = progress.add_task(f"[green]{name}({code}) 데이터 분석 중...[/]", total=None)
 
@@ -583,7 +584,7 @@ def diagnose_group_stocks(market_filter=None):
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
         console=config.console,
-        transient=False
+        transient=True
     ) as progress:
         task = progress.add_task(f"[green]등록된 종목 일괄 진단 중{title_suffix}...[/]", total=len(targets))
         
@@ -694,7 +695,8 @@ def diagnose_group_stocks(market_filter=None):
             cci_str
         )
         
-    config.console.print(table)
+    config.console.print(table, crop=False)
+    sys.stdout.flush()
     config.console.print()
 
 def get_analysis_params():
@@ -788,7 +790,7 @@ def _get_master_stock_list(market_type):
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 console=config.console,
-                transient=False
+                transient=True
             ) as progress:
                 progress.add_task(f"[green]{market_type} 데이터 압축 해제 중...[/]", total=None)
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -802,7 +804,7 @@ def _get_master_stock_list(market_type):
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             task = progress.add_task(f"[green]{market_type} 종목 리스트 파싱 중...[/]", total=file_size)
             
@@ -1073,7 +1075,7 @@ def analyze_market_stocks(market_type):
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             task = progress.add_task("[green]선별된 종목의 업종 정보를 조회 중...[/]", total=len(buy_candidates))
             
@@ -1220,7 +1222,8 @@ def analyze_market_stocks(market_type):
             if (i + 1) % 5 == 0 and (i + 1) < len(page_items):
                 table.add_section()
                 
-        config.console.print(table)
+        config.console.print(table, crop=False)
+        sys.stdout.flush()
         
         if page < total_pages - 1:
             if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (q: 중단)[/dim]", choices=["y", "n", "q"], default="y").lower() in ['q', 'n']:
@@ -1369,7 +1372,7 @@ def save_all_market_analysis():
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             task = progress.add_task(f"[green]엑셀 파일 저장 중... ({os.path.basename(filename)})[/]", total=len(results))
             
@@ -1462,7 +1465,7 @@ def print_table(title, data_list, is_overseas=False):
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
-            transient=False
+            transient=True
         ) as progress:
             task = progress.add_task(f"[cyan]{title}[/cyan]", total=len(data_list))
 
@@ -1705,7 +1708,8 @@ def print_table(title, data_list, is_overseas=False):
         logger.error(f"데이터 분석 중 오류: {e}")
 
     try:
-        config.console.print(table)
+        config.console.print(table, crop=False)
+        sys.stdout.flush()
     except Exception as e:
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
