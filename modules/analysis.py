@@ -365,6 +365,38 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     price_str = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
     table_tech.add_row("현재가", f"{curr_price_color}{price_str}[/]", "이평선 배열 및 위치 기반")
 
+    # ATR (변동성)
+    atr_val = ind.get('atr', 0)
+    vol_str = "-"
+    if atr_val > 0 and current_price > 0:
+        annual_vol = (atr_val / current_price) * math.sqrt(252) * 100
+        vol_str = f"{annual_vol:.1f}%"
+    
+    table_tech.add_row("변동성 (ATR)", f"{int(atr_val):,} ({vol_str})", "연환산 변동성 (리스크)")
+
+    # SAR
+    sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
+    sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
+    table_tech.add_row("SAR 위치", f"{sar_color}{sar_pos}[/]", "파라볼릭 추세 전환")
+
+    # MACD
+    macd_val = ind.get('macd')
+    sig_val = ind.get('macd_signal')
+    
+    macd_str = "-"
+    macd_desc = "추세 확인"
+    if macd_val is not None and sig_val is not None:
+        m_color = "[red]" if macd_val >= sig_val else "[blue]"
+        macd_str = f"{m_color}{macd_val:.2f}[/] / {sig_val:.2f}"
+        macd_desc = "골든크로스 (매수 우위)" if macd_val >= sig_val else "데드크로스 (매도 우위)"
+            
+    table_tech.add_row("MACD (12/26/9)", macd_str, macd_desc)
+
+    # OBV
+    obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
+    obv_color = "[red]" if ind.get('obv_trend') else "[blue]"
+    table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", "이동평균 상회 여부")
+
     # RSI
     rsi_val = ind['rsi']
     rsi_str = f"{rsi_val:.2f}"
@@ -407,15 +439,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         adx_desc = "추세 없음 (횡보)"
     table_tech.add_row("ADX (14)", f"{adx_str} [dim]({adx_desc})[/dim]", "추세 강도 (25 이상 강세)")
 
-    # ATR (변동성)
-    atr_val = ind.get('atr', 0)
-    vol_str = "-"
-    if atr_val > 0 and current_price > 0:
-        annual_vol = (atr_val / current_price) * math.sqrt(252) * 100
-        vol_str = f"{annual_vol:.1f}%"
-    
-    table_tech.add_row("변동성 (ATR)", f"{int(atr_val):,} ({vol_str})", "연환산 변동성 (리스크)")
-
     # CCI
     cci_val = ind['cci']
     cci_str = f"{cci_val:.2f}"
@@ -434,29 +457,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         cci_desc = "과매도 (저점 탐색)"
     table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
 
-    # MACD
-    macd_val = ind.get('macd')
-    sig_val = ind.get('macd_signal')
-    
-    macd_str = "-"
-    macd_desc = "추세 확인"
-    if macd_val is not None and sig_val is not None:
-        m_color = "[red]" if macd_val >= sig_val else "[blue]"
-        macd_str = f"{m_color}{macd_val:.2f}[/] / {sig_val:.2f}"
-        macd_desc = "골든크로스 (매수 우위)" if macd_val >= sig_val else "데드크로스 (매도 우위)"
-            
-    table_tech.add_row("MACD (12/26/9)", macd_str, macd_desc)
-
-    # OBV
-    obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
-    obv_color = "[red]" if ind.get('obv_trend') else "[blue]"
-    table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", "이동평균 상회 여부")
-    
-    # SAR
-    sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
-    sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
-    table_tech.add_row("SAR 위치", f"{sar_color}{sar_pos}[/]", "파라볼릭 추세 전환")
-    
     # 이평 배열
     ema_align = "알 수 없음"
     ema_color = "[white]"
