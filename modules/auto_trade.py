@@ -2328,13 +2328,6 @@ class AutoTrader:
                     self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 continue
             
-            # [추가] 거래 제한 종목 스킵
-            if code in restricted_stocks:
-                # 매도 제한: 사용자가 수동으로 관리하겠다는 의도로 간주하여 자동 매도 로직 스킵
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    self.log(f"[분석스킵] {name}: 거래 제한 종목")
-                continue
-
             # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
             # 미체결 매도 주문이 있을 경우 중복 매도를 방지하기 위함
             qty = api.safe_int(item.get('ord_psbl_qty'))
@@ -2586,6 +2579,10 @@ class AutoTrader:
             
             code = item['code']; name = item['name']
             
+            # [추가] 거래 제한 종목이면 매수 분석 스킵 (매수 판단 자체를 안 함)
+            if code in restricted_stocks:
+                continue
+            
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매수 방지)
             if code in self.pending_orders:
                 continue
@@ -2664,22 +2661,6 @@ class AutoTrader:
             self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}")
             
             if result['action'] == "buy":
-                # [추가] 거래 제한 종목 체크 (매수 시그널 발생 시 알림)
-                if code in restricted_stocks:
-                    memo = restricted_stocks[code].get('memo', 'No Memo')
-                    self.log(f"매수 스킵 (거래제한): {name} - {memo}")
-                    
-                    # 알림 스로틀링 (1시간에 1번)
-                    last_noti = self.restricted_notified.get(code, 0)
-                    if time.time() - last_noti > 3600:
-                        msg = f"🚫 [매수 제한] {name}({code}) 매수 시그널 감지\n"
-                        msg += f"설정된 제한으로 인해 매수를 건너뜁니다.\n"
-                        msg += f"사유: {memo}\n"
-                        msg += f"점수: {result['score']}점 / RSI: {rsi_val}"
-                        api.send_telegram_message(msg)
-                        self.restricted_notified[code] = time.time()
-                    continue
-
                 candidates.append({
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
