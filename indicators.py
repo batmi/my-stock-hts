@@ -120,6 +120,9 @@ def calculate_indicators(df):
     indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
     
+    # SettingWithCopyWarning 방지를 위해 명시적 복사
+    df = df.copy()
+    
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
     if len(df) >= 20: indicators['ema_20'] = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     if len(df) >= 60: indicators['ema_60'] = df['close'].ewm(span=60, adjust=False).mean().iloc[-1]

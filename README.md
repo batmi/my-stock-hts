@@ -98,7 +98,7 @@ chmod +x run.sh
 1. 생성한 봇에게 아무 메시지나 전송 (예: "start").
 2. 프로젝트 폴더의 `get_telegram_chat_id.py` 실행:
    ```bash
-   python test/get_telegram_chat_id.py
+   python tools/get_telegram_chat_id.py
    ```
 3. 토큰을 입력하면 **Chat ID**가 출력됩니다.
 
@@ -271,7 +271,8 @@ my-stock-hts/
 ├── logs/                 # [자동 생성] 로그 파일 저장소
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
-├── test/                 # 테스트 및 도구 스크립트 (Chat ID 조회 등)
+├── tools/                # 유틸리티 도구 스크립트 (Chat ID 조회 등)
+├── tests/                # [신규] Pytest 단위/통합 테스트 코드
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── telegram_bot.py   # 텔레그램 봇 연동 및 알림

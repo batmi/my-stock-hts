@@ -14,49 +14,50 @@ from rich.padding import Padding
 from google import genai
 from google.genai import types
 import config
+from modules import db_manager
 
 logger = logging.getLogger(__name__)
 
-def _get_db_connection():
-    return sqlite3.connect(config.DB_FILE_PATH)
-
 def _init_theme_db():
     try:
-        with _get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
+        # Use the global db instance
+        conn = db_manager.db._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
                 CREATE TABLE IF NOT EXISTS theme_analysis_cache (
                     key TEXT PRIMARY KEY,
                     updated_at TEXT,
                     data TEXT
                 )
             """)
-            conn.commit()
+        conn.commit()
     except Exception: pass
 
 def _save_theme_analysis(result):
     try:
         _init_theme_db()
-        with _get_db_connection() as conn:
-            cursor = conn.cursor()
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("""
+        # Use the global db instance
+        conn = db_manager.db._get_conn()
+        cursor = conn.cursor()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
                 INSERT OR REPLACE INTO theme_analysis_cache (key, updated_at, data)
                 VALUES (?, ?, ?)
             """, ("GEMINI_MARKET_TREND", now_str, result))
-            conn.commit()
+        conn.commit()
     except Exception as e:
         logger.error(f"테마 분석 저장 실패: {e}")
 
 def _load_theme_analysis():
     try:
         _init_theme_db()
-        with _get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT updated_at, data FROM theme_analysis_cache WHERE key = ?", ("GEMINI_MARKET_TREND",))
-            row = cursor.fetchone()
-            if row:
-                return {'updated_at': row[0], 'data': row[1]}
+        # Use the global db instance
+        conn = db_manager.db._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT updated_at, data FROM theme_analysis_cache WHERE key = ?", ("GEMINI_MARKET_TREND",))
+        row = cursor.fetchone()
+        if row:
+            return {'updated_at': row[0], 'data': row[1]}
     except Exception as e:
         logger.error(f"테마 분석 로드 실패: {e}")
     return None

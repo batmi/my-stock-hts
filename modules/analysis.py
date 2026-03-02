@@ -872,8 +872,8 @@ def diagnose_group_stocks(market_filter=None):
     table_title = f"전체 종목 분석 결과{title_suffix}"
     
     # [추가] 적용된 가중치 정보 표시 (검증용)
-    if params and 'WEIGHTS' in params:
-        w = params['WEIGHTS']
+    if config.SCORING_WEIGHTS:
+        w = config.SCORING_WEIGHTS
         w_str = f"{w.get('TREND', 4.0)}/{w.get('MOMENTUM', 2.5)}/{w.get('STRENGTH', 1.5)}/{w.get('SYNERGY', 2.0)}"
         table_title += f" [dim](가중치: {w_str})[/dim]"
 

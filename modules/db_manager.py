@@ -16,9 +16,16 @@ class DBManager:
         self.local = threading.local() # 스레드별 로컬 저장소
         self._init_db()
 
+    def __del__(self):
+        """객체 소멸 시 연결 종료"""
+        try:
+            if hasattr(self.local, 'conn') and self.local.conn:
+                self.local.conn.close()
+        except: pass
+
     def _get_conn(self):
         """스레드별 DB 연결 객체 반환 (없으면 생성)"""
-        if not hasattr(self.local, 'conn'):
+        if not hasattr(self.local, 'conn') or self.local.conn is None:
             self.local.conn = sqlite3.connect(self.db_path, timeout=60)
             self.local.conn.execute("PRAGMA journal_mode=WAL;") # WAL 모드 설정
             self.local.conn.row_factory = sqlite3.Row
@@ -73,7 +80,8 @@ class DBManager:
                         ts_activation REAL,
                         ts_callback REAL,
                         updated_at TEXT,
-                        memo TEXT
+                        memo TEXT,
+                        weights TEXT
                     )
                 ''')
                 
@@ -109,6 +117,14 @@ class DBManager:
                             config.console.print("[dim green][DB] stock_strategies 테이블에 memo 컬럼이 추가되었습니다.[/dim green]")
                     except Exception as e:
                         config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(memo): {e}[/red]")
+
+                if "weights" not in strat_columns:
+                    try:
+                        cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
+                        if config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] stock_strategies 테이블에 weights 컬럼이 추가되었습니다.[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(weights): {e}[/red]")
 
                 conn.commit()
                 conn.close()
@@ -357,16 +373,18 @@ class DBManager:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             memo = strategy.get('memo', '')
+            weights = strategy.get('weights')
+            weights_json = json.dumps(weights) if weights else None
             cursor.execute('''
                 INSERT OR REPLACE INTO stock_strategies 
-                (code, name, buy_score, buy_rsi, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (code, name, buy_score, buy_rsi, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (code, name, 
                   strategy['buy_score'], strategy['buy_rsi'], 
                   strategy['sell_score'], strategy['stop_loss'], 
                   strategy['take_profit'], strategy['take_profit_rsi'], 
                   strategy['ts_activation'], strategy['ts_callback'], 
-                  now, memo))
+                  now, memo, weights_json))
             conn.commit()
 
     def get_stock_strategy(self, code):
