@@ -36,9 +36,11 @@ TELEGRAM_INSTANCE_NAME = "HTS"
 TELEGRAM_POLLING_TIMEOUT = 10
 ENABLE_TELEGRAM = True
 
+# ==========================================================
 # [설정] Google Gemini API 설정 (무료 대안)
+# ==========================================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
