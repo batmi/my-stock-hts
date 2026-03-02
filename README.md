@@ -245,46 +245,46 @@ chmod +x run.sh
 *   **설정**: `config.py` 또는 설정 메뉴에서 보정값(`BULL_SCORE_ADJ`, `BEAR_SCORE_ADJ` 등)을 변경할 수 있습니다.
 
 ### 7. 테마 트랜드 분석
-*   **개요**: Google Gemini의 **Google Search Grounding** 기능을 활용하여 실시간 웹 검색을 통해 현재 시장의 주도 테마를 분석합니다.
+*   **개요**: 네이버 금융 데이터 크롤링과 Google Gemini(LLM)를 결합하여 실시간 테마 순위와 시장 분석 정보를 제공합니다.
 *   **기능**:
-    *   **실시간 트렌드 파악**: 최신 뉴스와 시장 이슈를 검색하여 강세 테마를 식별합니다.
-    *   **상승 원인 요약**: 각 테마가 상승하는 이유와 관련 이슈를 AI가 요약하여 제공합니다.
-    *   **관련주 발굴**: 테마별 대표 대장주 정보를 함께 제공합니다.
-*   **설정**: 사용을 위해서는 `GEMINI_API_KEY` 발급 및 설정이 필요합니다.
+    *   **네이버 테마 순위**: 실시간 등락률 상위 테마와 주도주 정보를 크롤링하여 제공합니다.
+    *   **AI 시장 분석**: Gemini의 Google Search Grounding을 활용해 현재 시장의 주도 테마와 상승 원인을 분석합니다.
+    *   **커스텀 분석**: 사용자가 직접 프롬프트를 입력하여 특정 이슈나 섹터에 대해 AI에게 질문할 수 있습니다.
+*   **설정**: AI 분석 기능을 사용하려면 `GEMINI_API_KEY` 설정이 필요합니다.
 
 ## � 프로젝트 구조 (Project Structure)
 
 ```text
 my-stock-hts/
-├── run.sh              # [Mac/Linux] 실행 스크립트
-├── run.bat             # [Windows] 실행 스크립트
-├── config.py           # 설정, 환경변수, 데이터 로드
-├── api.py              # KIS API 통신 및 데이터 조회
-├── constants.py        # 상수 정의 (TR ID, 필드 매핑 등)
-├── indicators.py       # 보조지표 계산 (RSI, ADX, MACD 등)
-├── utils.py            # 공통 유틸리티 (날짜, 포맷팅 등)
-├── session.py          # 세션 및 토큰 관리
-├── main.py             # 메인 실행 파일 (메뉴 및 라우팅)
-├── LICENSE.md          # 라이선스 파일
-├── db/                 # [자동 생성] SQLite DB 파일 저장소
-├── json/               # [자동 생성] 설정 및 캐시 파일 저장소
-├── logs/               # [자동 생성] 로그 파일 저장소
-├── chart/              # [자동 생성] 차트 이미지 저장소
-├── data/               # [자동 생성] 엑셀/CSV 내보내기 저장소
-├── test/               # 테스트 및 도구 스크립트 (Chat ID 조회 등)
-└── modules/            # 기능별 모듈 폴더
-    ├── db_manager.py   # DB 연결 및 쿼리 관리
-    ├── telegram_bot.py # 텔레그램 봇 연동 및 알림
-    ├── settings.py     # [0] 시스템 설정 관리
-    ├── market.py       # [1] 시장 지수 조회
-    ├── analysis.py     # [2] 종목 시세 및 기술적 분석
-    ├── chart.py        # [3] 차트 시각화 및 분석
-    ├── trading.py      # [4] 종목 주문 관리 (매수/매도/정정/취소)
-    ├── auto_trade.py   # [5] 시스템 트레이딩 (자동매매)
-    ├── backtest.py     # [6] 전략 백테스팅
-    ├── # [7] 테마 트랜드 분석 (개발 예정)
-    ├── manage.py       # [8] 관심 종목 관리
-    └── account.py      # [9] 자산 및 잔고 관리
+├── run.sh                # [Mac/Linux] 실행 스크립트
+├── run.bat               # [Windows] 실행 스크립트
+├── config.py             # 설정, 환경변수, 데이터 로드
+├── api.py                # KIS API 통신 및 데이터 조회
+├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
+├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
+├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
+├── session.py            # 세션 및 토큰 관리
+├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
+├── LICENSE.md            # 라이선스 파일
+├── db/                   # [자동 생성] SQLite DB 파일 저장소
+├── json/                 # [자동 생성] 설정 및 캐시 파일 저장소
+├── logs/                 # [자동 생성] 로그 파일 저장소
+├── chart/                # [자동 생성] 차트 이미지 저장소
+├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
+├── test/                 # 테스트 및 도구 스크립트 (Chat ID 조회 등)
+└── modules/              # 기능별 모듈 폴더
+    ├── db_manager.py     # DB 연결 및 쿼리 관리
+    ├── telegram_bot.py   # 텔레그램 봇 연동 및 알림
+    ├── settings.py       # [0] 시스템 설정 관리
+    ├── market.py         # [1] 시장 지수 조회
+    ├── analysis.py       # [2] 종목 시세 및 기술적 분석
+    ├── chart.py          # [3] 차트 시각화 및 분석
+    ├── trading.py        # [4] 종목 주문 관리 (매수/매도/정정/취소)
+    ├── auto_trade.py     # [5] 시스템 트레이딩 (자동매매)
+    ├── backtest.py       # [6] 전략 백테스팅
+    ├── theme_analysis.py # [7] 테마 트랜드 분석
+    ├── manage.py         # [8] 관심 종목 관리
+    └── account.py        # [9] 자산 및 잔고 관리
 ```
 
 ## � 라이선스
