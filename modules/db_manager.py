@@ -11,7 +11,7 @@ import atexit
 class DBManager:
     def __init__(self):
         self.db_path = config.DB_FILE_PATH
-        self.lock = threading.Lock() # 스레드 간 동기화를 위한 락 (필요 시 사용)
+        self.lock = threading.RLock() # 스레드 간 동기화를 위한 락 (RLock으로 변경)
         self.local = threading.local() # 스레드별 로컬 저장소
         self._init_db()
 

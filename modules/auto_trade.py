@@ -121,6 +121,7 @@ class ConclusionMonitor:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ConclusionMonitor, cls).__new__(cls)
+            cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
             cls._instance.is_running = False
             cls._instance.thread = None
             cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
@@ -472,7 +473,8 @@ class ConclusionMonitor:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
                                 
                                 # 상태 업데이트
-                                self.order_status[order_key] = tot_ccld_qty
+                                with self._lock:
+                                    self.order_status[order_key] = tot_ccld_qty
                                 
                                 # DB 저장
                                 if not db_manager.db.check_trade_exists(odno, "체결"):
@@ -609,6 +611,7 @@ class AutoTrader:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(AutoTrader, cls).__new__(cls)
+            cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
             cls._instance.is_running = False
             cls._instance.thread = None
             cls._instance.logs = []
@@ -671,20 +674,21 @@ class AutoTrader:
 
     def update_order_status(self, code, odno, status):
         """체결 모니터에서 호출하여 주문 상태 업데이트"""
-        if code in self.pending_orders and odno in self.pending_orders[code]:
-            current_status = self.pending_orders[code][odno]
-            # 상태가 변경된 경우에만 업데이트
-            if current_status != status:
-                self.pending_orders[code][odno] = status
-                # 종결 상태면 목록에서 제거
-                if status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
-                    del self.pending_orders[code][odno]
-                    if not self.pending_orders[code]:
-                        del self.pending_orders[code]
-                    self.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
-                else:
-                    # 부분 체결 등의 경우 로그
-                    self.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
+        with self._lock:
+            if code in self.pending_orders and odno in self.pending_orders[code]:
+                current_status = self.pending_orders[code][odno]
+                # 상태가 변경된 경우에만 업데이트
+                if current_status != status:
+                    self.pending_orders[code][odno] = status
+                    # 종결 상태면 목록에서 제거
+                    if status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
+                        del self.pending_orders[code][odno]
+                        if not self.pending_orders[code]:
+                            del self.pending_orders[code]
+                        self.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
+                    else:
+                        # 부분 체결 등의 경우 로그
+                        self.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
 
     def start(self, interactive=True):
         if self.is_running:
@@ -2323,10 +2327,11 @@ class AutoTrader:
             code = item['pdno']; name = item['prdt_name']
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매도 방지)
-            if code in self.pending_orders:
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
-                continue
+            with self._lock:
+                if code in self.pending_orders:
+                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                        self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
+                    continue
             
             # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
             # 미체결 매도 주문이 있을 경우 중복 매도를 방지하기 위함
@@ -2393,12 +2398,13 @@ class AutoTrader:
 
             ts_msg = ""
             # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
-            cached_highest = self.trailing_stop_cache.get(code)
-            if cached_highest is None:
-                # 캐시에 없으면 DB 조회 (최초 1회)
-                val = db_manager.db.get_highest_price(code)
-                cached_highest = val if val is not None else 0.0
-                self.trailing_stop_cache[code] = cached_highest
+            with self._lock:
+                cached_highest = self.trailing_stop_cache.get(code)
+                if cached_highest is None:
+                    # 캐시에 없으면 DB 조회 (최초 1회)
+                    val = db_manager.db.get_highest_price(code)
+                    cached_highest = val if val is not None else 0.0
+                    self.trailing_stop_cache[code] = cached_highest
             
             highest_price = cached_highest
             
@@ -2406,7 +2412,8 @@ class AutoTrader:
             if current_price > buy_price:
                 if highest_price == 0.0 or current_price > highest_price:
                     db_manager.db.update_highest_price(code, current_price)
-                    self.trailing_stop_cache[code] = current_price # 캐시 갱신
+                    with self._lock:
+                        self.trailing_stop_cache[code] = current_price # 캐시 갱신
                     highest_price = current_price
             
             if highest_price and highest_price > 0:
@@ -2491,8 +2498,9 @@ class AutoTrader:
                     self.trade_records.append(record)
                     # [추가] 매도 성공 시 트레일링 스탑 정보 삭제
                     db_manager.db.delete_trailing_stop(code)
-                    if code in self.trailing_stop_cache: # 캐시 삭제
-                        del self.trailing_stop_cache[code]
+                    with self._lock:
+                        if code in self.trailing_stop_cache: # 캐시 삭제
+                            del self.trailing_stop_cache[code]
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
         targets = config.session.stock_data.get("stocks_kr", [])
@@ -2554,6 +2562,7 @@ class AutoTrader:
     def _analyze_candidates(self, targets, holding_codes, rules_map):
         candidates = []
         skipped_stocks = []
+        restricted_skipped_stocks = [] # [추가] 거래 제한 스킵 리스트
         
         # [추가] 거래 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
@@ -2581,11 +2590,13 @@ class AutoTrader:
             
             # [추가] 거래 제한 종목이면 매수 분석 스킵 (매수 판단 자체를 안 함)
             if code in restricted_stocks:
+                restricted_skipped_stocks.append(name)
                 continue
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매수 방지)
-            if code in self.pending_orders:
-                continue
+            with self._lock:
+                if code in self.pending_orders:
+                    continue
 
             # [추가] 보유 중이면 스킵
             if code in holding_codes: continue
@@ -2667,6 +2678,10 @@ class AutoTrader:
                     'is_custom_rule': bool(rule),
                     'rule': rule
                 })
+
+        # [추가] 거래 제한 종목 스킵 로그 기록
+        if restricted_skipped_stocks:
+            self.log(f"[매수 스킵] 거래 제한 종목 ({len(restricted_skipped_stocks)}개): {', '.join(restricted_skipped_stocks)}")
 
         # [추가] 시장 필터링 보류 종목 로그 기록
         if skipped_stocks:
@@ -2948,9 +2963,10 @@ class AutoTrader:
                 success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
                 
                 # [추가] 주문 상태 추적 시작 (ORDER_SENT)
-                if code not in self.pending_orders:
-                    self.pending_orders[code] = {}
-                self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+                with self._lock:
+                    if code not in self.pending_orders:
+                        self.pending_orders[code] = {}
+                    self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
 
                 self.trade_history.append(success_msg)
                 self.log(f"결과: 성공 (주문번호: {odno})")
@@ -2991,7 +3007,8 @@ class AutoTrader:
                     
                     if init_price > 0:
                         db_manager.db.update_highest_price(code, init_price)
-                        self.trailing_stop_cache[code] = init_price
+                        with self._lock:
+                            self.trailing_stop_cache[code] = init_price
                         self.log(f"[TrailingStop] 감시 시작가 설정: {name} {init_price:,.0f}원")
                 
                 return odno

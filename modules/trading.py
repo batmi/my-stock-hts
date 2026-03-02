@@ -600,6 +600,13 @@ def send_order(order_type):
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
                 config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
                 
+                # [추가] AutoTrader에 주문 상태 등록 (중복 매매 방지)
+                trader = auto_trade.AutoTrader()
+                with trader._lock:
+                    if stock_code not in trader.pending_orders:
+                        trader.pending_orders[stock_code] = {}
+                    trader.pending_orders[stock_code][odno] = auto_trade.OrderStatus.ORDER_SENT
+                
                 # 텔레그램 알림
                 t_type = "매수" if order_type == 'buy' else "매도"
                 msg = f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}"
