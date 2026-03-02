@@ -1880,6 +1880,9 @@ class AutoTrader:
             
             # 실시간 모니터링
             while True:
+                # [추가] 로그 뷰어 실행 중에도 토큰 만료 체크 및 갱신 수행
+                api.check_and_refresh_token_if_expired()
+
                 line = f.readline()
                 if line:
                     console.print(escape(line.strip()))

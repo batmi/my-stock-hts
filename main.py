@@ -391,22 +391,6 @@ def flush_input():
         except:
             pass
 
-def check_and_refresh_tokens():
-    """토큰 만료 플래그가 설정되어 있으면 메인 스레드에서 토큰을 갱신합니다."""
-    if config.TOKEN_EXPIRED:
-        config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
-        try:
-            if config.session.is_simulation:
-                api.get_access_token(force_refresh=True)
-            else:
-                api.get_real_access_token(force_refresh=True)
-                if config.session.auto_app_key:
-                    api.get_auto_access_token(force_refresh=True)
-            config.TOKEN_EXPIRED = False
-            config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
-        except Exception as e:
-            config.console.print(f"[bold red]토큰 갱신 실패: {e}[/bold red]")
-
 def main():
     # [수정] 커맨드 라인 인자 파싱 설정 개선 (상세 도움말 추가)
     parser = argparse.ArgumentParser(
@@ -505,7 +489,7 @@ def main():
             flush_input()
 
             # [추가] 루프 시작 시 토큰 만료 여부 확인 및 갱신
-            check_and_refresh_tokens()
+            api.check_and_refresh_token_if_expired()
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"

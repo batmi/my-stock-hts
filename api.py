@@ -383,6 +383,46 @@ def get_access_token(force_refresh=False):
     with config.TOKEN_REFRESH_LOCK:
         return _get_access_token_internal(force_refresh)
 
+def check_and_refresh_token_if_expired():
+    """토큰 만료 플래그 확인 및 갱신 (메인 스레드/로그 뷰어 등에서 주기적 호출)"""
+    if config.TOKEN_EXPIRED:
+        if config.SCREEN_DEBUG_LEVEL != "OFF":
+            config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
+        
+        success = True
+        fail_reason = "Unknown Error"
+
+        try:
+            if config.session.is_simulation:
+                if not get_access_token(force_refresh=True):
+                    success = False
+                    fail_reason = "모의투자 토큰 발급 실패 (API 응답 오류)"
+            else:
+                if not get_real_access_token(force_refresh=True):
+                    success = False
+                    fail_reason = "실전투자 토큰 발급 실패 (API 응답 오류)"
+                
+                if success and config.session.auto_app_key:
+                    if not get_auto_access_token(force_refresh=True):
+                        success = False
+                        fail_reason = "자동매매 토큰 발급 실패 (API 응답 오류)"
+            
+            if success:
+                config.TOKEN_EXPIRED = False
+                if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
+            else:
+                raise Exception(fail_reason)
+
+        except Exception as e:
+            if config.SCREEN_DEBUG_LEVEL != "OFF":
+                config.console.print(f"[bold red]토큰 갱신 실패: {e}[/bold red]")
+            
+            # [추가] 텔레그램 알림 전송
+            try:
+                send_telegram_message(f"🚨 [시스템 경고] API 토큰 갱신 실패\n\n사유: {str(e)}\n\n시스템 재시작이나 수동 확인이 필요합니다.")
+            except: pass
+
 def _get_access_token_internal(force_refresh=False):
     # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
     # (자정 이후 세션 만료 등으로 인한 재발급 필요성 대응)
@@ -643,12 +683,17 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 # [추가] 토큰 만료 예외 감지 시 갱신 후 재시도
                 if "Token Expired" in str(e) and attempt == 0:
                     logger.warning(f"[API] 토큰 만료 감지({str(e)}). 갱신 후 재시도합니다.")
+                    new_token = None
                     if getattr(config.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
-                        get_auto_access_token(force_refresh=True)
+                        new_token = get_auto_access_token(force_refresh=True)
                     elif config.session.is_simulation:
-                        get_access_token(force_refresh=True)
+                        new_token = get_access_token(force_refresh=True)
                     else:
-                        get_real_access_token(force_refresh=True)
+                        new_token = get_real_access_token(force_refresh=True)
+                    
+                    if new_token:
+                        config.TOKEN_EXPIRED = False
+                        
                     continue
                 
                 return {'rt_cd': '9999', 'msg1': str(e)}
