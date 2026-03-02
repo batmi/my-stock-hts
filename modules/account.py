@@ -14,6 +14,7 @@ import utils
 from modules import db_manager
 import json
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
@@ -723,6 +724,29 @@ def export_trade_history_to_excel():
                 task = progress.add_task(f"[green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]", total=None)
                 
                 with pd.ExcelWriter(filename_xlsx, engine='openpyxl') as writer:
+                    # [추가] 컬럼 너비 자동 조절 헬퍼 함수
+                    def _auto_adjust_width(worksheet):
+                        for i, col in enumerate(worksheet.columns):
+                            col_idx = i + 1
+                            col_letter = get_column_letter(col_idx)
+                            
+                            # 헤더 길이 계산
+                            header_val = worksheet.cell(row=1, column=col_idx).value
+                            s_header = str(header_val) if header_val else ""
+                            max_width = len(s_header) + sum(0.7 for c in s_header if ord(c) > 127)
+                            
+                            # 데이터 길이 계산
+                            for cell in col[1:]:
+                                val = cell.value
+                                if val:
+                                    s_val = str(val)
+                                    length = len(s_val) + sum(0.7 for c in s_val if ord(c) > 127)
+                                    if length > max_width: max_width = length
+                            
+                            # 최대 너비 제한 (스냅샷 등 긴 컬럼 고려)
+                            limit = 100 if s_header in ["매매사유", "스냅샷", "비고"] else 60
+                            worksheet.column_dimensions[col_letter].width = min(max_width * 1.2, limit)
+
                     if '계좌번호' in df.columns:
                         # 계좌번호가 없는 데이터 처리
                         df['계좌번호'] = df['계좌번호'].fillna('기타')
@@ -736,10 +760,19 @@ def export_trade_history_to_excel():
                             sheet_name = str(acc).replace(':', '').replace('\\', '').replace('/', '').replace('?', '').replace('*', '').replace('[', '').replace(']', '')[:31]
                             if not sheet_name: sheet_name = "Unknown"
                             df[df['계좌번호'] == acc].to_excel(writer, sheet_name=sheet_name, index=False)
+                            
+                            # [추가] 너비 조절 적용
+                            _auto_adjust_width(writer.sheets[sheet_name])
+                            
                             progress.advance(task)
                     else:
                         progress.update(task, total=1)
-                        df.to_excel(writer, sheet_name='전체내역', index=False)
+                        sheet_name = '전체내역'
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        
+                        # [추가] 너비 조절 적용
+                        _auto_adjust_width(writer.sheets[sheet_name])
+                        
                         progress.advance(task)
 
             config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_xlsx)}[/bold green]")

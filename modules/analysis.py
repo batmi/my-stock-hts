@@ -22,6 +22,7 @@ import json
 import math
 import re
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from modules import db_manager
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
         score += s
         details.append(f"모멘텀 폭발: MACD골든+RSI강세+OBV (+{s:.2f})")
 
-    return score, details
+    return round(score, 2), details
 
 def get_market_regime(market_type="KOSPI"):
     """시장 국면 판단 (Bull/Bear/Sideways)"""
@@ -868,6 +869,12 @@ def diagnose_group_stocks(market_filter=None):
     results.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
     
     table_title = f"전체 종목 진단 결과{title_suffix}"
+    
+    # [추가] 적용된 가중치 정보 표시 (검증용)
+    if params and 'WEIGHTS' in params:
+        w = params['WEIGHTS']
+        w_str = f"{w.get('TREND', 4.0)}/{w.get('MOMENTUM', 2.5)}/{w.get('STRENGTH', 1.5)}/{w.get('SYNERGY', 2.0)}"
+        table_title += f" [dim](가중치: {w_str})[/dim]"
 
     table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
@@ -881,7 +888,7 @@ def diagnose_group_stocks(market_filter=None):
     
     for r in results:
         s_color = r['state_color'].replace('[', '').replace(']', '')
-        score_str = f"[{s_color}]{r['score']}점[/]"
+        score_str = f"[{s_color}]{r['score']:.2f}점[/]"
         state_str = f"[{s_color}]{r['state']}[/]"
         
         rsi_val = r['rsi']
@@ -948,36 +955,35 @@ def get_analysis_params():
 
     # [추가] 가중치 설정 입력
     config.console.print("\n[스코어링 가중치 설정]")
-    if Prompt.ask("가중치를 변경하시겠습니까?", choices=["y", "n"], default="n") == "y":
-        curr_weights = params['WEIGHTS'].copy()
-        while True:
-            config.console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10점 권장)[/dim]")
-            
-            try:
-                def ask_w(key, desc, default_v):
-                    v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
-                    if v.lower() == 'q': raise ValueError("quit")
-                    return float(v)
+    curr_weights = params['WEIGHTS'].copy()
+    while True:
+        config.console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10점 권장)[/dim]")
+        
+        try:
+            def ask_w(key, desc, default_v):
+                v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
+                if v.lower() == 'q': raise ValueError("quit")
+                return float(v)
 
-                w_trend = ask_w("TREND", "추세 (TREND)", curr_weights.get('TREND', 4.0))
-                w_mom = ask_w("MOMENTUM", "모멘텀 (MOMENTUM)", curr_weights.get('MOMENTUM', 2.5))
-                w_str = ask_w("STRENGTH", "강도 (STRENGTH)", curr_weights.get('STRENGTH', 1.5))
-                w_syn = ask_w("SYNERGY", "시너지 (SYNERGY)", curr_weights.get('SYNERGY', 2.0))
-                
-                total_score = w_trend + w_mom + w_str + w_syn
-                
-                if abs(total_score - 10.0) > 0.01:
-                    config.console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (권장: 10.0점)[/bold red]")
-                    config.console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
-                    curr_weights = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
-                    continue
-                
-                params['WEIGHTS'] = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
-                break
-            except ValueError as e:
-                if str(e) == "quit": return None
-                config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+            w_trend = ask_w("TREND", "추세 (TREND)", curr_weights.get('TREND', 4.0))
+            w_mom = ask_w("MOMENTUM", "모멘텀 (MOMENTUM)", curr_weights.get('MOMENTUM', 2.5))
+            w_str = ask_w("STRENGTH", "강도 (STRENGTH)", curr_weights.get('STRENGTH', 1.5))
+            w_syn = ask_w("SYNERGY", "시너지 (SYNERGY)", curr_weights.get('SYNERGY', 2.0))
+            
+            total_score = w_trend + w_mom + w_str + w_syn
+            
+            if abs(total_score - 10.0) > 0.01:
+                config.console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (권장: 10.0점)[/bold red]")
+                config.console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
+                curr_weights = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
                 continue
+            
+            params['WEIGHTS'] = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+            break
+        except ValueError as e:
+            if str(e) == "quit": return None
+            config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+            continue
 
     filter_choice = Prompt.ask("\n출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
     if filter_choice.lower() == 'q': return None
@@ -1109,9 +1115,12 @@ def _analyze_stock_worker(stock, params=None):
         initial_state = state
         initial_state_color = state_color
 
+        # [수정] 사용자 설정 가중치 적용
+        weights = params.get('WEIGHTS') if params else None
         score, _ = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            , weights=weights
         )
         
         # 52주 위치 계산 (최근 250일 기준)
@@ -1314,7 +1323,7 @@ def analyze_market_stocks(market_type):
                                 vol_str = ""
                                 if result.get('vol_strength') is not None: vol_str = f", 체결={result['vol_strength']:.0f}%"
                                 
-                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
+                                log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {result['name']}({result['code']}): 현재가={int(result['price']):,}, 점수={result['score']:.2f}, 상태={result['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                                 
                                 if result['is_target']:
                                     log_style = "bold green" if result['state'] == "매수" else "bold orange3"
@@ -1704,10 +1713,33 @@ def save_all_market_analysis():
                         try:
                             col_price = header.index("현재가(원)") + 1
                             col_state = header.index("상태") + 1
+                            col_score = header.index("점수") + 1
                             
+                            # [수정] 모든 컬럼 너비 자동 조절
+                            for i, col_name in enumerate(header):
+                                col_idx = i + 1
+                                col_letter = get_column_letter(col_idx)
+                                
+                                # 헤더 텍스트 길이 고려
+                                s_header = str(col_name)
+                                max_width = len(s_header) + sum(0.7 for c in s_header if ord(c) > 127)
+                                
+                                for row in range(2, ws.max_row + 1):
+                                    val = ws.cell(row=row, column=col_idx).value
+                                    if val:
+                                        s_val = str(val)
+                                        length = len(s_val) + sum(0.7 for c in s_val if ord(c) > 127)
+                                        if length > max_width: max_width = length
+                                
+                                limit = 100 if col_name == "비고" else 60
+                                ws.column_dimensions[col_letter].width = min(max_width * 1.2, limit)
+
                             for row in range(2, ws.max_row + 1):
                                 # 현재가 쉼표 포맷
                                 ws.cell(row=row, column=col_price).number_format = '#,##0'
+                                
+                                # 점수 소수점 2자리 포맷
+                                ws.cell(row=row, column=col_score).number_format = '0.00'
                                 
                                 # 상태 컬럼 색상 적용
                                 cell = ws.cell(row=row, column=col_state)
