@@ -8,6 +8,7 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from datetime import datetime, timedelta
 import config
+import context
 import api
 import utils
 import indicators
@@ -809,7 +810,7 @@ def run_backtest():
     else:
         initial_capital = initial_capital_krw
 
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
     config.console.print("\n[bold]실행 모드를 선택하세요:[/bold]")

@@ -6,6 +6,7 @@ from rich import box
 import time
 import pandas as pd
 import config
+import context # [추가]
 import api
 import utils
 import constants
@@ -330,8 +331,8 @@ def get_current_price(mode='add'):
 
     raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
     if raw_input.lower() != 'q' and raw_input.strip():
-        config.USER_ACTION_BREADCRUMB.append(f"[종목조회] {raw_input}")
-        logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+        context.USER_ACTION_BREADCRUMB.append(f"[종목조회] {raw_input}")
+        logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     if raw_input.lower() == 'q': return
     if not raw_input.strip(): 
@@ -391,8 +392,8 @@ def get_current_price(mode='add'):
             cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
             
             if cat_choice.lower() != 'q':
-                config.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
-                logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
+                context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
+                logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
             
             if cat_choice.lower() == 'q': return
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
@@ -424,7 +425,7 @@ def delete_stock():
     
     cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
     if cat_choice.lower() != 'q':
-        config.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
+        context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
     if cat_choice.lower() == 'q': return
 
     group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
@@ -447,7 +448,7 @@ def delete_stock():
     config.console.print()
     del_idx = Prompt.ask("삭제할 번호 선택 [dim](취소: q)[/dim]")
     if del_idx.lower() != 'q':
-        config.USER_ACTION_BREADCRUMB.append(f"[번호선택] {del_idx}")
+        context.USER_ACTION_BREADCRUMB.append(f"[번호선택] {del_idx}")
     if del_idx.lower() == 'q': return
     
     if del_idx.isdigit():
@@ -455,7 +456,7 @@ def delete_stock():
         if 0 <= idx < len(target_list):
             item_to_del = target_list[idx]
             if Prompt.ask(f"\n정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
-                logger.info("운영자 실행: " + " - ".join(config.USER_ACTION_BREADCRUMB))
+                logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
                 del config.session.stock_data[target_key][idx]
                 config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config()
@@ -477,7 +478,7 @@ def manage_stock_menu():
     
     menu_map = {"1": "종목 추가", "2": "종목 삭제"}
     if choice in menu_map:
-        config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
     if choice.lower() == 'q': return
 

@@ -9,6 +9,7 @@ import json
 import time
 from datetime import datetime
 import config
+import context # [추가]
 import api
 import utils
 from modules import account
@@ -452,14 +453,14 @@ def send_order(order_type):
         # 5. 수량 및 단가 입력
         qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
         if qty.lower() == 'q': return
-        config.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
+        context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         qty = qty.replace(',', '')
 
         unit = "달러" if is_overseas else "원"
         price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: q[/dim]"
         price = Prompt.ask(price_prompt, default="0")
         if price.lower() == 'q': return
-        config.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
+        context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
         price = price.replace(',', '')
 
@@ -588,7 +589,7 @@ def send_order(order_type):
         if config.FILE_DEBUG_LEVEL == "DEBUG":
             logger.debug(f"REQ (Order-{market_label}) | {order_type} | {stock_code} {qty}ea")
 
-        logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+        logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
         try:
             result = None
@@ -602,10 +603,9 @@ def send_order(order_type):
                 
                 # [추가] AutoTrader에 주문 상태 등록 (중복 매매 방지)
                 trader = auto_trade.AutoTrader()
-                with trader._lock:
-                    if stock_code not in trader.pending_orders:
-                        trader.pending_orders[stock_code] = {}
-                    trader.pending_orders[stock_code][odno] = auto_trade.OrderStatus.ORDER_SENT
+                # [수정] OrderManager를 통해 등록 (리팩토링 대응)
+                if hasattr(trader, 'order_manager'):
+                    trader.order_manager.register_manual_order(stock_code, odno)
                 
                 # 텔레그램 알림
                 t_type = "매수" if order_type == 'buy' else "매도"
@@ -644,7 +644,8 @@ def send_order(order_type):
                 # 매도 시 트레일링 스탑 초기화
                 if order_type == 'sell':
                     db_manager.db.delete_trailing_stop(stock_code)
-                    auto_trade.AutoTrader().trailing_stop_cache.pop(stock_code, None)
+                    with trader._lock:
+                        trader.trailing_stop_cache.pop(stock_code, None)
                 
                 # [추가] 매수 시 트레일링 스탑 감시 시작가 설정
                 elif order_type == 'buy':
@@ -652,7 +653,8 @@ def send_order(order_type):
                     if init_price > 0:
                         db_manager.db.update_highest_price(stock_code, init_price)
                         # AutoTrader 캐시도 갱신 (실행 중일 경우)
-                        auto_trade.AutoTrader().trailing_stop_cache[stock_code] = init_price
+                        with trader._lock:
+                            trader.trailing_stop_cache[stock_code] = init_price
                         config.console.print(f"[dim green]트레일링 스탑 감시 시작가 설정: {init_price:,.0f}원[/dim green]")
                 
                 # 체결 감시 및 미체결 조회
@@ -673,7 +675,7 @@ def modify_order():
     # config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})") # 계좌 선택 제거로 주석 처리
 
     # [추가] 메뉴 진입 시점 로깅 (미체결 내역이 없어도 기록 남기기 위함)
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     # [수정] 공통 함수 show_open_orders()를 사용하여 미체결 내역 조회 및 출력
     selectable_orders = show_open_orders()
@@ -686,7 +688,7 @@ def modify_order():
     # =========================================================================
     choice = Prompt.ask("\n선택 번호 [dim](취소: q)[/dim]")
     if choice.lower() == 'q': return
-    config.USER_ACTION_BREADCRUMB.append(f"[주문선택] {choice}")
+    context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {choice}")
     
     if not choice.isdigit() or int(choice) < 1 or int(choice) > len(selectable_orders):
         config.console.print("[red]잘못된 번호입니다.[/red]")
@@ -711,7 +713,7 @@ def modify_order():
     if action.lower() == 'q': return
     
     action_map = {"1": "정정", "2": "취소"}
-    if action in action_map: config.USER_ACTION_BREADCRUMB.append(f"[{action}] {action_map[action]}")
+    if action in action_map: context.USER_ACTION_BREADCRUMB.append(f"[{action}] {action_map[action]}")
 
     # 공통 변수 추출
     org_odno = target_order.get('odno')
@@ -739,19 +741,19 @@ def modify_order():
         rvse_cncl_dvsn_cd = "01"
         qty = Prompt.ask(f"\n[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
         if qty.lower() == 'q': return
-        config.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
+        context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         
         price_prompt = "[magenta]정정 단가($)[/]" if is_overseas else "[magenta]정정 단가[/] (0: 시장가)"
         price = Prompt.ask(f"{price_prompt} [dim](취소: q)[/dim]", default="0")
         if price.lower() == 'q': return
-        config.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
+        context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: 
             config.console.print("[red]가격 입력 필요[/]"); return
     else: # 취소
         rvse_cncl_dvsn_cd = "02"
         qty = Prompt.ask(f"\n[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
         if qty.lower() == 'q': return
-        config.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
+        context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         price = "0"
 
     qty = qty.replace(',', ''); price = price.replace(',', '')
@@ -813,7 +815,7 @@ def modify_order():
     if config.FILE_DEBUG_LEVEL == "DEBUG":
         logger.debug(f"REQ (Modify-{origin}) | {action_name}")
 
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     # 컨텍스트 적용 (선택된 주문의 계좌 사용)
     with utils.AccountContext(target_cano):

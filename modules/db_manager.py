@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime
 import config
+import context
 import atexit
 
 class DBManager:
@@ -130,7 +131,7 @@ class DBManager:
                     now_str = custom_time if custom_time else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     acc_no = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-                    if getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+                    if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
                         acc_no = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
                     
                     is_sim = 1 if config.session.is_simulation else 0

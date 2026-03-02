@@ -4,6 +4,7 @@ from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 from rich import box
 import config
+import context
 import api
 import logging
 import indicators
@@ -367,7 +368,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     if not code: return
 
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     # [추가] 개별 룰 로드 및 설정 준비
     custom_rule = db_manager.db.get_stock_strategy(code)
@@ -2120,7 +2121,7 @@ def show_stock_analysis():
         "11": "국내주식(반복)", "22": "국내ETF(반복)", "33": "미국주식(반복)", "44": "미국ETF(반복)", "55": "전체(반복)"
     }
     if choice in menu_map:
-        config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
     if choice.lower() == 'q': return
     
@@ -2143,7 +2144,7 @@ def show_stock_analysis():
             return
 
         market_type = "KOSPI" if sub_choice == "1" else "KOSDAQ"
-        config.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
+        context.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
         
         analyze_market_stocks(market_type)
         return
@@ -2169,7 +2170,7 @@ def show_stock_analysis():
     elif real_choice == "34": target_list = [("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
     else: target_list = [("국내 주식 기술적 분석", stocks_kr, False), ("국내 ETF 기술적 분석", etfs_kr, False), ("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
 
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     try:
         while True:

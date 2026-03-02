@@ -17,6 +17,7 @@ from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 from collections import deque
 import config
+import context # [추가] 상태 관리 모듈
 import constants
 
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -73,7 +74,7 @@ def _get_telegram_footer():
     acc_label = "모의" if config.session.is_simulation else "실전"
 
     # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acc_label = "자동"
 
@@ -299,7 +300,7 @@ class ThrottledSession(requests.Session):
                             if msg_cd in ['EGW00123', 'EGW00121']:
                                 # [수정] 자동 갱신 로직 삭제. 만료 플래그만 설정하고 예외 발생시킴.
                                 logger.error(f"토큰 만료 감지(Code: {msg_cd}). 메인 스레드에 갱신을 요청합니다.")
-                                config.TOKEN_EXPIRED = True
+                                context.TOKEN_EXPIRED = True
                                 raise Exception(f"Token Expired ({msg_cd})")
                             
                             # 그 외 모든 API 에러 (성공이 아닌 경우)
@@ -370,7 +371,7 @@ session.mount('https://', TLSAdapter(max_retries=retry_strategy))
 
 def get_current_token():
     # [추가] 시스템 트레이딩 컨텍스트 확인
-    if getattr(config.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
+    if getattr(context.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
         return get_auto_access_token()
         
     if config.session.is_simulation:
@@ -380,12 +381,12 @@ def get_current_token():
 
 def get_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
-    with config.TOKEN_REFRESH_LOCK:
+    with context.TOKEN_REFRESH_LOCK:
         return _get_access_token_internal(force_refresh)
 
 def check_and_refresh_token_if_expired():
     """토큰 만료 플래그 확인 및 갱신 (메인 스레드/로그 뷰어 등에서 주기적 호출)"""
-    if config.TOKEN_EXPIRED:
+    if context.TOKEN_EXPIRED:
         if config.SCREEN_DEBUG_LEVEL != "OFF":
             config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
         
@@ -408,7 +409,7 @@ def check_and_refresh_token_if_expired():
                         fail_reason = "자동매매 토큰 발급 실패 (API 응답 오류)"
             
             if success:
-                config.TOKEN_EXPIRED = False
+                context.TOKEN_EXPIRED = False
                 if config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
             else:
@@ -487,7 +488,7 @@ def _get_access_token_internal(force_refresh=False):
 
 def get_real_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
-    with config.TOKEN_REFRESH_LOCK:
+    with context.TOKEN_REFRESH_LOCK:
         return _get_real_access_token_internal(force_refresh)
 
 def _get_real_access_token_internal(force_refresh=False):
@@ -547,7 +548,7 @@ def _get_real_access_token_internal(force_refresh=False):
 
 def get_auto_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
-    with config.TOKEN_REFRESH_LOCK:
+    with context.TOKEN_REFRESH_LOCK:
         return _get_auto_access_token_internal(force_refresh)
 
 def _get_auto_access_token_internal(force_refresh=False):
@@ -631,7 +632,7 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     use_lock = (method != "GET") or is_account_related
     
     if use_lock:
-        config.SYSTEM_TRADING_LOCK.acquire()
+        context.SYSTEM_TRADING_LOCK.acquire()
 
     try:
         if timeout is None: timeout = config.DEFAULT_TIMEOUT
@@ -644,7 +645,7 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
                 
                 # [수정] 컨텍스트에 따라 키 선택
-                use_auto = getattr(config.trade_context, 'use_auto_account', False)
+                use_auto = getattr(context.trade_context, 'use_auto_account', False)
                 if use_auto and not config.session.is_simulation:
                     key = config.session.auto_app_key
                     secret = config.session.auto_app_secret
@@ -684,7 +685,7 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 if "Token Expired" in str(e) and attempt == 0:
                     logger.warning(f"[API] 토큰 만료 감지({str(e)}). 갱신 후 재시도합니다.")
                     new_token = None
-                    if getattr(config.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
+                    if getattr(context.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
                         new_token = get_auto_access_token(force_refresh=True)
                     elif config.session.is_simulation:
                         new_token = get_access_token(force_refresh=True)
@@ -692,14 +693,14 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                         new_token = get_real_access_token(force_refresh=True)
                     
                     if new_token:
-                        config.TOKEN_EXPIRED = False
+                        context.TOKEN_EXPIRED = False
                         
                     continue
                 
                 return {'rt_cd': '9999', 'msg1': str(e)}
     finally:
         if use_lock:
-            config.SYSTEM_TRADING_LOCK.release()
+            context.SYSTEM_TRADING_LOCK.release()
 
 def get_stock_name_by_code(code, is_overseas):
     final_name = None
@@ -976,7 +977,7 @@ def fetch_buyable_quantity(stock_code, price):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -995,7 +996,7 @@ def fetch_sellable_quantity(stock_code):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -1015,7 +1016,7 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
         
@@ -1041,7 +1042,7 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -1072,7 +1073,7 @@ def _prepare_account_params(cano, acnt_prdt_cd):
     """계좌 파라미터 준비 및 컨텍스트 설정 (내부 헬퍼)"""
     # 인자가 없으면 현재 설정/컨텍스트 값 사용
     if not cano:
-        if not config.session.is_simulation and getattr(config.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+        if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
             cano = config.session.auto_cano
             acnt_prdt_cd = config.session.auto_acnt_prdt_cd
         else:
@@ -1081,9 +1082,9 @@ def _prepare_account_params(cano, acnt_prdt_cd):
     
     # 요청 계좌가 자동매매 계좌와 일치하면 컨텍스트 전환 (토큰/Key 변경)
     if not config.session.is_simulation and cano == config.session.auto_cano and config.session.auto_app_key:
-        config.trade_context.use_auto_account = True
+        context.trade_context.use_auto_account = True
     elif not config.session.is_simulation and cano == config.session.cano:
-        config.trade_context.use_auto_account = False
+        context.trade_context.use_auto_account = False
         
     return cano, acnt_prdt_cd
 

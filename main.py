@@ -12,6 +12,7 @@ from rich import box
 from rich.markup import escape
 import argparse
 import config
+import context # [추가]
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
@@ -422,7 +423,7 @@ def main():
     logging.info("=== MyStock HTS 프로그램 구동 시작 ===")
 
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
-    config.MAIN_THREAD_ID = threading.get_ident()
+    context.MAIN_THREAD_ID = threading.get_ident()
 
     # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
     if args.mode:
@@ -516,7 +517,7 @@ def main():
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
                 
                 # [추가] 루프 시작 시 입력 경로 초기화
-                config.USER_ACTION_BREADCRUMB = []
+                context.USER_ACTION_BREADCRUMB = []
                 
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
@@ -536,7 +537,7 @@ def main():
                     show_help()
                     continue
 
-                config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
+                context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
                     
                 last_choice = choice
                 if choice == "0": settings.system_config_menu()
@@ -603,7 +604,7 @@ def main():
                             config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
 
                     if target_code: 
-                        logging.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+                        logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                         chart.generate_visual_chart(target_code, target_name, target_ovs)
                 elif choice == "4": manage.manage_stock_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 

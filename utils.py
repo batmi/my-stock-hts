@@ -3,6 +3,7 @@ from rich.prompt import Prompt
 import yfinance as yf
 import logging
 import config
+import context # [추가]
 import api
 import constants
 import math
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def get_common_headers(tr_id):
     # [수정] 컨텍스트에 따라 적절한 앱 키/시크릿 선택
-    use_auto = getattr(config.trade_context, 'use_auto_account', False)
+    use_auto = getattr(context.trade_context, 'use_auto_account', False)
     is_sim = config.session.is_simulation
     
     if is_sim:
@@ -83,7 +84,7 @@ def select_stock_for_chart():
     group_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="5")
     if group_choice.lower() != 'q':
         group_map = {"1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "직접입력", "6": "시장지수"}
-        config.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
+        context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
 
     if group_choice.lower() == 'q': return None, None, None
     
@@ -105,7 +106,7 @@ def select_stock_for_chart():
         config.console.print()
         idx_choice = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
         if idx_choice.lower() != 'q':
-            config.USER_ACTION_BREADCRUMB.append(f"[지수선택] {idx_choice}")
+            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {idx_choice}")
         if idx_choice.lower() == 'q': return None, None, None
 
         if idx_choice.isdigit() and 1 <= int(idx_choice) <= len(indices_list):
@@ -118,7 +119,7 @@ def select_stock_for_chart():
         config.console.print()
         raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
         if raw_input.lower() != 'q' and raw_input.strip():
-            config.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
+            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
         if raw_input.lower() == 'q' or not raw_input.strip(): return None, None, None
 
         parts = raw_input.split()
@@ -160,7 +161,7 @@ def select_stock_for_chart():
     config.console.print()
     choice_idx = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
     if choice_idx.lower() != 'q':
-        config.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
     if choice_idx.lower() == 'q': return None, None, None
     
     if choice_idx.isdigit() and 1 <= int(choice_idx) <= len(target_list):
@@ -178,7 +179,7 @@ def select_target_stock():
     nation_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     if nation_choice.lower() != 'q':
         nation_map = {"1": "국내", "2": "미국"}
-        config.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
+        context.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
     if nation_choice.lower() == 'q': return None, None, None
     
     is_overseas = (nation_choice == "2")
@@ -215,7 +216,7 @@ def select_target_stock():
     config.console.print()
     choice_idx = Prompt.ask("선택 [dim](취소: q)[/dim]", default=str(idx))
     if choice_idx.lower() != 'q':
-        config.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
     
     if choice_idx.lower() == 'q': return None, None, None
     
@@ -225,7 +226,7 @@ def select_target_stock():
             return all_stocks[c_idx-1][1], all_stocks[c_idx-1][0], is_overseas
         elif c_idx == idx:
             code = Prompt.ask("종목코드(티커) 입력").upper()
-            config.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
+            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
             return code, name, is_overseas
@@ -241,16 +242,16 @@ class AccountContext:
         self.original_state = None
 
     def __enter__(self):
-        self.original_state = getattr(config.trade_context, 'use_auto_account', False)
+        self.original_state = getattr(context.trade_context, 'use_auto_account', False)
         if not config.session.is_simulation and self.cano:
             if self.cano == config.session.auto_cano:
-                config.trade_context.use_auto_account = True
+                context.trade_context.use_auto_account = True
             elif self.cano == config.session.cano:
-                config.trade_context.use_auto_account = False
+                context.trade_context.use_auto_account = False
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        config.trade_context.use_auto_account = self.original_state
+        context.trade_context.use_auto_account = self.original_state
 
 def get_tick_size(price, is_overseas=False):
     """호가 단위(Tick Size) 반환"""

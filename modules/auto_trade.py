@@ -13,6 +13,7 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import config
+import context # [추가]
 import api
 import utils
 import indicators
@@ -466,8 +467,8 @@ class ConclusionMonitor:
                                         api.send_telegram_message(msg)
                                     
                                     # 로그 기록 (시스템 로거 활용)
-                                    if config.SYSTEM_LOGGER:
-                                        config.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
+                                    if context.SYSTEM_LOGGER:
+                                        context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
                                     
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
@@ -604,6 +605,228 @@ class DefaultStrategy:
             'state': state
         }
 
+class OrderManager:
+    """주문 관리 및 상태 추적 전담 클래스"""
+    def __init__(self, trader):
+        self.trader = trader
+        self.pending_orders = {}
+        self._lock = threading.RLock()
+
+    def is_pending(self, code):
+        """특정 종목의 진행 중인 주문 존재 여부 확인"""
+        with self._lock:
+            return code in self.pending_orders
+
+    def update_order_status(self, code, odno, status):
+        """주문 상태 업데이트"""
+        with self._lock:
+            if code in self.pending_orders and odno in self.pending_orders[code]:
+                current_status = self.pending_orders[code][odno]
+                if current_status != status:
+                    self.pending_orders[code][odno] = status
+                    if status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
+                        del self.pending_orders[code][odno]
+                        if not self.pending_orders[code]:
+                            del self.pending_orders[code]
+                        self.trader.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
+                    else:
+                        self.trader.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
+
+    def register_manual_order(self, code, odno):
+        """수동 주문 발생 시 상태 추적 등록 (외부 호출용)"""
+        with self._lock:
+            if code not in self.pending_orders:
+                self.pending_orders[code] = {}
+            self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+
+    def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
+        """주문 전송 및 상태 등록"""
+        ord_dvsn = "00" if price > 0 else "01"
+        
+        self.trader.log(f"======== [주문 실행] {type_str.upper()} ========")
+        price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
+        self.trader.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
+
+        try:
+            res_json = api.place_order("domestic", type_str, code, qty, price, ord_dvsn)
+            
+            if res_json['rt_cd'] == '0':
+                odno = res_json['output']['ODNO']
+                success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
+                
+                with self._lock:
+                    if code not in self.pending_orders:
+                        self.pending_orders[code] = {}
+                    self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+
+                self.trader.trade_history.append(success_msg)
+                self.trader.log(f"결과: 성공 (주문번호: {odno})")
+                stock_display = f"{name}({code})" if name else code
+                
+                title_tag = "[주문 접수]"
+                if rule:
+                    title_tag += " [개별]"
+                
+                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
+                if reason:
+                    msg += f"\n사유: {reason}"
+                
+                if rule:
+                    msg += f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                    if rule.get('ts_activation'):
+                        msg += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                
+                api.send_telegram_message(msg)
+                
+                snapshot = analysis.get_snapshot(code, is_overseas=False)
+                
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    logger.debug(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
+                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score, stop_loss_rate=stop_loss_rate)
+                
+                ConclusionMonitor().check_now()
+                
+                if type_str == "buy":
+                    init_price = float(price)
+                    if init_price <= 0:
+                        init_price = api.get_current_price(code, is_overseas=False)
+                    
+                    if init_price > 0:
+                        db_manager.db.update_highest_price(code, init_price)
+                        with self.trader._lock:
+                            self.trader.trailing_stop_cache[code] = init_price
+                        self.trader.log(f"[TrailingStop] 감시 시작가 설정: {name} {init_price:,.0f}원")
+                
+                return odno
+            else:
+                err_msg = res_json.get('msg1', 'Unknown Error')
+                msg_cd = res_json.get('msg_cd')
+                self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
+                
+                stock_display = f"{name}({code})" if name else code
+                fail_msg = f"🚫 [주문 실패] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
+                api.send_telegram_message(fail_msg)
+                
+                if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
+                    raise Exception(f"주문 시스템 치명적 오류: {err_msg}")
+
+        except Exception as e:
+            self.trader.log(f"결과: 에러 발생 ({str(e)})")
+            stock_display = f"{name}({code})" if name else code
+            fail_msg = f"🚫 [주문 에러] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
+            api.send_telegram_message(fail_msg)
+            raise e
+        finally:
+            self.trader.log("========================================")
+        return None
+
+    def manage_unfilled_orders(self):
+        """오래된 미체결 주문 확인 및 취소"""
+        try:
+            unfilled_list = api.get_unfilled_orders()
+            if not unfilled_list: return
+
+            cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)
+            now = datetime.now()
+            
+            for item in unfilled_list:
+                odno = item.get('odno')
+                code = item.get('pdno')
+                name = item.get('prdt_name')
+                qty = int(item.get('rmn_qty', 0))
+                ord_time_str = item.get('ord_tmd')
+                
+                if not odno or qty <= 0 or not ord_time_str: continue
+                
+                try:
+                    ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
+                    elapsed = (now - ord_dt).total_seconds()
+                    
+                    if elapsed >= cancel_seconds:
+                        self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
+                        
+                        res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+                        
+                        if res.get('rt_cd') == '0':
+                            api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
+                        else:
+                            self.trader.log(f"취소 실패: {res.get('msg1')}")
+                            
+                except Exception: pass
+        except Exception as e:
+            self.trader.log(f"미체결 관리 중 오류: {e}")
+
+class RiskManager:
+    """리스크 관리 및 자산 배분 전담 클래스"""
+    def __init__(self, trader):
+        self.trader = trader
+
+    def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
+        """자산 배분 계산"""
+        if self.trader.initial_asset > 0:
+            target_invest_amt = int(self.trader.initial_asset * invest_ratio)
+        else:
+            target_invest_amt = int(avail_cash * invest_ratio)
+        
+        base_amt = target_invest_amt
+        
+        risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+        risk_based_amt = 0
+        
+        if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
+            total_equity = self.trader.initial_asset if self.trader.initial_asset > 0 else avail_cash
+            max_loss_amt = total_equity * (risk_per_trade / 100.0)
+            sl_ratio = abs(stop_loss_rate) / 100.0
+            risk_based_amt = int(max_loss_amt / sl_ratio)
+            target_invest_amt = min(target_invest_amt, risk_based_amt)
+        
+        scale = 1.0
+        if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
+            daily_vol = atr / current_price
+            annual_vol = daily_vol * math.sqrt(252)
+            
+            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+            scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
+            scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
+            
+            if annual_vol > 0:
+                scale = target_vol / annual_vol
+                scale = max(scale_min, min(scale_max, scale))
+                target_invest_amt = int(target_invest_amt * scale)
+
+        invest_amt = min(target_invest_amt, avail_cash)
+        
+        log_msg = f"[자산배분] 기초:{base_amt:,}원"
+        if risk_based_amt > 0:
+            log_msg += f" -> 리스크조정:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
+        if scale != 1.0:
+            log_msg += f" -> 변동성조정(x{scale:.2f}):{target_invest_amt:,}원"
+        log_msg += f" -> 최종:{invest_amt:,}원"
+        
+        self.trader.log(log_msg)
+            
+        return invest_amt
+
+    def check_loss_limit(self, current_total):
+        """일일 손실 한도 체크"""
+        loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+        
+        if loss_limit_pct <= 0 or self.trader.initial_asset <= 0: return
+        if current_total <= 0: return
+
+        loss_rate = (current_total - self.trader.initial_asset) / self.trader.initial_asset * 100
+        
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[LossCheck] 시작자산:{self.trader.initial_asset:,} -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
+        
+        if loss_rate <= -loss_limit_pct:
+            self.trader.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
+            self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
+            
+            msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
+            
+            api.send_telegram_message(msg)
+            self.trader.stop()
 
 class AutoTrader:
     _instance = None
@@ -631,8 +854,9 @@ class AutoTrader:
             cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
             cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
             cls._instance.file_logger = config.get_autotrade_logger() # [추가] 파일 로거 초기화
-            cls._instance.pending_orders = {} # [추가] 진행 중인 주문 관리 {code: {odno: status}}
             cls._instance.restricted_notified = {} # [추가] 거래 제한 알림 스로틀링 (종목별 타임스탬프)
+            cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
+            cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -674,21 +898,7 @@ class AutoTrader:
 
     def update_order_status(self, code, odno, status):
         """체결 모니터에서 호출하여 주문 상태 업데이트"""
-        with self._lock:
-            if code in self.pending_orders and odno in self.pending_orders[code]:
-                current_status = self.pending_orders[code][odno]
-                # 상태가 변경된 경우에만 업데이트
-                if current_status != status:
-                    self.pending_orders[code][odno] = status
-                    # 종결 상태면 목록에서 제거
-                    if status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
-                        del self.pending_orders[code][odno]
-                        if not self.pending_orders[code]:
-                            del self.pending_orders[code]
-                        self.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
-                    else:
-                        # 부분 체결 등의 경우 로그
-                        self.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
+        self.order_manager.update_order_status(code, odno, status)
 
     def start(self, interactive=True):
         if self.is_running:
@@ -794,7 +1004,7 @@ class AutoTrader:
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
             
             # [추가] API 모듈에서 로그를 남길 수 있도록 연결
-            config.SYSTEM_LOGGER = self.log
+            context.SYSTEM_LOGGER = self.log
             
             progress.update(task, description="[green]트레이딩 스레드 시작 중...[/]")
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
@@ -961,7 +1171,7 @@ class AutoTrader:
             self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
         
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
-        config.SYSTEM_LOGGER = None
+        context.SYSTEM_LOGGER = None
 
     def get_status_message(self):
         """텔레그램 전송용 상태 요약 메시지 생성"""
@@ -2037,7 +2247,7 @@ class AutoTrader:
                         # 2. 매수 조건 점검
                         self._check_buy_conditions(holdings, deposit_res, current_market_status)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
-                        self._manage_unfilled_orders()
+                        self.order_manager.manage_unfilled_orders()
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                         self._monitor_account_status(holdings, summary, deposit_res)
                     
@@ -2098,44 +2308,6 @@ class AutoTrader:
             except Exception as e:
                 self.log(f"[장애 대기] 점검 중 오류: {e}")
 
-    def _manage_unfilled_orders(self):
-        """오래된 미체결 주문 확인 및 취소"""
-        try:
-            unfilled_list = api.get_unfilled_orders()
-            if not unfilled_list: return
-
-            cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)
-            now = datetime.now()
-            
-            for item in unfilled_list:
-                odno = item.get('odno')
-                code = item.get('pdno')
-                name = item.get('prdt_name')
-                qty = int(item.get('rmn_qty', 0)) # 잔여 수량
-                ord_time_str = item.get('ord_tmd') # 주문시간 (HHMMSS)
-                
-                if not odno or qty <= 0 or not ord_time_str: continue
-                
-                # 주문 시간 파싱
-                try:
-                    ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
-                    elapsed = (now - ord_dt).total_seconds()
-                    
-                    if elapsed >= cancel_seconds:
-                        self.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
-                        
-                        # 취소 주문 전송 (api.revise_cancel_order 사용)
-                        # 국내 주식 기준, 취소 코드는 "02", 단가는 "0"
-                        res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
-                        
-                        if res.get('rt_cd') == '0':
-                            api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
-                        else:
-                            self.log(f"취소 실패: {res.get('msg1')}")
-                            
-                except Exception: pass
-        except Exception as e:
-            self.log(f"미체결 관리 중 오류: {e}")
 
     def _monitor_account_status(self, holdings, summary, deposit_res):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
@@ -2222,7 +2394,7 @@ class AutoTrader:
                         self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 손익: {profit_diff:+,}원 ({profit_rate:+.2f}%)")
                         self.log(f"              예수금(D+2): {deposit_d2:,}원 | 주식평가: {total_eval:,}원")
 
-                        self._check_loss_limit(current_total)
+                        self.risk_manager.check_loss_limit(current_total)
                     else:
                         self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
@@ -2266,30 +2438,6 @@ class AutoTrader:
         self.log(f"⚠️ 자산 조회 최종 실패. (KIS 서버 응답 지연)")
         return None
 
-    def _check_loss_limit(self, current_total):
-        """자산 변동을 체크하여 손실 한도 초과 시 비상 정지"""
-        loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
-        
-        # 설정이 0이거나 초기 자산이 0이면 체크하지 않음
-        if loss_limit_pct <= 0 or self.initial_asset <= 0: return
-        if current_total <= 0: return
-
-        # [계산 공식] 수익률 = (현재 총자산 - 시작 시점 총자산) / 시작 시점 총자산 * 100
-        loss_rate = (current_total - self.initial_asset) / self.initial_asset * 100
-        
-        # [디버그] 자산 변동 상태 모니터링 (DEBUG 레벨일 때 로그 기록)
-        if config.FILE_DEBUG_LEVEL == "DEBUG":
-            logger.debug(f"[LossCheck] 시작자산:{self.initial_asset:,} -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
-        
-        if loss_rate <= -loss_limit_pct:
-            self.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
-            self.log(f"시작 자산: {self.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
-            
-            # [개선] 상세 알림 메시지 구성
-            msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
-            
-            api.send_telegram_message(msg)
-            self.stop()
 
     def _get_prev_rsi(self, df):
         """전일 RSI 계산 (주의 조건 판단용)"""
@@ -2330,11 +2478,10 @@ class AutoTrader:
             code = item['pdno']; name = item['prdt_name']
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매도 방지)
-            with self._lock:
-                if code in self.pending_orders:
-                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                        self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
-                    continue
+            if self.order_manager.is_pending(code):
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
+                continue
             
             # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
             # 미체결 매도 주문이 있을 경우 중복 매도를 방지하기 위함
@@ -2483,7 +2630,7 @@ class AutoTrader:
 
                 self.log(f"매도 실행: {name} - {reason}")
                 # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
-                odno = self._send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
+                odno = self.order_manager.send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
@@ -2597,9 +2744,8 @@ class AutoTrader:
                 continue
             
             # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매수 방지)
-            with self._lock:
-                if code in self.pending_orders:
-                    continue
+            if self.order_manager.is_pending(code):
+                continue
 
             # [추가] 보유 중이면 스킵
             if code in holding_codes: continue
@@ -2706,63 +2852,6 @@ class AutoTrader:
         
         return candidates
 
-    def _allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
-        # 1. 비중 기반 계산 (초기 자산의 N%) - 최대 투자 한도(Cap) 역할
-        # (invest_ratio가 1.0이면 전체 자산이 한도가 되어 사실상 제한 없음)
-        if self.initial_asset > 0:
-            target_invest_amt = int(self.initial_asset * invest_ratio)
-        else:
-            target_invest_amt = int(avail_cash * invest_ratio)
-        
-        base_amt = target_invest_amt # [추가] 로깅용 변수
-        
-        # 2. 리스크 기반 포지션 사이징 (Risk-Based Position Sizing) - 변동성 리스크 제어 역할
-        # 공식: 포지션크기 = (총자산 * 리스크비율) / 손절률
-        risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
-        risk_based_amt = 0 # [추가] 로깅용 변수
-        
-        if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
-            total_equity = self.initial_asset if self.initial_asset > 0 else avail_cash
-            max_loss_amt = total_equity * (risk_per_trade / 100.0) # 예: 1억 * 1% = 100만원
-            sl_ratio = abs(stop_loss_rate) / 100.0 # 예: 7% -> 0.07
-            
-            risk_based_amt = int(max_loss_amt / sl_ratio) # 예: 100만 / 0.07 = 약 1428만원
-            
-            target_invest_amt = min(target_invest_amt, risk_based_amt)
-        
-        # 3. 변동성 타겟팅 (Volatility Targeting)
-        # 목표 변동성에 맞춰 포지션 크기 조절 (변동성 크면 축소, 작으면 확대)
-        scale = 1.0 # [추가] 로깅용 변수
-        if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
-            daily_vol = atr / current_price
-            annual_vol = daily_vol * math.sqrt(252)
-            
-            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
-            scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-            scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
-            
-            if annual_vol > 0:
-                scale = target_vol / annual_vol
-                # [수정] 스케일링 범위 제한 (안전장치)
-                scale = max(scale_min, min(scale_max, scale))
-                
-                # [수정] 스케일링 적용 (기존 금액 * scale)
-                target_invest_amt = int(target_invest_amt * scale)
-
-        # 실제 집행 금액은 목표 금액과 현재 예수금 중 작은 값 (예수금 초과 불가)
-        invest_amt = min(target_invest_amt, avail_cash)
-        
-        # [추가] 자산 배분 상세 로그 출력 (매수 시점에 계산 내역 확인용)
-        log_msg = f"[자산배분] 기초:{base_amt:,}원"
-        if risk_based_amt > 0:
-            log_msg += f" -> 리스크조정:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
-        if scale != 1.0:
-            log_msg += f" -> 변동성조정(x{scale:.2f}):{target_invest_amt:,}원"
-        log_msg += f" -> 최종:{invest_amt:,}원"
-        
-        self.log(log_msg)
-            
-        return invest_amt
 
     def _execute_buy_orders(self, candidates, avail_cash, invest_ratio, current_holdings_count, max_holdings):
         for cand in candidates:
@@ -2801,7 +2890,7 @@ class AutoTrader:
             remaining_slots = max_holdings - current_holdings_count
             
             # 1. 예산 할당 계산 (변동성 타겟팅 및 리스크 관리 적용)
-            calc_amt = self._allocate_budget(avail_cash, invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
+            calc_amt = self.risk_manager.allocate_budget(avail_cash, invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
             
             if remaining_slots == 1:
                 # 마지막 종목일 때: 변동성 타겟팅/리스크 관리가 꺼져있다면 잔여 예수금 전액 사용, 켜져 있다면 계산된 금액 준수
@@ -2867,7 +2956,7 @@ class AutoTrader:
 
             self.log(f"매수 실행: {cand['name']} - {reason}")
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
-            odno = self._send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
+            odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
             if odno: 
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
@@ -2947,101 +3036,6 @@ class AutoTrader:
         except: pass
         
         return "KOSPI" # 기본값
-
-    def _send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
-        # [수정] 지정가/시장가 구분 (price > 0 이면 지정가)
-        ord_dvsn = "00" if price > 0 else "01"
-        
-        # [추가] 상세 로그: 요청 정보
-        self.log(f"======== [주문 실행] {type_str.upper()} ========")
-        price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
-        self.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
-
-        try:
-            # api.place_order 사용 (국내 전용)
-            res_json = api.place_order("domestic", type_str, code, qty, price, ord_dvsn)
-            
-            if res_json['rt_cd'] == '0':
-                odno = res_json['output']['ODNO']
-                success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
-                
-                # [추가] 주문 상태 추적 시작 (ORDER_SENT)
-                with self._lock:
-                    if code not in self.pending_orders:
-                        self.pending_orders[code] = {}
-                    self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
-
-                self.trade_history.append(success_msg)
-                self.log(f"결과: 성공 (주문번호: {odno})")
-                stock_display = f"{name}({code})" if name else code
-                
-                title_tag = "[주문 접수]"
-                if rule:
-                    title_tag += " [개별]"
-                
-                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
-                if reason:
-                    msg += f"\n사유: {reason}"
-                
-                if rule:
-                    msg += f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
-                    if rule.get('ts_activation'):
-                        msg += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
-                
-                api.send_telegram_message(msg)
-                
-                # [DB] 시스템 트레이딩 주문 기록 (스냅샷 및 상세 정보 포함)
-                snapshot = analysis.get_snapshot(code, is_overseas=False)
-                
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    logger.debug(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
-                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score, stop_loss_rate=stop_loss_rate)
-                
-                # [추가] 체결 감시자에게 즉시 확인 요청
-                ConclusionMonitor().check_now()
-                
-                # [추가] 매수 성공 시 트레일링 스탑 감시 시작가(최고가) 즉시 초기화
-                # (전문가 조언 반영: 매수 직후부터 추적 시작하여 사각지대 해소)
-                if type_str == "buy":
-                    init_price = float(price)
-                    # 시장가(0)인 경우 현재가 조회 시도 (국내주식 기준)
-                    if init_price <= 0:
-                        init_price = api.get_current_price(code, is_overseas=False)
-                    
-                    if init_price > 0:
-                        db_manager.db.update_highest_price(code, init_price)
-                        with self._lock:
-                            self.trailing_stop_cache[code] = init_price
-                        self.log(f"[TrailingStop] 감시 시작가 설정: {name} {init_price:,.0f}원")
-                
-                return odno
-            else:
-                err_msg = res_json.get('msg1', 'Unknown Error')
-                msg_cd = res_json.get('msg_cd')
-                self.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
-                
-                # [추가] 주문 실패 알림
-                stock_display = f"{name}({code})" if name else code
-                fail_msg = f"🚫 [주문 실패] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
-                api.send_telegram_message(fail_msg)
-                
-                # [추가] 시스템성 에러(9999) 또는 서버 지연(OPSQ2000) 시 Kill Switch 발동을 위해 예외 발생
-                if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
-                    raise Exception(f"주문 시스템 치명적 오류: {err_msg}")
-
-        except Exception as e:
-            self.log(f"결과: 에러 발생 ({str(e)})")
-            
-            # [추가] 주문 에러 알림
-            stock_display = f"{name}({code})" if name else code
-            fail_msg = f"🚫 [주문 에러] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
-            api.send_telegram_message(fail_msg)
-            
-            # [추가] 예외를 다시 발생시켜 메인 루프의 에러 카운트를 증가시킴 (Kill Switch 연동)
-            raise e
-        finally:
-            self.log("========================================")
-        return None
 
 def _select_stock_for_rules():
     """룰 설정을 위한 종목 선택 헬퍼"""
@@ -3777,7 +3771,7 @@ def system_trading_menu():
         
         menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정", "7": "거래제한"}
         if choice in menu_map:
-            config.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
             
     except KeyboardInterrupt:
         console.print()
@@ -3785,7 +3779,7 @@ def system_trading_menu():
 
     if choice.lower() == 'q': return
     
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
     
     if choice == "1":
         trader.start()

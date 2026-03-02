@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 
 import config
+import context # [추가]
 import api
 import utils
 import indicators

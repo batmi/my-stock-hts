@@ -5,6 +5,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import yfinance as yf
 import pandas as pd
 import config
+import context # [추가] 상태 관리 모듈
 import indicators
 import api
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 def show_market_indices():
-    logger.info(f"운영자 실행: {' - '.join(config.USER_ACTION_BREADCRUMB)}")
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
     # [변경] config.DEBUG_LEVEL 참조
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
