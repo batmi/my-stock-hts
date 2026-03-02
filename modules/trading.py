@@ -859,3 +859,26 @@ def order_menu():
         send_order("buy")
     elif choice == "2":
         send_order("sell")
+
+def stock_order_menu():
+    """종목 주문 관리 통합 메뉴"""
+    config.console.print("\n[bold]종목 주문 관리[/bold]")
+    config.console.print("[1] [red]매수[/red] 주문 (Buy)")
+    config.console.print("[2] [blue]매도[/blue] 주문 (Sell)")
+    config.console.print("[3] [magenta]정정/취소[/magenta] 주문 (Modify/Cancel)")
+    config.console.print()
+    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="3")
+    
+    menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문"}
+    if choice in menu_map:
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+
+    if choice.lower() == 'q': return
+
+    if choice == "1":
+        send_order("buy")
+    elif choice == "2":
+        send_order("sell")
+    elif choice == "3":
+        modify_order()

@@ -377,6 +377,12 @@ def show_help():
     else:
         score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
 
+    # [추가] 테마 트랜드 분석 설명
+    score_table.add_section()
+    score_table.add_row("[bold]테마 트랜드 분석[/]", "LLM 기반 테마/섹터 분석", "[yellow]개발 중[/]", "뉴스, 공시, 소셜 데이터 분석을 통한 주도 테마 발굴")
+    score_table.add_row("(개발 예정)", "트랜드 스코어링", "", "테마별 언급 빈도, 감성, 모멘텀 종합 점수 산출")
+    score_table.add_row("", "주도주 자동 편입", "", "고득점 테마의 핵심 종목을 관심 종목으로 자동 추가")
+
     config.console.print(score_table)
 
 def flush_input():
@@ -508,9 +514,9 @@ def main():
                 else:
                     trader_status = " [bold yellow](WAITING)[/]"
                 
-            config.console.print("[4] 관심 종목 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
-            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] [red]매수[/red]/[blue]매도[/blue] 주문")
-            config.console.print("[8] [magenta]정정/취소[/magenta] 주문"); config.console.print("[9] 자산 관리")
+            config.console.print("[4] 종목 주문 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
+            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] 테마 트랜드 분석")
+            config.console.print("[8] 관심 종목 관리"); config.console.print("[9] 자산 관리")
             config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
             print("─" * 50); config.console.print()
             try:
@@ -522,8 +528,8 @@ def main():
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
                     "0": "시스템 설정", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
-                    "4": "관심 종목 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
-                    "7": "매수/매도 주문", "8": "정정/취소 주문", "9": "자산 관리",
+                    "4": "종목 주문 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
+                    "7": "테마 트랜드 분석", "8": "관심 종목 관리", "9": "자산 관리",
                     "q": "종료", "h": "도움말"
                 }
                 menu_name = menu_map.get(choice.lower(), '')
@@ -606,11 +612,11 @@ def main():
                     if target_code: 
                         logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                         chart.generate_visual_chart(target_code, target_name, target_ovs)
-                elif choice == "4": manage.manage_stock_menu()
+                elif choice == "4": trading.stock_order_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
-                elif choice == "7": trading.order_menu()
-                elif choice == "8": trading.modify_order()
+                elif choice == "7": config.console.print("\n[yellow]추후 개발 예정 기능입니다.[/yellow]")
+                elif choice == "8": manage.manage_stock_menu()
                 elif choice == "9": account.asset_management_menu()
             except KeyboardInterrupt:
                 config.console.print()

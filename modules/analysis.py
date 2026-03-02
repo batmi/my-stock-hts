@@ -286,7 +286,7 @@ def _load_analysis_result(market_type):
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
-    config.console.print("\n[bold cyan]=== 개별 종목 진단 (Diagnosis) ===[/]")
+    config.console.print("\n[bold cyan]=== 개별 종목 분석 (Analysis) ===[/]")
     
     code, name, is_overseas = None, None, False
 
@@ -294,7 +294,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         code, name, is_overseas = target_code, target_name, target_is_overseas
     else:
         # [수정] 종목 선택 메뉴 확장 ([5] 직접 입력 추가 및 기본값 설정)
-        config.console.print("\n[bold]진단할 종목을 선택하세요:[/bold]")
+        config.console.print("\n[bold]분석할 종목을 선택하세요:[/bold]")
         config.console.print("[1] 국내 주식")
         config.console.print("[2] 국내 ETF")
         config.console.print("[3] 미국 주식")
@@ -769,7 +769,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     _print_period_price_20(code, is_overseas)
 
 def diagnose_group_stocks(market_filter=None):
-    """등록된 종목들에 대해 일괄 진단을 수행합니다."""
+    """등록된 종목들에 대해 일괄 분석을 수행합니다."""
     # 대상: 국내 주식 + 국내 ETF
     targets = config.session.stock_data.get('stocks_kr', []) + config.session.stock_data.get('etfs_kr', [])
     
@@ -794,7 +794,7 @@ def diagnose_group_stocks(market_filter=None):
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task(f"[green]등록된 종목 일괄 진단 중{title_suffix}...[/]", total=len(targets))
+        task = progress.add_task(f"[green]등록된 종목 일괄 분석 중{title_suffix}...[/]", total=len(targets))
         
         for item in targets:
             try:
@@ -869,7 +869,7 @@ def diagnose_group_stocks(market_filter=None):
     # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
     results.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
     
-    table_title = f"전체 종목 진단 결과{title_suffix}"
+    table_title = f"전체 종목 분석 결과{title_suffix}"
     
     # [추가] 적용된 가중치 정보 표시 (검증용)
     if params and 'WEIGHTS' in params:
@@ -1517,7 +1517,7 @@ def analyze_market_stocks(market_type):
     from modules import chart
     
     while True:
-        config.console.print("\n[dim]개별 진단 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (Enter: 메뉴복귀)[/dim]")
+        config.console.print("\n[dim]개별 분석 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (Enter: 메뉴복귀)[/dim]")
         choice = Prompt.ask("선택", default="q", show_default=False)
         
         if choice.lower() == 'q':
@@ -1530,8 +1530,8 @@ def analyze_market_stocks(market_type):
                 code = selected['code']
                 name = selected['name']
                 
-                # [수정] 차트 분석 전 개별 종목 진단 결과 출력
-                config.console.print(f"\n[bold green]>> {name}({code}) 개별 진단 및 차트 분석 실행[/bold green]")
+                # [수정] 차트 분석 전 개별 종목 분석 결과 출력
+                config.console.print(f"\n[bold green]>> {name}({code}) 개별 분석 및 차트 분석 실행[/bold green]")
                 diagnose_stock(code, name, target_is_overseas=False)
                 
                 chart.generate_visual_chart(code, name, is_overseas=False)
@@ -1541,9 +1541,9 @@ def analyze_market_stocks(market_type):
             config.console.print("[red]올바른 번호를 입력해주세요.[/red]")
 
 def save_all_market_analysis():
-    """코스피/코스닥 전 종목 진단 결과를 엑셀로 저장"""
+    """코스피/코스닥 전 종목 분석 결과를 엑셀로 저장"""
     
-    config.console.print("\n[bold cyan]=== 전체종목 진단결과 저장 (Excel) ===[/bold cyan]")
+    config.console.print("\n[bold cyan]=== 전체종목 분석결과 저장 (Excel) ===[/bold cyan]")
     config.console.print("[dim]코스피 및 코스닥 전 종목을 분석하여 파일로 저장합니다.[/dim]")
     config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
     
@@ -2109,14 +2109,14 @@ def show_stock_analysis():
     config.console.print("[3] 미국 주식")
     config.console.print("[4] 미국 ETF")
     config.console.print("[5] 전체 보기")
-    config.console.print("[6] 개별 종목 진단")
-    config.console.print("[7] 전체 종목 진단")
+    config.console.print("[6] 개별 종목 분석")
+    config.console.print("[7] 전체 종목 분석")
     valid_choices = ["1", "2", "3", "4", "5", "6", "7", "12", "34", "11", "22", "33", "44", "55", "q", "Q"]
     config.console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=valid_choices, default="5", show_choices=True)
     
     menu_map = {
-        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별진단", "7": "전체진단",
+        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별분석", "7": "전체분석",
         "12": "국내전체", "34": "미국전체", 
         "11": "국내주식(반복)", "22": "국내ETF(반복)", "33": "미국주식(반복)", "44": "미국ETF(반복)", "55": "전체(반복)"
     }
@@ -2130,10 +2130,10 @@ def show_stock_analysis():
         return
 
     if choice == "7":
-        config.console.print("\n[bold]진단할 시장을 선택하세요:[/bold]")
+        config.console.print("\n[bold]분석할 시장을 선택하세요:[/bold]")
         config.console.print("[1] 코스피 (KOSPI)")
         config.console.print("[2] 코스닥 (KOSDAQ)")
-        config.console.print("[3] 전체 종목 진단 결과 저장 (Excel)")
+        config.console.print("[3] 전체 종목 분석 결과 저장 (Excel)")
         config.console.print()
         sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
         

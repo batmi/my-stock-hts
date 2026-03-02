@@ -157,7 +157,7 @@ class TelegramCommander:
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /config : 현재 매매 전략 설정값 조회\n"
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
-            "• /restrict : 거래 제한 종목 리스트 조회\n"
+            "• /restrict : 트레이딩 제한 종목 리스트 조회\n"
             "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/n)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
             "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
@@ -240,9 +240,9 @@ class TelegramCommander:
     def _cmd_restricted(self, args):
         data = auto_trade.load_restricted_stocks()
         if not data:
-            return "📭 거래 제한 종목이 없습니다."
+            return "📭 트레이딩 제한 종목이 없습니다."
 
-        msg = f"🚫 [거래 제한 종목 ({len(data)}개)]\n"
+        msg = f"🚫 [트레이딩 제한 종목 ({len(data)}개)]\n"
         for code, info in data.items():
             name = info.get('name', code)
             memo = info.get('memo', '-')

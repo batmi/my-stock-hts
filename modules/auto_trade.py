@@ -2458,7 +2458,7 @@ class AutoTrader:
         custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
         rules_map = {r['code']: r for r in custom_rules}
         
-        # [추가] 거래 제한 종목 로드
+        # [추가] 트레이딩 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
 
         # [추가] Rate Limit 준수를 위한 딜레이 설정
@@ -2712,9 +2712,9 @@ class AutoTrader:
     def _analyze_candidates(self, targets, holding_codes, rules_map):
         candidates = []
         skipped_stocks = []
-        restricted_skipped_stocks = [] # [추가] 거래 제한 스킵 리스트
+        restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         
-        # [추가] 거래 제한 종목 로드
+        # [추가] 트레이딩 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
         
         # [추가] Rate Limit 준수를 위한 딜레이 설정
@@ -2738,7 +2738,7 @@ class AutoTrader:
             
             code = item['code']; name = item['name']
             
-            # [추가] 거래 제한 종목이면 매수 분석 스킵 (매수 판단 자체를 안 함)
+            # [추가] 트레이딩 제한 종목이면 매수 분석 스킵 (매수 판단 자체를 안 함)
             if code in restricted_stocks:
                 restricted_skipped_stocks.append(name)
                 continue
@@ -2828,9 +2828,9 @@ class AutoTrader:
                     'rule': rule
                 })
 
-        # [추가] 거래 제한 종목 스킵 로그 기록
+        # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:
-            self.log(f"[매수 스킵] 거래 제한 종목 ({len(restricted_skipped_stocks)}개): {', '.join(restricted_skipped_stocks)}")
+            self.log(f"[매수 스킵] 트레이딩 제한 종목 ({len(restricted_skipped_stocks)}개): {', '.join(restricted_skipped_stocks)}")
 
         # [추가] 시장 필터링 보류 종목 로그 기록
         if skipped_stocks:
@@ -3373,10 +3373,10 @@ def _delete_stock_rules():
         console.print("[red]잘못된 번호입니다.[/red]")
 
 def _view_restricted_stocks():
-    """거래 제한 종목 목록 및 후행지표 조회"""
+    """트레이딩 제한 종목 목록 및 후행지표 조회"""
     data = load_restricted_stocks()
     if not data:
-        console.print("\n[yellow]거래 제한 종목이 없습니다.[/yellow]")
+        console.print("\n[yellow]트레이딩 제한 종목이 없습니다.[/yellow]")
         return
 
     # [추가] 적응형 임계값 준비
@@ -3394,7 +3394,7 @@ def _view_restricted_stocks():
             use_adaptive = False
 
     console.print()
-    title = "거래 제한 종목"
+    title = "트레이딩 제한 종목"
     if use_adaptive:
         title += " [bold magenta](*)[/]"
     table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -3538,7 +3538,7 @@ def _view_restricted_stocks():
         console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
 
 def _add_restricted_stock():
-    """거래 제한 종목 추가"""
+    """트레이딩 제한 종목 추가"""
     code, name, is_overseas = _select_stock_for_rules()
     if not code: return
     
@@ -3557,20 +3557,20 @@ def _add_restricted_stock():
         "is_overseas": is_overseas
     }
     save_restricted_stocks(data)
-    console.print(f"\n[green]'{name}' 종목이 거래 제한 목록에 추가되었습니다.[/green]")
+    console.print(f"\n[green]'{name}' 종목이 트레이딩 제한 목록에 추가되었습니다.[/green]")
     
-    console.print("\n[bold cyan]>> 현재 설정된 거래 제한 종목 리스트입니다.[/bold cyan]")
+    console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
     _view_restricted_stocks()
 
 def _remove_restricted_stock():
-    """거래 제한 종목 해제"""
+    """트레이딩 제한 종목 해제"""
     data = load_restricted_stocks()
     if not data:
         console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
         return
 
     console.print()
-    table = Table(title="거래 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table = Table(title="트레이딩 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No.", justify="right", style="cyan", width=4)
     table.add_column("종목명(코드)", justify="left")
     table.add_column("현재가", justify="right")
@@ -3709,7 +3709,7 @@ def _remove_restricted_stock():
         save_restricted_stocks(data)
         console.print(f"\n[green]'{target_name}' 종목이 제한 목록에서 해제되었습니다.[/green]")
         
-        console.print("\n[bold cyan]>> 현재 설정된 거래 제한 종목 리스트입니다.[/bold cyan]")
+        console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
         _view_restricted_stocks()
 
 def manage_stock_rules():
@@ -3734,8 +3734,8 @@ def manage_stock_rules():
         _delete_stock_rules()
 
 def manage_restricted_stocks_menu():
-    """거래 제한 종목 관리 메뉴"""
-    console.print("\n[bold cyan]=== 거래 제한 종목 관리 ===[/]")
+    """트레이딩 제한 종목 관리 메뉴"""
+    console.print("\n[bold cyan]=== 트레이딩 제한 종목 관리 ===[/]")
     console.print("[1] 제한 종목 조회 (List)")
     console.print("[2] 제한 종목 추가 (Add)")
     console.print("[3] 제한 종목 해제 (Remove)")
@@ -3763,7 +3763,7 @@ def system_trading_menu():
     console.print("[4] 트레이딩 평가 (Report)")
     console.print("[5] 트레이딩 로그 (Log Viewer)")
     console.print("[6] 종목별 트레이딩 룰 (Rule)")
-    console.print("[7] 거래 제한 종목 (Restrict)")
+    console.print("[7] 트레이딩 제한 종목 (Restrict)")
     console.print()
     
     try:
