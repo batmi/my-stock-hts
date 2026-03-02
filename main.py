@@ -16,7 +16,7 @@ import context # [추가]
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
-from modules import auto_trade, telegram_bot
+from modules import auto_trade, telegram_bot, theme_analysis # [추가]
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -379,8 +379,8 @@ def show_help():
 
     # [추가] 테마 트랜드 분석 설명
     score_table.add_section()
-    score_table.add_row("[bold]테마 트랜드 분석[/]", "LLM 기반 테마/섹터 분석", "[yellow]개발 중[/]", "뉴스, 공시, 소셜 데이터 분석을 통한 주도 테마 발굴")
-    score_table.add_row("(개발 예정)", "트랜드 스코어링", "", "테마별 언급 빈도, 감성, 모멘텀 종합 점수 산출")
+    score_table.add_row("[bold]테마 트랜드 분석[/]", "네이버 금융 크롤링 + LLM", "[green]사용 가능[/]", "실시간 주도 테마 발굴 및 관련주 조회")
+    score_table.add_row("", "트랜드 스코어링", "", "테마별 등락률 분석 및 AI 요약")
     score_table.add_row("", "주도주 자동 편입", "", "고득점 테마의 핵심 종목을 관심 종목으로 자동 추가")
 
     config.console.print(score_table)
@@ -615,7 +615,7 @@ def main():
                 elif choice == "4": trading.stock_order_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
-                elif choice == "7": config.console.print("\n[yellow]추후 개발 예정 기능입니다.[/yellow]")
+                elif choice == "7": theme_analysis.run_theme_analysis() # [수정] 기능 연결
                 elif choice == "8": manage.manage_stock_menu()
                 elif choice == "9": account.asset_management_menu()
             except KeyboardInterrupt:

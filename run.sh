@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-genai python-dotenv"
 MISSING_LIBS=""
 
 # 2. 운영체제 확인 (macOS vs Linux)
@@ -50,7 +50,20 @@ fi
 
 # 6. 미설치 라이브러리 스캔
 for lib in $REQUIRED_LIBS; do
-    $PYTHON_PATH -c "import $lib" > /dev/null 2>&1
+    IMPORT_NAME=$lib
+    case $lib in
+        "beautifulsoup4")
+            IMPORT_NAME="bs4"
+            ;;
+        "google-genai")
+            IMPORT_NAME="google.genai"
+            ;;
+        "python-dotenv")
+            IMPORT_NAME="dotenv"
+            ;;
+    esac
+
+    $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         MISSING_LIBS="$MISSING_LIBS $lib"
     fi
@@ -76,4 +89,3 @@ fi
 # 8. 프로그램 실행
 echo "--- 프로그램 실행 ---"
 $PYTHON_PATH main.py "$@"
-

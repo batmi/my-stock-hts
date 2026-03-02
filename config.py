@@ -6,6 +6,10 @@ import logging
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from session import SessionManager
+from dotenv import load_dotenv
+
+# .env 파일 로드 (환경 변수 우선순위: 시스템 환경변수 > .env 파일)
+load_dotenv()
 
 console = Console()
 
@@ -31,6 +35,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_INSTANCE_NAME = "HTS"
 TELEGRAM_POLLING_TIMEOUT = 10
 ENABLE_TELEGRAM = True
+
+# [설정] Google Gemini API 설정 (무료 대안)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
@@ -396,6 +404,10 @@ def setup_logging():
     numeric_level = getattr(logging, level_name, logging.INFO)
 
     logging.basicConfig(level=numeric_level, handlers=[file_handler], force=True)
+    
+    # [추가] 외부 라이브러리 로그 레벨 조정 (노이즈 감소)
+    for lib in ["httpcore", "httpx", "urllib3", "google", "google.genai"]:
+        logging.getLogger(lib).setLevel(logging.WARNING)
 
 # [추가] 시스템 트레이딩 전용 로거 설정 함수
 def get_autotrade_logger():
