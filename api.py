@@ -843,7 +843,7 @@ def get_domestic_index_chart(code):
     """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""
     # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
     url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
-    tr_id = "FHKST03010200"
+    tr_id = "FHKUP03500100" # [수정] 업종기간별시세 TR ID (FHKST03010200은 주식분봉용)
     
     now = datetime.now()
     today = now.strftime("%Y%m%d")
@@ -865,12 +865,17 @@ def get_domestic_index_chart(code):
         if items:
             df = pd.DataFrame(items)
             # 컬럼 매핑 (KIS API 응답 -> 내부 표준)
-            # stck_bsop_date:일자, bstp_nmix_prpr:현재가(종가), bstp_nmix_hgpr:고가, bstp_nmix_lwpr:저가, acml_vol:거래량
-            df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
-            df.columns = ['date', 'close', 'high', 'low', 'volume']
-            df = df.astype({'close': float, 'high': float, 'low': float, 'volume': float})
+            # stck_bsop_date:일자, bstp_nmix_prpr:현재가(종가), bstp_nmix_oprc:시가, bstp_nmix_hgpr:고가, bstp_nmix_lwpr:저가, acml_vol:거래량
+            df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
+            df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
+            df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+            logger.debug(f"[API] 지수({code}) 조회 성공: {len(df)}건 반환")
             return df.sort_values('date', ascending=True).reset_index(drop=True)
-            
+        else:
+            logger.warning(f"[API] 지수({code}) 조회 성공했으나 데이터(output2)가 비어있음")
+    else:
+        logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+
     return pd.DataFrame()
 
 def get_current_price_data(code, is_overseas):

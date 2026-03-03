@@ -141,6 +141,8 @@ def view_system_config():
     table.add_row("강세장 보정\n[dim]기준 점수 완화값[/dim]", "MARKET_REGIME_PARAMS['BULL_SCORE_ADJ']", f"{regime.get('BULL_SCORE_ADJ')}")
     table.add_row("약세장 보정\n[dim]기준 점수 강화값[/dim]", "MARKET_REGIME_PARAMS['BEAR_SCORE_ADJ']", f"{regime.get('BEAR_SCORE_ADJ')}")
     table.add_row("횡보장 보정\n[dim]기준 점수 유지값[/dim]", "MARKET_REGIME_PARAMS['SIDEWAYS_SCORE_ADJ']", f"{regime.get('SIDEWAYS_SCORE_ADJ')}")
+    table.add_row("추세 판단 MA (일)\n[dim]시장 국면 판단용 이동평균선[/dim]", "MARKET_REGIME_PARAMS['REGIME_MA_PERIOD']", f"{regime.get('REGIME_MA_PERIOD', 20)}")
+    table.add_row("추세 판단 ADX\n[dim]강세장 판단용 ADX 기준[/dim]", "MARKET_REGIME_PARAMS['REGIME_ADX_THRESHOLD']", f"{regime.get('REGIME_ADX_THRESHOLD', 20)}")
 
     table.add_section()
 
@@ -480,7 +482,11 @@ def modify_market_regime_params():
         {"desc": "약세장 점수 보정", "help": "약세장일 때 기준 점수 조정값 (예: +1.0)", "name": "BEAR_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["BEAR_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BEAR_SCORE_ADJ": v})},
         {"desc": "횡보장 점수 보정", "help": "횡보장일 때 기준 점수 조정값 (예: 0.0)", "name": "SIDEWAYS_SCORE_ADJ", "type": "float",
-         "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})}
+         "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})},
+        {"desc": "추세 판단 MA (일)", "help": "시장 국면 판단용 이동평균선 (기본 20일)", "name": "REGIME_MA_PERIOD", "type": "int",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_MA_PERIOD": v})},
+        {"desc": "추세 판단 ADX", "help": "강세장 판단용 ADX 기준 (기본 20)", "name": "REGIME_ADX_THRESHOLD", "type": "int",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_ADX_THRESHOLD": v})}
     ]
     _edit_config_table("시장 국면 및 적응형 임계값 (Adaptive Thresholds)", items)
 
@@ -584,7 +590,7 @@ def reset_to_default():
     })
     config.MARKET_REGIME_PARAMS.update({
         "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -1.0, "BEAR_SCORE_ADJ": 1.0,
-        "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 60, "REGIME_ADX_THRESHOLD": 20
+        "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
     })
     
     config.SYSTEM_INVEST_PER_STOCK = 0.5

@@ -2,6 +2,7 @@
 import time
 import sys
 import os
+from datetime import datetime
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 모듈 임포트 가능하게 설정
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,6 +77,11 @@ def test_simulation_unfilled_orders():
     found_order = None
     console.print(f"조회된 미체결 건수: {len(unfilled_list)}")
     
+    if unfilled_list:
+        console.print(f"[dim]조회된 리스트: {unfilled_list}[/dim]")
+    else:
+        console.print("[dim]반환된 미체결 리스트가 비어있습니다.[/dim]")
+    
     for order in unfilled_list:
         r_odno = order.get('odno')
         r_code = order.get('pdno')
@@ -94,6 +100,59 @@ def test_simulation_unfilled_orders():
     else:
         console.print(f"\n[bold red]❌ 테스트 실패: 미체결 내역에서 주문번호({odno})를 찾을 수 없습니다.[/bold red]")
         console.print("[dim]참고: 모의투자 서버 지연이나 API 로직 문제일 수 있습니다.[/dim]")
+        
+        # [추가] 상세 분석 로직
+        console.print("\n[yellow]🔍 상세 분석: 전체 주문 내역(체결+미체결+취소) 조회 시도...[/yellow]")
+        
+        # 직접 API 호출 (CCLD_DVSN="00" : 전체)
+        url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        tr_id = "VTTC8001R"
+        today = datetime.now().strftime("%Y%m%d")
+        
+        params = {
+            "CANO": config.session.cano,
+            "ACNT_PRDT_CD": config.session.acnt_prdt_cd,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "00", # 00: 전체
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": ""
+        }
+        
+        try:
+            res = api.call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
+            
+            if res.get('rt_cd') == '0':
+                all_orders = res.get('output1', [])
+                target = next((o for o in all_orders if str(o.get('odno')) == str(odno)), None)
+                
+                if target:
+                    console.print(f"[cyan]👉 전체 내역에서 주문 발견![/cyan]")
+                    console.print(f"  - 주문번호: {target.get('odno')}")
+                    console.print(f"  - 종목명: {target.get('prdt_name')}")
+                    console.print(f"  - 주문구분: {target.get('sll_buy_dvsn_cd_name')}")
+                    console.print(f"  - 주문수량: {target.get('ord_qty')}")
+                    console.print(f"  - 체결수량: {target.get('tot_ccld_qty')}")
+                    console.print(f"  - 취소수량: {target.get('cncl_cfrm_qty')}")
+                    console.print(f"  - 잔량: {target.get('rmn_qty')}")
+                    
+                    if int(target.get('rmn_qty', 0)) > 0:
+                        console.print(f"  => [bold yellow]상태: 미체결 잔량 존재함 (API 필터링 조건 확인 필요)[/bold yellow]")
+                    else:
+                        console.print(f"  => [bold magenta]상태: 이미 전량 체결되거나 취소됨[/bold magenta]")
+                else:
+                    console.print(f"[red]전체 내역에서도 주문번호({odno})를 찾을 수 없습니다.[/red]")
+            else:
+                console.print(f"[red]전체 내역 조회 실패: {res.get('msg1')} ({res.get('msg_cd')})[/red]")
+        except Exception as e:
+            console.print(f"[red]상세 분석 중 오류 발생: {e}[/red]")
 
     # 6. 테스트 주문 취소 (청소)
     if found_order:

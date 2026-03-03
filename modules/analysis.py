@@ -121,25 +121,36 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
 def get_market_regime(market_type="KOSPI"):
     """시장 국면 판단 (Bull/Bear/Sideways)"""
     try:
-        # [보완] KIS API 우선 사용 (데이터 정합성 향상)
+        # [수정] KIS API 우선 사용 (데이터 정합성 향상) 및 yfinance Fallback 적용
         # KIS API 지수 코드: KOSPI(0001), KOSDAQ(1001)
         kis_code = "0001" if market_type == "KOSPI" else "1001"
         
+        # [수정] 설정된 MA 기간 가져오기 (하드코딩 제거)
+        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+
         # 1. KIS API 조회 시도
+        logger.debug(f"[Analysis] {market_type}({kis_code}) KIS API 지수 조회 시도...")
         df = api.get_domestic_index_chart(kis_code)
         
         # 2. 실패 시 yfinance 조회 시도 (Fallback)
-        if df is None or df.empty or len(df) < 60:
+        # [수정] 하드코딩된 60 대신 설정값 ma_period 사용
+        if df is None or df.empty or len(df) < ma_period:
+            fail_reason = "데이터 없음"
+            if df is not None and not df.empty:
+                fail_reason = f"데이터 부족({len(df)}건 < {ma_period}건)"
+            
+            logger.debug(f"[Analysis] {market_type} KIS API {fail_reason} -> yfinance 데이터로 대체하여 분석 진행")
             yf_ticker = "^KS11" if market_type == "KOSPI" else "^KQ11"
             df = api.get_chart_data(yf_ticker, is_overseas=True)
+        else:
+            logger.debug(f"[Analysis] {market_type} KIS API 데이터 사용 성공 ({len(df)} rows)")
         
-        if df is None or df.empty or len(df) < 60:
+        if df is None or df.empty or len(df) < ma_period:
             return "Sideways", 0.0 # 데이터 부족 시 횡보로 가정
             
         current_price = float(df.iloc[-1]['close'])
         
         # 지표 계산
-        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 60)
         adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
         
         ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]

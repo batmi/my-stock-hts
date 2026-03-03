@@ -377,12 +377,6 @@ def show_help():
     else:
         score_table.add_row("", "자산 배분 (마지막)", "[green]전액[/]", "마지막 종목은 잔여 예수금 100% 사용")
 
-    # [추가] 테마 트랜드 분석 설명
-    score_table.add_section()
-    score_table.add_row("[bold]테마 트랜드 분석[/]", "네이버 금융 크롤링 + LLM", "[green]사용 가능[/]", "실시간 주도 테마 발굴 및 관련주 조회")
-    score_table.add_row("", "트랜드 스코어링", "", "테마별 등락률 분석 및 AI 요약")
-    score_table.add_row("", "주도주 자동 편입", "", "고득점 테마의 핵심 종목을 관심 종목으로 자동 추가")
-
     config.console.print(score_table)
 
 def flush_input():

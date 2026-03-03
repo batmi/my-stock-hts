@@ -2975,7 +2975,7 @@ class AutoTrader:
 
     def _update_market_indices_status(self):
         """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림"""
-        # [수정] KIS API 사용을 위한 종목 코드 변경 (KOSPI: 0001, KOSDAQ: 1001)
+        # [수정] KIS API 사용을 위한 종목 코드 (KOSPI: 0001, KOSDAQ: 1001)
         target_indices = {"KOSPI": "0001", "KOSDAQ": "1001"}
         # [추가] Fallback용 yfinance 티커
         yf_tickers = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
@@ -2985,14 +2985,17 @@ class AutoTrader:
         for market_name, ticker in target_indices.items():
             try:
                 # [수정] KIS API를 통한 지수 차트 조회
+                logger.debug(f"[AutoTrade] {market_name}({ticker}) KIS API 지수 조회 시도...")
                 df = api.get_domestic_index_chart(ticker)
                 
                 # [추가] KIS API 실패 시 yfinance로 재시도 (Fallback)
                 if df is None or df.empty or len(df) < ma_period:
                     yf_ticker = yf_tickers.get(market_name)
                     if yf_ticker:
-                        logger.debug(f"[지수] KIS API 조회 실패. yfinance로 재시도합니다: {yf_ticker}")
+                        logger.debug(f"[AutoTrade] {market_name} KIS API 데이터 부족({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) 대체 사용")
                         df = api.get_chart_data(yf_ticker, is_overseas=True)
+                else:
+                    logger.debug(f"[AutoTrade] {market_name} KIS API 데이터 사용 성공 ({len(df)} rows)")
 
                 if df is None or df.empty or len(df) < ma_period:
                     self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
