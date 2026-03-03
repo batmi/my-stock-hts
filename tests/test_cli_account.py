@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from modules import account
 import config
+import api
 
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.account.get_deposit_balance')
@@ -39,7 +40,7 @@ def test_display_asset_status(mock_deposit, mock_ovs_balance, mock_dom_balance):
     mock_ovs_balance.return_value = []
     mock_deposit.return_value = {'deposit': 1000000, 'foreign_deposit': 0, 'd2_deposit': 1000000}
     
-    with patch('config.console.print'):
+    with patch('config.console.print'): # Added api to the with patch
         # _display_asset_status는 private이지만 테스트를 위해 직접 호출
         account._display_asset_status(config.session.cano, config.session.acnt_prdt_cd)
         

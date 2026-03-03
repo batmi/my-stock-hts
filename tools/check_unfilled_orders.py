@@ -2,7 +2,7 @@
 import time
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 모듈 임포트 가능하게 설정
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,6 +12,9 @@ import api
 from rich.console import Console
 
 console = Console()
+
+# [추가] 상세 디버깅을 위해 로그 레벨 설정
+config.SCREEN_DEBUG_LEVEL = "DEBUG"
 
 def test_simulation_unfilled_orders():
     console.print("[bold cyan]=== 모의투자 미체결 내역 조회 테스트 ===[/bold cyan]")
@@ -58,6 +61,9 @@ def test_simulation_unfilled_orders():
     # ord_dvsn="00" (지정가)
     res = api.place_order("domestic", "buy", code, qty, test_price, "00")
     
+    # [추가] 주문 응답 전체 출력
+    console.print(f"[dim]주문 응답 데이터: {res}[/dim]")
+    
     if res['rt_cd'] != '0':
         console.print(f"[bold red]주문 실패: {res['msg1']} (Code: {res.get('msg_cd')})[/bold red]")
         return
@@ -65,9 +71,18 @@ def test_simulation_unfilled_orders():
     odno = res['output']['ODNO']
     console.print(f"[bold green]주문 접수 완료. 주문번호: {odno}[/bold green]")
     
-    # 4. 대기 (서버 반영 시간)
-    console.print("\n[dim]서버 반영 대기 중 (3초)...[/dim]")
-    time.sleep(3)
+    # 4. 대기 및 반복 조회 (서버 반영 지연 대응)
+    console.print("\n[dim]서버 반영 대기 및 조회 (최대 5회 시도)...[/dim]")
+    
+    unfilled_list = []
+    for i in range(5):
+        time.sleep(2)
+        console.print(f"[dim]  Attempt {i+1}: 조회 중...[/dim]")
+        unfilled_list = api.get_unfilled_orders()
+        # 주문번호가 리스트에 있는지 확인
+        if any(str(o.get('odno')) == str(odno) for o in unfilled_list):
+            console.print(f"[green]  => 주문 발견![/green]")
+            break
     
     # 5. 미체결 내역 조회 (변경된 로직 검증)
     console.print("\n[green]2. 미체결 내역 조회 (api.get_unfilled_orders)...[/green]")
@@ -126,11 +141,19 @@ def test_simulation_unfilled_orders():
             "CTX_AREA_NK100": ""
         }
         
+        console.print(f"[dim]요청 파라미터: {params}[/dim]")
+        
         try:
             res = api.call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
             
+            console.print(f"[dim]API 응답 코드: {res.get('rt_cd')}, 메시지: {res.get('msg1')} ({res.get('msg_cd')})[/dim]")
+            
             if res.get('rt_cd') == '0':
                 all_orders = res.get('output1', [])
+                console.print(f"[dim]조회된 전체 주문 건수: {len(all_orders)}[/dim]")
+                if all_orders:
+                    console.print(f"[dim]첫 번째 주문 샘플: {all_orders[0]}[/dim]")
+                
                 target = next((o for o in all_orders if str(o.get('odno')) == str(odno)), None)
                 
                 if target:
@@ -152,7 +175,73 @@ def test_simulation_unfilled_orders():
             else:
                 console.print(f"[red]전체 내역 조회 실패: {res.get('msg1')} ({res.get('msg_cd')})[/red]")
         except Exception as e:
-            console.print(f"[red]상세 분석 중 오류 발생: {e}[/red]")
+            console.print(f"[red]상세 분석 1 오류: {e}[/red]")
+
+        # [추가] 상세 분석 2: 정정/취소 가능 주문 조회 (TTTC8036R) 시도
+        console.print("\n[yellow]🔍 상세 분석 2: 정정/취소 가능 주문 조회 (TTTC8036R) 시도...[/yellow]")
+        url_rvse = "uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        # 모의투자용 TR ID가 별도로 없으므로 실전용 ID 사용 시도 (혹시 동작할지 확인)
+        tr_id_rvse = "TTTC8036R" 
+        
+        params_rvse = {
+            "CANO": config.session.cano,
+            "ACNT_PRDT_CD": config.session.acnt_prdt_cd,
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+            "INQR_DVSN_1": "0",
+            "INQR_DVSN_2": "0"
+        }
+        
+        try:
+            res_rvse = api.call_api(url_rvse, "domestic", "inquiry", "open_orders", params=params_rvse, tr_id=tr_id_rvse)
+            console.print(f"[dim]API 응답 코드: {res_rvse.get('rt_cd')}, 메시지: {res_rvse.get('msg1')}[/dim]")
+            
+            if res_rvse.get('rt_cd') == '0':
+                rvse_list = res_rvse.get('output', [])
+                console.print(f"[dim]조회된 정정/취소 가능 건수: {len(rvse_list)}[/dim]")
+                target = next((o for o in rvse_list if str(o.get('odno')) == str(odno)), None)
+                if target:
+                    console.print(f"[cyan]👉 정정/취소 가능 목록에서 주문 발견![/cyan]")
+                    console.print(f"  - 주문번호: {target.get('odno')}")
+                    console.print(f"  - 잔량: {target.get('psbl_qty')}")
+        except Exception as e:
+            console.print(f"[red]상세 분석 2 오류: {e}[/red]")
+
+        # [추가] 상세 분석 3: 주문번호(ODNO)로 직접 조회 시도
+        console.print(f"\n[yellow]🔍 상세 분석 3: 주문번호({odno})로 직접 조회 시도...[/yellow]")
+        
+        params_odno = params.copy()
+        params_odno["ODNO"] = odno
+        
+        try:
+            res_odno = api.call_api(url, "domestic", "inquiry", "history", params=params_odno, tr_id=tr_id)
+            console.print(f"[dim]API 응답 코드: {res_odno.get('rt_cd')}, 메시지: {res_odno.get('msg1')}[/dim]")
+            
+            if res_odno.get('rt_cd') == '0':
+                odno_list = res_odno.get('output1', [])
+                console.print(f"[dim]조회된 건수: {len(odno_list)}[/dim]")
+                if odno_list:
+                    console.print(f"[cyan]👉 ODNO 직접 조회 성공: {odno_list[0]}[/cyan]")
+                else:
+                    console.print(f"[red]ODNO로 조회했으나 데이터가 없습니다.[/red]")
+        except Exception as e:
+            console.print(f"[red]상세 분석 3 오류: {e}[/red]")
+
+        # [추가] 상세 분석 4: 조회 기간 확장 및 정렬 변경 시도
+        console.print("\n[yellow]🔍 상세 분석 4: 조회 기간 확장 (3일 전) 및 정렬 변경(정순)...[/yellow]")
+        
+        params_ext = params.copy()
+        params_ext["INQR_STRT_DT"] = (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
+        params_ext["INQR_DVSN"] = "01" # 01: 정순
+        
+        try:
+            res_ext = api.call_api(url, "domestic", "inquiry", "history", params=params_ext, tr_id=tr_id)
+            console.print(f"[dim]API 응답 코드: {res_ext.get('rt_cd')}, 메시지: {res_ext.get('msg1')}[/dim]")
+            if res_ext.get('rt_cd') == '0':
+                ext_list = res_ext.get('output1', [])
+                console.print(f"[dim]확장 조회 건수: {len(ext_list)}[/dim]")
+        except Exception as e:
+            console.print(f"[red]상세 분석 4 오류: {e}[/red]")
 
     # 6. 테스트 주문 취소 (청소)
     if found_order:

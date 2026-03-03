@@ -52,8 +52,9 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     )
     
     # 2. 점수 계산
+    weights = thresholds.get("WEIGHTS") if thresholds else None
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=thresholds.get("WEIGHTS")
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights
     )
     
     # 3. 백테스팅용 플래그 변환

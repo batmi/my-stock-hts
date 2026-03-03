@@ -30,7 +30,7 @@ def test_get_domestic_index_chart(mock_call):
     mock_call.return_value = {
         'rt_cd': '0',
         'output2': [
-            {'stck_bsop_date': '20230101', 'bstp_nmix_prpr': '2500.00', 'bstp_nmix_hgpr': '2550.00', 'bstp_nmix_lwpr': '2450.00', 'acml_vol': '100000'}
+            {'stck_bsop_date': '20230101', 'bstp_nmix_prpr': '2500.00', 'bstp_nmix_oprc': '2480.00', 'bstp_nmix_hgpr': '2550.00', 'bstp_nmix_lwpr': '2450.00', 'acml_vol': '100000'}
         ]
     }
     

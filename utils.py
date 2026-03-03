@@ -255,6 +255,9 @@ class AccountContext:
 
 def get_tick_size(price, is_overseas=False):
     """호가 단위(Tick Size) 반환"""
+    if not isinstance(price, (int, float)):
+        return 0  # 숫자가 아니면 0을 반환
+
     if is_overseas:
         return 0.01
     
@@ -269,4 +272,7 @@ def get_tick_size(price, is_overseas=False):
 def adjust_to_tick(price, is_overseas=False):
     """가격을 호가 단위에 맞춰 반올림 보정"""
     tick = get_tick_size(price, is_overseas)
+    if not isinstance(price, (int, float)):
+        return 0  # 숫자가 아니면 0을 반환
+
     return round(price / tick) * tick

@@ -227,7 +227,7 @@ MARKET_REGIME_PARAMS = {
     "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
     "REGIME_MA_PERIOD": 20,          # 추세 판단용 이동평균선 (일) 
                                      #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
-                                     #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
+                                     #   60일 이상 설정 시 yfi아nance 데이터로 자동 대체됩니다.
     "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
 }
 

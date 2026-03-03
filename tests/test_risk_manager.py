@@ -1,6 +1,7 @@
 import pytest
 import math
 from modules.auto_trade import RiskManager
+from unittest.mock import patch
 import config
 
 # Mock Trader 클래스 (RiskManager 초기화용)
@@ -9,6 +10,8 @@ class MockTrader:
         self.initial_asset = initial_asset
     def log(self, msg):
         pass # 테스트 중 로그 출력 생략
+    def stop(self):
+        pass # Mock stop method
 
 @pytest.fixture
 def risk_manager():
@@ -121,3 +124,31 @@ def test_volatility_targeting_scaling_limits(risk_manager):
         avail_cash, invest_ratio, stop_loss_rate=None, atr=atr_high, current_price=current_price
     )
     assert invest_amt_min == 500_000 # 100만 * 0.5
+
+@patch('modules.auto_trade.api.send_telegram_message')
+def test_check_loss_limit_triggered(mock_tg, risk_manager):
+    """손실 한도 초과 시 정지 테스트"""
+    risk_manager.trader.initial_asset = 10_000_000
+    config.SYSTEM_DAILY_LOSS_LIMIT = 5.0 # 5% limit
+    
+    # Current asset: 9,000,000 (-10% loss)
+    current_total = 9_000_000
+    
+    with patch.object(risk_manager.trader, 'stop') as mock_stop:
+        risk_manager.check_loss_limit(current_total)
+        
+        mock_stop.assert_called_once()
+        mock_tg.assert_called_once()
+        assert "비상 정지" in mock_tg.call_args[0][0]
+
+def test_check_loss_limit_safe(risk_manager):
+    """손실 한도 이내일 때 테스트"""
+    risk_manager.trader.initial_asset = 10_000_000
+    config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
+    
+    # Current asset: 9,600,000 (-4% loss)
+    current_total = 9_600_000
+    
+    with patch.object(risk_manager.trader, 'stop') as mock_stop:
+        risk_manager.check_loss_limit(current_total)
+        mock_stop.assert_not_called()

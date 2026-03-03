@@ -7,7 +7,7 @@ import config
 @patch('modules.settings.modify_system_trading_general')
 def test_system_config_menu_general(mock_general, mock_ask):
     """시스템 설정 메뉴 - 일반 설정 테스트"""
-    mock_ask.return_value = "2"
+    mock_ask.return_value = "1"
     settings.system_config_menu()
     mock_general.assert_called_once()
 
@@ -15,7 +15,7 @@ def test_system_config_menu_general(mock_general, mock_ask):
 @patch('modules.settings.modify_analysis_thresholds')
 def test_system_config_menu_analysis(mock_analysis, mock_ask):
     """시스템 설정 메뉴 - 분석 임계값 테스트"""
-    mock_ask.return_value = "3"
+    mock_ask.return_value = "2"
     settings.system_config_menu()
     mock_analysis.assert_called_once()
 

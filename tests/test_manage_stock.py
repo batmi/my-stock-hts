@@ -4,6 +4,12 @@ import os
 from unittest.mock import patch, mock_open
 import config
 from session import SessionManager
+from modules import db_manager
+
+@pytest.fixture(autouse=True)
+def cleanup_db_connection():
+    yield
+    db_manager.db.close_connection()
 
 @pytest.fixture
 def session_manager():

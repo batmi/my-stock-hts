@@ -138,3 +138,38 @@ def test_analyze_market_trends_no_api_key():
     assert result is None
     
     config.GEMINI_API_KEY = original_key
+
+def test_fetch_theme_detail_success():
+    """테마 상세 페이지 크롤링 테스트"""
+    html = """
+    <html>
+    <table class="type_5">
+        <tr>
+            <td><a href="/item/main.naver?code=005930">삼성전자</a></td>
+            <td>설명</td>
+            <td>가격</td>
+            <td>대비</td>
+            <td>+1.5%</td>
+        </tr>
+        <tr>
+            <td><a href="/item/main.naver?code=000660">SK하이닉스</a></td>
+            <td>설명</td>
+            <td>가격</td>
+            <td>대비</td>
+            <td>+2.0%</td>
+        </tr>
+    </table>
+    </html>
+    """
+    theme = {'name': '반도체', 'link': '/theme/detail'}
+    with patch('requests.get') as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.content = html.encode('cp949')
+        mock_get.return_value = mock_resp
+        
+        theme_analysis._fetch_theme_detail(theme)
+        
+        assert 'leading' in theme
+        # 등락률 순 정렬 (2.0% > 1.5%)
+        assert 'SK하이닉스' in theme['leading']
+        assert '삼성전자' in theme['leading']

@@ -10,8 +10,8 @@ import os
 import time
 import config
 import context # [추가]
-import api
 import utils
+import api
 from modules import db_manager
 import json
 import pandas as pd
@@ -73,6 +73,7 @@ def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
 
 def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
     """해외 주식 잔고 데이터를 조회하여 반환"""
+
     return api.get_overseas_balance(cano, acnt_prdt_cd)
 
 def sync_today_trades():
@@ -599,7 +600,7 @@ def get_deposit_balance():
 def export_trade_history_to_excel():
     """전체 거래 내역을 엑셀 파일로 저장"""
     try:
-        trades = db_manager.db.get_trades(limit=None)
+        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=None)
         if not trades:
             config.console.print("\n[yellow]저장할 거래 내역이 없습니다.[/yellow]")
             return
@@ -813,16 +814,16 @@ def view_trade_history():
     trades = []
     if choice == "1":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        trades = db_manager.db.get_trades(limit=50)
+        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=50)
     elif choice == "2":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        trades = db_manager.db.get_trades(start_date=start_dt)
+        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, start_date=start_dt)
     elif choice == "3":
         keyword = Prompt.ask("검색할 종목코드(티커) 입력")
         context.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        trades = db_manager.db.get_trades(code=keyword)
+        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, code=keyword)
     elif choice == "4":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         export_trade_history_to_excel()

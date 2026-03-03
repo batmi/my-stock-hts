@@ -23,6 +23,14 @@ class DBManager:
                 self.local.conn.close()
         except: pass
 
+    def close_connection(self):
+        """현재 스레드의 DB 연결을 명시적으로 종료"""
+        try:
+            if hasattr(self.local, 'conn') and self.local.conn:
+                self.local.conn.close()
+                self.local.conn = None
+        except: pass
+
     def _get_conn(self):
         """스레드별 DB 연결 객체 반환 (없으면 생성)"""
         if not hasattr(self.local, 'conn') or self.local.conn is None:

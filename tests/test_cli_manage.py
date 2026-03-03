@@ -2,6 +2,12 @@ import pytest
 from unittest.mock import patch, MagicMock
 from modules import manage
 import config
+from modules import db_manager
+
+@pytest.fixture(autouse=True)
+def cleanup_db_connection():
+    yield
+    db_manager.db.close_connection()
 
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.manage.get_current_price')

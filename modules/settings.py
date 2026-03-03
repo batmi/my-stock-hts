@@ -410,6 +410,9 @@ def modify_log_settings():
     _edit_config_table("로그 레벨 설정 (Log Level)", items)
 
 def modify_scoring_weights():
+    # 기본값 정의
+    defaults = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
+
     while True:
         weights = config.SCORING_WEIGHTS
         total_score = sum(weights.values())
@@ -431,7 +434,9 @@ def modify_scoring_weights():
         ]
 
         for key, label, detail in items_info:
-            table.add_row(label, f"{weights[key]}", detail)
+            def_val = defaults.get(key, 0.0)
+            desc = f"{detail} (기본: {def_val})"
+            table.add_row(label, f"{weights[key]}", desc)
         
         console.print(table)
         
@@ -622,28 +627,28 @@ def reset_to_default():
 
 def system_config_menu():
     console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
-    console.print("[1] 시스템 설정 조회 (View Config)")
-    console.print("[2] 시스템 트레이딩 일반설정 (Trading General)")
-    console.print("[3] 매수/분석 임계값 (Analysis Thresholds)")
-    console.print("[4] 매도 전략 (Sell Strategy)")
-    console.print("[5] 스코어링 가중치 (Scoring Weights)")
-    console.print("[6] 적응형 임계값 (Adaptive Thresholds)")
-    console.print("[7] 기술적 지표 파라미터 (Indicators)")
-    console.print("[8] 텔레그램 설정 (Telegram)")
-    console.print("[9] 로그 레벨 설정 (Log Level)")
+    console.print("[1] 시스템 트레이딩 일반설정 (Trading General)")
+    console.print("[2] 매수/분석 임계값 (Analysis Thresholds)")
+    console.print("[3] 매도 전략 (Sell Strategy)")
+    console.print("[4] 스코어링 가중치 (Scoring Weights)")
+    console.print("[5] 적응형 임계값 (Adaptive Thresholds)")
+    console.print("[6] 기술적 지표 파라미터 (Indicators)")
+    console.print("[7] 텔레그램 설정 (Telegram)")
+    console.print("[8] 로그 레벨 설정 (Log Level)")
+    console.print("[9] 시스템 설정 조회 (View Config)")
     console.print("[0] 설정 초기화 (Reset to Default)")
     console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "Q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "Q"], default="9")
     if choice.lower() == 'q': return
     
-    if choice == "1": view_system_config()
-    elif choice == "2": modify_system_trading_general()
-    elif choice == "3": modify_analysis_thresholds()
-    elif choice == "4": modify_sell_strategy()
-    elif choice == "5": modify_scoring_weights()
-    elif choice == "6": modify_market_regime_params()
-    elif choice == "7": modify_indicator_params()
-    elif choice == "8": modify_telegram_settings()
-    elif choice == "9": modify_log_settings()
+    if choice == "1": modify_system_trading_general()
+    elif choice == "2": modify_analysis_thresholds()
+    elif choice == "3": modify_sell_strategy()
+    elif choice == "4": modify_scoring_weights()
+    elif choice == "5": modify_market_regime_params()
+    elif choice == "6": modify_indicator_params()
+    elif choice == "7": modify_telegram_settings()
+    elif choice == "8": modify_log_settings()
+    elif choice == "9": view_system_config()
     elif choice == "0": reset_to_default()

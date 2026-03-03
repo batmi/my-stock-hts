@@ -58,3 +58,22 @@ def test_cmd_rules(mock_get_rules, commander):
     assert "삼성전자" in response
     assert "005930" in response
     assert "매수: 8.0점" in response
+
+@patch('modules.auto_trade.db_manager.db.get_trades')
+def test_cmd_report(mock_get_trades, commander):
+    """리포트 명령어 테스트"""
+    # Mock DB response
+    mock_get_trades.return_value = [
+        {'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 60000, 'time': '2023-01-01 10:00:00', 'odno': '1', 'profit_rate': 0, 'profit_amt': 0, 'reason': '매수'},
+        {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절'}
+    ]
+    
+    # /report d (일간)
+    res = commander._cmd_report(['d'])
+    assert "시스템 트레이딩 성과 리포트" in res
+    assert "총 손익: +10,000원" in res
+    
+    # 데이터 없음
+    mock_get_trades.return_value = []
+    res_empty = commander._cmd_report([])
+    assert "매매 기록이 없습니다" in res_empty

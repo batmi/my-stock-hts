@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from modules import account
+import api
 import config
 
-@patch('modules.account.api.get_today_history')
+@patch('api.get_today_history')
 @patch('modules.account.db_manager.db')
 def test_sync_today_trades(mock_db, mock_get_history):
     """금일 체결 내역 동기화 테스트"""
@@ -33,4 +34,5 @@ def test_sync_today_trades(mock_db, mock_get_history):
     
     assert count == 1
     mock_db.insert_trade.assert_called_once()
+
     mock_db.update_trade.assert_called_once_with('1001', price=70000.0)

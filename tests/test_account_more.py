@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import patch
 from modules import account
 
-@patch('modules.account.api.get_domestic_balance')
+import api
+
+@patch('api.get_domestic_balance')
 def test_fetch_domestic_balance(mock_get):
     """국내 잔고 조회 래퍼 테스트"""
     mock_get.return_value = ([{'pdno': '005930', 'hldg_qty': '10'}], [{'tot_evlu_amt': '1000000'}])
@@ -11,7 +13,7 @@ def test_fetch_domestic_balance(mock_get):
     assert len(holdings) == 1
     assert summary['tot_evlu_amt'] == '1000000'
 
-@patch('modules.account.api.get_overseas_balance')
+@patch('api.get_overseas_balance')
 def test_fetch_overseas_balance(mock_get):
     """해외 잔고 조회 래퍼 테스트"""
     mock_get.return_value = [{'ovrs_pdno': 'AAPL', 'ovrs_cblc_qty': '5'}]

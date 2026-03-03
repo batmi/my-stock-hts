@@ -344,7 +344,7 @@ class ThrottledSession(requests.Session):
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
                     
                     # [추가] 시스템 트레이딩 로그 기록
-                    if config.SYSTEM_LOGGER: config.SYSTEM_LOGGER(f"[API] {msg}")
+                    if hasattr(context, 'SYSTEM_LOGGER') and context.SYSTEM_LOGGER: context.SYSTEM_LOGGER(f"[API] {msg}")
                     
                     time.sleep(wait_time)
                     continue
@@ -670,6 +670,15 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                     "appSecret": secret,
                     "tr_id": current_tr_id
                 }
+                
+                # [추가] 디버그 모드일 때 헤더 정보 출력 (민감정보 마스킹)
+                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    masked_headers = headers.copy()
+                    if 'authorization' in masked_headers:
+                        masked_headers['authorization'] = masked_headers['authorization'][:20] + "..."
+                    if 'appSecret' in masked_headers:
+                        masked_headers['appSecret'] = "********"
+                    config.console.print(f"[dim cyan]  > Headers: {masked_headers}[/dim cyan]")
                 
                 full_url = f"{base_url}/{url_path}"
                 
@@ -1121,8 +1130,8 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     # [추가] 실패 시 로그 출력
     msg = f"잔고 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})"
     logger.debug(f"{msg}")
-    if config.SYSTEM_LOGGER:
-        config.SYSTEM_LOGGER(f"[API] {msg}")
+    if hasattr(context, 'SYSTEM_LOGGER') and context.SYSTEM_LOGGER:
+        context.SYSTEM_LOGGER(f"[API] {msg}")
         
     return None, None
 
@@ -1221,7 +1230,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
             "SLL_BUY_DVSN_CD": "00",
             "INQR_DVSN": "00",
             "PDNO": "",
-            "CCLD_DVSN": "02", # 02: 미체결
+            "CCLD_DVSN": "00", # [수정] 00: 전체 (02 미체결 조회가 안될 경우 대비)
             "ORD_GNO_BRNO": "",
             "ODNO": "",
             "INQR_DVSN_3": "00",
@@ -1233,7 +1242,13 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
         res = call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
         
         if res.get('rt_cd') == '0':
-            return res.get('output1', [])
+            # [추가] 전체 내역 중 미체결 잔량이 있는 주문만 필터링
+            all_orders = res.get('output1', [])
+            unfilled = []
+            for order in all_orders:
+                if int(order.get('rmn_qty', 0)) > 0:
+                    unfilled.append(order)
+            return unfilled
         return []
 
     else:
