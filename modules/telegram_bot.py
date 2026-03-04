@@ -464,9 +464,11 @@ class TelegramCommander:
         targets = [
             ("KOSPI", "^KS11"),
             ("KOSDAQ", "^KQ11"),
+            ("나스닥 선물", "NQ=F"),
             ("나스닥", "^IXIC"),
             ("S&P500", "^GSPC"),
             ("다우존스", "^DJI"),
+            ("러셀 2000", "^RUT"),
             ("금", "GC=F"),
             ("은", "SI=F"),
             ("SOX(반도체)", "^SOX"),
