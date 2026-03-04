@@ -23,7 +23,7 @@ def show_market_indices():
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
     indices_map = {
-        "코스피": "^KS11", "코스닥": "^KQ11", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI",
+        "코스피": "^KS11", "코스닥": "^KQ11", "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀 2000": "^RUT",
         "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
         "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX"
     }
@@ -122,7 +122,7 @@ def show_market_indices():
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥", "금", "달러인덱스", "VIX (변동성)"]: 
+                if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)"]: 
                     table.add_section()
 
                 try:

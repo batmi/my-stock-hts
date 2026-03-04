@@ -92,7 +92,7 @@ def select_stock_for_chart():
     if group_choice == "6":
         indices_list = [
             ("코스피", "^KS11"), ("코스닥", "^KQ11"),
-            ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"),
+            ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀 2000", "^RUT"),
             ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
             ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("밀", "ZW=F"),
             ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),

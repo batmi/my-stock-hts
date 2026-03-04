@@ -1333,7 +1333,8 @@ class AutoTrader:
                         if config.session.is_simulation:
                             deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                     
-                    if deposit == 0:
+                    # [수정] 실전 투자는 항상 상세 조회 시도 (정확도 우선)
+                    if deposit == 0 or not config.session.is_simulation:
                         res = api.get_deposit_balance(target_cano, acnt)
                         if res:
                             deposit = res['d2_deposit']
@@ -2425,8 +2426,9 @@ class AutoTrader:
             if not config.session.is_simulation and tot_evlu > 0:
                 return tot_evlu
 
-            # 2. 예수금이 0이고 실전투자면 별도 API 시도
-            if deposit == 0 and not config.session.is_simulation:
+            # 2. 실전투자면 별도 API 시도 (잔고 API의 예수금 갱신 지연 대비)
+            # [수정] deposit이 0이 아니더라도 정확한 값을 위해 조회
+            if not config.session.is_simulation:
                 res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
                 if res:
                     deposit = res['deposit'] + res['foreign_deposit']

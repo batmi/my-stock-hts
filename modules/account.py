@@ -19,10 +19,10 @@ from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
-def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None):
+def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
     summary = {'buy_amt': 0, 'sell_amt': 0, 'total_cost': 0, 'realized_pl': 0}
     try:
-        data = api.get_today_profit_summary(cano, acnt_prdt_cd)
+        data = api.get_today_profit_summary(cano, acnt_prdt_cd, target_date=target_date)
         if data.get('rt_cd') == '0':
             out2 = data.get('output2')
             if isinstance(out2, list) and len(out2) > 0:
@@ -34,10 +34,10 @@ def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None):
     except: pass
     return summary
 
-def fetch_today_history(cano=None, acnt_prdt_cd=None):
+def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
     summary = {'buy_total': 0, 'sell_total': 0}
     try:
-        data = api.get_today_history(cano, acnt_prdt_cd)
+        data = api.get_today_history(cano, acnt_prdt_cd, target_date=target_date)
         if data.get('rt_cd') == '0':
             trades = data.get('output1', [])
             if trades:
@@ -411,24 +411,31 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         "sec_buy": 0,       "sec_eval": 0,      "sec_pl": 0,
         "realized_pl": 0,   "total_cost": 0,
         "buy_today": 0,     "sell_today": 0,
-        "ovrs_eval_krw": 0,
-        "ovrs_pl_krw": 0
+        "ovrs_eval_krw": 0, "ovrs_pl_krw": 0,
+        "order_possible": 0, # [추가] 주문가능금액
+        "d2_real": 0,        # [추가] 실제 D+2 예수금
+        "next_day_plus": 0,  # [추가] 익일결재(+)
+        "next_day_minus": 0  # [추가] 익일결재(-)
     }
     
     # 1. 금일 데이터 조회
     if progress: progress.update(task, description="[green]금일 매매 손익 조회 중...[/]")
     try:
+        # [원복] 항상 현재 날짜 기준 조회 (새벽 로직 제거)
         profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
         summary_data['buy_today'] = profit_data['buy_amt']
         summary_data['sell_today'] = profit_data['sell_amt']
         summary_data['total_cost'] = profit_data['total_cost']
         summary_data['realized_pl'] = profit_data['realized_pl']
         
-        if summary_data['buy_today'] == 0 and summary_data['sell_today'] == 0:
-                backup_data = fetch_today_history(cano, acnt_prdt_cd)
-                if backup_data['buy_total'] > 0 or backup_data['sell_total'] > 0:
-                    summary_data['buy_today'] = backup_data['buy_total']
-                    summary_data['sell_today'] = backup_data['sell_total']
+        # [수정] 기간별 손익 API가 매매금액을 0으로 반환하는 경우가 많으므로
+        # 체결 내역(fetch_today_history)을 조회하여 값이 더 크다면(누락된 경우) 덮어쓰기 수행
+        backup_data = fetch_today_history(cano, acnt_prdt_cd)
+        if backup_data['buy_total'] > summary_data['buy_today']:
+            summary_data['buy_today'] = backup_data['buy_total']
+        if backup_data['sell_total'] > summary_data['sell_today']:
+            summary_data['sell_today'] = backup_data['sell_total']
+            
     except: pass
 
     # 2. 국내 주식 잔고 및 자산
@@ -450,11 +457,24 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
 
             if output2:
                 summary = output2[0]
+                # [수정] 실전/모의 공통으로 D+1, D+2, 예수금 데이터 파싱
+                summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
+                summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
+                summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt'))
+                
+                # [추가] 익일결재 금액 계산 (전일 매도/매수 기준)
+                bfdy_sll = api.safe_int(summary.get('bfdy_sll_amt'))
+                bfdy_buy = api.safe_int(summary.get('bfdy_buy_amt'))
+                bfdy_tlex = api.safe_int(summary.get('bfdy_tlex_amt'))
+                summary_data['next_day_plus'] = bfdy_sll - bfdy_tlex
+                summary_data['next_day_minus'] = bfdy_buy
+                
                 if not config.session.is_simulation:
-                    summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
-                    summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
-                    # [수정] 모의투자에서도 dnca_tot_amt 사용 가능
-                    summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt')) 
+                    # [추가] 금일 제비용 보정 (기간별 손익 API 누락 시 잔고 요약 데이터 활용)
+                    tlex_amt = api.safe_int(summary.get('thdt_tlex_amt'))
+                    if tlex_amt > summary_data['total_cost']:
+                        summary_data['total_cost'] = tlex_amt
+                    
                     summary_data['withdraw'] = summary_data['d2_dep'] 
 
     except Exception as e:
@@ -504,11 +524,18 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             dep_data = api.get_deposit_balance(cano, acnt_prdt_cd)
             
             if dep_data:
-                if config.session.is_simulation:
-                    summary_data['dep_dom'] = dep_data['deposit']
-                    summary_data['d2_dep'] = dep_data['d2_deposit']
-                    summary_data['withdraw'] = dep_data['withdraw']
-                else:
+                # [수정] 실전/모의 모두 상세 예수금 정보로 업데이트 (잔고 조회 API보다 정확함)
+                summary_data['dep_dom'] = dep_data['deposit']
+                summary_data['d2_dep'] = dep_data['d2_deposit']
+                summary_data['withdraw'] = dep_data['withdraw']
+                summary_data['order_possible'] = dep_data.get('order_possible', 0)
+                summary_data['d2_real'] = dep_data.get('d2_real', 0)
+                
+                # [수정] 실전투자일 경우 UI 표시용 D+2 값을 실제 D+2(가수도) 값으로 덮어쓰기
+                if not config.session.is_simulation and summary_data['d2_real'] > 0:
+                    summary_data['d2_dep'] = summary_data['d2_real']
+                
+                if not config.session.is_simulation:
                     summary_data['dep_ovs'] = dep_data['foreign_deposit']
     except Exception: pass
     
@@ -544,10 +571,22 @@ def _display_asset_status(cano, acnt_prdt_cd):
     summary_table.add_row("총 평가금액", f"{summary_data['tot_asset']:,}원")
     summary_table.add_row("총 예수금(D+0)", f"{display_tot_deposit:,}원")
     summary_table.add_row("    원화 예수금", f"{summary_data['dep_dom']:,}원", style="dim")
-    if not config.session.is_simulation:
-        summary_table.add_row("      └ D+1 (익일)", f"{summary_data['d1_dep']:,}원", style="dim")
-        summary_table.add_row("      └ D+2 (가수도)", f"{summary_data['d2_dep']:,}원", style="dim")
+    
+    # [수정] 모의투자도 D+1, D+2 정보 표시 (사용자 요청)
+    d2_val = summary_data.get('d2_real', 0)
+    if d2_val == 0: d2_val = summary_data['d2_dep']
+    
+    summary_table.add_row("      └ D+1 (익일)", f"{summary_data['d1_dep']:,}원", style="dim")
+    summary_table.add_row("      └ D+2 (가수도)", f"{d2_val:,}원", style="dim")
+    
+    # [추가] 익일결재 정보 표시 (값이 있을 때만)
+    if summary_data['next_day_plus'] > 0:
+        summary_table.add_row("      └ 익일결재(+)", f"{summary_data['next_day_plus']:,}원", style="dim")
+    if summary_data['next_day_minus'] > 0:
+        summary_table.add_row("      └ 익일결재(-)", f"{summary_data['next_day_minus']:,}원", style="dim")
+    
     summary_table.add_row("    외화예수금", f"{summary_data['dep_ovs']:,}원", style="dim")
+    summary_table.add_row("주문가능금액", f"[bold green]{summary_data['order_possible']:,}원[/]")
     summary_table.add_row("출금가능금액", f"{summary_data['withdraw']:,}원")
     summary_table.add_row("유가증권매입금액", f"{summary_data['sec_buy']:,}원")
     summary_table.add_row("유가증권평가금액", f"{summary_data['sec_eval']:,}원")
@@ -562,6 +601,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
 
     summary_table.add_section()
     
+    # [원복] 라벨 고정
     summary_table.add_row("금일 매수 체결합계", f"{summary_data['buy_today']:,}원")
     summary_table.add_row("금일 매도 체결합계", f"{summary_data['sell_today']:,}원")
     summary_table.add_row("금일 제비용", f"{summary_data['total_cost']:,}원")
