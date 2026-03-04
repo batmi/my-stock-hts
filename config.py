@@ -149,8 +149,8 @@ VOLATILITY_SCALING_MIN = 0.3       # 최소 축소 배수 (0.3배) - 변동성�
 # [추가] 슬리피지 비율 (Slippage Rate)
 # 매수/매도 주문 시 현재가 대비 불리한 가격으로 주문을 내어 체결 확률을 높이고,
 # 백테스팅 시 실제 체결 오차를 반영하기 위한 비율입니다.
-# (기본값: 0.001 = 0.1%, 0으로 설정 시 미사용)
-SLIPPAGE_RATE = 0.001
+# (기본값: 0.003 = 0.3%, 0으로 설정 시 미사용)
+SLIPPAGE_RATE = 0.003
 
 SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
 SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리

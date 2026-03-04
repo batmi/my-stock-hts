@@ -361,7 +361,7 @@ def show_help():
 
     # [추가] 주문 집행 상세 섹션
     score_table.add_section()
-    slippage_rate = getattr(config, 'SLIPPAGE_RATE', 0.001)
+    slippage_rate = getattr(config, 'SLIPPAGE_RATE', 0.003)
     if slippage_rate > 0:
         slippage_val = slippage_rate * 100
         score_table.add_row("주문 집행", "매수 주문 시", f"[red]+{slippage_val:.2f}%[/]", "체결 확률 확보 (현재가 + 슬리피지)")

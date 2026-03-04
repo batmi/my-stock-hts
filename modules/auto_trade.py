@@ -726,7 +726,7 @@ class OrderManager:
             unfilled_list = api.get_unfilled_orders()
             if not unfilled_list: return
 
-            cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)
+            cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)
             now = datetime.now()
             
             for item in unfilled_list:
@@ -2259,8 +2259,16 @@ class AutoTrader:
                 # 설정된 주기만큼 대기 (중단 요청 시 즉시 반응)
                 # [확인] 설정된 간격(현재 180초)마다 위 로직을 반복합니다.
                 interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
+                
+                # [수정] 대기 시간 중에도 주기적으로 미체결 주문 관리 수행 (5초 단위)
+                # 긴 대기 시간(예: 3분) 동안 미체결 주문이 방치되는 것을 방지
                 for _ in range(interval): 
                     if not self.is_running: break
+                    
+                    # 5초마다 미체결 관리 호출 (단, 루프 시작 직후는 제외)
+                    if _ > 0 and _ % 5 == 0:
+                        self.order_manager.manage_unfilled_orders()
+                        
                     time.sleep(1)
                 
                 # 정상 루프 완료 시 에러 카운트 초기화

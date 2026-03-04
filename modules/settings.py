@@ -25,7 +25,7 @@ def _save_dynamic_config():
         "CONCLUSION_CHECK_INTERVAL": getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
         "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100),
-        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600),
+        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
         "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
         "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
         "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
@@ -85,7 +85,7 @@ def view_system_config():
     table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
     
-    slippage = getattr(config, 'SLIPPAGE_RATE', 0.001)
+    slippage = getattr(config, 'SLIPPAGE_RATE', 0.003)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
     table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
     table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
@@ -518,8 +518,8 @@ def modify_system_trading_general():
             {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "General",
              "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
             
-            {"desc": "슬리피지 비율", "help": "주문가 보정 비율 (0.001=0.1%, 0: 미사용)", "name": "SLIPPAGE_RATE", "type": "float", "section": "General",
-             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.001), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
+            {"desc": "슬리피지 비율", "help": "주문가 보정 비율 (0.003=0.3%, 0: 미사용)", "name": "SLIPPAGE_RATE", "type": "float", "section": "General",
+             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.003), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
             {"desc": "변동성 타겟팅 사용", "help": "ATR 기반 비중 조절 사용 여부", "name": "USE_VOLATILITY_TARGETING", "type": "bool", "choices": ["y", "n"], "section": "Volatility",
              "get": lambda: getattr(config, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config, 'USE_VOLATILITY_TARGETING', v)}
         ]
@@ -542,7 +542,7 @@ def modify_system_trading_general():
             {"desc": "집중 감시 유지 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Monitoring",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
             {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Monitoring",
-             "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
+             "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
              
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Filter",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
@@ -620,8 +620,8 @@ def reset_to_default():
     config.TARGET_VOLATILITY = 0.30
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.3
-    config.UNFILLED_ORDER_CANCEL_SECONDS = 600
-    config.SLIPPAGE_RATE = 0.001
+    config.UNFILLED_ORDER_CANCEL_SECONDS = 120
+    config.SLIPPAGE_RATE = 0.003
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 
