@@ -314,7 +314,6 @@ def show_help():
     score_table.add_row("", f"약세장: 지수 < {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
     score_table.add_row("", "횡보장: 그 외 구간", "[white]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
     
-    score_table.add_section()
     if market_status_info:
         k_adj_str = f"보정: {market_status_info['kospi_adj']:+.1f}점"
         q_adj_str = f"보정: {market_status_info['kosdaq_adj']:+.1f}점"
