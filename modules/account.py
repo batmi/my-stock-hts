@@ -943,12 +943,17 @@ def view_trade_history():
             clean_type = raw_type.replace("buy", "매수").replace("BUY", "매수").replace("sell", "매도").replace("SELL", "매도").replace("AUTO", "자동")
             
             base_type = "기타"
-            if "매수" in clean_type: base_type = "매수"
+            # [수정] 정정/취소 우선 확인
+            if "정정" in clean_type: base_type = "정정"
+            elif "취소" in clean_type: base_type = "취소"
+            elif "매수" in clean_type: base_type = "매수"
             elif "매도" in clean_type: base_type = "매도"
             
             type_disp = base_type
             if base_type == "매수": type_disp = "[red]매수[/]"
             elif base_type == "매도": type_disp = "[blue]매도[/]"
+            elif base_type == "정정": type_disp = "[magenta]정정[/]"
+            elif base_type == "취소": type_disp = "[yellow]취소[/]"
             
             tag_disp = ""
             if "자동" in clean_type: tag_disp = "([yellow]자동[/])"
@@ -960,6 +965,9 @@ def view_trade_history():
             # 상태 표시
             status_str = t.get('order_status', '접수') # 기본값 접수
             if status_str == "체결": status_str = "[green]체결[/]"
+            elif "체결(추정)" in status_str: status_str = "[green]체결 추정[/]" # [수정] 괄호 제거 및 색상 적용
+            elif "취소" in status_str: status_str = f"[yellow]{status_str}[/]"
+            elif "정정" in status_str: status_str = f"[magenta]{status_str}[/]"
             else: status_str = f"[dim]{status_str}[/]"
 
             # 가격 포맷팅

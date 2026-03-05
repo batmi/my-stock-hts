@@ -1218,6 +1218,8 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
     if config.session.is_simulation:
         # [수정] 모의투자: 주식일별주문체결조회(VTTC8001R) 사용하여 미체결(02) 조회
         # 모의투자 환경에서 주식정정취소가능주문조회(VTTC8036R) 미지원 이슈 대응
+        # [주의] 모의투자 API 버그로 인해 실제 미체결이 있어도 데이터가 반환되지 않는 경우가 많음
+        #       -> AutoTrader의 manage_unfilled_orders에서 로컬 상태 기반 강제 취소 로직으로 보완 중
         url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         tr_id = "VTTC8001R"
         today = datetime.now().strftime("%Y%m%d")

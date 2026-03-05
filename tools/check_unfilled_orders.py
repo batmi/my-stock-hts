@@ -243,6 +243,47 @@ def test_simulation_unfilled_orders():
         except Exception as e:
             console.print(f"[red]상세 분석 4 오류: {e}[/red]")
 
+        # [추가] 상세 분석 5: 체결구분(CCLD_DVSN)을 '02'(미체결)로 명시하여 조회
+        console.print("\n[yellow]🔍 상세 분석 5: 체결구분(CCLD_DVSN)을 '02'(미체결)로 설정하여 조회...[/yellow]")
+        
+        params_ccld = params.copy()
+        params_ccld["CCLD_DVSN"] = "02" # 02: 미체결
+        
+        try:
+            res_ccld = api.call_api(url, "domestic", "inquiry", "history", params=params_ccld, tr_id=tr_id)
+            console.print(f"[dim]API 응답 코드: {res_ccld.get('rt_cd')}, 메시지: {res_ccld.get('msg1')}[/dim]")
+            
+            if res_ccld.get('rt_cd') == '0':
+                ccld_list = res_ccld.get('output1', [])
+                console.print(f"[dim]조회된 미체결 건수: {len(ccld_list)}[/dim]")
+                
+                target = next((o for o in ccld_list if str(o.get('odno')) == str(odno)), None)
+                if target:
+                    console.print(f"[bold green]👉 '02'(미체결) 옵션으로 주문 발견![/bold green]")
+                    console.print(f"  - 주문번호: {target.get('odno')}")
+                    console.print(f"  - 잔량: {target.get('rmn_qty')}")
+                    console.print(f"[bold cyan]💡 해결책: api.py의 get_unfilled_orders() 함수에서 CCLD_DVSN 파라미터를 '02'로 수정해야 합니다.[/bold cyan]")
+                else:
+                    console.print(f"[red]'02' 옵션으로도 주문을 찾을 수 없습니다.[/red]")
+        except Exception as e:
+            console.print(f"[red]상세 분석 5 오류: {e}[/red]")
+
+        # [추가] 상세 분석 6: 강제 취소 시도 (Blind Cancel)
+        console.print("\n[yellow]🔍 상세 분석 6: 주문번호로 강제 취소 시도 (API 누락 확인용)...[/yellow]")
+        
+        # 취소 주문: org_no, code, qty, price="0", type_cd="02"(취소), ord_dvsn="00"
+        cancel_res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+        
+        console.print(f"[dim]취소 응답: {cancel_res}[/dim]")
+        
+        if cancel_res['rt_cd'] == '0':
+            console.print(f"[bold green]✅ 강제 취소 성공! 주문이 실제로는 미체결 상태였습니다.[/bold green]")
+            console.print(f"[dim]결론: API 조회(`VTTC8001R`)는 실패했지만 주문은 살아있었습니다. 로컬 관리 로직이 필요합니다.[/dim]")
+            found_order = True # 청소 단계 스킵용 (이미 취소됨)
+        else:
+            console.print(f"[red]강제 취소 실패: {cancel_res['msg1']} ({cancel_res.get('msg_cd')})[/red]")
+            console.print(f"[dim]결론: 주문이 이미 체결되었거나 유효하지 않습니다.[/dim]")
+
     # 6. 테스트 주문 취소 (청소)
     if found_order:
         console.print("\n[green]3. 테스트 주문 취소 (정리)...[/green]")

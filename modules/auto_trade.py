@@ -305,6 +305,16 @@ class ConclusionMonitor:
                     
                     if data.get('rt_cd') == '0':
                         trades = data.get('output1', [])
+                        
+                        # [추가] 모의투자 API 데이터 불일치(output1 Empty, output2 Not Empty) 감지 로그
+                        if not trades and config.session.is_simulation:
+                            out2 = data.get('output2', {})
+                            try:
+                                tot_qty = int(out2.get('tot_ccld_qty', 0))
+                                if tot_qty > 0 and config.FILE_DEBUG_LEVEL == "DEBUG":
+                                    logger.debug(f"[Monitor] API 데이터 불일치: 체결내역 리스트는 비어있으나 요약 수량은 {tot_qty}입니다. (Pagination 또는 필터링 문제 가능성)")
+                            except: pass
+
                         for item in trades:
                             odno = item.get('odno')
                             if not odno: continue
@@ -485,7 +495,12 @@ class ConclusionMonitor:
                                     db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score)
                                     
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
-                                    db_manager.db.update_trade(odno, price=avg_price)
+                                    # [수정] 전량 체결 시 상태를 '체결'로 업데이트하여 미체결 목록(DB Fallback)에서 제거
+                                    update_params = {'price': avg_price}
+                                    if ord_qty > 0 and ccld_qty >= ord_qty:
+                                        update_params['order_status'] = "체결"
+                                    
+                                    db_manager.db.update_trade(odno, **update_params)
                                 else:
                                     logger.debug(f"[AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})")
                 except Exception as e:
@@ -723,36 +738,114 @@ class OrderManager:
     def manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""
         try:
+            # 1. API를 통한 미체결 내역 조회
             unfilled_list = api.get_unfilled_orders()
-            if not unfilled_list: return
-
+            
+            api_checked_odnos = set()
             cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)
             now = datetime.now()
             
-            for item in unfilled_list:
-                odno = item.get('odno')
-                code = item.get('pdno')
-                name = item.get('prdt_name')
-                qty = int(item.get('rmn_qty', 0))
-                ord_time_str = item.get('ord_tmd')
-                
-                if not odno or qty <= 0 or not ord_time_str: continue
-                
-                try:
-                    ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
-                    elapsed = (now - ord_dt).total_seconds()
+            # API 조회 결과 처리
+            if unfilled_list:
+                for item in unfilled_list:
+                    odno = item.get('odno')
+                    code = item.get('pdno')
+                    name = item.get('prdt_name')
+                    qty = int(item.get('rmn_qty', 0))
+                    ord_time_str = item.get('ord_tmd')
                     
-                    if elapsed >= cancel_seconds:
-                        self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
+                    if not odno or qty <= 0 or not ord_time_str: continue
+                    api_checked_odnos.add(odno)
+                    
+                    try:
+                        ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
+                        elapsed = (now - ord_dt).total_seconds()
                         
-                        res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
-                        
-                        if res.get('rt_cd') == '0':
-                            api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
-                        else:
-                            self.trader.log(f"취소 실패: {res.get('msg1')}")
+                        if elapsed >= cancel_seconds:
+                            self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
                             
-                except Exception: pass
+                            res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+                            
+                            if res.get('rt_cd') == '0':
+                                api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
+                            else:
+                                self.trader.log(f"취소 실패: {res.get('msg1')}")
+                    except Exception: pass
+
+            # 2. [추가] API에는 없지만 로컬에는 남아있는 주문 처리 (API 누락 대응)
+            # 모의투자 등에서 API가 미체결 내역을 반환하지 않는 경우, 로컬 상태를 믿고 강제 확인
+            if config.session.is_simulation:
+                with self._lock:
+                    pending_codes = list(self.pending_orders.keys())
+                    
+                    for code in pending_codes:
+                        if code not in self.pending_orders: continue
+                        orders = self.pending_orders[code]
+                        odnos = list(orders.keys())
+                        
+                        for odno in odnos:
+                            if odno in api_checked_odnos: continue
+                            
+                            status = orders[odno]
+                            if status == OrderStatus.ORDER_SENT:
+                                trade = db_manager.db.get_trade_by_odno(odno)
+                                if trade and trade.get('time'):
+                                    try:
+                                        ord_time = datetime.strptime(trade['time'], "%Y-%m-%d %H:%M:%S")
+                                        elapsed = (now - ord_time).total_seconds()
+                                        
+                                        if elapsed >= cancel_seconds:
+                                            self.trader.log(f"[미체결 관리] 로컬 주문({odno}) 타임아웃({int(elapsed)}초). 강제 취소 시도 (API 누락 대응)")
+                                            qty = int(trade['qty'])
+                                            res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+                                            
+                                            if res.get('rt_cd') == '0':
+                                                self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
+                                                api.send_telegram_message(f"🗑 [주문 취소] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
+                                                
+                                                # [추가] DB 상태 업데이트 (취소)
+                                                db_manager.db.update_trade(odno, order_status="취소")
+                                                
+                                                # 로컬 상태 정리
+                                                if code in self.pending_orders and odno in self.pending_orders[code]:
+                                                    del self.pending_orders[code][odno]
+                                                    if not self.pending_orders[code]: del self.pending_orders[code]
+                                            else:
+                                                # 취소 실패 시 (이미 체결되었거나 거부된 주문)
+                                                msg_cd = res.get('msg_cd')
+                                                # 40330000: 정정/취소할 수량이 없습니다 (이미 체결됨 or 취소됨)
+                                                if msg_cd == '40330000':
+                                                    self.trader.log(f"-> 이미 체결/취소된 주문입니다. 잔고 확인 후 상태를 동기화합니다.")
+                                                    
+                                                    # [추가] 잔고 확인을 통해 체결 여부 추정
+                                                    is_filled = False
+                                                    # 매수 주문이었던 경우 잔고에 해당 종목이 있는지 확인
+                                                    if "buy" in trade.get('type', '').lower() or "매수" in trade.get('type', ''):
+                                                        try:
+                                                            holdings, _ = api.get_domestic_balance(config.session.cano, config.session.acnt_prdt_cd)
+                                                            if holdings:
+                                                                for h in holdings:
+                                                                    if h['pdno'] == code and int(h['hldg_qty']) > 0:
+                                                                        is_filled = True
+                                                                        break
+                                                        except: pass
+                                                    
+                                                    if is_filled:
+                                                        self.trader.log(f"-> 잔고 확인됨. '체결'로 기록합니다.")
+                                                        db_manager.db.update_trade(odno, order_status="체결(추정)")
+                                                        # 체결 내역 강제 생성 (히스토리 보정)
+                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                                    else:
+                                                        self.trader.log(f"-> 잔고 없음. '취소/거부'로 기록합니다.")
+                                                        db_manager.db.update_trade(odno, order_status="취소/거부")
+
+                                                    if code in self.pending_orders and odno in self.pending_orders[code]:
+                                                        del self.pending_orders[code][odno]
+                                                        if not self.pending_orders[code]: del self.pending_orders[code]
+                                                else:
+                                                    self.trader.log(f"-> 취소 실패: {res.get('msg1')}")
+                                    except Exception as e:
+                                        self.trader.log(f"로컬 미체결 처리 중 오류: {e}")
         except Exception as e:
             self.trader.log(f"미체결 관리 중 오류: {e}")
 
@@ -996,6 +1089,9 @@ class AutoTrader:
                 
                 # [수정] 시작 시 불필요한 집중 감시 모드 진입 방지 (IDLE_INTERVAL=0 설정 존중)
                 # ConclusionMonitor().check_now()
+                
+                # [추가] 체결 감시 모니터 시작 (체결 확인 및 DB 상태 동기화를 위해 필수)
+                ConclusionMonitor().start()
             
             if asset_check_failed:
                 self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
@@ -1084,6 +1180,7 @@ class AutoTrader:
             
         def _stop_logic():
             self.is_running = False
+            ConclusionMonitor().stop() # [추가] 체결 감시 모니터 종료
             if self.thread:
                 self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
 

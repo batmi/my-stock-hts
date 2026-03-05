@@ -256,6 +256,85 @@ def show_open_orders():
             with utils.AccountContext(cano):
                 # [A] 국내 주문
                 dom_orders = api.get_domestic_open_orders(cano, acnt)
+                
+                # [추가] 모의투자 API 누락 대응: DB에서 '접수' 상태 주문 조회하여 병합
+                if config.session.is_simulation:
+                    try:
+                        # [수정] 오늘 날짜 기준 접수 상태 주문만 조회 (과거 데이터 누적 방지 및 속도 개선)
+                        today_str = datetime.now().strftime("%Y-%m-%d")
+                        db_orders = db_manager.db.get_trades(limit=100, order_status="접수", start_date=today_str, is_sim=True)
+                        
+                        # [추가] 잔고 정보 조회 (매도 주문 체결 여부 검증용)
+                        holdings_map = {}
+                        try:
+                            h_list, _ = api.get_domestic_balance(cano, acnt)
+                            if h_list:
+                                for h in h_list:
+                                    holdings_map[h['pdno']] = int(h['hldg_qty'])
+                        except: pass
+
+                        # 이미 API로 조회된 주문번호 집합
+                        api_odnos = set(str(o.get('odno')) for o in dom_orders if o.get('odno'))
+                        
+                        current_acc_str = f"{cano}-{acnt}"
+
+                        for db_o in db_orders:
+                            # 계좌 일치 확인
+                            if db_o.get('account') and db_o.get('account') != current_acc_str:
+                                continue
+
+                            db_odno = str(db_o.get('odno'))
+                            if not db_odno or db_odno in api_odnos:
+                                continue
+                            
+                            # DB 주문 정보를 API 포맷으로 변환
+                            type_str = db_o.get('type', '')
+                            sll_buy_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
+                            
+                            # [추가] 매도 주문인데 잔고가 0이면 '체결'로 간주하고 목록에서 제외 (DB 업데이트 포함)
+                            # 모의투자 API가 체결 내역을 늦게 주거나 누락하는 경우 대응
+                            if "매도" in sll_buy_name:
+                                code = db_o.get('code')
+                                if holdings_map.get(code, 0) == 0:
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[Trading] 매도 주문({db_odno}) 잔고 부재(0)로 체결 처리")
+                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    continue
+                            
+                            # [추가] 매수 주문인데 잔고가 주문 수량 이상이면 '체결'로 간주하고 목록에서 제외
+                            # (모의투자 API 누락 대응: 잔고가 들어왔다면 체결된 것임)
+                            if "매수" in sll_buy_name:
+                                code = db_o.get('code')
+                                order_qty = int(float(db_o.get('qty', 0)))
+                                current_qty = holdings_map.get(code, 0)
+                                
+                                if current_qty >= order_qty:
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[Trading] 매수 주문({db_odno}) 잔고 확인({current_qty}>={order_qty})으로 체결 처리")
+                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    continue
+                            
+                            # 시간 포맷 변환 (YYYY-MM-DD HH:MM:SS -> HHMMSS)
+                            time_str = db_o.get('time', '')
+                            ord_tmd = ""
+                            if len(time_str) >= 19:
+                                ord_tmd = time_str[11:19].replace(':', '')
+                            
+                            converted = {
+                                'odno': db_odno,
+                                'pdno': db_o.get('code'),
+                                'prdt_name': db_o.get('name'),
+                                'sll_buy_dvsn_cd_name': sll_buy_name,
+                                'ord_qty': str(db_o.get('qty', 0)),
+                                'ord_unpr': str(int(float(db_o.get('price', 0)))),
+                                'rmn_qty': str(db_o.get('qty', 0)), # 잔량 정보가 없으므로 주문 수량으로 대체
+                                'ord_tmd': ord_tmd,
+                                '_is_db_fallback': True # DB 유래 플래그
+                            }
+                            dom_orders.append(converted)
+                    except Exception as e:
+                        logger.error(f"미체결 내역 DB 병합 중 오류: {e}")
+
                 for order in dom_orders:
                     rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
                     if api.safe_int(rmn_qty) <= 0: continue
@@ -278,8 +357,13 @@ def show_open_orders():
                     display_name = f"{order.get('prdt_name')} ({order.get('pdno')})"
                     ord_tmd = order.get('ord_tmd', '')
                     ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
+                    
+                    # [추가] DB 데이터 표시
+                    odno_disp = str(order.get('odno'))
+                    if order.get('_is_db_fallback'):
+                        odno_disp += " [dim](DB)[/dim]"
 
-                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold]국내[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold]국내[/]", ord_time, odno_disp, display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
                     idx += 1
 
                 # [B] 해외 주문
@@ -836,12 +920,24 @@ def modify_order():
                 
                 db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
                 
+                # [추가] 모의투자일 경우 원주문 상태 업데이트 (미체결 목록 중복 방지)
+                if config.session.is_simulation:
+                    status_update = "정정" if action == "1" else "취소"
+                    db_manager.db.update_trade(org_odno, order_status=status_update)
+                
                 auto_trade.ConclusionMonitor().check_now()
                 
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
                 show_open_orders()
             else:
-                config.console.print(f"[red]실패: {res_json.get('msg1')}[/]")
+                msg_cd = res_json.get('msg_cd')
+                err_msg = res_json.get('msg1')
+                config.console.print(f"[red]실패: {err_msg}[/]")
+                
+                # [추가] 이미 체결/취소된 주문(40330000)인 경우 DB 상태 업데이트 (유령 주문 정리)
+                if msg_cd == '40330000' and config.session.is_simulation:
+                    config.console.print("[yellow]안내: 이미 체결되었거나 취소된 주문입니다. 목록에서 제거합니다.[/yellow]")
+                    db_manager.db.update_trade(org_odno, order_status="체결/취소(정리)")
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
