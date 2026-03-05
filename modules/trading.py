@@ -205,6 +205,31 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
         config.console.print("[red]숫자를 입력해주세요.[/red]")
         return None, None, False, None, None
 
+def _create_fill_history(db_order, reason_msg):
+    """체결 히스토리 생성 (DB Insert) - 모의투자 API 누락 대응용"""
+    try:
+        odno = str(db_order.get('odno'))
+        # 이미 체결 내역이 있는지 확인 (중복 방지)
+        if not db_manager.db.check_trade_exists(odno, "체결"):
+            type_str = db_order.get('type', '')
+            
+            db_manager.db.insert_trade(
+                type_str, 
+                db_order.get('code'), 
+                db_order.get('name'), 
+                int(float(db_order.get('qty', 0))), 
+                float(db_order.get('price', 0)), 
+                odno, 
+                order_status="체결", 
+                reason=f"체결 확인 ({reason_msg})",
+                custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                snapshot=db_order.get('snapshot'),
+                strategy_score=db_order.get('strategy_score', 0),
+                profit_amt=db_order.get('profit_amt', 0),
+                profit_rate=db_order.get('profit_rate', 0.0)
+            )
+    except Exception as e:
+        logger.error(f"체결 히스토리 생성 실패: {e}")
 
 def show_open_orders():
     """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
@@ -323,6 +348,30 @@ def show_open_orders():
 
                                 msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
+                                
+                                # [추가] 체결 히스토리 별도 생성 (DB Insert)
+                                # 상태 업데이트만 하면 히스토리에 '접수' 내역이 사라지고 '체결'로 바뀌기만 하므로,
+                                # 실전처럼 '접수'와 '체결' 내역을 모두 남기기 위해 새로운 레코드를 추가함.
+                                try:
+                                    odno = str(db_order.get('odno'))
+                                    if not db_manager.db.check_trade_exists(odno, "체결"):
+                                        trade_type = "buy" if "매수" in type_name else "sell"
+                                        if "자동" in str(db_order.get('type', '')): trade_type += "(AUTO)"
+                                        elif "수동" in str(db_order.get('type', '')): trade_type += "(수동)"
+                                        
+                                        db_manager.db.insert_trade(
+                                            trade_type, code, name, qty, price, odno, 
+                                            order_status="체결", 
+                                            reason=f"체결 확인 ({reason_msg})",
+                                            custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                            snapshot=db_order.get('snapshot'),
+                                            strategy_score=db_order.get('strategy_score', 0),
+                                            profit_amt=db_order.get('profit_amt', 0),
+                                            profit_rate=db_order.get('profit_rate', 0.0)
+                                        )
+                                except Exception as e:
+                                    logger.error(f"체결 히스토리 생성 실패: {e}")
+                                    
                             except: pass
 
                         for db_o in db_orders:
@@ -347,6 +396,9 @@ def show_open_orders():
                                         logger.debug(f"[Trading] 매도 주문({db_odno}) 잔고 부재(0)로 체결 처리")
                                     db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
+                                    # [추가] 체결 히스토리 생성
+                                    _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
+
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
                                     _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)")
                                     
@@ -364,6 +416,9 @@ def show_open_orders():
                                         logger.debug(f"[Trading] 매수 주문({db_odno}) 잔고 확인({current_qty}>={order_qty})으로 체결 처리")
                                     db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
+                                    # [추가] 체결 히스토리 생성
+                                    _create_fill_history(db_o, "잔고 입고 확인 (API 누락 보정)")
+
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
                                     _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)")
                                     

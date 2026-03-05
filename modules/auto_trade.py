@@ -303,6 +303,10 @@ class ConclusionMonitor:
                     if data.get('rt_cd') != '0':
                         has_error = True
                     
+                    # [추가] 모의투자 전용: API 체결내역 누락 대비 잔고 기반 체결 확인
+                    if config.session.is_simulation:
+                        self._check_simulation_conclusions_by_balance(cano, acnt)
+
                     if data.get('rt_cd') == '0':
                         trades = data.get('output1', [])
                         
@@ -510,6 +514,96 @@ class ConclusionMonitor:
             logger.error(f"체결 확인 중 오류 발생: {e}")
             has_error = True
         return rate_limit_hit, has_error
+
+    def _check_simulation_conclusions_by_balance(self, cano, acnt):
+        """모의투자: 잔고 변동을 확인하여 체결 처리 (API 누락 대응)"""
+        trader = AutoTrader()
+        # 대기 중인 주문이 없으면 스킵
+        if not trader.order_manager.pending_orders:
+            return
+
+        try:
+            # 현재 잔고 조회 (API 호출)
+            holdings, _ = api.get_domestic_balance(cano, acnt)
+            holdings_map = {h['pdno']: int(h['hldg_qty']) for h in holdings} if holdings else {}
+            
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[Monitor] 모의투자 잔고 기반 체결 확인 중... (보유종목: {len(holdings_map)}개)")
+            
+            # 대기 중인 주문 확인
+            with trader.order_manager._lock:
+                pending_codes = list(trader.order_manager.pending_orders.keys())
+                
+                for code in pending_codes:
+                    orders = trader.order_manager.pending_orders.get(code, {})
+                    odnos = list(orders.keys())
+                    
+                    for odno in odnos:
+                        status = orders[odno]
+                        # '주문 전송' 상태인 주문만 대상
+                        if status != OrderStatus.ORDER_SENT: continue
+                        
+                        # DB에서 주문 정보 조회
+                        trade = db_manager.db.get_trade_by_odno(odno)
+                        if not trade: continue
+                        
+                        type_str = trade.get('type', '')
+                        qty = int(trade.get('qty', 0))
+                        
+                        is_filled = False
+                        reason = ""
+                        
+                        # 매수 주문: 잔고 수량이 주문 수량 이상이면 체결로 간주
+                        if "buy" in type_str.lower() or "매수" in type_str:
+                            current_qty = holdings_map.get(code, 0)
+                            if current_qty >= qty:
+                                is_filled = True
+                                reason = "잔고 입고 확인 (API 누락 보정)"
+                        
+                        # 매도 주문: 잔고가 0이면 체결로 간주 (전량 매도 가정)
+                        elif "sell" in type_str.lower() or "매도" in type_str:
+                            current_qty = holdings_map.get(code, 0)
+                            if current_qty == 0:
+                                is_filled = True
+                                reason = "잔고 0 확인 (API 누락 보정)"
+                        
+                        if is_filled:
+                            self._handle_simulation_fill(trader, trade, odno, code, qty, reason)
+                            
+        except Exception as e:
+            logger.error(f"[Monitor] 모의투자 잔고 기반 체결 확인 중 오류: {e}")
+
+    def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason):
+        """모의투자 체결 처리 핸들러"""
+        name = trade.get('name', code)
+        price = float(trade.get('price', 0))
+        
+        # 1. 상태 업데이트 (메모리)
+        trader.update_order_status(code, odno, OrderStatus.FILLED)
+        
+        # 2. DB 업데이트 (원본 주문 상태 변경)
+        db_manager.db.update_trade(odno, order_status="체결(추정)")
+        
+        # 3. 체결 히스토리 생성 (중복 방지)
+        if not db_manager.db.check_trade_exists(odno, "체결"):
+            db_manager.db.insert_trade(
+                trade['type'], code, name, qty, price, odno, 
+                order_status="체결", 
+                reason=f"체결 확인 ({reason})", 
+                custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                snapshot=trade.get('snapshot'),
+                strategy_score=trade.get('strategy_score', 0),
+                profit_amt=trade.get('profit_amt', 0),
+                profit_rate=trade.get('profit_rate', 0.0)
+            )
+            
+            # 4. 알림 발송 (간소화된 메시지, 상세 내용은 기존 로직 참고)
+            try:
+                type_name = "매수" if "buy" in trade['type'].lower() else "매도"
+                msg = f"✅ [체결 알림(추정)] {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}"
+                api.send_telegram_message(msg)
+                logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
+            except: pass
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
