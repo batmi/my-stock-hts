@@ -676,19 +676,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_logic.add_column("결과", justify="center", width=30)
     table_logic.add_column("상세 내용 / 사유", justify="left", style="dim")
 
-    # [추가] 점수 검증 로직
-    calc_sum = 0.0
-    for d in details:
-        m = re.search(r'\(\+([\d\.]+)\)', d)
-        if m:
-            calc_sum += float(m.group(1))
-            
-    diff = abs(score - calc_sum)
-    valid_msg = " [dim green](검증됨)[/]" if diff < 0.01 else f" [dim red](상세합계 {calc_sum:.2f} 불일치)[/]"
-
     # 종합 점수
     s_color = state_color.replace('[', '').replace(']', '')
-    score_str = f"[bold {s_color}]{score:.2f}점[/]{valid_msg}"
+    score_str = f"[bold {s_color}]{score:.2f}점[/]"
     
     details_str = ""
     if details:

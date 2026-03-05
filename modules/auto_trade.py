@@ -1640,7 +1640,7 @@ class AutoTrader:
                     
                     if need_update:
                         progress.update(task, description="[green]시장 지수(KOSPI/KOSDAQ) 상태 업데이트 중...[/]")
-                        self._update_market_indices_status()
+                        self._update_market_indices_status(notify=False)
 
         console.print()
         table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_style=status_color, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -3271,7 +3271,7 @@ class AutoTrader:
                 }
                 self.trade_records.append(record)
 
-    def _update_market_indices_status(self):
+    def _update_market_indices_status(self, notify=True):
         """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림"""
         # [수정] KIS API 사용을 위한 종목 코드 (KOSPI: 0001, KOSDAQ: 1001)
         target_indices = {"KOSPI": "0001", "KOSDAQ": "1001"}
@@ -3309,6 +3309,9 @@ class AutoTrader:
                 }
                 
                 # 상태 변경 알림
+                if not notify:
+                    continue
+
                 notified = self.market_status_notified.get(market_name, False)
                 if not is_healthy and not notified:
                     api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
