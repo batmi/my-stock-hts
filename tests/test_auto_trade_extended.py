@@ -10,11 +10,12 @@ def trader():
     t.is_running = False
     return t
 
+@patch('modules.auto_trade.ConclusionMonitor')
 @patch('modules.auto_trade.api.send_telegram_message')
 @patch('modules.auto_trade.api.get_domestic_balance')
 @patch('modules.auto_trade.api.get_deposit_balance')
 @patch('threading.Thread')
-def test_autotrader_start_stop(mock_thread_cls, mock_deposit, mock_balance, mock_telegram, trader):
+def test_autotrader_start_stop(mock_thread_cls, mock_deposit, mock_balance, mock_telegram, mock_monitor, trader):
     """AutoTrader 시작 및 중지 로직 테스트"""
     # Mock 설정
     mock_balance.return_value = ([], [{'scts_evlu_amt': '1000000'}])
