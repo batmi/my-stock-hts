@@ -200,7 +200,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
             table.add_column("평가금액", justify="right")
             table.add_column("평가손익", justify="right")
             table.add_column("수익률", justify="right")
-            table.add_column("목표/손절가", justify="right", style="dim")
+            table.add_column("목표가", justify="right", style="dim")
+            table.add_column("손절가", justify="right", style="dim")
             
             calculated_total_pchs = 0
             for item in output1:
@@ -253,7 +254,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     f"{eval_amt:,}원",
                     f"{p_color}{profit:+,}원[/]",
                     f"{p_color}{rate:.2f}%[/]",
-                    f"{target_str}\n{stop_str}"
+                    target_str,
+                    stop_str
                 )
             
             config.console.print(table)
@@ -314,7 +316,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
         table_ovrs.add_column("평가금액($)", justify="right")
         table_ovrs.add_column("평가손익($)", justify="right")
         table_ovrs.add_column("수익률(%)", justify="right")
-        table_ovrs.add_column("목표/손절가", justify="right", style="dim")
+        table_ovrs.add_column("목표가", justify="right", style="dim")
+        table_ovrs.add_column("손절가", justify="right", style="dim")
 
         tot_ovrs_evlu = 0.0
         tot_ovrs_profit = 0.0
@@ -381,7 +384,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     f"{item_eval:,.2f}", 
                     f"{color}{profit:+,.2f}[/]", 
                     f"{color}{rate:+.2f}[/]",
-                    f"{target_str}\n{stop_str}"
+                    target_str,
+                    stop_str
                 )
 
         if has_ovrs_item:
