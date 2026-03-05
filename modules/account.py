@@ -152,7 +152,8 @@ def sync_today_trades():
                                         profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score
                                     )
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
-                                    db_manager.db.update_trade(odno, price=avg_price)
+                                    # [수정] 원본 주문 보존을 위해 업데이트 제거
+                                    # db_manager.db.update_trade(odno, price=avg_price)
                                     
                                     total_count += 1
                                 else:
@@ -199,7 +200,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
             table.add_column("평가금액", justify="right")
             table.add_column("평가손익", justify="right")
             table.add_column("수익률", justify="right")
-            table.add_column("손절가 (기준)", justify="right", style="dim")
+            table.add_column("목표/손절가", justify="right", style="dim")
             
             calculated_total_pchs = 0
             for item in output1:
@@ -217,11 +218,13 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 # [추가] 손절가 및 기준 계산
                 use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
                 sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+                tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
                 
                 # 개별 룰 확인
                 rule = db_manager.db.get_stock_strategy(code)
                 if rule:
                     sl_rate = rule['stop_loss']
+                    tp_rate = rule['take_profit']
                 
                 applied_rate = sl_rate
                 label = "고정"
@@ -234,8 +237,11 @@ def _display_balance_details(cano, acnt_prdt_cd):
                             applied_rate = val
                             label = "ATR"
                 
+                target_price = buy_price * (1 + tp_rate / 100)
                 stop_price = buy_price * (1 + applied_rate / 100)
-                stop_price_str = f"{int(stop_price):,}원 ({label})"
+                
+                target_str = f"[red]{int(target_price):,}원[/] (+{tp_rate}%)"
+                stop_str = f"[blue]{int(stop_price):,}원[/] ({applied_rate:.2f}%, {label})"
                 
                 p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
                 table.add_row(
@@ -247,7 +253,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     f"{eval_amt:,}원",
                     f"{p_color}{profit:+,}원[/]",
                     f"{p_color}{rate:.2f}%[/]",
-                    stop_price_str
+                    f"{target_str}\n{stop_str}"
                 )
             
             config.console.print(table)
@@ -308,7 +314,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         table_ovrs.add_column("평가금액($)", justify="right")
         table_ovrs.add_column("평가손익($)", justify="right")
         table_ovrs.add_column("수익률(%)", justify="right")
-        table_ovrs.add_column("손절가 (기준)", justify="right", style="dim")
+        table_ovrs.add_column("목표/손절가", justify="right", style="dim")
 
         tot_ovrs_evlu = 0.0
         tot_ovrs_profit = 0.0
@@ -338,11 +344,13 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 # [추가] 손절가 및 기준 계산
                 use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
                 sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+                tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
                 
                 # 개별 룰 확인
                 rule = db_manager.db.get_stock_strategy(code)
                 if rule:
                     sl_rate = rule['stop_loss']
+                    tp_rate = rule['take_profit']
                 
                 applied_rate = sl_rate
                 label = "고정"
@@ -355,8 +363,11 @@ def _display_balance_details(cano, acnt_prdt_cd):
                             applied_rate = val
                             label = "ATR"
                 
+                target_price = pchs_avg * (1 + tp_rate / 100)
                 stop_price = pchs_avg * (1 + applied_rate / 100)
-                stop_price_str = f"${stop_price:,.2f} ({label})"
+                
+                target_str = f"[red]${target_price:,.2f}[/] (+{tp_rate}%)"
+                stop_str = f"[blue]${stop_price:,.2f}[/] ({applied_rate:.2f}%, {label})"
 
                 color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 
@@ -370,7 +381,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     f"{item_eval:,.2f}", 
                     f"{color}{profit:+,.2f}[/]", 
                     f"{color}{rate:+.2f}[/]",
-                    stop_price_str
+                    f"{target_str}\n{stop_str}"
                 )
 
         if has_ovrs_item:

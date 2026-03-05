@@ -581,8 +581,8 @@ class ConclusionMonitor:
         # 1. 상태 업데이트 (메모리)
         trader.update_order_status(code, odno, OrderStatus.FILLED)
         
-        # 2. DB 업데이트 (원본 주문 상태 변경)
-        db_manager.db.update_trade(odno, order_status="체결(추정)")
+        # 2. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
+        # db_manager.db.update_trade(odno, order_status="체결(추정)")
         
         # 3. 체결 히스토리 생성 (중복 방지)
         if not db_manager.db.check_trade_exists(odno, "체결"):
@@ -597,13 +597,54 @@ class ConclusionMonitor:
                 profit_rate=trade.get('profit_rate', 0.0)
             )
             
-            # 4. 알림 발송 (간소화된 메시지, 상세 내용은 기존 로직 참고)
+            # 4. 알림 발송 (상세 정보 포함)
             try:
-                type_name = "매수" if "buy" in trade['type'].lower() else "매도"
-                msg = f"✅ [체결 알림(추정)] {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}"
+                type_str = trade.get('type', '')
+                type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
+                
+                # 개별 룰 조회
+                custom_rules = db_manager.db.get_all_stock_strategies()
+                rules_map = {r['code']: r for r in custom_rules}
+                rule = rules_map.get(code)
+                
+                title_tag = "[체결 알림(추정)]"
+                rule_info = ""
+                if rule:
+                    title_tag += " [개별]"
+                    rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                    if rule.get('ts_activation'):
+                        rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                
+                # 현재가 정보
+                cur_info = ""
+                try:
+                    cp_data = api.get_current_price_data(code, is_overseas=False)
+                    if cp_data.get('rt_cd') == '0':
+                        curr = float(cp_data['output']['stck_prpr'])
+                        rate = float(cp_data['output']['prdy_ctrt'])
+                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                except: pass
+
+                # 전략 지표 (스냅샷 활용)
+                strategy_info = ""
+                if trade.get('snapshot'):
+                    try:
+                        snap = json.loads(trade['snapshot'])
+                        if 'indicators' in snap:
+                            ind = snap['indicators']
+                            score = trade.get('strategy_score', 0)
+                            rsi_str = f"{ind.get('rsi', 0):.1f}"
+                            adx_str = f"{ind.get('adx', 0):.1f}"
+                            cci_str = f"{ind.get('cci', 0):.1f}"
+                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                    except: pass
+
+                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
                 api.send_telegram_message(msg)
                 logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
-            except: pass
+            except Exception as e:
+                logger.error(f"알림 전송 실패: {e}")
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
@@ -897,8 +938,13 @@ class OrderManager:
                                                 self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
                                                 api.send_telegram_message(f"🗑 [주문 취소] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
                                                 
-                                                # [추가] DB 상태 업데이트 (취소)
-                                                db_manager.db.update_trade(odno, order_status="취소")
+                                                # [수정] 원본 업데이트 제거 -> 취소 히스토리 생성
+                                                # db_manager.db.update_trade(odno, order_status="취소")
+                                                
+                                                # 취소 주문 번호는 API 응답(res)에서 파싱해야 하나, revise_cancel_order는 현재 json을 반환함
+                                                cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
+                                                
+                                                db_manager.db.insert_trade("취소(자동)", code, trade['name'], qty, 0, cancel_odno, org_odno=odno, reason="미체결 시간 초과 (자동 취소)")
                                                 
                                                 # 로컬 상태 정리
                                                 if code in self.pending_orders and odno in self.pending_orders[code]:
@@ -926,7 +972,8 @@ class OrderManager:
                                                     
                                                     if is_filled:
                                                         self.trader.log(f"-> 잔고 확인됨. '체결'로 기록합니다.")
-                                                        db_manager.db.update_trade(odno, order_status="체결(추정)")
+                                                        # [수정] 원본 주문 상태 변경 제거 (접수 이력 보존)
+                                                        # db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
                                                         db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
@@ -979,7 +1026,9 @@ class OrderManager:
                                                             self.trader.log(f"알림 전송 실패: {e}")
                                                     else:
                                                         self.trader.log(f"-> 잔고 없음. '취소/거부'로 기록합니다.")
-                                                        db_manager.db.update_trade(odno, order_status="취소/거부")
+                                                        # [수정] 원본 업데이트 제거 -> 취소/거부 히스토리 생성
+                                                        # db_manager.db.update_trade(odno, order_status="취소/거부")
+                                                        db_manager.db.insert_trade("취소/거부(자동)", code, trade['name'], qty, 0, f"REJECT_{odno}", org_odno=odno, reason="체결 확인 실패 (잔고 없음)")
 
                                                     if code in self.pending_orders and odno in self.pending_orders[code]:
                                                         del self.pending_orders[code][odno]

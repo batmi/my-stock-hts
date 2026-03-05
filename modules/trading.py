@@ -289,6 +289,16 @@ def show_open_orders():
                         today_str = datetime.now().strftime("%Y-%m-%d")
                         db_orders = db_manager.db.get_trades(limit=100, order_status="접수", start_date=today_str, is_sim=True)
                         
+                        # [추가] 이미 체결 처리된 주문(체결 히스토리 존재) 필터링
+                        filled_trades = db_manager.db.get_trades(start_date=today_str, order_status="체결", is_sim=True)
+                        filled_odnos = set(str(t['odno']) for t in filled_trades)
+                        
+                        # [추가] 이미 취소/정정된 주문(후속 이력 존재) 필터링
+                        # 취소/정정 주문은 org_odno(원주문번호)를 가지고 있음
+                        # 오늘 날짜의 모든 거래 내역을 조회하여 org_odno가 있는 경우 원본 주문을 제외 대상에 추가
+                        all_today_trades = db_manager.db.get_trades(start_date=today_str, is_sim=True)
+                        canceled_org_odnos = set(str(t['org_odno']) for t in all_today_trades if t.get('org_odno'))
+                        
                         # [추가] 잔고 정보 조회 (매도 주문 체결 여부 검증용)
                         holdings_map = {}
                         try:
@@ -383,6 +393,14 @@ def show_open_orders():
                             if not db_odno or db_odno in api_odnos:
                                 continue
                             
+                            # [추가] 이미 체결된 주문이면 스킵 (접수 상태라도 체결 내역이 있으면 제외)
+                            if db_odno in filled_odnos:
+                                continue
+                            
+                            # [추가] 이미 취소/정정된 주문이면 스킵 (원주문번호로 참조된 이력이 있으면 제외)
+                            if db_odno in canceled_org_odnos:
+                                continue
+                            
                             # DB 주문 정보를 API 포맷으로 변환
                             type_str = db_o.get('type', '')
                             sll_buy_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
@@ -394,7 +412,8 @@ def show_open_orders():
                                 if holdings_map.get(code, 0) == 0:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Trading] 매도 주문({db_odno}) 잔고 부재(0)로 체결 처리")
-                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    # [수정] 원본 업데이트 제거
+                                    # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
                                     _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
@@ -414,7 +433,8 @@ def show_open_orders():
                                 if current_qty >= order_qty:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Trading] 매수 주문({db_odno}) 잔고 확인({current_qty}>={order_qty})으로 체결 처리")
-                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    # [수정] 원본 업데이트 제거
+                                    # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
                                     _create_fill_history(db_o, "잔고 입고 확인 (API 누락 보정)")
@@ -1030,10 +1050,11 @@ def modify_order():
                 
                 db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
                 
-                # [추가] 모의투자일 경우 원주문 상태 업데이트 (미체결 목록 중복 방지)
-                if config.session.is_simulation:
-                    status_update = "정정" if action == "1" else "취소"
-                    db_manager.db.update_trade(org_odno, order_status=status_update)
+                # [수정] 원본 주문 상태 업데이트 제거 (히스토리 보존)
+                # show_open_orders에서 canceled_org_odnos 필터링으로 처리됨
+                # if config.session.is_simulation:
+                #     status_update = "정정" if action == "1" else "취소"
+                #     db_manager.db.update_trade(org_odno, order_status=status_update)
                 
                 auto_trade.ConclusionMonitor().check_now()
                 
@@ -1047,7 +1068,10 @@ def modify_order():
                 # [추가] 이미 체결/취소된 주문(40330000)인 경우 DB 상태 업데이트 (유령 주문 정리)
                 if msg_cd == '40330000' and config.session.is_simulation:
                     config.console.print("[yellow]안내: 이미 체결되었거나 취소된 주문입니다. 목록에서 제거합니다.[/yellow]")
-                    db_manager.db.update_trade(org_odno, order_status="체결/취소(정리)")
+                    # [수정] 상태 업데이트 대신 정리용 히스토리 추가 (선택 사항이나, 여기서는 상태 업데이트 유지 또는 별도 처리)
+                    # 이미 체결/취소된 상태라면 원본을 건드리기보다, 사용자가 인지했으므로 
+                    # 해당 주문번호에 대한 '정리' 이력을 남겨 필터링되게 함
+                    db_manager.db.insert_trade("기타(정리)", pdno, prdt_name, 0, 0, f"CLEAN_{org_odno}", org_odno=org_odno, reason="이미 체결/취소됨(40330000)")
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
