@@ -8,6 +8,7 @@ import config
 import context # [추가] 상태 관리 모듈
 import indicators
 import api
+from modules import analysis # [추가] 분석 모듈 임포트
 from datetime import datetime, timedelta
 import math
 import logging
@@ -22,6 +23,17 @@ def show_market_indices():
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
+    # [추가] KOSPI/KOSDAQ 시장 국면 미리 조회 (도움말 화면과 데이터 동기화)
+    # KIS API 데이터를 사용하는 analysis.get_market_regime 결과와 yfinance 데이터를 사용하는 현재 화면의 불일치 해소
+    market_regime_cache = {}
+    try:
+        with config.console.status("[dim]국내 시장 국면 동기화 중...[/dim]"):
+            for m_type in ["KOSPI", "KOSDAQ", "KOSPI200"]:
+                regime, _ = analysis.get_market_regime(m_type)
+                market_regime_cache[m_type] = regime
+    except Exception:
+        pass
+
     indices_map = {
         "코스피200": "^KS200", "코스피": "^KS11", "코스닥": "^KQ11", "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
         "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
@@ -33,6 +45,7 @@ def show_market_indices():
     
     data_storage = {}
     yf_tickers = None
+    any_kis_used = False
 
     try:
         # [변경] 1. 히스토리 데이터 다운로드 (Progress 분리: Percentage 제거)
@@ -139,6 +152,23 @@ def show_market_indices():
                     if not df_intraday.empty:
                         df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
+                    # [추가] 국내 지수의 경우 KIS API 데이터로 덮어쓰기 (데이터 정합성 확보)
+                    is_domestic_index = name in ["코스피", "코스닥", "코스피200"]
+                    kis_data_success = False
+                    kis_code = ""
+                    
+                    if is_domestic_index:
+                        kis_code = "0001" if name == "코스피" else ("1001" if name == "코스닥" else "2001")
+                        try:
+                            # 일봉 데이터 조회 (KIS API)
+                            df_kis = api.get_domestic_index_chart(kis_code)
+                            # [수정] 120일 이평선 계산을 위해 최소 120개 이상 데이터가 확보된 경우에만 교체
+                            if df_kis is not None and not df_kis.empty and len(df_kis) >= 120:
+                                df_daily = df_kis # yfinance 데이터 대체
+                                kis_data_success = True
+                        except Exception as e:
+                            if config.SCREEN_DEBUG_LEVEL == "DEBUG": config.console.print(f"[dim red]KIS Index Chart Error: {e}[/dim red]")
+
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
                         
@@ -185,38 +215,58 @@ def show_market_indices():
                     prev = 0.0
                     high_52 = high_52_daily
                     
+                    # [추가] 국내 지수 KIS API 현재가 우선 적용
+                    use_kis_price = False
+                    if is_domestic_index:
+                        try:
+                            res = api.get_domestic_index_price(kis_code)
+                            if res.get('rt_cd') == '0':
+                                out = res.get('output', {})
+                                current = float(out.get('bstp_nmix_prpr', 0))
+                                prev = float(out.get('bstp_nmix_prdy_clpr', 0)) # 전일 종가
+                                
+                                # 52주 고가 갱신 (일봉 데이터 기준과 비교)
+                                # API 출력에 52주 고가가 없으므로 일봉 데이터의 max값 사용 유지
+                                
+                                use_kis_price = True
+                                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                    config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: KIS API)[/dim green]")
+                        except Exception as e:
+                            if config.SCREEN_DEBUG_LEVEL == "DEBUG": config.console.print(f"[dim red]KIS Price Error: {e}[/dim red]")
+
                     # 1. fast_info 시도 (가장 정확)
                     use_fast_info = False
-                    try:
-                        ticker_obj = yf_tickers.tickers[ticker]
-                        fi = ticker_obj.fast_info
-                        last_price = fi.last_price
-                        prev_close = fi.regular_market_previous_close # 공식 전일 종가
-                        
-                        if (last_price is not None and prev_close is not None and 
-                            not math.isnan(last_price) and not math.isnan(prev_close)):
+                    if not use_kis_price: # KIS API 성공 시 건너뜀
+                        try:
+                            ticker_obj = yf_tickers.tickers[ticker]
+                            fi = ticker_obj.fast_info
+                            last_price = fi.last_price
+                            prev_close = fi.regular_market_previous_close # 공식 전일 종가
                             
-                            current = float(last_price)
-                            prev = float(prev_close)
-                            
-                            if hasattr(fi, 'year_high') and fi.year_high is not None and not math.isnan(fi.year_high):
-                                high_52 = max(high_52, float(fi.year_high))
+                            if (last_price is not None and prev_close is not None and 
+                                not math.isnan(last_price) and not math.isnan(prev_close)):
+                                
+                                current = float(last_price)
+                                prev = float(prev_close)
+                                
+                                if hasattr(fi, 'year_high') and fi.year_high is not None and not math.isnan(fi.year_high):
+                                    high_52 = max(high_52, float(fi.year_high))
+                                else:
+                                    high_52 = max(high_52, current)
+                                
+                                use_fast_info = True
+                                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                    config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
                             else:
-                                high_52 = max(high_52, current)
-                            
-                            use_fast_info = True
-                            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                                config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: fast_info)[/dim green]")
-                        else:
-                            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                                config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
+                                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                    config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
 
-                    except Exception as e:
-                        if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                            config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
+                        except Exception as e:
+                            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                                config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
                     # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
-                    if not use_fast_info:
+                    if not use_fast_info and not use_kis_price:
                         if df_daily.empty:
                             table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                             progress.advance(task)
@@ -418,7 +468,53 @@ def show_market_indices():
                         else: cci_str = f"[blue]{cci_str}[/]"
 
                     display_name = name
-                    if name == "SOX (반도체)":
+                    
+                    # [수정] 적응형 임계값 색상 적용 대상 확대
+                    adaptive_targets = [
+                        "코스피", "코스닥", "코스피200", 
+                        "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
+                        "Japan - Nikkei 225", "Hong Kong - Hang Seng", "China - SSE Composite", 
+                        "Taiwan - TSEC weighted", "Germany - DAX", "Europe - ESTX 50"
+                    ]
+
+                    used_kis_regime = False
+                    if name in adaptive_targets:
+                        # [추가] KOSPI/KOSDAQ은 캐시된 국면 정보 우선 사용 (데이터 정합성 보장)
+                        regime_override = None
+                        if name == "코스피": regime_override = market_regime_cache.get("KOSPI")
+                        elif name == "코스닥": regime_override = market_regime_cache.get("KOSDAQ")
+                        elif name == "코스피200": regime_override = market_regime_cache.get("KOSPI200")
+                        
+                        if regime_override:
+                            used_kis_regime = True
+                            any_kis_used = True
+                            if regime_override == "Bull": display_name = f"[red]{name}*[/]"
+                            elif regime_override == "Bear": display_name = f"[blue]{name}*[/]"
+                            else: display_name = f"[white]{name}*[/]"
+                        else:
+                            # 기존 로직 (yfinance 데이터 기반 계산)
+                            try:
+                                ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+                                adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
+                                
+                                if not df_daily.empty and len(df_daily) >= ma_period:
+                                    ma_series = df_daily['close'].rolling(window=ma_period).mean()
+                                    ma_val = ma_series.iloc[-1]
+                                    
+                                    slope = 0
+                                    if len(ma_series) >= 5:
+                                        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
+                                    
+                                    adx_val = val_adx if val_adx is not None else 0
+                                    
+                                    if current > ma_val and slope > 0 and adx_val >= adx_threshold:
+                                        display_name = f"[red]{name}[/]"
+                                    elif current < ma_val:
+                                        display_name = f"[blue]{name}[/]"
+                                    else:
+                                        display_name = f"[white]{name}[/]"
+                            except: pass
+                    elif name == "SOX (반도체)":
                         if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
                         elif -15.0 < high_52_rate <= -10.0: display_name = f"[orange3]{name}[/]"
                         elif -20.0 <= high_52_rate <= -15.0: display_name = f"[yellow]{name}[/]"
@@ -479,6 +575,9 @@ def show_market_indices():
         try:
             config.console.print(table, crop=False)
             sys.stdout.flush()
+
+            if any_kis_used:
+                config.console.print("[dim] (*) KIS API 를 사용한 데이터가 적용된 결과입니다.[/dim]")
         except Exception as e:
             logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
             config.console.print(f"[red]테이블 출력 실패: {e}[/red]")

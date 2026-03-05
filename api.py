@@ -750,7 +750,7 @@ def get_chart_data(code, is_overseas=False):
     today = now.strftime("%Y%m%d")
     start_date_origin = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
     
-    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB')
+    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS'))
     if is_index:
         try:
             df = fetch_yfinance_data(code, period="2y")
@@ -858,34 +858,61 @@ def get_domestic_index_chart(code):
     today = now.strftime("%Y%m%d")
     start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
     
-    params = {
-        "FID_COND_MRKT_DIV_CODE": "U", # U: 업종(Index)
-        "FID_INPUT_ISCD": code,        # 0001(KOSPI), 1001(KOSDAQ)
-        "FID_INPUT_DATE_1": start_date,
-        "FID_INPUT_DATE_2": today,
-        "FID_PERIOD_DIV_CODE": "D"     # D: 일봉
-    }
+    all_items = []
+    current_end_date = today
     
-    # [수정] 지수 조회는 실패 시 yfinance Fallback이 있으므로 재시도 없이 즉시 실패 처리 (retries=0)
-    data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
-    
-    if data.get('rt_cd') == '0':
-        items = data.get('output2', [])
-        if items:
-            df = pd.DataFrame(items)
-            # 컬럼 매핑 (KIS API 응답 -> 내부 표준)
-            # stck_bsop_date:일자, bstp_nmix_prpr:현재가(종가), bstp_nmix_oprc:시가, bstp_nmix_hgpr:고가, bstp_nmix_lwpr:저가, acml_vol:거래량
-            df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
-            df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
-            df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-            logger.debug(f"[API] 지수({code}) 조회 성공: {len(df)}건 반환")
-            return df.sort_values('date', ascending=True).reset_index(drop=True)
+    # [수정] 데이터 부족 해결을 위해 최대 4회 반복 조회 (약 400건 확보 시도)
+    for _ in range(4):
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "U", # U: 업종(Index)
+            "FID_INPUT_ISCD": code,        # 0001(KOSPI), 1001(KOSDAQ)
+            "FID_INPUT_DATE_1": start_date,
+            "FID_INPUT_DATE_2": current_end_date,
+            "FID_PERIOD_DIV_CODE": "D"     # D: 일봉
+        }
+        
+        data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
+        
+        if data.get('rt_cd') == '0':
+            items = data.get('output2', [])
+            if items:
+                all_items.extend(items)
+                # 다음 조회를 위해 종료일을 가장 과거 데이터의 전일로 설정
+                last_date = items[-1]['stck_bsop_date']
+                current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                
+                # 120일 이평선 계산을 위해 최소 200건 이상이면 충분하므로 중단
+                if len(all_items) >= 300: break
+                time.sleep(0.1) # API 부하 방지
+            else:
+                break
         else:
-            logger.warning(f"[API] 지수({code}) 조회 성공했으나 데이터(output2)가 비어있음")
-    else:
-        logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+            if not all_items:
+                logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+            break
+
+    if all_items:
+        df = pd.DataFrame(all_items)
+        # 중복 제거 (날짜 기준)
+        df.drop_duplicates(subset=['stck_bsop_date'], inplace=True)
+        
+        # 컬럼 매핑 (KIS API 응답 -> 내부 표준)
+        df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
+        df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
+        df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+        logger.debug(f"[API] 지수({code}) 조회 성공: {len(df)}건 반환 (반복 조회)")
+        return df.sort_values('date', ascending=True).reset_index(drop=True)
 
     return pd.DataFrame()
+
+def get_domestic_index_price(code):
+    """업종/지수 현재가 조회 (KIS API)"""
+    url = "uapi/domestic-stock/v1/quotations/inquire-index-price"
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "U",
+        "FID_INPUT_ISCD": code
+    }
+    return call_api(url, "domestic", "quotations", "index_price", params=params)
 
 def get_current_price_data(code, is_overseas):
     if not is_overseas:

@@ -122,8 +122,10 @@ def get_market_regime(market_type="KOSPI"):
     """시장 국면 판단 (Bull/Bear/Sideways)"""
     try:
         # [수정] KIS API 우선 사용 (데이터 정합성 향상) 및 yfinance Fallback 적용
-        # KIS API 지수 코드: KOSPI(0001), KOSDAQ(1001)
-        kis_code = "0001" if market_type == "KOSPI" else "1001"
+        # KIS API 지수 코드: KOSPI(0001), KOSDAQ(1001), KOSPI200(2001)
+        kis_code = "0001"
+        if market_type == "KOSDAQ": kis_code = "1001"
+        elif market_type == "KOSPI200": kis_code = "2001"
         
         # [수정] 설정된 MA 기간 가져오기 (하드코딩 제거)
         ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
@@ -140,7 +142,9 @@ def get_market_regime(market_type="KOSPI"):
                 fail_reason = f"데이터 부족({len(df)}건 < {ma_period}건)"
             
             logger.debug(f"[Analysis] {market_type} KIS API {fail_reason} -> yfinance 데이터로 대체하여 분석 진행")
-            yf_ticker = "^KS11" if market_type == "KOSPI" else "^KQ11"
+            yf_ticker = "^KS11"
+            if market_type == "KOSDAQ": yf_ticker = "^KQ11"
+            elif market_type == "KOSPI200": yf_ticker = "^KS200"
             df = api.get_chart_data(yf_ticker, is_overseas=True)
         else:
             logger.debug(f"[Analysis] {market_type} KIS API 데이터 사용 성공 ({len(df)} rows)")
@@ -762,7 +766,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print(table_logic)
     
     if score_adj != 0:
-        config.console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
+        config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
 
     config.console.print()
 
@@ -1809,6 +1813,7 @@ def print_table(title, data_list, is_overseas=False):
     if not is_overseas:
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: True for r in custom_rules}
+    any_custom_rule = False
     
     if not is_overseas:
         table.add_column("52주", justify="right")
@@ -2067,7 +2072,8 @@ def print_table(title, data_list, is_overseas=False):
                         
                         # [추가] 개별 룰 적용 종목 표시
                         if code in rules_map:
-                            final_name_str += "*"
+                            final_name_str += "+"
+                            any_custom_rule = True
 
                         row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
                         if not is_overseas:
@@ -2098,7 +2104,10 @@ def print_table(title, data_list, is_overseas=False):
         sys.stdout.flush()
         
         if use_adaptive:
-            config.console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
+            config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
+
+        if any_custom_rule:
+            config.console.print("[dim] (+) 시스템 트레이딩 시 개별 룰이 적용된 종목입니다.[/dim]")
     except Exception as e:
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")

@@ -24,6 +24,14 @@ def show_help():
     table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
 
+    # [수정] 설정값 로드하여 동적 표시
+    ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+
+    table.add_row("시장 지수", f"지수 > {ma_period}일선 & 상승추세 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
+    table.add_row("(주요 글로벌 지수)", f"지수 < {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
+    table.add_row("", "그 외 구간", "[white]흰색[/]", "횡보장 (Sideways)")
+    table.add_section()
+
     table.add_row("WTI 원유", "가격 ≥ 120", "[magenta]보라색[/]", "에너지 위기 수준")
     table.add_row("", "100 ≤ 가격 < 120", "[red]빨간색[/]", "인플레 강한 압력")
     table.add_row("", "80 ≤ 가격 < 100", "[orange3]주황색[/]", "부담 있지만 정상")
@@ -246,8 +254,8 @@ def show_help():
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
         r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
-        k_r_str = r_map.get(kospi_regime, kospi_regime)
-        q_r_str = r_map.get(kosdaq_regime, kosdaq_regime)
+        k_r_str = r_map.get(kospi_regime, kospi_regime) + "*"
+        q_r_str = r_map.get(kosdaq_regime, kosdaq_regime) + "*"
 
         market_status_info = {
             "kospi_str": k_r_str, "kospi_adj": kospi_adj,
@@ -311,7 +319,7 @@ def show_help():
         k_adj_str = f"보정: {market_status_info['kospi_adj']:+.1f}점"
         q_adj_str = f"보정: {market_status_info['kosdaq_adj']:+.1f}점"
         score_table.add_row("현재 시장 상태", f"KOSPI: {market_status_info['kospi_str']}", k_adj_str, "실시간 국면 분석")
-        score_table.add_row("", f"KOSDAQ: {market_status_info['kosdaq_str']}", q_adj_str, "")
+        score_table.add_row("", f"KOSDAQ: {market_status_info['kosdaq_str']}", q_adj_str, "KIS API 데이터 기반 판단")
     else:
         score_table.add_row("현재 시장 상태", "분석 실패", "-", "-")
     
