@@ -462,17 +462,26 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
+            ("KOSPI200", "^KS200"),
             ("KOSPI", "^KS11"),
             ("KOSDAQ", "^KQ11"),
             ("나스닥 선물", "NQ=F"),
             ("나스닥", "^IXIC"),
             ("S&P500", "^GSPC"),
             ("다우존스", "^DJI"),
-            ("러셀 2000", "^RUT"),
+            ("러셀2000", "^RUT"),
             ("금", "GC=F"),
             ("은", "SI=F"),
             ("SOX(반도체)", "^SOX"),
-            ("달러환율", "KRW=X")
+            ("달러환율", "KRW=X"),
+            ("비트코인", "BTC-USD"),
+            ("이더리움", "ETH-USD"),
+            ("Japan - Nikkei 225", "^N225"),
+            ("Hong Kong - Hang Seng", "^HSI"),
+            ("China - SSE Composite", "000001.SS"),
+            ("Taiwan - TSEC weighted", "^TWII"),
+            ("Germany - DAX", "^GDAXI"),
+            ("Europe - ESTX 50", "^STOXX50E")
         ]
         
         ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
