@@ -835,6 +835,54 @@ class OrderManager:
                                                         db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
                                                         db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                                        
+                                                        # [수정] 텔레그램 알림 발송 (실전 포맷 적용)
+                                                        try:
+                                                            type_str = trade.get('type', '')
+                                                            type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
+                                                            
+                                                            # 개별 룰 조회
+                                                            custom_rules = db_manager.db.get_all_stock_strategies()
+                                                            rules_map = {r['code']: r for r in custom_rules}
+                                                            rule = rules_map.get(code)
+                                                            
+                                                            title_tag = "[체결 알림(추정)]"
+                                                            rule_info = ""
+                                                            if rule:
+                                                                title_tag += " [개별]"
+                                                                rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                                                                if rule.get('ts_activation'):
+                                                                    rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                                                            
+                                                            # 현재가 정보
+                                                            cur_info = ""
+                                                            try:
+                                                                cp_data = api.get_current_price_data(code, is_overseas=False)
+                                                                if cp_data.get('rt_cd') == '0':
+                                                                    curr = float(cp_data['output']['stck_prpr'])
+                                                                    rate = float(cp_data['output']['prdy_ctrt'])
+                                                                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                                    cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                                            except: pass
+
+                                                            # 전략 지표 (스냅샷 활용)
+                                                            strategy_info = ""
+                                                            if trade.get('snapshot'):
+                                                                try:
+                                                                    snap = json.loads(trade['snapshot'])
+                                                                    if 'indicators' in snap:
+                                                                        ind = snap['indicators']
+                                                                        score = trade.get('strategy_score', 0)
+                                                                        rsi_str = f"{ind.get('rsi', 0):.1f}"
+                                                                        adx_str = f"{ind.get('adx', 0):.1f}"
+                                                                        cci_str = f"{ind.get('cci', 0):.1f}"
+                                                                        strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                                                except: pass
+
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {float(trade['price']):,.0f}원(주문가)\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
+                                                            api.send_telegram_message(msg)
+                                                        except Exception as e:
+                                                            self.trader.log(f"알림 전송 실패: {e}")
                                                     else:
                                                         self.trader.log(f"-> 잔고 없음. '취소/거부'로 기록합니다.")
                                                         db_manager.db.update_trade(odno, order_status="취소/거부")

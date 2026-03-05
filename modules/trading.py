@@ -278,6 +278,53 @@ def show_open_orders():
                         
                         current_acc_str = f"{cano}-{acnt}"
 
+                        # [추가] 모의투자 체결 알림 헬퍼 함수 (실전 포맷 적용)
+                        def _send_sim_alert(type_name, db_order, reason_msg):
+                            try:
+                                code = db_order.get('code')
+                                name = db_order.get('name')
+                                qty = db_order.get('qty')
+                                price = float(db_order.get('price', 0))
+                                
+                                custom_rules = db_manager.db.get_all_stock_strategies()
+                                rules_map = {r['code']: r for r in custom_rules}
+                                rule = rules_map.get(code)
+                                
+                                title_tag = "[체결 알림(추정)]"
+                                rule_info = ""
+                                if rule:
+                                    title_tag += " [개별]"
+                                    rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                                    if rule.get('ts_activation'):
+                                        rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                                
+                                cur_info = ""
+                                try:
+                                    cp_data = api.get_current_price_data(code, is_overseas=False)
+                                    if cp_data.get('rt_cd') == '0':
+                                        curr = float(cp_data['output']['stck_prpr'])
+                                        rate = float(cp_data['output']['prdy_ctrt'])
+                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                except: pass
+                                
+                                strategy_info = ""
+                                if db_order.get('snapshot'):
+                                    try:
+                                        snap = json.loads(db_order['snapshot'])
+                                        if 'indicators' in snap:
+                                            ind = snap['indicators']
+                                            score = db_order.get('strategy_score', 0)
+                                            rsi_str = f"{ind.get('rsi', 0):.1f}"
+                                            adx_str = f"{ind.get('adx', 0):.1f}"
+                                            cci_str = f"{ind.get('cci', 0):.1f}"
+                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                    except: pass
+
+                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                api.send_telegram_message(msg)
+                            except: pass
+
                         for db_o in db_orders:
                             # 계좌 일치 확인
                             if db_o.get('account') and db_o.get('account') != current_acc_str:
@@ -299,6 +346,10 @@ def show_open_orders():
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Trading] 매도 주문({db_odno}) 잔고 부재(0)로 체결 처리")
                                     db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    
+                                    # [수정] 텔레그램 알림 (헬퍼 함수 사용)
+                                    _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)")
+                                    
                                     continue
                             
                             # [추가] 매수 주문인데 잔고가 주문 수량 이상이면 '체결'로 간주하고 목록에서 제외
@@ -312,6 +363,10 @@ def show_open_orders():
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Trading] 매수 주문({db_odno}) 잔고 확인({current_qty}>={order_qty})으로 체결 처리")
                                     db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    
+                                    # [수정] 텔레그램 알림 (헬퍼 함수 사용)
+                                    _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)")
+                                    
                                     continue
                             
                             # 시간 포맷 변환 (YYYY-MM-DD HH:MM:SS -> HHMMSS)
