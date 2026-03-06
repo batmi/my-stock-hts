@@ -113,11 +113,11 @@ def show_extended_info(code, is_overseas, basic_output=None):
             df['diff'] = df['close'].diff()
             df['rate'] = df['close'].pct_change() * 100
 
-            # 최신순 정렬 및 10개 추출
-            recent_df = df.sort_values('date', ascending=False).head(10)
+            # 최신순 정렬 및 20개 추출
+            recent_df = df.sort_values('date', ascending=False).head(20)
 
             config.console.print()
-            table_d = Table(title="[국내주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+            table_d = Table(title="[국내주식] 기간별 시세 (최근 20일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
             table_d.add_column("등락폭 (등락률)", justify="right")
@@ -284,11 +284,11 @@ def show_extended_info(code, is_overseas, basic_output=None):
             df['diff'] = df['close'].diff()
             df['rate'] = df['close'].pct_change() * 100
 
-            # 최신순 정렬 및 10개 추출
-            recent_df = df.sort_values('date', ascending=False).head(10)
+            # 최신순 정렬 및 20개 추출
+            recent_df = df.sort_values('date', ascending=False).head(20)
 
             config.console.print()
-            table_d = Table(title="[해외주식] 기간별 시세 (최근 10일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+            table_d = Table(title="[해외주식] 기간별 시세 (최근 20일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table_d.add_column("일자", justify="center")
             table_d.add_column("종가", justify="right")
             table_d.add_column("등락폭 (등락률)", justify="right")
