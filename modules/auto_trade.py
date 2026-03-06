@@ -591,8 +591,10 @@ class ConclusionMonitor:
             type_str = trade.get('type', '') # [수정] KeyError 방지
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
-            profit_amt = int(trade.get('profit_amt') or 0)
-            profit_rate = float(trade.get('profit_rate') or 0.0)
+            try: profit_amt = int(float(trade.get('profit_amt') or 0))
+            except: profit_amt = 0
+            try: profit_rate = float(trade.get('profit_rate') or 0.0)
+            except: profit_rate = 0.0
             
             # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
             # db_manager.db.update_trade(odno, order_status="체결(추정)")

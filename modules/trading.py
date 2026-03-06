@@ -215,8 +215,10 @@ def _create_fill_history(db_order, reason_msg):
             type_str = db_order.get('type', '')
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
-            profit_amt = int(db_order.get('profit_amt') or 0)
-            profit_rate = float(db_order.get('profit_rate') or 0.0)
+            try: profit_amt = int(float(db_order.get('profit_amt') or 0))
+            except: profit_amt = 0
+            try: profit_rate = float(db_order.get('profit_rate') or 0.0)
+            except: profit_rate = 0.0
             
             # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
             for attempt in range(3):
@@ -394,15 +396,20 @@ def show_open_orders():
                                         if "자동" in str(db_order.get('type', '')): trade_type += "(AUTO)"
                                         elif "수동" in str(db_order.get('type', '')): trade_type += "(수동)"
                                         
+                                        try: p_amt = int(float(db_order.get('profit_amt') or 0))
+                                        except: p_amt = 0
+                                        try: p_rate = float(db_order.get('profit_rate') or 0.0)
+                                        except: p_rate = 0.0
+                                        
                                         db_manager.db.insert_trade(
                                             trade_type, code, name, qty, price, odno, 
-                                            order_status="체결", 
+                                            order_status="체결(추정)", 
                                             reason=f"체결 확인 ({reason_msg})",
                                             custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                             snapshot=db_order.get('snapshot'),
                                             strategy_score=db_order.get('strategy_score', 0),
-                                            profit_amt=db_order.get('profit_amt', 0),
-                                            profit_rate=db_order.get('profit_rate', 0.0)
+                                            profit_amt=p_amt,
+                                            profit_rate=p_rate
                                         )
                                 except Exception as e:
                                     logger.error(f"체결 히스토리 생성 실패: {e}")
