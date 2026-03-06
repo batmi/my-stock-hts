@@ -1894,7 +1894,7 @@ def print_table(title, data_list, is_overseas=False):
     if not is_overseas:
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
-        if use_investor_data: table.add_column("개인/외인/기관", justify="center")
+        if use_investor_data: table.add_column("수급(개/외/기)", justify="center")
         else: table.add_column("OBV", justify="right")
     else:
         table.add_column("52주", justify="right")
@@ -2372,7 +2372,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     table.add_column("120일선", justify="right")
     table.add_column("거래량", justify="right") # [이동]
     if not is_overseas:
-        table.add_column("개인/외인/기관", justify="center") # [추가]
+        table.add_column("수급(개/외/기)", justify="center") # [수정]
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
         date_str = str(row['date'])

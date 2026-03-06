@@ -27,7 +27,15 @@ def show_market_indices():
     # KIS API 데이터를 사용하는 analysis.get_market_regime 결과와 yfinance 데이터를 사용하는 현재 화면의 불일치 해소
     market_regime_cache = {}
     try:
-        with config.console.status("[dim]국내 시장 국면 동기화 중...[/dim]"):
+        # [수정] console.status -> Progress (Bar 포함, Percentage 제외)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]지수 데이터 수신 중(KIS API)...[/green]", total=None)
             for m_type in ["KOSPI", "KOSDAQ", "KOSPI200"]:
                 regime, _ = analysis.get_market_regime(m_type)
                 market_regime_cache[m_type] = regime
@@ -643,7 +651,7 @@ def show_market_indices():
                         logger.error(f"[MARKET_INDEX_DEBUG] Error processing {name}: {e}", exc_info=True)
                     if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                         config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
-                    table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                    table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                     progress.advance(task)
         
         # 테이블 출력 (Progress Context 밖에서 실행)

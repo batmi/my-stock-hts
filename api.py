@@ -962,9 +962,57 @@ def get_current_price(code, is_overseas):
             return safe_int(output.get('stck_prpr'))
     return 0
 
-def get_investor_trend(code):
-    data = call_api("uapi/domestic-stock/v1/quotations/inquire-investor", "domestic", "quotations", "investor", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code})
-    if data.get('rt_cd') == '0': return data.get('output', [])
+def get_investor_trend(code, market_div="J"):
+    # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용
+    action = "investor"
+    url = "uapi/domestic-stock/v1/quotations/inquire-investor"
+    params = {"FID_COND_MRKT_DIV_CODE": market_div, "FID_INPUT_ISCD": code}
+
+    if market_div == "U":
+        # 1. 일별 추이 조회 (FHPTJ04040000) 시도
+        action = "index_investor"
+        url = "uapi/domestic-stock/v1/quotations/inquire-investor-daily-by-market"
+        
+        today = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d") # 기간 확대
+        params.update({
+            "FID_INPUT_DATE_1": start_date,
+            "FID_INPUT_DATE_2": today,
+            "FID_PERIOD_DIV_CODE": "D"
+        })
+        
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[API] get_investor_trend(Daily) Req: {code}, Params={params}")
+
+        data = call_api(url, "domestic", "quotations", action, params=params)
+        
+        if data.get('rt_cd') == '0':
+            output = data.get('output', [])
+            if output: return output
+            
+        # 2. 실패/빈값 시 현재가 투자자 조회 (FHKUP01010900) Fallback
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[API] get_investor_trend(Daily) Empty/Fail. Trying Current Trend Fallback.")
+            
+        action = "index_investor_current"
+        url = "uapi/domestic-stock/v1/quotations/inquire-index-investor"
+        params = {"FID_COND_MRKT_DIV_CODE": market_div, "FID_INPUT_ISCD": code}
+
+    # 주식(J)이거나 업종(U) Fallback 실행
+    data = call_api(url, "domestic", "quotations", action, params=params)
+    
+    if data.get('rt_cd') == '0':
+        output = data.get('output', [])
+        # [수정] output 키가 없거나 비어있을 경우 output1, output2 등 대체 키 확인 (지수 조회 시 필드명이 다를 수 있음)
+        if not output: output = data.get('output1', [])
+        if not output: output = data.get('output2', [])
+        
+        # [추가] output이 dict인 경우 list로 변환 (market.py 호환성)
+        if isinstance(output, dict):
+            output = [output]
+        
+        return output
+            
     return []
 
 def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):

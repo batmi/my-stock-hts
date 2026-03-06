@@ -129,7 +129,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("60일선", justify="right")
             table_d.add_column("120일선", justify="right")
             table_d.add_column("거래량", justify="right") # [이동]
-            table_d.add_column("개인/외인/기관", justify="center") # [추가]
+            table_d.add_column("수급(개/외/기)", justify="center") # [수정]
             
             for i, (idx, row) in enumerate(recent_df.iterrows()):
                 date_str = str(row['date'])
