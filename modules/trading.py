@@ -226,11 +226,16 @@ def _create_fill_history(db_order, reason_msg):
             try: profit_rate = float(db_order.get('profit_rate') or 0.0)
             except: profit_rate = 0.0
             
+            # [추가] snapshot 데이터 타입 안전 처리
+            snapshot_data = db_order.get('snapshot')
+            if isinstance(snapshot_data, dict):
+                snapshot_data = json.dumps(snapshot_data, ensure_ascii=False)
+            
             # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
-            for attempt in range(3):
+            for attempt in range(5): # [수정] 재시도 횟수 증가
                 try:
                     if config.FILE_DEBUG_LEVEL == "DEBUG":
-                        logger.debug(f"[ORDER_DEBUG] _create_fill_history insert 시도 ({attempt+1}/3): {odno}")
+                        logger.debug(f"[ORDER_DEBUG] _create_fill_history insert 시도 ({attempt+1}/5): {odno}")
 
                     db_manager.db.insert_trade(
                         type_str, 
@@ -242,7 +247,7 @@ def _create_fill_history(db_order, reason_msg):
                         order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
                         reason=f"체결 확인 ({reason_msg})",
                         custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        snapshot=db_order.get('snapshot'),
+                        snapshot=snapshot_data,
                         strategy_score=db_order.get('strategy_score', 0),
                         profit_amt=profit_amt,
                         profit_rate=profit_rate
@@ -251,8 +256,9 @@ def _create_fill_history(db_order, reason_msg):
                         logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
                     break
                 except Exception as e:
-                    logger.error(f"체결 히스토리 생성 실패 (시도 {attempt+1}/3): {e}", exc_info=True)
-                    time.sleep(0.5)
+                    logger.error(f"체결 히스토리 생성 실패 (시도 {attempt+1}/5): {e}", exc_info=True)
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG": config.console.print(f"[dim red]DB Insert Error: {e}[/dim red]")
+                    time.sleep(1.0)
     except Exception as e:
         logger.error(f"체결 히스토리 생성 실패: {e}", exc_info=True)
 

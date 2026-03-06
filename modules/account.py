@@ -864,12 +864,20 @@ def view_trade_history():
     if choice.lower() == 'q': return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
-    sync_today_trades()
+    try:
+        sync_today_trades()
+    except Exception as e:
+        config.console.print(f"[dim red]⚠️ 체결 내역 동기화 중 오류 발생: {e}[/dim red]")
+        logger.error(f"sync_today_trades error: {e}")
 
     trades = []
     if choice == "1":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=50)
+        try:
+            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=50)
+        except Exception as e:
+            config.console.print(f"[bold red]❌ 거래 내역 조회 실패: {e}[/bold red]")
+            return
     elif choice == "2":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
