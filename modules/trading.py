@@ -210,24 +210,34 @@ def _create_fill_history(db_order, reason_msg):
     try:
         odno = str(db_order.get('odno'))
         # 이미 체결 내역이 있는지 확인 (중복 방지)
-        if not db_manager.db.check_trade_exists(odno, "체결"):
+        # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
+        if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
             type_str = db_order.get('type', '')
             
-            db_manager.db.insert_trade(
-                type_str, 
-                db_order.get('code'), 
-                db_order.get('name'), 
-                int(float(db_order.get('qty', 0))), 
-                float(db_order.get('price', 0)), 
-                odno, 
-                order_status="체결", 
-                reason=f"체결 확인 ({reason_msg})",
-                custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                snapshot=db_order.get('snapshot'),
-                strategy_score=db_order.get('strategy_score', 0),
-                profit_amt=db_order.get('profit_amt', 0),
-                profit_rate=db_order.get('profit_rate', 0.0)
-            )
+            # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
+            for attempt in range(3):
+                try:
+                    db_manager.db.insert_trade(
+                        type_str, 
+                        db_order.get('code'), 
+                        db_order.get('name'), 
+                        int(float(db_order.get('qty', 0))), 
+                        float(db_order.get('price', 0)), 
+                        odno, 
+                        order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
+                        reason=f"체결 확인 ({reason_msg})",
+                        custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        snapshot=db_order.get('snapshot'),
+                        strategy_score=db_order.get('strategy_score', 0),
+                        profit_amt=db_order.get('profit_amt', 0),
+                        profit_rate=db_order.get('profit_rate', 0.0)
+                    )
+                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                        logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
+                    break
+                except Exception as e:
+                    logger.error(f"체결 히스토리 생성 실패 (시도 {attempt+1}/3): {e}")
+                    time.sleep(0.5)
     except Exception as e:
         logger.error(f"체결 히스토리 생성 실패: {e}")
 
@@ -291,11 +301,13 @@ def show_open_orders():
                         
                         # [추가] 이미 체결 처리된 주문(체결 히스토리 존재) 필터링 (limit=None으로 전체 조회)
                         filled_trades = db_manager.db.get_trades(start_date=today_str, order_status="체결", is_sim=True, limit=None)
-                        filled_odnos = set(str(t['odno']) for t in filled_trades)
+                        # [추가] 체결(추정) 상태도 포함하여 조회
+                        filled_trades_est = db_manager.db.get_trades(start_date=today_str, order_status="체결(추정)", is_sim=True, limit=None)
+                        filled_odnos = set(str(t['odno']) for t in filled_trades + filled_trades_est)
                         
                         # [DEBUG] DB 상태 로깅
                         if config.FILE_DEBUG_LEVEL == "DEBUG":
-                            logger.debug(f"[ORDER_DEBUG] show_open_orders: DB접수({len(db_orders)}건), DB체결({len(filled_trades)}건)")
+                            logger.debug(f"[ORDER_DEBUG] show_open_orders: DB접수({len(db_orders)}건), DB체결({len(filled_trades)}건), DB체결추정({len(filled_trades_est)}건)")
                             logger.debug(f"[ORDER_DEBUG] Filled ODNOs: {filled_odnos}")
                         
                         # [추가] 이미 취소/정정된 주문(후속 이력 존재) 필터링
