@@ -127,6 +127,7 @@ def show_market_indices():
 
         patched_tickers = []
         missing_tickers = []
+        mismatch_tickers = [] # [추가] 날짜 불일치 경고용
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
@@ -181,6 +182,16 @@ def show_market_indices():
                                 if target_col:
                                     df_daily[target_col] = pd.to_datetime(df_daily[target_col])
                                     df_daily.set_index(target_col, inplace=True)
+                            
+                            # [추가] KIS API 데이터와 yfinance 데이터 간 날짜 차이 검증
+                            if not df_intraday.empty:
+                                try:
+                                    kis_last_dt = df_daily.index[-1].date()
+                                    yf_last_dt = df_intraday.index[-1].date()
+                                    
+                                    if yf_last_dt > kis_last_dt:
+                                        mismatch_tickers.append(f"{name}(KIS:{kis_last_dt} vs YF:{yf_last_dt})")
+                                except Exception: pass
                         else:
                             logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Data Fetch Failed or Empty.")
 
@@ -660,3 +671,7 @@ def show_market_indices():
     if missing_tickers:
         targets = ", ".join(missing_tickers)
         config.console.print(f"[dim][yellow] 주의: 일부 지수[{targets}]의 전일 데이터가 누락되어(보정 실패) 등락폭이 정확하지 않습니다.[/yellow][/dim]")
+
+    if mismatch_tickers:
+        targets = ", ".join(mismatch_tickers)
+        config.console.print(f"[dim][yellow] ⚠️ 데이터 불일치 경고: {targets} - KIS API 데이터가 yfinance보다 과거입니다. 지표 분석에 주의하세요.[/yellow][/dim]")

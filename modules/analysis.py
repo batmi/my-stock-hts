@@ -134,6 +134,23 @@ def get_domestic_index_data(market_type):
     try:
         # 1. KIS API 조회
         df = api.get_domestic_index_chart(kis_code)
+        
+        # [Fix] KIS API 컬럼명 표준화 및 타입 변환
+        if df is not None and not df.empty:
+            rename_map = {
+                'stck_bsop_date': 'date',
+                'bstp_nmix_prpr': 'close',
+                'bstp_nmix_oprc': 'open',
+                'bstp_nmix_hgpr': 'high',
+                'bstp_nmix_lwpr': 'low',
+                'acml_vol': 'volume'
+            }
+            df.rename(columns=rename_map, inplace=True)
+            
+            for col in ['close', 'open', 'high', 'low', 'volume']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
     except Exception as e:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
         pass
