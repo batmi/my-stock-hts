@@ -154,22 +154,31 @@ def show_market_indices():
                     if not df_intraday.empty:
                         df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
-                    # [추가] 국내 지수의 경우 KIS API 데이터로 덮어쓰기 (데이터 정합성 확보)
+                    # [수정] 국내 지수의 경우 analysis 모듈의 공통 함수를 사용하여 데이터 조회 (Fallback 포함)
                     is_domestic_index = name in ["코스피", "코스닥", "코스피200"]
-                    kis_data_success = False
                     kis_code = ""
                     
                     if is_domestic_index:
+                        logger.debug(f"[MARKET_INDEX_DEBUG] Processing {name}...")
                         kis_code = "0001" if name == "코스피" else ("1001" if name == "코스닥" else "2001")
-                        try:
-                            # 일봉 데이터 조회 (KIS API)
-                            df_kis = api.get_domestic_index_chart(kis_code)
-                            # [수정] 120일 이평선 계산을 위해 최소 120개 이상 데이터가 확보된 경우에만 교체
-                            if df_kis is not None and not df_kis.empty and len(df_kis) >= 120:
-                                df_daily = df_kis # yfinance 데이터 대체
-                                kis_data_success = True
-                        except Exception as e:
-                            if config.SCREEN_DEBUG_LEVEL == "DEBUG": config.console.print(f"[dim red]KIS Index Chart Error: {e}[/dim red]")
+                        m_type = "KOSPI" if name == "코스피" else ("KOSDAQ" if name == "코스닥" else "KOSPI200")
+                        df_fallback = analysis.get_domestic_index_data(m_type)
+                        if df_fallback is not None and not df_fallback.empty:
+                            logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Data Fetched. Shape: {df_fallback.shape}")
+                            logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Columns: {list(df_fallback.columns)}")
+                            df_daily = df_fallback
+                            df_daily.columns = [c.lower() for c in df_daily.columns]
+                            
+                            # [Fix] KIS API 데이터 사용 시 Index가 DatetimeIndex가 아닌 경우 변환 (int has no attribute date 에러 방지)
+                            if not isinstance(df_daily.index, pd.DatetimeIndex):
+                                target_col = None
+                                if 'date' in df_daily.columns: target_col = 'date'
+                                elif 'stck_bsop_date' in df_daily.columns: target_col = 'stck_bsop_date'
+                                if target_col:
+                                    df_daily[target_col] = pd.to_datetime(df_daily[target_col])
+                                    df_daily.set_index(target_col, inplace=True)
+                        else:
+                            logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Data Fetch Failed or Empty.")
 
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DEBUG] >> Data Check: {name} ({ticker})[/dim cyan]")
@@ -568,6 +577,8 @@ def show_market_indices():
                     progress.advance(task)
 
                 except Exception as e:
+                    if name in ["코스피", "코스닥", "코스피200"]:
+                        logger.error(f"[MARKET_INDEX_DEBUG] Error processing {name}: {e}", exc_info=True)
                     if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                         config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")
                     table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")

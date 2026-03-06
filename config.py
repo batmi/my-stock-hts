@@ -24,7 +24,7 @@ SCREEN_DEBUG_LEVEL = "OFF"
 # ==========================================================
 # [설정] 파일 로그 레벨 설정 (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 # ==========================================================
-FILE_DEBUG_LEVEL = "WARNING"
+FILE_DEBUG_LEVEL = "DEBUG"
 
 # ==========================================================
 # [설정] 텔레그램 설정 (Telegram Configuration)
