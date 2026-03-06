@@ -289,9 +289,14 @@ def show_open_orders():
                         today_str = datetime.now().strftime("%Y-%m-%d")
                         db_orders = db_manager.db.get_trades(limit=100, order_status="접수", start_date=today_str, is_sim=True)
                         
-                        # [추가] 이미 체결 처리된 주문(체결 히스토리 존재) 필터링
-                        filled_trades = db_manager.db.get_trades(start_date=today_str, order_status="체결", is_sim=True)
+                        # [추가] 이미 체결 처리된 주문(체결 히스토리 존재) 필터링 (limit=None으로 전체 조회)
+                        filled_trades = db_manager.db.get_trades(start_date=today_str, order_status="체결", is_sim=True, limit=None)
                         filled_odnos = set(str(t['odno']) for t in filled_trades)
+                        
+                        # [DEBUG] DB 상태 로깅
+                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                            logger.debug(f"[ORDER_DEBUG] show_open_orders: DB접수({len(db_orders)}건), DB체결({len(filled_trades)}건)")
+                            logger.debug(f"[ORDER_DEBUG] Filled ODNOs: {filled_odnos}")
                         
                         # [추가] 이미 취소/정정된 주문(후속 이력 존재) 필터링
                         # 취소/정정 주문은 org_odno(원주문번호)를 가지고 있음
@@ -307,6 +312,10 @@ def show_open_orders():
                                 for h in h_list:
                                     holdings_map[h['pdno']] = int(h['hldg_qty'])
                         except: pass
+                        
+                        # [DEBUG] 잔고 상태 로깅
+                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                            logger.debug(f"[ORDER_DEBUG] Holdings Map: {holdings_map}")
 
                         # 이미 API로 조회된 주문번호 집합
                         api_odnos = set(str(o.get('odno')) for o in dom_orders if o.get('odno'))
@@ -390,15 +399,23 @@ def show_open_orders():
                                 continue
 
                             db_odno = str(db_o.get('odno'))
+                            
+                            # [DEBUG] 주문별 판단 로직 로깅
+                            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                logger.debug(f"[ORDER_DEBUG] Checking DB Order: {db_odno} ({db_o.get('type')}, {db_o.get('name')})")
+
                             if not db_odno or db_odno in api_odnos:
+                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (In API or Invalid)")
                                 continue
                             
                             # [추가] 이미 체결된 주문이면 스킵 (접수 상태라도 체결 내역이 있으면 제외)
                             if db_odno in filled_odnos:
+                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (Already Filled)")
                                 continue
                             
                             # [추가] 이미 취소/정정된 주문이면 스킵 (원주문번호로 참조된 이력이 있으면 제외)
                             if db_odno in canceled_org_odnos:
+                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (Canceled)")
                                 continue
                             
                             # DB 주문 정보를 API 포맷으로 변환
@@ -409,9 +426,10 @@ def show_open_orders():
                             # 모의투자 API가 체결 내역을 늦게 주거나 누락하는 경우 대응
                             if "매도" in sll_buy_name:
                                 code = db_o.get('code')
-                                if holdings_map.get(code, 0) == 0:
+                                cur_qty = holdings_map.get(code, 0)
+                                if cur_qty == 0:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[Trading] 매도 주문({db_odno}) 잔고 부재(0)로 체결 처리")
+                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리")
                                     # [수정] 원본 업데이트 제거
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
@@ -422,6 +440,9 @@ def show_open_orders():
                                     _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)")
                                     
                                     continue
+                                else:
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 보유중({cur_qty}) -> 미체결 유지")
                             
                             # [추가] 매수 주문인데 잔고가 주문 수량 이상이면 '체결'로 간주하고 목록에서 제외
                             # (모의투자 API 누락 대응: 잔고가 들어왔다면 체결된 것임)
@@ -432,7 +453,7 @@ def show_open_orders():
                                 
                                 if current_qty >= order_qty:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[Trading] 매수 주문({db_odno}) 잔고 확인({current_qty}>={order_qty})으로 체결 처리")
+                                        logger.debug(f"[ORDER_DEBUG] 매수 주문({db_odno}) 잔고 입고 확인({current_qty}>={order_qty}) -> 체결 처리")
                                     # [수정] 원본 업데이트 제거
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
@@ -443,6 +464,10 @@ def show_open_orders():
                                     _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)")
                                     
                                     continue
+
+                            # [DEBUG] 최종 추가
+                            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                logger.debug(f"[ORDER_DEBUG] -> Added to Open Orders List")
                             
                             # 시간 포맷 변환 (YYYY-MM-DD HH:MM:SS -> HHMMSS)
                             time_str = db_o.get('time', '')

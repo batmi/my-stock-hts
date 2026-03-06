@@ -622,7 +622,12 @@ def main():
                 elif choice == "6": backtest.run_backtest()
                 elif choice == "7": theme_analysis.run_theme_analysis() # [수정] 기능 연결
                 elif choice == "8": manage.manage_stock_menu()
-                elif choice == "9": account.asset_management_menu()
+                elif choice == "9": 
+                    try:
+                        account.asset_management_menu()
+                    except Exception as e:
+                        config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
+                        logging.error(f"자산 관리 메뉴 오류: {e}")
             except KeyboardInterrupt:
                 config.console.print()
                 config.console.print()

@@ -1300,6 +1300,7 @@ class AutoTrader:
             
             if asset_check_failed:
                 self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
+                console.print("[bold red]⚠️ 초기 자산 조회 실패: API 응답이 없거나 오류가 발생했습니다.[/bold red]")
 
             if self.initial_asset > 0:
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
@@ -2580,6 +2581,7 @@ class AutoTrader:
                 self.consecutive_errors += 1
                 max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
                 self.log(f"에러 발생({self.consecutive_errors}/{max_err}): {str(e)}")
+                console.print(f"[dim red]⚠️ 에러 발생: {str(e)}[/dim red]")
                 
                 if self.consecutive_errors >= max_err:
                     # [수정] 중단 대신 대기 모드로 전환
