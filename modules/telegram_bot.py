@@ -729,10 +729,10 @@ class TelegramCommander:
             
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
-            is_safe_state = state not in ["위험", "주의"]
+            is_safe_state = state not in ["매도", "주의"]
             
             if is_buy_score and is_buy_rsi and is_safe_state:
-                buy_result = f"매수 가능 (조건 충족{regime_msg})"
+                buy_result = f"🔴 매수 가능 (조건 충족{regime_msg})"
             else:
                 reasons = []
                 if not is_safe_state: reasons.append(f"상태:{state}")
@@ -740,24 +740,27 @@ class TelegramCommander:
                 if not is_buy_rsi:
                     rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "N/A"
                     reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")
-                buy_result = f"매수 불가 ({', '.join(reasons)})"
+                buy_result = f"🔵 매수 불가 ({', '.join(reasons)})"
 
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-            is_sell_signal = (score < sell_score_limit) or (state == "위험")
+            is_sell_signal = (score < sell_score_limit) or (state == "매도")
             
             if is_sell_signal:
                 reasons = []
-                if state == "위험": reasons.append(f"상태:{state}")
+                if state == "매도": reasons.append(f"상태:{state}")
                 if score < sell_score_limit: reasons.append(f"점수하락({score}<{sell_score_limit})")
-                sell_result = f"매도 ({', '.join(reasons)})"
+                sell_result = f"🔵 매도 ({', '.join(reasons)})"
             else:
-                sell_result = "보유 (추세유지)"
+                sell_result = "🟢 보유 (추세유지)"
+
+            state_emoji_map = {"매수": "🔴", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+            state_emoji = state_emoji_map.get(state, "")
 
             msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 10점\n"
-            msg += f"상태 분류: {state} ({reason})\n"
+            msg += f"상태 분류: {state_emoji} {state} ({reason})\n"
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
             msg += f"\n[주요 지표]\n"
@@ -846,7 +849,7 @@ class TelegramCommander:
                     if code in rules_map:
                         name += "+"
                         
-                    msg += f"\n - {name} ({code}) /signal_{code} /chart_{code}"
+                    msg += f"\n - {name} ({code}) [/signal](/signal_{code}) [/chart](/chart_{code})"
                 msg += "\n"
         
         if not has_stock:
