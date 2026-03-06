@@ -214,6 +214,10 @@ def _create_fill_history(db_order, reason_msg):
         if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
             type_str = db_order.get('type', '')
             
+            # [추가] None 값 안전 처리 (DB 저장 실패 방지)
+            profit_amt = int(db_order.get('profit_amt') or 0)
+            profit_rate = float(db_order.get('profit_rate') or 0.0)
+            
             # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
             for attempt in range(3):
                 try:
@@ -229,8 +233,8 @@ def _create_fill_history(db_order, reason_msg):
                         custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         snapshot=db_order.get('snapshot'),
                         strategy_score=db_order.get('strategy_score', 0),
-                        profit_amt=db_order.get('profit_amt', 0),
-                        profit_rate=db_order.get('profit_rate', 0.0)
+                        profit_amt=profit_amt,
+                        profit_rate=profit_rate
                     )
                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                         logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")

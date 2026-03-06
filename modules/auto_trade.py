@@ -582,97 +582,107 @@ class ConclusionMonitor:
 
     def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason):
         """모의투자 체결 처리 핸들러"""
-        name = trade.get('name', code)
-        price = float(trade.get('price', 0))
-        
-        # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
-        # db_manager.db.update_trade(odno, order_status="체결(추정)")
-        
-        # 2. 체결 히스토리 생성 (중복 방지 및 재시도 로직)
-        success_db = False
-        
-        # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
-        if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
-            # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
-            for attempt in range(3):
-                try:
-                    db_manager.db.insert_trade(
-                        trade['type'], code, name, qty, price, odno, 
-                        order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
-                        reason=f"체결 확인 ({reason})", 
-                        custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        snapshot=trade.get('snapshot'),
-                        strategy_score=trade.get('strategy_score', 0),
-                        profit_amt=trade.get('profit_amt', 0),
-                        profit_rate=trade.get('profit_rate', 0.0)
-                    )
-                    success_db = True
-                    break # 성공 시 루프 탈출
-                except Exception as e:
-                    logger.error(f"[Monitor] 체결 내역 DB 저장 실패 (시도 {attempt+1}/3): {e}")
-                    time.sleep(0.5) # 잠시 대기 후 재시도
+        try:
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ORDER_DEBUG] _handle_simulation_fill 진입: {odno}")
+
+            name = trade.get('name', code)
+            price = float(trade.get('price', 0))
+            type_str = trade.get('type', '') # [수정] KeyError 방지
             
-            if not success_db:
-                logger.error(f"[Monitor] 체결 내역 DB 저장 최종 실패: {odno}")
-                # DB 저장이 실패하면 메모리 상태 업데이트도 하지 않아야 함 (다음 주기에 재시도하기 위해)
-                return
-
-            # 3. 알림 발송 (상세 정보 포함)
-            try:
-                type_str = trade.get('type', '')
-                type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
-                
-                # 개별 룰 조회
-                custom_rules = db_manager.db.get_all_stock_strategies()
-                rules_map = {r['code']: r for r in custom_rules}
-                rule = rules_map.get(code)
-                
-                title_tag = "[체결 알림(추정)]"
-                rule_info = ""
-                if rule:
-                    title_tag += " [개별]"
-                    rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
-                    if rule.get('ts_activation'):
-                        rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
-                
-                # 현재가 정보
-                cur_info = ""
-                try:
-                    cp_data = api.get_current_price_data(code, is_overseas=False)
-                    if cp_data.get('rt_cd') == '0':
-                        curr = float(cp_data['output']['stck_prpr'])
-                        rate = float(cp_data['output']['prdy_ctrt'])
-                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                except: pass
-
-                # 전략 지표 (스냅샷 활용)
-                strategy_info = ""
-                if trade.get('snapshot'):
+            # [추가] None 값 안전 처리 (DB 저장 실패 방지)
+            profit_amt = int(trade.get('profit_amt') or 0)
+            profit_rate = float(trade.get('profit_rate') or 0.0)
+            
+            # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
+            # db_manager.db.update_trade(odno, order_status="체결(추정)")
+            
+            # 2. 체결 히스토리 생성 (중복 방지 및 재시도 로직)
+            success_db = False
+            
+            # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
+            if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
+                # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
+                for attempt in range(3):
                     try:
-                        snap = json.loads(trade['snapshot'])
-                        if 'indicators' in snap:
-                            ind = snap['indicators']
-                            score = trade.get('strategy_score', 0)
-                            rsi_str = f"{ind.get('rsi', 0):.1f}"
-                            adx_str = f"{ind.get('adx', 0):.1f}"
-                            cci_str = f"{ind.get('cci', 0):.1f}"
-                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                        db_manager.db.insert_trade(
+                            type_str, code, name, qty, price, odno, 
+                            order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
+                            reason=f"체결 확인 ({reason})", 
+                            custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            snapshot=trade.get('snapshot'),
+                            strategy_score=trade.get('strategy_score', 0),
+                            profit_amt=profit_amt,
+                            profit_rate=profit_rate
+                        )
+                        success_db = True
+                        break # 성공 시 루프 탈출
+                    except Exception as e:
+                        logger.error(f"[Monitor] 체결 내역 DB 저장 실패 (시도 {attempt+1}/3): {e}")
+                        time.sleep(0.5) # 잠시 대기 후 재시도
+                
+                if not success_db:
+                    logger.error(f"[Monitor] 체결 내역 DB 저장 최종 실패: {odno}")
+                    # DB 저장이 실패하면 메모리 상태 업데이트도 하지 않아야 함 (다음 주기에 재시도하기 위해)
+                    return
+
+                # 3. 알림 발송 (상세 정보 포함)
+                try:
+                    type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
+                    
+                    # 개별 룰 조회
+                    custom_rules = db_manager.db.get_all_stock_strategies()
+                    rules_map = {r['code']: r for r in custom_rules}
+                    rule = rules_map.get(code)
+                    
+                    title_tag = "[체결 알림(추정)]"
+                    rule_info = ""
+                    if rule:
+                        title_tag += " [개별]"
+                        rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                        if rule.get('ts_activation'):
+                            rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                    
+                    # 현재가 정보
+                    cur_info = ""
+                    try:
+                        cp_data = api.get_current_price_data(code, is_overseas=False)
+                        if cp_data.get('rt_cd') == '0':
+                            curr = float(cp_data['output']['stck_prpr'])
+                            rate = float(cp_data['output']['prdy_ctrt'])
+                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                            cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                     except: pass
 
-                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
-                api.send_telegram_message(msg)
-                logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
-            except Exception as e:
-                logger.error(f"알림 전송 실패: {e}")
-        else:
-            logger.debug(f"[ORDER_DEBUG] 모의투자 체결 DB 저장 스킵 (이미 체결/체결추정 존재): {odno}")
-            success_db = True # 이미 존재하면 성공으로 간주
+                    # 전략 지표 (스냅샷 활용)
+                    strategy_info = ""
+                    if trade.get('snapshot'):
+                        try:
+                            snap = json.loads(trade['snapshot'])
+                            if 'indicators' in snap:
+                                ind = snap['indicators']
+                                score = trade.get('strategy_score', 0)
+                                rsi_str = f"{ind.get('rsi', 0):.1f}"
+                                adx_str = f"{ind.get('adx', 0):.1f}"
+                                cci_str = f"{ind.get('cci', 0):.1f}"
+                                strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                        except: pass
 
-        # 4. 상태 업데이트 (메모리) - DB 저장 성공 시에만 수행하여 재시도 보장
-        if success_db:
-            logger.debug(f"[ORDER_DEBUG] 메모리 상태 업데이트(FILLED): {odno}")
-            trader.update_order_status(code, odno, OrderStatus.FILLED)
+                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
+                    api.send_telegram_message(msg)
+                    logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
+                except Exception as e:
+                    logger.error(f"알림 전송 실패: {e}")
+            else:
+                logger.debug(f"[ORDER_DEBUG] 모의투자 체결 DB 저장 스킵 (이미 체결/체결추정 존재): {odno}")
+                success_db = True # 이미 존재하면 성공으로 간주
+
+            # 4. 상태 업데이트 (메모리) - DB 저장 성공 시에만 수행하여 재시도 보장
+            if success_db:
+                logger.debug(f"[ORDER_DEBUG] 메모리 상태 업데이트(FILLED): {odno}")
+                trader.update_order_status(code, odno, OrderStatus.FILLED)
+        except Exception as e:
+            logger.error(f"[Monitor] 체결 처리 핸들러 오류: {e}")
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
@@ -999,11 +1009,11 @@ class OrderManager:
                                                         except: pass
                                                     
                                                     if is_filled:
-                                                        self.trader.log(f"-> 잔고 확인됨. '체결'로 기록합니다.")
+                                                        self.trader.log(f"-> 잔고 확인됨. '체결(추정)'으로 기록합니다.")
                                                         # [수정] 원본 주문 상태 변경 제거 (접수 이력 보존)
                                                         # db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
-                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결(추정)", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
                                                         # [수정] 텔레그램 알림 발송 (실전 포맷 적용)
                                                         try:
