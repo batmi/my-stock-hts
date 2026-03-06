@@ -209,11 +209,16 @@ def _create_fill_history(db_order, reason_msg):
     """체결 히스토리 생성 (DB Insert) - 모의투자 API 누락 대응용"""
     try:
         odno = str(db_order.get('odno'))
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[ORDER_DEBUG] _create_fill_history 진입: {odno}")
+
         # 이미 체결 내역이 있는지 확인 (중복 방지)
         # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
         exists_check = False
         try:
             exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ORDER_DEBUG] exists_check 결과: {exists_check}")
         except Exception as e:
             logger.error(f"[ORDER_DEBUG] check_trade_exists 오류: {e}", exc_info=True)
 
@@ -231,6 +236,9 @@ def _create_fill_history(db_order, reason_msg):
             if isinstance(snapshot_data, dict):
                 snapshot_data = json.dumps(snapshot_data, ensure_ascii=False)
             
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ORDER_DEBUG] insert_trade 호출 시도: {odno}")
+
             # [수정] 큐 시스템 적용으로 단순 호출로 변경
             db_manager.db.insert_trade(
                 type_str, 
@@ -243,14 +251,17 @@ def _create_fill_history(db_order, reason_msg):
                 reason=f"체결 확인 ({reason_msg})",
                 custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 snapshot=snapshot_data,
-                strategy_score=db_order.get('strategy_score', 0),
+                score=db_order.get('strategy_score', 0),
                 profit_amt=profit_amt,
                 profit_rate=profit_rate
             )
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
+        else:
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ORDER_DEBUG] 이미 체결 내역 존재하여 생성 스킵: {odno}")
     except Exception as e:
-        logger.error(f"체결 히스토리 생성 실패: {e}", exc_info=True)
+        logger.error(f"[ORDER_DEBUG] 체결 히스토리 생성 실패: {e}", exc_info=True)
 
 def show_open_orders():
     """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
@@ -431,12 +442,15 @@ def show_open_orders():
                                 cur_qty = holdings_map.get(code, 0)
                                 if cur_qty == 0:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리")
+                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리 시작")
                                     # [수정] 원본 업데이트 제거
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
                                     _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
+
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 체결 처리 완료 (알림 전송 예정)")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
                                     _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)")

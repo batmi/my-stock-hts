@@ -645,7 +645,7 @@ class ConclusionMonitor:
                     reason=f"체결 확인 ({reason})", 
                     custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     snapshot=snapshot_data,
-                    strategy_score=trade.get('strategy_score', 0),
+                    score=trade.get('strategy_score', 0),
                     profit_amt=profit_amt,
                     profit_rate=profit_rate
                 )
