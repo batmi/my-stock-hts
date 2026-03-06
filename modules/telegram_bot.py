@@ -407,9 +407,19 @@ class TelegramCommander:
                     msg += f"    └ D+1: {data['d1_dep']:,}원\n"
                     msg += f"    └ D+2: {data['d2_dep']:,}원\n"
                 else:
-                    msg += f"    └ D+2(주문가능): {data['d2_dep']:,}원\n"
+                    msg += f"    └ D+1: {data['d1_dep']:,}원\n"
+                    msg += f"    └ D+2: {data['d2_dep']:,}원\n"
 
                 msg += f"  • 외화: {data['dep_ovs']:,}원\n"
+                
+                # [추가] 주문가능금액 표시
+                ord_psbl = data.get('order_possible')
+                if ord_psbl is None:
+                    try:
+                        bal = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                        if bal: ord_psbl = bal.get('order_possible', 0)
+                    except: ord_psbl = 0
+                msg += f"주문가능금액: {ord_psbl:,}원\n"
                 msg += f"출금가능금액: {data['withdraw']:,}원\n\n"
                 
                 msg += f"유가증권매입: {data['sec_buy']:,}원\n"

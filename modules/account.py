@@ -603,6 +603,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
     summary_table.add_row("    외화예수금", f"{summary_data['dep_ovs']:,}원", style="dim")
     summary_table.add_row("주문가능금액", f"[bold green]{summary_data['order_possible']:,}원[/]")
     summary_table.add_row("출금가능금액", f"{summary_data['withdraw']:,}원")
+    summary_table.add_section()
     summary_table.add_row("유가증권매입금액", f"{summary_data['sec_buy']:,}원")
     summary_table.add_row("유가증권평가금액", f"{summary_data['sec_eval']:,}원")
     if summary_data['ovrs_eval_krw'] > 0:
