@@ -107,6 +107,18 @@ class TelegramCommander:
         command = parts[0].lower()
         args = parts[1:]
 
+        # [추가] /signal_종목코드 단축 명령어 지원
+        if command.startswith('/signal_'):
+            target = command.replace('/signal_', '')
+            args = [target] + args
+            command = '/signal'
+
+        # [추가] /chart_종목코드 단축 명령어 지원
+        if command.startswith('/chart_'):
+            target = command.replace('/chart_', '')
+            args = [target] + args
+            command = '/chart'
+
         # 핸들러 호출
         if command in self.command_handlers:
             response = self.command_handlers[command](args)
@@ -834,7 +846,7 @@ class TelegramCommander:
                     if code in rules_map:
                         name += "+"
                         
-                    msg += f"\n - {name} ({code})"
+                    msg += f"\n - {name} ({code}) /signal_{code} /chart_{code}"
                 msg += "\n"
         
         if not has_stock:
