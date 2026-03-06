@@ -786,6 +786,11 @@ def diagnose_group_stocks(market_filter=None):
     custom_rules = db_manager.db.get_all_stock_strategies()
     rules_map = {r['code']: True for r in custom_rules}
 
+    # [추가] 트레이딩 제한 종목 로드
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
+    any_restricted = False
+
     results = []
     
     title_suffix = f" ({market_filter})" if market_filter else " (전체)"
@@ -855,12 +860,14 @@ def diagnose_group_stocks(market_filter=None):
                 
                 # [추가] 개별 룰 여부 확인
                 is_custom_rule = code in rules_map
+                is_restricted = code in restricted_stocks
                 
                 results.append({
                     'code': code, 'name': name, 'price': current_price,
                     'score': score, 'state': state, 'state_color': state_color,
                     'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
-                    'vol_strength': vol_strength, 'is_custom_rule': is_custom_rule
+                    'vol_strength': vol_strength, 'is_custom_rule': is_custom_rule,
+                    'is_restricted': is_restricted
                 })
             finally:
                 progress.advance(task)
@@ -913,6 +920,10 @@ def diagnose_group_stocks(market_filter=None):
         if r.get('is_custom_rule'):
             name_display += "*"
         
+        if r.get('is_restricted'):
+            name_display += "-"
+            any_restricted = True
+        
         table.add_row(
             f"{name_display}({r['code']})",
             f"{int(r['price']):,}원",
@@ -926,6 +937,9 @@ def diagnose_group_stocks(market_filter=None):
     config.console.print(table, crop=False)
     sys.stdout.flush()
     config.console.print()
+    
+    if any_restricted:
+        config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
 
 def get_analysis_params():
     """분석에 사용할 파라미터를 사용자로부터 입력받습니다."""
@@ -1210,6 +1224,10 @@ def analyze_market_stocks(market_type):
     custom_rules = db_manager.db.get_all_stock_strategies()
     rules_map = {r['code']: True for r in custom_rules}
     
+    # [추가] 트레이딩 제한 종목 로드
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
+    
     if cached_data:
         updated_at = cached_data['updated_at']
         c_params = cached_data['params']
@@ -1413,6 +1431,7 @@ def analyze_market_stocks(market_type):
         start_idx = page * page_size
         end_idx = min((page + 1) * page_size, total_items)
         page_items = buy_candidates[start_idx:end_idx]
+        any_restricted_in_page = False
         
         table = Table(title=f"{market_type} 유망 종목 ({filter_str}) - 페이지 {page+1}/{total_pages}", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No.", justify="right", width=4)
@@ -1492,9 +1511,14 @@ def analyze_market_stocks(market_type):
                 v_color = "[red]" if vol_val >= std_vol else "[blue]"
                 vol_str = f"{v_color}{vol_val:.1f}%[/]"
             
+            name_display = item['name']
+            if item['code'] in restricted_stocks:
+                name_display += "-"
+                any_restricted_in_page = True
+
             table.add_row(
                 str(start_idx + i + 1),
-                f"{item['name']} [dim]({item['code']})[/dim]",
+                f"{name_display} [dim]({item['code']})[/dim]",
                 item.get('sector', '-'),
                 f"{int(item['price']):,}원",
                 f"{w_color}{pos:.1f}%[/]",
@@ -1514,6 +1538,9 @@ def analyze_market_stocks(market_type):
         config.console.print(table, crop=False)
         sys.stdout.flush()
         
+        if any_restricted_in_page:
+            config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
+
         if page < total_pages - 1:
             if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (q: 중단)[/dim]", choices=["y", "n", "q"], default="y").lower() in ['q', 'n']:
                 break
@@ -1815,6 +1842,11 @@ def print_table(title, data_list, is_overseas=False):
         rules_map = {r['code']: True for r in custom_rules}
     any_custom_rule = False
     
+    # [추가] 트레이딩 제한 종목 로드
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
+    any_restricted = False
+    
     if not is_overseas:
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
@@ -2070,6 +2102,11 @@ def print_table(title, data_list, is_overseas=False):
                             elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
                             elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
                         
+                        # [추가] 제한 종목 표시
+                        if code in restricted_stocks:
+                            final_name_str += "-"
+                            any_restricted = True
+
                         # [추가] 개별 룰 적용 종목 표시
                         if code in rules_map:
                             final_name_str += "+"
@@ -2105,6 +2142,9 @@ def print_table(title, data_list, is_overseas=False):
         
         if use_adaptive:
             config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
+
+        if any_restricted:
+            config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
 
         if any_custom_rule:
             config.console.print("[dim] (+) 시스템 트레이딩 시 개별 룰이 적용된 종목입니다.[/dim]")
@@ -2243,8 +2283,18 @@ def _print_period_price_20(code, is_overseas):
 
     # [수정] 단순 조회이므로 status 사용
     df = None
+    investor_map = {} # [추가]
+
     with config.console.status("[bold green]기간별 시세 데이터 조회 중...[/]"):
         df = api.get_chart_data(code, is_overseas)
+        # [추가] 수급 데이터 조회
+        if not is_overseas:
+            try:
+                inv_data = api.get_investor_trend(code)
+                if inv_data:
+                    for item in inv_data:
+                        investor_map[item['stck_bsop_date']] = item
+            except: pass
 
     if df is None or df.empty: return
 
@@ -2267,11 +2317,13 @@ def _print_period_price_20(code, is_overseas):
     table.add_column("시가", justify="right")
     table.add_column("고가", justify="right")
     table.add_column("저가", justify="right")
-    table.add_column("거래량", justify="right")
     table.add_column("5일선", justify="right")
     table.add_column("20일선", justify="right")
     table.add_column("60일선", justify="right")
     table.add_column("120일선", justify="right")
+    table.add_column("거래량", justify="right") # [이동]
+    if not is_overseas:
+        table.add_column("수급 (개인/외인/기관)", justify="center") # [추가]
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
         date_str = str(row['date'])
@@ -2317,19 +2369,43 @@ def _print_period_price_20(code, is_overseas):
             if pd.isna(val): return "-"
             return f"[{color}]{fmt_p(val)}[/]"
 
-        table.add_row(
+        # [추가] 수급 데이터 포맷팅
+        inv_str = "-"
+        if not is_overseas:
+            d_key = str(row['date']).replace('-', '')[:8]
+            if d_key in investor_map:
+                item = investor_map[d_key]
+                p = api.safe_int(item.get('prsn_ntby_qty'))
+                f = api.safe_int(item.get('frgn_ntby_qty'))
+                o = api.safe_int(item.get('orgn_ntby_qty'))
+                
+                def _fmt_i(val):
+                    if val == 0: return "[dim]-[/dim]"
+                    abs_val = abs(val)
+                    if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                    elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
+                    else: s = f"{val:,}"
+                    return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
+                
+                inv_str = f"{_fmt_i(p)} {_fmt_i(f)} {_fmt_i(o)}"
+
+        row_data = [
             date_str, 
             fmt_p(close), 
             diff_str, 
             fmt_p(row['open']), 
             fmt_p(row['high']), 
             fmt_p(row['low']), 
-            _fmt_vol(row['volume']),
             fmt_ma(ma5_val, get_ma_color(ma5_val, 5)),
             fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
             fmt_ma(ma60_val, get_ma_color(ma60_val, 60)),
-            fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
-        )
+            fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
+            _fmt_vol(row['volume'])
+        ]
+        if not is_overseas:
+            row_data.append(inv_str)
+
+        table.add_row(*row_data)
         
         if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
             table.add_section()

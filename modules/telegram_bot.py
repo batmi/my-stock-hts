@@ -199,6 +199,9 @@ class TelegramCommander:
         custom_rules = db_manager.db.get_all_stock_strategies()
         if not custom_rules:
             return "📭 설정된 개별 종목 룰이 없습니다."
+            
+        # [추가] 제한 종목 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
 
         target = " ".join(args).strip()
         filtered_rules = []
@@ -215,6 +218,12 @@ class TelegramCommander:
 
         msg = f"🔧 [개별 종목 룰 ({len(filtered_rules)}개)]\n"
         for r in filtered_rules:
+            code = r['code']
+            name = r['name']
+            name_display = name
+            if code in restricted_stocks: name_display += "-"
+            name_display += "+" # 개별 룰 목록이므로 항상 +
+            
             memo_part = f"   메모: {r.get('memo', '')}\n" if r.get('memo') else ""
             
             # [추가] 가중치 표시
@@ -227,7 +236,7 @@ class TelegramCommander:
                         w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
                 except: pass
 
-            msg += (f"\n• {r['name']}({r['code']})\n"
+            msg += (f"\n• {name_display}({code})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']} / 체결 {r.get('buy_vol_strength', '기본')}%\n" # [수정]
                     f"   매도: {r['sell_score']}점\n"
                     f"   익절: +{r['take_profit']}% / RSI {r['take_profit_rsi']}\n"
@@ -241,12 +250,20 @@ class TelegramCommander:
         data = auto_trade.load_restricted_stocks()
         if not data:
             return "📭 트레이딩 제한 종목이 없습니다."
+            
+        # [추가] 개별 룰 로드
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: True for r in custom_rules}
 
         msg = f"🚫 [트레이딩 제한 종목 ({len(data)}개)]\n"
         for code, info in data.items():
             name = info.get('name', code)
+            name_display = name
+            name_display += "-" # 제한 종목 목록이므로 항상 -
+            if code in rules_map: name_display += "+"
+            
             memo = info.get('memo', '-')
-            msg += f"\n• {name}({code})\n   메모: {memo}"
+            msg += f"\n• {name_display}({code})\n   메모: {memo}"
         return msg
 
     def _cmd_profit(self, args):
@@ -276,6 +293,11 @@ class TelegramCommander:
         
         # 매도(청산) 내역만 필터링하여 손익 합산
         sell_trades = [t for t in trades if "매도" in t.get('type', '') or "sell" in t.get('type', '').lower()]
+        
+        # [추가] 제한 종목 및 개별 룰 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: True for r in custom_rules}
         
         total_profit = 0
         win_count = 0
@@ -307,12 +329,22 @@ class TelegramCommander:
             if best_trade and int(best_trade.get('profit_amt') or 0) > 0:
                 p = int(best_trade.get('profit_amt'))
                 r = float(best_trade.get('profit_rate') or 0)
-                msg += f"\n\n최고 수익: {best_trade['name']} (+{p:,}원 / {r:+.2f}%)"
+                name = best_trade['name']
+                code = best_trade['code']
+                name_display = name
+                if code in restricted_stocks: name_display += "-"
+                if code in rules_map: name_display += "+"
+                msg += f"\n\n최고 수익: {name_display} (+{p:,}원 / {r:+.2f}%)"
             
             if worst_trade and int(worst_trade.get('profit_amt') or 0) < 0:
                 p = int(worst_trade.get('profit_amt'))
                 r = float(worst_trade.get('profit_rate') or 0)
-                msg += f"\n최다 손실: {worst_trade['name']} ({p:,}원 / {r:+.2f}%)"
+                name = worst_trade['name']
+                code = worst_trade['code']
+                name_display = name
+                if code in restricted_stocks: name_display += "-"
+                if code in rules_map: name_display += "+"
+                msg += f"\n최다 손실: {name_display} ({p:,}원 / {r:+.2f}%)"
 
         return msg
 
@@ -400,6 +432,11 @@ class TelegramCommander:
             
             # [수정] 보유수량 0 초과인 종목만 필터링
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+            
+            # [추가] 제한 종목 및 개별 룰 로드
+            restricted_stocks = auto_trade.load_restricted_stocks()
+            custom_rules = db_manager.db.get_all_stock_strategies()
+            rules_map = {r['code']: True for r in custom_rules}
 
             if not valid_holdings:
                 return "📋 [보유 종목] 없음"
@@ -410,6 +447,7 @@ class TelegramCommander:
             
             for item in valid_holdings:
                 name = item['prdt_name']
+                code = item['pdno']
                 qty = int(item['hldg_qty'])
                 cur_price = int(item['prpr'])
                 buy_price = float(item['pchs_avg_pric'])
@@ -419,7 +457,11 @@ class TelegramCommander:
                 
                 calc_total_pchs += int(qty * buy_price)
                 
-                msg += f"\n{name} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
+                name_display = name
+                if code in restricted_stocks: name_display += "-"
+                if code in rules_map: name_display += "+"
+                
+                msg += f"\n{name_display} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
             
             # [추가] 총 평가금액 및 손익 요약
             if summary and len(summary) > 0:
@@ -554,6 +596,13 @@ class TelegramCommander:
         # [추가] 개별 룰 존재 여부 확인
         custom_rule = db_manager.db.get_stock_strategy(code)
         rule_tag = " [개별]" if custom_rule else ""
+        
+        # [추가] 제한 종목 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
+        
+        name_display = name
+        if code in restricted_stocks: name_display += "-"
+        if custom_rule: name_display += "+"
 
         # [수정] 기본값 설정
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -692,7 +741,7 @@ class TelegramCommander:
             else:
                 sell_result = "보유 (추세유지)"
 
-            msg = f"🔍 [종목 진단{rule_tag}] {name}({code})\n"
+            msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 10점\n"
@@ -719,9 +768,17 @@ class TelegramCommander:
         if not code:
             self._send_reply(f"⚠️ '{keyword}' 종목을 찾을 수 없습니다.")
             return
+            
+        # [추가] 제한 종목 및 개별 룰 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
+        custom_rule = db_manager.db.get_stock_strategy(code)
+        
+        name_display = name
+        if code in restricted_stocks: name_display += "-"
+        if custom_rule: name_display += "+"
 
         try:
-            self._send_reply(f"⏳ {name}({code}) 차트 생성 중...")
+            self._send_reply(f"⏳ {name_display}({code}) 차트 생성 중...")
             
             # 차트 생성 (config.CHART_DIR에 저장됨)
             chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100)
@@ -731,7 +788,7 @@ class TelegramCommander:
             filename = f"analysis_{safe_code}.png"
             file_path = os.path.join(config.CHART_DIR, filename)
             
-            caption = f"📊 {name}({code}) 분석 차트"
+            caption = f"📊 {name_display}({code}) 분석 차트"
             
             # api.send_telegram_photo 사용
             if api.send_telegram_photo(file_path, caption):
@@ -749,6 +806,11 @@ class TelegramCommander:
         """현재 감시 중인 종목 리스트 반환"""
         msg = "📋 [현재 감시 종목 리스트]\n"
         
+        # [추가] 제한 종목 및 개별 룰 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: True for r in custom_rules}
+        
         groups = {
             "stocks_kr": "🇰🇷 국내주식",
             "etfs_kr": "🇰🇷 국내ETF",
@@ -763,7 +825,16 @@ class TelegramCommander:
                 has_stock = True
                 msg += f"\n{label}:"
                 for s in stocks:
-                    msg += f"\n - {s['name']} ({s['code']})"
+                    code = s['code']
+                    name = s['name']
+                    
+                    # [추가] 상태 표시 (제한: -, 개별룰: +)
+                    if code in restricted_stocks:
+                        name += "-"
+                    if code in rules_map:
+                        name += "+"
+                        
+                    msg += f"\n - {name} ({code})"
                 msg += "\n"
         
         if not has_stock:
@@ -887,9 +958,16 @@ class TelegramCommander:
             return "📭 체결된 거래 내역이 없습니다."
         
         msg = f"📜 [최근 체결 내역 ({len(trades)}건)]"
+        
+        # [추가] 제한 종목 및 개별 룰 로드
+        restricted_stocks = auto_trade.load_restricted_stocks()
+        custom_rules = db_manager.db.get_all_stock_strategies()
+        rules_map = {r['code']: True for r in custom_rules}
+        
         for t in trades:
             type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("수동", "")
             name = t['name']
+            code = t['code']
             qty = t['qty']
             price = float(t['price'])
             price_str = f"{price:,.2f}" if price < 1000 and "." in str(price) else f"{int(price):,}"
@@ -905,8 +983,12 @@ class TelegramCommander:
                 if amt is not None:
                     profit_msg = f"\n   └ {amt:+,}원 ({rate:+.2f}%)"
             
+            name_display = name
+            if code in restricted_stocks: name_display += "-"
+            if code in rules_map: name_display += "+"
+            
             date_str = t['time'][5:16] # MM-DD HH:MM
-            item_msg = f"\n\n• {date_str} | {type_str}\n   {name} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
+            item_msg = f"\n\n• {date_str} | {type_str}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
             
             # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
             if len(msg) + len(item_msg) > 4000:
