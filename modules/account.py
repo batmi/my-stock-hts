@@ -78,6 +78,7 @@ def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
 
 def sync_today_trades():
     """금일 체결 내역을 API로 조회하여 DB의 단가(시장가=0) 정보를 업데이트 (모든 계좌 대상)"""
+    logger.debug("[HISTORY_DEBUG] sync_today_trades() 시작")
     
     # 조회 대상 계좌 목록
     accounts = []
@@ -164,6 +165,7 @@ def sync_today_trades():
         finally:
             context.trade_context.use_auto_account = original_context
         
+    logger.debug(f"[HISTORY_DEBUG] sync_today_trades() 종료. 처리 건수: {total_count}")
     return total_count
 
 def _display_balance_details(cano, acnt_prdt_cd):
@@ -849,6 +851,8 @@ def export_trade_history_to_excel():
 
 def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
+    logger.debug("[HISTORY_DEBUG] view_trade_history() 진입")
+    
     config.console.print("\n[bold]거래 내역 조회 옵션:[/bold]")
     config.console.print("[1] 전체 내역 (최신순 50건)")
     config.console.print("[2] 최근 30일 내역")
@@ -857,43 +861,65 @@ def view_trade_history():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    logger.debug(f"[HISTORY_DEBUG] 사용자 선택: {choice}")
     
     menu_map = {"1": "전체 내역", "2": "최근 30일", "3": "종목 검색", "4": "엑셀 저장"}
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': 
+        logger.debug("[HISTORY_DEBUG] 사용자 취소(q)로 종료")
+        return
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
     try:
+        logger.debug("[HISTORY_DEBUG] 체결 내역 동기화 시도")
         sync_today_trades()
     except Exception as e:
         config.console.print(f"[dim red]⚠️ 체결 내역 동기화 중 오류 발생: {e}[/dim red]")
-        logger.error(f"sync_today_trades error: {e}")
+        logger.error(f"[HISTORY_DEBUG] sync_today_trades error: {e}")
 
     trades = []
     if choice == "1":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
+            logger.debug("[HISTORY_DEBUG] DB 조회 요청 (limit=50)")
             trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=50)
+            logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
+            logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
             config.console.print(f"[bold red]❌ 거래 내역 조회 실패: {e}[/bold red]")
             return
     elif choice == "2":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, start_date=start_dt)
+        try:
+            logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (start_date={start_dt})")
+            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, start_date=start_dt)
+            logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
+        except Exception as e:
+            logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
+            config.console.print(f"[bold red]❌ 거래 내역 조회 실패: {e}[/bold red]")
+            return
     elif choice == "3":
         keyword = Prompt.ask("검색할 종목코드(티커) 입력")
         context.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, code=keyword)
+        try:
+            logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (code={keyword})")
+            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, code=keyword)
+            logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
+        except Exception as e:
+            logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
+            config.console.print(f"[bold red]❌ 거래 내역 조회 실패: {e}[/bold red]")
+            return
     elif choice == "4":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         export_trade_history_to_excel()
         return
 
     if not trades:
+        logger.debug("[HISTORY_DEBUG] 조회된 내역 없음. 리턴.")
         config.console.print("\n[yellow]검색된 거래 내역이 없습니다.[/yellow]")
         return
 
@@ -931,6 +957,7 @@ def view_trade_history():
         grouped_trades[key].append(t)
         
     if not grouped_trades:
+        logger.debug("[HISTORY_DEBUG] 그룹핑 결과 없음 (필터링됨). 리턴.")
         config.console.print("\n[yellow]현재 모드에 해당하는 거래 내역이 없습니다.[/yellow]")
         return
 
@@ -945,6 +972,8 @@ def view_trade_history():
     for cat, acc in sorted_keys:
         t_list = grouped_trades[(cat, acc)]
         if not t_list: continue
+
+        logger.debug(f"[HISTORY_DEBUG] 테이블 생성 및 출력: {cat} {acc} ({len(t_list)}건)")
 
         # 테이블 생성 (제목에 계좌번호 포함)
         table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
@@ -1075,6 +1104,7 @@ def view_trade_history():
                 table.add_section()
 
         config.console.print(table)
+        logger.debug("[HISTORY_DEBUG] 테이블 출력 완료")
 
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
