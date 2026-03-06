@@ -151,6 +151,10 @@ def show_market_indices():
                     
                     if not df_daily.empty:
                         df_daily.columns = [c.lower() for c in df_daily.columns]
+                        # [이동] 데이터 정제: Close가 NaN인 행 제거 (비트코인 등 데이터 공백 방지)
+                        if 'close' in df_daily.columns:
+                            df_daily = df_daily.dropna(subset=['close'])
+
                     if not df_intraday.empty:
                         df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
@@ -226,6 +230,11 @@ def show_market_indices():
                     prev = 0.0
                     high_52 = high_52_daily
                     
+                    # [추가] 디버그 대상 확인 (비트코인, 이더리움)
+                    is_target_debug = name in ["비트코인", "이더리움"]
+                    is_crypto = name in ["비트코인", "이더리움"]
+                    debug_tag = "[MARKET_INDEX_DEBUG]"
+                    
                     # [추가] 국내 지수 KIS API 현재가 우선 적용
                     use_kis_price = False
                     if is_domestic_index:
@@ -254,6 +263,26 @@ def show_market_indices():
                             last_price = fi.last_price
                             prev_close = fi.regular_market_previous_close # 공식 전일 종가
                             
+                            # [추가] fast_info 값 로깅
+                            if is_target_debug:
+                                logger.debug(f"{debug_tag} {name} fast_info: last={last_price}, prev={prev_close}")
+                            
+                            # [추가] 암호화폐 전일 종가 보정 (UTC 00:00 기준)
+                            # fast_info의 prev_close가 NaN이거나 불명확할 수 있으므로 일봉 데이터(UTC기준)로 강제 고정
+                            if is_crypto and not df_daily.empty and len(df_daily) >= 2:
+                                try:
+                                    last_dt = df_daily.index[-1].date()
+                                    utc_today = datetime.utcnow().date()
+                                    
+                                    # 일봉 마지막이 오늘(UTC)이면 -2번째가 전일 종가, 아니면 -1번째
+                                    target_idx = -2 if last_dt >= utc_today else -1
+                                    check_prev = float(df_daily['close'].iloc[target_idx])
+                                    
+                                    if not math.isnan(check_prev):
+                                        prev_close = check_prev
+                                        if is_target_debug: logger.debug(f"{debug_tag} {name} prev_close fixed to UTC 00:00: {prev_close}")
+                                except Exception: pass
+                            
                             if (last_price is not None and prev_close is not None and 
                                 not math.isnan(last_price) and not math.isnan(prev_close)):
                                 
@@ -271,13 +300,20 @@ def show_market_indices():
                             else:
                                 if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                                     config.console.print(f"[dim red][DEBUG]    fast_info rejected: nan values detected (Cur={last_price}, Prev={prev_close})[/dim red]")
+                                if is_target_debug:
+                                    logger.debug(f"{debug_tag} {name} fast_info rejected (NaN/None)")
 
                         except Exception as e:
+                            if is_target_debug:
+                                logger.debug(f"{debug_tag} {name} fast_info error: {e}")
                             if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                                 config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
                     # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
                     if not use_fast_info and not use_kis_price:
+                        if is_target_debug:
+                            logger.debug(f"{debug_tag} {name} entering fallback. Daily len: {len(df_daily)}")
+                        
                         if df_daily.empty:
                             table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                             progress.advance(task)
@@ -292,9 +328,21 @@ def show_market_indices():
                         if len(df_daily) >= 2:
                             prev = float(df_daily['close'].iloc[-2])
                             prev_date_src = df_daily.index[-2].date()
+                            
+                            # [추가] prev가 NaN인 경우 과거 데이터 탐색 (안전장치)
+                            if math.isnan(prev):
+                                for i in range(3, min(10, len(df_daily) + 1)):
+                                    val = float(df_daily['close'].iloc[-i])
+                                    if not math.isnan(val):
+                                        prev = val
+                                        prev_date_src = df_daily.index[-i].date()
+                                        break
                         else:
                             prev = current
                             prev_date_src = daily_last_date
+
+                        if is_target_debug:
+                            logger.debug(f"{debug_tag} {name} fallback daily init: current={current}, prev={prev}")
 
                         # (2) 현재가 보정: 분봉이 일봉보다 최신이면 교체
                         intra_last_date = None
@@ -370,6 +418,9 @@ def show_market_indices():
 
                         if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                             config.console.print(f"[dim magenta][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: Fallback DF, Date: {target_date} vs {prev_date_src})[/dim magenta]")
+
+                        if is_target_debug:
+                            logger.debug(f"{debug_tag} {name} fallback final: current={current}, prev={prev}")
 
                     # C. 결과 계산
                     diff = current - prev
