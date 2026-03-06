@@ -497,6 +497,10 @@ def main():
     
     try:
         while True:
+            # [추가] 화면 출력 안정화를 위한 플러시 및 지연 (저사양 환경 대응)
+            sys.stdout.flush()
+            time.sleep(0.2)
+
             # [추가] 입력 버퍼 비우기 (이전 작업 중 눌린 키 무시)
             flush_input()
 
