@@ -88,12 +88,27 @@ def send_telegram_message(message):
 
     account_info = _get_telegram_footer()
     
+    # [추가] 마크다운 링크 패턴([text](url))을 임시 토큰으로 변환 (Rich 태그 제거 및 이스케이프 영향 방지)
+    link_map = {}
+    def _stash_link(match):
+        token = f"__LINK_{len(link_map)}__"
+        link_map[token] = (match.group(1), match.group(2)) # text, url
+        return token
+    
+    clean_message = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', _stash_link, message)
+
     # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
     # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
-    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', message)
+    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', clean_message)
 
     # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
     clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # [추가] 마크다운 링크 복원 (HTML <a> 태그로 변환)
+    for token, (text, url) in link_map.items():
+        # 텍스트 부분도 이스케이프 처리
+        safe_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        clean_message = clean_message.replace(token, f'<a href="{url}">{safe_text}</a>')
 
     # [수정] 종목 코드에 링크 자동 적용 (네이버 증권)
     # 패턴: 괄호 안의 6자리 숫자/영문(국내) 또는 영문 대문자(해외) -> 예: (005930), (0080G0), (AAPL)

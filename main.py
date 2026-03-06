@@ -10,6 +10,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 from rich.markup import escape
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import argparse
 import config
 import context # [추가]
@@ -643,20 +644,41 @@ def main():
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
         config.console.print()
-        with config.console.status("[bold green]시스템 종료 프로세스 진행 중...[/]"):
-            # [추가] 프로그램 종료 시 실행 중인 자동매매가 있다면 안전하게 종료 (텔레그램 알림 발송)
+        # [수정] 종료 프로세스를 Progress Bar로 시각화 및 세분화
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=config.console
+        ) as progress:
+            task = progress.add_task("[green]시스템 종료 프로세스 진행 중...[/]", total=4)
+
+            # 1. 자동매매 종료
+            progress.update(task, description="[1/4] 자동매매 스레드 안전 종료 중...")
             if trader.is_running:
                 trader.stop(use_status=False)
+            progress.advance(task)
             
-            # [추가] 체결 감시자 및 텔레그램 봇 종료
+            # 2. 백그라운드 서비스 종료
+            progress.update(task, description="[2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...")
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
+            progress.advance(task)
             
-            db_queue.shutdown() # [추가] DB 큐 종료
-            # [추가] DB 최적화 및 정리 (강제 종료 전 명시적 실행)
+            # 3. DB 큐 종료
+            progress.update(task, description="[3/4] DB 작업 큐 처리 및 종료 중...")
+            db_queue.shutdown()
+            progress.advance(task)
+            
+            # 4. DB 최적화 (VACUUM)
+            progress.update(task, description="[4/4] 데이터베이스 최적화(VACUUM) 수행 중...")
             try:
                 db_manager.db.run_vacuum()
-            except Exception: pass
+            except Exception as e:
+                config.console.print(f"[red]VACUUM 실패: {e}[/red]")
+            progress.advance(task)
 
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
         os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)
