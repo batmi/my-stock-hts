@@ -211,7 +211,13 @@ def _create_fill_history(db_order, reason_msg):
         odno = str(db_order.get('odno'))
         # 이미 체결 내역이 있는지 확인 (중복 방지)
         # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
-        if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
+        exists_check = False
+        try:
+            exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
+        except Exception as e:
+            logger.error(f"[ORDER_DEBUG] check_trade_exists 오류: {e}", exc_info=True)
+
+        if not exists_check:
             type_str = db_order.get('type', '')
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
@@ -223,6 +229,9 @@ def _create_fill_history(db_order, reason_msg):
             # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
             for attempt in range(3):
                 try:
+                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                        logger.debug(f"[ORDER_DEBUG] _create_fill_history insert 시도 ({attempt+1}/3): {odno}")
+
                     db_manager.db.insert_trade(
                         type_str, 
                         db_order.get('code'), 
@@ -242,10 +251,10 @@ def _create_fill_history(db_order, reason_msg):
                         logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
                     break
                 except Exception as e:
-                    logger.error(f"체결 히스토리 생성 실패 (시도 {attempt+1}/3): {e}")
+                    logger.error(f"체결 히스토리 생성 실패 (시도 {attempt+1}/3): {e}", exc_info=True)
                     time.sleep(0.5)
     except Exception as e:
-        logger.error(f"체결 히스토리 생성 실패: {e}")
+        logger.error(f"체결 히스토리 생성 실패: {e}", exc_info=True)
 
 def show_open_orders():
     """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
@@ -386,33 +395,7 @@ def show_open_orders():
                                 msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
-                                # [추가] 체결 히스토리 별도 생성 (DB Insert)
-                                # 상태 업데이트만 하면 히스토리에 '접수' 내역이 사라지고 '체결'로 바뀌기만 하므로,
-                                # 실전처럼 '접수'와 '체결' 내역을 모두 남기기 위해 새로운 레코드를 추가함.
-                                try:
-                                    odno = str(db_order.get('odno'))
-                                    if not db_manager.db.check_trade_exists(odno, "체결"):
-                                        trade_type = "buy" if "매수" in type_name else "sell"
-                                        if "자동" in str(db_order.get('type', '')): trade_type += "(AUTO)"
-                                        elif "수동" in str(db_order.get('type', '')): trade_type += "(수동)"
-                                        
-                                        try: p_amt = int(float(db_order.get('profit_amt') or 0))
-                                        except: p_amt = 0
-                                        try: p_rate = float(db_order.get('profit_rate') or 0.0)
-                                        except: p_rate = 0.0
-                                        
-                                        db_manager.db.insert_trade(
-                                            trade_type, code, name, qty, price, odno, 
-                                            order_status="체결(추정)", 
-                                            reason=f"체결 확인 ({reason_msg})",
-                                            custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                            snapshot=db_order.get('snapshot'),
-                                            strategy_score=db_order.get('strategy_score', 0),
-                                            profit_amt=p_amt,
-                                            profit_rate=p_rate
-                                        )
-                                except Exception as e:
-                                    logger.error(f"체결 히스토리 생성 실패: {e}")
+                                # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
                                     
                             except: pass
 

@@ -584,7 +584,8 @@ class ConclusionMonitor:
         """모의투자 체결 처리 핸들러"""
         try:
             if config.FILE_DEBUG_LEVEL == "DEBUG":
-                logger.debug(f"[ORDER_DEBUG] _handle_simulation_fill 진입: {odno}")
+                logger.debug(f"[ORDER_DEBUG] _handle_simulation_fill 진입: {odno} / Code: {code} / Qty: {qty}")
+                logger.debug(f"[ORDER_DEBUG] Trade Info: {trade}")
 
             name = trade.get('name', code)
             price = float(trade.get('price', 0))
@@ -603,10 +604,21 @@ class ConclusionMonitor:
             success_db = False
             
             # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
-            if not db_manager.db.check_trade_exists(odno, "체결") and not db_manager.db.check_trade_exists(odno, "체결(추정)"):
+            exists_check = False
+            try:
+                exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    logger.debug(f"[ORDER_DEBUG] 체결 내역 존재 여부: {exists_check}")
+            except Exception as e:
+                logger.error(f"[ORDER_DEBUG] check_trade_exists 오류: {e}", exc_info=True)
+
+            if not exists_check:
                 # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
                 for attempt in range(3):
                     try:
+                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                            logger.debug(f"[ORDER_DEBUG] insert_trade 시도 ({attempt+1}/3)")
+
                         db_manager.db.insert_trade(
                             type_str, code, name, qty, price, odno, 
                             order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
@@ -618,9 +630,11 @@ class ConclusionMonitor:
                             profit_rate=profit_rate
                         )
                         success_db = True
+                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                            logger.debug(f"[ORDER_DEBUG] insert_trade 성공")
                         break # 성공 시 루프 탈출
                     except Exception as e:
-                        logger.error(f"[Monitor] 체결 내역 DB 저장 실패 (시도 {attempt+1}/3): {e}")
+                        logger.error(f"[Monitor] 체결 내역 DB 저장 실패 (시도 {attempt+1}/3): {e}", exc_info=True)
                         time.sleep(0.5) # 잠시 대기 후 재시도
                 
                 if not success_db:
@@ -684,7 +698,7 @@ class ConclusionMonitor:
                 logger.debug(f"[ORDER_DEBUG] 메모리 상태 업데이트(FILLED): {odno}")
                 trader.update_order_status(code, odno, OrderStatus.FILLED)
         except Exception as e:
-            logger.error(f"[Monitor] 체결 처리 핸들러 오류: {e}")
+            logger.error(f"[Monitor] 체결 처리 핸들러 오류: {e}", exc_info=True)
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
