@@ -277,7 +277,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
 def _get_db_connection():
     return sqlite3.connect(config.DB_FILE_PATH)
 
-def _init_analysis_db():
+def _init_analysis_db_logic():
     try:
         with _get_db_connection() as conn:
             cursor = conn.cursor()
@@ -292,7 +292,7 @@ def _init_analysis_db():
             conn.commit()
     except Exception: pass
 
-def _save_analysis_result(market_type, results, params):
+def _save_analysis_result_logic(market_type, results, params):
     try:
         _init_analysis_db()
         with _get_db_connection() as conn:
@@ -309,7 +309,7 @@ def _save_analysis_result(market_type, results, params):
     except Exception as e:
         config.console.print(f"[dim red]분석 결과 저장 실패: {e}[/dim red]")
 
-def _load_analysis_result(market_type):
+def _load_analysis_result_logic(market_type):
     try:
         _init_analysis_db()
         with _get_db_connection() as conn:
@@ -325,6 +325,23 @@ def _load_analysis_result(market_type):
     except Exception as e:
         config.console.print(f"[dim red]분석 결과 로드 실패: {e}[/dim red]")
     return None
+
+# [수정] 큐 시스템을 통한 실행 래퍼 함수들
+def _init_analysis_db():
+    _init_analysis_db_logic()
+
+def _save_analysis_result(market_type, results, params):
+    if hasattr(db_manager.db, 'execute_custom'):
+        db_manager.db.execute_custom(_save_analysis_result_logic, market_type, results, params)
+    else:
+        _save_analysis_result_logic(market_type, results, params)
+
+def _load_analysis_result(market_type):
+    if hasattr(db_manager.db, 'execute_custom'):
+        return db_manager.db.execute_custom(_load_analysis_result_logic, market_type)
+    else:
+        return _load_analysis_result_logic(market_type)
+
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""

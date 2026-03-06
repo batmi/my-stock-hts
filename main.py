@@ -16,7 +16,7 @@ import context # [추가]
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
-from modules import auto_trade, telegram_bot, theme_analysis # [추가]
+from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
@@ -432,6 +432,9 @@ def main():
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
     context.MAIN_THREAD_ID = threading.get_ident()
 
+    # [추가] DB 큐 프록시 설치 (순차 처리 적용)
+    db_queue.install_proxy(db_manager)
+
     # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
     if args.mode:
         with config.console.status("[bold green]시스템 초기화 및 환경 설정 로드 중...[/]") as status:
@@ -649,6 +652,7 @@ def main():
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
             
+            db_queue.shutdown() # [추가] DB 큐 종료
             # [추가] DB 최적화 및 정리 (강제 종료 전 명시적 실행)
             try:
                 db_manager.db.run_vacuum()

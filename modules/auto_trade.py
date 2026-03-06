@@ -56,7 +56,7 @@ class OrderStatus:
     REJECTED = "REJECTED"           # 거부/에러
 
 # [추가] DB 스키마 보정 및 가중치 관리 헬퍼 함수
-def _ensure_db_weights_column():
+def _ensure_db_weights_column_logic():
     """stock_strategies 테이블에 weights 컬럼이 없으면 추가"""
     try:
         with sqlite3.connect(config.DB_FILE_PATH) as conn:
@@ -72,7 +72,7 @@ def _ensure_db_weights_column():
     except Exception as e:
         logger.error(f"DB 스키마 업데이트 실패: {e}")
 
-def _save_rule_weights(code, weights):
+def _save_rule_weights_logic(code, weights):
     """가중치 정보를 DB에 직접 저장 (JSON 직렬화)"""
     try:
         _ensure_db_weights_column()
@@ -84,7 +84,7 @@ def _save_rule_weights(code, weights):
     except Exception as e:
         logger.error(f"가중치 저장 실패: {e}")
 
-def _enrich_rules_with_weights(rules):
+def _enrich_rules_with_weights_logic(rules):
     """DB에서 weights 컬럼을 조회하여 룰 리스트에 병합"""
     if not rules: return rules
     try:
@@ -115,6 +115,25 @@ def _enrich_rules_with_weights(rules):
     except Exception as e:
         logger.error(f"가중치 로드 실패: {e}")
         return rules
+
+# [수정] 큐 시스템을 통한 실행 래퍼 함수들
+def _ensure_db_weights_column():
+    # 내부 로직이므로 별도 래핑 없이 호출되는 함수 내에서 처리되거나,
+    # 필요 시 execute_custom을 사용. 여기서는 _save/_enrich 내부에서 호출되므로 로직만 분리.
+    _ensure_db_weights_column_logic()
+
+def _save_rule_weights(code, weights):
+    if hasattr(db_manager.db, 'execute_custom'):
+        db_manager.db.execute_custom(_save_rule_weights_logic, code, weights)
+    else:
+        _save_rule_weights_logic(code, weights)
+
+def _enrich_rules_with_weights(rules):
+    if hasattr(db_manager.db, 'execute_custom'):
+        return db_manager.db.execute_custom(_enrich_rules_with_weights_logic, rules)
+    else:
+        return _enrich_rules_with_weights_logic(rules)
+
 
 class ConclusionMonitor:
     _instance = None
@@ -611,6 +630,7 @@ class ConclusionMonitor:
             # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
             exists_check = False
             try:
+                # 큐를 통해 순차 처리되므로 별도의 락이나 재시도 불필요
                 exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[ORDER_DEBUG] 체결 내역 존재 여부: {exists_check}")
@@ -618,36 +638,20 @@ class ConclusionMonitor:
                 logger.error(f"[ORDER_DEBUG] check_trade_exists 오류: {e}", exc_info=True)
 
             if not exists_check:
-                # [추가] DB 잠금(Lock) 등에 대비한 재시도 로직
-                for attempt in range(5): # [수정] 재시도 횟수 증가 (3 -> 5)
-                    try:
-                        if config.FILE_DEBUG_LEVEL == "DEBUG":
-                            logger.debug(f"[ORDER_DEBUG] insert_trade 시도 ({attempt+1}/5)")
-
-                        db_manager.db.insert_trade(
-                            type_str, code, name, qty, price, odno, 
-                            order_status="체결(추정)", # [수정] 상태를 '체결(추정)'으로 명시
-                            reason=f"체결 확인 ({reason})", 
-                            custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            snapshot=snapshot_data,
-                            strategy_score=trade.get('strategy_score', 0),
-                            profit_amt=profit_amt,
-                            profit_rate=profit_rate
-                        )
-                        success_db = True
-                        if config.FILE_DEBUG_LEVEL == "DEBUG":
-                            logger.debug(f"[ORDER_DEBUG] insert_trade 성공")
-                        break # 성공 시 루프 탈출
-                    except Exception as e:
-                        logger.error(f"[Monitor] 체결 내역 DB 저장 실패 (시도 {attempt+1}/5): {e}", exc_info=True)
-                        # [추가] 화면에 에러 출력 (디버깅용)
-                        if config.SCREEN_DEBUG_LEVEL == "DEBUG": console.print(f"[dim red]DB Insert Error: {e}[/dim red]")
-                        time.sleep(1.0) # [수정] 대기 시간 증가 (0.5 -> 1.0)
-                
-                if not success_db:
-                    logger.error(f"[Monitor] 체결 내역 DB 저장 최종 실패: {odno}")
-                    # DB 저장이 실패하면 메모리 상태 업데이트도 하지 않아야 함 (다음 주기에 재시도하기 위해)
-                    return
+                # [수정] 큐 시스템 적용으로 단순 호출로 변경
+                db_manager.db.insert_trade(
+                    type_str, code, name, qty, price, odno, 
+                    order_status="체결(추정)", 
+                    reason=f"체결 확인 ({reason})", 
+                    custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    snapshot=snapshot_data,
+                    strategy_score=trade.get('strategy_score', 0),
+                    profit_amt=profit_amt,
+                    profit_rate=profit_rate
+                )
+                success_db = True
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    logger.debug(f"[ORDER_DEBUG] insert_trade 성공")
 
                 # 3. 알림 발송 (상세 정보 포함)
                 try:
