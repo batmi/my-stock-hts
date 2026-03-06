@@ -814,8 +814,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     config.console.print()
 
-    # [추가] 기간별 시세 20일치 출력
-    _print_period_price_20(code, is_overseas)
+    # [추가] 기간별 시세 30일치 출력
+    _print_period_price_30(code, is_overseas)
 
 def diagnose_group_stocks(market_filter=None):
     """등록된 종목들에 대해 일괄 분석을 수행합니다."""
@@ -2316,8 +2316,8 @@ def get_snapshot(code, is_overseas):
         
     return snapshot
 
-def _print_period_price_20(code, is_overseas):
-    """기간별 시세 20일치 출력 (5줄마다 구분선)"""
+def _print_period_price_common(code, is_overseas, limit=20):
+    """기간별 시세 출력 공통 함수"""
     def _fmt_vol(v):
         val = float(v)
         if val == 0: return "0"
@@ -2350,11 +2350,16 @@ def _print_period_price_20(code, is_overseas):
     df['diff'] = df['close'].diff()
     df['rate'] = df['close'].pct_change() * 100
 
-    # 최신순 정렬 및 20개 추출
-    recent_df = df.sort_values('date', ascending=False).head(20)
+    # 최신순 정렬 및 limit 적용
+    df_sorted = df.sort_values('date', ascending=False)
+    if limit:
+        recent_df = df_sorted.head(limit)
+    else:
+        recent_df = df_sorted
 
     title_prefix = "[해외주식]" if is_overseas else "[국내주식]"
-    table = Table(title=f"{title_prefix} 기간별 시세 (최근 20일)", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+    period_str = f"(최근 {limit}일)" if limit else "(전체)"
+    table = Table(title=f"{title_prefix} 기간별 시세 {period_str}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("일자", justify="center")
     table.add_column("종가", justify="right")
     table.add_column("등락폭 (등락률)", justify="right")
@@ -2367,7 +2372,7 @@ def _print_period_price_20(code, is_overseas):
     table.add_column("120일선", justify="right")
     table.add_column("거래량", justify="right") # [이동]
     if not is_overseas:
-        table.add_column("수급 (개인/외인/기관)", justify="center") # [추가]
+        table.add_column("개인/외인/기관", justify="center") # [추가]
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
         date_str = str(row['date'])
@@ -2455,4 +2460,8 @@ def _print_period_price_20(code, is_overseas):
             table.add_section()
     
     config.console.print(table)
+
+def _print_period_price_30(code, is_overseas):
+    """기간별 시세 30일치 출력"""
+    _print_period_price_common(code, is_overseas, limit=30)
     config.console.print()

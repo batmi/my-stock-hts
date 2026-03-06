@@ -91,9 +91,18 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
         # [수정] 기간별 시세 출력 (analysis.py와 동일한 형식 및 로직 적용)
         df = None
+        investor_map = {} # [추가]
+
         # [수정] 단순 조회이므로 status 사용
         with config.console.status("[bold green]기간별 시세 데이터 조회 중...[/]"):
             df = api.get_chart_data(code, is_overseas=False)
+            # [추가] 수급 데이터 조회
+            try:
+                inv_data = api.get_investor_trend(code)
+                if inv_data:
+                    for item in inv_data:
+                        investor_map[item['stck_bsop_date']] = item
+            except: pass
         
         if df is not None and not df.empty:
             # 이동평균선 계산
@@ -115,11 +124,12 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("시가", justify="right")
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
-            table_d.add_column("거래량", justify="right")
             table_d.add_column("5일선", justify="right")
             table_d.add_column("20일선", justify="right")
             table_d.add_column("60일선", justify="right")
             table_d.add_column("120일선", justify="right")
+            table_d.add_column("거래량", justify="right") # [이동]
+            table_d.add_column("개인/외인/기관", justify="center") # [추가]
             
             for i, (idx, row) in enumerate(recent_df.iterrows()):
                 date_str = str(row['date'])
@@ -163,10 +173,30 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     if pd.isna(val): return "-"
                     return f"[{color}]{fmt_p(val)}[/]"
 
+                # [추가] 수급 데이터 포맷팅
+                inv_str = "-"
+                d_key = str(row['date']).replace('-', '')[:8]
+                if d_key in investor_map:
+                    item = investor_map[d_key]
+                    p = api.safe_int(item.get('prsn_ntby_qty'))
+                    f = api.safe_int(item.get('frgn_ntby_qty'))
+                    o = api.safe_int(item.get('orgn_ntby_qty'))
+                    
+                    def _fmt_i(val):
+                        if val == 0: return "[dim]-[/dim]"
+                        abs_val = abs(val)
+                        if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                        elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
+                        else: s = f"{val:,}"
+                        return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
+                    
+                    inv_str = f"{_fmt_i(p)} {_fmt_i(f)} {_fmt_i(o)}"
+
                 table_d.add_row(
-                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), _fmt_vol(row['volume']),
+                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']),
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
-                    fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
+                    fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
+                    _fmt_vol(row['volume']), inv_str
                 )
                 
                 if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
