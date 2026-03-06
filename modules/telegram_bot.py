@@ -849,7 +849,7 @@ class TelegramCommander:
                     if code in rules_map:
                         name += "+"
                         
-                    msg += f"\n - {name} ({code}) /signal_{code} /chart_{code}"
+                    msg += f"\n - {name} ({code})\n   /signal_{code} /chart_{code}"
                 msg += "\n"
         
         if not has_stock:
