@@ -644,41 +644,39 @@ def main():
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
     finally:
         config.console.print()
-        # [수정] 종료 프로세스를 Progress Bar로 시각화 및 세분화
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=config.console
-        ) as progress:
-            task = progress.add_task("[green]시스템 종료 프로세스 진행 중...[/]", total=4)
-
+        # [수정] 종료 프로세스를 console.status로 변경하고 완료 메시지 출력
+        with config.console.status("[bold green]시스템 종료 프로세스 진행 중...[/]") as status:
             # 1. 자동매매 종료
-            progress.update(task, description="[1/4] 자동매매 스레드 안전 종료 중...")
+            status.update("[bold green][1/4] 자동매매 스레드 안전 종료 중...[/]")
             if trader.is_running:
                 trader.stop(use_status=False)
-            progress.advance(task)
+            time.sleep(0.5)
+            config.console.print("[1/4] 자동매매 스레드 안전 종료 [bold green][완료][/]")
             
             # 2. 백그라운드 서비스 종료
-            progress.update(task, description="[2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...")
+            status.update("[bold green][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/]")
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
-            progress.advance(task)
+            time.sleep(0.5)
+            config.console.print("[2/4] 백그라운드 서비스(텔레그램/감시) 종료 [bold green][완료][/]")
             
             # 3. DB 큐 종료
-            progress.update(task, description="[3/4] DB 작업 큐 처리 및 종료 중...")
+            status.update("[bold green][3/4] DB 작업 큐 처리 및 종료 중...[/]")
             db_queue.shutdown()
-            progress.advance(task)
+            time.sleep(0.5)
+            config.console.print("[3/4] DB 작업 큐 처리 및 종료 [bold green][완료][/]")
             
             # 4. DB 최적화 (VACUUM)
-            progress.update(task, description="[4/4] 데이터베이스 최적화(VACUUM) 수행 중...")
+            status.update("[bold green][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/]")
             try:
-                db_manager.db.run_vacuum()
+                # [수정] DB Proxy가 종료되었으므로 원본 DB 객체에 직접 접근하여 실행 (타임아웃 방지)
+                real_db = db_manager.db
+                if hasattr(real_db, '_real_db'):
+                    real_db = real_db._real_db
+                real_db.run_vacuum()
             except Exception as e:
                 config.console.print(f"[red]VACUUM 실패: {e}[/red]")
-            progress.advance(task)
+            config.console.print("[4/4] 데이터베이스 최적화(VACUUM) 수행 [bold green][완료][/]")
 
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
         os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)
