@@ -216,6 +216,7 @@ class ConclusionMonitor:
                 # 초기화가 안 되었다면 initial=True로 호출하여 알림 없이 상태만 동기화
                 is_rate_limited, has_error = self._check_conclusions(initial=is_initial_run)
                 
+                if is_initial_run: logger.debug(f"[ORDER_DEBUG] 체결 모니터 초기화 실행 (결과: RateLimit={is_rate_limited}, Error={has_error})")
                 # 에러 없이 수행되었다면 초기화 완료 처리
                 if is_initial_run and not has_error:
                     self.initialized = True
@@ -339,6 +340,7 @@ class ConclusionMonitor:
                             
                             # AutoTrader 상태 업데이트 (싱글톤 인스턴스 접근)
                             if code_chk and odno:
+                                if new_status == OrderStatus.FILLED: logger.debug(f"[ORDER_DEBUG] API 체결 확인: {code_chk} (No.{odno})")
                                 AutoTrader().update_order_status(code_chk, odno, new_status)
                             
                             tot_ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
@@ -347,6 +349,7 @@ class ConclusionMonitor:
                             order_key = f"{cano}-{odno}"
                             prev_qty = self.order_status.get(order_key, 0)
                             
+                            if tot_ccld_qty > prev_qty: logger.debug(f"[ORDER_DEBUG] 신규 체결 감지: {odno} (기존:{prev_qty} -> 신규:{tot_ccld_qty}) Initial={initial}")
                             if tot_ccld_qty > prev_qty:
                                 new_qty = tot_ccld_qty - prev_qty
                                 avg_price = float(item.get('avg_prvs', 0))
@@ -486,6 +489,7 @@ class ConclusionMonitor:
                                     
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] 초기화 중이라 알림 스킵됨: {odno}")
                                 
                                 # 상태 업데이트
                                 with self._lock:
@@ -494,6 +498,7 @@ class ConclusionMonitor:
                                 # DB 저장
                                 if not db_manager.db.check_trade_exists(odno, "체결"):
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
                                     db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score)
@@ -506,6 +511,7 @@ class ConclusionMonitor:
                                     
                                     db_manager.db.update_trade(odno, **update_params)
                                 else:
+                                    logger.debug(f"[ORDER_DEBUG] DB 저장 스킵 (이미 존재): {odno}")
                                     logger.debug(f"[AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})")
                 except Exception as e:
                     logger.error(f"계좌({cano}) 체결 확인 중 오류: {e}")
@@ -568,6 +574,7 @@ class ConclusionMonitor:
                                 reason = "잔고 0 확인 (API 누락 보정)"
                         
                         if is_filled:
+                            logger.debug(f"[ORDER_DEBUG] 모의투자 잔고 기반 체결 감지: {code} (No.{odno})")
                             self._handle_simulation_fill(trader, trade, odno, code, qty, reason)
                             
         except Exception as e:
@@ -578,13 +585,11 @@ class ConclusionMonitor:
         name = trade.get('name', code)
         price = float(trade.get('price', 0))
         
-        # 1. 상태 업데이트 (메모리)
-        trader.update_order_status(code, odno, OrderStatus.FILLED)
-        
-        # 2. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
+        # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
         # db_manager.db.update_trade(odno, order_status="체결(추정)")
         
-        # 3. 체결 히스토리 생성 (중복 방지)
+        # 2. 체결 히스토리 생성 (중복 방지)
+        success_db = False
         if not db_manager.db.check_trade_exists(odno, "체결"):
             db_manager.db.insert_trade(
                 trade['type'], code, name, qty, price, odno, 
@@ -596,8 +601,9 @@ class ConclusionMonitor:
                 profit_amt=trade.get('profit_amt', 0),
                 profit_rate=trade.get('profit_rate', 0.0)
             )
+            success_db = True
             
-            # 4. 알림 발송 (상세 정보 포함)
+            # 3. 알림 발송 (상세 정보 포함)
             try:
                 type_str = trade.get('type', '')
                 type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
@@ -645,6 +651,14 @@ class ConclusionMonitor:
                 logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
             except Exception as e:
                 logger.error(f"알림 전송 실패: {e}")
+        else:
+            logger.debug(f"[ORDER_DEBUG] 모의투자 체결 DB 저장 스킵 (이미 존재): {odno}")
+            success_db = True # 이미 존재하면 성공으로 간주
+
+        # 4. 상태 업데이트 (메모리) - DB 저장 성공 시에만 수행하여 재시도 보장
+        if success_db:
+            logger.debug(f"[ORDER_DEBUG] 메모리 상태 업데이트(FILLED): {odno}")
+            trader.update_order_status(code, odno, OrderStatus.FILLED)
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
