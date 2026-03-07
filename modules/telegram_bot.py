@@ -567,28 +567,27 @@ class TelegramCommander:
                 
                 msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
                 
-                # KOSPI/KOSDAQ의 경우 추세 정보 추가
-                if name in ["KOSPI", "KOSDAQ", "KOSPI200"]:
-                    # 시장 국면 판단 로직 적용 (analysis.get_market_regime와 동일 로직)
-                    ma_series = df['close'].ewm(span=regime_ma_period, adjust=False).mean()
-                    ma_val = ma_series.iloc[-1]
+                # 시장 국면 판단 로직 적용 (모든 지수)
+                ma_series = df['close'].ewm(span=regime_ma_period, adjust=False).mean()
+                ma_val = ma_series.iloc[-1]
+                
+                slope = 0
+                if len(ma_series) >= 5:
+                    slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
+                
+                ind = indicators.calculate_indicators(df)
+                adx = ind['adx']
+                adx_val = adx if adx is not None else 0
+                adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
+                
+                if current > ma_val and slope > 0 and adx_val >= adx_threshold:
+                    trend = "📈" # 강세장
+                elif current < ma_val:
+                    trend = "📉" # 약세장
+                else:
+                    trend = "📊" # 횡보장
                     
-                    slope = 0
-                    if len(ma_series) >= 5:
-                        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-                    
-                    ind = indicators.calculate_indicators(df)
-                    adx = ind['adx']
-                    adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-                    
-                    if current > ma_val and slope > 0 and adx >= adx_threshold:
-                        trend = "↗️" # 강세장
-                    elif current < ma_val:
-                        trend = "↘️" # 약세장
-                    else:
-                        trend = "➡️" # 횡보장
-                        
-                    msg += f" {trend}"
+                msg += f" {trend}"
                     
             except Exception as e:
                 msg += f"\n• {name}: 오류"
