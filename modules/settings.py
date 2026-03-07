@@ -74,8 +74,8 @@ def view_system_config():
 
     # 1. 시스템 트레이딩 일반
     table.add_row("[bold]1. 트레이딩 일반[/]", "", "")
-    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0915')}")
-    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
+    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0920')}")
+    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1510')}")
     table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
     
     table.add_section()
@@ -97,13 +97,13 @@ def view_system_config():
     table.add_section()
     
     table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
-    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100)}")
-    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)}")
+    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
+    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
     
     table.add_section()
     
     table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
-    table.add_row("시장 필터링 MA (일)\n[dim]지수 추세 판단용 이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 20)}")
+    table.add_row("시장 필터링 MA (일)\n[dim]지수 추세 판단용 이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
     table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
     table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
@@ -518,9 +518,9 @@ def modify_system_trading_general():
     def get_items():
         items = [
             {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
             {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1515"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
             {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
              "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
 
@@ -550,14 +550,14 @@ def modify_system_trading_general():
             {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
             {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
+             "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
             {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
              
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
             {"desc": "시장 필터링 MA (일)", "help": "지수 추세 판단용 이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
-             "get": lambda: getattr(config, 'MARKET_FILTER_MA', 20), "set": lambda v: setattr(config, 'MARKET_FILTER_MA', v)},
+             "get": lambda: getattr(config, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config, 'MARKET_FILTER_MA', v)},
             {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "Risk",
              "get": lambda: getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
             {"desc": "일일 손실 제한 (%)", "help": "자산 보호를 위한 비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk",
@@ -612,18 +612,18 @@ def reset_to_default():
     config.SYSTEM_TRADING_INTERVAL = 180
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
     config.USE_MARKET_FILTER = True
-    config.MARKET_FILTER_MA = 20
+    config.MARKET_FILTER_MA = 50
     config.CONCLUSION_CHECK_INTERVAL = 5
     config.CONCLUSION_CHECK_IDLE_INTERVAL = 300
-    config.CONCLUSION_CHECK_ACTIVE_DURATION = 100
+    config.CONCLUSION_CHECK_ACTIVE_DURATION = 60
     config.ENABLE_TELEGRAM = True
     config.TELEGRAM_INSTANCE_NAME = "HTS"
     config.TELEGRAM_POLLING_TIMEOUT = 10
     config.SCREEN_DEBUG_LEVEL = "OFF"
     config.FILE_DEBUG_LEVEL = "WARNING"
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
-    config.SYSTEM_TRADING_START_TIME = "0915"
-    config.SYSTEM_TRADING_END_TIME = "1515"
+    config.SYSTEM_TRADING_START_TIME = "0920"
+    config.SYSTEM_TRADING_END_TIME = "1510"
     config.SYSTEM_RISK_PER_TRADE = 5.0
     config.USE_VOLATILITY_TARGETING = True
     config.TARGET_VOLATILITY = 0.30

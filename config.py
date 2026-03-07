@@ -24,7 +24,7 @@ SCREEN_DEBUG_LEVEL = "OFF"
 # ==========================================================
 # [설정] 파일 로그 레벨 설정 (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 # ==========================================================
-FILE_DEBUG_LEVEL = "DEBUG"
+FILE_DEBUG_LEVEL = "WARNING"
 
 # ==========================================================
 # [설정] 텔레그램 설정 (Telegram Configuration)
@@ -155,10 +155,10 @@ VOLATILITY_SCALING_MIN = 0.3       # 최소 축소 배수 (0.3배) - 변동성�
 # 1. 대형주/ETF (유동성 풍부): 0.001 ~ 0.002 (0.1% ~ 0.2%)
 # 2. 중소형주/코스닥 (일반): 0.003 ~ 0.005 (0.3% ~ 0.5%) - *권장*
 # 3. 급등주/변동성 장세: 0.005 ~ 0.010 (0.5% ~ 1.0%) - 체결 최우선
-SLIPPAGE_RATE = 0.002
+SLIPPAGE_RATE = 0.003
 
-SYSTEM_TRADING_START_TIME = "0915" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
-SYSTEM_TRADING_END_TIME = "1515"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
+SYSTEM_TRADING_START_TIME = "0920" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
+SYSTEM_TRADING_END_TIME = "1510"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
 # [추가] 체결 감시 모니터링 주기 (초)
 # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
@@ -169,11 +169,11 @@ CONCLUSION_CHECK_INTERVAL = 5
 CONCLUSION_CHECK_IDLE_INTERVAL = 300
 
 # 3. 집중 감시 유지 시간: 주문 후 짧은 주기로 확인할 시간 (기본값: 100초)
-CONCLUSION_CHECK_ACTIVE_DURATION = 100
+CONCLUSION_CHECK_ACTIVE_DURATION = 60
 
 # [추가] 미체결 주문 자동 취소 대기 시간 (초)
 # 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 600초 = 10분)
-UNFILLED_ORDER_CANCEL_SECONDS = 600
+UNFILLED_ORDER_CANCEL_SECONDS = 120
 
 # ==========================================================
 # [설정] 종목 분석 및 상태 분류 임계값
@@ -230,7 +230,7 @@ MARKET_REGIME_PARAMS = {
     "BULL_SCORE_ADJ": -1.0,          # 강세장: 기준 완화 (예: 8.0 -> 7.0)
     "BEAR_SCORE_ADJ": 1.0,           # 약세장: 기준 강화 (예: 8.0 -> 9.0)
     "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
-    "REGIME_MA_PERIOD": 50,          # 추세 판단용 이동평균선 (일) 
+    "REGIME_MA_PERIOD": 20,          # 추세 판단용 이동평균선 (일) 
                                      #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                      #   60일 이상 설정 시 yfi아nance 데이터로 자동 대체됩니다.
     "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
