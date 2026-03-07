@@ -74,28 +74,39 @@ def view_system_config():
 
     # 1. 시스템 트레이딩 일반
     table.add_row("[bold]1. 트레이딩 일반[/]", "", "")
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
-    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)}")
-    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
-    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
-    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
-    table.add_row("시장 필터링 MA (일)\n[dim]지수 추세 판단용 이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 20)}")
-    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
     table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0915')}")
     table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1515')}")
-    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
+    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
+    
+    table.add_section()
+    
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
+    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)}")
     
     slippage = getattr(config, 'SLIPPAGE_RATE', 0.003)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
     table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
+    
+    table.add_section()
+    
     table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
     if getattr(config, 'USE_VOLATILITY_TARGETING', True):
         table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
         table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)} ~ {getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)}")
     
+    table.add_section()
+    
     table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
     table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100)}")
     table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 600)}")
+    
+    table.add_section()
+    
+    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
+    table.add_row("시장 필터링 MA (일)\n[dim]지수 추세 판단용 이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 20)}")
+    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
+    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
+    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
     
     table.add_section()
 
@@ -506,20 +517,21 @@ def _validate_time_format(val):
 def modify_system_trading_general():
     def get_items():
         items = [
-            {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "General",
+            {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
+            {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1515"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
+            {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
+
+            {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
-            {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "General",
+            {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
-            {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "General",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
-            {"desc": "일일 손실 제한 (%)", "help": "자산 보호를 위한 비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "General",
-             "get": lambda: getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
-            {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "General",
-             "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
-            
-            {"desc": "슬리피지 비율", "help": "주문가 보정 비율 (0.003=0.3%, 0: 미사용)", "name": "SLIPPAGE_RATE", "type": "float", "section": "General",
+            {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
              "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.003), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
+             
             {"desc": "변동성 타겟팅 사용", "help": "ATR 기반 비중 조절 사용 여부", "name": "USE_VOLATILITY_TARGETING", "type": "bool", "choices": ["y", "n"], "section": "Volatility",
              "get": lambda: getattr(config, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config, 'USE_VOLATILITY_TARGETING', v)}
         ]
@@ -535,26 +547,23 @@ def modify_system_trading_general():
             ])
             
         items.extend([
-            {"desc": "체결 집중 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Monitoring",
+            {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
-            {"desc": "체결 대기 감시 주기(초)", "help": "평상시 체결 확인 간격 (0:미사용)", "name": "CONCLUSION_CHECK_IDLE_INTERVAL", "type": "int", "section": "Monitoring",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
-            {"desc": "집중 감시 유지 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Monitoring",
+            {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
-            {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Monitoring",
+            {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
              
-            {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Filter",
+            {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
-            {"desc": "시장 필터링 MA (일)", "help": "지수 추세 판단용 이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Filter",
+            {"desc": "시장 필터링 MA (일)", "help": "지수 추세 판단용 이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
              "get": lambda: getattr(config, 'MARKET_FILTER_MA', 20), "set": lambda v: setattr(config, 'MARKET_FILTER_MA', v)},
-             
-            {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "System",
+            {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "Risk",
              "get": lambda: getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
-            {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "System",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
-            {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "System",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1515"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)}
+            {"desc": "일일 손실 제한 (%)", "help": "자산 보호를 위한 비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk",
+             "get": lambda: getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
+            {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "Risk",
+             "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
         ])
         return items
 
