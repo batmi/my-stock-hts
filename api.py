@@ -25,9 +25,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
+def _is_screen_output_allowed():
+    """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단)"""
+    return threading.current_thread().name != "TelegramBot"
+
 def clear_yfinance_cache():
     """yfinance 캐시 파일(.sqlite)을 강제로 삭제하여 DB Lock 문제를 해결합니다."""
-    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim cyan][DEBUG] yfinance 캐시 정리 시도...[/dim cyan]")
     
     possible_paths = [
@@ -48,7 +52,7 @@ def clear_yfinance_cache():
                         except Exception: pass
             except Exception: pass
     
-    if config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
+    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
         config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
 
 def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column'):
@@ -152,7 +156,7 @@ def send_telegram_message(message):
     data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     
     # [추가] 화면 디버그 로그 (요청)
-    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] REQ (TELEGRAM) | POST {url}[/dim cyan]")
         if config.SCREEN_DEBUG_LEVEL == "DEBUG":
             config.console.print(f"[dim cyan]  > Message: {message.replace(chr(10), ' ')}[/dim cyan]")
@@ -166,7 +170,7 @@ def send_telegram_message(message):
             res = requests.post(url, data=data, timeout=current_timeout)
             
             # [추가] 화면 디버그 로그 (응답)
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} ({attempt+1}/{max_retries})[/dim magenta]")
                 if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
                      config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
@@ -178,7 +182,7 @@ def send_telegram_message(message):
                 logger.error(f"[Telegram] 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
         except Exception as e:
             # [추가] 화면 디버그 로그 (예외)
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
 
             logger.error(f"[Telegram] 전송 중 오류 발생({attempt+1}/{max_retries}): {str(e)}")
@@ -243,7 +247,7 @@ class ThrottledSession(requests.Session):
             
         current_tps = self._get_current_tps()
 
-        if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+        if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
             config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
             if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                 if kwargs.get('params'): config.console.print(f"[dim cyan]  > Params: {kwargs['params']}[/dim cyan]")
@@ -263,7 +267,7 @@ class ThrottledSession(requests.Session):
                 
                 response = super().request(method, url, *args, **kwargs)
 
-                if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+                if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
                     rt_cd = "-"
                     msg_cd = "-"
                     desc = "정상"
@@ -355,7 +359,7 @@ class ThrottledSession(requests.Session):
                     msg = f"⚠️ API 요청 실패. {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
                     logger.warning(msg)
                     
-                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
                     
                     # [추가] 시스템 트레이딩 로그 기록
@@ -402,7 +406,7 @@ def get_access_token(force_refresh=False):
 def check_and_refresh_token_if_expired():
     """토큰 만료 플래그 확인 및 갱신 (메인 스레드/로그 뷰어 등에서 주기적 호출)"""
     if context.TOKEN_EXPIRED:
-        if config.SCREEN_DEBUG_LEVEL != "OFF":
+        if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
             config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
         
         success = True
@@ -425,13 +429,13 @@ def check_and_refresh_token_if_expired():
             
             if success:
                 context.TOKEN_EXPIRED = False
-                if config.SCREEN_DEBUG_LEVEL != "OFF":
+                if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
             else:
                 raise Exception(fail_reason)
 
         except Exception as e:
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[bold red]토큰 갱신 실패: {e}[/bold red]")
             
             # [추가] 텔레그램 알림 전송
@@ -687,7 +691,7 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 }
                 
                 # [추가] 디버그 모드일 때 헤더 정보 출력 (민감정보 마스킹)
-                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     masked_headers = headers.copy()
                     if 'authorization' in masked_headers:
                         masked_headers['authorization'] = masked_headers['authorization'][:20] + "..."
@@ -1609,7 +1613,7 @@ def send_telegram_photo(file_path, caption=None):
                 logger.error(f"[Telegram] 사진 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
                 
         except Exception as e:
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][TRACE] ERR (TELEGRAM PHOTO) {str(e)}[/dim red]")
             logger.error(f"[Telegram] 사진 전송 중 오류({attempt+1}/{max_retries}): {str(e)}")
         

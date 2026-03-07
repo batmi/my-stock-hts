@@ -1616,7 +1616,8 @@ class AutoTrader:
                 self.file_logger.info(log_msg)
             except Exception as e:
                 # 파일 쓰기 실패 시 콘솔에만 출력하고 중단하지 않음
-                console.print(f"[dim red]로그 파일 기록 실패: {e}[/dim red]")
+                if threading.current_thread().name != "TelegramBot":
+                    console.print(f"[dim red]로그 파일 기록 실패: {e}[/dim red]")
 
     def get_recent_logs(self):
         """최근 로그 반환 (텔레그램용)"""

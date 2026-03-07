@@ -39,6 +39,9 @@ class DBManager:
             self.local.conn.row_factory = sqlite3.Row
         return self.local.conn
 
+    def _is_screen_output_allowed(self):
+        return threading.current_thread().name != "TelegramBot"
+
     def _init_db(self):
         """DB 초기화 (테이블 생성 등) - 메인 스레드에서 한 번만 실행"""
         with self.lock:
@@ -110,7 +113,7 @@ class DBManager:
                     if col not in columns:
                         try:
                             cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {dtype}")
-                            if config.SCREEN_DEBUG_LEVEL != "OFF":
+                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                                 config.console.print(f"[dim green][DB] 컬럼 추가됨: {col}[/dim green]")
                         except Exception as e:
                             config.console.print(f"[red][DB] 컬럼 추가 실패({col}): {e}[/red]")
@@ -121,7 +124,7 @@ class DBManager:
                 if "memo" not in strat_columns:
                     try:
                         cursor.execute("ALTER TABLE stock_strategies ADD COLUMN memo TEXT")
-                        if config.SCREEN_DEBUG_LEVEL != "OFF":
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] stock_strategies 테이블에 memo 컬럼이 추가되었습니다.[/dim green]")
                     except Exception as e:
                         config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(memo): {e}[/red]")
@@ -129,7 +132,7 @@ class DBManager:
                 if "weights" not in strat_columns:
                     try:
                         cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
-                        if config.SCREEN_DEBUG_LEVEL != "OFF":
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] stock_strategies 테이블에 weights 컬럼이 추가되었습니다.[/dim green]")
                     except Exception as e:
                         config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(weights): {e}[/red]")
@@ -137,7 +140,7 @@ class DBManager:
                 conn.commit()
                 conn.close()
             except Exception as e:
-                if config.SCREEN_DEBUG_LEVEL != "OFF":
+                if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Init Error: {e}[/red]")
 
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
@@ -146,7 +149,7 @@ class DBManager:
         with self.lock:
             for attempt in range(5):
                 try:
-                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DB][{threading.get_ident()}] insert_trade 요청 ({attempt+1}/5): {type_str} {name}({code})[/dim cyan]")
 
                     conn = self._get_conn()
@@ -168,7 +171,7 @@ class DBManager:
                     
                     conn.commit()
                     
-                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim green][DB][{threading.get_ident()}] 거래 내역 저장 완료 (ODNO: {odno})[/dim green]")
                     break
                     
@@ -176,11 +179,11 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
                     break
 
@@ -227,7 +230,7 @@ class DBManager:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except Exception as e:
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Select Error: {e}[/red]")
             return []
     
@@ -257,11 +260,11 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Update Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Update Error: {e}[/red]")
                     break
     
@@ -273,7 +276,7 @@ class DBManager:
             cursor.execute("SELECT count(*) FROM trades WHERE odno = ? AND order_status = ?", (odno, order_status))
             cnt = cursor.fetchone()[0]
             
-            if config.SCREEN_DEBUG_LEVEL == "DEBUG" and cnt > 0:
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and cnt > 0:
                 config.console.print(f"[dim yellow][DB] check_trade_exists: {odno} ({order_status}) -> 존재함[/dim yellow]")
             return cnt > 0
         except: return False
@@ -313,7 +316,7 @@ class DBManager:
         with self.lock:
             for attempt in range(5):
                 try:
-                    if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim cyan][DB][{threading.get_ident()}] update_highest_price 요청 ({attempt+1}/5): {code} {price}[/dim cyan]")
 
                     conn = self._get_conn()
@@ -337,13 +340,13 @@ class DBManager:
                         time.sleep(0.5)
                         continue
                     if "locked" in str(e):
-                        if config.SCREEN_DEBUG_LEVEL != "OFF":
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print(f"[yellow][DB] Locked during update_highest_price ({attempt+1}/5). Retrying...[/yellow]")
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
                     break
                 except Exception as e:
-                    if config.SCREEN_DEBUG_LEVEL != "OFF":
+                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
                     break
 
@@ -436,10 +439,10 @@ class DBManager:
             deleted_count = cursor.rowcount
             conn.commit()
             
-            if deleted_count > 0 and config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and deleted_count > 0 and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[dim yellow][DB] 오래된 거래 내역 {deleted_count}건을 정리했습니다. ({days_to_keep}일 이전)[/dim yellow]")
         except Exception as e:
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Cleanup Error: {e}[/red]")
 
     def run_vacuum(self):
@@ -448,7 +451,7 @@ class DBManager:
             # 별도 연결 생성하여 실행 (스레드 로컬 연결 간섭 방지)
             # [수정] VACUUM은 트랜잭션 내에서 실행할 수 없으므로 isolation_level=None (Auto-commit) 설정
             conn = sqlite3.connect(self.db_path, timeout=60, isolation_level=None)
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print("[dim cyan][DB] 데이터베이스 정리 및 최적화(VACUUM) 수행 중...[/dim cyan]")
             
             # 1. 오래된 데이터 삭제 (설정된 기간 기준)
@@ -460,10 +463,10 @@ class DBManager:
             conn.execute("VACUUM;")
             conn.close()
             
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print("[dim green][DB] 데이터베이스 최적화 완료[/dim green]")
         except Exception as e:
-            if config.SCREEN_DEBUG_LEVEL != "OFF":
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] VACUUM Error: {e}[/red]")
 
 # 전역 인스턴스

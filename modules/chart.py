@@ -12,6 +12,7 @@ import config
 import api
 import indicators
 from datetime import datetime
+from contextlib import nullcontext
 
 def setup_korean_font():
     current_os = platform.system()
@@ -22,14 +23,16 @@ def setup_korean_font():
     except: pass
     plt.rcParams['axes.unicode_minus'] = False
 
-def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
+def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False):
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
-    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+    if not quiet and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 차트 생성 요청: {name} ({code}) | Overseas: {is_overseas}[/dim cyan]")
 
-    with config.console.status(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]"):
+    status_ctx = config.console.status(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]") if not quiet else nullcontext()
+
+    with status_ctx:
         df = api.get_chart_data(code, is_overseas)
         
         if df is None or df.empty:
@@ -187,7 +190,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300):
         file_path = os.path.join(config.CHART_DIR, file_name)
         plt.savefig(file_path, dpi=dpi); plt.close()
         
-    config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
+    if not quiet:
+        config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
     if open_file:
         try:
             if platform.system() == "Windows": os.startfile(file_path)
