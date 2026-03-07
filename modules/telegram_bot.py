@@ -171,7 +171,7 @@ class TelegramCommander:
             "• /rules [종목] : 개별 종목 트레이딩 룰 조회\n"
             "• /restrict : 트레이딩 제한 종목 리스트 조회\n"
             "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/n)\n"
-            "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
+            "• /history [기간] : 트레이딩 거래 내역 조회 (d/w/m/n)\n"
             "• /log : 최근 시스템 트레이딩 로그 조회\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
@@ -361,11 +361,14 @@ class TelegramCommander:
         return msg
 
     def _cmd_history(self, args):
-        count = 10
-        if args and args[0].isdigit():
-            count = int(args[0])
-            if count > 50: count = 50
-        return self._get_trade_history(count)
+        days = 0 # 기본값: 당일 조회
+        if args:
+            arg = args[0].lower()
+            if arg in ["d", "day", "daily", "일간"]: days = 0
+            elif arg in ["w", "week", "weekly", "주간"]: days = 7
+            elif arg in ["m", "month", "monthly", "월간"]: days = 30
+            elif arg.isdigit(): days = int(arg)
+        return self._get_trade_history(days)
 
     def _cmd_log(self, args):
         return self.trader.get_recent_logs()
@@ -987,14 +990,38 @@ class TelegramCommander:
         
         return msg
 
-    def _get_trade_history(self, limit=10):
-        """최근 체결 내역 조회"""
-        # [수정] 체결 상태인 내역만 조회하도록 필터링 추가
-        trades = db_manager.db.get_trades(limit=limit, order_status="체결")
-        if not trades:
-            return "📭 체결된 거래 내역이 없습니다."
+    def _get_trade_history(self, days=None):
+        """거래 내역 조회 (기간별)"""
+        now = datetime.now()
+        end_date = now.strftime("%Y-%m-%d")
+        start_date = None
+        period_str = "전체"
         
-        msg = f"📜 [최근 체결 내역 ({len(trades)}건)]"
+        if days is not None:
+            start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+            if days == 0: period_str = "일간"
+            elif days == 7: period_str = "주간"
+            elif days == 30: period_str = "월간"
+            else: period_str = f"최근 {days}일"
+
+        # [수정] 전체 내역 조회 (체결 필터 제거)
+        trades = db_manager.db.get_trades(limit=None, start_date=start_date)
+        if not trades:
+            return "📭 거래 내역이 없습니다."
+        
+        # 기간 표시 문자열 생성
+        if start_date:
+            period_msg = f"{start_date} ~ {end_date}"
+        else:
+            # 전체 조회인 경우 실제 데이터의 기간 표시
+            if trades:
+                min_date = trades[-1]['time'][:10]
+                max_date = trades[0]['time'][:10]
+                period_msg = f"{min_date} ~ {max_date} (전체)"
+            else:
+                period_msg = "전체"
+
+        msg = f"📜 [거래 내역 ({period_str}) - {len(trades)}건]\n기간: {period_msg}"
         
         # [추가] 제한 종목 및 개별 룰 로드
         restricted_stocks = auto_trade.load_restricted_stocks()
@@ -1002,7 +1029,7 @@ class TelegramCommander:
         rules_map = {r['code']: True for r in custom_rules}
         
         for t in trades:
-            type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("수동", "")
+            type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("(수동)", "").replace("수동", "")
             name = t['name']
             code = t['code']
             qty = t['qty']
