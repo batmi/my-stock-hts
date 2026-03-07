@@ -954,7 +954,7 @@ class TelegramCommander:
         msg += f"• OBV: MA {ind.get('OBV_MA_PERIOD')}\n"
 
         # 기타
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_ma = getattr(config, 'MARKET_FILTER_MA', 20)

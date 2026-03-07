@@ -16,7 +16,7 @@ def _save_dynamic_config():
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5),
+        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
         "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 5),
         "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
@@ -74,7 +74,7 @@ def view_system_config():
 
     # 1. 시스템 트레이딩 일반
     table.add_row("[bold]1. 트레이딩 일반[/]", "", "")
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)}")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
     table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)}")
     table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
     table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
@@ -507,7 +507,7 @@ def modify_system_trading_general():
     def get_items():
         items = [
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "General",
-             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
+             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "General",
              "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
@@ -526,7 +526,7 @@ def modify_system_trading_general():
         
         if getattr(config, 'USE_VOLATILITY_TARGETING', True):
             items.extend([
-                {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%", "name": "TARGET_VOLATILITY", "type": "float", "section": "Volatility",
+                {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%, 0.3=30%", "name": "TARGET_VOLATILITY", "type": "float", "section": "Volatility",
                  "get": lambda: getattr(config, 'TARGET_VOLATILITY', 0.30), "set": lambda v: setattr(config, 'TARGET_VOLATILITY', v)},
                 {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "Volatility",
                  "get": lambda: getattr(config, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MAX', v)},
@@ -598,7 +598,7 @@ def reset_to_default():
         "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
     })
     
-    config.SYSTEM_INVEST_PER_STOCK = 0.5
+    config.SYSTEM_INVEST_PER_STOCK = 0.2
     config.SYSTEM_MAX_HOLDINGS = 5
     config.SYSTEM_TRADING_INTERVAL = 180
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0

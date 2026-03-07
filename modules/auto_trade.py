@@ -1399,7 +1399,7 @@ class AutoTrader:
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         
         msg += "\n\n⚙️ [적용 전략]"
         msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
@@ -1841,7 +1841,7 @@ class AutoTrader:
         table.add_row("", f"익절 (+{tp}%) / 손절 ({sl}%) / 트레일링스탑 (+{ts_act}%/-{ts_call}%)")
 
         # 투자 설정
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         if invest_ratio <= 0: invest_ratio = 0.1
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
         table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목)")
@@ -3032,7 +3032,7 @@ class AutoTrader:
                 holding_codes.add(h['pdno'])
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.5)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         if invest_ratio <= 0: invest_ratio = 0.1 # 0 이하일 경우 기본값 10%
 
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
