@@ -172,7 +172,7 @@ class TelegramCommander:
             "• /restrict : 트레이딩 제한 종목 리스트 조회\n"
             "• /profit [기간] : 기간별 실현 손익 조회 (d/w/m/n)\n"
             "• /history [개수] : 체결 내역 조회 (기본 10건)\n"
-            "• /log [줄수] : 최근 시스템 로그 조회 (기본 10줄)\n"
+            "• /log : 최근 시스템 트레이딩 로그 조회\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
         )
@@ -368,11 +368,7 @@ class TelegramCommander:
         return self._get_trade_history(count)
 
     def _cmd_log(self, args):
-        count = 10
-        if args and args[0].isdigit():
-            count = int(args[0])
-            if count > 20: count = 20
-        return self.trader.get_recent_logs(count)
+        return self.trader.get_recent_logs()
 
     def _cmd_balance(self, args):
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
@@ -792,11 +788,11 @@ class TelegramCommander:
             msg += f"\n[주요 지표]\n"
             msg += f"• EMA: {ema_state}\n"
             msg += f"• SAR: {sar_state}\n"
+            msg += f"• MACD: {macd_state}\n"
+            msg += f"• OBV: {obv_state}\n"
             msg += f"• RSI: {rsi_str}\n"
             msg += f"• ADX: {adx_str}\n"
-            msg += f"• CCI: {cci_str}\n"
-            msg += f"• OBV: {obv_state}\n"
-            msg += f"• MACD: {macd_state}"
+            msg += f"• CCI: {cci_str}"
             
             return msg
         except Exception as e:

@@ -1618,27 +1618,26 @@ class AutoTrader:
                 # 파일 쓰기 실패 시 콘솔에만 출력하고 중단하지 않음
                 console.print(f"[dim red]로그 파일 기록 실패: {e}[/dim red]")
 
-    def get_recent_logs(self, count=10):
+    def get_recent_logs(self):
         """최근 로그 반환 (텔레그램용)"""
         if not self.logs:
             return "📭 로그가 없습니다."
         
-        candidates = self.logs[-count:]
         final_logs = []
         current_len = 0
         max_len = 3800 # 텔레그램 제한(4096자) 고려하여 여유 있게 설정
+        
+        header = "📜 [최근 시스템 로그]\n"
+        current_len += len(header)
 
-        for log in reversed(candidates):
+        for log in reversed(self.logs):
             if current_len + len(log) + 1 > max_len:
                 break
             final_logs.append(log)
             current_len += len(log) + 1
         
         final_logs.reverse()
-        msg = "📜 [최근 시스템 로그]\n"
-        if len(final_logs) < len(candidates):
-            msg += f"(길이 제한으로 최근 {len(final_logs)}줄만 표시)\n"
-        return msg + "\n".join(final_logs)
+        return header + "\n".join(final_logs)
 
     def print_status(self):
         if not self.is_running:
