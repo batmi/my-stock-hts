@@ -144,7 +144,7 @@ def calculate_indicators(df):
         indicators['obv'] = obv_series.iloc[-1]
         obv_period = config.INDICATOR_PARAMS["OBV_MA_PERIOD"]
         if len(df) >= obv_period:
-            obv_ma = obv_series.rolling(window=obv_period).mean().iloc[-1]
+            obv_ma = obv_series.ewm(span=obv_period, adjust=False).mean().iloc[-1]
             if indicators['obv'] > obv_ma: indicators['obv_trend'] = True
 
     if len(df) >= 20:

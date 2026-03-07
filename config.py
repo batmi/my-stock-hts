@@ -130,7 +130,7 @@ SYSTEM_INVEST_PER_STOCK = 0.2
 SYSTEM_MAX_HOLDINGS = 5
 
 USE_MARKET_FILTER = True       # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
-MARKET_FILTER_MA = 50          # 시장 필터링 기준 이동평균선 (일)
+MARKET_FILTER_MA = 50          # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
 SYSTEM_MAX_CONSECUTIVE_ERRORS = 5  # [안전장치] 연속 에러 5회 발생 시 자동 중단
@@ -230,9 +230,9 @@ MARKET_REGIME_PARAMS = {
     "BULL_SCORE_ADJ": -1.0,          # 강세장: 기준 완화 (예: 8.0 -> 7.0)
     "BEAR_SCORE_ADJ": 1.0,           # 약세장: 기준 강화 (예: 8.0 -> 9.0)
     "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
-    "REGIME_MA_PERIOD": 20,          # 추세 판단용 이동평균선 (일) 
+    "REGIME_MA_PERIOD": 20,          # 추세 판단용 지수이동평균선 (EMA, 일) 
                                      #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
-                                     #   60일 이상 설정 시 yfi아nance 데이터로 자동 대체됩니다.
+                                     #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
     "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
 }
 
@@ -324,8 +324,8 @@ INDICATOR_PARAMS = {
 
     # [OBV] On-Balance Volume (거래량 추세)
     # - 거래량은 주가에 선행한다는 전제로, 주가 상승일 거래량은 더하고 하락일은 뺍니다.
-    # - OBV 값이 이 이동평균선 위에 있으면 매집(상승) 추세로 봅니다.
-    "OBV_MA_PERIOD": 5,            # OBV의 추세 방향을 판단할 이동평균 기간 (짧을수록 민감)
+    # - OBV 값이 이 지수이동평균선(EMA) 위에 있으면 매집(상승) 추세로 봅니다.
+    "OBV_MA_PERIOD": 5,            # OBV의 추세 방향을 판단할 지수이동평균 기간 (짧을수록 민감)
 
     # [RSI] Relative Strength Index (상대 강도 지수)
     # - 주가의 상승폭과 하락폭을 비교해 과매수/과매도를 판단합니다.

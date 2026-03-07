@@ -43,7 +43,7 @@ def show_market_indices():
         pass
 
     indices_map = {
-        "코스피200": "^KS200", "코스피": "^KS11", "코스닥": "^KQ11",
+        "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11",
         "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
         "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
         "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
@@ -579,7 +579,7 @@ def show_market_indices():
                                 adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
                                 
                                 if not df_daily.empty and len(df_daily) >= ma_period:
-                                    ma_series = df_daily['close'].rolling(window=ma_period).mean()
+                                    ma_series = df_daily['close'].ewm(span=ma_period, adjust=False).mean()
                                     ma_val = ma_series.iloc[-1]
                                     
                                     slope = 0

@@ -184,10 +184,10 @@ def get_market_regime(market_type="KOSPI"):
         # 지표 계산
         adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
         
-        ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+        ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
         
         # MA 기울기 (최근 5일)
-        ma_series = df['close'].rolling(window=ma_period).mean()
+        ma_series = df['close'].ewm(span=ma_period, adjust=False).mean()
         slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
         
         # ADX 계산

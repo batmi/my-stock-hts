@@ -28,8 +28,8 @@ def show_help():
     # [수정] 설정값 로드하여 동적 표시
     ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
 
-    table.add_row("시장 지수", f"지수 > {ma_period}일선 & 상승추세 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
-    table.add_row("(주요 글로벌 지수)", f"지수 < {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
+    table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
+    table.add_row("(주요 글로벌 지수)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
     table.add_row("", "그 외 구간", "[white]흰색[/]", "횡보장 (Sideways)")
     table.add_section()
 
@@ -210,8 +210,8 @@ def show_help():
     table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
     table.add_section()
 
-    table.add_row("OBV (거래량)", "OBV > OBV 이동평균", "[red]빨간색[/]", "수급 양호 (상승 추세)")
-    table.add_row("", "OBV ≤ OBV 이동평균", "[blue]파란색[/]", "수급 약세 (하락 추세)")
+    table.add_row("OBV (거래량)", "OBV > OBV EMA", "[red]빨간색[/]", "수급 양호 (상승 추세)")
+    table.add_row("", "OBV ≤ OBV EMA", "[blue]파란색[/]", "수급 약세 (하락 추세)")
     table.add_section()
 
     table.add_row("투자자 동향", "순매수 (> 0)", "[red]빨간색[/]", "매수 우위")
@@ -311,8 +311,8 @@ def show_help():
     
     score_table.add_section()
     adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
-    score_table.add_row(f"적응형 임계값 ({adaptive_status})", f"강세장: 지수 > {ma_p}일선 & 이평선우상향 & ADX≥{adx_th}", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
-    score_table.add_row("", f"약세장: 지수 < {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row(f"적응형 임계값 ({adaptive_status})", f"강세장: 지수 > EMA {ma_p}일선 & 이평선우상향 & ADX≥{adx_th}", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row("", f"약세장: 지수 < EMA {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
     score_table.add_row("", "횡보장: 그 외 구간", "[white]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
     
     if market_status_info:
@@ -327,7 +327,7 @@ def show_help():
     score_table.add_section()
     filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
     ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
-    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
+    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()

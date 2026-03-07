@@ -526,8 +526,8 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
-            ("KOSPI200", "^KS200"),
             ("KOSPI", "^KS11"),
+            ("KOSPI200", "^KS200"),
             ("KOSDAQ", "^KQ11"),
             ("나스닥 선물", "NQ=F"),
             ("나스닥", "^IXIC"),
@@ -548,7 +548,7 @@ class TelegramCommander:
             ("Europe - ESTX 50", "^STOXX50E")
         ]
         
-        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+        regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
         
         for name, code in targets:
             try:
@@ -568,9 +568,26 @@ class TelegramCommander:
                 msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
                 
                 # KOSPI/KOSDAQ의 경우 추세 정보 추가
-                if name in ["KOSPI", "KOSDAQ"]:
-                    ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
-                    trend = "📈" if current >= ma_val else "📉"
+                if name in ["KOSPI", "KOSDAQ", "KOSPI200"]:
+                    # 시장 국면 판단 로직 적용 (analysis.get_market_regime와 동일 로직)
+                    ma_series = df['close'].ewm(span=regime_ma_period, adjust=False).mean()
+                    ma_val = ma_series.iloc[-1]
+                    
+                    slope = 0
+                    if len(ma_series) >= 5:
+                        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
+                    
+                    ind = indicators.calculate_indicators(df)
+                    adx = ind['adx']
+                    adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
+                    
+                    if current > ma_val and slope > 0 and adx >= adx_threshold:
+                        trend = "↗️" # 강세장
+                    elif current < ma_val:
+                        trend = "↘️" # 약세장
+                    else:
+                        trend = "➡️" # 횡보장
+                        
                     msg += f" {trend}"
                     
             except Exception as e:
@@ -774,7 +791,7 @@ class TelegramCommander:
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
             msg += f"\n[주요 지표]\n"
-            msg += f"• 이평선: {ema_state}\n"
+            msg += f"• EMA: {ema_state}\n"
             msg += f"• SAR: {sar_state}\n"
             msg += f"• RSI: {rsi_str}\n"
             msg += f"• ADX: {adx_str}\n"
@@ -927,7 +944,7 @@ class TelegramCommander:
             msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -1.0):+.1f}점\n"
             msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 1.0):+.1f}점\n"
             msg += f"• 횡보장 보정: {regime.get('SIDEWAYS_SCORE_ADJ', 0.0):+.1f}점\n"
-            msg += f"• 기준: {regime.get('REGIME_MA_PERIOD', 60)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
+            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 60)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
             
             # [추가] 현재 시장 국면 정보
             try:
@@ -951,14 +968,14 @@ class TelegramCommander:
         msg += f"• CCI: {ind.get('CCI_WINDOW')} ({ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')})\n"
         msg += f"• ADX: {ind.get('ADX_PERIOD')}\n"
         msg += f"• SAR: {ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}\n"
-        msg += f"• OBV: MA {ind.get('OBV_MA_PERIOD')}\n"
+        msg += f"• OBV: EMA {ind.get('OBV_MA_PERIOD')}\n"
 
         # 기타
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_ma = getattr(config, 'MARKET_FILTER_MA', 20)
-        filter_str = f"ON ({filter_ma}일선)" if use_filter else "OFF"
+        filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.001)
 
         msg += f"\n[기타]\n"

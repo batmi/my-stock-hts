@@ -848,7 +848,7 @@ def run_backtest():
         df['RSI'] = indicators.get_rsi_full_series(df)
         df['CCI'] = indicators.get_cci_full_series(df)
         df['OBV'] = indicators.get_obv_full_series(df)
-        df['OBV_MA'] = df['OBV'].rolling(window=config.INDICATOR_PARAMS["OBV_MA_PERIOD"]).mean()
+        df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
         df['ATR'] = indicators.get_atr_full_series(df) # [추가] ATR 계산
         df['MACD'], df['MACD_Signal'], _ = indicators.get_macd_full_series(df)
 

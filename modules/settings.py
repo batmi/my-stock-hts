@@ -103,7 +103,7 @@ def view_system_config():
     table.add_section()
     
     table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
-    table.add_row("시장 필터링 MA (일)\n[dim]지수 추세 판단용 이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
+    table.add_row("시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
     table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
     table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
@@ -152,7 +152,7 @@ def view_system_config():
     table.add_row("강세장 보정\n[dim]기준 점수 완화값[/dim]", "MARKET_REGIME_PARAMS['BULL_SCORE_ADJ']", f"{regime.get('BULL_SCORE_ADJ')}")
     table.add_row("약세장 보정\n[dim]기준 점수 강화값[/dim]", "MARKET_REGIME_PARAMS['BEAR_SCORE_ADJ']", f"{regime.get('BEAR_SCORE_ADJ')}")
     table.add_row("횡보장 보정\n[dim]기준 점수 유지값[/dim]", "MARKET_REGIME_PARAMS['SIDEWAYS_SCORE_ADJ']", f"{regime.get('SIDEWAYS_SCORE_ADJ')}")
-    table.add_row("추세 판단 MA (일)\n[dim]시장 국면 판단용 이동평균선[/dim]", "MARKET_REGIME_PARAMS['REGIME_MA_PERIOD']", f"{regime.get('REGIME_MA_PERIOD', 20)}")
+    table.add_row("추세 판단 EMA (일)\n[dim]시장 국면 판단용 지수이동평균선[/dim]", "MARKET_REGIME_PARAMS['REGIME_MA_PERIOD']", f"{regime.get('REGIME_MA_PERIOD', 20)}")
     table.add_row("추세 판단 ADX\n[dim]강세장 판단용 ADX 기준[/dim]", "MARKET_REGIME_PARAMS['REGIME_ADX_THRESHOLD']", f"{regime.get('REGIME_ADX_THRESHOLD', 20)}")
 
     table.add_section()
@@ -167,7 +167,7 @@ def view_system_config():
     table.add_row("ADX 기간\n[dim]추세 강도 지표[/dim]", "INDICATOR_PARAMS['ADX_PERIOD']", f"{ind.get('ADX_PERIOD')}")
     table.add_row("CCI (Window/Up/Low)\n[dim]상품채널지수[/dim]", "INDICATOR_PARAMS['CCI_WINDOW', 'CCI_UPPER', 'CCI_LOWER']", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
     table.add_row("MACD (Fast/Slow/Sig)\n[dim]이동평균수렴확산[/dim]", "INDICATOR_PARAMS['MACD_FAST', 'MACD_SLOW', 'MACD_SIGNAL']", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
-    table.add_row("OBV MA 기간\n[dim]거래량 추세 이동평균[/dim]", "INDICATOR_PARAMS['OBV_MA_PERIOD']", f"{ind.get('OBV_MA_PERIOD')}")
+    table.add_row("OBV EMA 기간\n[dim]거래량 추세 지수이동평균[/dim]", "INDICATOR_PARAMS['OBV_MA_PERIOD']", f"{ind.get('OBV_MA_PERIOD')}")
     table.add_row("ATR 기간\n[dim]평균 진폭 (변동성)[/dim]", "INDICATOR_PARAMS['ATR_PERIOD']", f"{ind.get('ATR_PERIOD')}")
 
     table.add_section()
@@ -391,7 +391,7 @@ def modify_indicator_params():
         {"desc": "MACD Signal", "help": "시그널 기간", "name": "MACD_SIGNAL", "type": "int", "section": "MACD",
          "get": lambda: config.INDICATOR_PARAMS["MACD_SIGNAL"], "set": lambda v: config.INDICATOR_PARAMS.update({"MACD_SIGNAL": v})},
         
-        {"desc": "OBV 이동평균 기간", "help": "거래량 추세 판단", "name": "OBV_MA_PERIOD", "type": "int", "section": "OBV",
+        {"desc": "OBV EMA 기간", "help": "거래량 추세 판단 (지수이동평균)", "name": "OBV_MA_PERIOD", "type": "int", "section": "OBV",
          "get": lambda: config.INDICATOR_PARAMS["OBV_MA_PERIOD"], "set": lambda v: config.INDICATOR_PARAMS.update({"OBV_MA_PERIOD": v})},
         
         {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "ATR",
@@ -499,7 +499,7 @@ def modify_market_regime_params():
          "get": lambda: config.MARKET_REGIME_PARAMS["BEAR_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BEAR_SCORE_ADJ": v})},
         {"desc": "횡보장 점수 보정", "help": "횡보장일 때 기준 점수 조정값 (예: 0.0)", "name": "SIDEWAYS_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})},
-        {"desc": "추세 판단 MA (일)", "help": "시장 국면 판단용 이동평균선 (기본 20일)", "name": "REGIME_MA_PERIOD", "type": "int",
+        {"desc": "추세 판단 EMA (일)", "help": "시장 국면 판단용 지수이동평균선 (기본 20일)", "name": "REGIME_MA_PERIOD", "type": "int",
          "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_MA_PERIOD": v})},
         {"desc": "추세 판단 ADX", "help": "강세장 판단용 ADX 기준 (기본 20)", "name": "REGIME_ADX_THRESHOLD", "type": "int",
          "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_ADX_THRESHOLD": v})}
@@ -556,7 +556,7 @@ def modify_system_trading_general():
              
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
-            {"desc": "시장 필터링 MA (일)", "help": "지수 추세 판단용 이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
+            {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
              "get": lambda: getattr(config, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config, 'MARKET_FILTER_MA', v)},
             {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "Risk",
              "get": lambda: getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
