@@ -1006,8 +1006,6 @@ class TelegramCommander:
 
         # [수정] 전체 내역 조회 (체결 필터 제거)
         trades = db_manager.db.get_trades(limit=None, start_date=start_date)
-        if not trades:
-            return "📭 거래 내역이 없습니다."
         
         # 기간 표시 문자열 생성
         if start_date:
@@ -1022,6 +1020,9 @@ class TelegramCommander:
                 period_msg = "전체"
 
         msg = f"📜 [거래 내역 ({period_str}) - {len(trades)}건]\n기간: {period_msg}"
+        
+        if not trades:
+            return msg + "\n\n거래 내역이 없습니다."
         
         # [추가] 제한 종목 및 개별 룰 로드
         restricted_stocks = auto_trade.load_restricted_stocks()
@@ -1051,8 +1052,15 @@ class TelegramCommander:
             if code in restricted_stocks: name_display += "-"
             if code in rules_map: name_display += "+"
             
-            date_str = t['time'][5:16] # MM-DD HH:MM
-            item_msg = f"\n\n• {date_str} | {type_str}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
+            date_str = t['time'][5:19] # MM-DD HH:MM:SS
+            
+            status = t.get('order_status', '접수')
+            if "체결(추정)" in status: status = "체결 추정"
+            
+            if "체결" in status:
+                status = f"✅ {status}"
+            
+            item_msg = f"\n\n• {date_str} | {type_str} | {status}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
             
             # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
             if len(msg) + len(item_msg) > 4000:
