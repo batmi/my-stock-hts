@@ -45,7 +45,9 @@ def show_market_indices():
     indices_map = {
         "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11",
         "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
-        "금": "GC=F", "은": "SI=F", "구리": "HG=F", "WTI 원유": "CL=F", "천연가스": "NG=F", "밀": "ZW=F",
+        "금": "GC=F", "은": "SI=F", "구리": "HG=F", 
+        "브랜트유": "BZ=F", "WTI 원유": "CL=F", "가솔린 RBOB": "RB=F",
+        "천연가스": "NG=F", "밀": "ZW=F",
         "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
         "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX",
         "비트코인": "BTC-USD", "이더리움": "ETH-USD",
@@ -552,7 +554,7 @@ def show_market_indices():
                     
                     # [수정] 적응형 임계값 색상 적용 대상 확대
                     adaptive_targets = [
-                        "코스피", "코스닥", "코스피200", 
+                        "코스피", "코스닥", "코스피200",
                         "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
                         "Japan - Nikkei 225", "Hong Kong - Hang Seng", "China - SSE Composite", 
                         "Taiwan - TSEC weighted", "Germany - DAX", "Europe - ESTX 50",
@@ -598,20 +600,20 @@ def show_market_indices():
                             except: pass
                     elif name == "SOX (반도체)":
                         if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
-                        elif -15.0 < high_52_rate <= -10.0: display_name = f"[orange3]{name}[/]"
-                        elif -20.0 <= high_52_rate <= -15.0: display_name = f"[yellow]{name}[/]"
+                        elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"
+                        elif -20.0 < high_52_rate <= -12.0: display_name = f"[yellow]{name}[/]"
                         elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
                     elif name == "VIX (변동성)":
                         if current <= 20: display_name = f"[green]{name}[/]"
-                        elif 20 < current < 30: display_name = f"[white]{name}[/]"
+                        elif 20 < current < 30: display_name = f"[cyan]{name}[/]"
                         elif 30 <= current < 40: display_name = f"[yellow]{name}[/]"
                         elif 40 <= current < 50: display_name = f"[orange3]{name}[/]"
                         elif current >= 50: display_name = f"[red]{name}[/]"
                     elif name == "달러인덱스":
                         if current >= 120: display_name = f"[magenta]{name}[/]"
                         elif 110 <= current < 120: display_name = f"[red]{name}[/]"
-                        elif 100 <= current < 110: display_name = f"[orange3]{name}[/]"
-                        elif 90 <= current < 100: display_name = f"[green]{name}[/]"
+                        elif 103 <= current < 110: display_name = f"[orange3]{name}[/]"
+                        elif 90 <= current < 103: display_name = f"[green]{name}[/]"
                         elif 80 <= current < 90: display_name = f"[yellow]{name}[/]"
                         elif current < 80: display_name = f"[blue]{name}[/]"
                     elif name == "달러환율":
@@ -629,6 +631,20 @@ def show_market_indices():
                         elif 60 <= current < 80: display_name = f"[green]{name}[/]"
                         elif 40 <= current < 60: display_name = f"[yellow]{name}[/]"
                         elif current < 40: display_name = f"[blue]{name}[/]"
+                    elif name == "브랜트유":
+                        if current >= 125: display_name = f"[magenta]{name}[/]"
+                        elif 105 <= current < 125: display_name = f"[red]{name}[/]"
+                        elif 85 <= current < 105: display_name = f"[orange3]{name}[/]"
+                        elif 65 <= current < 85: display_name = f"[green]{name}[/]"
+                        elif 45 <= current < 65: display_name = f"[yellow]{name}[/]"
+                        elif current < 45: display_name = f"[blue]{name}[/]"
+                    elif name == "가솔린 RBOB":
+                        if current >= 4.00: display_name = f"[magenta]{name}[/]"
+                        elif 3.20 <= current < 4.00: display_name = f"[red]{name}[/]"
+                        elif 2.60 <= current < 3.20: display_name = f"[orange3]{name}[/]"
+                        elif 2.10 <= current < 2.60: display_name = f"[green]{name}[/]"
+                        elif 1.60 <= current < 2.10: display_name = f"[yellow]{name}[/]"
+                        elif current < 1.60: display_name = f"[blue]{name}[/]"
                     elif name == "천연가스":
                         if current >= 10: display_name = f"[magenta]{name}[/]"
                         elif 6 <= current < 10: display_name = f"[red]{name}[/]"
