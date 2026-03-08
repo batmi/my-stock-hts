@@ -525,34 +525,27 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
-            ("KOSPI", "^KS11"),
-            ("KOSPI200", "^KS200"),
-            ("KOSDAQ", "^KQ11"),
-            ("나스닥 선물", "NQ=F"),
-            ("나스닥", "^IXIC"),
-            ("S&P500", "^GSPC"),
-            ("다우존스", "^DJI"),
-            ("러셀2000", "^RUT"),
-            ("금", "GC=F"),
-            ("은", "SI=F"),
-            ("브랜트유", "BZ=F"),
-            ("WTI", "CL=F"),
-            ("가솔린", "RB=F"),
-            ("SOX(반도체)", "^SOX"),
-            ("달러환율", "KRW=X"),
-            ("비트코인", "BTC-USD"),
-            ("이더리움", "ETH-USD"),
-            ("Japan - 닛케이", "^N225"),
-            ("Hong Kong - 항셍", "^HSI"),
-            ("China - 상해종합", "000001.SS"),
-            ("Taiwan - 대만가권", "^TWII"),
-            ("Germany - 닥스40", "^GDAXI"),
-            ("Europe - 스톡스50", "^STOXX50E")
+            ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"),
+            ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
+            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"), 
+            ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
+            ("천연가스", "NG=F"), ("밀", "ZW=F"),
+            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), 
+            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
+            ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
+            ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
+            ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
         ]
+        
+        # 구분선(공백라인)을 넣을 지수명 리스트
+        section_keys = ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
         
         regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
         
         for name, code in targets:
+            if name in section_keys:
+                msg += "\n"
+            
             try:
                 df = api.get_chart_data(code, is_overseas=True)
                 if df is None or df.empty:
