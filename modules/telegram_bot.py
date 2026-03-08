@@ -166,9 +166,9 @@ class TelegramCommander:
             "• /rules [종목] : 종목별 트레이딩 룰 조회\n"
             "• /restrict : 트레이딩 제한 종목 조회\n"
             "• /log : 최근 시스템 트레이딩 로그 조회\n"
-            "• /report [기간] : 트레이딩 성과 리포트 (d/w/m/n)\n"
-            "• /profit [기간] : 트레이딩 실현 손익 조회 (d/w/m/n)\n"
-            "• /history [기간] : 트레이딩 거래 내역 조회 (d/w/m/n)\n"
+            "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
+            "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
+            "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
             "• /market : 주요 시장 지수 현황\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
@@ -542,7 +542,7 @@ class TelegramCommander:
             ("달러환율", "KRW=X"),
             ("비트코인", "BTC-USD"),
             ("이더리움", "ETH-USD"),
-            ("Japan - Nikkei 225", "^N225"),
+            ("Nikkei", "^N225"),
             ("Hong Kong - Hang Seng", "^HSI"),
             ("China - SSE Composite", "000001.SS"),
             ("Taiwan - TSEC weighted", "^TWII"),
