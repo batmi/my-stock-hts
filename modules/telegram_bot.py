@@ -542,12 +542,12 @@ class TelegramCommander:
             ("달러환율", "KRW=X"),
             ("비트코인", "BTC-USD"),
             ("이더리움", "ETH-USD"),
-            ("Nikkei", "^N225"),
-            ("Hong Kong - Hang Seng", "^HSI"),
-            ("China - SSE Composite", "000001.SS"),
-            ("Taiwan - TSEC weighted", "^TWII"),
-            ("Germany - DAX", "^GDAXI"),
-            ("Europe - ESTX 50", "^STOXX50E")
+            ("Japan - 닛케이", "^N225"),
+            ("Hong Kong - 항셍", "^HSI"),
+            ("China - 상해종합", "000001.SS"),
+            ("Taiwan - 대만가권", "^TWII"),
+            ("Germany - 닥스40", "^GDAXI"),
+            ("Europe - 스톡스50", "^STOXX50E")
         ]
         
         regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)

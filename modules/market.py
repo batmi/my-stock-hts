@@ -51,8 +51,8 @@ def show_market_indices():
         "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
         "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX",
         "비트코인": "BTC-USD", "이더리움": "ETH-USD",
-        "Japan - Nikkei 225": "^N225", "Hong Kong - Hang Seng": "^HSI", "China - SSE Composite": "000001.SS", "Taiwan - TSEC weighted": "^TWII",
-        "Germany - DAX": "^GDAXI", "Europe - ESTX 50": "^STOXX50E"
+        "Japan - 닛케이": "^N225", "Hong Kong - 항셍": "^HSI", "China - 상해종합": "000001.SS", "Taiwan - 대만가권": "^TWII",
+        "Germany - 닥스40": "^GDAXI", "Europe - 스톡스50": "^STOXX50E"
     }
     
     data_storage = {}
@@ -151,7 +151,7 @@ def show_market_indices():
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - Nikkei 225"]: 
+                if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
                     table.add_section()
 
                 try:
@@ -556,8 +556,8 @@ def show_market_indices():
                     adaptive_targets = [
                         "코스피", "코스닥", "코스피200",
                         "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
-                        "Japan - Nikkei 225", "Hong Kong - Hang Seng", "China - SSE Composite", 
-                        "Taiwan - TSEC weighted", "Germany - DAX", "Europe - ESTX 50",
+                        "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
+                        "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
                         "금", "은", "구리", "비트코인", "이더리움"
                     ]
 

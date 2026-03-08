@@ -609,9 +609,9 @@ def main():
                             ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
                             ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
                             ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
-                            ("Japan - Nikkei 225", "^N225"), ("Hong Kong - Hang Seng", "^HSI"),
-                            ("China - SSE Composite", "000001.SS"), ("Taiwan - TSEC weighted", "^TWII"),
-                            ("Germany - DAX", "^GDAXI"), ("Europe - ESTX 50", "^STOXX50E")
+                            ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"),
+                            ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
+                            ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
                         ]
                         config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
                         for i, (name, code) in enumerate(indices_list):
