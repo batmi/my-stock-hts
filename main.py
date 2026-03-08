@@ -29,7 +29,7 @@ def show_help():
     ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
 
     table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
-    table.add_row("(주요 글로벌 지수)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
+    table.add_row("(글로벌/원자재/코인)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
     table.add_row("", "그 외 구간", "[white]흰색[/]", "횡보장 (Sideways)")
     table.add_section()
 

@@ -555,7 +555,8 @@ def show_market_indices():
                         "코스피", "코스닥", "코스피200", 
                         "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
                         "Japan - Nikkei 225", "Hong Kong - Hang Seng", "China - SSE Composite", 
-                        "Taiwan - TSEC weighted", "Germany - DAX", "Europe - ESTX 50"
+                        "Taiwan - TSEC weighted", "Germany - DAX", "Europe - ESTX 50",
+                        "금", "은", "구리", "비트코인", "이더리움"
                     ]
 
                     used_kis_regime = False
