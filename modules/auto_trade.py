@@ -1581,6 +1581,18 @@ class AutoTrader:
         else:
             msg += "자산 정보 조회 실패\n"
             
+        # [추가] 현재 시장 상태 정보
+        msg += "\n[현재 시장 상태]\n"
+        regime_map = {"Bull": "강세장", "Bear": "약세장", "Sideways": "횡보장"}
+        
+        for m_type, label in [("KOSPI", "코스피"), ("KOSPI200", "코스피200"), ("KOSDAQ", "코스닥")]:
+            try:
+                regime, _ = analysis.get_market_regime(m_type)
+                regime_str = regime_map.get(regime, regime)
+                msg += f"• {label}: {regime_str}\n"
+            except Exception:
+                msg += f"• {label}: 확인 불가\n"
+
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 

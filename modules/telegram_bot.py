@@ -1056,7 +1056,10 @@ class TelegramCommander:
             if "체결" in status:
                 status = f"✅ {status}"
             
-            item_msg = f"\n\n• {date_str} | {type_str} | {status}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}"
+            reason = t.get('reason')
+            reason_msg = f"\n   사유: {reason}" if reason else ""
+            
+            item_msg = f"\n\n• {date_str} | {type_str} | {status}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}{reason_msg}"
             
             # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
             if len(msg) + len(item_msg) > 4000:
