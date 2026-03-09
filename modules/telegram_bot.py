@@ -1059,10 +1059,22 @@ class TelegramCommander:
             reason = t.get('reason')
             reason_msg = ""
             if reason:
-                # [수정] 사유 내에 대괄호 그룹이 여러 개 있는 경우(] [) 줄바꿈 처리하여 가독성 향상
-                if "] [" in reason:
-                    formatted_reason = reason.replace("] [", "]\n           [")
-                    reason_msg = f"\n   사유: {formatted_reason}"
+                # 사유가 길고 상세 정보(대괄호/소괄호)가 포함된 경우 줄바꿈 처리하여 가독성 향상
+                if len(reason) > 25:
+                    if "[" in reason:
+                        parts = reason.partition("[")
+                        if parts[0].strip():
+                            reason_msg = f"\n   사유: {parts[0].strip()}\n         {parts[1]}{parts[2]}"
+                        else:
+                            reason_msg = f"\n   사유: {reason}"
+                    elif "(" in reason:
+                        parts = reason.partition("(")
+                        if parts[0].strip():
+                            reason_msg = f"\n   사유: {parts[0].strip()}\n         {parts[1]}{parts[2]}"
+                        else:
+                            reason_msg = f"\n   사유: {reason}"
+                    else:
+                        reason_msg = f"\n   사유: {reason}"
                 else:
                     reason_msg = f"\n   사유: {reason}"
             
