@@ -1057,7 +1057,14 @@ class TelegramCommander:
                 status = f"✅ {status}"
             
             reason = t.get('reason')
-            reason_msg = f"\n   사유: {reason}" if reason else ""
+            reason_msg = ""
+            if reason:
+                # [수정] 사유 내에 대괄호 그룹이 여러 개 있는 경우(] [) 줄바꿈 처리하여 가독성 향상
+                if "] [" in reason:
+                    formatted_reason = reason.replace("] [", "]\n           [")
+                    reason_msg = f"\n   사유: {formatted_reason}"
+                else:
+                    reason_msg = f"\n   사유: {reason}"
             
             item_msg = f"\n\n• {date_str} | {type_str} | {status}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}{reason_msg}"
             
