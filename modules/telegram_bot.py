@@ -1059,20 +1059,26 @@ class TelegramCommander:
             reason = t.get('reason')
             reason_msg = ""
             if reason:
-                # 사유가 길고 상세 정보(대괄호/소괄호)가 포함된 경우 줄바꿈 처리하여 가독성 향상
-                if len(reason) > 25:
-                    if "[" in reason:
-                        parts = reason.partition("[")
-                        if parts[0].strip():
-                            reason_msg = f"\n   사유: {parts[0].strip()}\n         {parts[1]}{parts[2]}"
-                        else:
-                            reason_msg = f"\n   사유: {reason}"
-                    elif "(" in reason:
-                        parts = reason.partition("(")
-                        if parts[0].strip():
-                            reason_msg = f"\n   사유: {parts[0].strip()}\n         {parts[1]}{parts[2]}"
-                        else:
-                            reason_msg = f"\n   사유: {reason}"
+                # [수정] 사유 내에 대괄호가 포함된 경우 포맷팅 (줄바꿈 및 들여쓰기)
+                if "[" in reason:
+                    # 1. 대괄호 그룹 간 줄바꿈 (] [ -> ]\n         [)
+                    formatted = reason.replace("] [", "]\n         [")
+                    
+                    # 2. 텍스트와 첫 대괄호 사이 줄바꿈
+                    # 예: "조건 만족 [점수...]" -> "조건 만족\n         [점수...]"
+                    first_bracket_idx = formatted.find("[")
+                    if first_bracket_idx > 0:
+                        pre_text = formatted[:first_bracket_idx].strip()
+                        if pre_text:
+                            formatted = f"{pre_text}\n         {formatted[first_bracket_idx:]}"
+                    
+                    reason_msg = f"\n   사유: {formatted}"
+                
+                # 기존 로직 (길이가 길고 소괄호가 있는 경우)
+                elif len(reason) > 25 and "(" in reason:
+                    parts = reason.partition("(")
+                    if parts[0].strip():
+                        reason_msg = f"\n   사유: {parts[0].strip()}\n         {parts[1]}{parts[2]}"
                     else:
                         reason_msg = f"\n   사유: {reason}"
                 else:
