@@ -170,9 +170,11 @@ def show_help():
     table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
     table.add_section()
 
+    obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
+
     table.add_row("추세SMO", "S (SAR)", "[red]⬆[/] / [blue]⬇[/]", "상승 / 하락")
     table.add_row("", "M (MACD)", "[red]+G[/] / [blue]-D[/]", "골든/데드 (0선 위/아래)")
-    table.add_row("", "O (OBV)", "[red]▲[/] / [blue]▼[/]", "수급 상승 / 하락")
+    table.add_row("", "O (OBV)", "[red]▲[/] / [blue]▼[/]", f"수급 양호 (OBV > EMA {obv_period}일) / 약세")
     table.add_section()
 
     rsi_upper = config.INDICATOR_PARAMS["RSI_UPPER"]
@@ -224,10 +226,6 @@ def show_help():
     table.add_row("", "50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
     table.add_row("", "30% 이하", "[blue]파란색[/]", "신저가 근접/침체")
     table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
-    table.add_section()
-
-    table.add_row("OBV (거래량)", "OBV > OBV EMA", "[red]빨간색[/]", "수급 양호 (상승 추세)")
-    table.add_row("", "OBV ≤ OBV EMA", "[blue]파란색[/]", "수급 약세 (하락 추세)")
     table.add_section()
 
     table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")

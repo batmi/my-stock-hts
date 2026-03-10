@@ -15,7 +15,6 @@ import math
 import logging
 import time
 import sys
-import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
