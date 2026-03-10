@@ -2214,7 +2214,7 @@ def print_table(title, data_list, is_overseas=False):
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
 def show_stock_analysis():
-    config.console.print("\n[bold]분석할 종목 그룹을 선택하세요:[/bold]")
+    config.console.print("\n[bold]분석할 종목 그룹을 선택하세요 (쉼표로 구분):[/bold]")
     config.console.print("[1] 국내 주식")
     config.console.print("[2] 국내 ETF")
     config.console.print("[3] 미국 주식")
@@ -2222,25 +2222,21 @@ def show_stock_analysis():
     config.console.print("[5] 전체 보기")
     config.console.print("[6] 개별 종목 분석")
     config.console.print("[7] 전체 종목 분석")
-    valid_choices = ["1", "2", "3", "4", "5", "6", "7", "12", "34", "11", "22", "33", "44", "55", "q", "Q"]
     config.console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=valid_choices, default="5", show_choices=True)
     
-    menu_map = {
-        "1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "전체보기", "6": "개별분석", "7": "전체분석",
-        "12": "국내전체", "34": "미국전체", 
-        "11": "국내주식(반복)", "22": "국내ETF(반복)", "33": "미국주식(반복)", "44": "미국ETF(반복)", "55": "전체(반복)"
-    }
-    if choice in menu_map:
-        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]", default="5")
+    if choice_str.lower() == 'q': return
 
-    if choice.lower() == 'q': return
-    
-    if choice == "6":
+    choices = [c.strip() for c in choice_str.split(',') if c.strip()]
+    if not choices: return
+
+    if '6' in choices:
+        context.USER_ACTION_BREADCRUMB.append("[6] 개별분석")
         diagnose_stock()
         return
 
-    if choice == "7":
+    if '7' in choices:
+        context.USER_ACTION_BREADCRUMB.append("[7] 전체분석")
         config.console.print("\n[bold]분석할 시장을 선택하세요:[/bold]")
         config.console.print("[1] 코스피 (KOSPI)")
         config.console.print("[2] 코스닥 (KOSDAQ)")
@@ -2260,26 +2256,49 @@ def show_stock_analysis():
         analyze_market_stocks(market_type)
         return
 
+    selected_groups = set()
+    group_names = []
+    
+    for c in choices:
+        if c == '1': 
+            selected_groups.add('stocks_kr')
+            group_names.append("국내주식")
+        elif c == '2': 
+            selected_groups.add('etfs_kr')
+            group_names.append("국내ETF")
+        elif c == '3': 
+            selected_groups.add('stocks_us')
+            group_names.append("미국주식")
+        elif c == '4': 
+            selected_groups.add('etfs_us')
+            group_names.append("미국ETF")
+        elif c == '5': 
+            selected_groups.update(['stocks_kr', 'etfs_kr', 'stocks_us', 'etfs_us'])
+            group_names.append("전체보기")
+    
+    if not selected_groups:
+        config.console.print("[red]잘못된 입력입니다.[/red]")
+        return
+
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
+
     interval = 0
-    real_choice = choice
-    if choice in ["11", "22", "33", "44", "55"]: interval = 60; real_choice = choice[0] 
-    elif choice in ["12", "34"]: real_choice = choice
+    config.console.print()
+    if Prompt.ask("반복 조회 하시겠습니까? (60초 간격)", choices=["y", "n"], default="n") == "y":
+        interval = 60
 
-    def get_list(key):
-        return [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
+    target_list = []
+    order_map = [
+        ('stocks_kr', "국내 주식 기술적 분석", False),
+        ('etfs_kr', "국내 ETF 기술적 분석", False),
+        ('stocks_us', "미국 주식 기술적 분석", True),
+        ('etfs_us', "미국 ETF 기술적 분석", True)
+    ]
 
-    stocks_kr = get_list('stocks_kr')
-    etfs_kr = get_list('etfs_kr')
-    stocks_us = get_list('stocks_us')
-    etfs_us = get_list('etfs_us')
-
-    if real_choice == "1": target_list = [("국내 주식 기술적 분석", stocks_kr, False)]
-    elif real_choice == "2": target_list = [("국내 ETF 기술적 분석", etfs_kr, False)]
-    elif real_choice == "3": target_list = [("미국 주식 기술적 분석", stocks_us, True)]
-    elif real_choice == "4": target_list = [("미국 ETF 기술적 분석", etfs_us, True)]
-    elif real_choice == "12": target_list = [("국내 주식 기술적 분석", stocks_kr, False), ("국내 ETF 기술적 분석", etfs_kr, False)]
-    elif real_choice == "34": target_list = [("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
-    else: target_list = [("국내 주식 기술적 분석", stocks_kr, False), ("국내 ETF 기술적 분석", etfs_kr, False), ("미국 주식 기술적 분석", stocks_us, True), ("미국 ETF 기술적 분석", etfs_us, True)]
+    for key, title, is_ovs in order_map:
+        if key in selected_groups:
+            d_list = [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
+            target_list.append((title, d_list, is_ovs))
 
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 

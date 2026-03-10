@@ -780,43 +780,43 @@ def show_market_indices(interval=0):
     target_indices = None
     
     if interval == 0:
-        config.console.print("\n[bold]지수 조회 옵션:[/bold]")
-        config.console.print("[1] 전체 지수 조회")
-        config.console.print("[2] 지수 그룹 선택 조회")
+        config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
+        
+        for key, info in INDICES_GROUPS.items():
+            config.console.print(f"[{key}] {info['name']}")
+        config.console.print("[8] 전체 지수")
+        
         config.console.print()
+        sel = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]", default="8")
+        if sel.lower() == 'q': return
         
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "11", "q"], default="1")
-        if choice.lower() == 'q': return
-        
-        if choice == '11':
-            interval = 60
+        try:
+            keys = [k.strip() for k in sel.split(',') if k.strip()]
+            
+            if '11' in keys:
+                interval = 60
+                keys.remove('11')
+                if not keys: keys = ['8']
 
-        if choice == '2':
-            config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
-            
-            for key, info in INDICES_GROUPS.items():
-                config.console.print(f"[{key}] {info['name']}")
-            
-            config.console.print()
-            sel = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]")
-            if sel.lower() == 'q': return
-            
-            try:
-                keys = [k.strip() for k in sel.split(',') if k.strip() in INDICES_GROUPS]
-                if not keys:
-                    config.console.print("[red]선택된 그룹이 없습니다.[/red]")
-                    return
-                
+            if '8' in keys:
+                target_indices = None
+            else:
                 target_indices = []
                 for k in keys:
-                    target_indices.extend(INDICES_GROUPS[k]['indices'])
+                    if k in INDICES_GROUPS:
+                        target_indices.extend(INDICES_GROUPS[k]['indices'])
+                
+                if not target_indices:
+                    config.console.print("[red]선택된 그룹이 없습니다.[/red]")
+                    return
 
+            if interval == 0:
                 config.console.print()
                 if Prompt.ask("반복 조회 하시겠습니까? (60초 간격)", choices=["y", "n"], default="n") == "y":
                     interval = 60
-            except:
-                config.console.print("[red]잘못된 입력입니다.[/red]")
-                return
+        except:
+            config.console.print("[red]잘못된 입력입니다.[/red]")
+            return
 
     try:
         while True:
