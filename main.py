@@ -230,6 +230,14 @@ def show_help():
     table.add_row("", "OBV ≤ OBV EMA", "[blue]파란색[/]", "수급 약세 (하락 추세)")
     table.add_section()
 
+    table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
+    table.add_row("", "120% ~ 150%", "[red]빨간색[/]", "매수 우위: 상승 추세 강화, 단기 모멘텀 발생")
+    table.add_row("", "100% ~ 120%", "[orange3]주황색[/]", "점진적 유입: 완만한 매수세, 주가 하방 지지력 강함")
+    table.add_row("", "100%", "[white]흰색[/]", "균형: 매수와 매도의 힘이 팽팽하게 맞서는 상태")
+    table.add_row("", "80% ~ 100%", "[yellow]노란색[/]", "매도 우위: 주가 탄력 둔화, 관망세 확산")
+    table.add_row("", "80% 미만", "[blue]파란색[/]", "하락 압력: 공격적인 매도세, 추가 하락 경계 필요")
+    table.add_section()
+
     table.add_row("투자자 동향", "순매수 (> 0)", "[red]빨간색[/]", "매수 우위")
     table.add_row("(개인/외인/기관)", "순매도 (< 0)", "[blue]파란색[/]", "매도 우위")
     table.add_section()

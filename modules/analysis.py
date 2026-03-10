@@ -1946,7 +1946,12 @@ def print_table(title, data_list, is_overseas=False):
                             try:
                                 rt_strength = api.get_realtime_vol_strength(code, is_overseas, cached_ex)
                                 if rt_strength is not None:
-                                    s_color = "[red]" if rt_strength >= 100 else "[blue]"
+                                    if rt_strength >= 150: s_color = "[magenta]"
+                                    elif rt_strength >= 120: s_color = "[red]"
+                                    elif rt_strength > 100: s_color = "[orange3]"
+                                    elif rt_strength == 100: s_color = "[white]"
+                                    elif rt_strength >= 80: s_color = "[yellow]"
+                                    else: s_color = "[blue]"
                                     strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
                                 else: strength_display = " [dim][0%][/dim]"
                             except: strength_display = " [dim][0%][/dim]"
