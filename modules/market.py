@@ -2,6 +2,7 @@
 from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.prompt import Prompt
 import yfinance as yf
 import pandas as pd
 import config
@@ -18,7 +19,30 @@ import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
-def _show_market_indices_core():
+INDICES_MAP = {
+    "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11",
+    "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
+    "금": "GC=F", "은": "SI=F", "구리": "HG=F", 
+    "브랜트유": "BZ=F", "WTI 원유": "CL=F", "가솔린 RBOB": "RB=F",
+    "천연가스": "NG=F", "밀": "ZW=F",
+    "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
+    "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX",
+    "비트코인": "BTC-USD", "이더리움": "ETH-USD",
+    "Japan - 닛케이": "^N225", "Hong Kong - 항셍": "^HSI", "China - 상해종합": "000001.SS", "Taiwan - 대만가권": "^TWII",
+    "Germany - 닥스40": "^GDAXI", "Europe - 스톡스50": "^STOXX50E"
+}
+
+INDICES_GROUPS = {
+    "1": {"name": "국내 지수", "indices": ["코스피", "코스피200", "코스닥"]},
+    "2": {"name": "미국 지수", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
+    "3": {"name": "원자재", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
+    "4": {"name": "환율", "indices": ["달러인덱스", "달러환율"]},
+    "5": {"name": "변동성/반도체", "indices": ["VIX (변동성)", "SOX (반도체)"]},
+    "6": {"name": "암호화폐", "indices": ["비트코인", "이더리움"]},
+    "7": {"name": "글로벌 지수", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50"]}
+}
+
+def _show_market_indices_core(target_indices=None):
     # [변경] config.DEBUG_LEVEL 참조
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
@@ -26,6 +50,17 @@ def _show_market_indices_core():
     # [추가] KOSPI/KOSDAQ 시장 국면 미리 조회 (도움말 화면과 데이터 동기화)
     # KIS API 데이터를 사용하는 analysis.get_market_regime 결과와 yfinance 데이터를 사용하는 현재 화면의 불일치 해소
     market_regime_cache = {}
+    
+    indices_map = INDICES_MAP.copy()
+    if target_indices:
+        indices_map = {k: v for k, v in indices_map.items() if k in target_indices}
+        
+    if not indices_map:
+        return []
+
+    targets_regime = [m for m in ["KOSPI", "KOSDAQ", "KOSPI200"] if any(k in indices_map for k in ["코스피", "코스닥", "코스피200"])]
+    # 정확한 매핑: 코스피->KOSPI, 코스닥->KOSDAQ, 코스피200->KOSPI200
+    
     try:
         # [수정] console.status -> Progress (Bar 포함, Percentage 제외)
         with Progress(
@@ -35,26 +70,14 @@ def _show_market_indices_core():
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[green]지수 데이터 수신 중(KIS API)...[/green]", total=None)
-            for m_type in ["KOSPI", "KOSDAQ", "KOSPI200"]:
-                regime, _ = analysis.get_market_regime(m_type)
-                market_regime_cache[m_type] = regime
+            if targets_regime:
+                progress.add_task("[green]지수 데이터 수신 중(KIS API)...[/green]", total=None)
+                for m_type in targets_regime:
+                    regime, _ = analysis.get_market_regime(m_type)
+                    market_regime_cache[m_type] = regime
     except Exception:
         pass
 
-    indices_map = {
-        "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11",
-        "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
-        "금": "GC=F", "은": "SI=F", "구리": "HG=F", 
-        "브랜트유": "BZ=F", "WTI 원유": "CL=F", "가솔린 RBOB": "RB=F",
-        "천연가스": "NG=F", "밀": "ZW=F",
-        "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
-        "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX",
-        "비트코인": "BTC-USD", "이더리움": "ETH-USD",
-        "Japan - 닛케이": "^N225", "Hong Kong - 항셍": "^HSI", "China - 상해종합": "000001.SS", "Taiwan - 대만가권": "^TWII",
-        "Germany - 닥스40": "^GDAXI", "Europe - 스톡스50": "^STOXX50E"
-    }
-    
     data_storage = {}
     yf_tickers = None
     any_kis_used = False
@@ -71,8 +94,10 @@ def _show_market_indices_core():
             # 1. 히스토리 데이터 다운로드
             task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
 
-            kr_tickers = ["^KS200", "^KS11", "^KQ11"]
-            global_tickers = [t for t in indices_map.values() if t not in kr_tickers]
+            current_tickers = set(indices_map.values())
+            kr_candidates = ["^KS200", "^KS11", "^KQ11"]
+            kr_tickers = [t for t in kr_candidates if t in current_tickers]
+            global_tickers = [t for t in current_tickers if t not in kr_candidates]
             tickers_sets = [("KR", kr_tickers), ("GL", global_tickers)]
             
             for label, t_list in tickers_sets:
@@ -87,18 +112,9 @@ def _show_market_indices_core():
                         d_data = pd.DataFrame()
                         i_data = pd.DataFrame()
                         
-                        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-                        try:
-                            future_d = executor.submit(api.fetch_yfinance_data, tickers_str, period="1y", interval="1d", group_by='ticker')
-                            future_i = executor.submit(api.fetch_yfinance_data, tickers_str, period="5d", interval="5m", group_by='ticker')
-                            
-                            while not (future_d.done() and future_i.done()):
-                                time.sleep(0.1)
-                            
-                            d_data = future_d.result()
-                            i_data = future_i.result()
-                        finally:
-                            executor.shutdown(wait=False, cancel_futures=True)
+                        # [수정] yfinance 캐시 DB Lock 방지를 위해 순차 실행으로 변경
+                        d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
+                        i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
                         
                         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                             d_shape = d_data.shape if not d_data.empty else "Empty"
@@ -151,6 +167,7 @@ def _show_market_indices_core():
         patched_tickers = []
         missing_tickers = []
         mismatch_tickers = [] # [추가] 날짜 불일치 경고용
+        failed_tickers = []   # [추가] 데이터 수신 실패 종목
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
@@ -349,7 +366,8 @@ def _show_market_indices_core():
                             logger.debug(f"{debug_tag} {name} entering fallback. Daily len: {len(df_daily)}")
                         
                         if df_daily.empty:
-                            table.add_row(name, "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                            table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                            failed_tickers.append(name)
                             progress.advance(task)
                             continue
                         
@@ -435,10 +453,15 @@ def _show_market_indices_core():
                                     
                                     # 일봉 전일보다 분봉 과거가 더 최신이면 교체
                                     if last_past_date > prev_date_src:
-                                        prev = float(last_past['close'])
-                                        prev_date_src = last_past_date
-                                        patched = True
-                                        is_gap = False # 보정 성공
+                                        # [수정] NaN이 아닌 유효한 값을 찾을 때까지 역순 탐색 (최대 10개 봉)
+                                        for i in range(1, min(11, len(past_intra) + 1)):
+                                            val = float(past_intra.iloc[-i]['close'])
+                                            if not math.isnan(val):
+                                                prev = val
+                                                prev_date_src = past_intra.index[-i].date()
+                                                patched = True
+                                                is_gap = False # 보정 성공
+                                                break
                             except: pass
                         
                         # 경고 리스트 추가
@@ -457,12 +480,19 @@ def _show_market_indices_core():
                             logger.debug(f"{debug_tag} {name} fallback final: current={current}, prev={prev}")
 
                     # C. 결과 계산
+                    if math.isnan(current): current = 0.0
+                    if math.isnan(prev): prev = 0.0
+
                     diff = current - prev
                     rate = 0.0
                     if prev != 0: rate = (diff / prev) * 100
                     
+                    if math.isnan(diff): diff = 0.0
+                    if math.isnan(rate): rate = 0.0
+
                     high_52_rate = 0.0
                     if high_52 != 0: high_52_rate = ((current - high_52) / high_52) * 100
+                    if math.isnan(high_52_rate): high_52_rate = 0.0
 
                     # --- 서식 ---
                     diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
@@ -714,17 +744,66 @@ def _show_market_indices_core():
         targets = ", ".join(mismatch_tickers)
         config.console.print(f"[dim][yellow] ⚠️ 데이터 불일치 경고: {targets} - KIS API 데이터가 yfinance보다 과거입니다. 지표 분석에 주의하세요.[/yellow][/dim]")
 
+    if failed_tickers:
+        targets = ", ".join(failed_tickers)
+        config.console.print(f"[dim][red] ⚠️ 데이터 수신 실패: {targets} - yfinance 서버 장애 또는 일시적 통신 오류일 수 있습니다. 잠시 후 다시 시도하세요.[/red][/dim]")
+        
+    return failed_tickers
+
 def show_market_indices(interval=0):
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
+    
+    target_indices = None
+    
+    if interval == 0:
+        config.console.print("\n[bold]지수 조회 옵션:[/bold]")
+        config.console.print("[1] 전체 지수 조회")
+        config.console.print("[2] 지수 그룹 선택 조회")
+        config.console.print()
+        
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "11", "q"], default="1")
+        if choice.lower() == 'q': return
+        
+        if choice == '11':
+            interval = 60
+
+        if choice == '2':
+            config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
+            
+            for key, info in INDICES_GROUPS.items():
+                config.console.print(f"[{key}] {info['name']}")
+            
+            config.console.print()
+            sel = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]")
+            if sel.lower() == 'q': return
+            
+            try:
+                keys = [k.strip() for k in sel.split(',') if k.strip() in INDICES_GROUPS]
+                if not keys:
+                    config.console.print("[red]선택된 그룹이 없습니다.[/red]")
+                    return
+                
+                target_indices = []
+                for k in keys:
+                    target_indices.extend(INDICES_GROUPS[k]['indices'])
+            except:
+                config.console.print("[red]잘못된 입력입니다.[/red]")
+                return
+
     try:
         while True:
             if interval > 0:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
 
-            _show_market_indices_core()
+            failed_list = _show_market_indices_core(target_indices)
 
             if interval <= 0:
+                if failed_list:
+                    config.console.print()
+                    if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
+                        target_indices = failed_list
+                        continue
                 break
             
             config.console.print() 

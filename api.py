@@ -60,8 +60,12 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
     try:
         return yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
     except Exception as e:
-        if "database" in str(e).lower():
+        err_msg = str(e).lower()
+        if "database" in err_msg or "lock" in err_msg:
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim yellow]yfinance DB Lock 감지: {e}. 캐시 정리 후 재시도합니다.[/dim yellow]")
             clear_yfinance_cache()
+            time.sleep(0.5) # 파일 잠금 해제 대기
             return yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
         raise e
 
