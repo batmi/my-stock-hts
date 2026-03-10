@@ -786,6 +786,10 @@ def show_market_indices(interval=0):
                 target_indices = []
                 for k in keys:
                     target_indices.extend(INDICES_GROUPS[k]['indices'])
+
+                config.console.print()
+                if Prompt.ask("반복 조회 하시겠습니까? (60초 간격)", choices=["y", "n"], default="n") == "y":
+                    interval = 60
             except:
                 config.console.print("[red]잘못된 입력입니다.[/red]")
                 return
