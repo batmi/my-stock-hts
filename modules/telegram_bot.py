@@ -127,25 +127,7 @@ class TelegramCommander:
 
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
-        status_msg = self.trader.get_status_message()
-        
-        # [추가] KOSPI/KOSDAQ 지수 요약
-        market_summary = ""
-        try:
-            # [수정] analysis 모듈을 통해 KIS API 데이터 우선 조회
-            for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
-                df = analysis.get_domestic_index_data(m_type)
-                if df is not None and not df.empty:
-                    curr = df.iloc[-1]['close']
-                    prev = df.iloc[-2]['close'] if len(df) > 1 else curr
-                    rate = ((curr - prev) / prev) * 100
-                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                    market_summary += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
-        except: pass
-
-        if market_summary:
-            return f"{status_msg}\n\n[시장 지수]{market_summary}"
-        return status_msg
+        return self.trader.get_status_message()
 
     def _cmd_start(self, args):
         if self.trader.is_running:
@@ -182,15 +164,15 @@ class TelegramCommander:
             "• /status : 시스템 트레이딩 상태 조회\n"
             "• /config : 현재 트레이딩 전략 설정값 조회\n"
             "• /rules [종목] : 종목별 트레이딩 룰 조회\n"
-            "• /restrict : 트레이딩 제한 종목 조회\n"
+            "• /restrict : 트레이딩 제한 종목 조회\n\n"
             "• /log : 최근 시스템 트레이딩 로그 조회\n"
             "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
             "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
-            "• /market : 주요 시장 지수 현황\n"
+            "• /market [그룹]: 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
-            "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
+            "• /chart <종목> : 기술적 분석 차트 이미지 전송\n\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
         )
@@ -206,7 +188,22 @@ class TelegramCommander:
         return self.trader.get_performance_report(days=days)
 
     def _cmd_market(self, args):
-        return self._get_market_status()
+        group_arg = args[0].lower() if args else None
+        
+        group_map = {
+            'k': "국내 지수",
+            'u': "미국 지수",
+            'c': "원자재",
+            'f': "환율",
+            'i': "변동성/반도체",
+            'b': "암호화폐",
+            'g': "글로벌 지수"
+        }
+        
+        target_group_name = group_map.get(group_arg)
+        if group_arg and not target_group_name:
+            return f"⚠️ 잘못된 그룹입니다. (사용 가능: {', '.join(group_map.keys())})"
+        return self._get_market_status(target_group_name)
 
     def _cmd_signal(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
@@ -537,7 +534,7 @@ class TelegramCommander:
     def _send_reply(self, text):
         api.send_telegram_message(text)
 
-    def _get_market_status(self):
+    def _get_market_status(self, target_group_name=None):
         """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
         msg = "📊 [시장 지수 현황]\n"
         
@@ -564,6 +561,20 @@ class TelegramCommander:
             "코스피": "KOSPI", "코스피50": "KOSPI50", "코스피200": "KOSPI200",
             "코스닥": "KOSDAQ", "코스닥 글로벌": "KOSDAQ_GLOBAL", "코스닥150": "KOSDAQ150"
         }
+
+        # [추가] 그룹 필터링 로직
+        if target_group_name:
+            group_indices = set()
+            for g_info in config.INDICES_GROUPS.values():
+                if g_info['name'] == target_group_name:
+                    group_indices.update(g_info['indices'])
+                    break
+            
+            if group_indices:
+                targets = [(name, code) for name, code in targets if name in group_indices]
+                msg = f"📊 [{target_group_name} 현황]\n"
+            else:
+                return f"⚠️ '{target_group_name}' 그룹을 찾을 수 없습니다."
 
         regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
         

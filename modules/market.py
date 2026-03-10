@@ -31,16 +31,6 @@ INDICES_MAP = {
     "Germany - 닥스40": "^GDAXI", "Europe - 스톡스50": "^STOXX50E"
 }
 
-INDICES_GROUPS = {
-    "1": {"name": "국내 지수", "indices": ["코스피", "코스피50", "코스피200", "코스닥", "코스닥 글로벌", "코스닥150"]},
-    "2": {"name": "미국 지수", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
-    "3": {"name": "원자재", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
-    "4": {"name": "환율", "indices": ["달러인덱스", "달러환율"]},
-    "5": {"name": "변동성/반도체", "indices": ["VIX (변동성)", "SOX (반도체)"]},
-    "6": {"name": "암호화폐", "indices": ["비트코인", "이더리움"]},
-    "7": {"name": "글로벌 지수", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50"]}
-}
-
 def _show_market_indices_core(target_indices=None):
     # [변경] config.DEBUG_LEVEL 참조
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -782,7 +772,7 @@ def show_market_indices(interval=0):
     if interval == 0:
         config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
         
-        for key, info in INDICES_GROUPS.items():
+        for key, info in config.INDICES_GROUPS.items():
             config.console.print(f"[{key}] {info['name']}")
         config.console.print("[8] 전체 지수")
         
@@ -803,8 +793,8 @@ def show_market_indices(interval=0):
             else:
                 target_indices = []
                 for k in keys:
-                    if k in INDICES_GROUPS:
-                        target_indices.extend(INDICES_GROUPS[k]['indices'])
+                    if k in config.INDICES_GROUPS:
+                        target_indices.extend(config.INDICES_GROUPS[k]['indices'])
                 
                 if not target_indices:
                     config.console.print("[red]선택된 그룹이 없습니다.[/red]")

@@ -1593,6 +1593,20 @@ class AutoTrader:
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
 
+        # [추가] 시장 지수 요약 정보 (시장 상황 아래 배치)
+        msg += "\n[시장 지수]"
+        try:
+            for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
+                df = analysis.get_domestic_index_data(m_type)
+                if df is not None and not df.empty:
+                    curr = df.iloc[-1]['close']
+                    prev = df.iloc[-2]['close'] if len(df) > 1 else curr
+                    rate = ((curr - prev) / prev) * 100
+                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                    msg += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
+        except: pass
+        msg += "\n"
+
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
