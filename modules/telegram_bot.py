@@ -127,7 +127,24 @@ class TelegramCommander:
 
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
-        return self.trader.get_status_message()
+        status_msg = self.trader.get_status_message()
+        
+        # [추가] KOSPI/KOSDAQ 지수 요약
+        market_summary = ""
+        try:
+            for name, code in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
+                df = api.get_chart_data(code, is_overseas=True)
+                if df is not None and not df.empty:
+                    curr = df.iloc[-1]['close']
+                    prev = df.iloc[-2]['close'] if len(df) > 1 else curr
+                    rate = ((curr - prev) / prev) * 100
+                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                    market_summary += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
+        except: pass
+        
+        if market_summary:
+            return f"{status_msg}\n\n📊 [시장 지수]{market_summary}"
+        return status_msg
 
     def _cmd_start(self, args):
         if self.trader.is_running:
@@ -525,7 +542,8 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
-            ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"),
+            ("코스피", "^KS11"), ("코스피50", "^KS50"), ("코스피200", "^KS200"), 
+            ("코스닥", "^KQ11"), ("코스닥 글로벌", "^KQGlobal"), ("코스닥150", "^KQ150"),
             ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
             ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"), 
             ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),

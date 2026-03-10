@@ -19,7 +19,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 INDICES_MAP = {
-    "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11",
+    "코스피": "^KS11", "코스피50": "^KS50", "코스피200": "^KS200", "코스닥": "^KQ11", "코스닥 글로벌": "^KQGlobal", "코스닥150": "^KQ150",
     "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
     "금": "GC=F", "은": "SI=F", "구리": "HG=F", 
     "브랜트유": "BZ=F", "WTI 원유": "CL=F", "가솔린 RBOB": "RB=F",
@@ -32,7 +32,7 @@ INDICES_MAP = {
 }
 
 INDICES_GROUPS = {
-    "1": {"name": "국내 지수", "indices": ["코스피", "코스피200", "코스닥"]},
+    "1": {"name": "국내 지수", "indices": ["코스피", "코스피50", "코스피200", "코스닥", "코스닥 글로벌", "코스닥150"]},
     "2": {"name": "미국 지수", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
     "3": {"name": "원자재", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
     "4": {"name": "환율", "indices": ["달러인덱스", "달러환율"]},
@@ -57,9 +57,13 @@ def _show_market_indices_core(target_indices=None):
     if not indices_map:
         return []
 
-    targets_regime = [m for m in ["KOSPI", "KOSDAQ", "KOSPI200"] if any(k in indices_map for k in ["코스피", "코스닥", "코스피200"])]
-    # 정확한 매핑: 코스피->KOSPI, 코스닥->KOSDAQ, 코스피200->KOSPI200
-    
+    # [수정] KIS API 국면 분석 대상 확대 (신규 지수 포함)
+    regime_map = {
+        "코스피": "KOSPI", "코스닥": "KOSDAQ", "코스피200": "KOSPI200",
+        "코스피50": "KOSPI50", "코스닥150": "KOSDAQ150", "코스닥 글로벌": "KOSDAQ_GLOBAL"
+    }
+    targets_regime = [m_type for k_name, m_type in regime_map.items() if k_name in indices_map]
+
     try:
         # [수정] console.status -> Progress (Bar 포함, Percentage 제외)
         with Progress(
@@ -94,7 +98,9 @@ def _show_market_indices_core(target_indices=None):
             task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
 
             current_tickers = set(indices_map.values())
-            kr_candidates = ["^KS200", "^KS11", "^KQ11"]
+            # [수정] 국내 지수는 KIS API를 전적으로 사용하므로 yfinance 일괄 수집 대상에서 제외
+            # (KIS API 실패 시 analysis 모듈 내부에서 개별적으로 Fallback 처리)
+            kr_candidates = [] 
             kr_tickers = [t for t in kr_candidates if t in current_tickers]
             global_tickers = [t for t in current_tickers if t not in kr_candidates]
             tickers_sets = [("KR", kr_tickers), ("GL", global_tickers)]
@@ -180,6 +186,7 @@ def _show_market_indices_core(target_indices=None):
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
 
             for name, ticker in indices_map.items():
+                is_kis_source = False # [추가] KIS API 사용 여부 초기화
                 if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
                     table.add_section()
 
@@ -199,13 +206,18 @@ def _show_market_indices_core(target_indices=None):
                         df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
                     # [수정] 국내 지수의 경우 analysis 모듈의 공통 함수를 사용하여 데이터 조회 (Fallback 포함)
-                    is_domestic_index = name in ["코스피", "코스닥", "코스피200"]
+                    is_domestic_index = name in ["코스피", "코스닥", "코스피200", "코스피50", "코스닥 글로벌", "코스닥150"]
                     kis_code = ""
                     
                     if is_domestic_index:
                         logger.debug(f"[MARKET_INDEX_DEBUG] Processing {name}...")
-                        kis_code = "0001" if name == "코스피" else ("1001" if name == "코스닥" else "2001")
-                        m_type = "KOSPI" if name == "코스피" else ("KOSDAQ" if name == "코스닥" else "KOSPI200")
+                        if name == "코스피": kis_code = "0001"; m_type = "KOSPI"
+                        elif name == "코스닥": kis_code = "1001"; m_type = "KOSDAQ"
+                        elif name == "코스피200": kis_code = "2001"; m_type = "KOSPI200"
+                        elif name == "코스피50": kis_code = "2050"; m_type = "KOSPI50"
+                        elif name == "코스닥150": kis_code = "2203"; m_type = "KOSDAQ150"
+                        elif name == "코스닥 글로벌": kis_code = "2216"; m_type = "KOSDAQ_GLOBAL"
+                        
                         df_fallback = analysis.get_domestic_index_data(m_type)
                         if df_fallback is not None and not df_fallback.empty:
                             logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Data Fetched. Shape: {df_fallback.shape}")
@@ -231,6 +243,10 @@ def _show_market_indices_core(target_indices=None):
                                     if yf_last_dt > kis_last_dt:
                                         mismatch_tickers.append(f"{name}(KIS:{kis_last_dt} vs YF:{yf_last_dt})")
                                 except Exception: pass
+                            
+                            # [추가] 데이터 소스 확인 (KIS API 여부)
+                            if df_daily.attrs.get('source') == 'KIS':
+                                is_kis_source = True
                         else:
                             logger.debug(f"[MARKET_INDEX_DEBUG] {name} - Data Fetch Failed or Empty.")
 
@@ -596,7 +612,7 @@ def _show_market_indices_core(target_indices=None):
                     
                     # [수정] 적응형 임계값 색상 적용 대상 확대
                     adaptive_targets = [
-                        "코스피", "코스닥", "코스피200",
+                        "코스피", "코스닥", "코스피200", "코스피50", "코스닥 글로벌", "코스닥150",
                         "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
                         "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
                         "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
@@ -607,16 +623,25 @@ def _show_market_indices_core(target_indices=None):
                     if name in adaptive_targets:
                         # [추가] KOSPI/KOSDAQ은 캐시된 국면 정보 우선 사용 (데이터 정합성 보장)
                         regime_override = None
-                        if name == "코스피": regime_override = market_regime_cache.get("KOSPI")
-                        elif name == "코스닥": regime_override = market_regime_cache.get("KOSDAQ")
-                        elif name == "코스피200": regime_override = market_regime_cache.get("KOSPI200")
+                        
+                        # [수정] 신규 지수 매핑 추가
+                        regime_key_map = {
+                            "코스피": "KOSPI", "코스닥": "KOSDAQ", "코스피200": "KOSPI200",
+                            "코스피50": "KOSPI50", "코스닥150": "KOSDAQ150", "코스닥 글로벌": "KOSDAQ_GLOBAL"
+                        }
+                        if name in regime_key_map:
+                            regime_override = market_regime_cache.get(regime_key_map[name])
                         
                         if regime_override:
                             used_kis_regime = True
-                            any_kis_used = True
-                            if regime_override == "Bull": display_name = f"[red]{name}*[/]"
-                            elif regime_override == "Bear": display_name = f"[blue]{name}*[/]"
-                            else: display_name = f"[white]{name}*[/]"
+                            
+                            # [수정] KIS API 데이터 소스일 때만 * 표시 및 하단 안내 활성화
+                            suffix = "*" if is_kis_source else ""
+                            if is_kis_source: any_kis_used = True
+
+                            if regime_override == "Bull": display_name = f"[red]{name}{suffix}[/]"
+                            elif regime_override == "Bear": display_name = f"[blue]{name}{suffix}[/]"
+                            else: display_name = f"[white]{name}{suffix}[/]"
                         else:
                             # 기존 로직 (yfinance 데이터 기반 계산)
                             try:
@@ -706,7 +731,7 @@ def _show_market_indices_core(target_indices=None):
                     progress.advance(task)
 
                 except Exception as e:
-                    if name in ["코스피", "코스닥", "코스피200"]:
+                    if name in ["코스피", "코스닥", "코스피200", "코스피50", "코스닥 글로벌", "코스닥150"]:
                         logger.error(f"[MARKET_INDEX_DEBUG] Error processing {name}: {e}", exc_info=True)
                     if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                         config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {e}[/bold red]")

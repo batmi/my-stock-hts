@@ -129,6 +129,15 @@ def get_domestic_index_data(market_type):
     elif market_type == "KOSPI200": 
         kis_code = "2001"
         yf_ticker = "^KS200"
+    elif market_type == "KOSPI50":
+        kis_code = "2050"
+        yf_ticker = "^KS50"
+    elif market_type == "KOSDAQ150":
+        kis_code = "2203"
+        yf_ticker = "^KQ150"
+    elif market_type == "KOSDAQ_GLOBAL":
+        kis_code = "2216"
+        yf_ticker = "^KQGlobal"
         
     df = None
     try:
@@ -150,6 +159,7 @@ def get_domestic_index_data(market_type):
             for col in ['close', 'open', 'high', 'low', 'volume']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.attrs['source'] = 'KIS' # [추가] 데이터 소스 명시
 
     except Exception as e:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
@@ -162,6 +172,8 @@ def get_domestic_index_data(market_type):
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
         try:
             df = api.get_chart_data(yf_ticker, is_overseas=True)
+            if df is not None:
+                df.attrs['source'] = 'YFINANCE' # [추가] 데이터 소스 명시
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance Fallback 실패: {e}")
         
