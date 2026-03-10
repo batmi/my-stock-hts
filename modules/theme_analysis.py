@@ -15,9 +15,12 @@ from rich.padding import Padding
 
 # [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
 # (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", category=FutureWarning)
-    import google.generativeai as genai
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        import google.generativeai as genai
+except ImportError:
+    genai = None
 import config
 from modules import db_manager
 
@@ -154,6 +157,10 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
     """
+    if genai is None:
+        config.console.print("\n[red]※ google-generativeai 라이브러리가 설치되지 않았습니다.[/red]")
+        return None
+
     if not config.GEMINI_API_KEY:
         config.console.print("\n[red]※ Gemini API 키가 설정되지 않았습니다.[/red]")
         config.console.print("[dim]  Google AI Studio에서 키를 발급받아 설정해주세요.[/dim]")

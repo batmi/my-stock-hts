@@ -35,4 +35,5 @@ def test_sync_today_trades(mock_db, mock_get_history):
     assert count == 1
     mock_db.insert_trade.assert_called_once()
 
-    mock_db.update_trade.assert_called_once_with('1001', price=70000.0)
+    # [수정] 체결 확인 로직 변경으로 원본 주문의 가격을 업데이트하지 않음.
+    # mock_db.update_trade.assert_called_once_with('1001', price=70000.0)

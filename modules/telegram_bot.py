@@ -132,8 +132,9 @@ class TelegramCommander:
         # [추가] KOSPI/KOSDAQ 지수 요약
         market_summary = ""
         try:
-            for name, code in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
-                df = api.get_chart_data(code, is_overseas=True)
+            # [수정] analysis 모듈을 통해 KIS API 데이터 우선 조회
+            for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
+                df = analysis.get_domestic_index_data(m_type)
                 if df is not None and not df.empty:
                     curr = df.iloc[-1]['close']
                     prev = df.iloc[-2]['close'] if len(df) > 1 else curr
@@ -141,9 +142,9 @@ class TelegramCommander:
                     icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
                     market_summary += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
         except: pass
-        
+
         if market_summary:
-            return f"{status_msg}\n\n📊 [시장 지수]{market_summary}"
+            return f"{status_msg}\n\n[시장 지수]{market_summary}"
         return status_msg
 
     def _cmd_start(self, args):
@@ -558,6 +559,12 @@ class TelegramCommander:
         # 구분선(공백라인)을 넣을 지수명 리스트
         section_keys = ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
         
+        # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
+        domestic_map = {
+            "코스피": "KOSPI", "코스피50": "KOSPI50", "코스피200": "KOSPI200",
+            "코스닥": "KOSDAQ", "코스닥 글로벌": "KOSDAQ_GLOBAL", "코스닥150": "KOSDAQ150"
+        }
+
         regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
         
         for name, code in targets:
@@ -565,7 +572,13 @@ class TelegramCommander:
                 msg += "\n"
             
             try:
-                df = api.get_chart_data(code, is_overseas=True)
+                df = None
+                # [수정] 국내 지수는 analysis 모듈을 통해 KIS API 우선 조회
+                if name in domestic_map:
+                    df = analysis.get_domestic_index_data(domestic_map[name])
+                else:
+                    df = api.get_chart_data(code, is_overseas=True)
+                
                 if df is None or df.empty:
                     msg += f"\n• {name}: 데이터 조회 실패"
                     continue

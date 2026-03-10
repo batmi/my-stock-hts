@@ -1533,13 +1533,13 @@ class AutoTrader:
         if self.is_running:
             status_text = "RUNNING" if self.is_market_open() else "WAITING"
         
-        msg = f"📊 [시스템 상태: {status_text}]\n"
+        msg = f"[시스템 상태: {status_text}]\n"
         
         # 자산 정보 조회
         current_asset = None
         deposit = 0
         holdings = []
-        
+
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
             try:
@@ -1581,11 +1581,11 @@ class AutoTrader:
         else:
             msg += "자산 정보 조회 실패\n"
             
-        # [추가] 현재 시장 상태 정보
-        msg += "\n[현재 시장 상태]\n"
+        # [수정] 현재 시장 상황 정보
+        msg += "\n[시장 상황]\n"
         regime_map = {"Bull": "강세장", "Bear": "약세장", "Sideways": "횡보장"}
-        
-        for m_type, label in [("KOSPI", "코스피"), ("KOSPI200", "코스피200"), ("KOSDAQ", "코스닥")]:
+
+        for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
                 regime, _ = analysis.get_market_regime(m_type)
                 regime_str = regime_map.get(regime, regime)
@@ -3363,6 +3363,7 @@ class AutoTrader:
                 df = analysis.get_domestic_index_data(market_name)
 
                 if df is None or df.empty or len(df) < ma_period:
+                    self.log(f"{market_name} 지수 데이터 부족/조회 실패. 필터링을 건너뜁니다.")
                     self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
                     continue
                 

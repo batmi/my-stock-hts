@@ -22,8 +22,8 @@ def test_system_config_menu_analysis(mock_analysis, mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_system_trading_general(mock_ask):
     """시스템 트레이딩 일반 설정 변경 테스트"""
-    # 1번(투자비중) -> 0.3 -> q
-    mock_ask.side_effect = ["1", "0.3", "q"]
+    # 4번(투자비중) -> 0.3 -> q
+    mock_ask.side_effect = ["4", "0.3", "q"]
     
     original_val = config.SYSTEM_INVEST_PER_STOCK
     try:

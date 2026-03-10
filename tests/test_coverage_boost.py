@@ -89,9 +89,11 @@ def test_ensure_db_weights_column(mock_connect):
 def test_show_market_indices_partial_fail(mock_fetch):
     """일부 지수 데이터 조회 실패 시에도 동작 확인"""
     mock_fetch.side_effect = [pd.DataFrame(), pd.DataFrame()]
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
-        assert mock_print.call_count > 0
+    # [수정] 사용자 입력을 모킹하여 stdin read 에러 방지
+    with patch('rich.prompt.Prompt.ask', return_value="8"):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
+            assert mock_print.call_count > 0
 
 # --- modules/account.py ---
 @patch('api.get_today_profit_summary')

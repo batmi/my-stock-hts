@@ -101,15 +101,16 @@ def test_fetch_naver_themes_failure():
         
         assert themes == []
 
-@patch('modules.theme_analysis.genai.Client')
-def test_analyze_market_trends_success(mock_client_cls):
+@pytest.mark.skipif(getattr(theme_analysis, 'genai', None) is None, reason="google-generativeai not installed")
+@patch('modules.theme_analysis.genai.GenerativeModel')
+def test_analyze_market_trends_success(mock_model_cls):
     """Gemini API 호출 성공 테스트"""
     # API 키 설정 (테스트용)
     original_key = config.GEMINI_API_KEY
     config.GEMINI_API_KEY = "TEST_KEY"
     
     # Mock Client 및 Response 설정
-    mock_client = mock_client_cls.return_value
+    mock_model = mock_model_cls.return_value
     mock_response = MagicMock()
     mock_candidate = MagicMock()
     mock_part = MagicMock()
@@ -119,12 +120,12 @@ def test_analyze_market_trends_success(mock_client_cls):
     mock_response.candidates = [mock_candidate]
     mock_candidate.content.parts = [mock_part]
     
-    mock_client.models.generate_content.return_value = mock_response
+    mock_model.generate_content.return_value = mock_response
     
     result = theme_analysis.analyze_market_trends_with_gemini()
     
     assert result == "시장 분석 결과입니다."
-    mock_client.models.generate_content.assert_called_once()
+    mock_model.generate_content.assert_called_once()
     
     config.GEMINI_API_KEY = original_key
 
