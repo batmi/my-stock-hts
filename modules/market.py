@@ -14,11 +14,11 @@ import math
 import logging
 import time
 import sys
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
-def show_market_indices():
-    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
+def _show_market_indices_core():
     # [변경] config.DEBUG_LEVEL 참조
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
@@ -84,8 +84,21 @@ def show_market_indices():
                         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                             config.console.print(f"[dim cyan][TRACE] REQ ({label}) | Attempt: {attempt+1} | Tickers: {tickers_str}[/dim cyan]")
 
-                        d_data = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
-                        i_data = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
+                        d_data = pd.DataFrame()
+                        i_data = pd.DataFrame()
+                        
+                        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+                        try:
+                            future_d = executor.submit(api.fetch_yfinance_data, tickers_str, period="1y", interval="1d", group_by='ticker')
+                            future_i = executor.submit(api.fetch_yfinance_data, tickers_str, period="5d", interval="5m", group_by='ticker')
+                            
+                            while not (future_d.done() and future_i.done()):
+                                time.sleep(0.1)
+                            
+                            d_data = future_d.result()
+                            i_data = future_i.result()
+                        finally:
+                            executor.shutdown(wait=False, cancel_futures=True)
                         
                         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                             d_shape = d_data.shape if not d_data.empty else "Empty"
@@ -683,7 +696,7 @@ def show_market_indices():
             config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
     except KeyboardInterrupt:
-        config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+        raise
     except Exception as e:
         logger.error(f"지수 분석 중 치명적 오류: {e}")
         config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
@@ -700,3 +713,30 @@ def show_market_indices():
     if mismatch_tickers:
         targets = ", ".join(mismatch_tickers)
         config.console.print(f"[dim][yellow] ⚠️ 데이터 불일치 경고: {targets} - KIS API 데이터가 yfinance보다 과거입니다. 지표 분석에 주의하세요.[/yellow][/dim]")
+
+def show_market_indices(interval=0):
+    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
+    try:
+        while True:
+            if interval > 0:
+                now_str = datetime.now().strftime("%H:%M:%S")
+                config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
+
+            _show_market_indices_core()
+
+            if interval <= 0:
+                break
+            
+            config.console.print() 
+            try:
+                for remaining in range(interval, -1, -1):
+                    config.console.print(f"[bold yellow]다음 조회까지 {remaining}초 대기 중입니다. (중단: Ctrl+C)[/]   ", end="\r")
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
+                break
+    except KeyboardInterrupt:
+        config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+    except Exception as e:
+        logger.error(f"지수 분석 중 치명적 오류: {e}")
+        config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")

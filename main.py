@@ -553,7 +553,7 @@ def main():
             config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
             print("─" * 50); config.console.print()
             try:
-                choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+                choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "11", "q", "Q", "h", "H"], default=last_choice)
                 
                 # [추가] 루프 시작 시 입력 경로 초기화
                 context.USER_ACTION_BREADCRUMB = []
@@ -581,6 +581,7 @@ def main():
                 last_choice = choice
                 if choice == "0": settings.system_config_menu()
                 elif choice == "1": market.show_market_indices()
+                elif choice == "11": market.show_market_indices(interval=60)
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
                     # [수정] 차트 분석 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
