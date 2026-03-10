@@ -66,7 +66,7 @@ pip install requests pandas yfinance rich matplotlib numpy openpyxl
 *   `AUTO_ACC_NUM`: (선택) 자동매매 전용 계좌번호
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: 텔레그램 알림 설정
 *   `GEMINI_API_KEY`: (선택) 테마 분석용 Google Gemini API Key (발급받기)
-*   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-2.5-flash`)
+*   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-3.1-flash-lite-preview`)
 
 *또는 `config.py` 파일을 직접 수정하여 기본 설정을 변경할 수 있습니다.*
 

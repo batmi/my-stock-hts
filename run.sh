@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-genai python-dotenv"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv"
 MISSING_LIBS=""
 
 # 2. 운영체제 확인 (macOS vs Linux)
@@ -55,8 +55,8 @@ for lib in $REQUIRED_LIBS; do
         "beautifulsoup4")
             IMPORT_NAME="bs4"
             ;;
-        "google-genai")
-            IMPORT_NAME="google.genai"
+        "google-generativeai")
+            IMPORT_NAME="google.generativeai"
             ;;
         "python-dotenv")
             IMPORT_NAME="dotenv"

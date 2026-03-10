@@ -40,7 +40,8 @@ ENABLE_TELEGRAM = True
 # [설정] Google Gemini API 설정 (무료 대안)
 # ==========================================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능한 버전: v1beta, v1
 
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)

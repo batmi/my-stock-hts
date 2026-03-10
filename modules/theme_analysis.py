@@ -2,6 +2,7 @@ import logging
 import requests
 import sqlite3
 import concurrent.futures
+import warnings
 from bs4 import BeautifulSoup
 from datetime import datetime
 from rich.panel import Panel
@@ -11,8 +12,12 @@ from rich.table import Table
 from rich import box
 from rich.prompt import Prompt
 from rich.padding import Padding
-from google import genai
-from google.genai import types
+
+# [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
+# (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    import google.generativeai as genai
 import config
 from modules import db_manager
 
@@ -197,21 +202,25 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[bold green]Google Gemini가 실시간 시장 정보를 검색 중입니다...[/bold green]\n[dim]  (모델: {config.GEMINI_MODEL}, 도구: Google Search)[/dim]", total=None)
-            # Google Search 도구는 v1beta 버전에서 지원됩니다.
-            client = genai.Client(api_key=config.GEMINI_API_KEY, http_options={'api_version': 'v1beta'})
+            progress.add_task(f"[bold green]Google Gemini가 실시간 시장 정보를 분석 중입니다...[/bold green]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
-            response = client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    response_modalities=["TEXT"]
-                )
+            # 1. Gemini API 설정
+            genai.configure(api_key=config.GEMINI_API_KEY)
+
+            # 2. 모델 설정
+            model = genai.GenerativeModel(
+                model_name=config.GEMINI_MODEL,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.95,
+                    "max_output_tokens": 8192,
+                }
             )
             
-            # 응답 처리
-            if response.candidates and response.candidates[0].content.parts:
+            # 3. 콘텐츠 생성
+            response = model.generate_content(prompt)
+            
+            if response and response.text:
                 return response.text
             else:
                 return "검색 결과가 없거나 응답을 생성하지 못했습니다."
@@ -222,16 +231,21 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            config.console.print("\n[yellow]Gemini API 호출 한도 초과 (Rate Limit)[/yellow]")
+            config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]")
             config.console.print("[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]")
-            logger.warning(f"Gemini API Rate Limit: {e}")
+            logger.warning(f"Gemini API Rate Limit (Model: {config.GEMINI_MODEL}): {e}")
         elif "400" in error_msg and "tools" in error_msg:
-            config.console.print("\n[red]Gemini API 오류: Google Search 도구 사용 불가[/red]")
-            config.console.print("[dim]  API 설정 오류 또는 모델이 도구를 지원하지 않습니다.[/dim]")
-            logger.error(f"Gemini API Error (Tools): {e}")
+            config.console.print(f"\n[red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]")
+            config.console.print(f"[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]")
+            logger.error(f"Gemini API Error (Tools, Model: {config.GEMINI_MODEL}): {e}")
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            config.console.print(f"\n[red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]")
+            config.console.print("[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]")
+            config.console.print("[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]")
+            logger.error(f"Gemini Model Not Found (Model: {config.GEMINI_MODEL}): {e}")
         else:
             config.console.print(f"\n[red]오류 발생: {e}[/red]")
-            logger.error(f"Gemini Search Error: {e}")
+            logger.error(f"Gemini Search Error (Model: {config.GEMINI_MODEL}): {e}")
         return None
 
 def _show_naver_themes():
