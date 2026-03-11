@@ -169,7 +169,7 @@ class TelegramCommander:
             "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
             "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
-            "• /market [그룹]: 주요 지수 현황 (k/u/c/f/i/b/g)\n"
+            "• /market [그룹] : 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
             "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"

@@ -88,7 +88,6 @@ def _show_market_indices_core(target_indices=None):
             task_dl = progress.add_task("[green]지수 데이터 수신 중(yfinance)...[/green]", total=None)
 
             current_tickers = set(indices_map.values())
-            # [수정] 국내 지수는 KIS API를 전적으로 사용하므로 yfinance 일괄 수집 대상에서 제외
             # (KIS API 실패 시 analysis 모듈 내부에서 개별적으로 Fallback 처리)
             kr_candidates = [] 
             kr_tickers = [t for t in kr_candidates if t in current_tickers]
