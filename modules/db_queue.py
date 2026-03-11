@@ -6,6 +6,53 @@ import time
 
 logger = logging.getLogger(__name__)
 
+class DBWorker(threading.Thread):
+    """DB 작업을 순차적으로 처리하는 워커 스레드"""
+    def __init__(self, task_queue, real_db):
+        super().__init__(daemon=True, name="DBWorker")
+        self._queue = task_queue
+        self._real_db = real_db
+        self._running = True
+
+    def run(self):
+        """큐에서 작업을 꺼내 순차적으로 실행"""
+        while self._running:
+            try:
+                task = self._queue.get(timeout=0.5)
+                if task is None:  # 종료 시그널
+                    break
+
+                method_name, args, kwargs, result_queue = task
+                
+                q_size = self._queue.qsize()
+                if q_size > 10:
+                    logger.warning(f"[DBQueue] High load: {q_size} tasks waiting.")
+
+                try:
+                    if method_name == "__CUSTOM__":
+                        func, f_args, f_kwargs = args
+                        result = func(*f_args, **f_kwargs)
+                    else:
+                        method = getattr(self._real_db, method_name)
+                        result = method(*args, **kwargs)
+                    
+                    if result_queue:
+                        result_queue.put(("OK", result))
+                except Exception as e:
+                    logger.error(f"[DBQueue] Error executing '{method_name}': {e}", exc_info=True)
+                    if result_queue:
+                        result_queue.put(("ERROR", e))
+                finally:
+                    self._queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"[DBQueue] Worker loop critical error: {e}", exc_info=True)
+
+    def stop(self):
+        self._running = False
+        self._queue.put(None) # 대기 중인 get()을 깨우기 위해 None 전송
+
 class DBProxy:
     """
     기존 DB 객체를 감싸서 모든 메서드 호출을 큐에 넣어 
@@ -14,9 +61,8 @@ class DBProxy:
     def __init__(self, real_db):
         self._real_db = real_db
         self._queue = queue.Queue()
-        self._running = True
-        self._thread = threading.Thread(target=self._worker_loop, daemon=True, name="DBWorker")
-        self._thread.start()
+        self._worker = DBWorker(self._queue, self._real_db)
+        self._worker.start()
 
     def execute_custom(self, func, *args, **kwargs):
         """
@@ -36,41 +82,6 @@ class DBProxy:
         except queue.Empty:
             logger.error("[DBQueue] Custom operation timed out (30s)")
             raise Exception("DB Operation Timeout")
-
-    def _worker_loop(self):
-        """큐에서 작업을 꺼내 순차적으로 실행하는 워커 스레드"""
-        while self._running:
-            try:
-                task = self._queue.get(timeout=0.5)
-                method_name, args, kwargs, result_queue = task
-                
-                # 큐 사이즈 모니터링
-                q_size = self._queue.qsize()
-                if q_size > 10:
-                    logger.warning(f"[DBQueue] High load: {q_size} tasks waiting.")
-
-                try:
-                    if method_name == "__CUSTOM__":
-                        # 커스텀 함수 실행
-                        func, f_args, f_kwargs = args
-                        result = func(*f_args, **f_kwargs)
-                    else:
-                        # 실제 DB 객체의 메서드 호출
-                        method = getattr(self._real_db, method_name)
-                        result = method(*args, **kwargs)
-                    
-                    if result_queue:
-                        result_queue.put(("OK", result))
-                except Exception as e:
-                    logger.error(f"[DBQueue] Error executing '{method_name}': {e}", exc_info=True)
-                    if result_queue:
-                        result_queue.put(("ERROR", e))
-                finally:
-                    self._queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"[DBQueue] Worker loop critical error: {e}", exc_info=True)
 
     def __getattr__(self, name):
         attr = getattr(self._real_db, name)
@@ -93,9 +104,9 @@ class DBProxy:
         return attr
 
     def stop(self):
-        self._running = False
-        if self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+        if self._worker.is_alive():
+            self._worker.stop()
+            self._worker.join(timeout=2.0)
 
 _proxy_instance = None
 

@@ -30,10 +30,11 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
                     with patch('api.get_real_access_token'):
                         with patch('modules.auto_trade.ConclusionMonitor.start'):
                             with patch('modules.telegram_bot.TelegramCommander.start'):
-                                try:
-                                    main.main()
-                                except SystemExit:
-                                    pass
+                                with patch('modules.db_queue.install_proxy'):
+                                    try:
+                                        main.main()
+                                    except SystemExit:
+                                        pass
     
     # 각 메뉴 함수가 호출되었는지 검증
     mock_settings.assert_called()
@@ -64,6 +65,7 @@ def test_main_chart_menu(mock_chart, mock_ask, mock_exit):
              patch('api.get_real_access_token'), \
              patch('modules.auto_trade.ConclusionMonitor.start'), \
              patch('modules.telegram_bot.TelegramCommander.start'), \
+             patch('modules.db_queue.install_proxy'), \
              patch('api.get_stock_name_by_code', return_value="삼성전자"):
                 try:
                     main.main()

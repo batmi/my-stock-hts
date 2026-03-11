@@ -28,6 +28,7 @@ def test_show_market_indices_full_coverage(mock_tickers, mock_fetch):
     }
     
     # 3. Run
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
-        assert mock_print.call_count > 0
+    with patch('rich.prompt.Prompt.ask', return_value="8"):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
+            assert mock_print.call_count > 0

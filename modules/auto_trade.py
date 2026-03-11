@@ -1999,7 +1999,20 @@ class AutoTrader:
                 limit = None
                 start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
             
-            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+            # [수정] 자동매매 계좌 번호로 필터링 (시스템 트레이딩 내역만 조회)
+            target_account = None
+            if config.session.is_simulation:
+                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+            elif config.session.auto_cano:
+                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            
+            # [Fix] DBManager.get_trades가 account 인자를 지원하지 않는 경우 대비 (메모리 필터링)
+            try:
+                db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date, account=target_account)
+            except TypeError:
+                db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+                if target_account:
+                    db_records = [r for r in db_records if r.get('account') == target_account]
             
             # DB 레코드를 내부 포맷으로 변환
             self.trade_records = []
@@ -2042,8 +2055,21 @@ class AutoTrader:
             start_date = start_dt.strftime("%Y-%m-%d")
             end_date = datetime.now().strftime("%Y-%m-%d")
             period_msg = f"{start_date} ~ {end_date}"
+        
+        # [수정] 자동매매 계좌 번호로 필터링
+        target_account = None
+        if config.session.is_simulation:
+            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+        elif config.session.auto_cano:
+            target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
-        db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+        # [Fix] DBManager.get_trades가 account 인자를 지원하지 않는 경우 대비
+        try:
+            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date, account=target_account)
+        except TypeError:
+            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+            if target_account:
+                db_records = [r for r in db_records if r.get('account') == target_account]
         
         temp_records = []
         for r in reversed(db_records):
@@ -3489,7 +3515,13 @@ def _view_stock_rules():
         w_str = "기본"
         if r.get('weights'):
             w = r['weights']
-            w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+            # [Fix] 가중치가 JSON 문자열인 경우 딕셔너리로 변환
+            if isinstance(w, str):
+                try: w = json.loads(w)
+                except: pass
+            
+            if isinstance(w, dict):
+                w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
         table.add_row(
             f"{r['name']}({r['code']})",
@@ -3709,7 +3741,11 @@ def _modify_stock_rules():
         w_str = "기본"
         if r.get('weights'):
             w = r['weights']
-            w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+            if isinstance(w, str):
+                try: w = json.loads(w)
+                except: pass
+            if isinstance(w, dict):
+                w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
         table.add_row(
             str(i+1),

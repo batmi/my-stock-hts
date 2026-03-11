@@ -44,7 +44,7 @@ def test_view_stock_rules_exist(mock_get_rules):
         'code': '005930', 'name': 'Samsung', 'buy_score': 8.0, 'buy_rsi': 60,
         'sell_score': 5.0, 'take_profit_rsi': 75, 'take_profit': 10, 'stop_loss': -5,
         'ts_activation': 5, 'ts_callback': 2, 'updated_at': '2023-01-01', 'memo': 'Test',
-        'weights': '{"TREND": 4.0}'
+        'weights': '{"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}'
     }]
     with patch('config.console.print') as mock_print:
         auto_trade._view_stock_rules()

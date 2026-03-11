@@ -432,7 +432,8 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         "order_possible": 0, # [추가] 주문가능금액
         "d2_real": 0,        # [추가] 실제 D+2 예수금
         "next_day_plus": 0,  # [추가] 익일결재(+)
-        "next_day_minus": 0  # [추가] 익일결재(-)
+        "next_day_minus": 0, # [추가] 익일결재(-)
+        "api_tot_asset": 0   # [추가] API 제공 총 평가금액 (검증용)
     }
     
     # 1. 금일 데이터 조회
@@ -475,9 +476,13 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             if output2:
                 summary = output2[0]
                 # [수정] 실전/모의 공통으로 D+1, D+2, 예수금 데이터 파싱
+                summary_data['api_tot_asset'] = api.safe_int(summary.get('tot_evlu_amt')) # API 제공 총평가금
                 summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))
                 summary_data['d2_dep'] = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
                 summary_data['dep_dom'] = api.safe_int(summary.get('dnca_tot_amt'))
+
+                if config.FILE_DEBUG_LEVEL == "DEBUG":
+                    logger.debug(f"[ACCOUNT_DEBUG] Balance Summary (Output2): {summary}")
                 
                 # [추가] 익일결재 금액 계산 (전일 매도/매수 기준)
                 bfdy_sll = api.safe_int(summary.get('bfdy_sll_amt'))
@@ -554,11 +559,36 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 
                 if not config.session.is_simulation:
                     summary_data['dep_ovs'] = dep_data['foreign_deposit']
+            
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ACCOUNT_DEBUG] Deposit Detail: {dep_data}")
     except Exception: pass
     
     # 4. 최종 계산
+    # [수정] API가 제공하는 총 평가금액이 있으면 우선 사용 (이중 합산 방지)
+    # 실전 투자의 경우 d2_dep(가수도)와 sec_eval(평가금)을 단순 합산하면 중복될 수 있음
+    if summary_data['api_tot_asset'] > 0:
+        summary_data['tot_asset'] = summary_data['api_tot_asset']
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[ACCOUNT_DEBUG] Using API Total Asset: {summary_data['tot_asset']:,} (Source: tot_evlu_amt)")
+    else:
+        # API 값이 없으면 직접 계산 (예수금 + 평가금)
+        real_cash = summary_data['d2_dep']
+        summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval']
+        if config.FILE_DEBUG_LEVEL == "DEBUG":
+            logger.debug(f"[ACCOUNT_DEBUG] Calculated Total Asset: {summary_data['tot_asset']:,} = D2({real_cash:,}) + Ovs({summary_data['dep_ovs']:,}) + Sec({summary_data['sec_eval']:,})")
+    # [수정] API의 tot_evlu_amt는 D+0 예수금 기준(미결제 매수금 포함)일 수 있어 자산이 과대평가될 수 있음.
+    # 따라서 실질적인 순자산(NAV)은 'D+2 예수금(주문가능금액) + 평가금'으로 직접 계산하는 방식을 사용.
     real_cash = summary_data['d2_dep']
-    summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval']
+    # [수정] 익일 결제 예정 금액(마이너스)이 있다면 차감하여 보수적으로 계산
+    next_day_deduct = summary_data.get('next_day_minus', 0)
+    calculated_asset = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval'] - next_day_deduct
+    
+    if config.FILE_DEBUG_LEVEL == "DEBUG":
+        logger.debug(f"[ACCOUNT_DEBUG] Asset Calc: API({summary_data['api_tot_asset']:,}) vs D+2Calc({calculated_asset:,})")
+        logger.debug(f"[ACCOUNT_DEBUG] Formula: D2({real_cash:,}) + Ovs({summary_data['dep_ovs']:,}) + Sec({summary_data['sec_eval']:,}) - NextDay({next_day_deduct:,})")
+        
+    summary_data['tot_asset'] = calculated_asset
     
     return summary_data
 

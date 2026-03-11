@@ -13,7 +13,8 @@ import sys
 @patch('main.Prompt.ask')
 @patch('main.os._exit')
 @patch('main.time.sleep')
-def test_main_auto_mode(mock_sleep, mock_exit, mock_ask, mock_init, mock_load, mock_check_token, mock_token, mock_monitor, mock_bot, mock_trader):
+@patch('modules.db_queue.install_proxy')
+def test_main_auto_mode(mock_install_proxy, mock_sleep, mock_exit, mock_ask, mock_init, mock_load, mock_check_token, mock_token, mock_monitor, mock_bot, mock_trader):
     """메인 함수 자동 시작 모드 테스트"""
     test_args = ['main.py', '--mode', '1', '--auto']
     
@@ -40,7 +41,8 @@ def test_main_menu_exit(mock_exit, mock_ask):
     with patch('main.config.session'), \
          patch('main.api'), \
          patch('main.auto_trade'), \
-         patch('main.telegram_bot'):
+         patch('main.telegram_bot'), \
+         patch('modules.db_queue.install_proxy'):
         
         with patch.object(sys, 'argv', ['main.py']):
              main.main()

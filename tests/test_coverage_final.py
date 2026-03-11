@@ -58,9 +58,11 @@ def test_show_market_indices_data_handling(mock_fetch):
     # 데이터가 비어있을 때 에러 없이 처리되는지 확인
     mock_fetch.return_value = pd.DataFrame() 
     
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
-        assert mock_print.call_count > 0
+    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n')
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n"]):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
+            assert mock_print.call_count > 0
 
 def test_main_show_help():
     """메인 도움말 출력 테스트"""

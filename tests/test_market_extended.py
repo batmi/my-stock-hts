@@ -15,8 +15,9 @@ def test_show_market_indices_exceptions(mock_get_chart, mock_get_index, mock_fet
     mock_get_index.side_effect = Exception("KIS API Error")
     mock_get_chart.side_effect = Exception("Chart Data Error")
     
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
+    with patch('rich.prompt.Prompt.ask', return_value="8"):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
 
     db_manager.db._get_conn().close() # Close db connection to resolve warnings.
     assert mock_print.call_count > 0
@@ -36,6 +37,7 @@ def test_show_market_indices_empty_data(mock_fetch_yf):
     """데이터가 비어있을 때 처리 테스트"""
     mock_fetch_yf.return_value = pd.DataFrame()
     
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
-        assert mock_print.call_count > 0
+    with patch('rich.prompt.Prompt.ask', return_value="8"):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
+            assert mock_print.call_count > 0

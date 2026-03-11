@@ -16,7 +16,7 @@ def test_cmd_market(mock_get_chart, commander):
     mock_get_chart.return_value = df
     
     res = commander._cmd_market([])
-    assert "KOSPI" in res
+    assert "코스피" in res or "KOSPI" in res
     assert "2,510.00" in res
 
 @patch('modules.telegram_bot.api.get_stock_name_by_code', return_value="삼성전자")

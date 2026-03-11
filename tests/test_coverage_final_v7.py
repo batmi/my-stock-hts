@@ -101,7 +101,7 @@ def test_calculate_score_missing_indicators():
     
     # Partial None (Only Price and EMA20)
     # Price(10000) > EMA20(9000) -> Trend Score +0.5
-    score, details = analysis.calculate_score(10000, 9000, None, None, None, None, None, None, False)
+    score, details = analysis.calculate_score(10000, 9000, None, None, None, None, None, None, False, weights={"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0})
     assert score == 0.5
 
 def test_classify_stock_state_neutral():

@@ -164,7 +164,7 @@ class TelegramCommander:
             "• /status : 시스템 트레이딩 상태 조회\n"
             "• /config : 현재 트레이딩 전략 설정값 조회\n"
             "• /rules [종목] : 종목별 트레이딩 룰 조회\n"
-            "• /restrict : 트레이딩 제한 종목 조회\n\n"
+            "• /restrict : 트레이딩 제한 종목 조회\n"
             "• /log : 최근 시스템 트레이딩 로그 조회\n"
             "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
             "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
@@ -172,7 +172,7 @@ class TelegramCommander:
             "• /market [그룹]: 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
-            "• /chart <종목> : 기술적 분석 차트 이미지 전송\n\n"
+            "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
         )
@@ -432,7 +432,9 @@ class TelegramCommander:
                     try:
                         bal = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         if bal: ord_psbl = bal.get('order_possible', 0)
-                    except: ord_psbl = 0
+                    except: pass
+                
+                if ord_psbl is None: ord_psbl = 0
                 msg += f"주문가능금액: {ord_psbl:,}원\n"
                 msg += f"출금가능금액: {data['withdraw']:,}원\n\n"
                 

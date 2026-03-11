@@ -27,10 +27,10 @@ def test_cmd_config(commander):
 def test_cmd_history(mock_get_trades, commander):
     """체결 내역 조회 명령어 테스트"""
     mock_get_trades.return_value = [
-        {'time': '2023-01-01 10:00:00', 'type': 'buy', 'name': 'Samsung', 'qty': 10, 'price': 50000, 'odno': '1', 'order_status': '체결'}
+        {'time': '2023-01-01 10:00:00', 'type': 'buy', 'name': 'Samsung', 'code': '005930', 'qty': 10, 'price': 50000, 'odno': '1', 'order_status': '체결'}
     ]
     res = commander._cmd_history(['5'])
-    assert "최근 체결 내역" in res
+    assert "거래 내역" in res
     assert "Samsung" in res
 
 def test_cmd_log(commander):
@@ -41,7 +41,8 @@ def test_cmd_log(commander):
     assert "Test Log 2" in res
 
 @patch('modules.telegram_bot.account.get_asset_status_data')
-def test_cmd_balance(mock_get_asset, commander):
+@patch('modules.telegram_bot.api.get_deposit_balance')
+def test_cmd_balance(mock_deposit, mock_get_asset, commander):
     """자산 현황 조회 명령어 테스트"""
     mock_get_asset.return_value = {
         'tot_asset': 1000000, 'dep_dom': 500000, 'dep_ovs': 0, 'withdraw': 500000,
@@ -49,6 +50,7 @@ def test_cmd_balance(mock_get_asset, commander):
         'buy_today': 0, 'sell_today': 0, 'total_cost': 0, 'realized_pl': 0,
         'd1_dep': 500000, 'd2_dep': 500000
     }
+    mock_deposit.return_value = {'order_possible': 1000000}
     res = commander._cmd_balance([])
     assert "1,000,000원" in res
     assert "500,000원" in res
@@ -68,7 +70,7 @@ def test_cmd_holdings(mock_balance, commander):
 def test_cmd_profit(mock_get_trades, commander):
     """실현 손익 조회 명령어 테스트"""
     mock_get_trades.return_value = [
-        {'type': 'sell', 'name': 'Samsung', 'profit_amt': 10000, 'profit_rate': 10.0}
+        {'type': 'sell', 'name': 'Samsung', 'code': '005930', 'profit_amt': 10000, 'profit_rate': 10.0}
     ]
     res = commander._cmd_profit(['d'])
     assert "실현 손익" in res

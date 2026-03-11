@@ -29,15 +29,15 @@ def test_execute_buy_orders_low_cash():
         trader._execute_buy_orders(candidates, 500, 0.5, 0, 5) # Cash 500 < 1000
         assert any("예수금 부족" in str(c) for c in mock_log.call_args_list)
 
-@patch('modules.auto_trade.api.get_domestic_index_chart')
-def test_update_market_indices_status_exception(mock_get):
+@patch('modules.auto_trade.analysis.get_domestic_index_data')
+def test_update_market_indices_status_exception(mock_analysis_get):
     """지수 상태 업데이트 예외 처리 테스트"""
     trader = auto_trade.AutoTrader()
-    mock_get.side_effect = Exception("API Error")
+    mock_analysis_get.side_effect = Exception("API Error")
     
     with patch.object(trader, 'log') as mock_log:
         trader._update_market_indices_status()
-        assert any("지수 조회 실패" in str(c) for c in mock_log.call_args_list)
+        assert any("지수 조회 실패" in str(c) or "지수 데이터 부족/조회 실패" in str(c) for c in mock_log.call_args_list)
 
 # --- Analysis ---
 @patch('modules.analysis.api.get_chart_data')
@@ -53,9 +53,11 @@ def test_show_market_indices_no_data(mock_fetch):
     """데이터 없음 처리 테스트"""
     mock_fetch.return_value = pd.DataFrame()
     
-    with patch('config.console.print') as mock_print:
-        market.show_market_indices()
-        assert mock_print.call_count > 0
+    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n')
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n"]):
+        with patch('config.console.print') as mock_print:
+            market.show_market_indices()
+            assert mock_print.call_count > 0
 
 # --- API ---
 def test_get_chart_data_index_code():

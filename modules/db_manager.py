@@ -187,7 +187,7 @@ class DBManager:
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
                     break
 
-    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None):
+    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None):
         """거래 내역 조회"""
         # 읽기 작업은 락 없이 수행 가능 (WAL 모드 덕분)
         try:
@@ -214,6 +214,11 @@ class DBManager:
             if is_sim is not None:
                 query += " AND is_sim = ?"
                 params.append(1 if is_sim else 0)
+            
+            # [추가] 계좌 번호 필터링
+            if account:
+                query += " AND account = ?"
+                params.append(account)
             
             # [추가] 주문 상태 필터링
             if order_status:

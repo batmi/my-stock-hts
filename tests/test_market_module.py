@@ -30,7 +30,8 @@ def test_show_market_indices(mock_get_chart, mock_get_index, mock_fetch_yf):
         mock_ticker.fast_info.regular_market_previous_close = 2490.0
         mock_tickers.return_value.tickers = {'^KS11': mock_ticker}
         
-        with patch('config.console.print') as mock_print:
-            market.show_market_indices()
-            # 테이블 출력 확인 (호출 횟수로 간접 확인)
-            assert mock_print.call_count > 0
+        with patch('rich.prompt.Prompt.ask', return_value="8"):
+            with patch('config.console.print') as mock_print:
+                market.show_market_indices()
+                # 테이블 출력 확인 (호출 횟수로 간접 확인)
+                assert mock_print.call_count > 0

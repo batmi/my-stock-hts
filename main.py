@@ -27,6 +27,7 @@ def show_help():
 
     # [수정] 설정값 로드하여 동적 표시
     ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+    obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
     table.add_row("(글로벌/원자재/코인)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
@@ -139,6 +140,14 @@ def show_help():
     table.add_row("", "[혼조세] 현재가 < 5일선", "[blue]파란색[/]", "약세 지속")
     table.add_section()
 
+    table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
+    table.add_row("", "120% ~ 150%", "[red]빨간색[/]", "매수 우위: 상승 추세 강화, 단기 모멘텀 발생")
+    table.add_row("", "100% ~ 120%", "[orange3]주황색[/]", "점진적 유입: 완만한 매수세, 주가 하방 지지력 강함")
+    table.add_row("", "100%", "[white]흰색[/]", "균형: 매수와 매도의 힘이 팽팽하게 맞서는 상태")
+    table.add_row("", "80% ~ 100%", "[yellow]노란색[/]", "매도 우위: 주가 탄력 둔화, 관망세 확산")
+    table.add_row("", "80% 미만", "[blue]파란색[/]", "하락 압력: 공격적인 매도세, 추가 하락 경계 필요")
+    table.add_section()
+
     table.add_row("EMA 5일선", "5일선 > 20, 60, 120일선 (정배열)", "[red]빨간색[/]", "강세 (가장 높음)")
     table.add_row("", "5일선이 20일선과 60일선 사이", "[yellow]노란색[/]", "경계")
     table.add_row("", "5일선이 60일선과 120일선 사이", "[orange3]주황색[/]", "주의")
@@ -169,8 +178,6 @@ def show_help():
     table.add_row("", "SAR 하향 전환 +  EMA60 종가 이탈 + RSI 65 이상", "", "정리")
     table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
     table.add_section()
-
-    obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("추세SMO", "S (SAR)", "[red]⬆[/] / [blue]⬇[/]", "상승 / 하락")
     table.add_row("", "M (MACD)", "[red]+G[/] / [blue]-D[/]", "골든/데드 (0선 위/아래)")
@@ -228,12 +235,10 @@ def show_help():
     table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
     table.add_section()
 
-    table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
-    table.add_row("", "120% ~ 150%", "[red]빨간색[/]", "매수 우위: 상승 추세 강화, 단기 모멘텀 발생")
-    table.add_row("", "100% ~ 120%", "[orange3]주황색[/]", "점진적 유입: 완만한 매수세, 주가 하방 지지력 강함")
-    table.add_row("", "100%", "[white]흰색[/]", "균형: 매수와 매도의 힘이 팽팽하게 맞서는 상태")
-    table.add_row("", "80% ~ 100%", "[yellow]노란색[/]", "매도 우위: 주가 탄력 둔화, 관망세 확산")
-    table.add_row("", "80% 미만", "[blue]파란색[/]", "하락 압력: 공격적인 매도세, 추가 하락 경계 필요")
+    table.add_row("OBV (거래량)", f"OBV > EMA {obv_period}일선", "[red]빨간색[/]", "수급 양호 (매집)")
+    table.add_row("", f"OBV < EMA {obv_period}일선", "[blue]파란색[/]", "수급 약세 (분산)")
+    table.add_row("", "주가 하락 + OBV 상승", "", "강세 다이버전스 (반등 시그널)")
+    table.add_row("", "주가 상승 + OBV 하락", "", "약세 다이버전스 (하락 시그널)")
     table.add_section()
 
     table.add_row("투자자 동향", "순매수 (> 0)", "[red]빨간색[/]", "매수 우위")
@@ -456,7 +461,8 @@ def main():
     context.MAIN_THREAD_ID = threading.get_ident()
 
     # [추가] DB 큐 프록시 설치 (순차 처리 적용)
-    db_queue.install_proxy(db_manager)
+    if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+        db_queue.install_proxy(db_manager)
 
     # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
     if args.mode:

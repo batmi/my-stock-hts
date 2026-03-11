@@ -292,8 +292,10 @@ def test_show_market_indices_fast_info_fail(mock_tickers, mock_fetch):
     data = pd.DataFrame(100, index=dates, columns=cols)
     mock_fetch.return_value = data
     
-    with patch('config.console.print'):
-        market.show_market_indices()
+    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n')
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n"]):
+        with patch('config.console.print'):
+            market.show_market_indices()
 
 # --- modules/settings.py coverage ---
 @patch('rich.prompt.Prompt.ask')
