@@ -23,17 +23,17 @@ def setup_korean_font():
     except: pass
     plt.rcParams['axes.unicode_minus'] = False
 
-def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False):
+def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily'):
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
     if not quiet and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print(f"[dim cyan][TRACE] 차트 생성 요청: {name} ({code}) | Overseas: {is_overseas}[/dim cyan]")
+        config.console.print(f"[dim cyan][TRACE] 차트 생성 요청: {name} ({code}) | Type: {period_type}[/dim cyan]")
 
     status_ctx = config.console.status(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]") if not quiet else nullcontext()
 
     with status_ctx:
-        df = api.get_chart_data(code, is_overseas)
+        df = api.get_chart_data(code, is_overseas, period_type)
         
         if df is None or df.empty:
             if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -86,7 +86,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax1.scatter(df.index, df['SAR'], s=5, c=sar_color, alpha=0.4, label='SAR')
         
         is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or 'DX-Y' in code)
-        ax1.set_title(f"차트 분석: {name}", fontsize=16, pad=20)
+        period_str = "일봉 (1년)" if period_type == 'daily' else "분봉 (1분, 당일)"
+        ax1.set_title(f"차트 분석 [{period_str}]: {name}", fontsize=16, pad=20)
         ax1.set_ylabel("지수" if is_index else "가격")
         ax1.legend(loc='upper left', ncol=4, fontsize=9)
         ax1.grid(True, alpha=0.2)
@@ -172,7 +173,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         
         def format_date(date_val):
             s_date = str(date_val).split('.')[0]
-            if len(s_date) == 8: return f"{s_date[:4]}-{s_date[4:6]}-{s_date[6:]}"
+            if period_type == 'intraday':
+                return s_date[5:16] # YYYY-MM-DD HH:MM:SS -> MM-DD HH:MM
+            elif len(s_date) == 8: return f"{s_date[:4]}-{s_date[4:6]}-{s_date[6:]}"
             elif '-' in s_date: return s_date[:10]
             return s_date
 
@@ -186,7 +189,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         plt.tight_layout()
         safe_code = re.sub(r'[=\-\.\^]', '', code)
-        file_name = f"analysis_{safe_code}.png"
+        file_name = f"analysis_{safe_code}_{period_type}.png"
         file_path = os.path.join(config.CHART_DIR, file_name)
         plt.savefig(file_path, dpi=dpi); plt.close()
         

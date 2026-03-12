@@ -768,11 +768,14 @@ def get_stock_name_by_code(code, is_overseas):
     if not final_name and code: return code
     return final_name
 
-def get_chart_data(code, is_overseas=False):
+def get_chart_data(code, is_overseas=False, period_type='daily'):
     """
     기술적 분석을 위한 차트 데이터를 조회합니다.
-    현재 로직은 '일봉(Daily)' 데이터를 기준으로 하며, 장 중에는 당일의 실시간 시세가 반영된 일봉 데이터가 포함됩니다.
+    period_type: 'daily' (일봉) or 'intraday' (분봉, 5분)
     """
+    if period_type == 'intraday':
+        return _get_intraday_chart_data(code, is_overseas)
+
     now = datetime.now()
     today = now.strftime("%Y%m%d")
     start_date_origin = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
@@ -874,6 +877,132 @@ def get_chart_data(code, is_overseas=False):
                 for c in numeric_cols: df[c] = df[c].astype(float)
                 return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
         return None
+
+def _get_intraday_chart_data(code, is_overseas):
+    """분봉(1분) 데이터 조회 (KIS API 사용, 해외/지수는 yfinance Fallback)"""
+    
+    # 1. KIS API 미지원 대상 확인 (해외주식, 지수 등)
+    use_fallback = is_overseas
+    if code.startswith('^') or (code.startswith('0001') and len(code) == 4):
+        use_fallback = True
+
+    # Fallback 로직 (yfinance)
+    if use_fallback:
+        try:
+            logger.info(f"[API] '{code}' yfinance 분봉 조회 시도 (Fallback)...")
+            # yfinance는 1분봉 최대 7일, 5분봉 최대 60일 지원
+            # [수정] 5일치를 가져와서 최근 390개(약 1일 거래시간)만 추출하여 차트 여백 최소화
+            df = fetch_yfinance_data(code, period="5d", interval="1m")
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    try: df.columns = df.columns.get_level_values(0)
+                    except: pass
+                
+                df.reset_index(inplace=True)
+                # 컬럼명 표준화 (KIS API 포맷과 통일)
+                
+                # [추가] yfinance 시간대 변환 (UTC/현지시간 -> 한국 시간 KST)
+                if 'Datetime' in df.columns:
+                    if df['Datetime'].dt.tz is not None:
+                        df['Datetime'] = df['Datetime'].dt.tz_convert('Asia/Seoul')
+                    else:
+                        # 시간대가 없는 경우(naive) UTC로 가정하고 변환하거나 그대로 둠
+                        # yfinance는 보통 tz-aware 객체를 반환함
+                        pass
+
+                rename_map = {'Datetime': 'date', 'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}
+                df.rename(columns=rename_map, inplace=True)
+                
+                df = df[['date', 'open', 'high', 'low', 'close', 'volume']].sort_values('date', ascending=True)
+                
+                # 최근 390개 (약 6시간 30분 = 1일 장 운영 시간) 데이터만 유지
+                if len(df) > 390:
+                    df = df.iloc[-390:]
+                
+                return df.reset_index(drop=True)
+                return df
+        except Exception as e:
+            logger.error(f"[API] yfinance 분봉 조회 실패: {e}")
+        return pd.DataFrame()
+    
+    # 국내 주식 KIS API 1분봉 조회
+    # URL: /uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice
+    # TR_ID: FHKST03010200
+    url_path = "uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+    tr_id = "FHKST03010200"
+    
+    all_items = []
+    current_time_key = "" # 빈 문자열 = 현재시간(최신)
+    
+    # [수정] 하루치(381분) 전체 조회를 위해 반복 횟수 및 최대 건수 상향 (3회 -> 20회)
+    for i in range(20):
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": code,
+            "FID_INPUT_HOUR_1": current_time_key,
+            "FID_PW_DIV_CODE": "1", # 1분봉
+            "FID_PW_DATA_INCU_YN": "N" # [추가] 필수 입력 필드 (데이터 포함 여부)
+        }
+        
+        # [디버그] 요청 상세 로그 (태그 포함)
+        logger.debug(f"[API_DEBUG] 분봉 조회 요청({i+1}): {code} | TimeKey: {current_time_key} | Params: {params}")
+        
+        res = call_api(url_path, "domestic", "quotations", "time_chart", params=params, tr_id=tr_id)
+        
+        if res.get('rt_cd') == '0':
+            items = res.get('output2', [])
+            if items:
+                all_items.extend(items)
+                # 다음 페이징을 위해 마지막 데이터의 시간 사용
+                last_item = items[-1]
+                current_time_key = last_item.get('stck_cntg_hour')
+                
+                # [수정] 하루 장 운영 시간(09:00~15:30) 커버를 위해 420건으로 상향
+                if len(all_items) >= 420: break
+            else:
+                break
+        else:
+            logger.error(f"[API] 분봉 조회 실패: {res.get('msg1')} (Code: {res.get('msg_cd')})")
+            break
+            
+        time.sleep(0.1) # Rate Limit
+    
+    if not all_items:
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(all_items)
+    
+    # 컬럼 매핑 및 정제
+    # stck_bsop_date: 일자, stck_cntg_hour: 시간
+    # stck_prpr: 현재가, stck_oprc: 시가, stck_hgpr: 고가, stck_lwpr: 저가, cntg_vol: 체결량
+    cols_map = {
+        'stck_bsop_date': 'date_str',
+        'stck_cntg_hour': 'time_str',
+        'stck_prpr': 'close',
+        'stck_oprc': 'open',
+        'stck_hgpr': 'high',
+        'stck_lwpr': 'low',
+        'cntg_vol': 'volume'
+    }
+    
+    # 필요한 컬럼만 존재 시 이름 변경
+    df.rename(columns=cols_map, inplace=True)
+    df = df[list(cols_map.values())].copy()
+    
+    # 날짜+시간 병합 (YYYYMMDD + HHMMSS)
+    df['date'] = pd.to_datetime(df['date_str'] + df['time_str'], format='%Y%m%d%H%M%S')
+    
+    # 수치형 변환
+    numeric_cols = ['close', 'open', 'high', 'low', 'volume']
+    for c in numeric_cols:
+        df[c] = pd.to_numeric(df[c])
+        
+    df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
+    
+    # 시간순 정렬 (과거 -> 현재)
+    return df.sort_values('date', ascending=True).reset_index(drop=True)
+
 
 def get_domestic_index_chart(code):
     """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""

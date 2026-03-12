@@ -659,7 +659,17 @@ def main():
 
                     if target_code: 
                         logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
-                        chart.generate_visual_chart(target_code, target_name, target_ovs)
+                        
+                        # [추가] 차트 유형 선택 (일봉/분봉)
+                        config.console.print("\n[bold]차트 유형을 선택하세요:[/bold]")
+                        config.console.print("[1] 일봉 (최근 1년)")
+                        config.console.print("[2] 분봉 (최근 1일)")
+                        config.console.print()
+                        c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "q"], default="1")
+                        
+                        if c_type != 'q':
+                            p_type = 'daily' if c_type == '1' else 'intraday'
+                            chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
                 elif choice == "4": trading.stock_order_menu()
                 elif choice == "5": auto_trade.system_trading_menu() 
                 elif choice == "6": backtest.run_backtest()
