@@ -1583,7 +1583,7 @@ class AutoTrader:
             
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
-        regime_map = {"Bull": "강세장", "Bear": "약세장", "Sideways": "횡보장"}
+        regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "⚪ 횡보장"}
 
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
