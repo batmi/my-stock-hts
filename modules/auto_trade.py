@@ -1602,7 +1602,7 @@ class AutoTrader:
                     curr = df.iloc[-1]['close']
                     prev = df.iloc[-2]['close'] if len(df) > 1 else curr
                     rate = ((curr - prev) / prev) * 100
-                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                    icon = "🔴" if rate > 0 else ("🔵" if rate < 0 else "⚪")
                     msg += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
         except: pass
         msg += "\n"
