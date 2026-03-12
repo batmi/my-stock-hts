@@ -2224,7 +2224,7 @@ def show_stock_analysis():
     config.console.print("[7] 전체 종목 분석")
     config.console.print()
     
-    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 / 반복: 1@ / 취소: q)[/dim]", default="5")
+    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 취소: q)[/dim]", default="5")
     if choice_str.lower() == 'q': return
 
     interval = 0
@@ -2232,7 +2232,14 @@ def show_stock_analysis():
         interval = 60
         choice_str = choice_str.rstrip('@')
 
-    choices = [c.strip() for c in choice_str.split(',') if c.strip()]
+    raw_choices = [c.strip() for c in choice_str.split(',') if c.strip()]
+    choices = []
+    for c in raw_choices:
+        if c.isdigit() and len(c) > 1:
+            choices.extend(list(c))
+        else:
+            choices.append(c)
+
     if not choices: return
 
     if '6' in choices:

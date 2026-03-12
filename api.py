@@ -66,7 +66,7 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
                 config.console.print(f"[dim yellow]yfinance DB Lock 감지: {e}. 캐시 정리 후 재시도합니다.[/dim yellow]")
             clear_yfinance_cache()
             time.sleep(0.5) # 파일 잠금 해제 대기
-            return yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
+            return fetch_yfinance_data(tickers, period, start, end, interval, group_by)
         raise e
 
 class TLSAdapter(HTTPAdapter):
