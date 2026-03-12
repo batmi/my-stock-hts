@@ -486,6 +486,9 @@ def main():
                 api.get_access_token()
             else:
                 api.get_real_access_token()
+                # [Fix] 실전투자 모드에서 자동매매 계좌가 별도로 설정된 경우 토큰 미리 발급
+                if config.session.auto_app_key:
+                    api.get_auto_access_token()
 
             # 백그라운드 서비스 시작
             auto_trade.ConclusionMonitor().start()
@@ -506,6 +509,10 @@ def main():
                 api.get_access_token()
             else:
                 api.get_real_access_token()
+                # [Fix] 실전투자 모드에서 자동매매 계좌가 별도로 설정된 경우 토큰 미리 발급
+                if config.session.auto_app_key:
+                    api.get_auto_access_token()
+            
             auto_trade.ConclusionMonitor().start()
             telegram_cmd = telegram_bot.TelegramCommander()
             telegram_cmd.start()

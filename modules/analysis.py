@@ -2224,8 +2224,13 @@ def show_stock_analysis():
     config.console.print("[7] 전체 종목 분석")
     config.console.print()
     
-    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]", default="5")
+    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 / 반복: 1@ / 취소: q)[/dim]", default="5")
     if choice_str.lower() == 'q': return
+
+    interval = 0
+    if choice_str.endswith('@'):
+        interval = 60
+        choice_str = choice_str.rstrip('@')
 
     choices = [c.strip() for c in choice_str.split(',') if c.strip()]
     if not choices: return
@@ -2281,11 +2286,6 @@ def show_stock_analysis():
         return
 
     context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
-
-    interval = 0
-    config.console.print()
-    if Prompt.ask("반복 조회 하시겠습니까? (60초 간격)", choices=["y", "n"], default="n") == "y":
-        interval = 60
 
     target_list = []
     order_map = [

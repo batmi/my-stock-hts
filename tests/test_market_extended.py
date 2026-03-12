@@ -15,7 +15,8 @@ def test_show_market_indices_exceptions(mock_get_chart, mock_get_index, mock_fet
     mock_get_index.side_effect = Exception("KIS API Error")
     mock_get_chart.side_effect = Exception("Chart Data Error")
     
-    with patch('rich.prompt.Prompt.ask', return_value="8"):
+    # [수정] 그룹 선택(8) 후 반복 조회(n)를 순차적으로 입력하여 무한 루프 방지
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n"]):
         with patch('config.console.print') as mock_print:
             market.show_market_indices()
 

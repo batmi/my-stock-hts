@@ -310,34 +310,45 @@ def test_modify_log_settings(mock_ask):
 def test_db_update_highest_price_lock():
     """DB 락 발생 시 재시도 로직 테스트 (Mocking)"""
     db = db_manager.DBManager()
-    with patch.object(db, '_get_conn') as mock_conn:
-        mock_cursor = MagicMock()
-        mock_conn.return_value.cursor.return_value = mock_cursor
-        
-        # First call raises OperationalError (locked), Second call succeeds
-        mock_cursor.execute.side_effect = [sqlite3.OperationalError("database is locked"), None]
-        
-        with patch('time.sleep'):
-            db.update_highest_price("005930", 80000)
+    try:
+        with patch.object(db, '_get_conn') as mock_conn:
+            mock_cursor = MagicMock()
+            mock_conn.return_value.cursor.return_value = mock_cursor
             
-        assert mock_cursor.execute.call_count == 2
+            # First call raises OperationalError (locked), Second call succeeds
+            mock_cursor.execute.side_effect = [sqlite3.OperationalError("database is locked"), None]
+            
+            with patch('time.sleep'):
+                db.update_highest_price("005930", 80000)
+                
+            assert mock_cursor.execute.call_count == 2
+    finally:
+        try:
+            db.close_connection()
+        except:
+            pass
 
 def test_db_check_trade_exists_debug():
     """check_trade_exists 디버그 로그 테스트"""
     db = db_manager.DBManager()
     config.SCREEN_DEBUG_LEVEL = "DEBUG"
     
-    with patch.object(db, '_get_conn') as mock_conn:
-        mock_cursor = MagicMock()
-        mock_conn.return_value.cursor.return_value = mock_cursor
-        mock_cursor.fetchone.return_value = [1] # Exists
-        
-        with patch('config.console.print') as mock_print:
-            exists = db.check_trade_exists("123", "체결")
-            assert exists is True
-            assert mock_print.called
-
-    config.SCREEN_DEBUG_LEVEL = "OFF"
+    try:
+        with patch.object(db, '_get_conn') as mock_conn:
+            mock_cursor = MagicMock()
+            mock_conn.return_value.cursor.return_value = mock_cursor
+            mock_cursor.fetchone.return_value = [1] # Exists
+            
+            with patch('config.console.print') as mock_print:
+                exists = db.check_trade_exists("123", "체결")
+                assert exists is True
+                assert mock_print.called
+    finally:
+        config.SCREEN_DEBUG_LEVEL = "OFF"
+        try:
+            db.close_connection()
+        except:
+            pass
 
 # --- modules/backtest.py coverage ---
 @patch('modules.backtest.api.fetch_yfinance_data')

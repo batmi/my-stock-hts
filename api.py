@@ -355,6 +355,10 @@ class ThrottledSession(requests.Session):
                 raise Exception(retry_reason)
 
             except Exception as e:
+                # [Fix] 토큰 만료 예외는 내부 재시도(ThrottledSession)를 하지 않고 즉시 상위(call_api)로 전파
+                if "Token Expired" in str(e):
+                    raise e
+
                 # [수정] 모든 예외(연결 끊김, API 에러 등)에 대해 백오프 후 재시도
                 if attempt < max_retries:
                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)

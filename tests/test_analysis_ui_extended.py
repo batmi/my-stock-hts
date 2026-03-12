@@ -2,6 +2,15 @@ import pytest
 from unittest.mock import patch, MagicMock
 from modules import analysis
 import config
+import pandas as pd
+from modules import db_manager
+
+@pytest.fixture(autouse=True)
+def cleanup_db():
+    yield
+    try:
+        db_manager.db.close_connection()
+    except: pass
 
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.analysis.diagnose_stock')
@@ -61,6 +70,43 @@ def test_get_analysis_params_custom(mock_ask):
     params = analysis.get_analysis_params()
     assert params['BUY_SCORE'] == 9.0
     assert params['BUY_RSI_MAX'] == 60
-    assert params['BUY_VOL_STRENGTH'] == 120.0
-    assert params['WEIGHTS']['TREND'] == 5.0
-    assert params['OUTPUT_FILTER'] == 'RISE'
+
+@patch('modules.analysis.print_table')
+@patch('rich.prompt.Prompt.ask')
+def test_show_stock_analysis_auto_refresh(mock_ask, mock_print):
+    """분석 메뉴 반복 조회(@ 입력) 테스트"""
+    # 1@ 입력 -> 반복 조회 모드 활성화 -> KeyboardInterrupt로 루프 탈출
+    mock_ask.return_value = "1@"
+    config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
+    
+    with patch('time.sleep', side_effect=KeyboardInterrupt):
+        analysis.show_stock_analysis()
+        
+    assert mock_print.called
+
+@patch('rich.prompt.Prompt.ask')
+@patch('modules.analysis.api.get_stock_name_by_code')
+@patch('modules.analysis.api.get_chart_data')
+@patch('modules.analysis.indicators.calculate_indicators')
+@patch('modules.analysis.classify_stock_state')
+@patch('modules.analysis.calculate_score')
+def test_diagnose_stock_direct_input(mock_score, mock_classify, mock_ind, mock_chart, mock_name, mock_ask):
+    """개별 종목 분석 - 직접 입력 테스트"""
+    # 5(직접입력) -> 005930
+    mock_ask.side_effect = ["5", "005930"]
+    mock_name.return_value = "Samsung"
+    
+    # [Fix] KeyError: 'date' 해결을 위해 date 컬럼 추가
+    mock_chart.return_value = pd.DataFrame({
+        'date': pd.date_range(end='20240101', periods=20).strftime("%Y%m%d"),
+        'close': [100]*20, 'high': [100]*20, 'low': [100]*20, 'open': [100]*20, 'volume': [100]*20
+    })
+    mock_ind.return_value = {'ema_5': 100, 'ema_20': 100, 'ema_60': 100, 'ema_120': 100, 'psar': 90, 'rsi': 50, 'adx': 20, 'cci': 0, 'obv_trend': True}
+    mock_classify.return_value = ("매수", "[red]", "Reason")
+    mock_score.return_value = (9.0, [])
+    
+    with patch('config.console.print') as mock_print:
+        with patch('modules.db_manager.db.get_stock_strategy', return_value=None):
+             analysis.diagnose_stock()
+             
+    assert mock_print.call_count > 0

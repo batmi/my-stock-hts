@@ -74,6 +74,12 @@ def _show_market_indices_core(target_indices=None):
     data_storage = {}
     yf_tickers = None
     any_kis_used = False
+    
+    # [Fix] 예외 발생 시 참조 오류(UnboundLocalError) 방지를 위해 변수 초기화 상단 이동
+    patched_tickers = []
+    missing_tickers = []
+    mismatch_tickers = []
+    failed_tickers = []
 
     try:
         # [변경] 1. 히스토리 데이터 다운로드 (Progress 분리: Percentage 제거)
@@ -157,11 +163,6 @@ def _show_market_indices_core(target_indices=None):
         table.add_column("RSI", justify="right")
         table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
-
-        patched_tickers = []
-        missing_tickers = []
-        mismatch_tickers = [] # [추가] 날짜 불일치 경고용
-        failed_tickers = []   # [추가] 데이터 수신 실패 종목
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
@@ -776,10 +777,14 @@ def show_market_indices(interval=0):
         config.console.print("[8] 전체 지수")
         
         config.console.print()
-        sel = Prompt.ask("번호 입력 [dim](예: 1,3 / 취소: q)[/dim]", default="8")
+        sel = Prompt.ask("번호 입력 [dim](예: 1,3 / 반복: 1@ / 취소: q)[/dim]", default="8")
         if sel.lower() == 'q': return
         
         try:
+            if sel.endswith('@'):
+                interval = 60
+                sel = sel.rstrip('@')
+
             keys = [k.strip() for k in sel.split(',') if k.strip()]
             
             if '11' in keys:
@@ -798,11 +803,6 @@ def show_market_indices(interval=0):
                 if not target_indices:
                     config.console.print("[red]선택된 그룹이 없습니다.[/red]")
                     return
-
-            if interval == 0:
-                config.console.print()
-                if Prompt.ask("반복 조회 하시겠습니까? (60초 간격)", choices=["y", "n"], default="n") == "y":
-                    interval = 60
         except:
             config.console.print("[red]잘못된 입력입니다.[/red]")
             return
