@@ -948,6 +948,9 @@ def _get_intraday_chart_data(code, is_overseas):
         # [디버그] 요청 상세 로그 (태그 포함)
         logger.debug(f"[API_DEBUG] 분봉 조회 요청({i+1}): {code} | TimeKey: {current_time_key} | Params: {params}")
         
+        # [추가] 모의투자 환경일 경우 TR ID 변경 (실전: FHKST03010200, 모의: 없음/지원안함 가능성 체크)
+        # KIS 모의투자 API 문서를 보면 주식분봉조회는 실전/모의 동일하게 FHKST03010200을 사용하는 경우가 많으나,
+        # 모의투자 서버의 경우 데이터가 없거나 다른 TR일 수 있음. 일단 실전용 TR 사용.
         res = call_api(url_path, "domestic", "quotations", "time_chart", params=params, tr_id=tr_id)
         
         if res.get('rt_cd') == '0':
@@ -961,6 +964,7 @@ def _get_intraday_chart_data(code, is_overseas):
                 # [수정] 하루 장 운영 시간(09:00~15:30) 커버를 위해 420건으로 상향
                 if len(all_items) >= 420: break
             else:
+                logger.debug(f"[API_DEBUG] 분봉 조회 결과 없음 (반복 중단): {res.get('msg1')}")
                 break
         else:
             logger.error(f"[API] 분봉 조회 실패: {res.get('msg1')} (Code: {res.get('msg_cd')})")

@@ -38,6 +38,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         if df is None or df.empty:
             if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][TRACE] 차트 데이터 수신 실패 (Empty)[/dim red]")
+            else:
+                logging.error(f"[Chart] {name}({code}) 데이터 수신 실패 (Empty DataFrame). Period: {period_type}")
             config.console.print(f"[red]{name} 데이터를 불러올 수 없습니다.[/]")
             return
         
