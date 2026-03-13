@@ -465,20 +465,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         if custom_rule.get('buy_vol_strength'):
             buy_vol = custom_rule['buy_vol_strength']
 
+    foreign_rate_str = "-"
     # [추가] 적응형 임계값 적용 (시장 국면 보정)
     score_adj = 0.0
-    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
-        market_type = "KOSPI"
+    if not is_overseas:
         try:
-            # API로 시장 구분 확인
+            # API로 시장 구분 및 외인 소진율 확인
             cp = api.get_current_price_data(code, False)
-            if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
-                market_type = "KOSDAQ"
+            if cp.get('rt_cd') == '0':
+                foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
+                
+                if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                    market_type = "KOSDAQ" if "코스닥" in cp['output'].get('rprs_mrkt_kor_name', '') else "KOSPI"
+                    regime, score_adj = get_market_regime(market_type)
+                    if score_adj != 0:
+                        buy_score += score_adj
         except: pass
-        
-        regime, score_adj = get_market_regime(market_type)
-        if score_adj != 0:
-            buy_score += score_adj
 
     # [추가] 임계값 및 가중치 딕셔너리 구성
     thresholds = {
@@ -598,7 +600,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
     obv_color = "[red]" if ind.get('obv_trend') else "[blue]"
     table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", "이동평균 상회 여부")
-
+    
     # RSI
     rsi_val = ind['rsi']
     rsi_str = f"{rsi_val:.2f}"
@@ -688,6 +690,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     else: disp_eval = "[white]적정 범위[/]"
     
     table_tech.add_row("이격도", disp_msg, f"{disp_eval} [dim](현재가/이평선)[/dim]")
+
+    # [추가] 외인 소진율
+    if not is_overseas:
+        table_tech.add_row("외인 소진율", foreign_rate_str, "외국인 보유 비중")
 
     config.console.print(table_tech)
     config.console.print()
@@ -1877,7 +1883,10 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
         strength_display = ""
 
-        is_us_stock = is_overseas and (len(code) > 6 or not code.isdigit()) # 대략적인 구분
+        # [수정] 타이틀 기반으로 주식/ETF 컨텍스트 정확히 구분 (데이터 처리 및 컬럼 매칭용)
+        # 기존: 코드 형태(숫자 여부)로만 판단하여 ETF(QQQ 등)를 주식으로 오인하는 문제 해결
+        is_us_stock_context = is_overseas and ("주식" in title)
+        is_us_etf_context = is_overseas and ("ETF" in title)
 
         if not is_overseas:
             if use_investor_data:
@@ -1923,15 +1932,20 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 except: pass
         else:
             detail = api.fetch_overseas_detail_price(code, cached_ex)
+            
+            # [추가] 원인 분석을 위한 디버그 로그 (상장주수 0.00 등 데이터 확인용)
+            if config.FILE_DEBUG_LEVEL == "DEBUG":
+                logger.debug(f"[ANALYSIS_DEBUG] {code} Detail: {detail} | StockCtx:{is_us_stock_context} EtfCtx:{is_us_etf_context}")
+
             if detail:
-                if is_us_stock: 
+                if is_us_stock_context: 
                     per_str = detail.get('perx', '-')
                     pbr_str = detail.get('pbrx', '-') if detail.get('pbrx') != '-' else '-'
-                # ETF 구분은 호출처에서 title로 판단하므로 여기선 대략 처리
-                try:
-                    shar_val = float(detail.get('shar', 0))
-                    shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
-                except: pass
+                if is_us_etf_context:
+                    try:
+                        shar_val = float(detail.get('shar', 0))
+                        shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
+                    except: pass
                 try:
                     h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
                     if h52 > l52:
@@ -2121,19 +2135,18 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
                 row_data.append(w52_pos_str)
-                if "ETF" not in title: row_data.append(foreign_rate_str)
                 if use_investor_data: row_data.append(inv_str)
                 else: row_data.append(obv_disp)
             else:
                 row_data.append(w52_pos_str)
-                if is_us_stock: row_data.extend([per_str, pbr_str])
-                elif "ETF" in title: row_data.append(shar_str)
+                if is_us_stock_context: row_data.extend([per_str, pbr_str])
+                elif is_us_etf_context: row_data.append(shar_str)
             return row_data, is_restricted, is_custom_rule
         else:
-            return [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False
+            return [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
     except Exception as e:
         logger.error(f"[{code}] 분석 오류: {e}")
-        return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False
+        return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
 
 def print_table(title, data_list, is_overseas=False):
     is_domestic_etf = ("ETF" in title and not is_overseas)
@@ -2175,10 +2188,7 @@ def print_table(title, data_list, is_overseas=False):
 
     display_title = f"\n{title}" + (" [bold magenta](*)[/]" if use_adaptive else "")
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-    if not is_overseas and not is_domestic_etf:
-        table.add_column("종목명", justify="left", style="white", no_wrap=True, max_width=14, overflow="ellipsis")
-    else:
-        table.add_column("종목명", justify="left", style="white", no_wrap=True)
+    table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
     table.add_column("분류", justify="center") 
     table.add_column("현재가", justify="right")
@@ -2211,9 +2221,8 @@ def print_table(title, data_list, is_overseas=False):
     
     if not is_overseas:
         table.add_column("52주", justify="right")
-        if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
         if use_investor_data: table.add_column("수급(개/외/기)", justify="center")
-        else: table.add_column("OBV", justify="right", width=8)
+        else: table.add_column("OBV", justify="right")
     else:
         table.add_column("52주", justify="right")
         if is_us_stock:
