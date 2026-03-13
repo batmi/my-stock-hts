@@ -1584,10 +1584,16 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             "ORD_QTY": str(qty), "ORD_UNPR": str(price)
         }
     else: # overseas
+        # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
+        trade_excd = exchange_code
+        if exchange_code == "NAS": trade_excd = "NASD"
+        elif exchange_code == "NYS": trade_excd = "NYSE"
+        elif exchange_code == "AMS": trade_excd = "AMEX"
+
         url_path = "uapi/overseas-stock/v1/trading/order"
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
-            "OVRS_EXCG_CD": exchange_code, "PDNO": code, 
+            "OVRS_EXCG_CD": trade_excd, "PDNO": code, 
             "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price), 
             "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn
         }
@@ -1607,8 +1613,14 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
     else: # overseas
+        # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
+        trade_excd = exchange_code
+        if exchange_code == "NAS": trade_excd = "NASD"
+        elif exchange_code == "NYS": trade_excd = "NYSE"
+        elif exchange_code == "AMS": trade_excd = "AMEX"
+
         url_path = "uapi/overseas-stock/v1/trading/order-rvsecncl"
-        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "OVRS_EXCG_CD": exchange_code, "PDNO": code, "ORGN_ODNO": org_no, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price)}
+        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "OVRS_EXCG_CD": trade_excd, "PDNO": code, "ORGN_ODNO": org_no, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price)}
     
     # action 파라미터는 TR_ID 조회를 위해 사용됨 (modify/cancel)
     return call_api(url_path, market, "modify", action, data=data, method="POST")
