@@ -10,6 +10,7 @@ import re
 from matplotlib.ticker import MaxNLocator
 import config
 import api
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import indicators
 from datetime import datetime
 from contextlib import nullcontext
@@ -30,9 +31,21 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
     if not quiet and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 차트 생성 요청: {name} ({code}) | Type: {period_type}[/dim cyan]")
 
-    status_ctx = config.console.status(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]") if not quiet else nullcontext()
+    if quiet:
+        status_ctx = nullcontext()
+    else:
+        status_ctx = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        )
 
-    with status_ctx:
+    with status_ctx as progress:
+        if not quiet:
+            progress.add_task(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]", total=None)
+            
         df = api.get_chart_data(code, is_overseas, period_type)
         
         if df is None or df.empty:

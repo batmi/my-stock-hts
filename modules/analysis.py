@@ -1852,7 +1852,14 @@ def print_table(title, data_list, is_overseas=False):
     is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
     if not is_overseas and data_list:
-        with config.console.status("[bold green]수급 데이터 확인 중 (KIS API)...[/]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[bold green]수급 데이터 확인 중 (KIS API)...[/]", total=None)
             test_data = api.get_investor_trend(data_list[0][1])
             if test_data:
                 sample = test_data[0]
@@ -1864,7 +1871,14 @@ def print_table(title, data_list, is_overseas=False):
     if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
         use_adaptive = True
         try:
-            with config.console.status("[bold green]시장 국면 분석 중 (KIS API)...[/]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
                 _, kospi_adj = get_market_regime("KOSPI")
                 _, kosdaq_adj = get_market_regime("KOSDAQ")
                 market_regime_adj["KOSPI"] = kospi_adj
@@ -2381,7 +2395,14 @@ def _print_period_price_common(code, is_overseas, limit=20):
     df = None
     investor_map = {} # [추가]
 
-    with config.console.status("[bold green]기간별 시세 데이터 조회 중...[/]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[bold green]기간별 시세 데이터 조회 중...[/]", total=None)
         df = api.get_chart_data(code, is_overseas)
         # [추가] 수급 데이터 조회
         if not is_overseas:

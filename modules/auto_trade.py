@@ -1901,10 +1901,47 @@ class AutoTrader:
             err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
         table.add_row("연속 에러", err_display)
         
-        # 금일 매매
-        buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
-        sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
-        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
+        # 금일 매매 & 실현 손익
+        # [수정] 메모리 대신 DB에서 조회하여 재시작 시에도 정확한 카운트 및 실현 손익 표시
+        today_profit = 0
+        buy_cnt = 0
+        sell_cnt = 0
+
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            
+            target_account = None
+            if config.session.is_simulation:
+                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+            elif config.session.auto_cano:
+                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            
+            today_trades = db_manager.db.get_trades(
+                start_date=today_str, end_date=today_str, 
+                is_sim=config.session.is_simulation, account=target_account
+            )
+            
+            # 매수/매도 필터링
+            buy_trades = [x for x in today_trades if "매수" in x.get('type', '') or "buy" in x.get('type', '').lower()]
+            sell_trades = [x for x in today_trades if "매도" in x.get('type', '') or "sell" in x.get('type', '').lower()]
+            
+            buy_cnt = len(buy_trades)
+            sell_cnt = len(sell_trades)
+            
+            # 금일 실현 손익 합산
+            for t in sell_trades:
+                today_profit += int(t.get('profit_amt') or 0)
+                
+        except Exception:
+            # DB 조회 실패 시 메모리 값 사용 (Fallback)
+            buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
+            sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
+            for r in self.trade_records:
+                if r['type'] == 'sell':
+                    today_profit += int(r.get('profit_amt') or 0)
+            
+        p_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
+        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/] (실현손익: {p_color}{today_profit:+,}원[/])")
 
         console.print(table)
         
