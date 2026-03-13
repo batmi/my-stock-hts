@@ -3070,7 +3070,8 @@ class AutoTrader:
                             del self.trailing_stop_cache[code]
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
-        targets = config.session.stock_data.get("stocks_kr", [])
+        # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합
+        targets = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
         if not targets: return
         
         # [추가] 필터링 카운트 초기화 (매 주기마다 갱신)
@@ -4176,7 +4177,7 @@ def system_trading_menu():
     trader = AutoTrader()
 
     console.print("\n[bold yellow]=== 시스템 트레이딩 ===[/]")
-    console.print("[dim]안내: 시스템 트레이딩은 현재 '국내주식' 리스트를 대상으로만 작동합니다.[/dim]")
+    console.print("[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]")
     console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
     console.print("[1] 트레이딩 실행 (Start)")
