@@ -658,6 +658,24 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     is_account_related = "trading" in url_path or "balance" in action or "ccld" in action or "psbl" in action or "nccs" in action
     use_lock = (method != "GET") or is_account_related
     
+    # [추가] API 호출 우선순위 제어 (시스템 트레이딩 스레드 우대)
+    # AutoTrader, ConclusionMonitor, TelegramBot 스레드가 API를 호출하려 하면,
+    # 일반 사용자(MainThread)의 API 호출은 잠시 대기하여 시스템 반응성을 확보함
+    current_thread_name = threading.current_thread().name
+    is_priority_thread = (
+        current_thread_name in ["AutoTrader", "ConclusionMonitor", "TelegramBot"] or
+        getattr(context.trade_context, 'is_system_trading', False)
+    )
+    
+    if is_priority_thread:
+        with context.API_PRIORITY_CONDITION:
+            context.SYSTEM_API_WAIT_COUNT += 1
+    else:
+        with context.API_PRIORITY_CONDITION:
+            if context.SYSTEM_API_WAIT_COUNT > 0:
+                # 시스템 트레이딩 작업이 있으면 최대 1초간 양보 (Starvation 방지)
+                context.API_PRIORITY_CONDITION.wait(timeout=1.0)
+    
     if use_lock:
         context.SYSTEM_TRADING_LOCK.acquire()
 
@@ -737,6 +755,14 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
     finally:
         if use_lock:
             context.SYSTEM_TRADING_LOCK.release()
+            
+        # [추가] 우선순위 카운트 감소 및 대기 스레드 알림
+        if is_priority_thread:
+            with context.API_PRIORITY_CONDITION:
+                context.SYSTEM_API_WAIT_COUNT -= 1
+                if context.SYSTEM_API_WAIT_COUNT <= 0:
+                    context.SYSTEM_API_WAIT_COUNT = 0
+                    context.API_PRIORITY_CONDITION.notify_all()
 
 def get_stock_name_by_code(code, is_overseas):
     final_name = None

@@ -3174,6 +3174,9 @@ class AutoTrader:
     def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay):
         """(내부함수) 매수 후보 분석용 단일 워커"""
         try:
+            # [추가] 시스템 트레이딩 스레드임을 마킹 (API 우선순위 획득용)
+            context.trade_context.is_system_trading = True
+            
             # [추가] API 호출 전 대기 (Rate Limit 방지 - 스레드별 분산 효과)
             time.sleep(safe_delay)
             
