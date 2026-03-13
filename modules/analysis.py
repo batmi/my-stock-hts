@@ -2106,12 +2106,16 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
             
             # 제한 종목 표시
+            is_restricted = False
             if code in restricted_stocks:
                 final_name_str += "-"
+                is_restricted = True
 
             # 개별 룰 적용 종목 표시
+            is_custom_rule = False
             if code in rules_map:
                 final_name_str += "+"
+                is_custom_rule = True
 
             row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
@@ -2123,12 +2127,12 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 row_data.append(w52_pos_str)
                 if is_us_stock: row_data.extend([per_str, pbr_str])
                 elif "ETF" in title: row_data.append(shar_str)
-            return row_data
+            return row_data, is_restricted, is_custom_rule
         else:
-            return [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))]
+            return [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False
     except Exception as e:
         logger.error(f"[{code}] 분석 오류: {e}")
-        return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))]
+        return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False
 
 def print_table(title, data_list, is_overseas=False):
     is_domestic_etf = ("ETF" in title and not is_overseas)
@@ -2260,17 +2264,18 @@ def print_table(title, data_list, is_overseas=False):
                     except Exception as e:
                         logger.error(f"Print table worker error: {e}")
                         name, code = data_list[idx]
-                        results[idx] = [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))]
+                        results[idx] = ([name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False)
                     
                     progress.advance(task)
             
             # 결과 테이블 추가
-            for row_data in results:
-                if not row_data: continue
+            for result_item in results:
+                if not result_item: continue
                 
-                # 플래그 업데이트 (종목명에 포함된 마커 확인)
-                if "-" in row_data[0]: any_restricted = True
-                if "+" in row_data[0]: any_custom_rule = True
+                row_data, is_res, is_cust = result_item
+                
+                if is_res: any_restricted = True
+                if is_cust: any_custom_rule = True
                 
                 table.add_row(*row_data)
                 if table.row_count % 5 == 0 and table.row_count < len(data_list):

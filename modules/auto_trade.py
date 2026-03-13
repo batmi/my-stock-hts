@@ -1,4 +1,5 @@
 import threading
+import concurrent.futures
 import logging
 import time
 import requests
@@ -3170,6 +3171,95 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay):
+        """(내부함수) 매수 후보 분석용 단일 워커"""
+        try:
+            # [추가] API 호출 전 대기 (Rate Limit 방지 - 스레드별 분산 효과)
+            time.sleep(safe_delay)
+            
+            code = item['code']; name = item['name']
+            
+            # 1. 트레이딩 제한 종목 체크
+            if code in restricted_stocks:
+                return {'type': 'restricted_skip', 'name': name}
+            
+            # 2. 진행 중인 주문 체크
+            if self.order_manager.is_pending(code):
+                return None
+
+            # 3. 보유 종목 체크
+            if code in holding_codes: return None
+            
+            # 4. 시장 지수 필터링 (종목별 적용)
+            if getattr(config, 'USE_MARKET_FILTER', True):
+                market_type = self._get_stock_market_type(code)
+                market_stat = self.market_index_status.get(market_type)
+                if market_stat and isinstance(market_stat, dict):
+                    if not market_stat.get('is_healthy', True):
+                        return {'type': 'market_skip', 'name': name}
+            
+            # 5. 데이터 조회 및 분석
+            df = api.get_chart_data(code, is_overseas=False)
+            if df is None or df.empty: return None
+            
+            current_price = float(df.iloc[-1]['close'])
+            
+            # 실시간 체결강도 조회 (매수 유력 시 호출하는 게 좋지만, 로직 단순화를 위해 수행)
+            # [최적화] 여기서 에러나도 무시하고 진행
+            vol_strength = None
+            try: vol_strength = api.get_realtime_vol_strength(code)
+            except: pass
+            
+            # 룰 및 임계값 설정
+            rule = rules_map.get(code)
+            market_type = self._get_stock_market_type(code)
+            score_adj = market_regime_adj.get(market_type, 0.0)
+            base_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            
+            thresholds = None
+            if rule:
+                thresholds = {
+                    "BUY_SCORE": rule['buy_score'] + score_adj,
+                    "BUY_RSI_MAX": rule['buy_rsi'],
+                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]),
+                    "WEIGHTS": rule.get('weights')
+                }
+            else:
+                thresholds = {
+                    "BUY_SCORE": base_buy_score + score_adj,
+                    "WEIGHTS": config.SCORING_WEIGHTS
+                }
+            
+            # 전략 실행
+            result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds)
+            if not result: return None
+            
+            # 로그 출력을 위한 문자열 구성
+            rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
+            adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
+            cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
+            sar_val = result.get('psar')
+            sar_str = "상승" if sar_val and current_price > sar_val else "하락"
+            macd_val = result.get('macd'); sig_val = result.get('macd_signal')
+            macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
+            obv_trend = result.get('obv_trend')
+            obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
+            vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
+            rule_msg = " [개별 룰 적용]" if rule else ""
+            
+            log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}"
+            
+            if result['action'] == "buy":
+                candidate_data = {
+                    'code': code, 'name': name, 'price': current_price,
+                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
+                    'is_custom_rule': bool(rule), 'rule': rule
+                }
+                return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
+            else:
+                return {'type': 'log_only', 'log': log_msg}
+        except Exception: return None
+
     def _analyze_candidates(self, targets, holding_codes, rules_map):
         candidates = []
         skipped_stocks = []
@@ -3191,103 +3281,27 @@ class AutoTrader:
                 if self.consecutive_errors == 0:
                     self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
 
-        for item in targets:
-            if not self.is_running: break
-            
-            # [추가] API 호출 전 대기 (Rate Limit 방지)
-            time.sleep(safe_delay)
-            
-            code = item['code']; name = item['name']
-            
-            # [추가] 트레이딩 제한 종목이면 매수 분석 스킵 (매수 판단 자체를 안 함)
-            if code in restricted_stocks:
-                restricted_skipped_stocks.append(name)
-                continue
-            
-            # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매수 방지)
-            if self.order_manager.is_pending(code):
-                continue
+        # [병렬 처리] 사용자 작업과의 충돌을 고려하여 보수적인 워커 수 설정
+        # (실전: 5개, 모의: 2개)
+        max_workers = 5 if not config.session.is_simulation else 2
 
-            # [추가] 보유 중이면 스킵
-            if code in holding_codes: continue
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay) for item in targets]
             
-            # [추가] 시장 지수 필터링 (종목별 적용)
-            if getattr(config, 'USE_MARKET_FILTER', True):
-                market_type = self._get_stock_market_type(code)
-                # 해당 시장이 하락장이면 스킵 (기본값 True로 설정하여 데이터 없을 시 매수 허용)
-                market_stat = self.market_index_status.get(market_type)
-                if market_stat and isinstance(market_stat, dict):
-                    if not market_stat.get('is_healthy', True):
+            for future in concurrent.futures.as_completed(futures):
+                if not self.is_running: break
+                res = future.result()
+                if res:
+                    if res['type'] == 'candidate':
+                        self.log(res['log'])
+                        candidates.append(res['data'])
+                    elif res['type'] == 'log_only':
+                        self.log(res['log'])
+                    elif res['type'] == 'restricted_skip':
+                        restricted_skipped_stocks.append(res['name'])
+                    elif res['type'] == 'market_skip':
                         self.skipped_by_market_filter_count += 1
-                        skipped_stocks.append(f"{name}")
-                        continue
-            
-            # [설명] 장 중에는 당일 실시간 시세가 반영된 일봉 데이터를 가져옵니다.
-            df = api.get_chart_data(code, is_overseas=False)
-            if df is None or df.empty: continue
-            
-            current_price = float(df.iloc[-1]['close'])
-            
-            # [추가] 실시간 체결강도 조회
-            vol_strength = api.get_realtime_vol_strength(code)
-            
-            # [Refactoring] Use Strategy for analysis
-            # [추가] 개별 룰 적용
-            rule = rules_map.get(code)
-            thresholds = None
-            
-            # [추가] 적응형 임계값 적용
-            market_type = self._get_stock_market_type(code)
-            score_adj = market_regime_adj.get(market_type, 0.0)
-            
-            base_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-            
-            if rule:
-                # 개별 룰이 있으면 개별 룰 기준에 보정값 적용
-                thresholds = {
-                    "BUY_SCORE": rule['buy_score'] + score_adj,
-                    "BUY_RSI_MAX": rule['buy_rsi'],
-                    # [수정] 개별 룰에 체결강도가 있으면 사용, 없으면 전역 설정 사용
-                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]),
-                    "WEIGHTS": rule.get('weights') # [추가] 가중치 전달
-                }
-            else:
-                # 전역 설정에 보정값 적용
-                thresholds = {
-                    "BUY_SCORE": base_buy_score + score_adj,
-                    "WEIGHTS": config.SCORING_WEIGHTS # [추가] 명시적 전달
-                }
-            
-            result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds)
-            if not result: continue
-            
-            rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
-            adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
-            cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
-            
-            # SAR/MACD 상태
-            sar_val = result.get('psar')
-            sar_str = "상승" if sar_val and current_price > sar_val else "하락"
-            
-            macd_val = result.get('macd')
-            sig_val = result.get('macd_signal')
-            macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
-            
-            obv_trend = result.get('obv_trend')
-            obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
-            
-            vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
-            
-            rule_msg = " [개별 룰 적용]" if rule else ""
-            self.log(f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}")
-            
-            if result['action'] == "buy":
-                candidates.append({
-                    'code': code, 'name': name, 'price': current_price,
-                    'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
-                    'is_custom_rule': bool(rule),
-                    'rule': rule
-                })
+                        skipped_stocks.append(res['name'])
 
         # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:
