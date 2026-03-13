@@ -620,18 +620,9 @@ def main():
                                 target_name = api.get_stock_name_by_code(target_code, True) or target_code
                                 target_ovs = True
                     elif sub_choice == '5':
-                        indices_list = [
-                            ("코스피200", "^KS200"), ("코스피", "^KS11"), ("코스닥", "^KQ11"),
-                            ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-                            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
-                            ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("밀", "ZW=F"),
-                            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
-                            ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
-                            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
-                            ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"),
-                            ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
-                            ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
-                        ]
+                        # [수정] 통합 지수 리스트 사용
+                        indices_list = market.ALL_INDICES
+                        
                         config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
                         for i, (name, code) in enumerate(indices_list):
                             config.console.print(f"[{i+1}] {name}")

@@ -15,6 +15,7 @@ import indicators
 from modules import analysis
 from modules import chart
 import logging
+from modules import market # [추가] 통합 지수 리스트 참조용
 from modules import db_manager # [추가]
 import json
 
@@ -643,14 +644,9 @@ def run_backtest():
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
     elif sub_choice == '5':
-        indices_list = [
-            ("코스피", "^KS11"), ("코스닥", "^KQ11"),
-            ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"),
-            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
-            ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("밀", "ZW=F"),
-            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
-            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX")
-        ]
+        # [수정] 통합 지수 리스트 사용 (백테스팅용)
+        indices_list = market.ALL_INDICES
+        
         config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
         for i, (n, c) in enumerate(indices_list):
             config.console.print(f"[{i+1}] {n}")

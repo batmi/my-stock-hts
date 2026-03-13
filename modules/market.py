@@ -20,18 +20,22 @@ import concurrent.futures # [추가] 병렬 처리용
 
 logger = logging.getLogger(__name__)
 
-INDICES_MAP = {
-    "코스피": "^KS11", "코스피200": "^KS200", "코스닥": "^KQ11", "코스닥150": "^KQ150",
-    "나스닥 선물": "NQ=F", "나스닥": "^IXIC", "S&P500": "^GSPC", "다우존스": "^DJI", "러셀2000": "^RUT",
-    "금": "GC=F", "은": "SI=F", "구리": "HG=F", 
-    "브랜트유": "BZ=F", "WTI 원유": "CL=F", "가솔린 RBOB": "RB=F",
-    "천연가스": "NG=F", "밀": "ZW=F",
-    "달러인덱스": "DX-Y.NYB", "달러환율": "KRW=X", 
-    "VIX (변동성)": "^VIX", "SOX (반도체)": "^SOX",
-    "비트코인": "BTC-USD", "이더리움": "ETH-USD",
-    "Japan - 닛케이": "^N225", "Hong Kong - 항셍": "^HSI", "China - 상해종합": "000001.SS", "Taiwan - 대만가권": "^TWII",
-    "Germany - 닥스40": "^GDAXI", "Europe - 스톡스50": "^STOXX50E"
-}
+# [수정] 지수 리스트 통합 관리 (순서 유지)
+ALL_INDICES = [
+    ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
+    ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
+    ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
+    ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
+    ("천연가스", "NG=F"), ("밀", "ZW=F"),
+    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
+    ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
+    ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
+    ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
+    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
+]
+
+# 이름 -> 티커 매핑 (기존 호환성 유지)
+INDICES_MAP = dict(ALL_INDICES)
 
 def _process_index_worker(name, ticker, df_daily, df_intraday, market_regime_cache):
     """(내부함수) 단일 지수 분석 워커"""

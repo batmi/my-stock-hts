@@ -6,6 +6,7 @@ import config
 import context # [추가]
 import api
 import constants
+from modules import market # [추가] 통합 지수 리스트 참조용
 import math
 
 logger = logging.getLogger(__name__)
@@ -90,18 +91,8 @@ def select_stock_for_chart():
     
     # [복구] 시장 지수 선택 로직 추가
     if group_choice == "6":
-        indices_list = [
-            ("코스피200", "^KS200"), ("코스피", "^KS11"), ("코스닥", "^KQ11"),
-            ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
-            ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("밀", "ZW=F"),
-            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
-            ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
-            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
-            ("Japan - Nikkei 225", "^N225"), ("Hong Kong - Hang Seng", "^HSI"),
-            ("China - SSE Composite", "000001.SS"), ("Taiwan - TSEC weighted", "^TWII"),
-            ("Germany - DAX", "^GDAXI"), ("Europe - ESTX 50", "^STOXX50E")
-        ]
+        # [수정] 통합 지수 리스트 사용
+        indices_list = market.ALL_INDICES
 
         config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
         for i, (name, code) in enumerate(indices_list):

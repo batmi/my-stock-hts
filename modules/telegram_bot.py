@@ -11,7 +11,7 @@ import context # [추가]
 import api
 import utils
 import indicators
-from modules import analysis, account, chart, db_manager, auto_trade
+from modules import analysis, account, chart, db_manager, auto_trade, market # [추가]
 from modules.auto_trade import AutoTrader
 
 logger = logging.getLogger(__name__)
@@ -540,20 +540,8 @@ class TelegramCommander:
         """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
         msg = "📊 [시장 지수 현황]\n"
         
-        # 통합 리스트 (모두 yfinance 사용)
-        targets = [
-            ("코스피", "^KS11"), ("코스피200", "^KS200"), 
-            ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
-            ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-            ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"), 
-            ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
-            ("천연가스", "NG=F"), ("밀", "ZW=F"),
-            ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), 
-            ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
-            ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
-            ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
-            ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
-        ]
+        # [수정] 통합 지수 리스트 사용
+        targets = market.ALL_INDICES
         
         # 구분선(공백라인)을 넣을 지수명 리스트
         section_keys = ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
