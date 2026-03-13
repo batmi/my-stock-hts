@@ -1852,10 +1852,11 @@ def print_table(title, data_list, is_overseas=False):
     is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
     if not is_overseas and data_list:
-        test_data = api.get_investor_trend(data_list[0][1])
-        if test_data:
-            sample = test_data[0]
-            if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
+        with config.console.status("[bold green]수급 데이터 확인 중 (KIS API)...[/]"):
+            test_data = api.get_investor_trend(data_list[0][1])
+            if test_data:
+                sample = test_data[0]
+                if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
     
     # [이동] 적응형 임계값 준비 (테이블 생성 전으로 이동)
     market_regime_adj = {}
@@ -1863,16 +1864,20 @@ def print_table(title, data_list, is_overseas=False):
     if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
         use_adaptive = True
         try:
-            _, kospi_adj = get_market_regime("KOSPI")
-            _, kosdaq_adj = get_market_regime("KOSDAQ")
-            market_regime_adj["KOSPI"] = kospi_adj
-            market_regime_adj["KOSDAQ"] = kosdaq_adj
+            with config.console.status("[bold green]시장 국면 분석 중 (KIS API)...[/]"):
+                _, kospi_adj = get_market_regime("KOSPI")
+                _, kosdaq_adj = get_market_regime("KOSDAQ")
+                market_regime_adj["KOSPI"] = kospi_adj
+                market_regime_adj["KOSDAQ"] = kosdaq_adj
         except:
             use_adaptive = False
 
     display_title = f"\n{title}" + (" [bold magenta](*)[/]" if use_adaptive else "")
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-    table.add_column("종목명", justify="left", style="white", no_wrap=True)
+    if not is_overseas and not is_domestic_etf:
+        table.add_column("종목명", justify="left", style="white", no_wrap=True, max_width=14, overflow="ellipsis")
+    else:
+        table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
     table.add_column("분류", justify="center") 
     table.add_column("현재가", justify="right")
@@ -1907,7 +1912,7 @@ def print_table(title, data_list, is_overseas=False):
         table.add_column("52주", justify="right")
         if not is_domestic_etf: table.add_column("외인률", justify="right", style="dim")
         if use_investor_data: table.add_column("수급(개/외/기)", justify="center")
-        else: table.add_column("OBV", justify="right")
+        else: table.add_column("OBV", justify="right", width=8)
     else:
         table.add_column("52주", justify="right")
         if is_us_stock:
@@ -2128,7 +2133,11 @@ def print_table(title, data_list, is_overseas=False):
                         obv_disp = "-"
                         if obv_val:
                             obv_c = "red" if ind.get('obv_trend') else "blue"
-                            obv_disp = f"[{obv_c}]{int(obv_val/1000):,}K[/]"
+                            if abs(obv_val) >= 100_000_000:
+                                obv_str = f"{int(obv_val/1_000_000):,}M"
+                            else:
+                                obv_str = f"{int(obv_val/1000):,}K"
+                            obv_disp = f"[{obv_c}]{obv_str}[/]"
 
                         rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
                         if ind['rsi'] is not None:
