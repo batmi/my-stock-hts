@@ -472,6 +472,11 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 db_sell = 0
                 
                 for t in db_trades:
+                    # [수정] 중복 합산 방지: '체결 확인' 사유가 있는 확정 내역만 집계
+                    # (DB에는 원주문(접수)과 체결 내역이 모두 존재할 수 있어 단순 합산 시 이중 계산됨)
+                    if "체결 확인" not in t.get('reason', ''):
+                        continue
+
                     type_str = t.get('type', '').lower()
                     price = float(t.get('price', 0))
                     qty = int(t.get('qty', 0))
