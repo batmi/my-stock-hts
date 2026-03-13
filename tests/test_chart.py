@@ -42,7 +42,8 @@ def test_generate_visual_chart_success(mock_get_data, mock_plt, sample_chart_df,
         chart.generate_visual_chart("005930", "삼성전자", False)
         
         # 검증
-        mock_get_data.assert_called_with("005930", False)
+        # generate_visual_chart는 내부적으로 period_type='daily'를 사용하여 호출함
+        mock_get_data.assert_called_with("005930", False, 'daily')
         
         # 플롯 관련 함수 호출 확인
         assert mock_plt.subplots.called

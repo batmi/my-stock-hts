@@ -3,6 +3,18 @@ from unittest.mock import patch, MagicMock
 import main
 import config
 
+# [추가] time.sleep을 패치하여 테스트 속도 향상 (finally 블록의 대기 시간 제거)
+@pytest.fixture(autouse=True)
+def mock_sleep():
+    with patch('time.sleep'):
+        yield
+
+# [추가] db_queue.shutdown 패치 (미초기화 상태에서의 블로킹 방지)
+@pytest.fixture(autouse=True)
+def mock_db_queue():
+    with patch('modules.db_queue.shutdown'), patch('modules.db_queue.install_proxy'):
+        yield
+
 @patch('main.os._exit')
 @patch('main.Prompt.ask')
 @patch('main.settings.system_config_menu')
@@ -30,11 +42,10 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
                     with patch('api.get_real_access_token'):
                         with patch('modules.auto_trade.ConclusionMonitor.start'):
                             with patch('modules.telegram_bot.TelegramCommander.start'):
-                                with patch('modules.db_queue.install_proxy'):
-                                    try:
-                                        main.main()
-                                    except SystemExit:
-                                        pass
+                                try:
+                                    main.main()
+                                except SystemExit:
+                                    pass
     
     # 각 메뉴 함수가 호출되었는지 검증
     mock_settings.assert_called()
@@ -55,8 +66,9 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
 @patch('modules.chart.generate_visual_chart')
 def test_main_chart_menu(mock_chart, mock_ask, mock_exit):
     """메인 메뉴 -> 차트 분석 메뉴 테스트"""
-    # 3번(차트) -> 6번(직접입력) -> 코드입력 -> 종료
-    mock_ask.side_effect = ["3", "6", "005930", "q"]
+    # 3번(차트) -> 6번(직접입력) -> 코드입력 -> 1번(일봉) -> q(종료)
+    # [수정] 입력값 부족으로 인한 StopIteration(무한루프) 방지
+    mock_ask.side_effect = ["3", "6", "005930", "1", "q"]
     
     with patch('sys.argv', ['main.py']):
         with patch('config.session.initialize'), \
@@ -65,12 +77,12 @@ def test_main_chart_menu(mock_chart, mock_ask, mock_exit):
              patch('api.get_real_access_token'), \
              patch('modules.auto_trade.ConclusionMonitor.start'), \
              patch('modules.telegram_bot.TelegramCommander.start'), \
-             patch('modules.db_queue.install_proxy'), \
              patch('api.get_stock_name_by_code', return_value="삼성전자"):
                 try:
                     main.main()
                 except SystemExit:
                     pass
                     
-    mock_chart.assert_called_with("005930", "삼성전자", False)
+    # main.py에서 keyword args로 호출하므로 period_type 확인
+    mock_chart.assert_called_with("005930", "삼성전자", False, period_type='daily')
     assert mock_exit.called

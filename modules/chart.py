@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Agg') # [추가] GUI 백엔드 미사용 (스레드 안전성 확보)
 import matplotlib.pyplot as plt
 import numpy as np
+import logging
 from matplotlib import rc
 import platform
 import os

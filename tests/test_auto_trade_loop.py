@@ -6,8 +6,12 @@ import time
 
 @pytest.fixture
 def trader():
+    # 싱글톤 인스턴스의 상태를 매 테스트마다 초기화
     t = AutoTrader()
     t.is_running = True
+    t.consecutive_errors = 0
+    t.logs.clear()
+    t.initial_holdings = None
     return t
 
 @patch('modules.auto_trade.api.get_domestic_balance')
@@ -36,10 +40,11 @@ def test_run_loop_exception_handling(mock_update_indices, mock_deposit, mock_bal
     mock_balance.side_effect = Exception("API Error")
     
     with patch.object(trader, 'is_market_open', return_value=True):
-        with patch('time.sleep', side_effect=[Exception("Interrupted")]): # Fixed: Use side_effect only for the first call, then raise InterruptedError
+        # time.sleep 호출 시 예외를 발생시켜 루프를 한 번만 실행하고 탈출
+        with patch('time.sleep', side_effect=InterruptedError):
             try:
                 trader._run_loop()
-            except Exception:
+            except InterruptedError:
                 pass
                 
     # 에러 카운트 증가 확인

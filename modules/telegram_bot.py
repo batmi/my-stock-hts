@@ -542,8 +542,8 @@ class TelegramCommander:
         
         # 통합 리스트 (모두 yfinance 사용)
         targets = [
-            ("코스피", "^KS11"), ("코스피50", "^KS50"), ("코스피200", "^KS200"), 
-            ("코스닥", "^KQ11"), ("코스닥 글로벌", "^KQGlobal"), ("코스닥150", "^KQ150"),
+            ("코스피", "^KS11"), ("코스피200", "^KS200"), 
+            ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
             ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
             ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"), 
             ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
@@ -560,8 +560,8 @@ class TelegramCommander:
         
         # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
         domestic_map = {
-            "코스피": "KOSPI", "코스피50": "KOSPI50", "코스피200": "KOSPI200",
-            "코스닥": "KOSDAQ", "코스닥 글로벌": "KOSDAQ_GLOBAL", "코스닥150": "KOSDAQ150"
+            "코스피": "KOSPI", "코스피200": "KOSPI200",
+            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
         }
 
         # [추가] 그룹 필터링 로직

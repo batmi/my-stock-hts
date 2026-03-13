@@ -129,15 +129,9 @@ def get_domestic_index_data(market_type):
     elif market_type == "KOSPI200": 
         kis_code = "2001"
         yf_ticker = "^KS200"
-    elif market_type == "KOSPI50":
-        kis_code = "2050"
-        yf_ticker = "^KS50"
     elif market_type == "KOSDAQ150":
         kis_code = "2203"
         yf_ticker = "^KQ150"
-    elif market_type == "KOSDAQ_GLOBAL":
-        kis_code = "2216"
-        yf_ticker = "^KQGlobal"
         
     df = None
     try:
