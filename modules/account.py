@@ -454,6 +454,42 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         if backup_data['sell_total'] > summary_data['sell_today']:
             summary_data['sell_today'] = backup_data['sell_total']
             
+        # [추가] 모의투자이거나 실현손익이 0인 경우 DB에서 금일 손익 및 매매금액 합산 (Fallback)
+        # 모의투자는 기간별 손익 API를 지원하지 않으므로 DB 활용 필수
+        if config.session.is_simulation or summary_data['realized_pl'] == 0:
+            try:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                target_acc = f"{cano}-{acnt_prdt_cd}"
+                
+                # DB 조회
+                db_trades = db_manager.db.get_trades(
+                    start_date=today_str, end_date=today_str,
+                    is_sim=config.session.is_simulation, account=target_acc
+                )
+                
+                db_pl = 0
+                db_buy = 0
+                db_sell = 0
+                
+                for t in db_trades:
+                    type_str = t.get('type', '').lower()
+                    price = float(t.get('price', 0))
+                    qty = int(t.get('qty', 0))
+                    amt = int(price * qty)
+                    
+                    if "sell" in type_str or "매도" in type_str:
+                        db_pl += int(t.get('profit_amt') or 0)
+                        db_sell += amt
+                    elif "buy" in type_str or "매수" in type_str:
+                        db_buy += amt
+                
+                if summary_data['realized_pl'] == 0: summary_data['realized_pl'] = db_pl
+                if db_buy > summary_data['buy_today']: summary_data['buy_today'] = db_buy
+                if db_sell > summary_data['sell_today']: summary_data['sell_today'] = db_sell
+                    
+            except Exception as e:
+                logger.debug(f"DB 금일 데이터 조회 실패: {e}")
+
     except: pass
 
     # 2. 국내 주식 잔고 및 자산
