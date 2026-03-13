@@ -102,7 +102,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax1.scatter(df.index, df['SAR'], s=5, c=sar_color, alpha=0.4, label='SAR')
         
         is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or 'DX-Y' in code)
-        period_str = "일봉 (1년)" if period_type == 'daily' else "분봉 (1분, 당일)"
+        
+        period_str = "일봉 (1년)" if period_type == 'daily' else ("시봉 (3개월)" if period_type == 'hourly' else "분봉 (1분, 당일)")
         ax1.set_title(f"차트 분석 [{period_str}]: {name}", fontsize=16, pad=20)
         ax1.set_ylabel("지수" if is_index else "가격")
         ax1.legend(loc='upper left', ncol=4, fontsize=9)
@@ -188,10 +189,16 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         tick_indices = np.linspace(0, len(df) - 1, 15, dtype=int)
         
         def format_date(date_val):
+            # Timestamp 객체 등 날짜형식인 경우 strftime 사용
+            if hasattr(date_val, 'strftime'):
+                if period_type in ['intraday', 'hourly']:
+                    return date_val.strftime("%m-%d %H:%M")
+                return date_val.strftime("%Y-%m-%d")
+            
             s_date = str(date_val).split('.')[0]
-            if period_type == 'intraday':
-                return s_date[5:16] # YYYY-MM-DD HH:MM:SS -> MM-DD HH:MM
-            elif len(s_date) == 8: return f"{s_date[:4]}-{s_date[4:6]}-{s_date[6:]}"
+            if period_type in ['intraday', 'hourly']:
+                if len(s_date) >= 16: return s_date[5:16] # MM-DD HH:MM
+            if len(s_date) == 8: return f"{s_date[:4]}-{s_date[4:6]}-{s_date[6:]}"
             elif '-' in s_date: return s_date[:10]
             return s_date
 

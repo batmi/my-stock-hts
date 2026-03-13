@@ -809,13 +809,61 @@ def get_stock_name_by_code(code, is_overseas):
     if not final_name and code: return code
     return final_name
 
+def _get_hourly_chart_data(code, is_overseas):
+    """시봉(1시간) 데이터 조회 (yfinance 전용)"""
+    targets = []
+    if is_overseas:
+        targets.append(code)
+    else:
+        # 국내 주식의 경우 티커 추론 (.KS / .KQ)
+        targets.append(f"{code}.KS")
+        targets.append(f"{code}.KQ")
+    
+    for t in targets:
+        try:
+            # 1시간 간격, 최근 3개월 (지표 계산을 위해 충분한 데이터 확보)
+            df = fetch_yfinance_data(t, period="3mo", interval="1h")
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    try: df.columns = df.columns.get_level_values(0)
+                    except: pass
+                
+                df.reset_index(inplace=True)
+                
+                # 컬럼명 표준화
+                rename_map = {'Datetime': 'date', 'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}
+                df.rename(columns=rename_map, inplace=True)
+                
+                cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+                for c in cols:
+                    if c not in df.columns: df[c] = 0
+                
+                df = df[cols].copy()
+                
+                # 시간대 변환 (UTC -> KST)
+                if pd.api.types.is_datetime64_any_dtype(df['date']):
+                    if df['date'].dt.tz is None:
+                        df['date'] = df['date'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+                    else:
+                        df['date'] = df['date'].dt.tz_convert('Asia/Seoul')
+
+                return df.sort_values('date', ascending=True).reset_index(drop=True)
+        except Exception as e:
+            logger.debug(f"yfinance hourly fetch failed for {t}: {e}")
+            pass
+            
+    return pd.DataFrame()
+
 def get_chart_data(code, is_overseas=False, period_type='daily'):
     """
     기술적 분석을 위한 차트 데이터를 조회합니다.
-    period_type: 'daily' (일봉) or 'intraday' (분봉, 5분)
+    period_type: 'daily' (일봉), 'hourly' (시봉), 'intraday' (분봉)
     """
     if period_type == 'intraday':
         return _get_intraday_chart_data(code, is_overseas)
+    
+    if period_type == 'hourly':
+        return _get_hourly_chart_data(code, is_overseas)
 
     now = datetime.now()
     today = now.strftime("%Y%m%d")
@@ -1323,11 +1371,12 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
     if excd == "NAS": primary_excd = "NASD"
     elif excd == "NYS": primary_excd = "NYSE"
     elif excd == "AMS": primary_excd = "AMEX"
-    if config.session.is_simulation:
-        trade_excds.append(primary_excd)
-        for e in ["NASD", "NYSE", "AMEX"]:
-            if e != primary_excd: trade_excds.append(e)
-    else: trade_excds = ["NASD"]
+    
+    # [수정] 실전/모의 모두 모든 거래소 확인 (종목별 상장 거래소가 다를 수 있음)
+    trade_excds = []
+    trade_excds.append(primary_excd)
+    for e in ["NASD", "NYSE", "AMEX"]:
+        if e != primary_excd: trade_excds.append(e)
     
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
@@ -1551,7 +1600,9 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     """해외주식 미체결 내역 조회"""
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     all_orders = []
-    target_exchanges = ["NASD", "NYSE", "AMEX"] if config.session.is_simulation else ["NASD"]
+    # [수정] 실전 투자 시에도 모든 거래소 조회 (NYSE, AMEX 누락 방지)
+    # 단, API 호출 횟수가 늘어나므로 Rate Limit 주의 필요
+    target_exchanges = ["NASD", "NYSE", "AMEX"]
     
     for exc in target_exchanges:
         params = {
