@@ -399,7 +399,8 @@ def show_open_orders():
                                             strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                     except: pass
 
-                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                exec_amt = int(price * qty)
+                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)

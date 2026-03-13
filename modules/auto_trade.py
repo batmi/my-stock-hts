@@ -498,7 +498,8 @@ class ConclusionMonitor:
                                         if rule.get('ts_activation'):
                                             rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
                                     
-                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                    exec_amt = int(avg_price * new_qty)
+                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원 / 금액: {exec_amt:,}원{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
@@ -695,7 +696,8 @@ class ConclusionMonitor:
                                 strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                         except: pass
 
-                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가)\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
+                    exec_amt = int(price * qty)
+                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
                 except Exception as e:
@@ -882,7 +884,10 @@ class OrderManager:
                 if rule:
                     title_tag += " [개별]"
                 
-                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})\n주문번호: {odno}"
+                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})"
+                if price > 0:
+                    msg += f"\n금액: {int(price * qty):,}원"
+                msg += f"\n주문번호: {odno}"
                 if reason:
                     msg += f"\n사유: {reason}"
                 
@@ -1084,8 +1089,9 @@ class OrderManager:
                                                                         cci_str = f"{ind.get('cci', 0):.1f}"
                                                                         strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                                                 except: pass
-
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {float(trade['price']):,.0f}원(주문가)\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
+                                                            
+                                                            exec_amt = int(float(trade['price']) * qty)
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {float(trade['price']):,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
                                                         except Exception as e:
                                                             self.trader.log(f"알림 전송 실패: {e}")
