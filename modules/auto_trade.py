@@ -3284,9 +3284,9 @@ class AutoTrader:
                 if self.consecutive_errors == 0:
                     self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
 
-        # [병렬 처리] 사용자 작업과의 충돌을 고려하여 보수적인 워커 수 설정
-        # (실전: 5개, 모의: 2개)
-        max_workers = 5 if not config.session.is_simulation else 2
+        # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
+        # (실전: 5개, 모의: 1개 - 순차 처리로 안정성 확보)
+        max_workers = 5 if not config.session.is_simulation else 1
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay) for item in targets]
