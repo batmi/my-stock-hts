@@ -2534,6 +2534,16 @@ def _print_period_price_common(code, is_overseas, limit=20):
                 if inv_data:
                     for item in inv_data:
                         investor_map[item['stck_bsop_date']] = item
+                        
+                # 외인 소진율 데이터 조회 및 병합 (최근 30일)
+                frate_data = api.get_daily_foreign_rate(code)
+                if frate_data:
+                    for item in frate_data:
+                        d_key = item['stck_bsop_date']
+                        if d_key in investor_map:
+                            investor_map[d_key]['hts_frgn_ehrt'] = item.get('hts_frgn_ehrt')
+                        else:
+                            investor_map[d_key] = {'hts_frgn_ehrt': item.get('hts_frgn_ehrt')}
             except: pass
 
     if df is None or df.empty: return
@@ -2568,6 +2578,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     table.add_column("120일선", justify="right")
     table.add_column("거래량", justify="right") # [이동]
     if not is_overseas:
+        table.add_column("외인률", justify="right") # [추가]
         table.add_column("수급(개/외/기)", justify="center") # [수정]
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
@@ -2616,6 +2627,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
 
         # [추가] 수급 데이터 포맷팅
         inv_str = "-"
+        foreign_rate_str = "-"
         if not is_overseas:
             d_key = str(row['date']).replace('-', '')[:8]
             if d_key in investor_map:
@@ -2624,6 +2636,12 @@ def _print_period_price_common(code, is_overseas, limit=20):
                 f = api.safe_int(item.get('frgn_ntby_qty'))
                 o = api.safe_int(item.get('orgn_ntby_qty'))
                 
+                # 외인률(외국인 소진율) 파싱 복구
+                f_rate = item.get('hts_frgn_ehrt')
+                if f_rate is not None and str(f_rate).strip():
+                    try: foreign_rate_str = f"{float(f_rate):.2f}%"
+                    except: pass
+
                 def _fmt_i(val):
                     if val == 0: return "[dim]-[/dim]"
                     abs_val = abs(val)
@@ -2648,6 +2666,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
             _fmt_vol(row['volume'])
         ]
         if not is_overseas:
+            row_data.append(foreign_rate_str)
             row_data.append(inv_str)
 
         table.add_row(*row_data)

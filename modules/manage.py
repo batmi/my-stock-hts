@@ -102,6 +102,16 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 if inv_data:
                     for item in inv_data:
                         investor_map[item['stck_bsop_date']] = item
+                        
+                # 외인 소진율 데이터 조회 및 병합 (최근 30일)
+                frate_data = api.get_daily_foreign_rate(code)
+                if frate_data:
+                    for item in frate_data:
+                        d_key = item['stck_bsop_date']
+                        if d_key in investor_map:
+                            investor_map[d_key]['hts_frgn_ehrt'] = item.get('hts_frgn_ehrt')
+                        else:
+                            investor_map[d_key] = {'hts_frgn_ehrt': item.get('hts_frgn_ehrt')}
             except: pass
         
         if df is not None and not df.empty:
@@ -129,6 +139,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("60일선", justify="right")
             table_d.add_column("120일선", justify="right")
             table_d.add_column("거래량", justify="right") # [이동]
+            table_d.add_column("외인률", justify="right") # [추가]
             table_d.add_column("수급(개/외/기)", justify="center") # [수정]
             
             for i, (idx, row) in enumerate(recent_df.iterrows()):
@@ -175,6 +186,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
                 # [추가] 수급 데이터 포맷팅
                 inv_str = "-"
+                foreign_rate_str = "-"
                 d_key = str(row['date']).replace('-', '')[:8]
                 if d_key in investor_map:
                     item = investor_map[d_key]
@@ -182,6 +194,12 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     f = api.safe_int(item.get('frgn_ntby_qty'))
                     o = api.safe_int(item.get('orgn_ntby_qty'))
                     
+                    # 외인률(외국인 소진율) 파싱 복구
+                    f_rate = item.get('hts_frgn_ehrt')
+                    if f_rate is not None and str(f_rate).strip():
+                        try: foreign_rate_str = f"{float(f_rate):.2f}%"
+                        except: pass
+
                     def _fmt_i(val):
                         if val == 0: return "[dim]-[/dim]"
                         abs_val = abs(val)
@@ -196,7 +214,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']),
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
                     fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
-                    _fmt_vol(row['volume']), inv_str
+                    _fmt_vol(row['volume']), foreign_rate_str, inv_str
                 )
                 
                 if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):

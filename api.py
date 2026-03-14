@@ -928,6 +928,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
         df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
         df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+        
         return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
     
     else:
@@ -1259,6 +1260,20 @@ def get_investor_trend(code, market_div="J"):
         
         return output
             
+    return []
+
+def get_daily_foreign_rate(code):
+    """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
+    url = "uapi/domestic-stock/v1/quotations/inquire-daily-price"
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": code,
+        "FID_PERIOD_DIV_CODE": "D",
+        "FID_ORG_ADJ_PRC": "1"
+    }
+    data = call_api(url, "domestic", "quotations", "daily_price", params=params, tr_id="FHKST01010400", timeout=3)
+    if data.get('rt_cd') == '0':
+        return data.get('output', [])
     return []
 
 def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
