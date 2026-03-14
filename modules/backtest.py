@@ -59,7 +59,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     )
     
     # 3. 백테스팅용 플래그 변환
-    can_buy_state = (state not in ["매도", "주의"]) # 매도/주의 상태가 아니면 매수 후보
+    can_buy_state = (state not in ["매도", "주의"]) # 매도/주의가 아니면 매수 후보 (역추세매수 포함)
     sell_check_score = 0 if state == "매도" else raw_score # 매도 상태면 점수 0점 처리 (매도 유도)
     
     return raw_score, sell_check_score, can_buy_state, state, reason
@@ -153,6 +153,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     gross_loss = 0
     cum_profit = 0
     daily_assets = []
+    buy_reason_str = "" # [추가] 역추세/일반 매수 구분 추적용
     
     ts_highest_price = 0
     half_tp_executed = False # [추가] 백테스트용 반익절 추적 변수
@@ -195,11 +196,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         # 매매 로직
         # [매수]
         if holdings == 0:
-            # [수정] 매수 조건 체크 (상태 필터링 통계 추가)
+            # [수정] 매수 조건 체크 (역추세 허용)
             is_score_ok = raw_score >= buy_score_limit
-            is_rsi_ok = row['RSI'] < buy_rsi_limit
+            is_mr_buy = (state == "역추세매수")
+            is_rsi_ok = row['RSI'] < buy_rsi_limit # MR은 기준이 40이라 무조건 통과됨
             
-            if is_score_ok:
+            if is_score_ok or is_mr_buy:
                 if is_rsi_ok and can_buy_state:
                     # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
                     slippage_mult = 1.0
@@ -251,8 +253,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         avg_price = buy_price
                         buy_date = date
                         ts_highest_price = buy_price
+                        buy_reason_str = "역추세" if is_mr_buy else "일반"
                         trades.append({
-                            "date": date, "type": "매수", "price": buy_price, "qty": qty, "balance": balance, 
+                            "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": qty, "balance": balance, 
                             "profit": 0, "profit_amt": 0, "days": 0, 
                             "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                             "cum_profit": cum_profit
@@ -323,7 +326,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if drop_rate >= ts_callback: sell_signal = True; reason = "트레일링스탑"
             
             if not sell_signal and row['RSI'] > take_profit_rsi_limit: sell_signal = True; reason = "RSI과열"
-            if not sell_signal and sell_check_score < sell_score_limit: sell_signal = True; reason = "점수하락"
+            if not sell_signal and sell_check_score < sell_score_limit:
+                # [추가] 역추세 매수 종목은 5일간 점수 하락으로 팔지 않고 기회를 줌 (유예 기간)
+                if buy_reason_str == "역추세" and current_holding_days <= 5 and loss_rate > -5.0:
+                    pass
+                else:
+                    sell_signal = True; reason = "점수하락"
             
             if sell_signal:
                 # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)

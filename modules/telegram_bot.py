@@ -806,7 +806,7 @@ class TelegramCommander:
             else:
                 sell_result = "🟢 보유 (추세유지)"
 
-            state_emoji_map = {"매수": "🔴", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+            state_emoji_map = {"매수": "🔴", "역추세매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
             state_emoji = state_emoji_map.get(state, "")
 
             msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"
@@ -935,6 +935,12 @@ class TelegramCommander:
         msg += f"• RSI 상한: {buy_rsi} 미만\n"
         msg += f"• 체결강도: {buy_vol}% 이상\n"
         
+        msg += f"\n[역추세 매수 (낙폭과대 반등)]\n"
+        use_mr = config.ANALYSIS_THRESHOLDS.get('USE_MEAN_REVERSION', True)
+        msg += f"• 사용 여부: {'ON' if use_mr else 'OFF'}\n"
+        msg += f"• 발동 조건: RSI < {config.ANALYSIS_THRESHOLDS.get('MR_RSI_MAX', 40.0)} & 20일선 이격도 < {config.ANALYSIS_THRESHOLDS.get('MR_DISPARITY_MAX', 90.0)}%\n"
+        msg += f"• 최소 체결강도: {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 120.0)}% 이상\n"
+
         # 매도 관련
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]

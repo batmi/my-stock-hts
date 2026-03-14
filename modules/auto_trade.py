@@ -762,7 +762,7 @@ class DefaultStrategy:
             'vol_strength': vol_strength
         }
 
-    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False, holding_days=0):
+    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False, holding_days=0, is_mr_holding=False):
         """매도 청산 여부 판단"""
         reason = ""
         ind = {}
@@ -829,7 +829,11 @@ class DefaultStrategy:
                 if state == "매도":
                     reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                 else:
-                    reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
+                    # [추가] 역추세 매수 종목은 유예 기간(5일) 및 허용 손실률(-5%) 내에서는 추세 이탈로 손절하지 않음
+                    if is_mr_holding and holding_days <= 5 and profit_rate > -5.0:
+                        pass # 유예 기간 적용
+                    else:
+                        reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             
         return {
             'action': 'sell' if reason else 'hold',
@@ -3051,8 +3055,11 @@ class AutoTrader:
                 
             # [추가] 보유 기간(일수) 계산을 위해 DB에서 최근 매수 기록 확인
             holding_days = 0
+            is_mr_holding = False # [추가] 역추세 진입 여부
             last_buy = db_manager.db.get_latest_buy_trade(code)
             if last_buy and last_buy.get('time'):
+                if '역추세' in str(last_buy.get('reason', '')):
+                    is_mr_holding = True
                 try:
                     buy_dt = datetime.strptime(last_buy['time'], "%Y-%m-%d %H:%M:%S")
                     holding_days = (datetime.now() - buy_dt).days
@@ -3088,7 +3095,7 @@ class AutoTrader:
             # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
             already_half_sold = code in self.half_tp_cache
-            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days)
+            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding)
             
             # [로그] 분석 결과 기록
             ind = result['ind']
@@ -3283,7 +3290,7 @@ class AutoTrader:
                 thresholds = {
                     "BUY_SCORE": rule['buy_score'] + score_adj,
                     "BUY_RSI_MAX": rule['buy_rsi'],
-                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]),
+                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
                     "WEIGHTS": rule.get('weights')
                 }
             else:

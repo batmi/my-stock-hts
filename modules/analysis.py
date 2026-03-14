@@ -220,6 +220,17 @@ def get_market_regime(market_type="KOSPI"):
 def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
+    # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
+    use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+    if use_mr and ema20 is not None and prev_rsi is not None and rsi is not None:
+        mr_rsi = thresholds.get("MR_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
+        mr_disp = thresholds.get("MR_DISPARITY_MAX", config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
+        
+        disparity = (price / ema20) * 100
+        # 조건: RSI 침체 도달 후 전일 대비 상승(반등 확인) & 이격도 충분히 하락
+        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp:
+            return "역추세매수", "[magenta]", "낙폭과대 (역추세 반등 신호)"
+
     reasons = []
     is_severe_danger = False
     
@@ -763,10 +774,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # 매수 조건 체크
     buy_score_limit = buy_score
     buy_rsi_limit = thresholds["BUY_RSI_MAX"]
-    buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    if rule_applied and custom_rule.get('buy_vol_strength'):
-        buy_vol_limit = custom_rule['buy_vol_strength']
     
+    is_mr_state = (state == "역추세매수")
+    if is_mr_state:
+        buy_vol_limit = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0))
+    else:
+        buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        if rule_applied and custom_rule.get('buy_vol_strength'):
+            buy_vol_limit = custom_rule['buy_vol_strength']
+        
     is_buy_score = score >= buy_score_limit
     is_buy_rsi = ind['rsi'] < buy_rsi_limit
     is_safe_state = state not in ["위험", "주의"]
@@ -774,19 +790,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     if vol_strength is not None:
         is_buy_vol = vol_strength >= buy_vol_limit
     
-    buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+    if is_mr_state:
+        buy_result = "[bold magenta]매수 가능 (역추세)[/]" if is_buy_vol else "[bold blue]매수 불가 (체결강도 미달)[/]"
+    else:
+        buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
     
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
-    if not is_buy_score:
+    if not is_buy_score and not is_mr_state: # 역추세매수는 점수 무관
         if score_adj != 0:
             origin_score = round(buy_score_limit - score_adj, 2)
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
         else:
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
-    if not is_buy_rsi: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
+    if not is_buy_rsi and not is_mr_state: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
-    buy_reason = ", ".join(buy_reason_list) if buy_reason_list else "모든 매수 조건 충족"
+    buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
     
     table_logic.add_row("매수 판단", buy_result, buy_reason)
     
@@ -1227,7 +1246,7 @@ def _analyze_stock_worker(stock, params=None):
         vol_strength = None
         
         # 조회 대상 상태 정의 (기본: 매수, 상승)
-        target_vol_states = ["매수", "상승"]
+        target_vol_states = ["매수", "역추세매수", "상승"]
         
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "ALL")
@@ -1243,11 +1262,13 @@ def _analyze_stock_worker(stock, params=None):
                     if vol_strength is not None: break
                 except: time.sleep(0.1)
 
-        # [수정] 매수 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
-        if state in ["매수", "상승"] and vol_strength is not None:
+        # [수정] 매수(역추세포함) 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
+        if state in ["매수", "역추세매수", "상승"] and vol_strength is not None:
             try:
-                if params and 'BUY_VOL_STRENGTH' in params:
-                    min_vol = params['BUY_VOL_STRENGTH']
+                if state == "역추세매수":
+                    min_vol = params.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if params else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+                elif params and 'BUY_VOL_STRENGTH' in params:
+                    min_vol = params.get('BUY_VOL_STRENGTH', 100.0)
                 else:
                     min_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
                 
@@ -1262,9 +1283,9 @@ def _analyze_stock_worker(stock, params=None):
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "BUY")
             target_states = []
-            if filter_mode == "BUY": target_states = ["매수"]
+            if filter_mode == "BUY": target_states = ["매수", "역추세매수"]
             elif filter_mode == "RISE": target_states = ["상승"]
-            elif filter_mode == "ALL": target_states = ["매수", "상승"]
+            elif filter_mode == "ALL": target_states = ["매수", "역추세매수", "상승"]
             if state in target_states:
                 is_target = True
         else:
@@ -1409,7 +1430,7 @@ def analyze_market_stocks(market_type):
                         log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
                         if res_data['is_target']:
-                            log_style = "bold green" if res_data['state'] == "매수" else "bold orange3"
+                            log_style = "bold green" if res_data['state'] in ["매수", "역추세매수"] else "bold orange3"
                             progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
                             buy_candidates.append(res_data)
                         else:
