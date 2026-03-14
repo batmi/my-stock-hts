@@ -10,6 +10,7 @@ def test_take_profit(strategy):
     """익절 테스트: 수익률이 목표치(+30%) 도달 시 매도 신호 발생"""
     # 설정: 익절 30%
     thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -7.0}
+    config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = False
     
     buy_price = 10000
     current_price = 13500 # +35% 상승
@@ -23,6 +24,24 @@ def test_take_profit(strategy):
     
     assert result['action'] == 'sell'
     assert "익절" in result['reason']
+
+def test_half_take_profit(strategy):
+    """반익절 테스트: 목표 익절의 절반 도달 시 50% 매도 신호 발생"""
+    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -7.0}
+    config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = True
+    
+    buy_price = 10000
+    current_price = 11600 # +16% 상승 (15% 초과)
+    profit_rate = 16.0
+    
+    result = strategy.analyze_sell(
+        code="005930", name="삼성전자", df=None, 
+        current_price=current_price, buy_price=buy_price, 
+        profit_rate=profit_rate, ts_msg="", thresholds=thresholds, already_half_sold=False
+    )
+    assert result['action'] == 'sell'
+    assert result['sell_ratio'] == 0.5
+    assert "반익절" in result['reason']
 
 def test_stop_loss(strategy):
     """손절 테스트: 손실률이 한계치(-7%) 도달 시 매도 신호 발생"""

@@ -762,22 +762,30 @@ class DefaultStrategy:
             'vol_strength': vol_strength
         }
 
-    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None):
+    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False):
         """매도 청산 여부 판단"""
         reason = ""
         ind = {}
         score = 0
         state = ""
+        sell_ratio = 1.0 # 기본값 전량 매도
         
         # 설정값 로드 (thresholds가 있으면 우선 사용)
         tp_rate = thresholds.get("TAKE_PROFIT_RATE", config.SELL_STRATEGY["TAKE_PROFIT_RATE"]) if thresholds else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         sl_rate = thresholds.get("STOP_LOSS_RATE", config.SELL_STRATEGY["STOP_LOSS_RATE"]) if thresholds else config.SELL_STRATEGY["STOP_LOSS_RATE"]
         tp_rsi = thresholds.get("TAKE_PROFIT_RSI", config.SELL_STRATEGY["TAKE_PROFIT_RSI"]) if thresholds else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score_limit = thresholds.get("SELL_SCORE", config.SELL_STRATEGY["SELL_SCORE"]) if thresholds else config.SELL_STRATEGY["SELL_SCORE"]
+        
+        # [추가] 반익절 설정 및 계산 (익절 설정의 절반)
+        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+        half_tp_rate = tp_rate / 2.0
 
         # 1. 고정 익절/손절
         if profit_rate >= tp_rate:
             reason = f"익절({profit_rate}%)"
+        elif use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
+            reason = f"반익절({profit_rate:.1f}%)"
+            sell_ratio = 0.5
         elif profit_rate <= sl_rate:
             reason = f"손절({profit_rate}%)"
         # 2. 트레일링 스탑 (외부에서 계산된 메시지 반영)
@@ -818,6 +826,7 @@ class DefaultStrategy:
         return {
             'action': 'sell' if reason else 'hold',
             'reason': reason,
+            'sell_ratio': sell_ratio,
             'ind': ind,
             'score': score,
             'state': state
@@ -1213,6 +1222,7 @@ class AutoTrader:
             cls._instance.restricted_notified = {} # [추가] 거래 제한 알림 스로틀링 (종목별 타임스탬프)
             cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
             cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
+            cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -1331,6 +1341,30 @@ class AutoTrader:
                         if res:
                             deposit = res['deposit'] + res['foreign_deposit']
                     
+                    # 4. 반익절 상태 DB 복원 (시스템 재시작 대비)
+                    def _init_half_tp_cache(holdings_list):
+                        cache = set()
+                        try:
+                            with sqlite3.connect(config.DB_FILE_PATH) as conn:
+                                cursor = conn.cursor()
+                                for h in holdings_list:
+                                    code = h['pdno']
+                                    cursor.execute("SELECT type, reason FROM trade_history WHERE code = ? ORDER BY time DESC LIMIT 5", (code,))
+                                    for row in cursor.fetchall():
+                                        t_type, reason = row[0], row[1]
+                                        if 'buy' in t_type.lower() or '매수' in t_type: break # 최근 매수 기록 만나면 중단
+                                        if ('sell' in t_type.lower() or '매도' in t_type) and reason and '반익절' in reason:
+                                            cache.add(code)
+                                            break
+                        except Exception as e:
+                            logger.error(f"반익절 캐시 복원 실패: {e}")
+                        return cache
+                    
+                    if hasattr(db_manager.db, 'execute_custom'):
+                        self.half_tp_cache = db_manager.db.execute_custom(_init_half_tp_cache, holdings)
+                    else:
+                        self.half_tp_cache = _init_half_tp_cache(holdings)
+
                     # 3. 총 자산 계산
                     stock_eval = 0
                     tot_evlu = 0
@@ -3036,7 +3070,8 @@ class AutoTrader:
 
             # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
-            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds)
+            already_half_sold = code in self.half_tp_cache
+            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold)
             
             # [로그] 분석 결과 기록
             ind = result['ind']
@@ -3061,6 +3096,9 @@ class AutoTrader:
             if result['action'] == 'sell':
                 reason = result['reason']
                 score = result['score']
+                sell_ratio = result.get('sell_ratio', 1.0)
+                
+                target_sell_qty = max(1, int(qty * sell_ratio)) if sell_ratio < 1.0 else qty
                 
                 # [추가] 개별 룰 적용 시 사유에 표시
                 if rule:
@@ -3081,24 +3119,24 @@ class AutoTrader:
 
                 # [추가] 매도 주문 전 실제 매도 가능 수량 재조회 (미체결 등 변동 고려)
                 real_qty = api.fetch_sellable_quantity(code)
-                if real_qty < qty:
+                if real_qty < target_sell_qty:
                     if real_qty > 0:
-                        self.log(f"매도 수량 조정: {name} {qty}주 -> {real_qty}주 (주문 가능 수량 변동)")
-                        qty = real_qty
+                        self.log(f"매도 수량 조정: {name} {target_sell_qty}주 -> {real_qty}주 (주문 가능 수량 변동)")
+                        target_sell_qty = real_qty
                     else:
                         self.log(f"매도 중단: {name} 주문 가능 수량 부족 (미체결 존재 가능성)")
                         continue
 
                 self.log(f"매도 실행: {name} - {reason}")
                 # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
-                odno = self.order_manager.send_order(code, qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
+                odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
                 if odno:
                     # 매도 성공 시 기록 (추정치)
                     record = {
                         "type": "sell",
                         "code": code,
                         "name": name,
-                        "qty": qty,
+                        "qty": target_sell_qty,
                         "price": float(order_price),
                         "profit_rate": profit_rate,
                         "profit_amt": int(item['evlu_pfls_amt']),
@@ -3107,11 +3145,15 @@ class AutoTrader:
                         "odno": odno
                     }
                     self.trade_records.append(record)
-                    # [추가] 매도 성공 시 트레일링 스탑 정보 삭제
-                    db_manager.db.delete_trailing_stop(code)
-                    with self._lock:
-                        if code in self.trailing_stop_cache: # 캐시 삭제
-                            del self.trailing_stop_cache[code]
+                    
+                    if sell_ratio < 1.0:
+                        self.half_tp_cache.add(code) # 반익절 완료 상태 등록
+                    else:
+                        self.half_tp_cache.discard(code) # 전량 매도 시 캐시 클리어
+                        db_manager.db.delete_trailing_stop(code)
+                        with self._lock:
+                            if code in self.trailing_stop_cache: # 캐시 삭제
+                                del self.trailing_stop_cache[code]
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합
@@ -3436,6 +3478,7 @@ class AutoTrader:
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
             if odno: 
+                self.half_tp_cache.discard(cand['code']) # 신규 매수 시 기존 반익절 캐시 방어적 초기화
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
                 record = {

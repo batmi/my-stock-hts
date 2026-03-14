@@ -947,6 +947,10 @@ class TelegramCommander:
         
         msg += f"\n[매도 조건]\n"
         msg += f"• 익절: +{tp}%\n"
+        
+        half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else "OFF"
+        msg += f"• 반익절: {half_tp_str}\n"
+        
         msg += f"• 손절: {sl}%\n"
         atr_str = f"ON (x{atr_mult})" if use_atr else "OFF"
         msg += f"• ATR 손절: {atr_str}\n"
