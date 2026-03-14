@@ -71,7 +71,12 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
 
 class TLSAdapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
+        try:
+            # urllib3 v2.0 이상 호환성 지원
+            self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_minimum_version=ssl.TLSVersion.TLSv1_2)
+        except TypeError:
+            # urllib3 v1.x 버전 하위 호환성 유지
+            self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
 
 def _get_telegram_footer():
     """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
