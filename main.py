@@ -586,7 +586,7 @@ def main():
             grid.add_row("[2] 종목 시세 분석", "(Stock Analysis)")
             grid.add_row("[3] 종목 차트 분석", "(Chart Analysis)")
             grid.add_row("[4] 종목 주문 관리", "(Order Management)")
-            grid.add_row(f"[5] 시스템 트레이딩{trader_status}", "(System Trading)")
+            grid.add_row("[5] 시스템 트레이딩", f"(System Trading){trader_status}")
             grid.add_row("[6] 전략 백테스팅", "(Backtesting)")
             grid.add_row("[7] 테마 트랜드 분석", "(Theme Analysis)")
             grid.add_row("[8] 관심 종목 관리", "(Watchlist Management)")
