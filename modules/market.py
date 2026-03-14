@@ -227,7 +227,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday, market_regime_cac
             elif weekday < 5: # 화~금
                 if gap_days > 1: is_gap = True
             
-            if target_date < today:
+            # KIS API 데이터는 신뢰할 수 있으므로 강제 Stale 처리(yfinance 지연 감지용) 제외
+            if target_date < today and not is_kis_source:
                 is_gap = True
 
             # 분봉으로 전일 종가 찾기 시도
@@ -935,8 +936,9 @@ def _show_market_indices_core(target_indices=None):
                         elif weekday < 5: # 화~금이면 1일 차이는 정상, 2일 이상이면 Gap
                             if gap_days > 1: is_gap = True
                         
-                        # [강화] 오늘 날짜가 아닌 경우 강제로 Gap/Stale로 처리 (사용자 요청 반영)
-                        if target_date < today:
+                        # [강화] 오늘 날짜가 아닌 경우 강제로 Gap/Stale로 처리 (yfinance 지연 감지용)
+                        # KIS API 데이터는 신뢰할 수 있으므로 강제 Stale 처리 제외
+                        if target_date < today and not is_kis_source:
                             is_gap = True
 
                         # 분봉으로 전일 종가 찾기 시도
