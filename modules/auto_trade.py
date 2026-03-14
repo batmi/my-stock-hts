@@ -762,7 +762,7 @@ class DefaultStrategy:
             'vol_strength': vol_strength
         }
 
-    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False):
+    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False, holding_days=0):
         """매도 청산 여부 판단"""
         reason = ""
         ind = {}
@@ -779,6 +779,11 @@ class DefaultStrategy:
         # [추가] 반익절 설정 및 계산 (익절 설정의 절반)
         use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
         half_tp_rate = tp_rate / 2.0
+        
+        # [추가] 시간 청산 설정 로드
+        use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
         # 1. 고정 익절/손절
         if profit_rate >= tp_rate:
@@ -788,6 +793,9 @@ class DefaultStrategy:
             sell_ratio = 0.5
         elif profit_rate <= sl_rate:
             reason = f"손절({profit_rate}%)"
+        # [추가] 시간 청산 (보유 기간 대비 수익률 미달)
+        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
+            reason = f"시간청산({holding_days}일경과, 기대수익미달)"
         # 2. 트레일링 스탑 (외부에서 계산된 메시지 반영)
         elif ts_msg:
             reason = ts_msg
@@ -3040,6 +3048,15 @@ class AutoTrader:
                 if thresholds is None:
                     thresholds = {}
                 thresholds["STOP_LOSS_RATE"] = applied_sl_rate
+                
+            # [추가] 보유 기간(일수) 계산을 위해 DB에서 최근 매수 기록 확인
+            holding_days = 0
+            last_buy = db_manager.db.get_latest_buy_trade(code)
+            if last_buy and last_buy.get('time'):
+                try:
+                    buy_dt = datetime.strptime(last_buy['time'], "%Y-%m-%d %H:%M:%S")
+                    holding_days = (datetime.now() - buy_dt).days
+                except: pass
 
             ts_msg = ""
             # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
@@ -3071,7 +3088,7 @@ class AutoTrader:
             # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
             already_half_sold = code in self.half_tp_cache
-            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold)
+            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days)
             
             # [로그] 분석 결과 기록
             ind = result['ind']

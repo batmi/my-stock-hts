@@ -155,6 +155,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     daily_assets = []
     
     ts_highest_price = 0
+    half_tp_executed = False # [추가] 백테스트용 반익절 추적 변수
     prev_row = prev_row_init
     
     # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
@@ -283,17 +284,38 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         elif holdings > 0:
             loss_rate = (price - avg_price) / avg_price * 100
             if high_price > ts_highest_price: ts_highest_price = high_price
+            
+            # [추가] 현재 보유 기간(일수) 계산
+            current_holding_days = 0
+            if buy_date:
+                try:
+                    d1 = datetime.strptime(str(buy_date), "%Y%m%d")
+                    d2 = datetime.strptime(str(date), "%Y%m%d")
+                    current_holding_days = (d2 - d1).days
+                except: pass
 
             sell_signal = False
             reason = ""
+            sell_ratio = 1.0 # 기본 전량 매도
+            
+            use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+            half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
+            
+            use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+            time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
             if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
+            elif use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
+                sell_signal = True; reason = "반익절"; sell_ratio = 0.5
             elif loss_rate <= current_sl_rate: # [수정] 동적 손절률 사용
                 sell_signal = True
                 if use_atr_stop and current_sl_rate != stop_loss_limit:
                     reason = "ATR손절"
                 else:
                     reason = "손절"
+            elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
+                sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
                 max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
                 if max_profit_rate >= ts_activation:
@@ -314,13 +336,15 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 sell_price = utils.adjust_to_tick(raw_sell_price, is_overseas)
                 if sell_price <= 0: sell_price = utils.adjust_to_tick(price, is_overseas)
 
-                sell_amt = holdings * sell_price
+                # [수정] 분할 매도에 따른 수량 및 수익 계산
+                sell_qty = max(1, int(holdings * sell_ratio)) if sell_ratio < 1.0 else holdings
+                sell_amt = sell_qty * sell_price
                 fee = sell_amt * 0.0023
                 if not is_overseas: fee = int(fee)
                 sell_amt -= fee
                 
-                profit = sell_amt - (holdings * avg_price)
-                profit_rate = (profit / (holdings * avg_price)) * 100
+                profit = sell_amt - (sell_qty * avg_price)
+                profit_rate = (profit / (sell_qty * avg_price)) * 100
                 
                 if profit > 0: 
                     win_trades += 1
@@ -340,11 +364,16 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     except: pass
                 
                 balance += sell_amt
-                sold_qty = holdings
-                holdings = 0
-                avg_price = 0
-                buy_date = None
-                ts_highest_price = 0
+                sold_qty = sell_qty
+                holdings -= sell_qty
+                
+                if holdings == 0:
+                    avg_price = 0
+                    buy_date = None
+                    ts_highest_price = 0
+                    half_tp_executed = False
+                else:
+                    half_tp_executed = True
                 
                 if reason == "점수하락" and sell_check_score == 0 and raw_score > 0: reason = state_reason
                     
