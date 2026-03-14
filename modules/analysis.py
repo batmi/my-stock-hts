@@ -2528,6 +2528,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
         progress.add_task("[bold green]기간별 시세 데이터 조회 중...[/]", total=None)
         df = api.get_chart_data(code, is_overseas)
         # [추가] 수급 데이터 조회
+        frgn_rates_map = {} # [추가] 실제 지분율 맵
         if not is_overseas:
             try:
                 inv_data = api.get_investor_trend(code)
@@ -2544,6 +2545,21 @@ def _print_period_price_common(code, is_overseas, limit=20):
                             investor_map[d_key]['hts_frgn_ehrt'] = item.get('hts_frgn_ehrt')
                         else:
                             investor_map[d_key] = {'hts_frgn_ehrt': item.get('hts_frgn_ehrt')}
+                            
+                # [추가] 실제 외국인 지분율 역산 로직
+                cp_res = api.get_current_price_data(code, is_overseas=False)
+                if cp_res.get('rt_cd') == '0':
+                    out = cp_res['output']
+                    lstn_stcn = api.safe_int(out.get('lstn_stcn'))
+                    frgn_hldn_qty = api.safe_int(out.get('frgn_hldn_qty'))
+                    
+                    if lstn_stcn > 0:
+                        sorted_dates = sorted(list(investor_map.keys()), reverse=True)
+                        current_hldn = frgn_hldn_qty
+                        for d_key in sorted_dates:
+                            frgn_rates_map[d_key] = (current_hldn / lstn_stcn) * 100
+                            f_net = api.safe_int(investor_map[d_key].get('frgn_ntby_qty'))
+                            current_hldn -= f_net
             except: pass
 
     if df is None or df.empty: return
@@ -2636,11 +2652,14 @@ def _print_period_price_common(code, is_overseas, limit=20):
                 f = api.safe_int(item.get('frgn_ntby_qty'))
                 o = api.safe_int(item.get('orgn_ntby_qty'))
                 
-                # 외인률(외국인 소진율) 파싱 복구
-                f_rate = item.get('hts_frgn_ehrt')
-                if f_rate is not None and str(f_rate).strip():
-                    try: foreign_rate_str = f"{float(f_rate):.2f}%"
-                    except: pass
+                # [수정] 역산된 실제 외국인 지분율 우선 적용
+                if d_key in frgn_rates_map:
+                    foreign_rate_str = f"{frgn_rates_map[d_key]:.2f}%"
+                else:
+                    f_rate = item.get('hts_frgn_ehrt')
+                    if f_rate is not None and str(f_rate).strip():
+                        try: foreign_rate_str = f"{float(f_rate):.2f}%"
+                        except: pass
 
                 def _fmt_i(val):
                     if val == 0: return "[dim]-[/dim]"
