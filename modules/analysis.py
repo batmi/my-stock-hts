@@ -483,7 +483,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
                     market_type = "KOSDAQ" if "코스닥" in cp['output'].get('rprs_mrkt_kor_name', '') else "KOSPI"
                     regime, score_adj = get_market_regime(market_type)
-                    if score_adj != 0:
+                    if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                         buy_score += score_adj
         except: pass
 
@@ -798,7 +798,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
     if not is_buy_score and not is_mr_state: # 역추세매수는 점수 무관
-        if score_adj != 0:
+        if score_adj != 0 and not rule_applied:
             origin_score = round(buy_score_limit - score_adj, 2)
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
         else:

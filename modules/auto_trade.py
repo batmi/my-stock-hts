@@ -3027,7 +3027,7 @@ class AutoTrader:
                     "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
                     "SELL_SCORE": rule['sell_score'],
                     "WEIGHTS": rule.get('weights'), # [추가] 가중치 전달
-                    "BUY_SCORE": rule['buy_score'] + score_adj # [추가] 상태 분류용 보정된 매수 기준
+                    "BUY_SCORE": rule['buy_score'] # [수정] 개별 룰은 매도 분석 시에도 시장 보정 무시 (절대값)
                 }
             else:
                 # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
@@ -3288,7 +3288,7 @@ class AutoTrader:
             thresholds = None
             if rule:
                 thresholds = {
-                    "BUY_SCORE": rule['buy_score'] + score_adj,
+                    "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 시장 보정 무시 (절대값)
                     "BUY_RSI_MAX": rule['buy_rsi'],
                     "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
                     "WEIGHTS": rule.get('weights')

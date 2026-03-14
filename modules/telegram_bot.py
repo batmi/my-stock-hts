@@ -725,8 +725,9 @@ class TelegramCommander:
                 
                 regime, score_adj = analysis.get_market_regime(market_type)
                 if score_adj != 0:
-                    buy_score += score_adj
-                    regime_msg = f" [시장국면 보정 {score_adj:+.1f}점]"
+                    if not custom_rule: # [수정] 개별 룰이 없을 때만 보정 적용
+                        buy_score += score_adj
+                        regime_msg = f" [시장국면 보정 {score_adj:+.1f}점]"
 
             thresholds = {
                 "BUY_SCORE": buy_score,
