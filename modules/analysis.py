@@ -1425,7 +1425,10 @@ def analyze_market_stocks(market_type):
                                     buy_candidates.append(result)
                                 else:
                                     progress.console.print(f"[dim]{log_msg}[/dim]")
-                        except Exception: pass
+                            else:
+                                progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock['name']}({stock['code']}) - 데이터 부족 또는 API 응답 없음[/dim red]")
+                        except Exception as e:
+                            progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [오류] {stock['name']}({stock['code']}) - {e}[/dim red]")
                         
                         progress.advance(task)
                     

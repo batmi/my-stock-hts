@@ -899,9 +899,9 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         current_end_date = today
         current_start_date = start_date_origin
         
-        for i in range(5):
+        retry_count = 0
+        while len(all_items) < 250 and retry_count < 10:
             params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
-            page_success = False
             data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
             if data.get('rt_cd') == '0':
                 items = data.get('output2')
@@ -909,13 +909,15 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
                     all_items.extend(items)
                     temp_dates = sorted([x['stck_bsop_date'] for x in items])
                     current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                    page_success = True
-                else: page_success = True
-            elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
-            else: time.sleep(0.2)
-            
-            if not page_success: break
-            if page_success and len(all_items) >= 250: break
+                else:
+                    break
+                retry_count += 1
+            elif data.get('msg_cd') == 'EGW00201': 
+                time.sleep(0.5)
+                retry_count += 1
+            else: 
+                time.sleep(0.2)
+                break
             
         if not all_items: return pd.DataFrame()
         df = pd.DataFrame(all_items).drop_duplicates(subset=['stck_bsop_date'])
@@ -937,11 +939,10 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         for excd in exchanges:
             all_items = []
             next_bymd = today
-            page_success = False
             
-            for i in range(4):
+            retry_count = 0
+            while len(all_items) < 250 and retry_count < 10:
                 params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "0", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
-                sub_success = False
                 data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
                 if data.get('rt_cd') == '0':
                     items = data.get('output2')
@@ -951,13 +952,15 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
                         all_items.extend(items)
                         last = items[-1]['xymd']
                         next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                        sub_success = True
-                    else: sub_success = True
-                elif data.get('msg_cd') == 'EGW00201': time.sleep(0.5)
-                else: time.sleep(0.1)
-                
-                if not sub_success: break
-                if len(all_items) >= 250: break
+                    else:
+                        break
+                    retry_count += 1
+                elif data.get('msg_cd') == 'EGW00201': 
+                    time.sleep(0.5)
+                    retry_count += 1
+                else: 
+                    time.sleep(0.1)
+                    break
             
             if all_items:
                 df = pd.DataFrame(all_items).drop_duplicates(subset=['xymd'])
@@ -1115,8 +1118,8 @@ def get_domestic_index_chart(code):
     all_items = []
     current_end_date = today
     
-    # [수정] 데이터 부족 해결을 위해 최대 4회 반복 조회 (약 400건 확보 시도)
-    for _ in range(4):
+    retry_count = 0
+    while len(all_items) < 300 and retry_count < 10:
         params = {
             "FID_COND_MRKT_DIV_CODE": "U", # U: 업종(Index)
             "FID_INPUT_ISCD": code,        # 0001(KOSPI), 1001(KOSDAQ)
@@ -1134,12 +1137,13 @@ def get_domestic_index_chart(code):
                 # 다음 조회를 위해 종료일을 가장 과거 데이터의 전일로 설정
                 last_date = items[-1]['stck_bsop_date']
                 current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                
-                # 120일 이평선 계산을 위해 최소 200건 이상이면 충분하므로 중단
-                if len(all_items) >= 300: break
+                retry_count += 1
                 time.sleep(0.1) # API 부하 방지
             else:
                 break
+        elif data.get('msg_cd') == 'EGW00201':
+            time.sleep(0.5)
+            retry_count += 1
         else:
             if not all_items:
                 logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
