@@ -205,11 +205,16 @@ chmod +x run.sh
 *   **상승 추세 점수 (`RISE_SCORE`)**: 기본값 **6점**. 매수 기준에는 미치지 못하지만 상승 흐름이 있는 상태입니다.
 *   **매수 허용 RSI 상한 (`BUY_RSI_MAX`)**: 기본값 **65**. 매수 점수를 충족하더라도, RSI가 이 값 이상이면 이미 과열된 것으로 보고 진입하지 않습니다.
 *   **매수 체결강도 기준 (`BUY_VOL_STRENGTH`)**: 기본값 **100.0%**. 매수 시점의 체결강도가 이 값 이상이어야 진입합니다. (매수세 우위 확인)
+*   **역추세 매수 (`USE_MEAN_REVERSION`)**: 하락장이나 급락 구간에서 지표가 과매도에 도달한 후 반등하는 시점을 포착합니다.
+    *   `MR_RSI_MAX`: 역추세 진입 허용 최대 RSI (기본 40.0)
+    *   `MR_DISPARITY_MAX`: 20일선 대비 이격도 제한 (기본 90.0% 이하)
+    *   `MR_VOL_STRENGTH`: 바닥권 매수세 확인을 위한 높은 체결강도 (기본 120.0%)
 
 ### 3. 매도 전략 (`SELL_STRATEGY`)
 *   **익절 (Take Profit)**: 수익률 **+30.0%** (`TAKE_PROFIT_RATE`) 도달 시 이익 실현.
 *   **반익절 (Half Take-Profit)**: `HALF_TAKE_PROFIT_USE`가 True일 경우, 익절 목표치의 절반 도달 시 보유 물량의 50%를 선매도하여 수익을 조기 확정합니다.
 *   **손절 (Stop Loss)**: 손실률 **-7.0%** (`STOP_LOSS_RATE`) 도달 시 손실 확정.
+*   **시간 청산 (Time-based Stop)**: `TIME_STOP_USE`가 True일 경우, 매수 후 설정된 일수(`TIME_STOP_DAYS`, 기본 10일) 내에 목표 수익(`TIME_STOP_MIN_PROFIT_RATE`, 기본 3.0%)에 미달하면 기회비용 확보를 위해 매도합니다.
 *   **트레일링 스탑 (Trailing Stop)**:
     *   **발동 조건**: 수익률 **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) 도달 시 감시 시작.
     *   **매도 조건**: 최고가 대비 **-3.0%** (`TRAILING_STOP_CALLBACK_RATE`) 하락 시 매도.

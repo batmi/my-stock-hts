@@ -334,7 +334,12 @@ def show_help():
     
     # [추가] 현재 설정 및 적응형 임계값, 시장 상태 정보
     score_table.add_section()
-    score_table.add_row("현재 설정", "스코어링 가중치", f"{weights['TREND']} / {weights['MOMENTUM']} / {weights['STRENGTH']} / {weights['SYNERGY']}", "추세/모멘텀/강도/시너지")
+    score_table.add_row("스코어링 가중치", "현재 설정", f"{weights['TREND']} / {weights['MOMENTUM']} / {weights['STRENGTH']} / {weights['SYNERGY']}", "추세/모멘텀/강도/시너지")
+    score_table.add_row("", "(기본값)", "4.0 / 2.5 / 1.5 / 2.0", "[dim]초기 시스템 권장값[/dim]")
+    score_table.add_row("", "(추세 중시)", "5.0 / 2.0 / 1.0 / 2.0", "[dim]확실한 상승 추세를 타는 종목 집중[/dim]")
+    score_table.add_row("", "(모멘텀 중시)", "3.0 / 3.5 / 1.5 / 2.0", "[dim]빠른 단기 반등 및 시세 탄력 집중[/dim]")
+    score_table.add_row("", "(수급 중시)", "3.0 / 2.0 / 3.0 / 2.0", "[dim]거래량 및 외인/기관 매수세 포착[/dim]")
+    score_table.add_row("", "(균등 배분)", "2.5 / 2.5 / 2.5 / 2.5", "[dim]모든 팩터를 균형있게 고려[/dim]")
     
     score_table.add_section()
     adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
@@ -369,6 +374,11 @@ def show_help():
     buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
 
     score_table.add_row("매수 (진입)", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max} & 체결강도 > {buy_vol}%", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    
+    use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+    mr_status = "[green]ON[/green]" if use_mr else "[red]OFF[/red]"
+    score_table.add_row("매수 (역추세)", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역추세매수[/]", f"낙폭과대 기술적 반등 노리기 ({mr_status})")
+    
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
@@ -382,14 +392,26 @@ def show_help():
     ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
     use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+    half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
+    time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+    time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
     score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
+    
+    half_tp_status = "[green]ON[/green]" if half_tp_use else "[red]OFF[/red]"
+    score_table.add_row("매도 (반익절)", f"수익률 +{take_profit/2:.1f}% 도달", "[red]반익절[/]", f"절반(50%) 선매도로 수익 확보 ({half_tp_status})")
+    
     score_table.add_row("매도 (고정손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
     
     atr_desc = "변동성 기반 동적 손절"
     if not use_atr:
         atr_desc += " [dim](현재 미사용)[/dim]"
     score_table.add_row("매도 (ATR손절)", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", atr_desc)
+    
+    time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
+    score_table.add_row("매도 (시간청산)", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}%", "[blue]시간청산[/]", f"장기 횡보 종목 기회비용 보전 ({time_stop_status})")
+    
     score_table.add_row("매도 (트레일링)", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
     score_table.add_row("매도 (과열)", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 (추세이탈)", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
