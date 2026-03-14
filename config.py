@@ -47,13 +47,13 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 # [설정] 시장 지수 그룹 (Market Index Groups)
 # ==========================================================
 INDICES_GROUPS = {
-    "1": {"name": "국내 지수", "indices": ["코스피", "코스피200", "코스닥", "코스닥150"]},
-    "2": {"name": "미국 지수", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
-    "3": {"name": "원자재", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
-    "4": {"name": "환율", "indices": ["달러인덱스", "달러환율"]},
-    "5": {"name": "변동성/반도체", "indices": ["VIX (변동성)", "SOX (반도체)"]},
-    "6": {"name": "암호화폐", "indices": ["비트코인", "이더리움"]},
-    "7": {"name": "글로벌 지수", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50"]}
+    "1": {"name": "국내 지수 (Domestic Indices)", "indices": ["코스피", "코스피200", "코스닥", "코스닥150"]},
+    "2": {"name": "미국 지수 (US Indices)", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
+    "3": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
+    "4": {"name": "환율 (Exchange Rates)", "indices": ["달러인덱스", "달러환율"]},
+    "5": {"name": "변동성/반도체 (Volatility/Semiconductors)", "indices": ["VIX (변동성)", "SOX (반도체)"]},
+    "6": {"name": "암호화폐 (Cryptocurrency)", "indices": ["비트코인", "이더리움"]},
+    "7": {"name": "글로벌 지수 (Global Indices)", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50"]}
 }
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)

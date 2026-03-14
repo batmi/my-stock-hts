@@ -656,12 +656,16 @@ def run_backtest():
     # 1. 종목 선택
     # [수정] 백테스팅 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
     config.console.print("\n[bold]백테스팅할 종목을 선택하세요:[/bold]")
-    config.console.print("[1] 국내 주식")
-    config.console.print("[2] 국내 ETF")
-    config.console.print("[3] 미국 주식")
-    config.console.print("[4] 미국 ETF")
-    config.console.print("[5] 시장 지수")
-    config.console.print("[6] 직접 입력 (코드 검색)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+    grid.add_row("[3] 미국 주식", "(US Stock)")
+    grid.add_row("[4] 미국 ETF", "(US ETF)")
+    grid.add_row("[5] 시장 지수", "(Market Indices)")
+    grid.add_row("[6] 직접 입력", "(Direct Input)")
+    config.console.print(grid)
     config.console.print()
     
     sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
@@ -848,8 +852,12 @@ def run_backtest():
 
     # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
     config.console.print("\n[bold]실행 모드를 선택하세요:[/bold]")
-    config.console.print("[1] 단일 백테스팅 (Single Run)")
-    config.console.print("[2] Monte Carlo 시뮬레이션 (1,000회 반복/노이즈 추가)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 단일 백테스팅", "(Single Run)")
+    grid.add_row("[2] Monte Carlo 시뮬레이션", "(Monte Carlo Sim)")
+    config.console.print(grid)
     mode_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
 
     if mode_choice.lower() == 'q': return

@@ -1269,9 +1269,20 @@ def show_market_indices(interval=0):
     if interval == 0:
         config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
         
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(justify="left")
+        grid.add_column(justify="left", style="dim")
+        
         for key, info in config.INDICES_GROUPS.items():
-            config.console.print(f"[{key}] {info['name']}")
-        config.console.print("[8] 전체 지수")
+            name = info['name']
+            if " (" in name:
+                parts = name.split(" (", 1)
+                grid.add_row(f"[{key}] {parts[0]}", "(" + parts[1])
+            else:
+                grid.add_row(f"[{key}] {name}", "")
+                
+        grid.add_row("[8] 전체 지수", "(All Indices)")
+        config.console.print(grid)
         
         config.console.print()
         sel = Prompt.ask("번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 취소: q)[/dim]", default="8")

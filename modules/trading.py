@@ -29,8 +29,12 @@ def select_account():
     # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
     if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
         config.console.print("\n[bold]주문을 수행할 계좌를 선택하세요:[/bold]")
-        config.console.print(f"[1] {acc_label}: {config.session.cano}-{config.session.acnt_prdt_cd}")
-        config.console.print(f"[2] 자동투자: {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(justify="left")
+        grid.add_column(justify="left", style="dim")
+        grid.add_row(f"[1] {acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}")
+        grid.add_row(f"[2] 자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
+        config.console.print(grid)
         config.console.print()
         
         choice = Prompt.ask("선택 [dim](기본값: 1, 취소: q)[/dim]", choices=["1", "2", "q"], default="1")
@@ -50,8 +54,12 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     (메뉴 4번 잔고 조회와 동일한 상세 정보를 출력)
     """
     config.console.print("\n[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
-    config.console.print("[1] 국내 주식")
-    config.console.print("[2] 해외 주식")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 국내 주식", "(Domestic)")
+    grid.add_row("[2] 해외 주식", "(Overseas)")
+    config.console.print(grid)
     config.console.print()
     market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1", show_choices=False, show_default=False)
     
@@ -607,11 +615,15 @@ def send_order(order_type):
         else:
             # [수정] 매수 시 종목 선택 메뉴 확장 ([5] 직접 입력 추가)
             config.console.print("\n[bold]매수할 종목을 선택하세요:[/bold]")
-            config.console.print("[1] 국내 주식")
-            config.console.print("[2] 국내 ETF")
-            config.console.print("[3] 미국 주식")
-            config.console.print("[4] 미국 ETF")
-            config.console.print("[5] 직접 입력 (코드 검색)")
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(justify="left")
+            grid.add_column(justify="left", style="dim")
+            grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+            grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+            grid.add_row("[3] 미국 주식", "(US Stock)")
+            grid.add_row("[4] 미국 ETF", "(US ETF)")
+            grid.add_row("[5] 직접 입력", "(Direct Input)")
+            config.console.print(grid)
             config.console.print()
             
             choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
@@ -962,8 +974,12 @@ def modify_order():
     config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
-    config.console.print("[1] 정정 (Modify)")
-    config.console.print("[2] 취소 (Cancel)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 정정", "(Modify)")
+    grid.add_row("[2] 취소", "(Cancel)")
+    config.console.print(grid)
     config.console.print()
     action = Prompt.ask("작업 선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     if action.lower() == 'q': return
@@ -1120,8 +1136,12 @@ def modify_order():
 def order_menu():
     """매수/매도 주문 선택 메뉴"""
     config.console.print("\n[bold]주문 유형을 선택하세요:[/bold]")
-    config.console.print("[1] 매수 주문 (Buy)")
-    config.console.print("[2] 매도 주문 (Sell)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 매수 주문", "(Buy Order)")
+    grid.add_row("[2] 매도 주문", "(Sell Order)")
+    config.console.print(grid)
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
@@ -1134,10 +1154,14 @@ def order_menu():
 
 def stock_order_menu():
     """종목 주문 관리 통합 메뉴"""
-    config.console.print("\n[bold]종목 주문 관리[/bold]")
-    config.console.print("[1] [red]매수[/red] 주문 (Buy)")
-    config.console.print("[2] [blue]매도[/blue] 주문 (Sell)")
-    config.console.print("[3] [magenta]정정/취소[/magenta] 주문 (Modify/Cancel)")
+    config.console.print("\n[bold]종목 주문 관리 (Stock Order Management)[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] [red]매수[/red] 주문", "(Buy)")
+    grid.add_row("[2] [blue]매도[/blue] 주문", "(Sell)")
+    grid.add_row("[3] [magenta]정정/취소[/magenta] 주문", "(Modify/Cancel)")
+    config.console.print(grid)
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="3")

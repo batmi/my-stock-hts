@@ -309,8 +309,13 @@ def _analyze_with_gemini_ui():
     if cached:
         updated_at = cached['updated_at']
         config.console.print(f"\n[bold cyan]기존 분석 결과가 존재합니다. (분석 일시: {updated_at})[/bold cyan]")
-        config.console.print("[1] 기존 결과 보기")
-        config.console.print("[2] 새로 분석 시작")
+        
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(justify="left")
+        grid.add_column(justify="left", style="dim")
+        grid.add_row("[1] 기존 결과 보기", "(View Cached)")
+        grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
+        config.console.print(grid)
         
         choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
         if choice.lower() == 'q': return
@@ -362,9 +367,13 @@ def _analyze_with_custom_prompt_ui():
 def run_theme_analysis():
     """테마 트랜드 분석 메인 함수 (서브 메뉴)"""
     config.console.print("\n[bold magenta]=== 테마 트랜드 분석 (Theme Trend Analysis) ===[/]")
-    config.console.print("[1] 네이버 금융 테마 순위 (크롤링)")
-    config.console.print("[2] AI 시장 주도 테마 분석 (Gemini)")
-    config.console.print("[3] 직접 프롬프트 입력 (Gemini)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 네이버 금융 테마 순위", "(Naver Theme Ranking)")
+    grid.add_row("[2] AI 시장 주도 테마 분석", "(AI Market Theme Analysis)")
+    grid.add_row("[3] 직접 프롬프트 입력", "(Custom Prompt)")
+    config.console.print(grid)
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")

@@ -191,13 +191,13 @@ class TelegramCommander:
         group_arg = args[0].lower() if args else None
         
         group_map = {
-            'k': "국내 지수",
-            'u': "미국 지수",
-            'c': "원자재",
-            'f': "환율",
-            'i': "변동성/반도체",
-            'b': "암호화폐",
-            'g': "글로벌 지수"
+            'k': "국내 지수 (Domestic Indices)",
+            'u': "미국 지수 (US Indices)",
+            'c': "원자재 (Commodities)",
+            'f': "환율 (Exchange Rates)",
+            'i': "변동성/반도체 (Volatility/Semiconductors)",
+            'b': "암호화폐 (Cryptocurrency)",
+            'g': "글로벌 지수 (Global Indices)"
         }
         
         target_group_name = group_map.get(group_arg)

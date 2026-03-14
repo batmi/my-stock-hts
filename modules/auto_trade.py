@@ -2039,13 +2039,16 @@ class AutoTrader:
         console.print()
 
     def print_report(self):
-        console.print("\n[bold yellow]=== 시스템 트레이딩 리포트 ===[/]")
+        console.print("\n[bold yellow]=== 시스템 트레이딩 리포트 (Trading Report) ===[/]")
         
-        # [수정] 기간 선택 메뉴 변경
-        console.print("[1] 일간 (오늘)")
-        console.print("[2] 주간 (최근 7일)")
-        console.print("[3] 월간 (최근 30일)")
-        console.print("[4] 기간 직접 입력 (일 단위)")
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(justify="left")
+        grid.add_column(justify="left", style="dim")
+        grid.add_row("[1] 일간 (오늘)", "(Daily)")
+        grid.add_row("[2] 주간 (최근 7일)", "(Weekly)")
+        grid.add_row("[3] 월간 (최근 30일)", "(Monthly)")
+        grid.add_row("[4] 기간 직접 입력", "(Custom Days)")
+        console.print(grid)
         console.print()
         
         choice = Prompt.ask("조회할 기간을 선택하세요 [dim](Enter: 4)[/dim]", choices=["1", "2", "3", "4"], default="4")
@@ -3580,11 +3583,15 @@ class AutoTrader:
 def _select_stock_for_rules():
     """룰 설정을 위한 종목 선택 헬퍼"""
     console.print("\n[bold]개별 설정할 대상을 선택하세요:[/bold]")
-    console.print("[1] 국내 주식")
-    console.print("[2] 국내 ETF")
-    console.print("[3] 미국 주식")
-    console.print("[4] 미국 ETF")
-    console.print("[5] 직접 입력 (코드 검색)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+    grid.add_row("[3] 미국 주식", "(US Stock)")
+    grid.add_row("[4] 미국 ETF", "(US ETF)")
+    grid.add_row("[5] 직접 입력", "(Direct Input)")
+    console.print(grid)
     console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
@@ -4264,11 +4271,15 @@ def _remove_restricted_stock():
 
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
-    console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 ===[/]")
-    console.print("[1] 룰 조회 (View)")
-    console.print("[2] 룰 설정 (Set)")
-    console.print("[3] 룰 변경 (Modify)")
-    console.print("[4] 룰 삭제 (Delete)")
+    console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 (Manage Stock Rules) ===[/]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 룰 조회", "(View)")
+    grid.add_row("[2] 룰 설정", "(Set)")
+    grid.add_row("[3] 룰 변경", "(Modify)")
+    grid.add_row("[4] 룰 삭제", "(Delete)")
+    console.print(grid)
     console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
@@ -4285,10 +4296,14 @@ def manage_stock_rules():
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
-    console.print("\n[bold cyan]=== 트레이딩 제한 종목 관리 ===[/]")
-    console.print("[1] 제한 종목 조회 (List)")
-    console.print("[2] 제한 종목 추가 (Add)")
-    console.print("[3] 제한 종목 해제 (Remove)")
+    console.print("\n[bold cyan]=== 트레이딩 제한 종목 관리 (Restricted Stocks) ===[/]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 제한 종목 조회", "(List)")
+    grid.add_row("[2] 제한 종목 추가", "(Add)")
+    grid.add_row("[3] 제한 종목 해제", "(Remove)")
+    console.print(grid)
     console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q", "Q"], default="1")
@@ -4303,17 +4318,21 @@ def system_trading_menu():
 
     trader = AutoTrader()
 
-    console.print("\n[bold yellow]=== 시스템 트레이딩 ===[/]")
+    console.print("\n[bold yellow]=== 시스템 트레이딩 (System Trading) ===[/]")
     console.print("[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]")
     console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
-    console.print("[1] 트레이딩 실행 (Start)")
-    console.print("[2] 트레이딩 중단 (Stop)")
-    console.print("[3] 트레이딩 상태 (Status)")
-    console.print("[4] 트레이딩 평가 (Report)")
-    console.print("[5] 트레이딩 로그 (Log Viewer)")
-    console.print("[6] 종목별 트레이딩 룰 (Rule)")
-    console.print("[7] 트레이딩 제한 종목 (Restrict)")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 트레이딩 실행", "(Start)")
+    grid.add_row("[2] 트레이딩 중단", "(Stop)")
+    grid.add_row("[3] 트레이딩 상태", "(Status)")
+    grid.add_row("[4] 트레이딩 평가", "(Report)")
+    grid.add_row("[5] 트레이딩 로그", "(Log Viewer)")
+    grid.add_row("[6] 종목별 트레이딩 룰", "(Rule)")
+    grid.add_row("[7] 트레이딩 제한 종목", "(Restrict)")
+    console.print(grid)
     console.print()
     
     try:

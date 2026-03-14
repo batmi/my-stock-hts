@@ -570,8 +570,6 @@ def main():
             print("\n" + "━"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             print("━"*50)
-            config.console.print("[0] 시스템 설정"); config.console.print("[1] 시장 지수 조회")
-            config.console.print("[2] 종목 시세 분석"); config.console.print("[3] 종목 차트 분석")
             
             trader_status = ""
             if trader.is_running:
@@ -580,10 +578,21 @@ def main():
                 else:
                     trader_status = " [bold yellow](WAITING)[/]"
                 
-            config.console.print("[4] 종목 주문 관리"); config.console.print(f"[5] 시스템 트레이딩{trader_status}")
-            config.console.print(f"[6] 전략 백테스팅"); config.console.print("[7] 테마 트랜드 분석")
-            config.console.print("[8] 관심 종목 관리"); config.console.print("[9] 자산 관리")
-            config.console.print("[Q] 종료  |  [H] 도움말 (색상 설명)")
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(justify="left")
+            grid.add_column(justify="left", style="dim")
+            grid.add_row("[0] 시스템 설정", "(Settings)")
+            grid.add_row("[1] 시장 지수 조회", "(Market Indices)")
+            grid.add_row("[2] 종목 시세 분석", "(Stock Analysis)")
+            grid.add_row("[3] 종목 차트 분석", "(Chart Analysis)")
+            grid.add_row("[4] 종목 주문 관리", "(Order Management)")
+            grid.add_row(f"[5] 시스템 트레이딩{trader_status}", "(System Trading)")
+            grid.add_row("[6] 전략 백테스팅", "(Backtesting)")
+            grid.add_row("[7] 테마 트랜드 분석", "(Theme Analysis)")
+            grid.add_row("[8] 관심 종목 관리", "(Watchlist Management)")
+            grid.add_row("[9] 자산 관리", "(Asset Management)")
+            config.console.print(grid)
+            config.console.print("[Q] 종료 (Quit)  |  [H] 도움말 (Help)")
             print("─" * 50); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
@@ -618,12 +627,16 @@ def main():
                 elif choice == "3": 
                     # [수정] 차트 분석 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
                     config.console.print("\n[bold]차트 분석할 대상을 선택하세요:[/bold]")
-                    config.console.print("[1] 국내 주식")
-                    config.console.print("[2] 국내 ETF")
-                    config.console.print("[3] 미국 주식")
-                    config.console.print("[4] 미국 ETF")
-                    config.console.print("[5] 시장 지수")
-                    config.console.print("[6] 직접 입력 (코드 검색)")
+                    grid = Table.grid(padding=(0, 2))
+                    grid.add_column(justify="left")
+                    grid.add_column(justify="left", style="dim")
+                    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+                    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+                    grid.add_row("[3] 미국 주식", "(US Stock)")
+                    grid.add_row("[4] 미국 ETF", "(US ETF)")
+                    grid.add_row("[5] 시장 지수", "(Market Indices)")
+                    grid.add_row("[6] 직접 입력", "(Direct Input)")
+                    config.console.print(grid)
                     config.console.print()
                     
                     sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
@@ -675,9 +688,13 @@ def main():
                         
                         # [추가] 차트 유형 선택 (일봉/분봉)
                         config.console.print("\n[bold]차트 유형을 선택하세요:[/bold]")
-                        config.console.print("[1] 일봉 (최근 1년)")
-                        config.console.print("[2] 시봉 (최근 3개월)")
-                        config.console.print("[3] 분봉 (최근 1일)")
+                        grid = Table.grid(padding=(0, 2))
+                        grid.add_column(justify="left")
+                        grid.add_column(justify="left", style="dim")
+                        grid.add_row("[1] 일봉", "(Daily)")
+                        grid.add_row("[2] 시봉", "(Hourly)")
+                        grid.add_row("[3] 분봉", "(Intraday)")
+                        config.console.print(grid)
                         config.console.print()
                         c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "3", "q"], default="1")
                         

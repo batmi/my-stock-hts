@@ -917,11 +917,15 @@ def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
     logger.debug("[HISTORY_DEBUG] view_trade_history() 진입")
     
-    config.console.print("\n[bold]거래 내역 조회 옵션:[/bold]")
-    config.console.print("[1] 전체 내역 (최신순 50건)")
-    config.console.print("[2] 최근 30일 내역")
-    config.console.print("[3] 종목코드(티커) 검색")
-    config.console.print("[4] 전체 거래 내역 저장 (Excel)")
+    config.console.print("\n[bold]거래 내역 조회 옵션 (Trade History Options):[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 전체 내역 (최신순 50건)", "(All - Latest 50)")
+    grid.add_row("[2] 최근 30일 내역", "(Last 30 Days)")
+    grid.add_row("[3] 종목코드(티커) 검색", "(Search by Ticker)")
+    grid.add_row("[4] 전체 거래 내역 저장", "(Save to Excel)")
+    config.console.print(grid)
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
@@ -1172,10 +1176,14 @@ def view_trade_history():
 
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
-    config.console.print("\n[bold]자산 관리[/bold]")
-    config.console.print("[1] 자산 조회 (예수금/총자산)")
-    config.console.print("[2] 보유 잔고 (종목별 상세)")
-    config.console.print("[3] 거래 내역 (히스토리)")
+    config.console.print("\n[bold]자산 관리 (Asset Management)[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 자산 조회", "(Asset Inquiry)")
+    grid.add_row("[2] 보유 잔고", "(Holdings)")
+    grid.add_row("[3] 거래 내역", "(Trade History)")
+    config.console.print(grid)
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
