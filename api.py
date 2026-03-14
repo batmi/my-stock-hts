@@ -71,11 +71,14 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
 
 class TLSAdapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
-        try:
-            # urllib3 v2.0 이상 호환성 지원
+        # urllib3 메이저 버전 확인을 통한 명시적 분기 (지연 평가로 인한 에러 방지)
+        urllib3_version = int(urllib3.__version__.split('.')[0])
+        
+        if urllib3_version >= 2:
+            # urllib3 v2.x
             self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_minimum_version=ssl.TLSVersion.TLSv1_2)
-        except TypeError:
-            # urllib3 v1.x 버전 하위 호환성 유지
+        else:
+            # urllib3 v1.x
             self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
 
 def _get_telegram_footer():
