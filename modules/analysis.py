@@ -929,8 +929,8 @@ def diagnose_group_stocks(market_filter=None):
     ) as progress:
         task = progress.add_task(f"[green]등록된 종목 병렬 분석 중{title_suffix}...[/]", total=len(targets))
         
-        # [병렬 처리] API Rate Limit 및 락 경합을 고려하여 워커 수 최적화 (실전 8 / 모의 1)
-        max_workers = 8 if not config.session.is_simulation else 1
+        # [병렬 처리] API Rate Limit 및 락 경합을 고려하여 워커 수 최적화
+        max_workers = 4 if not config.session.is_simulation else 1
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 각 종목별로 워커 할당
@@ -1383,9 +1383,9 @@ def analyze_market_stocks(market_type):
             ) as progress:
                 task = progress.add_task(f"[cyan]{market_type} 분석 중...[/cyan]", total=len(stock_list))
                 
-                # [최적화] 멀티스레딩 적용 (API Rate Limit 고려하여 워커 수 조정)
-                # 실전: 20TPS -> 워커 20개, 모의: 2TPS -> 워커 1개
-                max_workers = 20 if not config.session.is_simulation else 1
+                # [최적화] 멀티스레딩 적용 (시뮬레이션 테스트 결과 최적 워커 수 4개 적용)
+                # 실전: 20TPS -> 워커 4개, 모의: 2TPS -> 워커 1개
+                max_workers = 4 if not config.session.is_simulation else 1
                 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     # Future 객체 생성 및 매핑
@@ -1468,7 +1468,7 @@ def analyze_market_stocks(market_type):
                 except: pass
                 return '-'
 
-            max_workers_sector = 20 if not config.session.is_simulation else 1
+            max_workers_sector = 4 if not config.session.is_simulation else 1
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_sector) as executor:
                 future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
                 for future in concurrent.futures.as_completed(future_to_idx):
@@ -1684,7 +1684,7 @@ def save_all_market_analysis():
                 task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
 
                 # [최적화] 멀티스레딩 적용
-                max_workers = 20 if not config.session.is_simulation else 1
+                max_workers = 4 if not config.session.is_simulation else 1
                 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {executor.submit(_analyze_stock_worker, stock, None): stock for stock in stock_list}
