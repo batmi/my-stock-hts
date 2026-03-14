@@ -29,6 +29,8 @@
 *   **국내/해외 통합 관리:** 한국투자증권(KIS) API를 활용하여 국내 주식과 미국 주식을 하나의 인터페이스에서 통합 관리
 *   **실전/모의 투자 지원:** 설정 변경만으로 모의 투자와 실전 투자를 손쉽게 전환
 *   **전략 백테스팅:** 과거 데이터를 기반으로 현재의 매매 전략을 검증하고 수익률을 시뮬레이션
+*   **API 통신 최적화:** KIS API 초당 호출 한도(실전 20 TPS, 모의 2 TPS)에 맞춰 멀티스레드와 순차 처리를 자동 전환하여 통신 병목 최소화
+*   **스레드 안전(Thread-Safe) DB:** 작업 큐(Queue) 기반의 DB 프록시 아키텍처를 도입하여 다중 스레드 환경에서 발생하는 SQLite Lock 문제 원천 차단
 
 ## 2. 필수 준비 사항 (Prerequisites)
 이 프로그램은 **한국투자증권(Korea Investment & Securities)**의 Open API를 기반으로 동작합니다.
@@ -272,6 +274,7 @@ my-stock-hts/
 ├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
 ├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
 ├── session.py            # 세션 및 토큰 관리
+├── context.py            # 스레드 전역 상태 및 락(Lock) 관리
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── LICENSE.md            # 라이선스 파일
 ├── db/                   # [자동 생성] SQLite DB 파일 저장소
@@ -279,10 +282,11 @@ my-stock-hts/
 ├── logs/                 # [자동 생성] 로그 파일 저장소
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
-├── tools/                # 유틸리티 도구 스크립트 (Chat ID 조회 등)
+├── tools/                # 각종 진단 및 유틸리티 도구 (DB 초기화, 스레드 성능 시뮬레이션 등)
 ├── tests/                # Pytest 단위/통합 테스트 코드
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
+    ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
     ├── telegram_bot.py   # 텔레그램 봇 연동 및 알림
     ├── settings.py       # [0] 시스템 설정 관리
     ├── market.py         # [1] 시장 지수 조회
