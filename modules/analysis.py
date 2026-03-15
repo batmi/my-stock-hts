@@ -1287,9 +1287,9 @@ def _analyze_stock_worker(stock, params=None):
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "BUY")
             target_states = []
-            if filter_mode == "BUY": target_states = ["매수", "역추세매수"]
+            if filter_mode == "BUY": target_states = ["매수"]
             elif filter_mode == "RISE": target_states = ["상승"]
-            elif filter_mode == "ALL": target_states = ["매수", "역추세매수", "상승"]
+            elif filter_mode == "ALL": target_states = ["매수", "상승"]
             if state in target_states:
                 is_target = True
         else:
