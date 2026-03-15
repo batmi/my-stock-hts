@@ -177,28 +177,39 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
     else:
         prompt = f"""
         [현재 시각: {now} (KST)]
-        당신은 여의도 최고의 전략가이자 국제 정세와 매크로 경제에 정통한 주식 분석 전문가입니다. 
-        구글 검색을 통해 실시간 글로벌 뉴스 및 한국 증시 데이터를 수집한 후, 오늘 한국 증시(KOSPI, KOSDAQ)를 관통하는 '글로벌 연동형 핵심 테마 5가지'를 분석해 주세요.
+        당신은 여의도 최고의 퀀트 전략가이자 국제 정세와 매크로 경제에 정통한 수석 주식 분석가입니다. 
+        구글 검색을 통해 최신 실시간 글로벌 뉴스, 경제 지표, 한국 증시(KOSPI/KOSDAQ) 데이터를 완벽하게 수집한 후, 
+        오늘 시장을 지배하는 '핵심 주도 테마 TOP 5'에 대한 **매우 심층적이고 전문적인** 마켓 인사이트 리포트를 작성해 주세요.
 
-        반드시 다음의 상세 가이드라인을 엄격히 준수하세요:
+        반드시 다음의 상세 가이드라인을 엄격히 준수하여 분량을 충분히 확보하고 깊이 있게 작성해야 합니다:
 
-        1. **국제 정세 및 매크로 환경 분석 (신규 추가)**:
-          - 각 테마를 선정하기 전, 현재 한국 증시에 가장 큰 영향을 끼치고 있는 '글로벌 이슈 3가지'(예: 미 연준 금리 향방, 지경학적 갈등, 유가/환율 변동성 등)를 요약하고, 이것이 오늘 국내 테마 형성에 어떤 논리로 작용했는지 서술할 것.
+        1. **글로벌 정세, 매크로 및 증시 환경 브리핑 (지정학적/거시적 관점)**:
+          - 글로벌 지정학적 핵심 이슈(미중 무역 갈등, 전쟁/지경학적 분쟁, 주요국 정책 변화 등)가 현재 증시와 공급망에 미치는 영향을 반드시 포함하여 심층 분석할 것.
+          - 전일 미 증시 동향 및 오늘 한국 증시에 미치는 영향 (구체적인 지수 등락률 및 주요 섹터 움직임 포함).
+          - 핵심 매크로 지표(달러 환율, 국채 금리, 주요 원자재 가격 등)의 현재 흐름과 이것이 투심에 미치는 영향.
+          - 오늘 시장의 전체적인 수급 동향(외인/기관 포지셔닝) 및 전반적인 시장 심리(투심) 평가.
 
-        2. **실시간 테마 및 모멘텀 분석**:
-          - 거래대금 상위 및 뉴스 노출 빈도를 바탕으로 주도 테마 선정.
-          - 글로벌 공급망 변화, 외신 보도, 해외 기업(엔비디아, 테슬라 등)과의 연동성을 구체적으로 명시할 것.
+        2. **핵심 주도 테마 요약 표 (Markdown Table 필수)**:
+          - 오늘 시장을 주도하는 TOP 5 테마를 한눈에 파악할 수 있도록 반드시 **마크다운 표(Table)** 형태로 먼저 요약할 것.
+          - 표의 컬럼: [순위 | 테마명 | 상승 강도 | 핵심 트리거(한 줄 요약) | 대장주 및 관련주]
 
-        3. **종목 및 수급 분석**:
-          - 각 테마별 대장주 1개와 핵심 관련주 2개를 선정.
-          - 해당 종목들에 대한 외국인/기관의 수급 특징(숏커버링 유입 여부, 바스켓 매수 등)을 실시간 속보 기반으로 분석할 것.
+        3. **테마별 딥다이브 심층 분석 및 대응 전략 (TOP 5 각각에 대해 매우 상세히 작성)**:
+          각 테마별로 아래 항목을 분리하여 **최소 3~4문장 이상** 구체적으로 서술할 것:
+          - **상승 배경 및 촉매제**: 단순 뉴스 나열이 아닌, 해당 뉴스가 왜 시장에서 강력한 매수세로 이어졌는지 논리적 배경 설명.
+          - **글로벌 밸류체인 연동성**: 이 테마가 글로벌 공급망이나 해외 빅테크(엔비디아, 테슬라, 애플 등)와 어떤 역학 관계로 연결되어 있는지 심층 분석.
+          - **주도주 수급 및 기술적 위치**: 대장주와 2~3등주의 이름과 현재 기술적 위치(예: 52주 신고가 돌파, 주요 이평선 지지 등). 외인/기관의 구체적인 수급 특징.
+          - **리스크 및 실전 대응 전략**: 단기적인 차익 실현 가능성, 밸류에이션 부담, 재료 소멸 타이밍 등을 경고. "지금 추격 매수해도 되는가?"에 대한 명확한 뷰(View)와 타점(눌림목 등) 제시.
 
-        4. **기술적 전략 및 리스크 관리**:
-          - 현재 시점의 매수 적정성(과열 여부) 판정.
-          - 국제 정세 급변에 따른 '변동성 리스크'와 '재료 소멸 시점'을 날카롭게 지적할 것.
+        4. **향후 체크포인트 (Upcoming Events)**:
+          - 이번 주 또는 단기적으로 해당 테마 및 증시 전체의 방향성을 바꿀 수 있는 주요 일정(주요국 경제 지표 발표, 빅테크 실적 발표, 정책 이벤트 등) 2~3가지를 날짜와 함께 구체적으로 제시.
 
-        5. **보고서 형식**: 
-          - [글로벌 매크로 요약] -> [테마별 상세 분석 표] -> [최종 투자 총평] 순서로 작성하여 가독성 높은 '마켓 인사이트 리포트' 형태로 출력할 것.
+        5. **보고서 출력 형식**:
+          - 도입부: [🌟 마켓 브리핑, 매크로 및 글로벌 정세 요약]
+          - 요약부: [📊 오늘의 핵심 테마 TOP 5 요약 표] (반드시 표 형태로 출력)
+          - 본문: [🔍 테마별 심층 분석 (Deep Dive)] (각 테마별로 소제목을 달아 상세히 서술)
+          - 일정: [📅 단기 핵심 체크포인트]
+          - 결론: [💡 수석 전략가의 최종 투자 총평 및 포트폴리오 비중 조언]
+          - 가독성을 위해 불릿 포인트(•)와 적절한 이모지를 적극적으로 활용하되, 내용은 최대한 풍부하고 깊이 있게 작성할 것.
         """
 
     try:
@@ -344,25 +355,25 @@ def _analyze_with_gemini_ui():
 
 def _analyze_with_custom_prompt_ui():
     """사용자 정의 프롬프트로 Gemini 분석 실행"""
-    config.console.print("\n[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
-    config.console.print("[dim](예: 현재 2차전지 관련 최신 뉴스와 전망을 요약해줘)[/dim]")
-    
-    user_prompt = Prompt.ask("입력 [dim](취소: q)[/dim]")
-    if user_prompt.lower() == 'q' or not user_prompt.strip():
-        return
-
-    config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]\n")
-    
-    # 사용자 프롬프트 실행 (캐시 저장 안함)
-    result = analyze_market_trends_with_gemini(custom_prompt=user_prompt)
-
-    if result:
-        md = Markdown(result)
-        panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2))
-        config.console.print(Padding(panel, (0, 4)))
+    while True:
+        config.console.print("\n[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
         
-        config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
-        config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
+        user_prompt = Prompt.ask("입력 [dim](종료: q 또는 Enter)[/dim]")
+        if user_prompt.lower() == 'q' or not user_prompt.strip():
+            return
+
+        config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]\n")
+        
+        # 사용자 프롬프트 실행 (캐시 저장 안함)
+        result = analyze_market_trends_with_gemini(custom_prompt=user_prompt)
+
+        if result:
+            md = Markdown(result)
+            panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2))
+            config.console.print(Padding(panel, (0, 4)))
+            
+            config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
+            config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
 
 def run_theme_analysis():
     """테마 트랜드 분석 메인 함수 (서브 메뉴)"""
@@ -371,16 +382,16 @@ def run_theme_analysis():
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
     grid.add_row("[1] 네이버 금융 테마 순위", "(Naver Theme Ranking)")
-    grid.add_row("[2] AI 시장 주도 테마 분석", "(AI Market Theme Analysis)")
-    grid.add_row("[3] 직접 프롬프트 입력", "(Custom Prompt)")
+    grid.add_row("[2] 시장 주도 테마 분석", "(Market Theme Analysis)")
+    # grid.add_row("[3] 직접 프롬프트 입력", "(Custom Prompt)")
     config.console.print(grid)
     config.console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     
     if choice == '1':
         _show_naver_themes()
     elif choice == '2':
         _analyze_with_gemini_ui()
-    elif choice == '3':
-        _analyze_with_custom_prompt_ui()
+    # elif choice == '3':
+    #     _analyze_with_custom_prompt_ui()
