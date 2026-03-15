@@ -172,7 +172,7 @@ class TelegramCommander:
             "• /market [그룹] : 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
-            "• /chart <종목> : 기술적 분석 차트 이미지 전송\n"
+            "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
         )
@@ -211,10 +211,26 @@ class TelegramCommander:
 
     def _cmd_chart(self, args):
         if not args:
-            self._send_reply("⚠️ 종목명이나 코드를 입력해주세요.\n예: /chart 삼성전자")
-        else:
-            self._send_chart(" ".join(args))
-        return None # 차트는 별도 전송하므로 반환값 없음
+            self._send_reply("⚠️ 종목명이나 코드를 입력해주세요.\n예: /chart [d/h/m] 삼성전자")
+            return None
+
+        period_type = 'hourly'
+        period_label = "시봉"
+        keyword_args = args
+
+        if args[0].lower() in ['d', 'h', 'm']:
+            p = args[0].lower()
+            if p == 'd': period_type, period_label = 'daily', '일봉'
+            elif p == 'h': period_type, period_label = 'hourly', '시봉'
+            elif p == 'm': period_type, period_label = 'intraday', '분봉'
+            keyword_args = args[1:]
+            
+        if not keyword_args:
+            self._send_reply("⚠️ 종목명이나 코드를 입력해주세요.\n예: /chart [d/h/m] 삼성전자")
+            return None
+
+        self._send_chart(" ".join(keyword_args), period_type, period_label)
+        return None
 
     def _cmd_stocks(self, args):
         return self._get_monitoring_list()
@@ -830,7 +846,7 @@ class TelegramCommander:
         except Exception as e:
             return f"⚠️ 분석 중 오류 발생: {str(e)}"
             
-    def _send_chart(self, keyword):
+    def _send_chart(self, keyword, period_type='hourly', period_label='시봉'):
         """차트 이미지를 생성하여 텔레그램으로 전송"""
         code, name, is_overseas = self._resolve_stock(keyword)
         
@@ -847,17 +863,17 @@ class TelegramCommander:
         if custom_rule: name_display += "+"
 
         try:
-            self._send_reply(f"⏳ {name_display}({code}) 차트 생성 중...")
+            self._send_reply(f"⏳ {name_display}({code}) {period_label} 차트 생성 중...")
             
             # 차트 생성 (config.CHART_DIR에 저장됨)
-            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100, quiet=True, period_type='hourly')
+            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100, quiet=True, period_type=period_type)
             
             # 파일 경로 추론
             safe_code = re.sub(r'[=\-\.\^]', '', code)
-            filename = f"analysis_{safe_code}_hourly.png"
+            filename = f"analysis_{safe_code}_{period_type}.png"
             file_path = os.path.join(config.CHART_DIR, filename)
             
-            caption = f"📊 {name_display}({code}) 분석 차트"
+            caption = f"📊 {name_display}({code}) 분석 차트 ({period_label})"
             
             # api.send_telegram_photo 사용
             if api.send_telegram_photo(file_path, caption):
