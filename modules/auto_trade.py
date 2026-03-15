@@ -1646,8 +1646,11 @@ class AutoTrader:
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
 
-        # [추가] 시장 지수 요약 정보 (시장 상황 아래 배치)
-        msg += "\n[시장 지수]"
+        # [추가] 시장 지수 요약 정보 및 필터링 상태 (시장 상황 아래 배치)
+        use_filter = getattr(config, 'USE_MARKET_FILTER', True)
+        filter_str = "ON" if use_filter else "OFF"
+        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str})]\n"
+        
         try:
             for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
                 df = analysis.get_domestic_index_data(m_type)
@@ -1655,10 +1658,19 @@ class AutoTrader:
                     curr = df.iloc[-1]['close']
                     prev = df.iloc[-2]['close'] if len(df) > 1 else curr
                     rate = ((curr - prev) / prev) * 100
-                    icon = "🔴" if rate > 0 else ("🔵" if rate < 0 else "⚪")
-                    msg += f"\n• {name}: {curr:,.2f} ({icon} {rate:+.2f}%)"
+                    
+                    filter_msg = ""
+                    if use_filter:
+                        stat = self.market_index_status.get(m_type)
+                        if stat and isinstance(stat, dict) and stat.get('current', 0) > 0:
+                            is_healthy = stat.get('is_healthy', True)
+                            filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
+                            
+                    msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
         except: pass
-        msg += "\n"
+        
+        if use_filter and self.skipped_by_market_filter_count > 0:
+            msg += f"⚠️ 하락장 방어 중 (최근 {self.skipped_by_market_filter_count}종목 신규 매수 보류)\n"
 
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -1908,7 +1920,15 @@ class AutoTrader:
         buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑")
 
-        # 매도 조건 (2줄)
+        # [추가] 역추세 매수 표시
+        use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+        if use_mr:
+            mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
+            mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
+            mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+            table.add_row("", f"└ 역추세매수 [green]ON[/] (RSI {mr_rsi}↓ / 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑)")
+
+        # 매도 조건
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
@@ -1916,8 +1936,25 @@ class AutoTrader:
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         
+        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
+        use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+        atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+        use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+
         table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
-        table.add_row("", f"익절 (+{tp}%) / 손절 ({sl}%) / 트레일링스탑 (+{ts_act}%/-{ts_call}%)")
+        
+        cond_str = f"익절 (+{tp}%)"
+        if use_half_tp: cond_str += f" [dim](반익절: +{tp/2}%, 50%)[/dim]"
+        cond_str += f" / 손절 ({sl}%)"
+        if use_atr: cond_str += f" [dim](ATR손절: x{atr_mult})[/dim]"
+        
+        table.add_row("", cond_str)
+        table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
+        
+        if use_time_stop:
+            table.add_row("", f"시간청산 [green]ON[/] ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만)")
 
         # 투자 설정
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
