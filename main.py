@@ -276,19 +276,34 @@ def show_help():
     adx_th = regime.get('REGIME_ADX_THRESHOLD', 20)
     
     market_status_info = None
+    filter_info = None
     try:
-        with config.console.status("[dim]현재 시장 국면(KOSPI/KOSDAQ) 분석 중...[/]"):
+        with config.console.status("[dim]현재 시장 상태 및 필터링 분석 중...[/]"):
             kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
-        r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
-        k_r_str = r_map.get(kospi_regime, kospi_regime) + "*"
-        q_r_str = r_map.get(kosdaq_regime, kosdaq_regime) + "*"
+            r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
+            k_r_str = r_map.get(kospi_regime, kospi_regime) + "*"
+            q_r_str = r_map.get(kosdaq_regime, kosdaq_regime) + "*"
 
-        market_status_info = {
-            "kospi_str": k_r_str, "kospi_adj": kospi_adj,
-            "kosdaq_str": q_r_str, "kosdaq_adj": kosdaq_adj
-        }
+            market_status_info = {
+                "kospi_str": k_r_str, "kospi_adj": kospi_adj,
+                "kosdaq_str": q_r_str, "kosdaq_adj": kosdaq_adj
+            }
+            
+            # [추가] 실시간 필터링 상태 계산
+            if getattr(config, 'USE_MARKET_FILTER', True):
+                filter_info = {}
+                ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 50)
+                for m_type in ["KOSPI", "KOSDAQ"]:
+                    try:
+                        df = analysis.get_domestic_index_data(m_type)
+                        if df is not None and not df.empty and len(df) >= ma_period_filter:
+                            ma_val = df['close'].rolling(window=ma_period_filter).mean().iloc[-1]
+                            current_idx = df['close'].iloc[-1]
+                            filter_info[m_type] = current_idx >= ma_val
+                    except:
+                        pass
     except Exception:
         pass
 
@@ -358,9 +373,16 @@ def show_help():
     # [추가] 시장 필터링 섹션
     score_table.add_section()
     filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
-    ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+    ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
     score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
+    if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
+        score_table.add_row("현재 필터링 상태", "확인 불가", "-", "-")
+    elif filter_info:
+        k_stat = "[red]허용[/]" if filter_info.get("KOSPI", True) else "[blue]보류[/]"
+        q_stat = "[red]허용[/]" if filter_info.get("KOSDAQ", True) else "[blue]보류[/]"
+        score_table.add_row("현재 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
+
     # [추가] 필터링 (위험/주의) 섹션
     score_table.add_section()
     score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (점수 무관)")

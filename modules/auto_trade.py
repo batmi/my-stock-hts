@@ -1742,6 +1742,9 @@ class AutoTrader:
             status_text = "WAITING"
             status_color = "yellow"
         
+        kospi_regime, kospi_adj = "확인 불가", 0.0
+        kosdaq_regime, kosdaq_adj = "확인 불가", 0.0
+
         # 3. 자산 및 손익 현황 (안전성 핵심)
         current_asset = None
         deposit = 0
@@ -1785,6 +1788,13 @@ class AutoTrader:
                             deposit = res['d2_deposit']
                 except: pass
                 
+                progress.update(task, description="[green]시장 국면(KOSPI/KOSDAQ) 분석 중...[/]")
+                try:
+                    kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
+                    kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
+                except:
+                    pass
+
                 # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
                 # 시스템이 정지 상태이거나 장 시작 전이라도 상태 조회 시에는 최신 정보를 보여주기 위함
                 if getattr(config, 'USE_MARKET_FILTER', True):
@@ -1816,6 +1826,12 @@ class AutoTrader:
         if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
         table.add_row("마켓 상태", market_status)
         
+        # [추가] 시장 국면 상태 표시
+        regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
+        k_regime_str = regime_map.get(kospi_regime, kospi_regime)
+        q_regime_str = regime_map.get(kosdaq_regime, kosdaq_regime)
+        table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점)")
+
         # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
         if getattr(config, 'USE_MARKET_FILTER', True):
             # ... existing code ...
