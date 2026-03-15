@@ -59,7 +59,7 @@ def test_simulate_strategy_atr_stop(sample_df):
     # Price 10000 -> Stop Price 9800
     # 9700 < 9800 -> Sell
     
-    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0}):
+    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False}):
         res = backtest.simulate_strategy(
             sample_df, sample_df.iloc[0], 10000000, 
             buy_score_limit=8.0, buy_rsi_limit=70, is_overseas=False
@@ -136,7 +136,7 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
     found = False
     for call in mock_print.call_args_list:
         args, _ = call
-        if args and isinstance(args[0], Table) and "매수 점수 최적화" in args[0].title:
+        if args and isinstance(args[0], Table) and args[0].title and "매수 점수 최적화" in args[0].title:
             found = True
     assert found
 

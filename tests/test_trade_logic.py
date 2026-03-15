@@ -63,8 +63,9 @@ def test_stop_loss(strategy):
 
 def test_trailing_stop(strategy):
     """트레일링 스탑 테스트: 외부에서 감지된 TS 메시지가 있을 경우 매도"""
-    # 설정 무관 (ts_msg가 있으면 매도)
+    # 반익절 로직이 먼저 트리거되는 것을 방지하기 위해 끄기
     ts_msg = "트레일링스탑 (최고가:12000원, 하락률:-3.5%)"
+    config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = False
     
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
