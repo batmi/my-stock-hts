@@ -718,7 +718,7 @@ def main():
                         grid.add_row("[3] 분봉", "(Intraday)")
                         config.console.print(grid)
                         config.console.print()
-                        c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "3", "q"], default="1")
+                        c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "3", "q"], default="2")
                         
                         if c_type != 'q':
                             p_type = 'daily'

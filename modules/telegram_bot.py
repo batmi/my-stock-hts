@@ -850,11 +850,11 @@ class TelegramCommander:
             self._send_reply(f"⏳ {name_display}({code}) 차트 생성 중...")
             
             # 차트 생성 (config.CHART_DIR에 저장됨)
-            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100, quiet=True)
+            chart.generate_visual_chart(code, name, is_overseas, open_file=False, dpi=100, quiet=True, period_type='hourly')
             
             # 파일 경로 추론
             safe_code = re.sub(r'[=\-\.\^]', '', code)
-            filename = f"analysis_{safe_code}_daily.png" # 기본값 daily
+            filename = f"analysis_{safe_code}_hourly.png"
             file_path = os.path.join(config.CHART_DIR, filename)
             
             caption = f"📊 {name_display}({code}) 분석 차트"
