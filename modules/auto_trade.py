@@ -1661,10 +1661,14 @@ class AutoTrader:
                     
                     filter_msg = ""
                     if use_filter:
-                        stat = self.market_index_status.get(m_type)
-                        if stat and isinstance(stat, dict) and stat.get('current', 0) > 0:
-                            is_healthy = stat.get('is_healthy', True)
+                        # 대기 상태(WAITING) 시 메모리 캐시 누락 방지를 위해 실시간 데이터로 직접 계산
+                        ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
+                        if len(df) >= ma_period:
+                            ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+                            is_healthy = curr >= ma_val
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
+                        else:
+                            filter_msg = " [데이터부족]"
                             
                     msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
         except: pass
