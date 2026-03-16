@@ -954,7 +954,7 @@ def modify_order():
     # =========================================================================
     # 4. 선택 및 분기 처리
     # =========================================================================
-    choice = Prompt.ask("\n선택 번호 [dim](취소: q)[/dim]")
+    choice = Prompt.ask("\n선택 번호 [dim](취소: q/Enter)[/dim]", default="q", show_default=False)
     if choice.lower() == 'q': return
     context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {choice}")
     
