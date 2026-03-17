@@ -334,6 +334,10 @@ class TelegramCommander:
             
         trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
         
+        # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
+        if hasattr(self.trader, '_refine_trade_records'):
+            trades = self.trader._refine_trade_records(trades)
+        
         # 매도(청산) 내역만 필터링하여 손익 합산
         sell_trades = [t for t in trades if "매도" in t.get('type', '') or "sell" in t.get('type', '').lower()]
         
@@ -1061,6 +1065,10 @@ class TelegramCommander:
 
         # [수정] 전체 내역 조회 (체결 필터 제거)
         trades = db_manager.db.get_trades(limit=None, start_date=start_date)
+        
+        # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
+        if hasattr(self.trader, '_refine_trade_records'):
+            trades = self.trader._refine_trade_records(trades)
         
         # 기간 표시 문자열 생성
         if start_date:
