@@ -93,7 +93,11 @@ class DBManager:
                         ts_callback REAL,
                         updated_at TEXT,
                         memo TEXT,
-                        weights TEXT
+                        weights TEXT,
+                        invest_ratio REAL,
+                        time_stop_days INTEGER,
+                        use_atr_stop INTEGER,
+                        atr_stop_multiplier REAL
                     )
                 ''')
                 
@@ -122,29 +126,20 @@ class DBManager:
                 # stock_strategies 테이블 컬럼 확장 (memo 추가)
                 cursor.execute("PRAGMA table_info(stock_strategies)")
                 strat_columns = [info[1] for info in cursor.fetchall()]
-                if "buy_vol_strength" not in strat_columns:
-                    try:
-                        cursor.execute("ALTER TABLE stock_strategies ADD COLUMN buy_vol_strength REAL")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] stock_strategies 테이블에 buy_vol_strength 컬럼이 추가되었습니다.[/dim green]")
-                    except Exception as e:
-                        config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(buy_vol_strength): {e}[/red]")
-
-                if "memo" not in strat_columns:
-                    try:
-                        cursor.execute("ALTER TABLE stock_strategies ADD COLUMN memo TEXT")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] stock_strategies 테이블에 memo 컬럼이 추가되었습니다.[/dim green]")
-                    except Exception as e:
-                        config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(memo): {e}[/red]")
-
-                if "weights" not in strat_columns:
-                    try:
-                        cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] stock_strategies 테이블에 weights 컬럼이 추가되었습니다.[/dim green]")
-                    except Exception as e:
-                        config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패(weights): {e}[/red]")
+                
+                new_strat_columns = {
+                    "buy_vol_strength": "REAL", "memo": "TEXT", "weights": "TEXT",
+                    "invest_ratio": "REAL", "time_stop_days": "INTEGER",
+                    "use_atr_stop": "INTEGER", "atr_stop_multiplier": "REAL"
+                }
+                for col, dtype in new_strat_columns.items():
+                    if col not in strat_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE stock_strategies ADD COLUMN {col} {dtype}")
+                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                                config.console.print(f"[dim green][DB] stock_strategies 테이블에 {col} 컬럼 추가 완료[/dim green]")
+                        except Exception as e:
+                            config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패({col}): {e}[/red]")
 
                 conn.commit()
                 conn.close()
@@ -401,16 +396,22 @@ class DBManager:
             weights = strategy.get('weights')
             weights_json = json.dumps(weights) if weights else None
             buy_vol_strength = strategy.get('buy_vol_strength', 100.0)
+            
+            invest_ratio = strategy.get('invest_ratio')
+            time_stop_days = strategy.get('time_stop_days')
+            use_atr_stop = strategy.get('use_atr_stop')
+            atr_stop_multiplier = strategy.get('atr_stop_multiplier')
+            
             cursor.execute('''
                 INSERT OR REPLACE INTO stock_strategies 
-                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (code, name, 
                   strategy['buy_score'], strategy['buy_rsi'], buy_vol_strength,
                   strategy['sell_score'], strategy['stop_loss'], 
                   strategy['take_profit'], strategy['take_profit_rsi'], 
                   strategy['ts_activation'], strategy['ts_callback'], 
-                  now, memo, weights_json))
+                  now, memo, weights_json, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier))
             conn.commit()
 
     def get_stock_strategy(self, code):

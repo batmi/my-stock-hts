@@ -278,13 +278,13 @@ class TelegramCommander:
                     if isinstance(w, dict):
                         w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
                 except: pass
+                
+            sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
 
             msg += (f"\n• {name_display}({code})\n"
-                    f"   매수: {r['buy_score']}점 / RSI {r['buy_rsi']} / 체결 {r.get('buy_vol_strength', '기본')}%\n" # [수정]
-                    f"   매도: {r['sell_score']}점\n"
-                    f"   익절: +{r['take_profit']}% / RSI {r['take_profit_rsi']}\n"
-                    f"   손절: {r['stop_loss']}%\n"
-                    f"   TS: +{r['ts_activation']}% / -{r['ts_callback']}%\n"
+                    f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', 100.0)}%\n"
+                    f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
+                    f"   리스크: 비중 {r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2))*100:.0f}% / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
                     f"{memo_part}")
         return msg

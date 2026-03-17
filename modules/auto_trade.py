@@ -133,6 +133,10 @@ def _enrich_rules_with_weights_logic(rules):
                     r_dict['weights'] = weights_map[r_dict['code']]
                 elif 'weights' not in r_dict:
                     r_dict['weights'] = None
+                
+                # None 값 초기화
+                if r_dict.get('use_atr_stop') is None:
+                    r_dict['use_atr_stop'] = 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0
                 new_rules.append(r_dict)
             return new_rules
     except Exception as e:
@@ -1933,11 +1937,10 @@ class AutoTrader:
             # 별도 테이블로 상세 표시
             rule_table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             rule_table.add_column("종목명(코드)", justify="left")
-            rule_table.add_column("매수(점수/RSI/체결)", justify="center") # [수정] 헤더 변경
-            rule_table.add_column("매도(점수/RSI)", justify="center")
-            rule_table.add_column("익절/손절", justify="center")
-            rule_table.add_column("트레일링", justify="center")
-            rule_table.add_column("가중치", justify="center", style="dim") # [추가]
+            rule_table.add_column("매수(점수/RSI/체결)", justify="center")
+            rule_table.add_column("청산(익절/TS/RSI/기한)", justify="center")
+            rule_table.add_column("리스크(비중/손절)", justify="center")
+            rule_table.add_column("가중치", justify="center") # [추가]
             rule_table.add_column("수정일", justify="center", style="dim")
             
             for i, r in enumerate(custom_rules):
@@ -1951,12 +1954,14 @@ class AutoTrader:
                     w = r['weights']
                     w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
+                sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
+                ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+
                 rule_table.add_row(
                     name_disp,
-                    f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정] 체결강도 표시
-                    f"{r['sell_score']}점 / {r['take_profit_rsi']}",
-                    f"+{r['take_profit']}% / {r['stop_loss']}%",
-                    f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+                    f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
+                    f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+                    f"{ratio_str} / {sl_str}",
                     w_str,
                     r.get('updated_at', '-')
                 )
@@ -3178,12 +3183,16 @@ class AutoTrader:
                 # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
-                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj
+                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
+                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
                 }
 
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
             # [추가] ATR 손절 사용 여부 확인 및 적용
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            if rule and rule.get('use_atr_stop') is not None:
+                use_atr_stop = bool(rule['use_atr_stop'])
+
             applied_sl_rate = None
             
             if use_atr_stop:
@@ -3556,22 +3565,28 @@ class AutoTrader:
                 self.log(f"매수 중단: 최대 보유 종목 수({max_holdings}개) 도달")
                 break
 
-            # [추가] 손절률 확인 (개별 룰 or 전역 설정)
+            # [추가] 손절률, ATR 여부 및 투자 비중 확인 (개별 룰 or 전역 설정)
             sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-            if cand.get('rule'):
-                sl_rate = cand['rule'].get('stop_loss', sl_rate)
-
-            # [수정] ATR 기반 동적 손절률 계산 (Volatility Targeting)
-            # 고정 손절률 대신 종목의 변동성(ATR)에 비례하여 손절폭을 설정
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+            cand_invest_ratio = invest_ratio
+
+            if cand.get('rule'):
+                rule = cand['rule']
+                sl_rate = rule.get('stop_loss', sl_rate)
+                if rule.get('use_atr_stop') is not None:
+                    use_atr_stop = bool(rule['use_atr_stop'])
+                if rule.get('atr_stop_multiplier') is not None:
+                    atr_mult = rule['atr_stop_multiplier']
+                if rule.get('invest_ratio') is not None:
+                    cand_invest_ratio = rule['invest_ratio']
+
             atr_val = cand.get('atr', 0)
             price_val = cand.get('price', 0)
             atr_sl_rate = None # DB 저장용
             
             if use_atr_stop and atr_val > 0 and price_val > 0:
-                atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
                 # [수정] ATR 기반 동적 손절률 계산 (음수 값)
-                # 예: ATR=1000, Price=50000, Mult=2.0 -> (2000/50000)*100 = 4% -> -4.0% 손절
                 stop_distance = atr_val * atr_mult
                 sl_rate = -((stop_distance / price_val) * 100)
                 
@@ -3579,7 +3594,7 @@ class AutoTrader:
             remaining_slots = max_holdings - current_holdings_count
             
             # 1. 예산 할당 계산 (변동성 타겟팅 및 리스크 관리 적용)
-            calc_amt = self.risk_manager.allocate_budget(avail_cash, invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
+            calc_amt = self.risk_manager.allocate_budget(avail_cash, cand_invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
             
             if remaining_slots == 1:
                 # 마지막 종목일 때: 변동성 타겟팅/리스크 관리가 꺼져있다면 잔여 예수금 전액 사용, 켜져 있다면 계산된 금액 준수
@@ -3780,11 +3795,10 @@ def _view_stock_rules():
 
     table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
-    table.add_column("매도(점수/RSI)", justify="center")
-    table.add_column("익절/손절", justify="center")
-    table.add_column("트레일링", justify="center")
-    table.add_column("가중치(T/M/S/Syn)", justify="center", style="dim") # [이동]
+    table.add_column("매수(점수/RSI/체결)", justify="center")
+    table.add_column("청산(익절/TS/RSI/기한)", justify="center")
+    table.add_column("리스크(비중/손절)", justify="center")
+    table.add_column("가중치", justify="center")
     table.add_column("메모", justify="left", style="dim")
     table.add_column("수정일", justify="center", style="dim")
     
@@ -3800,12 +3814,14 @@ def _view_stock_rules():
             if isinstance(w, dict):
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
+        sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
+        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+
         table.add_row(
             f"{r['name']}({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
-            f"{r['sell_score']}점 / {r['take_profit_rsi']}",
-            f"+{r['take_profit']}% / {r['stop_loss']}%",
-            f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+            f"{ratio_str} / {sl_str}",
             w_str,
             r.get('memo', ''),
             r['updated_at']
@@ -3845,7 +3861,11 @@ def _input_and_save_rule(code, name):
         "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
         "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "memo": "",
-        "weights": None # [추가] 가중치 기본값 (None이면 전역 설정 사용)
+        "weights": None,
+        "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
+        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
+        "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0,
+        "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     }
     
     current = existing if existing else defaults.copy()
@@ -3871,41 +3891,37 @@ def _input_and_save_rule(code, name):
         return type_func(val)
 
     try:
-        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수", float)
+        console.print("\n[bold]1. 기본 매수 및 청산 타점 설정[/bold]")
+        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (종합 점수)", float)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한", float)
-        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%)", float) # [추가] 입력
-        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준", float)
-        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수", float)
-        new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%)", float)
-        
-        if current_price > 0:
-            sl_price = current_price * (1 + new_strategy['stop_loss'] / 100)
-            p_str = f"${sl_price:,.2f}" if is_overseas else f"{int(sl_price):,}원"
-            console.print(f"   └ [cyan]예상 손절 가격: {p_str}[/cyan]")
-            
-        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%)", float)
-        
-        if current_price > 0:
-            tp_price = current_price * (1 + new_strategy['take_profit'] / 100)
-            p_str = f"${tp_price:,.2f}" if is_overseas else f"{int(tp_price):,}원"
-            console.print(f"   └ [cyan]예상 익절 가격: {p_str}[/cyan]")
-            
+        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 하한(%)", float)
+        new_strategy['take_profit'] = ask_val('take_profit', "목표 익절 수익률(%)", float)
+        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "과열 매도 RSI 기준", float)
         new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%)", float)
-        
-        # [추가] 발동 가격 계산 및 표시
-        if current_price > 0:
-            act_price = current_price * (1 + new_strategy['ts_activation'] / 100)
-            p_str = f"${act_price:,.2f}" if is_overseas else f"{int(act_price):,}원"
-            console.print(f"   └ [cyan]예상 발동 가격: {p_str}[/cyan]")
-            
         new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%)", float)
+        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한 (보유 허용 일수)", int)
+            
+        console.print("\n[bold]2. 리스크 관리 및 자산 비중 설정[/bold]")
+        curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
+        val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})[/dim]", default=str(int(curr_ratio_pct)))
+        if val.lower() == 'q': raise QuitInput()
+        new_strategy['invest_ratio'] = float(val) / 100.0
         
-        # [추가] 매도 가격 계산 및 표시
-        if current_price > 0:
-            act_price = current_price * (1 + new_strategy['ts_activation'] / 100)
-            sell_price = act_price * (1 - new_strategy['ts_callback'] / 100)
-            p_str = f"${sell_price:,.2f}" if is_overseas else f"{int(sell_price):,}원"
-            console.print(f"   └ [cyan]예상 매도 가격: {p_str} (발동 직후 하락 시)[/cyan]")
+        curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0) else "n"
+        val = Prompt.ask(f"손절 방식 선택 (y: 개별 ATR 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
+        if val.lower() == 'q': raise QuitInput()
+        use_atr = (val.lower() == 'y')
+        new_strategy['use_atr_stop'] = 1 if use_atr else 0
+        
+        if use_atr:
+            new_strategy['atr_stop_multiplier'] = ask_val('atr_stop_multiplier', "ATR 손절 배수 (기본 2.0)", float)
+            new_strategy['stop_loss'] = current.get('stop_loss', defaults['stop_loss']) # 고정 손절률은 숨김
+        else:
+            new_strategy['stop_loss'] = ask_val('stop_loss', "고정 손절 수익률(%) (예: -5.0)", float)
+            new_strategy['atr_stop_multiplier'] = current.get('atr_stop_multiplier', defaults['atr_stop_multiplier']) # 배수는 숨김
+            
+        # 숨김 처리된 세부 지표는 기존 값 또는 기본값 유지
+        new_strategy['sell_score'] = current.get('sell_score', defaults['sell_score'])
         
         # [추가] 가중치 설정 입력
         console.print("\n[스코어링 가중치 설정]")
@@ -3967,11 +3983,16 @@ def _input_and_save_rule(code, name):
         table.add_column("구분", justify="center", style="cyan")
         table.add_column("설정값", justify="left")
         
-        table.add_row("매수 조건", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑") # [수정]
-        table.add_row("매도 조건", f"점수 {new_strategy['sell_score']}점 미만 (추세이탈)")
-        table.add_row("익절/손절", f"익절 +{new_strategy['take_profit']}% / 손절 {new_strategy['stop_loss']}%")
-        table.add_row("RSI 익절", f"RSI {new_strategy['take_profit_rsi']} 초과")
-        table.add_row("트레일링 스탑", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
+        table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑")
+        table.add_row("청산 타점", f"익절 +{new_strategy['take_profit']}% / 과열 RSI {new_strategy['take_profit_rsi']}↑ / 시간청산 {new_strategy['time_stop_days']}일")
+        table.add_row("트레일링", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
+        
+        if new_strategy['use_atr_stop']:
+            sl_disp = f"ATR 동적 손절 (배수: x{new_strategy['atr_stop_multiplier']})"
+        else:
+            sl_disp = f"고정 손절 ({new_strategy['stop_loss']}%)"
+        
+        table.add_row("리스크 관리", f"투자 비중 {new_strategy['invest_ratio']*100:.0f}% / {sl_disp}")
         
         w_disp = "기본 설정"
         if new_strategy.get('weights'):
@@ -4007,11 +4028,10 @@ def _modify_stock_rules():
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No.", justify="right", style="cyan", width=4)
     table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI/체결)", justify="center") # [수정]
-    table.add_column("매도(점수/RSI)", justify="center")
-    table.add_column("익절/손절", justify="center")
-    table.add_column("트레일링", justify="center")
-    table.add_column("가중치", justify="center", style="dim") # [이동]
+    table.add_column("매수(점수/RSI/체결)", justify="center")
+    table.add_column("청산(익절/TS/RSI/기한)", justify="center")
+    table.add_column("리스크(비중/손절)", justify="center")
+    table.add_column("가중치", justify="center")
     table.add_column("수정일", justify="center", style="dim")
     
     for i, r in enumerate(custom_rules):
@@ -4023,14 +4043,16 @@ def _modify_stock_rules():
                 except: pass
             if isinstance(w, dict):
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+                
+        sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
+        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
 
         table.add_row(
             str(i+1),
             f"{r['name']} ({r['code']})",
-            f"{r['buy_score']}점 / {r['buy_rsi']} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}%", # [수정]
-            f"{r['sell_score']}점 / {r['take_profit_rsi']}",
-            f"+{r['take_profit']}% / {r['stop_loss']}%",
-            f"+{r['ts_activation']}% / -{r['ts_callback']}%",
+            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+            f"{ratio_str} / {sl_str}",
             w_str,
             r['updated_at']
         )
