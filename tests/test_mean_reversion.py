@@ -95,11 +95,12 @@ def test_mr_grace_period_time_over(mock_score, mock_classify, mock_ind):
     
     thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0}
     
-    # 보유 6일차 (유예기간 만료) -> 점수 미달로 인해 SELL 반환해야 함
-    res = strategy.analyze_sell(
-        code="000", name="Test", df=df, current_price=980, buy_price=1000,
-        profit_rate=-2.0, ts_msg="", thresholds=thresholds,
-        holding_days=6, is_mr_holding=True
-    )
+    with patch.dict(config.SELL_STRATEGY, {"TIME_STOP_USE": False}):
+        # 보유 6일차 (유예기간 만료) -> 점수 미달로 인해 SELL 반환해야 함
+        res = strategy.analyze_sell(
+            code="000", name="Test", df=df, current_price=980, buy_price=1000,
+            profit_rate=-2.0, ts_msg="", thresholds=thresholds,
+            holding_days=6, is_mr_holding=True
+        )
     assert res['action'] == 'sell'
     assert "추세이탈" in res['reason']

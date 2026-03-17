@@ -89,12 +89,9 @@ def test_delete_stock_rules(mock_delete, mock_ask, mock_get_rules):
 @patch('modules.auto_trade._save_rule_weights')
 def test_input_and_save_rule_new(mock_save_weights, mock_save, mock_ask, mock_get_strat, mock_price):
     """새로운 룰 입력 및 저장"""
-    # 입력 순서: 
-    # buy_score, buy_rsi, buy_vol, tp_rsi, sell_score, stop_loss, take_profit, ts_act, ts_call, 
-    # weights(T, M, S, Syn), memo
     mock_ask.side_effect = [
-        "8.5", "60", "100", "75", "5.0", "-5.0", "10.0", "5.0", "2.0",
-        "4.0", "2.5", "1.5", "2.0", "Test Memo"
+        "8.5", "60", "100", "10.0", "75", "5.0", "2.0", "5", "10",
+        "n", "-5.0", "4.0", "2.5", "1.5", "2.0", "Test Memo"
     ]
     
     auto_trade._input_and_save_rule("005930", "Samsung")

@@ -380,7 +380,8 @@ def test_get_backtest_data_multi_index(mock_fetch):
 @patch('modules.auto_trade.db_manager.db.get_highest_price', return_value=0)
 @patch('modules.auto_trade.db_manager.db.update_highest_price')
 @patch('modules.auto_trade.db_manager.db.delete_trailing_stop')
-def test_check_sell_conditions_atr_stop(mock_del, mock_upd, mock_get_high, mock_load, mock_insert, mock_tg, mock_analyze, mock_chart, mock_qty):
+@patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
+def test_check_sell_conditions_atr_stop(mock_get_rules, mock_del, mock_upd, mock_get_high, mock_load, mock_insert, mock_tg, mock_analyze, mock_chart, mock_qty):
     """ATR 손절 로직 테스트"""
     trader = auto_trade.AutoTrader()
     trader.is_running = True

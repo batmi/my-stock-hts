@@ -70,7 +70,7 @@ def test_cmd_holdings(mock_balance, commander):
 def test_cmd_profit(mock_get_trades, commander):
     """실현 손익 조회 명령어 테스트"""
     mock_get_trades.return_value = [
-        {'type': 'sell', 'name': 'Samsung', 'code': '005930', 'profit_amt': 10000, 'profit_rate': 10.0}
+        {'time': '2023-01-01 10:00:00', 'type': 'sell', 'name': 'Samsung', 'code': '005930', 'profit_amt': 10000, 'profit_rate': 10.0}
     ]
     res = commander._cmd_profit(['d'])
     assert "실현 손익" in res

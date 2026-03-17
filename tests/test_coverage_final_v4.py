@@ -66,6 +66,7 @@ def test_check_buy_conditions_max_holdings():
     trader.consecutive_errors = 0 # [Fix] 상태 초기화 (로그 출력 조건 만족을 위해)
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
     
+    config.SYSTEM_MAX_HOLDINGS = 5
     # 보유 종목 5개 (최대치)
     holdings = [{'pdno': str(i)} for i in range(5)]
     

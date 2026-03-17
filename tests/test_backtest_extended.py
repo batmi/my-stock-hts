@@ -39,7 +39,7 @@ def test_run_monte_carlo_simulation(mock_print, sample_backtest_df):
         10000000, 
         8.0, 70, False, 
         -7.0, 30.0, 75, 5.0, 10.0, 3.0,
-        name="TestStock", code="005930", days=100
+        5, True, 2.0, name="TestStock", code="005930", days=100
     )
     
     # 결과 출력 확인
