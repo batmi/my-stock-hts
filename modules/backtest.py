@@ -105,6 +105,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
                       ts_activation_rate=None, ts_callback_rate=None,
+                      time_stop_days_limit=None,
+                      use_atr_stop_limit=None, atr_stop_multiplier_limit=None,
                       weights=None,
                       execution_noise=False):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
@@ -138,8 +140,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
     
     # [추가] ATR 기반 손절 설정 로드
-    use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
-    atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+    use_atr_stop = use_atr_stop_limit if use_atr_stop_limit is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+    atr_mult = atr_stop_multiplier_limit if atr_stop_multiplier_limit is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     use_vol_target = getattr(config, 'USE_VOLATILITY_TARGETING', True)
 
     # [추가] 현재 적용 중인 손절률 (매수 시 결정됨)
@@ -305,7 +307,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
             
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
             time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
             if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
@@ -415,7 +417,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     }
 
 def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
-                               stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
+                               stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
+                               use_atr_stop, atr_mult,
                                name="Unknown", code="Unknown", days=0):
     """Monte Carlo 시뮬레이션 실행 (1,000회 반복)"""
     config.console.print("\n[bold magenta]=== Monte Carlo Simulation (1,000 runs) ===[/]")
@@ -470,6 +473,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                                     take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                                     ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                    time_stop_days_limit=time_stop_days,
+                                    use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult,
                                     execution_noise=True)
             
             # 결과 수집
@@ -733,6 +738,9 @@ def run_backtest():
     take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+    use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+    atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     
     weights = config.SCORING_WEIGHTS
     if custom_rule and custom_rule.get('weights'):
@@ -794,6 +802,21 @@ def run_backtest():
         if val.lower() == 'q': return
         ts_callback = float(val)
         
+        def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+        val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]설명: 매수 후 목표 기간 내 수익 미달 시 강제 청산[/dim]", default=str(def_time_stop))
+        if val.lower() == 'q': return
+        time_stop_days = int(val)
+        
+        curr_use_atr = "y" if use_atr_stop else "n"
+        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) (기본: {curr_use_atr})\n[dim]설명: 종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
+        if val.lower() == 'q': return
+        use_atr_stop = (val.lower() == 'y')
+        
+        if use_atr_stop:
+            val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]설명: ATR 값의 몇 배를 손절폭으로 할지 설정[/dim]", default=str(atr_mult))
+            if val.lower() == 'q': return
+            atr_mult = float(val)
+        
         # [추가] 가중치 설정 입력
         config.console.print("\n[스코어링 가중치 설정]")
         if Prompt.ask("가중치를 변경하시겠습니까?", choices=["y", "n"], default="n") == "y":
@@ -831,12 +854,14 @@ def run_backtest():
         if weights:
              w_str = f", 가중치: {weights['TREND']}/{weights['MOMENTUM']}/{weights['STRENGTH']}/{weights['SYNERGY']}"
 
-        config.console.print(f"\n[dim]설정한 조건으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%{w_str})[/dim]")
+        atr_str = f", ATR손절: x{atr_mult}" if use_atr_stop else ""
+        config.console.print(f"\n[dim]설정한 조건으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
     else:
         w_str = ""
         if weights:
              w_str = f", 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
-        config.console.print(f"\n[dim]기본 설정으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%{w_str})[/dim]")
+        atr_str = f", ATR손절: x{atr_mult}" if use_atr_stop else ""
+        config.console.print(f"\n[dim]기본 설정으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
     
     # [수정] 초기 자본금 및 환율 설정
     initial_capital_krw = 10_000_000
@@ -915,6 +940,7 @@ def run_backtest():
     if mode_choice == "2":
         run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
                                    stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
+                                   time_stop_days, use_atr_stop, atr_mult,
                                    name=name, code=code, days=days)
         return
 
@@ -923,6 +949,8 @@ def run_backtest():
                             stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                             take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                             ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                            time_stop_days_limit=time_stop_days,
+                            use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult,
                             weights=weights) # [수정] 가중치 전달
     
     # 결과 변수 매핑 (기존 출력 로직 호환)
@@ -1323,7 +1351,9 @@ def run_backtest():
             res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, buy_rsi, is_overseas,
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                                     take_profit_rsi=take_profit_rsi, sell_score=sell_score,
-                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
+                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                    time_stop_days_limit=time_stop_days,
+                                    use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult)
             
             # 결과 계산
             total_trades = len(res['trades'])
@@ -1381,7 +1411,9 @@ def run_backtest():
             res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas,
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                                     take_profit_rsi=take_profit_rsi, sell_score=sell_score,
-                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
+                                    ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                    time_stop_days_limit=time_stop_days,
+                                    use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult)
             
             total_trades = len(res['trades'])
             sell_trades = res['win_trades'] + res['loss_trades']
@@ -1433,7 +1465,9 @@ def run_backtest():
                 res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
                                         stop_loss_rate=sl, take_profit_rate=tp,
                                         take_profit_rsi=take_profit_rsi, sell_score=sell_score,
-                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback)
+                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                        time_stop_days_limit=time_stop_days,
+                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult)
                 
                 total_trades = len(res['trades'])
                 sell_trades = res['win_trades'] + res['loss_trades']
@@ -1514,6 +1548,8 @@ def run_backtest():
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
                                     take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                                     ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                    time_stop_days_limit=time_stop_days,
+                                    use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult,
                                     weights=weights_opt)
             
             total_trades_opt = len(res_opt['trades'])

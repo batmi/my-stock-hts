@@ -136,7 +136,7 @@ def _enrich_rules_with_weights_logic(rules):
                 
                 # None 값 초기화
                 if r_dict.get('use_atr_stop') is None:
-                    r_dict['use_atr_stop'] = 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0
+                    r_dict['use_atr_stop'] = 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0
                 new_rules.append(r_dict)
             return new_rules
     except Exception as e:
@@ -3864,7 +3864,7 @@ def _input_and_save_rule(code, name):
         "weights": None,
         "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1),
         "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5),
-        "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0,
+        "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     }
     
@@ -3907,7 +3907,7 @@ def _input_and_save_rule(code, name):
         if val.lower() == 'q': raise QuitInput()
         new_strategy['invest_ratio'] = float(val) / 100.0
         
-        curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0) else "n"
+        curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0) else "n"
         val = Prompt.ask(f"손절 방식 선택 (y: 개별 ATR 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
         if val.lower() == 'q': raise QuitInput()
         use_atr = (val.lower() == 'y')

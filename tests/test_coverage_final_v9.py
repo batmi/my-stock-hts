@@ -108,7 +108,7 @@ def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, sample_df):
     
     backtest.run_monte_carlo_simulation(
         sample_df, sample_df.iloc[0], 10000000, 
-        8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0
+        8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0
     )
     
     assert mock_sim.call_count == 1000
@@ -150,7 +150,7 @@ def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_g
     mock_get_data.return_value = sample_df
     
     mock_ask.side_effect = [
-        "6", "005930", "y", "100", "9.0", "60", "100", "6.0", "-5.0", "20.0", "5.0", "2.0", "n", "1"
+        "6", "005930", "y", "100", "9.0", "60", "100", "6.0", "-5.0", "20.0", "5.0", "2.0", "5", "y", "2.0", "n", "1"
     ]
     
     mock_status.return_value.__enter__.return_value = MagicMock()
