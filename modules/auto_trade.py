@@ -1680,6 +1680,11 @@ class AutoTrader:
             msg += f"현재 자산: {current_asset:,}원\n"
             msg += f"평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
             msg += f"주문 가능: {deposit:,}원\n"
+            
+            if self.initial_asset > 0:
+                daily_profit = current_asset - self.initial_asset
+                daily_profit_rate = (daily_profit / self.initial_asset) * 100
+                msg += f"일일 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
         else:
             msg += "자산 정보 조회 실패\n"
             
@@ -3024,6 +3029,10 @@ class AutoTrader:
                         
                         self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 평가손익: {total_profit:+,}원 ({profit_rate:+.2f}%)")
                         self.log(f"              예수금(D+2): {deposit_d2:,}원 | 주식평가: {total_eval:,}원")
+
+                        daily_profit = current_total - self.initial_asset
+                        daily_profit_rate = (daily_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+                        self.log(f"              일일 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 시작 자산: {self.initial_asset:,}원")
 
                         self.risk_manager.check_loss_limit(current_total)
                     else:
