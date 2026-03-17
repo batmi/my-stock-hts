@@ -366,9 +366,9 @@ def modify_sell_strategy():
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
         {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TS_ACTIVATION", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TS_CALLBACK", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
         {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정", "name": "ATR_STOP_MULTIPLIER", "type": "float",
@@ -609,14 +609,14 @@ def reset_to_default():
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
-        "BUY_SCORE": 8.0, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
+        "BUY_SCORE": 7.0, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
         "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
         "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0
     })
     config.SELL_STRATEGY.update({
         "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
-        "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
+        "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 5.0
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
         "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0

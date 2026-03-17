@@ -967,8 +967,8 @@ class TelegramCommander:
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         

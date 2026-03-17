@@ -1488,8 +1488,8 @@ class AutoTrader:
         buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
@@ -2015,8 +2015,8 @@ class AutoTrader:
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         
         use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
@@ -3158,8 +3158,8 @@ class AutoTrader:
             score_adj = market_regime_adj.get(market_type, 0.0)
             
             # 기본값 설정
-            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
             
             thresholds = None
             if rule:
@@ -3842,8 +3842,8 @@ def _input_and_save_rule(code, name):
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
         "take_profit_rsi": config.SELL_STRATEGY["TAKE_PROFIT_RSI"],
-        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
-        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0),
+        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
+        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "memo": "",
         "weights": None # [추가] 가중치 기본값 (None이면 전역 설정 사용)
     }
