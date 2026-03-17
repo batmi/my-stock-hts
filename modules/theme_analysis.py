@@ -210,6 +210,9 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
           - 일정: [📅 단기 핵심 체크포인트]
           - 결론: [💡 수석 전략가의 최종 투자 총평 및 포트폴리오 비중 조언]
           - 가독성을 위해 불릿 포인트(•)와 적절한 이모지를 적극적으로 활용하되, 내용은 최대한 풍부하고 깊이 있게 작성할 것.
+
+        [중요] 반드시 실시간 구글 검색을 통해 수집된 최신 정보만을 기반으로 분석을 작성해야 하며, 과거 데이터나 일반적인 상식에 의존한 분석은 허용되지 않습니다.
+        또한 모든 숫자는 [현재 시각: {now} (KST)] 기준으로 최신 데이터를 반영해야 합니다.
         """
 
     try:
@@ -265,6 +268,52 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             config.console.print(f"\n[red]오류 발생: {e}[/red]")
             logger.error(f"Gemini Search Error (Model: {config.GEMINI_MODEL}): {e}")
         return None
+
+def ask_gemini(question):
+    """사용자의 자유 질문에 대해 Gemini API로 답변 생성"""
+    if genai is None:
+        return "⚠️ google-generativeai 라이브러리가 설치되지 않았습니다."
+
+    if not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API 키가 설정되지 않았습니다."
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 친절하고 전문적인 여의도 수석 주식/경제 AI 비서입니다.
+    사용자의 다음 질문에 대해 최신 정보를 바탕으로 핵심만 명확하고 이해하기 쉽게 답변해 주세요.
+    가독성을 위해 적절한 줄바꿈과 불릿 포인트(•), 이모지를 적극적으로 사용해 주세요.
+
+    질문: {question}
+    """
+
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={
+                "temperature": 0.3,
+                "top_p": 0.95,
+                "max_output_tokens": 4096,
+            }
+        )
+        response = model.generate_content(prompt)
+        
+        if response and response.text:
+            return response.text
+        else:
+            return "검색 결과가 없거나 답변을 생성하지 못했습니다."
+
+    except Exception as e:
+        logger.error(f"Gemini Ask Error: {e}")
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+            return "⚠️ API 호출 한도 초과 (Rate Limit). 잠시 후 다시 시도해주세요."
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            return f"⚠️ 설정된 Gemini 모델({config.GEMINI_MODEL})을 찾을 수 없습니다."
+        else:
+            return f"⚠️ AI 답변 생성 중 오류 발생: {e}"
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""

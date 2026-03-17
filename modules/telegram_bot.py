@@ -11,7 +11,7 @@ import context # [추가]
 import api
 import utils
 import indicators
-from modules import analysis, account, chart, db_manager, auto_trade, market # [추가]
+from modules import analysis, account, chart, db_manager, auto_trade, market, theme_analysis
 from modules.auto_trade import AutoTrader
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class TelegramCommander:
             "/report": self._cmd_report,
             "/market": self._cmd_market,
             "/signal": self._cmd_signal,
+            "/ask": self._cmd_ask,
             "/chart": self._cmd_chart,
             "/stocks": self._cmd_stocks,
             "/config": self._cmd_config,
@@ -172,6 +173,7 @@ class TelegramCommander:
             "• /market [그룹] : 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
+            "• /ask <질문> : AI에게 주식/경제 관련 자유 질문\n"
             "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
@@ -208,6 +210,16 @@ class TelegramCommander:
     def _cmd_signal(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
         return self._analyze_stock(" ".join(args))
+
+    def _cmd_ask(self, args):
+        if not args:
+            return "⚠️ 질문을 입력해주세요.\n예: /ask 오늘 삼성전자 주식 가격이 왜 오르는거야?"
+        question = " ".join(args)
+        
+        self._send_reply(f"⏳ '{question}'\n\nAI가 분석 중입니다. 잠시만 기다려주세요...")
+        
+        answer = theme_analysis.ask_gemini(question)
+        return f"🤖 [AI 답변]\n\n{answer}"
 
     def _cmd_chart(self, args):
         if not args:
