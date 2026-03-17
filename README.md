@@ -293,7 +293,11 @@ my-stock-hts/
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── LICENSE.md            # 라이선스 파일
 ├── db/                   # [자동 생성] SQLite DB 파일 저장소
-├── json/                 # [자동 생성] 설정 및 캐시 파일 저장소
+├── json/                 # [자동 생성] 동적 설정 및 상태/캐시 파일 저장소
+│   ├── stock.json              # 관심/감시 종목 리스트
+│   ├── restricted_stocks.json  # 트레이딩 제한 종목 리스트
+│   ├── daily_asset_state.json  # 당일 최초 시작 자산 기록 (일일 손실 제한용)
+│   └── dynamic_config.json     # 프로그램 실행 중 변경된 시스템 설정 백업
 ├── logs/                 # [자동 생성] 로그 파일 저장소
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소

@@ -46,6 +46,28 @@ def save_restricted_stocks(data):
     except Exception as e:
         console.print(f"[red]저장 실패: {e}[/red]")
 
+# [추가] 일일 자산 상태 파일 경로 및 관리 함수 (재시작 시 손실 제한 기준 유지용)
+DAILY_STATE_FILE = os.path.join(config.JSON_DIR, "daily_asset_state.json")
+
+def load_daily_initial_asset():
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(DAILY_STATE_FILE):
+        try:
+            with open(DAILY_STATE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data.get("date") == today_str and data.get("initial_asset", 0) > 0:
+                    return data["initial_asset"]
+        except: pass
+    return 0
+
+def save_daily_initial_asset(asset_value):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(DAILY_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"date": today_str, "initial_asset": asset_value}, f)
+    except Exception as e:
+        logger.error(f"일일 자산 상태 저장 실패: {e}")
+
 # [추가] 주문 상태 상수 정의 (Order State Machine)
 class OrderStatus:
     IDLE = "IDLE"
@@ -1385,11 +1407,22 @@ class AutoTrader:
                         tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt'))
                     
                     # [수정] 모의투자는 API 총평가금 대신 (주식평가 + D+2예수금) 계산값 사용
+                    current_calculated_asset = 0
                     if not config.session.is_simulation and tot_evlu > 0:
-                        self.initial_asset = tot_evlu
+                        current_calculated_asset = tot_evlu
                     else:
-                        self.initial_asset = deposit + stock_eval
+                        current_calculated_asset = deposit + stock_eval
                         
+                    if current_calculated_asset > 0:
+                        saved_initial = load_daily_initial_asset()
+                        if saved_initial > 0:
+                            self.initial_asset = saved_initial
+                        else:
+                            self.initial_asset = current_calculated_asset
+                            save_daily_initial_asset(self.initial_asset)
+                    else:
+                        self.initial_asset = 0
+
                     asset_check_failed = False
 
                 except Exception as e:
@@ -1407,7 +1440,8 @@ class AutoTrader:
                 console.print("[bold red]⚠️ 초기 자산 조회 실패: API 응답이 없거나 오류가 발생했습니다.[/bold red]")
 
             if self.initial_asset > 0:
-                self.log(f"시스템 시작 자산: {self.initial_asset:,}원")
+                saved_msg = " (당일 기준 복원)" if load_daily_initial_asset() > 0 else " (당일 기준 저장)"
+                self.log(f"시스템 시작 자산: {self.initial_asset:,}원{saved_msg}")
             
             # [추가] API 모듈에서 로그를 남길 수 있도록 연결
             context.SYSTEM_LOGGER = self.log
@@ -1440,7 +1474,13 @@ class AutoTrader:
             stock_eval_amt = api.safe_int(s_data.get('scts_evlu_amt'))
             current_total_asset = stock_eval_amt + deposit
             total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
-            msg += f"\n현재 평가(자산): {current_total_asset:,}원 (손익: {total_profit:+,}원)"
+            
+            tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
+            if tot_pchs == 0 and holdings:
+                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+            
+            rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+            msg += f"\n현재 평가(자산): {current_total_asset:,}원 (평가손익: {total_profit:+,}원 / {rate:+.2f}%)"
 
         # [추가] 전략 설정 요약 정보 추가
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -1626,10 +1666,19 @@ class AutoTrader:
             except: pass
 
         if current_asset is not None:
-            profit = current_asset - self.initial_asset
-            rate = (profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+            tot_profit = 0
+            tot_pchs = 0
+            if summary:
+                tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+            
+            if tot_pchs == 0 and holdings:
+                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+            
+            rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+            
             msg += f"현재 자산: {current_asset:,}원\n"
-            msg += f"누적 손익: {profit:+,}원 ({rate:+.2f}%)\n"
+            msg += f"평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
             msg += f"주문 가능: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
@@ -1913,17 +1962,25 @@ class AutoTrader:
         # 3. 자산 현황
         if current_asset is not None:
             if self.initial_asset > 0:
-                profit = current_asset - self.initial_asset
-                rate = (profit / self.initial_asset) * 100
-                color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                tot_profit = 0
+                tot_pchs = 0
+                if summary:
+                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                
+                if tot_pchs == 0 and holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                
+                rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+                color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
                 
                 table.add_row("초기 자산", f"{self.initial_asset:,}원")
                 table.add_row("현재 자산", f"{current_asset:,}원")
-                table.add_row("누적 손익", f"{color}{profit:+,}원 ({rate:+.2f}%)[/]")
+                table.add_row("평가 손익", f"{color}{tot_profit:+,}원 ({rate:+.2f}%)[/]")
             else:
                 table.add_row("초기 자산", "- (미설정)")
                 table.add_row("현재 자산", f"{current_asset:,}원")
-                table.add_row("누적 손익", "-")
+                table.add_row("평가 손익", "-")
             
             table.add_row("현재 예수금", f"{deposit:,}원")
         else:
@@ -2951,13 +3008,21 @@ class AutoTrader:
                     if current_total > 0:
                         # [Fix] 초기 자산 로드 실패(0원) 시, 첫 유효 조회 값으로 보정
                         if self.initial_asset == 0:
-                            self.initial_asset = current_total
-                            self.log(f"[시스템 보정] 초기 자산 정보 갱신: {self.initial_asset:,}원")
+                            saved_initial = load_daily_initial_asset()
+                            if saved_initial > 0:
+                                self.initial_asset = saved_initial
+                                self.log(f"[시스템 보정] 기존 초기 자산 기록 로드: {self.initial_asset:,}원")
+                            else:
+                                self.initial_asset = current_total
+                                save_daily_initial_asset(self.initial_asset)
+                                self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
 
-                        profit_diff = current_total - self.initial_asset
-                        profit_rate = (profit_diff / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+                        tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
+                        if tot_pchs == 0 and valid_holdings:
+                            tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                        profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
-                        self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 손익: {profit_diff:+,}원 ({profit_rate:+.2f}%)")
+                        self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 평가손익: {total_profit:+,}원 ({profit_rate:+.2f}%)")
                         self.log(f"              예수금(D+2): {deposit_d2:,}원 | 주식평가: {total_eval:,}원")
 
                         self.risk_manager.check_loss_limit(current_total)
