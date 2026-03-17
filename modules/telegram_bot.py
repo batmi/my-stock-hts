@@ -240,6 +240,7 @@ class TelegramCommander:
 
     def _cmd_rules(self, args):
         custom_rules = db_manager.db.get_all_stock_strategies()
+        custom_rules = auto_trade._enrich_rules_with_weights(custom_rules)
         if not custom_rules:
             return "📭 설정된 개별 종목 룰이 없습니다."
             
