@@ -242,6 +242,25 @@ class DBManager:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Select Error: {e}[/red]")
             return []
+            
+    def delete_trade_by_id(self, trade_id):
+        """특정 ID의 거래 내역을 삭제"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+                    deleted = cursor.rowcount
+                    conn.commit()
+                    return deleted > 0
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    return False
+                except Exception:
+                    return False
     
     def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None, order_status=None):
         """주문번호(odno)를 기준으로 거래 내역 업데이트"""

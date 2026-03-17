@@ -109,13 +109,25 @@ def sync_today_trades():
                 
                 try:
                     data = api.get_today_history(cano, acnt)
+                    ovrs_data = api.get_overseas_today_history(cano, acnt)
                     
+                    all_trades = []
                     if data.get('rt_cd') == '0':
-                        trades = data.get('output1', [])
-                        for item in trades:
+                        all_trades.extend(data.get('output1', []))
+                    if ovrs_data.get('rt_cd') == '0':
+                        all_trades.extend(ovrs_data.get('output', []))
+
+                    if all_trades:
+                        for item in all_trades:
                             odno = item.get('odno')
-                            avg_price = float(item.get('avg_prvs', 0))
-                            tot_qty = int(item.get('tot_ccld_qty', 0))
+                            is_overseas_trade = 'ft_ccld_qty' in item
+                            
+                            if is_overseas_trade:
+                                avg_price = float(item.get('ft_ccld_unpr3', 0))
+                                tot_qty = int(item.get('ft_ccld_qty', 0))
+                            else:
+                                avg_price = float(item.get('avg_prvs', 0))
+                                tot_qty = int(item.get('tot_ccld_qty', 0))
                             
                             if odno and avg_price > 0:
                                 # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
@@ -146,7 +158,7 @@ def sync_today_trades():
                                         score = origin_trade.get('strategy_score', 0)
                                     
                                     db_manager.db.insert_trade(
-                                        type_str, item.get('pdno'), item.get('prdt_name'), 
+                                        type_str, item.get('pdno'), item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm'), 
                                         tot_qty, avg_price, odno, 
                                         order_status="체결", custom_time=trade_time,
                                         reason="체결 확인",

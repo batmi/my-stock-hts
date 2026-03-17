@@ -225,8 +225,18 @@ class ConclusionMonitor:
         time.sleep(initial_delay)
         
         while self.is_running:
-            # [추가] 장 운영 시간 외에는 모니터링 중단 (트래픽 감소)
-            if not self._is_market_open():
+            # [추가] 대기 중인 미체결 주문이 있는지 확인 (해외주식 장외 시간 대응)
+            has_pending_orders = False
+            try:
+                trader_cls = globals().get('AutoTrader')
+                if trader_cls:
+                    trader = trader_cls()
+                    if trader.order_manager.pending_orders:
+                        has_pending_orders = True
+            except: pass
+
+            # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
+            if not self._is_market_open() and not has_pending_orders:
                 self.event.wait(60)
                 if not self.event.is_set():
                     continue
@@ -342,20 +352,26 @@ class ConclusionMonitor:
                     # [최적화] retries=0 설정: 모니터링 루프가 주기적으로 돌기 때문에
                     # API 내부에서 blocking 재시도를 하지 않고 즉시 실패 처리(Fail Fast)하여 다음 주기로 넘김
                     data = api.get_today_history(cano, acnt, retries=0)
+                    ovrs_data = api.get_overseas_today_history(cano, acnt, retries=0)
                     
-                    if data.get('msg_cd') == 'EGW00201':
+                    if data.get('msg_cd') == 'EGW00201' or ovrs_data.get('msg_cd') == 'EGW00201':
                         rate_limit_hit = True
                     
                     # [추가] API 호출 실패(RT_CD != 0) 감지
-                    if data.get('rt_cd') != '0':
+                    if data.get('rt_cd') != '0' and ovrs_data.get('rt_cd') != '0':
                         has_error = True
                     
                     # [추가] 모의투자 전용: API 체결내역 누락 대비 잔고 기반 체결 확인
                     if config.session.is_simulation:
                         self._check_simulation_conclusions_by_balance(cano, acnt)
 
+                    trades = []
                     if data.get('rt_cd') == '0':
-                        trades = data.get('output1', [])
+                        trades.extend(data.get('output1', []))
+                    if ovrs_data.get('rt_cd') == '0':
+                        trades.extend(ovrs_data.get('output', []))
+
+                    if trades:
                         
                         # [추가] 모의투자 API 데이터 불일치(output1 Empty, output2 Not Empty) 감지 로그
                         if not trades and config.session.is_simulation:
@@ -370,12 +386,28 @@ class ConclusionMonitor:
                             odno = item.get('odno')
                             if not odno: continue
                             
+                            is_overseas_trade = 'ft_ord_qty' in item or 'ft_ccld_qty' in item
+                            
                             # [추가] 주문 상태 파악 및 업데이트 (State Machine)
                             # API 필드: ord_qty(주문), tot_ccld_qty(체결), cncl_cfrm_qty(취소), rmn_qty(잔량)
-                            ord_qty = api.safe_int(item.get('ord_qty'))
-                            ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
-                            cncl_qty = api.safe_int(item.get('cncl_cfrm_qty'))
-                            rmn_qty = api.safe_int(item.get('rmn_qty'))
+                            if is_overseas_trade:
+                                ord_qty = api.safe_int(item.get('ft_ord_qty'))
+                                ccld_qty = api.safe_int(item.get('ft_ccld_qty'))
+                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty', 0))
+                                rmn_qty = api.safe_int(item.get('nccs_qty'))
+                                avg_price = float(item.get('ft_ccld_unpr3', 0))
+                                type_name = item.get('sll_buy_dvsn_cd_name')
+                                if not type_name:
+                                    sll_buy_cd = item.get('sll_buy_dvsn_cd', '')
+                                    type_name = "매수" if sll_buy_cd == "02" else ("매도" if sll_buy_cd == "01" else "")
+                            else:
+                                ord_qty = api.safe_int(item.get('ord_qty'))
+                                ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
+                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty'))
+                                rmn_qty = api.safe_int(item.get('rmn_qty'))
+                                avg_price = float(item.get('avg_prvs', 0))
+                                type_name = item.get('sll_buy_dvsn_cd_name')
+
                             code_chk = item.get('pdno')
                             
                             new_status = OrderStatus.ACCEPTED
@@ -389,7 +421,7 @@ class ConclusionMonitor:
                                 if new_status == OrderStatus.FILLED: logger.debug(f"[ORDER_DEBUG] API 체결 확인: {code_chk} (No.{odno})")
                                 AutoTrader().update_order_status(code_chk, odno, new_status)
                             
-                            tot_ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
+                            tot_ccld_qty = ccld_qty
                             if tot_ccld_qty <= 0: continue
                             
                             order_key = f"{cano}-{odno}"
@@ -398,10 +430,8 @@ class ConclusionMonitor:
                             if tot_ccld_qty > prev_qty: logger.debug(f"[ORDER_DEBUG] 신규 체결 감지: {odno} (기존:{prev_qty} -> 신규:{tot_ccld_qty}) Initial={initial}")
                             if tot_ccld_qty > prev_qty:
                                 new_qty = tot_ccld_qty - prev_qty
-                                avg_price = float(item.get('avg_prvs', 0))
-                                name = item.get('prdt_name')
+                                name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
                                 code = item.get('pdno')
-                                type_name = item.get('sll_buy_dvsn_cd_name')
                                 
                                 # [추가] 매매일시 정보 추출 (DB 저장용)
                                 ord_dt = item.get('ord_dt', '')
@@ -460,11 +490,18 @@ class ConclusionMonitor:
                                     try:
                                         # 체결 확인은 주로 국내 주식 대상
                                         cp_data = api.get_current_price_data(code, is_overseas=False)
+                                        cp_data = api.get_current_price_data(code, is_overseas=is_overseas_trade)
                                         if cp_data.get('rt_cd') == '0':
-                                            curr = float(cp_data['output']['stck_prpr'])
-                                            rate = float(cp_data['output']['prdy_ctrt'])
-                                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                            cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                            if is_overseas_trade:
+                                                curr = float(cp_data['output'].get('last', 0))
+                                                rate = float(cp_data['output'].get('rate', 0))
+                                                icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
+                                            else:
+                                                curr = float(cp_data['output']['stck_prpr'])
+                                                rate = float(cp_data['output']['prdy_ctrt'])
+                                                icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                     except: pass
                                     
                                     # [추가] 개별 룰 조회
@@ -525,14 +562,21 @@ class ConclusionMonitor:
                                         if rule.get('ts_activation'):
                                             rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
                                     
-                                    exec_amt = int(avg_price * new_qty)
-                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {avg_price:,.0f}원 / 금액: {exec_amt:,}원{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                    exec_amt = avg_price * new_qty
+                                    if is_overseas_trade:
+                                        price_str = f"${avg_price:,.2f}"
+                                        amt_str = f"${exec_amt:,.2f}"
+                                    else:
+                                        price_str = f"{avg_price:,.0f}원"
+                                        amt_str = f"{int(exec_amt):,}원"
+
+                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {price_str} / 금액: {amt_str}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
                                     # 로그 기록 (시스템 로거 활용)
                                     if context.SYSTEM_LOGGER:
-                                        context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {avg_price:,.0f}원)")
+                                        context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {price_str})")
                                     
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
@@ -580,6 +624,12 @@ class ConclusionMonitor:
             holdings, _ = api.get_domestic_balance(cano, acnt)
             holdings_map = {h['pdno']: int(h['hldg_qty']) for h in holdings} if holdings else {}
             
+            # 해외 잔고 조회
+            ovrs_holdings = api.get_overseas_balance(cano, acnt)
+            if ovrs_holdings:
+                for h in ovrs_holdings:
+                    holdings_map[h['ovrs_pdno']] = int(float(h.get('ovrs_cblc_qty', 0) or h.get('ord_psbl_qty', 0)))
+
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[Monitor] 모의투자 잔고 기반 체결 확인 중... (보유종목: {len(holdings_map)}개)")
             

@@ -1559,6 +1559,28 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     
     return call_api(url, "domestic", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
 
+def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
+    """금일 해외주식 체결 내역 조회"""
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+    today = target_date if target_date else datetime.now().strftime("%Y%m%d")
+    
+    url = "uapi/overseas-stock/v1/trading/inquire-ccnl"
+    tr_id = "VTTS3035R" if config.session.is_simulation else "TTTS3035R"
+    
+    params = {
+        "CANO": cano,
+        "ACNT_PRDT_CD": acnt_prdt_cd,
+        "PDNO": "%",
+        "ORD_STRT_DT": today,
+        "ORD_END_DT": today,
+        "SLL_BUY_DVSN": "00",
+        "CCLD_NCCS_DVSN": "01", # 01: 체결
+        "CTX_AREA_FK200": "",
+        "CTX_AREA_NK200": ""
+    }
+    
+    return call_api(url, "overseas", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
+
 def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     """미체결 내역 조회 (국내주식) - get_domestic_open_orders의 Alias"""
     return get_domestic_open_orders(cano, acnt_prdt_cd)
