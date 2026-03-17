@@ -416,7 +416,7 @@ def show_help():
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
     time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
     time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
     score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")

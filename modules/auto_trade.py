@@ -1492,11 +1492,11 @@ class AutoTrader:
         buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)
         
         msg += "\n\n⚙️ [적용 전략]"
         msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
@@ -1955,12 +1955,12 @@ class AutoTrader:
                     w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
                 sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-                ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+                ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100:.0f}%"
 
                 rule_table.add_row(
                     name_disp,
                     f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-                    f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+                    f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
                     f"{ratio_str} / {sl_str}",
                     w_str,
                     r.get('updated_at', '-')
@@ -2020,14 +2020,14 @@ class AutoTrader:
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         
         use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
         table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
@@ -2044,9 +2044,9 @@ class AutoTrader:
             table.add_row("", f"시간청산 [green]ON[/] ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만)")
 
         # 투자 설정
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)
         if invest_ratio <= 0: invest_ratio = 0.1
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
+        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
         table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목)")
 
         # 손실 제한
@@ -3163,8 +3163,8 @@ class AutoTrader:
             score_adj = market_regime_adj.get(market_type, 0.0)
             
             # 기본값 설정
-            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
             
             thresholds = None
             if rule:
@@ -3184,7 +3184,7 @@ class AutoTrader:
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
                     "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
                 }
 
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
@@ -3349,10 +3349,10 @@ class AutoTrader:
                 holding_codes.add(h['pdno'])
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
+        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)
         if invest_ratio <= 0: invest_ratio = 0.1 # 0 이하일 경우 기본값 10%
 
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)
+        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
         
         if len(holding_codes) >= max_holdings:
             if self.consecutive_errors == 0: # 로그 도배 방지
@@ -3815,12 +3815,12 @@ def _view_stock_rules():
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100:.0f}%"
 
         table.add_row(
             f"{r['name']}({r['code']})",
             f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
             r.get('memo', ''),
@@ -3858,12 +3858,12 @@ def _input_and_save_rule(code, name):
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
         "take_profit_rsi": config.SELL_STRATEGY["TAKE_PROFIT_RSI"],
-        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
-        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0),
         "memo": "",
         "weights": None,
-        "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
-        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
+        "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1),
+        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", False) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     }
@@ -3902,7 +3902,7 @@ def _input_and_save_rule(code, name):
         new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한 (보유 허용 일수)", int)
             
         console.print("\n[bold]2. 리스크 관리 및 자산 비중 설정[/bold]")
-        curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
+        curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100
         val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})[/dim]", default=str(int(curr_ratio_pct)))
         if val.lower() == 'q': raise QuitInput()
         new_strategy['invest_ratio'] = float(val) / 100.0
@@ -4045,13 +4045,13 @@ def _modify_stock_rules():
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
                 
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100:.0f}%"
 
         table.add_row(
             str(i+1),
             f"{r['name']} ({r['code']})",
             f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
             r['updated_at']

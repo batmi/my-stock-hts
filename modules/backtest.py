@@ -131,8 +131,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     take_profit_rsi_limit = take_profit_rsi if take_profit_rsi is not None else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     sell_score_limit = sell_score if sell_score is not None else config.SELL_STRATEGY["SELL_SCORE"]
     
-    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
 
     # [추가] 리스크 관리 설정 로드
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
@@ -731,8 +731,8 @@ def run_backtest():
     stop_loss = custom_rule['stop_loss'] if custom_rule else config.SELL_STRATEGY["STOP_LOSS_RATE"]
     take_profit = custom_rule['take_profit'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-    ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-    ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+    ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
     
     weights = config.SCORING_WEIGHTS
     if custom_rule and custom_rule.get('weights'):
@@ -784,12 +784,12 @@ def run_backtest():
         if val.lower() == 'q': return
         take_profit = float(val)
         
-        def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]설명: 수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
         if val.lower() == 'q': return
         ts_activation = float(val)
         
-        def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]설명: 최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
         if val.lower() == 'q': return
         ts_callback = float(val)

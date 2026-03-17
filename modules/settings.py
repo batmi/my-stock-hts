@@ -16,8 +16,8 @@ def _save_dynamic_config():
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
-        "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 5),
+        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1),
+        "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 10),
         "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config, 'USE_MARKET_FILTER', True),
@@ -80,8 +80,8 @@ def view_system_config():
     
     table.add_section()
     
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
-    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 5)}")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)}")
+    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
     
     slippage = getattr(config, 'SLIPPAGE_RATE', 0.003)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
@@ -131,7 +131,7 @@ def view_system_config():
     table.add_row("익절 수익률\n[dim]목표 수익 달성 시 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RATE']", f"{sell.get('TAKE_PROFIT_RATE')}%")
     table.add_row("반익절 사용\n[dim]익절 수익률의 절반 도달 시 50% 선매도[/dim]", "SELL_STRATEGY['HALF_TAKE_PROFIT_USE']", f"{sell.get('HALF_TAKE_PROFIT_USE', True)}")
     table.add_row("시간 청산 사용\n[dim]장기 횡보 종목 강제 매도[/dim]", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}")
-    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "TIME_STOP_DAYS", f"{sell.get('TIME_STOP_DAYS', 10)}일")
+    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "TIME_STOP_DAYS", f"{sell.get('TIME_STOP_DAYS', 5)}일")
     table.add_row("  └ 최소 기대 수익\n    [dim]해당 기간 내 도달해야 할 수익률[/dim]", "TIME_STOP_MIN_PROFIT_RATE", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%")
     table.add_row("손절 수익률\n[dim]손실 제한 (Stop Loss)[/dim]", "SELL_STRATEGY['STOP_LOSS_RATE']", f"{sell.get('STOP_LOSS_RATE')}%")
     table.add_row("매도(추세이탈) 점수\n[dim]점수 하락 시 매도[/dim]", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}")
@@ -356,7 +356,7 @@ def modify_sell_strategy():
         {"desc": "시간 청산 사용", "help": "장기 횡보 시 강제 매도", "name": "TIME_STOP_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_USE": v})},
         {"desc": "시간 청산 기준일", "help": "매수 후 제한 일수 (예: 10)", "name": "TIME_STOP_DAYS", "type": "int",
-         "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
         {"desc": "시간청산 최소수익(%)", "help": "기간 내 달성해야 할 목표치", "name": "TIME_STOP_MIN_PROFIT_RATE", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_MIN_PROFIT_RATE": v})},
         {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss)", "name": "STOP_LOSS_RATE", "type": "float",
@@ -366,9 +366,9 @@ def modify_sell_strategy():
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
         {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TS_ACTIVATION", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TS_CALLBACK", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
         {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정", "name": "ATR_STOP_MULTIPLIER", "type": "float",
@@ -550,10 +550,10 @@ def modify_system_trading_general():
              "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
 
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
+             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
+             "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
             {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
              "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.003), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
              
@@ -615,11 +615,11 @@ def reset_to_default():
         "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0
     })
     config.SELL_STRATEGY.update({
-        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
-        "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 5.0
+        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
+        "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
-        "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0
+        "TIME_STOP_USE": True, "TIME_STOP_DAYS": 5, "TIME_STOP_MIN_PROFIT_RATE": 3.0
     })
     config.INDICATOR_PARAMS.update({
         "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
@@ -636,8 +636,8 @@ def reset_to_default():
         "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
     })
     
-    config.SYSTEM_INVEST_PER_STOCK = 0.2
-    config.SYSTEM_MAX_HOLDINGS = 5
+    config.SYSTEM_INVEST_PER_STOCK = 0.1
+    config.SYSTEM_MAX_HOLDINGS = 10
     config.SYSTEM_TRADING_INTERVAL = 180
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
     config.USE_MARKET_FILTER = True
