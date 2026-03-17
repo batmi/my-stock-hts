@@ -2048,14 +2048,25 @@ class AutoTrader:
         loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
         if loss_limit > 0:
             safety_msg = "[green]안전[/green]"
+            daily_info = ""
             if current_asset is not None and self.initial_asset > 0:
                 profit = current_asset - self.initial_asset
                 rate = (profit / self.initial_asset) * 100
+                
+                p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                daily_info = f" | 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/]"
+                
                 if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
                 elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
-            table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
+            table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg}{daily_info})")
         else:
-            table.add_row("손실 제한", "미사용")
+            daily_info = ""
+            if current_asset is not None and self.initial_asset > 0:
+                profit = current_asset - self.initial_asset
+                rate = (profit / self.initial_asset) * 100
+                p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+                daily_info = f" (현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/])"
+            table.add_row("손실 제한", f"미사용{daily_info}")
 
         # 연속 에러
         err_cnt = self.consecutive_errors
