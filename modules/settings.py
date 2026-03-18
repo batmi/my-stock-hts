@@ -29,6 +29,8 @@ def _save_dynamic_config():
         "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
         "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
         "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
+        "AUTO_MORNING_BRIEFING_USE": getattr(config, 'AUTO_MORNING_BRIEFING_USE', False),
+        "AUTO_MORNING_BRIEFING_TIME": getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
         "SCREEN_DEBUG_LEVEL": getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"),
         "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
@@ -186,6 +188,8 @@ def view_system_config():
     table.add_row("사용 여부", "ENABLE_TELEGRAM", f"{getattr(config, 'ENABLE_TELEGRAM', True)}")
     table.add_row("인스턴스 이름\n[dim]알림 메시지 머리말[/dim]", "TELEGRAM_INSTANCE_NAME", f"{getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
     table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
+    table.add_row("장전 AI 브리핑\n[dim]매일 글로벌 매크로 시황 전송[/dim]", "AUTO_MORNING_BRIEFING_USE", f"{getattr(config, 'AUTO_MORNING_BRIEFING_USE', False)}")
+    table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
 
     table.add_section()
 
@@ -431,7 +435,11 @@ def modify_telegram_settings():
         {"desc": "인스턴스 이름", "help": "알림 메시지 머리말", "name": "TELEGRAM_INSTANCE_NAME", "type": "str",
          "get": lambda: getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"), "set": lambda v: setattr(config, 'TELEGRAM_INSTANCE_NAME', v)},
         {"desc": "폴링 타임아웃(초)", "help": "봇 명령어 수신 대기 시간", "name": "TELEGRAM_POLLING_TIMEOUT", "type": "int",
-         "get": lambda: getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10), "set": lambda v: setattr(config, 'TELEGRAM_POLLING_TIMEOUT', v)}
+         "get": lambda: getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10), "set": lambda v: setattr(config, 'TELEGRAM_POLLING_TIMEOUT', v)},
+        {"desc": "장전 AI 브리핑 사용", "help": "매일 지정된 시간에 글로벌 매크로 시황 알림", "name": "AUTO_MORNING_BRIEFING_USE", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: getattr(config, 'AUTO_MORNING_BRIEFING_USE', False), "set": lambda v: setattr(config, 'AUTO_MORNING_BRIEFING_USE', v)},
+        {"desc": "장전 AI 브리핑 시간", "help": "발송 시각 (예: 0830)", "name": "AUTO_MORNING_BRIEFING_TIME", "type": "time",
+         "get": lambda: getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config, 'AUTO_MORNING_BRIEFING_TIME', v)}
     ]
     _edit_config_table("텔레그램 설정 (Telegram)", items)
 
@@ -648,6 +656,8 @@ def reset_to_default():
     config.ENABLE_TELEGRAM = True
     config.TELEGRAM_INSTANCE_NAME = "HTS"
     config.TELEGRAM_POLLING_TIMEOUT = 10
+    config.AUTO_MORNING_BRIEFING_USE = False
+    config.AUTO_MORNING_BRIEFING_TIME = "0830"
     config.SCREEN_DEBUG_LEVEL = "OFF"
     config.FILE_DEBUG_LEVEL = "WARNING"
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5

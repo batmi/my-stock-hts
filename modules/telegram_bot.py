@@ -4,6 +4,7 @@ import time
 import requests
 import re
 import os
+import math # [추가] 장전 브리핑 시 yfinance 데이터 계산용
 from datetime import datetime, timedelta
 
 import config
@@ -24,6 +25,7 @@ class TelegramCommander:
         self.is_running = False
         self.thread = None
         self.last_update_id = 0
+        self.last_briefing_date = None # [추가] 브리핑 중복 전송 방지용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
         
         # [리팩토링] 명령어 핸들러 매핑
@@ -36,6 +38,7 @@ class TelegramCommander:
             "/report": self._cmd_report,
             "/market": self._cmd_market,
             "/signal": self._cmd_signal,
+            "/analyze": self._cmd_analyze, # [추가] AI 심층 진단
             "/ask": self._cmd_ask,
             "/chart": self._cmd_chart,
             "/stocks": self._cmd_stocks,
@@ -74,6 +77,10 @@ class TelegramCommander:
         
         while self.is_running:
             try:
+                # [추가] 장전 브리핑 발송 확인 스케줄러
+                if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
+                    self._check_morning_briefing()
+
                 params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
                 response = requests.get(url, params=params, timeout=timeout + 5)
                 
@@ -126,6 +133,64 @@ class TelegramCommander:
             if response:
                 self._send_reply(response)
 
+    def _check_morning_briefing(self):
+        """장전 브리핑 발송 시간 확인 및 트리거"""
+        now = datetime.now()
+        target_time_str = getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830")
+        today_str = now.strftime("%Y-%m-%d")
+        
+        if self.last_briefing_date == today_str:
+            return
+            
+        try:
+            # 문자열 시간을 datetime 객체로 파싱하여 비교 (1시간 이내에 봇이 켜졌을 때 발송 보장)
+            target_dt = datetime.strptime(target_time_str, "%H%M").time()
+            now_time = now.time()
+            end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
+            
+            if target_dt <= now_time <= end_dt:
+                self.last_briefing_date = today_str # 중복 방지 즉시 마킹
+                # 주말(토, 일)에는 발송하지 않음
+                if now.weekday() < 5:
+                    threading.Thread(target=self._send_morning_briefing, daemon=True).start()
+        except Exception as e:
+            logger.error(f"Morning briefing check error: {e}")
+
+    def _send_morning_briefing(self):
+        """글로벌 마켓 데이터를 수집하고 Gemini에게 브리핑을 요청하여 전송"""
+        try:
+            import yfinance as yf
+            self._send_reply("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 AI 장전 브리핑을 작성 중입니다...")
+            
+            target_indices = {
+                "나스닥": "^IXIC", "S&P500": "^GSPC", 
+                "달러환율": "KRW=X", "WTI 원유": "CL=F", 
+                "VIX (변동성)": "^VIX", "비트코인": "BTC-USD"
+            }
+            market_data_str = ""
+            
+            for name, ticker in target_indices.items():
+                try:
+                    t = yf.Ticker(ticker)
+                    fi = t.fast_info
+                    last_price = fi.last_price
+                    prev_close = fi.regular_market_previous_close
+                    if last_price and prev_close and not math.isnan(last_price) and not math.isnan(prev_close):
+                        rate = ((last_price - prev_close) / prev_close) * 100
+                        market_data_str += f"{name}: {last_price:,.2f} ({rate:+.2f}%)\n"
+                except Exception: pass
+            
+            if not market_data_str:
+                market_data_str = "글로벌 마감 데이터 수집에 실패했습니다. (yfinance 응답 지연)"
+                
+            briefing = theme_analysis.generate_morning_briefing(market_data_str)
+            if briefing:
+                self._send_reply(briefing)
+            else:
+                self._send_reply("⚠️ AI 장전 브리핑 생성에 실패했습니다.")
+        except Exception as e:
+            logger.error(f"Morning briefing send error: {e}")
+
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
         return self.trader.get_status_message()
@@ -173,6 +238,7 @@ class TelegramCommander:
             "• /market [그룹] : 주요 지수 현황 (k/u/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
+            "• /analyze <종목> : AI 종목 기술적 분석 및 심층 진단\n"
             "• /ask <질문> : AI에게 주식/경제 관련 자유 질문\n"
             "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
@@ -210,6 +276,60 @@ class TelegramCommander:
     def _cmd_signal(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
         return self._analyze_stock(" ".join(args))
+        
+    def _cmd_analyze(self, args):
+        if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /analyze 삼성전자"
+        
+        keyword = " ".join(args)
+        code, name, is_overseas = self._resolve_stock(keyword)
+        if not code:
+            return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
+
+        self._send_reply(f"⏳ '{name}({code})' 심층 진단 중...\n(차트 분석 + AI 뉴스 검색 중이므로 10~20초 소요됩니다)")
+        
+        try:
+            df = api.get_chart_data(code, is_overseas)
+            if df is None or df.empty:
+                return f"⚠️ 차트 데이터를 불러올 수 없어 분석할 수 없습니다."
+            
+            ind = indicators.calculate_indicators(df)
+            current_price = float(df.iloc[-1]['close'])
+            
+            # 상태 분류를 위한 전일 RSI 계산
+            prev_rsi = None
+            if len(df) >= 16:
+                delta = df['close'].diff()
+                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                except: pass
+
+            state, _, state_reason = analysis.classify_stock_state(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            )
+
+            score, _ = analysis.calculate_score(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            )
+
+            rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+            adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+            cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+            
+            price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+            tech_info = (
+                f"• 현재가: {price_str}\n"
+                f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                f"• 퀀트 점수: {score}점 / 10점 만점\n"
+                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
+            )
+
+            answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
+            return f"🤖 [AI 종목 심층 진단] {name}({code})\n\n{answer}"
+        except Exception as e:
+            return f"⚠️ 진단 중 오류 발생: {e}"
 
     def _cmd_ask(self, args):
         if not args:

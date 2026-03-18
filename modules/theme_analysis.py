@@ -235,7 +235,8 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                     "temperature": 0.2,
                     "top_p": 0.95,
                     "max_output_tokens": 8192,
-                }
+                },
+                tools="google_search_retrieval" # [추가] 실시간 웹 검색(Grounding) 활성화
             )
             
             # 3. 콘텐츠 생성
@@ -269,6 +270,90 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             logger.error(f"Gemini Search Error (Model: {config.GEMINI_MODEL}): {e}")
         return None
 
+def analyze_stock_with_gemini(code, name, tech_info_str):
+    """특정 종목의 기술적 지표와 뉴스를 결합하여 심층 진단"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 여의도 최고의 퀀트 전략가이자 주식 분석가입니다.
+    다음은 '{name}({code})' 종목의 현재 기술적 분석 상태입니다.
+    
+    [기술적 분석 요약]
+    {tech_info_str}
+    
+    이 기술적 데이터를 바탕으로, 구글 검색을 통해 '{name}'의 최근 핵심 뉴스(실적, 수주, 주요 공시 등)와 펀더멘털 이슈를 찾아주세요.
+    그리고 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
+    
+    텔레그램 메신저에서 읽기 편하도록 간결하고 가독성 좋게, 텍스트 스타일링(굵게 등)과 이모지를 적절히 활용하여 작성해 주세요.
+    
+    출력 형식:
+    🔍 [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석)
+    📰 [최신 핵심 모멘텀] (최근 뉴스 및 재료 요약)
+    📊 [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
+    💡 [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+                generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096},
+                tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
+        )
+        res = model.generate_content(prompt)
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"Gemini Stock Analyze Error: {e}")
+        return f"⚠️ 분석 중 오류 발생: {e}"
+
+def generate_morning_briefing(market_data_str):
+    """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return None
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 글로벌 매크로 경제 전문가이자 한국 증시 투자 전략가입니다.
+    아래는 지난밤 마감된 글로벌 주요 지수 및 지표 데이터입니다.
+    
+    [글로벌 마감 데이터]
+    {market_data_str}
+    
+    위 데이터를 분석하고 구글 검색을 통해 간밤의 미국 증시 주요 이슈(주도주 실적, 연준(Fed) 발언, 매크로 지표 발표 등)를 파악한 뒤,
+    오늘 아침 개장할 한국 증시(코스피/코스닥)에 미칠 영향과 오늘 가장 주목해야 할 섹터 3가지를 정리해 주세요.
+    
+    출력 형식:
+    🌅 [굿모닝 글로벌 마켓 브리핑]
+    
+    📌 간밤의 뉴욕 증시 요약 (핵심 이슈 3줄)
+    - 
+    - 
+    - 
+    
+    🇰🇷 오늘 한국 증시 관전 포인트 & 시황 예측
+    (내용 서술)
+    
+    🎯 오늘의 주목 섹터 TOP 3 (각 섹터별 상승 명분 1줄 포함)
+    1. 
+    2. 
+    3. 
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+                generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 4096},
+                tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
+        )
+        res = model.generate_content(prompt)
+        return res.text if res and res.text else None
+    except Exception as e:
+        logger.error(f"Gemini Morning Briefing Error: {e}")
+        return None
+
 def ask_gemini(question):
     """사용자의 자유 질문에 대해 Gemini API로 답변 생성"""
     if genai is None:
@@ -296,7 +381,8 @@ def ask_gemini(question):
                 "temperature": 0.3,
                 "top_p": 0.95,
                 "max_output_tokens": 4096,
-            }
+            },
+            tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
         )
         response = model.generate_content(prompt)
         
@@ -377,7 +463,7 @@ def _analyze_with_gemini_ui():
         grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
         config.console.print(grid)
         
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
         if choice.lower() == 'q': return
         
         if choice == '1':
@@ -436,7 +522,7 @@ def run_theme_analysis():
     config.console.print(grid)
     config.console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
     
     if choice == '1':
         _show_naver_themes()

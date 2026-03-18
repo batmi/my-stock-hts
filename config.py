@@ -35,6 +35,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_INSTANCE_NAME = "HTS"
 TELEGRAM_POLLING_TIMEOUT = 10
 ENABLE_TELEGRAM = True
+AUTO_MORNING_BRIEFING_USE = False
+AUTO_MORNING_BRIEFING_TIME = "0830"
 
 # ==========================================================
 # [설정] Google Gemini API 설정 (무료 대안)
