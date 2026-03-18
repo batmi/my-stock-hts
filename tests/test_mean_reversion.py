@@ -71,7 +71,7 @@ def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
     mock_classify.return_value = ("관망", "", "점수하락")
     mock_score.return_value = (3.0, []) # 매도 기준(5.0) 미달
     
-    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0}
+    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0, "TIME_STOP_DAYS": 5}
     
     # 보유 3일차, 수익률 -2.0% -> 추세이탈 매도가 무시되고 HOLD 반환해야 함
     res = strategy.analyze_sell(
@@ -93,7 +93,7 @@ def test_mr_grace_period_time_over(mock_score, mock_classify, mock_ind):
     mock_classify.return_value = ("관망", "", "점수하락")
     mock_score.return_value = (3.0, [])
     
-    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0}
+    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0, "TIME_STOP_DAYS": 5}
     
     with patch.dict(config.SELL_STRATEGY, {"TIME_STOP_USE": False}):
         # 보유 6일차 (유예기간 만료) -> 점수 미달로 인해 SELL 반환해야 함

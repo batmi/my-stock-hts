@@ -862,25 +862,10 @@ class DefaultStrategy:
         
         # [추가] 시간 청산 설정 로드
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
-        # 1. 고정 익절/손절
-        if profit_rate >= tp_rate:
-            reason = f"익절({profit_rate}%)"
-        elif use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
-            reason = f"반익절({profit_rate:.1f}%)"
-            sell_ratio = 0.5
-        elif profit_rate <= sl_rate:
-            reason = f"손절({profit_rate}%)"
-        # [추가] 시간 청산 (보유 기간 대비 수익률 미달)
-        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            reason = f"시간청산({holding_days}일경과, 기대수익미달)"
-        # 2. 트레일링 스탑 (외부에서 계산된 메시지 반영)
-        elif ts_msg:
-            reason = ts_msg
-        
-        # 3. 기술적 지표 분석
+        # 1. 기술적 지표 분석 (시간 청산 시 매수 상태 확인을 위해 우선 수행)
         if df is not None and not df.empty:
             ind = indicators.calculate_indicators(df)
             # 전일 RSI 계산 (상태 분류용)
@@ -897,7 +882,25 @@ class DefaultStrategy:
             # [수정] 가중치(WEIGHTS) 전달
             score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
 
-            # 4. RSI 과열 익절
+        # 2. 고정 익절/손절 및 시간 청산
+        if profit_rate >= tp_rate:
+            reason = f"익절({profit_rate}%)"
+        elif use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
+            reason = f"반익절({profit_rate:.1f}%)"
+            sell_ratio = 0.5
+        elif profit_rate <= sl_rate:
+            reason = f"손절({profit_rate}%)"
+        # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
+        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
+            if state in ["매수", "역추세매수"]:
+                pass # 매수 신호가 유지 중이면 시간 청산 유예
+            else:
+                reason = f"시간청산({holding_days}일경과, 기대수익미달)"
+        # 3. 트레일링 스탑 (외부에서 계산된 메시지 반영)
+        elif ts_msg:
+            reason = ts_msg
+        
+        # 4. RSI 과열 익절
             if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
                 reason = f"RSI 과열 익절 (RSI: {ind['rsi']:.1f})"
             
@@ -909,8 +912,8 @@ class DefaultStrategy:
                 if state == "매도":
                     reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                 else:
-                    # [추가] 역추세 매수 종목은 유예 기간(5일) 및 허용 손실률(-5%) 내에서는 추세 이탈로 손절하지 않음
-                    if is_mr_holding and holding_days <= 5 and profit_rate > -5.0:
+                    # [추가] 역추세 매수 종목은 유예 기간(TIME_STOP_DAYS) 및 허용 손실률(-5%) 내에서는 추세 이탈로 손절하지 않음
+                    if is_mr_holding and holding_days <= time_stop_days and profit_rate > -5.0:
                         pass # 유예 기간 적용
                     else:
                         reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
@@ -3231,7 +3234,8 @@ class AutoTrader:
                     "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
                     "SELL_SCORE": rule['sell_score'],
                     "WEIGHTS": rule.get('weights'), # [추가] 가중치 전달
-                    "BUY_SCORE": rule['buy_score'] # [수정] 개별 룰은 매도 분석 시에도 시장 보정 무시 (절대값)
+                    "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 매도 분석 시에도 시장 보정 무시 (절대값)
+                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10))
                 }
             else:
                 # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
@@ -3874,7 +3878,7 @@ def _view_stock_rules():
         table.add_row(
             f"{r['name']}({r['code']})",
             f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
             r.get('memo', ''),

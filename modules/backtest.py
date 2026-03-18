@@ -307,7 +307,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
             
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
             time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
             if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
@@ -320,7 +320,10 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
-                sell_signal = True; reason = "시간청산"
+                if state in ["매수", "역추세매수"]:
+                    pass # 매수 신호가 유지 중이면 시간 청산 유예
+                else:
+                    sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
                 max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
                 if max_profit_rate >= ts_activation:
@@ -329,8 +332,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             
             if not sell_signal and row['RSI'] > take_profit_rsi_limit: sell_signal = True; reason = "RSI과열"
             if not sell_signal and sell_check_score < sell_score_limit:
-                # [추가] 역추세 매수 종목은 5일간 점수 하락으로 팔지 않고 기회를 줌 (유예 기간)
-                if buy_reason_str == "역추세" and current_holding_days <= 5 and loss_rate > -5.0:
+                # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
+                if buy_reason_str == "역추세" and current_holding_days <= time_stop_days and loss_rate > -5.0:
                     pass
                 else:
                     sell_signal = True; reason = "점수하락"
