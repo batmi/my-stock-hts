@@ -2274,18 +2274,21 @@ class AutoTrader:
                 
                 tot_pchs = 0
                 tot_profit = 0
+                tot_evlu = 0
                 
                 if summary and len(summary) > 0:
                     tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
                     tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
                 
                 if tot_pchs == 0 and holdings:
                     tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
                     tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
                 
                 if tot_pchs > 0 or tot_profit != 0:
                     rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_profit': tot_profit, 'rate': rate}
+                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
         except Exception: pass
 
         self._print_summary_table(stats, holdings_summary)
@@ -2432,18 +2435,21 @@ class AutoTrader:
                 
                 tot_pchs = 0
                 tot_profit = 0
+                tot_evlu = 0
                 
                 if summary and len(summary) > 0:
                     tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
                     tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
                 
                 if tot_pchs == 0 and holdings:
                     tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
                     tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
                 
                 if tot_pchs > 0 or tot_profit != 0:
                     rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_profit': tot_profit, 'rate': rate}
+                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
         except Exception: pass
         
         if stats['sell_trades_exist']:
@@ -2461,6 +2467,7 @@ class AutoTrader:
             if holdings_summary:
                 msg += f"\n[현재 보유 현황]\n"
                 msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
+                msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
                 msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
 
             msg += f"\n[최고/최악 거래]\n"
@@ -2485,6 +2492,7 @@ class AutoTrader:
             if holdings_summary:
                 msg += f"\n[현재 보유 현황]\n"
                 msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
+                msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
                 msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
             
         return msg.strip()
@@ -2549,12 +2557,15 @@ class AutoTrader:
             # [추가] 매도 사유 분석
             reason = t.get('reason', '기타')
             reason_key = "기타"
-            if "익절" in reason: reason_key = "익절"
+            if "반익절" in reason: reason_key = "반익절"
+            elif "과열" in reason: reason_key = "과열매도"
+            elif "익절" in reason: reason_key = "익절"
+            elif "ATR손절" in reason: reason_key = "ATR손절"
             elif "손절" in reason: reason_key = "손절"
-            elif "트레일링" in reason: reason_key = "TS"
-            elif "추세" in reason: reason_key = "추세이탈"
-            elif "과열" in reason: reason_key = "과열"
-            elif "ATR" in reason: reason_key = "ATR손절"
+            elif "트레일링" in reason: reason_key = "트레일링스탑"
+            elif "시간청산" in reason: reason_key = "시간청산"
+            elif "추세" in reason or "점수하락" in reason or "매도진입" in reason: reason_key = "추세이탈"
+            elif "수동" in reason: reason_key = "수동매도"
             sell_reasons[reason_key] += 1
             
         avg_profit_rate = (total_profit_rate / len(sell_trades)) if sell_trades else 0.0
@@ -2602,6 +2613,7 @@ class AutoTrader:
         if holdings_summary:
             summary_table.add_section()
             summary_table.add_row("총 매입금액", f"{holdings_summary['tot_pchs']:,}원")
+            summary_table.add_row("총 평가금액", f"{holdings_summary['tot_evlu']:,}원")
             hp = holdings_summary['tot_profit']
             hr = holdings_summary['rate']
             hc = "[red]" if hp > 0 else ("[blue]" if hp < 0 else "[white]")
