@@ -2068,6 +2068,54 @@ class AutoTrader:
                     rule_table.add_section()
             table.add_section()
 
+        # 금일 매매 & 실현 손익 계산 (상단 이동)
+        today_profit = 0
+        buy_cnt = 0
+        sell_cnt = 0
+
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            
+            target_account = None
+            if config.session.is_simulation:
+                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+            elif config.session.auto_cano:
+                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            
+            today_trades = db_manager.db.get_trades(
+                start_date=today_str, end_date=today_str, 
+                is_sim=config.session.is_simulation, account=target_account
+            )
+            
+            today_trades_parsed = []
+            for r in today_trades:
+                type_str = r['type']
+                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                parsed_r = dict(r)
+                parsed_r['type'] = simple_type
+                today_trades_parsed.append(parsed_r)
+            
+            # 중복 제거 및 정제
+            today_trades_refined = self._refine_trade_records(today_trades_parsed)
+            
+            buy_trades = [x for x in today_trades_refined if x['type'] == 'buy']
+            sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
+            
+            buy_cnt = len(buy_trades)
+            sell_cnt = len(sell_trades)
+            
+            # 금일 실현 손익 합산
+            for t in sell_trades:
+                today_profit += int(t.get('profit_amt') or 0)
+                
+        except Exception:
+            # DB 조회 실패 시 메모리 값 사용 (Fallback)
+            buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
+            sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
+            for r in self.trade_records:
+                if r['type'] == 'sell':
+                    today_profit += int(r.get('profit_amt') or 0)
+
         # 3. 자산 현황
         if current_asset is not None:
             # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
@@ -2102,9 +2150,20 @@ class AutoTrader:
             if self.initial_asset > 0:
                 table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
                 table.add_row("금일 현재 자산", f"{current_asset:,}원")
+                
+                daily_profit = current_asset - self.initial_asset
+                daily_profit_rate = (daily_profit / self.initial_asset) * 100
+                dp_color = "[red]" if daily_profit > 0 else ("[blue]" if daily_profit < 0 else "[white]")
+                table.add_row("금일 현재 손익", f"{dp_color}{daily_profit:+,}원 ({daily_profit_rate:+.2f}%)[/]")
+                
+                realized_rate = (today_profit / self.initial_asset) * 100
+                rp_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
+                table.add_row("금일 실현 손익", f"{rp_color}{today_profit:+,}원 ({realized_rate:+.2f}%)[/]")
             else:
                 table.add_row("금일 시작 자산", "- (미설정)")
                 table.add_row("금일 현재 자산", f"{current_asset:,}원")
+                table.add_row("금일 현재 손익", "-")
+                table.add_row("금일 실현 손익", "-")
         else:
             table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
@@ -2165,25 +2224,15 @@ class AutoTrader:
         loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
         if loss_limit > 0:
             safety_msg = "[green]안전[/green]"
-            daily_info = ""
             if current_asset is not None and self.initial_asset > 0:
                 profit = current_asset - self.initial_asset
                 rate = (profit / self.initial_asset) * 100
-                
-                p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
-                daily_info = f" | 금일 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/]"
                 
                 if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
                 elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
-            table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg}{daily_info})")
+            table.add_row("손실 제한", f"-{loss_limit}% (상태: {safety_msg})")
         else:
-            daily_info = ""
-            if current_asset is not None and self.initial_asset > 0:
-                profit = current_asset - self.initial_asset
-                rate = (profit / self.initial_asset) * 100
-                p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
-                daily_info = f" (금일 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/])"
-            table.add_row("손실 제한", f"미사용{daily_info}")
+            table.add_row("손실 제한", "미사용")
 
         # 연속 에러
         err_cnt = self.consecutive_errors
@@ -2195,57 +2244,7 @@ class AutoTrader:
             err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
         table.add_row("연속 에러", err_display)
         
-        # 금일 매매 & 실현 손익
-        # [수정] 메모리 대신 DB에서 조회하여 재시작 시에도 정확한 카운트 및 실현 손익 표시
-        today_profit = 0
-        buy_cnt = 0
-        sell_cnt = 0
-
-        try:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            
-            target_account = None
-            if config.session.is_simulation:
-                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-            elif config.session.auto_cano:
-                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
-            
-            today_trades = db_manager.db.get_trades(
-                start_date=today_str, end_date=today_str, 
-                is_sim=config.session.is_simulation, account=target_account
-            )
-            
-            today_trades_parsed = []
-            for r in today_trades:
-                type_str = r['type']
-                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
-                parsed_r = dict(r)
-                parsed_r['type'] = simple_type
-                today_trades_parsed.append(parsed_r)
-            
-            # 중복 제거 및 정제
-            today_trades_refined = self._refine_trade_records(today_trades_parsed)
-            
-            buy_trades = [x for x in today_trades_refined if x['type'] == 'buy']
-            sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
-            
-            buy_cnt = len(buy_trades)
-            sell_cnt = len(sell_trades)
-            
-            # 금일 실현 손익 합산
-            for t in sell_trades:
-                today_profit += int(t.get('profit_amt') or 0)
-                
-        except Exception:
-            # DB 조회 실패 시 메모리 값 사용 (Fallback)
-            buy_cnt = len([x for x in self.trade_records if x['type'] == 'buy'])
-            sell_cnt = len([x for x in self.trade_records if x['type'] == 'sell'])
-            for r in self.trade_records:
-                if r['type'] == 'sell':
-                    today_profit += int(r.get('profit_amt') or 0)
-            
-        p_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
-        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/] (금일 실현 손익: {p_color}{today_profit:+,}원[/])")
+        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
 
         console.print(table)
         
