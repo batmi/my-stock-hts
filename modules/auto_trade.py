@@ -1787,7 +1787,7 @@ class AutoTrader:
             realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
             msg += f"금일 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
             msg += f"금일 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
-            msg += f"주문 가능: {deposit:,}원\n"
+            msg += f"주문 가능 금액: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
             
@@ -2076,28 +2076,35 @@ class AutoTrader:
                 if saved_initial > 0:
                     self.initial_asset = saved_initial
                     
+            tot_profit = 0
+            tot_pchs = 0
+            tot_evlu = 0
+            if summary:
+                tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
+            
+            if tot_pchs == 0 and holdings:
+                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+            
+            rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+            color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
+            
+            table.add_row("증권 매입 금액", f"{tot_pchs:,}원")
+            table.add_row("증권 평가 금액", f"{tot_evlu:,}원")
+            table.add_row("증권 평가 손익", f"{color}{tot_profit:+,}원 ({rate:+.2f}%)[/]")
+            table.add_row("주문 가능 금액", f"{deposit:,}원")
+            
+            table.add_section()
+
             if self.initial_asset > 0:
-                tot_profit = 0
-                tot_pchs = 0
-                if summary:
-                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
-                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
-                
-                if tot_pchs == 0 and holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                
-                rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-                color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
-                
                 table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
                 table.add_row("금일 현재 자산", f"{current_asset:,}원")
-                table.add_row("금일 평가 손익", f"{color}{tot_profit:+,}원 ({rate:+.2f}%)[/]")
             else:
                 table.add_row("금일 시작 자산", "- (미설정)")
                 table.add_row("금일 현재 자산", f"{current_asset:,}원")
-                table.add_row("금일 평가 손익", "-")
-            
-            table.add_row("현재 예수금", f"{deposit:,}원")
         else:
             table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
