@@ -2261,8 +2261,34 @@ class AutoTrader:
         if not self.trade_records:
             console.print("\n[yellow]선택한 기간에 해당하는 매매 기록이 없습니다.[/yellow]")
             return
+            
         stats = self._calculate_statistics()
-        self._print_summary_table(stats)
+        
+        # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
+        holdings_summary = None
+        try:
+            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            with utils.AccountContext(target_cano):
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                
+                tot_pchs = 0
+                tot_profit = 0
+                
+                if summary and len(summary) > 0:
+                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                
+                if tot_pchs == 0 and holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                
+                if tot_pchs > 0 or tot_profit != 0:
+                    rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_profit': tot_profit, 'rate': rate}
+        except Exception: pass
+
+        self._print_summary_table(stats, holdings_summary)
         self._print_current_holdings()
         self._print_stock_details()
 
@@ -2396,40 +2422,72 @@ class AutoTrader:
             end_date = refined_records[-1]['time'][:10]
             msg += f"기간: {start_date} ~ {end_date}\n\n"
         
+        # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
+        holdings_summary = None
+        try:
+            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            with utils.AccountContext(target_cano):
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                
+                tot_pchs = 0
+                tot_profit = 0
+                
+                if summary and len(summary) > 0:
+                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                
+                if tot_pchs == 0 and holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                
+                if tot_pchs > 0 or tot_profit != 0:
+                    rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_profit': tot_profit, 'rate': rate}
+        except Exception: pass
+        
         if stats['sell_trades_exist']:
             win_rate = stats['win_rate']
             total_profit = stats['total_profit']
             avg_profit_rate = stats['avg_profit_rate']
             
             msg += f"[수익 현황]\n"
-            msg += f"총 손익: {total_profit:+,}원\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
+            msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
+            msg += f"총 실현 손익: {total_profit:+,}원\n"
             msg += f"평균 수익률: {avg_profit_rate:+.2f}%\n"
-            msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n\n"
+            msg += f"평균 보유: {stats['avg_holding_str']}\n"
             
-            msg += f"[최고/최악 거래]\n"
+            if holdings_summary:
+                msg += f"\n[현재 보유 현황]\n"
+                msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
+                msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
+
+            msg += f"\n[최고/최악 거래]\n"
             if stats.get('best_trade'):
                 b = stats['best_trade']
                 msg += f"Best: {b['name']} ({b['profit_amt']:+,}원 / {b['profit_rate']:+.2f}%)\n"
             if stats.get('worst_trade'):
                 w = stats['worst_trade']
-                msg += f"Worst: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n\n"
+                msg += f"Worst: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n"
             
-            msg += f"[매도 사유 분포]\n"
+            msg += f"\n[매도 사유 분포]\n"
             reasons = stats.get('sell_reasons', {})
             total_sells = stats['sell_count']
             if total_sells > 0:
                 for r, count in reasons.most_common():
                     msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
-            msg += "\n"
-            
-            msg += f"[기타 통계]\n"
-            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
-            msg += f"평균 보유: {stats['avg_holding_str']}"
         else:
+            msg += f"[수익 현황]\n"
             msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
-            msg += "\n(청산된 내역이 없어 수익률 산출 불가)"
+            msg += "(청산된 내역이 없어 수익률 산출 불가)\n"
             
-        return msg
+            if holdings_summary:
+                msg += f"\n[현재 보유 현황]\n"
+                msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
+                msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
+            
+        return msg.strip()
 
     def _calculate_statistics(self, records=None):
         if records is None: records = self.trade_records
@@ -2526,7 +2584,7 @@ class AutoTrader:
             "sell_reasons": sell_reasons
         }
 
-    def _print_summary_table(self, stats):
+    def _print_summary_table(self, stats, holdings_summary=None):
         summary_table = Table(box=box.HORIZONTALS, show_header=False, border_style="dim")
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
@@ -2541,6 +2599,14 @@ class AutoTrader:
             summary_table.add_row("평균 수익률", f"[red]{apr:+.2f}%[/]" if apr > 0 else f"[blue]{apr:+.2f}%[/]")
             summary_table.add_row("평균 보유 기간", stats['avg_holding_str'])
         
+        if holdings_summary:
+            summary_table.add_section()
+            summary_table.add_row("총 매입금액", f"{holdings_summary['tot_pchs']:,}원")
+            hp = holdings_summary['tot_profit']
+            hr = holdings_summary['rate']
+            hc = "[red]" if hp > 0 else ("[blue]" if hp < 0 else "[white]")
+            summary_table.add_row("총 평가손익", f"{hc}{hp:+,}원 ({hr:+.2f}%)[/]")
+            
         console.print(summary_table)
 
     def _print_current_holdings(self):
