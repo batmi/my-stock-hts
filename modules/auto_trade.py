@@ -892,8 +892,8 @@ class DefaultStrategy:
             reason = f"손절({profit_rate}%)"
         # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
         elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            if state in ["매수", "역추세매수"]:
-                pass # 매수 신호가 유지 중이면 시간 청산 유예
+            if state in ["매수", "역추세매수", "상승"]:
+                pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
             else:
                 reason = f"시간청산({holding_days}일경과, 기대수익미달)"
         # 3. 트레일링 스탑 (외부에서 계산된 메시지 반영)

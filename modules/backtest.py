@@ -320,8 +320,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
-                if state in ["매수", "역추세매수"]:
-                    pass # 매수 신호가 유지 중이면 시간 청산 유예
+                if state in ["매수", "역추세매수", "상승"]:
+                    pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
                 else:
                     sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
