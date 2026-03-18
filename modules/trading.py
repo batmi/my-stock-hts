@@ -261,7 +261,8 @@ def _create_fill_history(db_order, reason_msg):
                 snapshot=snapshot_data,
                 score=db_order.get('strategy_score', 0),
                 profit_amt=profit_amt,
-                profit_rate=profit_rate
+                profit_rate=profit_rate,
+                stop_loss_rate=float(db_order.get('stop_loss_rate', 0.0))
             )
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")

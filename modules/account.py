@@ -150,19 +150,22 @@ def sync_today_trades():
                                     profit_amt = 0
                                     profit_rate = 0.0
                                     score = 0
+                                    stop_loss_rate = 0.0
                                     
                                     if origin_trade:
                                         type_str = origin_trade['type'] # 기존 타입 유지
                                         profit_amt = origin_trade.get('profit_amt', 0)
                                         profit_rate = origin_trade.get('profit_rate', 0.0)
                                         score = origin_trade.get('strategy_score', 0)
+                                        stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
                                     
                                     db_manager.db.insert_trade(
                                         type_str, item.get('pdno'), item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm'), 
                                         tot_qty, avg_price, odno, 
                                         order_status="체결", custom_time=trade_time,
                                         reason="체결 확인",
-                                        profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score
+                                        profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score,
+                                        stop_loss_rate=stop_loss_rate
                                     )
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                     # [수정] 원본 주문 보존을 위해 업데이트 제거

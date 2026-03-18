@@ -447,13 +447,16 @@ class ConclusionMonitor:
                                     profit_amt = 0
                                     profit_rate = 0.0
                                     score = 0
+                                    stop_loss_rate = 0.0
                                     if origin_trade:
                                         db_type_name = origin_trade['type']
                                         profit_amt = origin_trade.get('profit_amt', 0)
                                         profit_rate = origin_trade.get('profit_rate', 0.0)
                                         score = origin_trade.get('strategy_score', 0)
+                                        stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
                                 except Exception:
                                     db_type_name = type_name
+                                    stop_loss_rate = 0.0
                                 
                                 # [추가] 매도 체결 시 실현 손익 및 사유 조회
                                 profit_msg = ""
@@ -592,7 +595,7 @@ class ConclusionMonitor:
                                         logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
-                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score)
+                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
                                     
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                     # [수정] 전량 체결 시 상태를 '체결'로 업데이트하여 미체결 목록(DB Fallback)에서 제거
@@ -725,7 +728,8 @@ class ConclusionMonitor:
                     snapshot=snapshot_data,
                     score=trade.get('strategy_score', 0),
                     profit_amt=profit_amt,
-                    profit_rate=profit_rate
+                    profit_rate=profit_rate,
+                    stop_loss_rate=float(trade.get('stop_loss_rate', 0.0))
                 )
                 success_db = True
                 if config.FILE_DEBUG_LEVEL == "DEBUG":

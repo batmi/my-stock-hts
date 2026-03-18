@@ -334,8 +334,15 @@ class DBManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC LIMIT 1", (code,))
+            # [수정] ATR 손절률이 누락되지 않은(0.0이 아닌) 원본 매수 내역을 우선 조회합니다.
+            cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') AND stop_loss_rate != 0.0 ORDER BY id DESC LIMIT 1", (code,))
             row = cursor.fetchone()
+            
+            # 만약 0이 아닌 내역이 없다면(고정 손절 등), 기본 최신 매수 내역을 조회합니다.
+            if not row:
+                cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC LIMIT 1", (code,))
+                row = cursor.fetchone()
+                
             return dict(row) if row else None
         except: return None
             
