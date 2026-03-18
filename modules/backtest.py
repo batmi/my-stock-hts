@@ -738,7 +738,7 @@ def run_backtest():
     take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
-    time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+    time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
     use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     
@@ -802,7 +802,7 @@ def run_backtest():
         if val.lower() == 'q': return
         ts_callback = float(val)
         
-        def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+        def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]설명: 매수 후 목표 기간 내 수익 미달 시 강제 청산[/dim]", default=str(def_time_stop))
         if val.lower() == 'q': return
         time_stop_days = int(val)

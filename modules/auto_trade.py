@@ -2010,7 +2010,7 @@ class AutoTrader:
                 rule_table.add_row(
                     name_disp,
                     f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-                    f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
+                    f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
                     f"{ratio_str} / {sl_str}",
                     w_str,
                     r.get('updated_at', '-')
@@ -2077,7 +2077,7 @@ class AutoTrader:
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
         table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
@@ -3234,7 +3234,7 @@ class AutoTrader:
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
                     "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
+                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
                 }
 
             # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
@@ -3913,7 +3913,7 @@ def _input_and_save_rule(code, name):
         "memo": "",
         "weights": None,
         "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1),
-        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5),
+        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     }
@@ -4101,7 +4101,7 @@ def _modify_stock_rules():
             str(i+1),
             f"{r['name']} ({r['code']})",
             f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 5)}일",
+            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
             r['updated_at']
