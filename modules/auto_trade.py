@@ -1738,20 +1738,62 @@ class AutoTrader:
             
             rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
             
-            msg += f"현재 자산: {current_asset:,}원\n"
-            msg += f"평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
-            msg += f"주문 가능: {deposit:,}원\n"
+            # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
+            if self.initial_asset <= 0:
+                saved_initial = load_daily_initial_asset()
+                if saved_initial > 0:
+                    self.initial_asset = saved_initial
+            
+            if self.initial_asset > 0:
+                msg += f"금일 시작 자산: {self.initial_asset:,}원\n"
+            else:
+                msg += f"금일 시작 자산: - (미설정)\n"
+                
+            msg += f"금일 현재 자산: {current_asset:,}원\n"
             
             if self.initial_asset > 0:
                 daily_profit = current_asset - self.initial_asset
                 daily_profit_rate = (daily_profit / self.initial_asset) * 100
-                msg += f"일일 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
+                msg += f"금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
+                
+            realized_profit = 0
+            try:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                
+                target_account = None
+                if config.session.is_simulation:
+                    target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+                elif config.session.auto_cano:
+                    target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+                    
+                today_trades = db_manager.db.get_trades(
+                    start_date=today_str, end_date=today_str, 
+                    is_sim=config.session.is_simulation, account=target_account
+                )
+                
+                today_trades_parsed = []
+                for r in today_trades:
+                    type_str = r['type']
+                    simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                    parsed_r = dict(r)
+                    parsed_r['type'] = simple_type
+                    today_trades_parsed.append(parsed_r)
+                
+                today_trades_refined = self._refine_trade_records(today_trades_parsed)
+                sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
+                realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
+            except: pass
+            
+            realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+            msg += f"금일 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
+            msg += f"금일 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
+            msg += f"주문 가능: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
             
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
-        regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "⚪ 횡보장"}
+        regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "🟡 횡보장"}
 
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
@@ -1946,7 +1988,7 @@ class AutoTrader:
         table.add_row("마켓 상태", market_status)
         
         # [추가] 시장 국면 상태 표시
-        regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
+        regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
         k_regime_str = regime_map.get(kospi_regime, kospi_regime)
         q_regime_str = regime_map.get(kosdaq_regime, kosdaq_regime)
         table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점)")
@@ -2028,6 +2070,12 @@ class AutoTrader:
 
         # 3. 자산 현황
         if current_asset is not None:
+            # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
+            if self.initial_asset <= 0:
+                saved_initial = load_daily_initial_asset()
+                if saved_initial > 0:
+                    self.initial_asset = saved_initial
+                    
             if self.initial_asset > 0:
                 tot_profit = 0
                 tot_pchs = 0
@@ -2041,19 +2089,19 @@ class AutoTrader:
                 rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                 color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
                 
-                table.add_row("초기 자산", f"{self.initial_asset:,}원")
-                table.add_row("현재 자산", f"{current_asset:,}원")
-                table.add_row("평가 손익", f"{color}{tot_profit:+,}원 ({rate:+.2f}%)[/]")
+                table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
+                table.add_row("금일 현재 자산", f"{current_asset:,}원")
+                table.add_row("금일 평가 손익", f"{color}{tot_profit:+,}원 ({rate:+.2f}%)[/]")
             else:
-                table.add_row("초기 자산", "- (미설정)")
-                table.add_row("현재 자산", f"{current_asset:,}원")
-                table.add_row("평가 손익", "-")
+                table.add_row("금일 시작 자산", "- (미설정)")
+                table.add_row("금일 현재 자산", f"{current_asset:,}원")
+                table.add_row("금일 평가 손익", "-")
             
             table.add_row("현재 예수금", f"{deposit:,}원")
         else:
             table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
-                table.add_row("초기 자산", f"{self.initial_asset:,}원")
+                table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
 
         table.add_section()
 
@@ -2070,7 +2118,7 @@ class AutoTrader:
             mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
             mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
             mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-            table.add_row("", f"└ 역추세매수 [green]ON[/] (RSI {mr_rsi}↓ / 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑)")
+            table.add_row("", f"역추세매수 [green]ON[/] (RSI {mr_rsi}↓ / 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑)")
 
         # 매도 조건
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
@@ -2090,9 +2138,9 @@ class AutoTrader:
         table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
         
         cond_str = f"익절 (+{tp}%)"
-        if use_half_tp: cond_str += f" [dim](반익절: +{tp/2}%, 50%)[/dim]"
+        if use_half_tp: cond_str += f" / 반익절 (+{tp/2:.1f}%, 50%)"
         cond_str += f" / 손절 ({sl}%)"
-        if use_atr: cond_str += f" [dim](ATR손절: x{atr_mult})[/dim]"
+        if use_atr: cond_str += f" / ATR손절 (x{atr_mult})"
         
         table.add_row("", cond_str)
         table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
@@ -2116,7 +2164,7 @@ class AutoTrader:
                 rate = (profit / self.initial_asset) * 100
                 
                 p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
-                daily_info = f" | 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/]"
+                daily_info = f" | 금일 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/]"
                 
                 if rate <= -loss_limit: safety_msg = "[bold red]위험 (한도 초과)[/bold red]"
                 elif rate <= -(loss_limit * 0.8): safety_msg = "[bold orange3]주의 (한도 임박)[/bold orange3]"
@@ -2127,7 +2175,7 @@ class AutoTrader:
                 profit = current_asset - self.initial_asset
                 rate = (profit / self.initial_asset) * 100
                 p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
-                daily_info = f" (현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/])"
+                daily_info = f" (금일 현재 손익: {p_color}{profit:+,}원 ({rate:+.2f}%)[/])"
             table.add_row("손실 제한", f"미사용{daily_info}")
 
         # 연속 에러
@@ -2160,9 +2208,19 @@ class AutoTrader:
                 is_sim=config.session.is_simulation, account=target_account
             )
             
-            # 매수/매도 필터링
-            buy_trades = [x for x in today_trades if "매수" in x.get('type', '') or "buy" in x.get('type', '').lower()]
-            sell_trades = [x for x in today_trades if "매도" in x.get('type', '') or "sell" in x.get('type', '').lower()]
+            today_trades_parsed = []
+            for r in today_trades:
+                type_str = r['type']
+                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                parsed_r = dict(r)
+                parsed_r['type'] = simple_type
+                today_trades_parsed.append(parsed_r)
+            
+            # 중복 제거 및 정제
+            today_trades_refined = self._refine_trade_records(today_trades_parsed)
+            
+            buy_trades = [x for x in today_trades_refined if x['type'] == 'buy']
+            sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
             
             buy_cnt = len(buy_trades)
             sell_cnt = len(sell_trades)
@@ -2180,7 +2238,7 @@ class AutoTrader:
                     today_profit += int(r.get('profit_amt') or 0)
             
         p_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
-        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/] (실현손익: {p_color}{today_profit:+,}원[/])")
+        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/] (금일 실현 손익: {p_color}{today_profit:+,}원[/])")
 
         console.print(table)
         
@@ -3183,7 +3241,7 @@ class AutoTrader:
 
                         daily_profit = current_total - self.initial_asset
                         daily_profit_rate = (daily_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
-                        self.log(f"              일일 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 시작 자산: {self.initial_asset:,}원")
+                        self.log(f"              금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 금일 시작 자산: {self.initial_asset:,}원")
 
                         self.risk_manager.check_loss_limit(current_total)
                     else:

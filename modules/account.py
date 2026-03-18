@@ -702,7 +702,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
     summary_table.add_row("금일 매수 체결합계", f"{summary_data['buy_today']:,}원")
     summary_table.add_row("금일 매도 체결합계", f"{summary_data['sell_today']:,}원")
     summary_table.add_row("금일 제비용", f"{summary_data['total_cost']:,}원")
-    summary_table.add_row("금일 실현손익 (확정)", f"[{get_color(summary_data['realized_pl'])}]{summary_data['realized_pl']:,}원[/]")
+    summary_table.add_row("금일 실현 손익 (확정)", f"[{get_color(summary_data['realized_pl'])}]{summary_data['realized_pl']:,}원[/]")
 
     panel = Panel(
         summary_table,
