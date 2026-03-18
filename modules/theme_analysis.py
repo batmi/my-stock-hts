@@ -297,10 +297,10 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
+        # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
-                generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096},
-                tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
         res = model.generate_content(prompt)
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
@@ -375,14 +375,14 @@ def ask_gemini(question):
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
+        # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
             generation_config={
                 "temperature": 0.3,
                 "top_p": 0.95,
                 "max_output_tokens": 4096,
-            },
-            tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
+            }
         )
         response = model.generate_content(prompt)
         
