@@ -39,7 +39,7 @@ def _save_dynamic_config():
         "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
         "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
         "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.3),
-        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.001)
+        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.002)
     }
     
     try:
@@ -83,7 +83,7 @@ def view_system_config():
     table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)}")
     table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
     
-    slippage = getattr(config, 'SLIPPAGE_RATE', 0.003)
+    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
     table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
     
@@ -659,7 +659,7 @@ def reset_to_default():
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.3
     config.UNFILLED_ORDER_CANCEL_SECONDS = 120
-    config.SLIPPAGE_RATE = 0.003
+    config.SLIPPAGE_RATE = 0.002
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 

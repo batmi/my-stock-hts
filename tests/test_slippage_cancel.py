@@ -19,11 +19,11 @@ def reset_autotrader():
 def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, reset_autotrader):
     """
     [매수 슬리피지 테스트]
-    현재가 10,000원, 슬리피지 0.3% 설정 시
-    주문 가격이 10,030원으로 계산되어 전송되는지 확인
+    현재가 10,000원, 슬리피지 0.2% 설정 시
+    주문 가격이 10,020원으로 계산되어 전송되는지 확인
     """
-    # 설정: 슬리피지 0.3%
-    config.SLIPPAGE_RATE = 0.003
+    # 설정: 슬리피지 0.2%
+    config.SLIPPAGE_RATE = 0.002
     config.SYSTEM_RISK_PER_TRADE = 0 # 리스크 관리 비활성화 (단순화)
     config.USE_VOLATILITY_TARGETING = False # 변동성 타겟팅 비활성화
     
@@ -32,7 +32,7 @@ def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, r
     
     # Mock 설정
     current_price = 10000
-    expected_price = 10030 # 10000 * (1 + 0.003)
+    expected_price = 10020 # 10000 * (1 + 0.002)
     
     # adjust_to_tick은 입력값을 그대로 정수로 반환하도록 설정
     mock_adjust.side_effect = lambda x, is_overseas: int(round(x))
@@ -72,18 +72,18 @@ def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, r
 def test_sell_slippage(mock_adjust, mock_chart, mock_fetch_qty, mock_place, reset_autotrader):
     """
     [매도 슬리피지 테스트]
-    현재가 10,000원, 슬리피지 0.3% 설정 시
-    주문 가격이 9,970원으로 계산되어 전송되는지 확인
+    현재가 10,000원, 슬리피지 0.2% 설정 시
+    주문 가격이 9,980원으로 계산되어 전송되는지 확인
     """
-    # 설정: 슬리피지 0.3%
-    config.SLIPPAGE_RATE = 0.003
+    # 설정: 슬리피지 0.2%
+    config.SLIPPAGE_RATE = 0.002
     
     trader = auto_trade.AutoTrader()
     trader.is_running = True # [수정] 실행 상태 활성화 (로직 진입 조건)
     
     # Mock 설정
     current_price = 10000
-    expected_price = 9970 # 10000 * (1 - 0.003)
+    expected_price = 9980 # 10000 * (1 - 0.002)
     
     mock_adjust.side_effect = lambda x, is_overseas: int(round(x))
     mock_fetch_qty.return_value = 10 # 매도 가능 수량
