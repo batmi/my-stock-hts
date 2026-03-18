@@ -463,7 +463,7 @@ def _analyze_with_gemini_ui():
         grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
         config.console.print(grid)
         
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
         if choice.lower() == 'q': return
         
         if choice == '1':
@@ -510,6 +510,114 @@ def _analyze_with_custom_prompt_ui():
             config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
             config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
 
+def _analyze_stock_ui():
+    """개별 종목 AI 심층 진단 UI"""
+    import api
+    import indicators
+    from modules import analysis
+    
+    config.console.print("\n[bold cyan]=== AI 종목 심층 진단 ===[/bold cyan]")
+    keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](취소: q)[/dim]")
+    
+    if not keyword or keyword.lower() == 'q': return
+    
+    code = None
+    name = None
+    is_overseas = False
+    
+    # 1. 등록된 관심 종목에서 검색
+    all_stocks = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
+    for item in all_stocks:
+        if keyword == item['code'] or keyword == item['name']:
+            code, name, is_overseas = item['code'], item['name'], False
+            break
+            
+    if not code:
+        all_us = config.session.stock_data.get("stocks_us", []) + config.session.stock_data.get("etfs_us", [])
+        for item in all_us:
+            if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
+                code, name, is_overseas = item['code'], item['name'], True
+                break
+                
+    # 2. 미등록 종목인 경우 입력값 분석
+    if not code:
+        if keyword.isdigit() and len(keyword) == 6:
+            code = keyword
+            name = api.get_stock_name_by_code(code, False) or keyword
+            is_overseas = False
+        elif all(ord(c) < 128 for c in keyword):
+            code = keyword.upper()
+            name = api.get_stock_name_by_code(code, True) or keyword
+            is_overseas = True
+            
+    if not code:
+        config.console.print(f"[red]'{keyword}' 종목을 찾을 수 없습니다.[/red]")
+        return
+        
+    config.console.print(f"\n[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 뉴스 검색)[/dim]")
+    
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[green]차트 데이터 및 기술적 지표 분석 중...[/]", total=None)
+            
+            df = api.get_chart_data(code, is_overseas)
+            if df is None or df.empty:
+                config.console.print("[red]차트 데이터를 불러올 수 없어 분석할 수 없습니다.[/red]")
+                return
+                
+            ind = indicators.calculate_indicators(df)
+            current_price = float(df.iloc[-1]['close'])
+            
+            prev_rsi = None
+            if len(df) >= 16:
+                delta = df['close'].diff()
+                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                except: pass
+
+            state, _, state_reason = analysis.classify_stock_state(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            )
+
+            score, _ = analysis.calculate_score(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            )
+
+            rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+            adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+            cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+            
+            price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+            tech_info = (
+                f"• 현재가: {price_str}\n"
+                f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                f"• 퀀트 점수: {score}점 / 10점 만점\n"
+                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
+            )
+            
+            progress.add_task(f"[green]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/green]", total=None)
+            answer = analyze_stock_with_gemini(code, name, tech_info)
+            
+        if answer:
+            md = Markdown(answer)
+            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2))
+            config.console.print(Padding(panel, (0, 4)))
+            config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
+            config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
+        else:
+            config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
+            
+    except Exception as e:
+        config.console.print(f"[red]진단 중 오류 발생: {e}[/red]")
+
 def run_theme_analysis():
     """테마 트랜드 분석 메인 함수 (서브 메뉴)"""
     config.console.print("\n[bold magenta]=== 테마 트랜드 분석 (Theme Trend Analysis) ===[/]")
@@ -518,15 +626,15 @@ def run_theme_analysis():
     grid.add_column(justify="left", style="dim")
     grid.add_row("[1] 네이버 금융 테마 순위", "(Naver Theme Ranking)")
     grid.add_row("[2] 시장 주도 테마 분석", "(Market Theme Analysis)")
-    # grid.add_row("[3] 직접 프롬프트 입력", "(Custom Prompt)")
+    grid.add_row("[3] AI 종목 심층 진단", "(AI Stock Analysis)")
     config.console.print(grid)
     config.console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
     
     if choice == '1':
         _show_naver_themes()
     elif choice == '2':
         _analyze_with_gemini_ui()
-    # elif choice == '3':
-    #     _analyze_with_custom_prompt_ui()
+    elif choice == '3':
+        _analyze_stock_ui()
