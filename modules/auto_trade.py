@@ -1684,10 +1684,16 @@ class AutoTrader:
     def get_status_message(self):
         """텔레그램 전송용 상태 요약 메시지 생성"""
         status_text = "STOPPED"
+        status_icon = "🔴"
         if self.is_running:
-            status_text = "RUNNING" if self.is_market_open() else "WAITING"
+            if self.is_market_open():
+                status_text = "RUNNING"
+                status_icon = "🟢"
+            else:
+                status_text = "WAITING"
+                status_icon = "🟡"
         
-        msg = f"[시스템 상태: {status_text}]\n"
+        msg = f"{status_icon} [시스템 상태: {status_text}]\n"
         
         # 자산 정보 조회
         current_asset = None
