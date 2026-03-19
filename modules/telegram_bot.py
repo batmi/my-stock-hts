@@ -467,12 +467,14 @@ class TelegramCommander:
         
         current_asset = 0
         sec_buy = 0
+        sec_pl = 0
         try:
             with utils.AccountContext(target_cano):
                 asset_data = account.get_asset_status_data(target_cano, acnt)
                 if asset_data:
                     current_asset = asset_data.get('tot_asset', 0)
                     sec_buy = asset_data.get('sec_buy', 0)
+                    sec_pl = asset_data.get('sec_pl', 0)
         except Exception as e:
             logger.error(f"Profit 자산 조회 실패: {e}")
 
@@ -572,17 +574,15 @@ class TelegramCommander:
             if initial_asset and current_asset > 0:
                 total_asset_profit = int(current_asset - initial_asset)
                 total_asset_roi = (total_asset_profit / initial_asset * 100) if initial_asset > 0 else 0.0
-                unrealized_profit = total_asset_profit - total_profit
-                unrealized_roi = (unrealized_profit / sec_buy * 100) if sec_buy > 0 else 0.0
                 
-                msg += f"총 자산 손익: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
-                msg += f"  └ 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
-                msg += f"  └ 미실현 손익: {unrealized_profit:+,}원 ({unrealized_roi:+.2f}%)\n"
+                msg += f"총 자산 증감: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
             else:
-                msg += "총 자산 손익: - (데이터 부족)\n"
-                msg += f"  └ 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
-                msg += "  └ 미실현 손익: -\n"
+                msg += "총 자산 증감: - (데이터 부족)\n"
                 
+            msg += f"기간 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
+            unrealized_roi = (sec_pl / sec_buy * 100) if sec_buy > 0 else 0.0
+            msg += f"현재 평가 손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
+
             msg += "\n[시장 대비 성과]\n"
             msg += f"코스피 지수: {kospi_rate:+.2f}%\n"
             if initial_asset and current_asset > 0:
@@ -594,6 +594,7 @@ class TelegramCommander:
             msg += "\n[매매 요약]\n"
             msg += f"총 매입금액: {int(total_buy_amt_for_sell):,}원\n"
             msg += f"총 매도금액: {int(total_sell_amt):,}원\n"
+            msg += f"총 평가손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
             pf_str = f"{profit_factor:.2f}" if profit_factor != 99.9 else "Inf"
             msg += f"평균 손익비: {pf_str}\n"
 
