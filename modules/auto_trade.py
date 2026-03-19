@@ -3248,12 +3248,42 @@ class AutoTrader:
                             tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
-                        self.log(f"   [자산 현황] 총자산: {current_total:,}원 | 평가손익: {total_profit:+,}원 ({profit_rate:+.2f}%)")
-                        self.log(f"              예수금(D+2): {deposit_d2:,}원 | 주식평가: {total_eval:,}원")
-
+                        realized_profit = 0
+                        try:
+                            today_str = datetime.now().strftime("%Y-%m-%d")
+                            
+                            target_account = None
+                            if config.session.is_simulation:
+                                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+                            elif config.session.auto_cano:
+                                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+                                
+                            today_trades = db_manager.db.get_trades(
+                                start_date=today_str, end_date=today_str, 
+                                is_sim=config.session.is_simulation, account=target_account
+                            )
+                            
+                            today_trades_parsed = []
+                            for r in today_trades:
+                                type_str = r['type']
+                                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                                parsed_r = dict(r)
+                                parsed_r['type'] = simple_type
+                                today_trades_parsed.append(parsed_r)
+                            
+                            today_trades_refined = self._refine_trade_records(today_trades_parsed)
+                            sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
+                            realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
+                        except Exception:
+                            pass
+                            
+                        realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
                         daily_profit = current_total - self.initial_asset
                         daily_profit_rate = (daily_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
-                        self.log(f"              금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 금일 시작 자산: {self.initial_asset:,}원")
+                        order_possible = deposit_res.get('order_possible', deposit_d2) if deposit_res else 0
+                        
+                        self.log(f"   [자산 현황] 증권 매입 금액: {tot_pchs:,}원 | 증권 평가 금액: {total_eval:,}원 | 증권 평가 손익: {total_profit:+,}원 ({profit_rate:+.2f}%) | 주문 가능 금액: {order_possible:,}원")
+                        self.log(f"              금일 시작 자산: {self.initial_asset:,}원 | 금일 현재 자산: {current_total:,}원 | 금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 금일 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)")
 
                         self.risk_manager.check_loss_limit(current_total)
                     else:
