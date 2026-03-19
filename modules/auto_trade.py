@@ -1543,6 +1543,13 @@ class AutoTrader:
                         else:
                             self.initial_asset = current_calculated_asset
                             save_daily_initial_asset(self.initial_asset)
+                            
+                        # [추가] DB에 일일 초기 자산 기록 (스냅샷)
+                        try:
+                            today_str = datetime.now().strftime("%Y-%m-%d")
+                            acc_str = f"{target_cano}-{acnt}"
+                            db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                        except: pass
                     else:
                         self.initial_asset = 0
 
@@ -3345,6 +3352,15 @@ class AutoTrader:
                                 self.initial_asset = current_total
                                 save_daily_initial_asset(self.initial_asset)
                                 self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
+
+                            # [추가] DB에 기록
+                            try:
+                                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                                today_str = datetime.now().strftime("%Y-%m-%d")
+                                acc_str = f"{target_cano}-{acnt}"
+                                db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                            except: pass
 
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         

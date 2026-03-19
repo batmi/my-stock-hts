@@ -456,6 +456,26 @@ class TelegramCommander:
         start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
         end_dt = today_str
         
+        # [추가] 타겟 계좌 문자열 생성 및 현재 총 자산/기초 자산 조회
+        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        if not config.session.is_simulation and not target_cano:
+            target_cano = config.session.cano
+            acnt = config.session.acnt_prdt_cd
+            
+        target_account = f"{target_cano}-{acnt}"
+        
+        current_asset = 0
+        try:
+            with utils.AccountContext(target_cano):
+                asset_data = account.get_asset_status_data(target_cano, acnt)
+                if asset_data:
+                    current_asset = asset_data.get('tot_asset', 0)
+        except Exception as e:
+            logger.error(f"Profit 자산 조회 실패: {e}")
+
+        initial_asset = db_manager.db.get_daily_asset(start_dt, target_account)
+
         if days == 0:
             title = "📅 [일간 실현 손익]"
         elif days == 7:
@@ -516,9 +536,18 @@ class TelegramCommander:
             tot_roi = (total_profit / total_buy_amt_for_sell * 100) if total_buy_amt_for_sell > 0 else 0.0
             
             msg += "[수익 요약]\n"
-            msg += f"총 손익: {total_profit:+,}원\n"
-            msg += f"총 수익률: {tot_roi:+.2f}% (총 매입금액 대비)\n"
-            msg += f"평균 수익률: {stats['avg_profit_rate']:+.2f}% (건당 평균)\n\n"
+            if initial_asset and current_asset > 0:
+                total_asset_profit = int(current_asset - initial_asset)
+                total_asset_roi = (total_asset_profit / initial_asset * 100) if initial_asset > 0 else 0.0
+                msg += f"총 자산 기준 손익금: {total_asset_profit:+,}원\n"
+                msg += f"총 자산 기준 수익률: {total_asset_roi:+.2f}%\n"
+            else:
+                msg += "총 자산 기준 손익금: - (데이터 부족)\n"
+                msg += "총 자산 기준 수익률: - (데이터 부족)\n"
+                
+            msg += f"총 매입 대비 손익금: {total_profit:+,}원\n"
+            msg += f"총 매입 대비 수익률: {tot_roi:+.2f}%\n"
+            msg += f"거래 건당 평균 수익률: {stats['avg_profit_rate']:+.2f}%\n\n"
             
             msg += "[매매 통계]\n"
             msg += f"매매 횟수: {stats['sell_count']}건 (익절 {stats['win_trades']} / 손절 {stats['loss_trades']})\n"

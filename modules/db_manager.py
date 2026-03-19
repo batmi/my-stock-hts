@@ -101,6 +101,16 @@ class DBManager:
                     )
                 ''')
                 
+                # [추가] 일별 자산 스냅샷 테이블 생성
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS daily_asset_history (
+                        date TEXT,
+                        account TEXT,
+                        asset REAL,
+                        PRIMARY KEY (date, account)
+                    )
+                ''')
+                
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [info[1] for info in cursor.fetchall()]
@@ -510,6 +520,38 @@ class DBManager:
         except Exception as e:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] VACUUM Error: {e}[/red]")
+
+    def save_daily_asset(self, date_str, account, asset_value):
+        """일일 총 자산 스냅샷 저장"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO daily_asset_history (date, account, asset)
+                        VALUES (?, ?, ?)
+                    ''', (date_str, account, asset_value))
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+
+    def get_daily_asset(self, start_date, account):
+        """특정 날짜 이후의 가장 오래된 자산 스냅샷 조회 (기초 자산용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT asset FROM daily_asset_history WHERE account = ? AND date >= ? ORDER BY date ASC LIMIT 1", (account, start_date))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except:
+            return None
 
 # 전역 인스턴스
 db = DBManager()
