@@ -2596,17 +2596,19 @@ class AutoTrader:
                     holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
         except Exception: pass
         
+        holding_count = max(0, stats['buy_count'] - stats['sell_count'])
+
         if stats['sell_trades_exist']:
             win_rate = stats['win_rate']
             total_profit = stats['total_profit']
             avg_profit_rate = stats['avg_profit_rate']
             
-            msg += f"[수익 현황]\n"
-            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
+            msg += f"[매매 현황 요약]\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']} / 보유 {holding_count})\n"
             msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
+            msg += f"건당 평균 수익률: {avg_profit_rate:+.2f}%\n"
+            msg += f"건당 평균 보유: {stats['avg_holding_str']}\n"
             msg += f"총 실현 손익: {total_profit:+,}원\n"
-            msg += f"평균 수익률: {avg_profit_rate:+.2f}%\n"
-            msg += f"평균 보유: {stats['avg_holding_str']}\n"
             
             if holdings_summary:
                 msg += f"\n[현재 보유 현황]\n"
@@ -2629,8 +2631,8 @@ class AutoTrader:
                 for r, count in reasons.most_common():
                     msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
         else:
-            msg += f"[수익 현황]\n"
-            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
+            msg += f"[매매 현황 요약]\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']} / 보유 {holding_count})\n"
             msg += "(청산된 내역이 없어 수익률 산출 불가)\n"
             
             if holdings_summary:
@@ -2639,6 +2641,12 @@ class AutoTrader:
                 msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
                 msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
             
+        instance_name = getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')
+        acc_type = "모의" if config.session.is_simulation else "실전"
+        t_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        if not t_cano: t_cano = config.session.cano
+        msg += f"\n[{instance_name} | {acc_type} {t_cano}]"
+
         return msg.strip()
 
     def _calculate_statistics(self, records=None):
