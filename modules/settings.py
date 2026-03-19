@@ -99,6 +99,7 @@ def view_system_config():
     table.add_section()
     
     table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
+    table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
     table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
     table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
     
@@ -582,6 +583,8 @@ def modify_system_trading_general():
         items.extend([
             {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
+            {"desc": "대기 모드 주기(초)", "help": "주문이 없는 평상시 체결 확인 간격", "name": "CONCLUSION_CHECK_IDLE_INTERVAL", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
             {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
             {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
