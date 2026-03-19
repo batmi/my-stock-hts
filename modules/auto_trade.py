@@ -1387,18 +1387,37 @@ class AutoTrader:
             odno = r.get('odno')
             # odno가 없으면 고유 키 생성하여 포함
             if not odno:
-                key = f"NO_ODNO_{r['time']}_{r['code']}_{r['type']}_{len(unique_records)}"
+                key = f"NO_ODNO_{r.get('time', '')}_{r.get('code', '')}_{r.get('type', '')}_{len(unique_records)}"
                 unique_records[key] = r
                 continue
                 
             if odno not in unique_records:
-                unique_records[odno] = r
+                unique_records[odno] = dict(r) # 복사본 저장
             else:
                 existing = unique_records[odno]
-                # 기존 기록이 '체결 확인'이고, 현재 기록이 구체적 사유가 있다면 교체 (정보 보강)
-                if existing.get('reason') == '체결 확인' and r.get('reason') != '체결 확인':
-                    unique_records[odno] = r
-                # 현재 기록이 '체결 확인'이면 무시 (기존의 구체적 사유 유지)
+                
+                # 새 레코드(r)가 더 최신 정보(체결 등)를 담고 있을 때 병합
+                if float(r.get('price', 0)) > 0 and float(existing.get('price', 0)) <= 0:
+                    existing['price'] = r['price']
+                    
+                if r.get('profit_amt'):
+                    existing['profit_amt'] = r['profit_amt']
+                if r.get('profit_rate'):
+                    existing['profit_rate'] = r['profit_rate']
+                    
+                old_reason = str(existing.get('reason', ''))
+                new_reason = str(r.get('reason', ''))
+                
+                if "체결 확인" in old_reason and "체결 확인" not in new_reason:
+                    existing['reason'] = new_reason
+                elif "체결 확인" not in old_reason and "체결 확인" in new_reason:
+                    pass # 기존 구체적 사유 유지
+                else:
+                    existing['reason'] = new_reason # 최신 사유로 덮어씀
+
+                existing['time'] = r.get('time', existing.get('time'))
+                if r.get('order_status'):
+                    existing['order_status'] = r['order_status']
         
         return list(unique_records.values())
 
@@ -2717,6 +2736,14 @@ class AutoTrader:
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
         
+        # [추가] 조회 기간 표시
+        period_str = "전체"
+        if getattr(self, 'trade_records', None) and len(self.trade_records) > 0:
+            start_date = self.trade_records[0]['time'][:10]
+            end_date = self.trade_records[-1]['time'][:10]
+            period_str = f"{start_date} ~ {end_date}"
+            
+        summary_table.add_row("조회 기간", period_str)
         summary_table.add_row("총 매매 실행", f"{stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})")
         
         if stats['sell_trades_exist']:
@@ -2903,14 +2930,19 @@ class AutoTrader:
         for i, r in enumerate(records):
             type_str = "[red]매수[/]" if r['type'] == 'buy' else "[blue]매도[/]"
             
-            # 단가 포맷팅 (정수/실수 구분)
-            price_val = r['price']
-            if price_val.is_integer():
-                price_str = f"{int(price_val):,}"
+            # [수정] 단가 포맷팅 (시장가 0원 처리)
+            price_val = float(r['price'])
+            if price_val <= 0:
+                price_str = "시장가"
+                amt_str = "-"
             else:
-                price_str = f"{price_val:,.2f}"
-            
-            trade_amt = int(r['price'] * r['qty']) # [추가] 매매 총액 계산
+                if price_val.is_integer():
+                    price_str = f"{int(price_val):,}"
+                else:
+                    price_str = f"{price_val:,.2f}"
+                
+                trade_amt = int(price_val * r['qty'])
+                amt_str = f"{trade_amt:,}"
             
             profit_display = "-"
             reason_display = r.get('reason', '-')
@@ -2927,7 +2959,7 @@ class AutoTrader:
                 f"{r['name']}",
                 f"{r['qty']}",
                 price_str,
-                f"{trade_amt:,}", # [추가]
+                amt_str, # [수정]
                 profit_display,
                 reason_display
             )
