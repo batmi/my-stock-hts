@@ -2676,6 +2676,22 @@ class AutoTrader:
                     diff = (dt - buy_dt).total_seconds()
                     total_holding_seconds += diff
                     holding_count += 1
+                else:
+                    # [추가] 기간 검색으로 인해 주어진 레코드에 매수 기록이 없는 경우 DB에서 과거 내역 조회
+                    try:
+                        from modules import db_manager
+                        past_trades = db_manager.db.get_trades(code=code, limit=100)
+                        for pt in past_trades:
+                            pt_type = pt.get('type', '').lower()
+                            if "buy" in pt_type or "매수" in pt_type:
+                                pt_dt = datetime.strptime(pt['time'], "%Y-%m-%d %H:%M:%S")
+                                if pt_dt < dt:
+                                    diff = (dt - pt_dt).total_seconds()
+                                    total_holding_seconds += diff
+                                    holding_count += 1
+                                    break
+                    except Exception:
+                        pass
         
         for t in sell_trades:
             profit = t.get('profit_amt', 0)

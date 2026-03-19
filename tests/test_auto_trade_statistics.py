@@ -1,6 +1,7 @@
 import pytest
 from modules.auto_trade import AutoTrader
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 @pytest.fixture
 def trader():
@@ -13,8 +14,10 @@ def test_calculate_statistics_empty(trader):
     assert stats['win_rate'] == 0.0
     assert stats['total_profit'] == 0
 
-def test_calculate_statistics_mixed(trader):
+@patch('modules.auto_trade.db_manager.db.get_trades')
+def test_calculate_statistics_mixed(mock_get_trades, trader):
     """매수/매도 혼합 내역 통계 계산 테스트"""
+    mock_get_trades.return_value = []
     records = [
         {'type': 'buy', 'code': '005930', 'time': '2023-01-01 10:00:00', 'price': 10000, 'qty': 10},
         {'type': 'sell', 'code': '005930', 'time': '2023-01-02 10:00:00', 'price': 11000, 'qty': 10, 'profit_amt': 10000, 'profit_rate': 10.0, 'reason': '익절'},
@@ -41,8 +44,10 @@ def test_calculate_statistics_mixed(trader):
     # 보유 기간 확인 (1일 vs 1시간 -> 평균 약 12.5시간)
     assert "시간" in stats['avg_holding_str'] or "분" in stats['avg_holding_str']
 
-def test_calculate_statistics_holding_time(trader):
+@patch('modules.auto_trade.db_manager.db.get_trades')
+def test_calculate_statistics_holding_time(mock_get_trades, trader):
     """평균 보유 기간 계산 테스트"""
+    mock_get_trades.return_value = []
     t1 = datetime(2023, 1, 1, 10, 0, 0)
     t2 = t1 + timedelta(minutes=1)
     
