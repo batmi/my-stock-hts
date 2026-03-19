@@ -26,8 +26,8 @@ def test_manage_stock_menu(mock_delete, mock_add, mock_ask):
 @patch('modules.manage.api.get_current_price_data')
 def test_get_current_price_add_flow(mock_api, mock_ask, mock_load_config):
     """종목 검색 및 추가 흐름 테스트"""
-    # 시나리오: 코드입력(005930) -> 추가확인(y) -> 이름확인(엔터) -> 그룹선택(1:국내주식)
-    mock_ask.side_effect = ["005930", "y", "", "1"]
+    # 시나리오: 코드입력(005930) -> 추가확인(y) -> 이름확인(엔터) -> 그룹선택(1:국내주식) -> 위치지정(엔터) -> (여분)
+    mock_ask.side_effect = ["005930", "y", "", "1", "", ""]
     
     # API Mock
     mock_api.return_value = {

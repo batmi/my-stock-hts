@@ -92,8 +92,8 @@ def test_show_stock_analysis_auto_refresh(mock_ask, mock_print):
 @patch('modules.analysis.calculate_score')
 def test_diagnose_stock_direct_input(mock_score, mock_classify, mock_ind, mock_chart, mock_name, mock_ask):
     """개별 종목 분석 - 직접 입력 테스트"""
-    # 5(직접입력) -> 005930
-    mock_ask.side_effect = ["5", "005930"]
+    # 5(직접입력) -> 005930 -> AI진단 묻기(n)
+    mock_ask.side_effect = ["5", "005930", "n"]
     mock_name.return_value = "Samsung"
     
     # [Fix] KeyError: 'date' 해결을 위해 date 컬럼 추가

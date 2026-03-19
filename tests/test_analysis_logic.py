@@ -33,7 +33,8 @@ def test_diagnose_stock_no_data(mock_get_chart):
 
 @patch('modules.analysis.api.get_chart_data')
 @patch('modules.analysis.indicators.calculate_indicators')
-def test_diagnose_stock_indicators(mock_calc, mock_get_chart, mock_df):
+@patch('rich.prompt.Prompt.ask', return_value='n')
+def test_diagnose_stock_indicators(mock_ask, mock_calc, mock_get_chart, mock_df):
     """지표 계산 후 출력 테스트"""
     mock_get_chart.return_value = mock_df
     mock_calc.return_value = {

@@ -13,7 +13,7 @@ def test_get_asset_status_data(mock_deposit, mock_balance, mock_overseas):
     # Mock Balance (보유 종목 및 평가금)
     try:
         mock_balance.return_value = ( # Fixed: Added parenthesis
-            [{'pdno': '005930', 'prdt_name': 'Samsung', 'hldg_qty': '10', 'pchs_amt': '500000', 'evlu_amt': '600000', 'evlu_pfls_amt': '100000', 'evlu_pfls_rt': '20.0'}],
+                [{'pdno': '005930', 'prdt_name': 'Samsung', 'hldg_qty': '10', 'pchs_amt': '500000', 'pchs_avg_pric': '50000', 'evlu_amt': '600000', 'evlu_pfls_amt': '100000', 'evlu_pfls_rt': '20.0'}],
             [{'scts_evlu_amt': '600000', 'tot_evlu_amt': '1600000', 'dnca_tot_amt': '1000000'}]
         )
     

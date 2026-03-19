@@ -20,7 +20,8 @@ def mock_chart_df():
 @patch('modules.analysis.api.get_chart_data')
 @patch('modules.analysis.api.get_realtime_vol_strength')
 @patch('modules.analysis.indicators.calculate_indicators')
-def test_diagnose_stock(mock_calc, mock_vol, mock_get_chart, mock_chart_df):
+@patch('rich.prompt.Prompt.ask', return_value='n')
+def test_diagnose_stock(mock_ask, mock_calc, mock_vol, mock_get_chart, mock_chart_df):
     """개별 종목 진단 함수 테스트"""
     # Mock 설정
     mock_get_chart.return_value = mock_chart_df

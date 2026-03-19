@@ -71,7 +71,7 @@ def test_cmd_report(mock_get_trades, commander):
     # /report d (일간)
     res = commander._cmd_report(['d'])
     assert "시스템 트레이딩 성과 리포트" in res
-    assert "총 손익: +10,000원" in res
+    assert "총 실현 손익: +10,000원" in res
     
     # 데이터 없음
     mock_get_trades.return_value = []

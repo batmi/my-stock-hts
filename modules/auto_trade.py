@@ -928,7 +928,8 @@ class DefaultStrategy:
         elif ts_msg:
             reason = ts_msg
         
-        # 4. RSI 과열 익절
+        if df is not None and not df.empty:
+            # 4. RSI 과열 익절
             if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
                 reason = f"RSI 과열 익절 (RSI: {ind['rsi']:.1f})"
             

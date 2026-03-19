@@ -22,7 +22,7 @@ def test_get_performance_report_with_data(mock_get_trades, trader):
         {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절'}
     ]
     report = trader.get_performance_report()
-    assert "총 손익: +10,000원" in report
+    assert "총 실현 손익: +10,000원" in report
     assert "승률: 100.0%" in report
 
 @patch('modules.auto_trade.db_manager.db.get_trades')
