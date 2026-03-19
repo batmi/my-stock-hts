@@ -232,6 +232,26 @@ def _create_fill_history(db_order, reason_msg):
 
         if not exists_check:
             type_str = db_order.get('type', '')
+            code = db_order.get('code')
+            name = db_order.get('name')
+            qty = int(float(db_order.get('qty', 0)))
+            price = float(db_order.get('price', 0))
+            
+            # [추가] 시장가(0)인 경우 현재가 조회하여 대체
+            if price <= 0:
+                is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                try:
+                    cp = api.get_current_price(code, is_overseas=is_overseas)
+                    if cp > 0: price = float(cp)
+                    else:
+                        # [추가] get_current_price 실패 시 상세 데이터에서 추출
+                        cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
+                        if cp_data and cp_data.get('rt_cd') == '0':
+                            if is_overseas:
+                                price = float(cp_data['output'].get('last', 0))
+                            else:
+                                price = float(cp_data['output'].get('stck_prpr', 0))
+                except: pass
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
             try: profit_amt = int(float(db_order.get('profit_amt') or 0))
@@ -250,10 +270,10 @@ def _create_fill_history(db_order, reason_msg):
             # [수정] 큐 시스템 적용으로 단순 호출로 변경
             db_manager.db.insert_trade(
                 type_str, 
-                db_order.get('code'), 
-                db_order.get('name'), 
-                int(float(db_order.get('qty', 0))), 
-                float(db_order.get('price', 0)), 
+                code, 
+                name, 
+                qty, 
+                price, 
                 odno, 
                 order_status="체결(추정)", 
                 reason=f"체결 확인 ({reason_msg})",
@@ -266,11 +286,14 @@ def _create_fill_history(db_order, reason_msg):
             )
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
+            return price
         else:
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 이미 체결 내역 존재하여 생성 스킵: {odno}")
+            return float(db_order.get('price', 0))
     except Exception as e:
         logger.error(f"[ORDER_DEBUG] 체결 히스토리 생성 실패: {e}", exc_info=True)
+        return float(db_order.get('price', 0)) if db_order else 0.0
 
 def show_open_orders():
     """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
@@ -366,12 +389,27 @@ def show_open_orders():
                         current_acc_str = f"{cano}-{acnt}"
 
                         # [추가] 모의투자 체결 알림 헬퍼 함수 (실전 포맷 적용)
-                        def _send_sim_alert(type_name, db_order, reason_msg):
+                        def _send_sim_alert(type_name, db_order, reason_msg, fill_price=0.0):
                             try:
                                 code = db_order.get('code')
                                 name = db_order.get('name')
-                                qty = db_order.get('qty')
-                                price = float(db_order.get('price', 0))
+                                qty = int(float(db_order.get('qty', 0)))
+                                price = fill_price if fill_price > 0 else float(db_order.get('price', 0))
+                                
+                                is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                                if price <= 0:
+                                    try:
+                                        cp = api.get_current_price(code, is_overseas=is_overseas)
+                                        if cp > 0: price = float(cp)
+                                        else:
+                                            # [추가] get_current_price 실패 시 상세 데이터에서 추출
+                                            cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
+                                            if cp_data and cp_data.get('rt_cd') == '0':
+                                                if is_overseas:
+                                                    price = float(cp_data['output'].get('last', 0))
+                                                else:
+                                                    price = float(cp_data['output'].get('stck_prpr', 0))
+                                    except: pass
                                 
                                 custom_rules = db_manager.db.get_all_stock_strategies()
                                 rules_map = {r['code']: r for r in custom_rules}
@@ -387,12 +425,18 @@ def show_open_orders():
                                 
                                 cur_info = ""
                                 try:
-                                    cp_data = api.get_current_price_data(code, is_overseas=False)
+                                    cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
                                     if cp_data.get('rt_cd') == '0':
-                                        curr = float(cp_data['output']['stck_prpr'])
-                                        rate = float(cp_data['output']['prdy_ctrt'])
-                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                        if is_overseas:
+                                            curr = float(cp_data['output'].get('last', 0))
+                                            rate = float(cp_data['output'].get('rate', 0))
+                                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                            cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
+                                        else:
+                                            curr = float(cp_data['output']['stck_prpr'])
+                                            rate = float(cp_data['output']['prdy_ctrt'])
+                                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                            cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                 except: pass
                                 
                                 strategy_info = ""
@@ -408,8 +452,10 @@ def show_open_orders():
                                             strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                     except: pass
 
-                                exec_amt = int(price * qty)
-                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                exec_amt = price * qty
+                                price_fmt = f"${price:,.2f}" if is_overseas and price > 0 else (f"{price:,.0f}원" if price > 0 else "시장가")
+                                amt_fmt = f"${exec_amt:,.2f}" if is_overseas and exec_amt > 0 else (f"{int(exec_amt):,}원" if exec_amt > 0 else "-")
+                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
@@ -457,13 +503,13 @@ def show_open_orders():
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
-                                    _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
+                                    fill_price = _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
 
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 체결 처리 완료 (알림 전송 예정)")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)")
+                                    _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)", fill_price)
                                     
                                     continue
                                 else:
@@ -484,10 +530,10 @@ def show_open_orders():
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
-                                    _create_fill_history(db_o, "잔고 입고 확인 (API 누락 보정)")
+                                    fill_price = _create_fill_history(db_o, "잔고 입고 확인 (API 누락 보정)")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)")
+                                    _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)", fill_price)
                                     
                                     continue
 

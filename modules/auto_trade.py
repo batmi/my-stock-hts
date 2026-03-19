@@ -689,6 +689,23 @@ class ConclusionMonitor:
 
             name = trade.get('name', code)
             price = float(trade.get('price', 0))
+            is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+            
+            # [추가] 시장가(0)인 경우 현재가 조회하여 대체
+            if price <= 0:
+                try:
+                    cp = api.get_current_price(code, is_overseas=is_overseas)
+                    if cp > 0: price = float(cp)
+                    else:
+                        # [추가] get_current_price 실패 시 상세 데이터에서 추출
+                        cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
+                        if cp_data and cp_data.get('rt_cd') == '0':
+                            if is_overseas:
+                                price = float(cp_data['output'].get('last', 0))
+                            else:
+                                price = float(cp_data['output'].get('stck_prpr', 0))
+                except: pass
+
             type_str = trade.get('type', '') # [수정] KeyError 방지
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
@@ -778,7 +795,9 @@ class ConclusionMonitor:
                         except: pass
 
                     exec_amt = int(price * qty)
-                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price:,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
+                    price_fmt = f"{price:,.0f}원" if price > 0 else "시장가"
+                    amt_fmt = f"{exec_amt:,}원" if exec_amt > 0 else "-"
+                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: {reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
                 except Exception as e:
@@ -1147,10 +1166,19 @@ class OrderManager:
                                                     
                                                     if is_filled:
                                                         self.trader.log(f"-> 잔고 확인됨. '체결(추정)'으로 기록합니다.")
+                                                        
+                                                        fill_price = float(trade['price'])
+                                                        is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                                                        if fill_price <= 0:
+                                                            try:
+                                                                cp = api.get_current_price(code, is_overseas=is_overseas)
+                                                                if cp > 0: fill_price = float(cp)
+                                                            except: pass
+
                                                         # [수정] 원본 주문 상태 변경 제거 (접수 이력 보존)
                                                         # db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
-                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="체결(추정)", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
                                                         # [수정] 텔레그램 알림 발송 (실전 포맷 적용)
                                                         try:
@@ -1173,12 +1201,18 @@ class OrderManager:
                                                             # 현재가 정보
                                                             cur_info = ""
                                                             try:
-                                                                cp_data = api.get_current_price_data(code, is_overseas=False)
+                                                                cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
                                                                 if cp_data.get('rt_cd') == '0':
-                                                                    curr = float(cp_data['output']['stck_prpr'])
-                                                                    rate = float(cp_data['output']['prdy_ctrt'])
-                                                                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                                    cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                                                    if is_overseas:
+                                                                        curr = float(cp_data['output'].get('last', 0))
+                                                                        rate = float(cp_data['output'].get('rate', 0))
+                                                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                                        cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
+                                                                    else:
+                                                                        curr = float(cp_data['output']['stck_prpr'])
+                                                                        rate = float(cp_data['output']['prdy_ctrt'])
+                                                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                                             except: pass
 
                                                             # 전략 지표 (스냅샷 활용)
@@ -1195,8 +1229,10 @@ class OrderManager:
                                                                         strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                                                 except: pass
                                                             
-                                                            exec_amt = int(float(trade['price']) * qty)
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {float(trade['price']):,.0f}원(주문가) / 금액: {exec_amt:,}원\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
+                                                            exec_amt = fill_price * qty
+                                                            price_fmt = f"${fill_price:,.2f}" if is_overseas else f"{fill_price:,.0f}원"
+                                                            amt_fmt = f"${exec_amt:,.2f}" if is_overseas else f"{int(exec_amt):,}원"
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
                                                         except Exception as e:
                                                             self.trader.log(f"알림 전송 실패: {e}")
@@ -1462,17 +1498,14 @@ class AutoTrader:
 
                     # 3. 총 자산 계산
                     stock_eval = 0
-                    tot_evlu = 0
-                    if summary:
+                    # [수정] API 요약 데이터 대신 보유 종목 실시간 합산
+                    if holdings:
+                        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                        stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
+                    elif summary:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
-                        tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt'))
                     
-                    # [수정] 모의투자는 API 총평가금 대신 (주식평가 + D+2예수금) 계산값 사용
-                    current_calculated_asset = 0
-                    if not config.session.is_simulation and tot_evlu > 0:
-                        current_calculated_asset = tot_evlu
-                    else:
-                        current_calculated_asset = deposit + stock_eval
+                    current_calculated_asset = deposit + stock_eval
                         
                     if current_calculated_asset > 0:
                         saved_initial = load_daily_initial_asset()
@@ -1640,8 +1673,12 @@ class AutoTrader:
 
                     # 2. 잔고 및 평가금 조회
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                    if summary and len(summary) > 0:
-                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
+                    
+                    if holdings:
+                        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                        stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
+                    elif summary and len(summary) > 0:
+                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
 
                     if is_data_valid:
                         final_asset = deposit + stock_eval
@@ -1703,7 +1740,6 @@ class AutoTrader:
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
             try:
-                # [최적화] API 호출 통합 (중복 조회 제거)
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 
                 # 1. 잔고 조회 (평가금 포함)
@@ -1714,33 +1750,33 @@ class AutoTrader:
                     if summary:
                         # [수정] D+2 예수금(가수도금) 사용 (매도 대금 포함, /balance와 통일)
                         deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                        tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0))
-                        
-                        # 총 자산: API 제공값 우선, 없으면 계산
-                        if not config.session.is_simulation and tot_evlu > 0:
-                            current_asset = tot_evlu
-                        else:
-                            current_asset = deposit + stock_eval
                 else:
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
                         deposit = res['d2_deposit']
-                        stock_eval = 0
-                        if summary: stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-                        total_cash = res['deposit'] + res['foreign_deposit']
-                        current_asset = total_cash + stock_eval
+                
+                # [수정] 보유 종목 개별 합산으로 평가금액 직접 계산 (데이터 정합성 보장)
+                tot_evlu = 0
+                if holdings:
+                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                    if valid_holdings:
+                        tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                elif summary:
+                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                
+                current_asset = deposit + tot_evlu
             except: pass
 
         if current_asset is not None:
             tot_profit = 0
             tot_pchs = 0
-            if summary:
-                tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
-                tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
             
-            if tot_pchs == 0 and holdings:
-                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+            # [수정] API 요약 데이터 대신 보유 종목 합산 (데이터 불일치 방지)
+            if holdings:
+                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                if valid_holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
             
             rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
             
@@ -1926,11 +1962,7 @@ class AutoTrader:
                 console=console,
                 transient=True
             ) as progress:
-                task = progress.add_task("[green]트레이딩 상태 및 자산 정보 조회 중...[/]", total=None)
-                
-                progress.update(task, description="[green]총 추정 자산 계산 중...[/]")
-                current_asset = self._get_total_estimated_asset()
-                
+                task = progress.add_task("[green]보유 종목 및 자산 정보 조회 중...[/]", total=None)
                 progress.update(task, description="[green]보유 종목 및 잔고 조회 중...[/]")
                 # [추가] 보유 종목 확인
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -1954,6 +1986,16 @@ class AutoTrader:
                         if res:
                             deposit = res['d2_deposit']
                 except: pass
+
+                # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
+                tot_evlu = 0
+                if holdings:
+                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                    tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                elif summary and len(summary) > 0:
+                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+
+                current_asset = deposit + tot_evlu
                 
                 progress.update(task, description="[green]시장 국면(KOSPI/KOSDAQ) 분석 중...[/]")
                 try:
@@ -2133,15 +2175,14 @@ class AutoTrader:
             tot_profit = 0
             tot_pchs = 0
             tot_evlu = 0
-            if summary:
-                tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
-                tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
-                tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
             
-            if tot_pchs == 0 and holdings:
-                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+            # [수정] API 요약 데이터 대신 보유 종목 합산 (데이터 불일치 방지)
+            if holdings:
+                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                if valid_holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                    tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
             
             rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
             color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
@@ -2506,15 +2547,13 @@ class AutoTrader:
                 tot_profit = 0
                 tot_evlu = 0
                 
-                if summary and len(summary) > 0:
-                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
-                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
-                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
-                
-                if tot_pchs == 0 and holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                    tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                # [수정] API 요약 데이터 대신 보유 종목 합산
+                if holdings:
+                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                    if valid_holdings:
+                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                        tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
                 
                 if tot_pchs > 0 or tot_profit != 0:
                     rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
@@ -3216,8 +3255,15 @@ class AutoTrader:
                 self.log("-" * 125)
                 if summary and len(summary) > 0:
                     s_data = summary[0]
-                    total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
-                    total_eval = api.safe_int(s_data.get('scts_evlu_amt'))
+                    
+                    # [수정] API 지연에 따른 왜곡 방지를 위해 보유 종목 개별 합산 값 사용
+                    tot_pchs = 0
+                    total_profit = 0
+                    total_eval = 0
+                    if valid_holdings:
+                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                        total_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                        total_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
                     
                     # 총 자산 계산 (예수금 + 평가금)
                     current_total = 0
@@ -3242,9 +3288,6 @@ class AutoTrader:
                                 save_daily_initial_asset(self.initial_asset)
                                 self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
 
-                        tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
-                        if tot_pchs == 0 and valid_holdings:
-                            tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
                         realized_profit = 0
@@ -3298,22 +3341,23 @@ class AutoTrader:
             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
             
             # 1. 잔고 및 평가금 조회
-            _, summary = api.get_domestic_balance(cano, acnt)
+            holdings, summary = api.get_domestic_balance(cano, acnt)
             
             stock_eval = 0
             deposit = 0
             
             if summary and len(summary) > 0: 
-                stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
                 # [수정] 자산 계산 시 D+2 예수금(가수도금) 우선 사용
                 deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
                 if deposit == 0:
                     deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
 
-            # [추가] API 제공 총자산 우선 사용
-            tot_evlu = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
-            if not config.session.is_simulation and tot_evlu > 0:
-                return tot_evlu
+            # [수정] API 제공 총자산 대신 보유 종목 합산 (데이터 불일치 방지)
+            if holdings:
+                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
+            elif summary and len(summary) > 0:
+                stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
 
             # 2. 실전투자면 별도 API 시도 (잔고 API의 예수금 갱신 지연 대비)
             # [수정] deposit이 0이 아니더라도 정확한 값을 위해 조회

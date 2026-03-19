@@ -279,29 +279,12 @@ def _display_balance_details(cano, acnt_prdt_cd):
             
             # 요약 정보 출력
             if summary:
-                stock_evlu = api.safe_int(summary.get('scts_evlu_amt'))
-                tot_evlu = api.safe_int(summary.get('tot_evlu_amt'))
-                
-                # API에서 총평가금액이 0으로 오는 경우 직접 계산 (예수금 + 주식평가금)
-                if tot_evlu == 0:
-                    # [수정] D+2 예수금 사용 (모의투자 일관성 확보)
-                    deposit = api.safe_int(summary.get('prvs_rcdl_excc_amt'))
-                    if deposit == 0: deposit = api.safe_int(summary.get('dnca_tot_amt'))
-                    tot_evlu = stock_evlu + deposit
-
-                tot_profit = api.safe_int(summary.get('evlu_pfls_smtl_amt'))
-                api_tot_pchs = api.safe_int(summary.get('pchs_amt_smtl'))
-                
-                # [보정] API 응답의 총 매입금액이 0인 경우, 개별 종목 합계로 대체
-                if api_tot_pchs == 0 and calculated_total_pchs > 0:
-                    api_tot_pchs = calculated_total_pchs
-
                 total_rate = 0.0
-                if api_tot_pchs > 0:
-                    total_rate = (tot_profit / api_tot_pchs) * 100
+                if calculated_total_pchs > 0:
+                    total_rate = (calculated_total_profit / calculated_total_pchs) * 100
                 
-                profit_color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
-                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {stock_evlu:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{tot_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                profit_color = "[red]" if calculated_total_profit > 0 else ("[blue]" if calculated_total_profit < 0 else "[white]")
+                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {calculated_total_eval:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
             config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
 
@@ -519,10 +502,13 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
         
         if output1 is not None:
-            holdings = output1
+            # [수정] 보유 중인 종목만 필터링
+            holdings = [h for h in output1 if int(h.get('hldg_qty', 0)) > 0]
             calc_buy = 0; calc_eval = 0; calc_pl = 0
             for item in holdings:
-                calc_buy += api.safe_int(item.get('pchs_amt'))
+                qty = int(item['hldg_qty'])
+                avg_pric = float(item['pchs_avg_pric'])
+                calc_buy += int(qty * avg_pric) # 매입금액 직접 계산 (API 누락 방지)
                 calc_eval += api.safe_int(item.get('evlu_amt'))
                 calc_pl += api.safe_int(item.get('evlu_pfls_amt'))
             summary_data['sec_buy'] = calc_buy
@@ -621,23 +607,13 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     except Exception: pass
     
     # 4. 최종 계산
-    # [수정] 사용자 요청 반영: API 제공 총 평가금액(tot_evlu_amt)을 최우선 사용
-    # 기존의 직접 계산(NAV) 방식에서 발생하던 마이너스 자산 오류 수정
-    if summary_data['api_tot_asset'] > 0:
-        summary_data['tot_asset'] = summary_data['api_tot_asset']
-        
-        # API의 tot_evlu_amt는 국내 자산 기준이므로 해외 자산(외화예수금 + 해외주식평가) 합산 보정
-        summary_data['tot_asset'] += summary_data['dep_ovs'] + summary_data['ovrs_eval_krw']
-        
-        if config.FILE_DEBUG_LEVEL == "DEBUG":
-            logger.debug(f"[ACCOUNT_DEBUG] Using API Total Asset: {summary_data['tot_asset']:,} (Base: {summary_data['api_tot_asset']:,} + Ovs)")
-    else:
-        # API 값이 없는 경우 Fallback: 직접 계산 (D+2 예수금 + 외화예수금 + 유가증권평가금)
-        # [수정] 부정확한 차감 로직(next_day_deduct) 제거하고 단순 합산으로 변경
-        real_cash = summary_data['d2_dep']
-        summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval']
-        if config.FILE_DEBUG_LEVEL == "DEBUG":
-            logger.debug(f"[ACCOUNT_DEBUG] Calculated Total Asset: {summary_data['tot_asset']:,} (D2 + Ovs + Sec)")
+    # API 지연(Lag)에 의한 총 자산 금액의 왜곡을 방지하기 위해 
+    # API가 제공하는 tot_evlu_amt 대신 개별 종목 합산 기반으로 직접 계산하여 일관성 유지
+    real_cash = summary_data['d2_dep']
+    summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval'] + summary_data['ovrs_eval_krw']
+    
+    if config.FILE_DEBUG_LEVEL == "DEBUG":
+        logger.debug(f"[ACCOUNT_DEBUG] Calculated Total Asset: {summary_data['tot_asset']:,} (D2 + Ovs + Sec)")
     
     return summary_data
 
