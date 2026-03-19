@@ -228,6 +228,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             # 1. Gemini API 설정
             genai.configure(api_key=config.GEMINI_API_KEY)
 
+            # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
             # 2. 모델 설정
             model = genai.GenerativeModel(
                 model_name=config.GEMINI_MODEL,
@@ -235,8 +236,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                     "temperature": 0.2,
                     "top_p": 0.95,
                     "max_output_tokens": 8192,
-                },
-                tools="google_search_retrieval" # [추가] 실시간 웹 검색(Grounding) 활성화
+                }
             )
             
             # 3. 콘텐츠 생성
@@ -463,7 +463,7 @@ def _analyze_with_gemini_ui():
         grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
         config.console.print(grid)
         
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
         if choice.lower() == 'q': return
         
         if choice == '1':
