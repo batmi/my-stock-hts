@@ -473,11 +473,33 @@ def get_current_price(mode='add'):
             new_item = {"name": input_name, "code": code}
             if code in config.session.exchange_cache: new_item["exchange"] = config.session.exchange_cache[code]
             
-            if not any(item['code'] == code for item in config.session.stock_data.get(target_list_key, [])):
-                config.session.stock_data[target_list_key].append(new_item)
+            target_list = config.session.stock_data.get(target_list_key, [])
+            if not any(item['code'] == code for item in target_list):
+                group_map = {"1": "국내 주식", "2": "국내 ETF", "3": "미국 주식", "4": "미국 ETF"}
+                group_name = group_map.get(cat_choice, "선택")
+                
+                if target_list:
+                    config.console.print(f"\n[bold]{group_name} 목록:[/bold]")
+                    for i, item in enumerate(target_list):
+                        config.console.print(f"[{i+1}] {item['name']} ({item['code']})")
+                
+                config.console.print(f"\n현재 '{group_name}' 그룹에 {len(target_list)}개의 종목이 있습니다.")
+                pos_input = Prompt.ask("추가할 위치 번호를 입력하세요 [dim](그냥 Enter 입력 시 맨 끝에 추가, 취소: q)[/dim]", default="")
+                
+                if pos_input.lower() == 'q':
+                    config.console.print("[yellow]종목 추가가 취소되었습니다.[/yellow]")
+                    return
+                
+                if pos_input.isdigit() and 1 <= int(pos_input) <= len(target_list) + 1:
+                    insert_idx = int(pos_input) - 1
+                    config.session.stock_data[target_list_key].insert(insert_idx, new_item)
+                    config.console.print(f"\n[green]'{input_name}' 종목이 {insert_idx + 1}번 위치에 추가되었습니다.[/green]")
+                else:
+                    config.session.stock_data[target_list_key].append(new_item)
+                    config.console.print(f"\n[green]'{input_name}' 종목이 맨 끝에 추가되었습니다.[/green]")
+                    
                 config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config()
-                config.console.print(f"\n[green]'{input_name}' 종목이 추가되었습니다.[/green]")
             else:
                 config.console.print("\n[yellow]이미 등록된 종목입니다.[/yellow]")
     else:
@@ -540,6 +562,77 @@ def delete_stock():
         else: config.console.print(f"\n[red]잘못된 번호입니다.[/red]")
     else: config.console.print(f"\n[red]숫자를 입력해주세요.[/red]")
 
+def reorder_stock():
+    """관심 종목 순서 재배치"""
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] 종목 순서 변경 메뉴 진입[/dim cyan]")
+
+    config.console.print("\n[bold]어떤 그룹의 순서를 변경하시겠습니까?[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+    grid.add_row("[3] 미국 주식", "(US Stock)")
+    grid.add_row("[4] 미국 ETF", "(US ETF)")
+    config.console.print(grid)
+    config.console.print()
+    
+    cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    if cat_choice.lower() != 'q':
+        context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
+    if cat_choice.lower() == 'q': return
+
+    group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
+    target_key, group_name = group_map[cat_choice]
+    
+    target_list = config.session.stock_data[target_key]
+    
+    if len(target_list) < 2:
+        config.console.print(f"[yellow]'{group_name}' 그룹에 순서를 변경할 만큼 종목이 충분하지 않습니다.[/yellow]")
+        return
+        
+    config.console.print(f"\n[bold]{group_name} 목록:[/bold]")
+    for i, item in enumerate(target_list):
+        config.console.print(f"[{i+1}] {item['name']} ({item['code']})")
+        
+    config.console.print()
+    from_idx_str = Prompt.ask("이동할 종목의 현재 번호를 입력하세요 [dim](취소: q)[/dim]")
+    if from_idx_str.lower() != 'q':
+        context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {from_idx_str}")
+    if from_idx_str.lower() == 'q' or not from_idx_str.isdigit(): return
+    
+    from_idx = int(from_idx_str) - 1
+    if from_idx < 0 or from_idx >= len(target_list):
+        config.console.print("[red]잘못된 번호입니다.[/red]")
+        return
+        
+    target_stock = target_list[from_idx]
+    
+    to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](취소: q)[/dim]")
+    if to_idx_str.lower() != 'q':
+        context.USER_ACTION_BREADCRUMB.append(f"[목표위치] {to_idx_str}")
+    if to_idx_str.lower() == 'q' or not to_idx_str.isdigit(): return
+    
+    to_idx = int(to_idx_str) - 1
+    if to_idx < 0 or to_idx >= len(target_list):
+        config.console.print("[red]잘못된 번호입니다.[/red]")
+        return
+        
+    if from_idx == to_idx:
+        config.console.print("[yellow]현재 위치와 같습니다.[/yellow]")
+        return
+        
+    logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+    
+    # 리스트 순서 변경 (pop 후 insert)
+    target_list.insert(to_idx, target_list.pop(from_idx))
+    
+    config.session.save_stock_config(config.session.stock_data)
+    config.session.load_stock_config()
+    
+    config.console.print(f"\n[bold green]'{target_stock['name']}' 종목이 {to_idx + 1}번 위치로 이동되었습니다.[/bold green]")
+
 def manage_stock_menu():
     """종목 추가 및 삭제를 통합 관리하는 메뉴"""
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -551,12 +644,13 @@ def manage_stock_menu():
     grid.add_column(justify="left", style="dim")
     grid.add_row("[1] 종목 추가", "(Add Stock)")
     grid.add_row("[2] 종목 삭제", "(Delete Stock)")
+    grid.add_row("[3] 종목 순서 변경", "(Reorder Stock)")
     config.console.print(grid)
     config.console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
     
-    menu_map = {"1": "종목 추가", "2": "종목 삭제"}
+    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경"}
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -566,3 +660,5 @@ def manage_stock_menu():
         get_current_price(mode='add')
     elif choice == "2":
         delete_stock()
+    elif choice == "3":
+        reorder_stock()
