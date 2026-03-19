@@ -514,7 +514,7 @@ class ConclusionMonitor:
                                     strategy_info = ""
                                     if type_name and "매수" in type_name:
                                         try:
-                                            is_overseas_stock = not (code.isdigit() and len(code) == 6)
+                                            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
                                             df = api.get_chart_data(code, is_overseas=is_overseas_stock)
                                             if df is not None and not df.empty:
                                                 ind = indicators.calculate_indicators(df)

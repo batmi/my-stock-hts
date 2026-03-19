@@ -239,7 +239,7 @@ def _create_fill_history(db_order, reason_msg):
             
             # [추가] 시장가(0)인 경우 현재가 조회하여 대체
             if price <= 0:
-                is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
                 try:
                     cp = api.get_current_price(code, is_overseas=is_overseas)
                     if cp > 0: price = float(cp)
@@ -692,11 +692,11 @@ def send_order(order_type):
                 if not raw_input or raw_input.lower() == 'q': return
                 
                 # 간단 검색 로직
-                if raw_input.isdigit() and len(raw_input) == 6:
+                if len(raw_input) == 6 and raw_input[0].isdigit() and raw_input.isalnum():
                     stock_code = raw_input
                     stock_name = api.get_stock_name_by_code(stock_code, False) or stock_code
                     is_overseas = False
-                elif all(ord(c) < 128 for c in raw_input) and not raw_input.isdigit():
+                elif all(ord(c) < 128 for c in raw_input):
                     stock_code = raw_input.upper()
                     stock_name = api.get_stock_name_by_code(stock_code, True) or stock_code
                     is_overseas = True

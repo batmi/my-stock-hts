@@ -792,7 +792,7 @@ class TelegramCommander:
                 return item['code'], item['name'], True
         
         # 2. 등록된 종목이 아니면 입력값을 코드로 간주하거나 이름으로 검색 시도
-        if keyword.isdigit() and len(keyword) == 6:
+        if len(keyword) == 6 and keyword[0].isdigit() and keyword.isalnum():
             code = keyword
             name = api.get_stock_name_by_code(code, False) or keyword
             is_overseas = False

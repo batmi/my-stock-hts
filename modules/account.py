@@ -731,8 +731,8 @@ def export_trade_history_to_excel():
                 try:
                     val = float(row['price'])
                     code = str(row['code'])
-                    # 국내 주식 (6자리 숫자)
-                    if code.isdigit() and len(code) == 6:
+                    # 국내 주식 (6자리, 숫자로 시작)
+                    if len(code) == 6 and code[0].isdigit() and code.isalnum():
                         return int(val)
                     return val
                 except: return row['price']
@@ -755,8 +755,8 @@ def export_trade_history_to_excel():
                 try:
                     if val is None or val == '': return "0"
                     f = float(val)
-                    # 국내 주식 (6자리 숫자)
-                    if code.isdigit() and len(code) == 6:
+                    # 국내 주식 (6자리, 숫자로 시작)
+                    if len(code) == 6 and code[0].isdigit() and code.isalnum():
                         return f"{int(f):+,}"
                     # 해외 주식
                     return f"{f:+,.2f}"

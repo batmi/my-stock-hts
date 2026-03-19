@@ -394,11 +394,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             
             # manage 모듈의 _resolve_stock 로직과 유사하게 처리하거나 utils 활용
             # 여기서는 utils가 없으므로 telegram_bot의 로직을 참고하여 간단히 구현
-            if raw_input.isdigit() and len(raw_input) == 6:
+            if len(raw_input) == 6 and raw_input[0].isdigit() and raw_input.isalnum():
                 code = raw_input
                 name = api.get_stock_name_by_code(code, False) or code
                 is_overseas = False
-            elif all(ord(c) < 128 for c in raw_input) and not raw_input.isdigit(): # 해외 티커 가정
+            elif all(ord(c) < 128 for c in raw_input): # 해외 티커 가정
                 code = raw_input.upper()
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
@@ -1184,7 +1184,8 @@ def _get_master_stock_list(market_type):
                         code = line[0:9].decode('cp949').strip()
                         name = line[21:61].decode('cp949').strip()
                         
-                        if len(code) == 6:
+                        # [수정] 영문이 포함된 최신 ETF(예: 0080G0)를 지원하기 위해 숫자로 시작하는 6자리 영문/숫자 코드로 완화
+                        if len(code) == 6 and code[0].isdigit() and code.isalnum():
                             stock_list.append({'code': code, 'name': name})
                     except Exception:
                         continue

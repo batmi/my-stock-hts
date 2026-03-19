@@ -541,7 +541,7 @@ def _analyze_stock_ui():
                 
     # 2. 미등록 종목인 경우 입력값 분석
     if not code:
-        if keyword.isdigit() and len(keyword) == 6:
+        if len(keyword) == 6 and keyword[0].isdigit() and keyword.isalnum():
             code = keyword
             name = api.get_stock_name_by_code(code, False) or keyword
             is_overseas = False

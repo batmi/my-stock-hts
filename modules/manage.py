@@ -410,7 +410,7 @@ def get_current_price(mode='add'):
     parts = raw_input.split()
     code = parts[-1].upper()
     guessed_name = " ".join(parts[:-1])
-    is_overseas = not (code.isdigit() or (len(code) == 6 and code.startswith('0')))
+    is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
 
     # [로그] 입력 파싱 결과
     if config.FILE_DEBUG_LEVEL == "DEBUG":
