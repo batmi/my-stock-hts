@@ -470,6 +470,12 @@ class TelegramCommander:
         # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
         if hasattr(self.trader, '_refine_trade_records'):
             trades = self.trader._refine_trade_records(trades)
+            
+        # [추가] 통계 계산을 위해 시간순(과거->최신)으로 정렬
+        if trades:
+            trades.sort(key=lambda x: x.get('time', ''))
+            
+        stats = self.trader._calculate_statistics(trades)
         
         # 매도(청산) 내역만 필터링하여 손익 합산
         sell_trades = [t for t in trades if "매도" in t.get('type', '') or "sell" in t.get('type', '').lower()]
@@ -479,54 +485,64 @@ class TelegramCommander:
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: True for r in custom_rules}
         
-        total_profit = 0
-        win_count = 0
-        loss_count = 0
-        
-        best_trade = None
-        worst_trade = None
+        total_sell_amt = 0
+        total_buy_amt_for_sell = 0
         
         for t in sell_trades:
-            p = int(t.get('profit_amt') or 0)
-            total_profit += p
-            if p > 0: win_count += 1
-            elif p < 0: loss_count += 1
+            qty = int(float(t.get('qty', 0)))
+            price = float(t.get('price', 0))
+            profit = int(t.get('profit_amt') or 0)
             
-            if best_trade is None or p > int(best_trade.get('profit_amt') or 0):
-                best_trade = t
+            sell_amt = qty * price
+            buy_amt = sell_amt - profit
             
-            if worst_trade is None or p < int(worst_trade.get('profit_amt') or 0):
-                worst_trade = t
+            total_sell_amt += sell_amt
+            total_buy_amt_for_sell += buy_amt
             
         msg = f"{title}\n기간: {start_dt} ~ {end_dt}\n\n"
         
-        if not sell_trades:
+        if not stats['sell_trades_exist']:
             msg += "실현된 손익이 없습니다."
         else:
+            total_profit = stats['total_profit']
+            tot_roi = (total_profit / total_buy_amt_for_sell * 100) if total_buy_amt_for_sell > 0 else 0.0
+            
+            msg += "[수익 요약]\n"
             msg += f"총 손익: {total_profit:+,}원\n"
-            msg += f"매매 횟수: {len(sell_trades)}건 (익절 {win_count} / 손절 {loss_count})"
+            msg += f"총 수익률: {tot_roi:+.2f}% (총 매입금액 대비)\n"
+            msg += f"평균 수익률: {stats['avg_profit_rate']:+.2f}% (건당 평균)\n\n"
             
-            if best_trade and int(best_trade.get('profit_amt') or 0) > 0:
-                p = int(best_trade.get('profit_amt'))
-                r = float(best_trade.get('profit_rate') or 0)
-                name = best_trade['name']
-                code = best_trade['code']
-                name_display = name
-                if code in restricted_stocks: name_display += "-"
-                if code in rules_map: name_display += "+"
-                msg += f"\n\n최고 수익: {name_display} (+{p:,}원 / {r:+.2f}%)"
+            msg += "[매매 통계]\n"
+            msg += f"매매 횟수: {stats['sell_count']}건 (익절 {stats['win_trades']} / 손절 {stats['loss_trades']})\n"
+            msg += f"승률: {stats['win_rate']:.1f}%\n"
+            msg += f"총 매입금액: {int(total_buy_amt_for_sell):,}원\n"
+            msg += f"총 매도금액: {int(total_sell_amt):,}원\n"
+            msg += f"평균 보유: {stats['avg_holding_str']}\n\n"
             
-            if worst_trade and int(worst_trade.get('profit_amt') or 0) < 0:
-                p = int(worst_trade.get('profit_amt'))
-                r = float(worst_trade.get('profit_rate') or 0)
-                name = worst_trade['name']
-                code = worst_trade['code']
-                name_display = name
-                if code in restricted_stocks: name_display += "-"
-                if code in rules_map: name_display += "+"
-                msg += f"\n최다 손실: {name_display} ({p:,}원 / {r:+.2f}%)"
+            msg += "[최고 / 최다 손익]\n"
+            best = stats.get('best_trade')
+            if best and int(best.get('profit_amt') or 0) > 0:
+                p = int(best['profit_amt'])
+                r = float(best.get('profit_rate') or 0)
+                name_display = best['name']
+                if best['code'] in restricted_stocks: name_display += "-"
+                if best['code'] in rules_map: name_display += "+"
+                msg += f"최고 수익: {name_display} (+{p:,}원 / {r:+.2f}%)\n"
+            else:
+                msg += "최고 수익: -\n"
+            
+            worst = stats.get('worst_trade')
+            if worst and int(worst.get('profit_amt') or 0) < 0:
+                p = int(worst['profit_amt'])
+                r = float(worst.get('profit_rate') or 0)
+                name_display = worst['name']
+                if worst['code'] in restricted_stocks: name_display += "-"
+                if worst['code'] in rules_map: name_display += "+"
+                msg += f"최다 손실: {name_display} ({p:,}원 / {r:+.2f}%)\n"
+            else:
+                msg += "최다 손실: -\n"
 
-        return msg
+        return msg.strip()
 
     def _cmd_history(self, args):
         days = 0 # 기본값: 당일 조회
