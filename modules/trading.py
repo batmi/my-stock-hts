@@ -455,7 +455,16 @@ def show_open_orders():
                                 exec_amt = price * qty
                                 price_fmt = f"${price:,.2f}" if is_overseas and price > 0 else (f"{price:,.0f}원" if price > 0 else "시장가")
                                 amt_fmt = f"${exec_amt:,.2f}" if is_overseas and exec_amt > 0 else (f"{int(exec_amt):,}원" if exec_amt > 0 else "-")
-                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: {reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                
+                                original_reason = db_order.get('reason', reason_msg)
+                                profit_msg = ""
+                                if type_name == "매도":
+                                    p_amt = db_order.get('profit_amt')
+                                    p_rate = db_order.get('profit_rate')
+                                    if p_amt is not None and p_rate is not None:
+                                        profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
+                                        
+                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)

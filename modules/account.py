@@ -221,6 +221,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
             table.add_column("손절가", justify="right", style="dim")
             
             calculated_total_pchs = 0
+            calculated_total_eval = 0
+            calculated_total_profit = 0
             for item in output1:
                 name = f"{item['prdt_name']} ({item['pdno']})"
                 code = item['pdno']
@@ -232,6 +234,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 rate = float(item['evlu_pfls_rt'])
                 pchs_amt = int(qty * buy_price)
                 calculated_total_pchs += pchs_amt
+                calculated_total_eval += eval_amt
+                calculated_total_profit += profit
                 
                 # [추가] 손절가 및 기준 계산
                 use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
