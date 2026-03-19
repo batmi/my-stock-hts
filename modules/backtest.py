@@ -239,7 +239,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         
                         target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
                         scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-                        scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)
+                        scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
                         
                         if annual_vol > 0:
                             scale = target_vol / annual_vol

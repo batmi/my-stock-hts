@@ -159,7 +159,7 @@ TARGET_VOLATILITY = 0.30           # 목표 연간 변동성 (30%)
                                    # - 0.15 ~ 0.20: 중립적 (시장 수익률 추구)
                                    # - 0.25 ~ 0.30: 적극적 (고수익 추구, 변동성 허용) -> 현재 설정
 VOLATILITY_SCALING_MAX = 2.0       # 최대 확대 배수 (2배) - 변동성이 낮을 때 포지션 확대 제한
-VOLATILITY_SCALING_MIN = 0.3       # 최소 축소 배수 (0.3배) - 변동성이 높을 때 최소 포지션 유지
+VOLATILITY_SCALING_MIN = 0.5       # 최소 축소 배수 (0.5배) - 변동성이 높을 때 최소 포지션 유지 (너무 적은 금액 매수 방지)
 
 # [추가] 슬리피지 비율 (Slippage Rate)
 # 매수/매도 주문 시 현재가 대비 불리한 가격으로 주문을 내어 체결 확률을 높이고,
@@ -550,7 +550,7 @@ def load_dynamic_config():
             if "USE_VOLATILITY_TARGETING" in data: USE_VOLATILITY_TARGETING = data["USE_VOLATILITY_TARGETING"]
             if "TARGET_VOLATILITY" in data: TARGET_VOLATILITY = data["TARGET_VOLATILITY"]
             if "VOLATILITY_SCALING_MAX" in data: VOLATILITY_SCALING_MAX = data["VOLATILITY_SCALING_MAX"]
-            if "VOLATILITY_SCALING_MIN" in data: VOLATILITY_SCALING_MIN = data["VOLATILITY_SCALING_MIN"]
+            if "VOLATILITY_SCALING_MIN" in data: VOLATILITY_SCALING_MIN = data.get("VOLATILITY_SCALING_MIN", 0.5)
             
             if "SLIPPAGE_RATE" in data: SLIPPAGE_RATE = data["SLIPPAGE_RATE"]
 

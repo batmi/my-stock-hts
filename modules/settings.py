@@ -40,7 +40,7 @@ def _save_dynamic_config():
         "USE_VOLATILITY_TARGETING": getattr(config, 'USE_VOLATILITY_TARGETING', True),
         "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
         "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
-        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.3),
+        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.5),
         "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.002)
     }
     
@@ -576,7 +576,7 @@ def modify_system_trading_general():
                 {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "Volatility",
                  "get": lambda: getattr(config, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MAX', v)},
                 {"desc": "스케일링 최소 배수", "help": "비중 축소 제한", "name": "VOLATILITY_SCALING_MIN", "type": "float", "section": "Volatility",
-                 "get": lambda: getattr(config, 'VOLATILITY_SCALING_MIN', 0.3), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MIN', v)}
+                 "get": lambda: getattr(config, 'VOLATILITY_SCALING_MIN', 0.5), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MIN', v)}
             ])
             
         items.extend([
@@ -667,7 +667,7 @@ def reset_to_default():
     config.USE_VOLATILITY_TARGETING = True
     config.TARGET_VOLATILITY = 0.30
     config.VOLATILITY_SCALING_MAX = 2.0
-    config.VOLATILITY_SCALING_MIN = 0.3
+    config.VOLATILITY_SCALING_MIN = 0.5
     config.UNFILLED_ORDER_CANCEL_SECONDS = 120
     config.SLIPPAGE_RATE = 0.002
 
