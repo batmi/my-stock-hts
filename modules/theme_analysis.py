@@ -345,8 +345,7 @@ def generate_morning_briefing(market_data_str):
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
-                generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 4096},
-                tools="google_search_retrieval" # [추가] 실시간 웹 검색 활성화
+            generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 4096}
         )
         res = model.generate_content(prompt)
         return res.text if res and res.text else None
