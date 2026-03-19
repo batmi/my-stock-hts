@@ -1751,16 +1751,16 @@ class AutoTrader:
                     self.initial_asset = saved_initial
             
             if self.initial_asset > 0:
-                msg += f"금일 시작 자산: {self.initial_asset:,}원\n"
+                msg += f"오늘 시작 자산: {self.initial_asset:,}원\n"
             else:
-                msg += f"금일 시작 자산: - (미설정)\n"
+                msg += f"오늘 시작 자산: - (미설정)\n"
                 
-            msg += f"금일 현재 자산: {current_asset:,}원\n"
+            msg += f"오늘 현재 자산: {current_asset:,}원\n"
             
             if self.initial_asset > 0:
                 daily_profit = current_asset - self.initial_asset
                 daily_profit_rate = (daily_profit / self.initial_asset) * 100
-                msg += f"금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
+                msg += f"오늘 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
                 
             realized_profit = 0
             try:
@@ -1791,8 +1791,8 @@ class AutoTrader:
             except: pass
             
             realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
-            msg += f"금일 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
-            msg += f"금일 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
+            msg += f"오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
+            msg += f"오늘 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
             msg += f"주문 가능 금액: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
@@ -2154,26 +2154,25 @@ class AutoTrader:
             table.add_section()
 
             if self.initial_asset > 0:
-                table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
-                table.add_row("금일 현재 자산", f"{current_asset:,}원")
+                table.add_row("오늘 시작 자산", f"{self.initial_asset:,}원")
+                table.add_row("오늘 현재 자산", f"{current_asset:,}원")
                 
                 daily_profit = current_asset - self.initial_asset
                 daily_profit_rate = (daily_profit / self.initial_asset) * 100
                 dp_color = "[red]" if daily_profit > 0 else ("[blue]" if daily_profit < 0 else "[white]")
-                table.add_row("금일 현재 손익", f"{dp_color}{daily_profit:+,}원 ({daily_profit_rate:+.2f}%)[/]")
+                table.add_row("오늘 현재 손익", f"{dp_color}{daily_profit:+,}원 ({daily_profit_rate:+.2f}%)[/]")
                 
                 realized_rate = (today_profit / self.initial_asset) * 100
                 rp_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
-                table.add_row("금일 실현 손익", f"{rp_color}{today_profit:+,}원 ({realized_rate:+.2f}%)[/]")
+                table.add_row("오늘 실현 손익", f"{rp_color}{today_profit:+,}원 ({realized_rate:+.2f}%)[/]")
             else:
-                table.add_row("금일 시작 자산", "- (미설정)")
-                table.add_row("금일 현재 자산", f"{current_asset:,}원")
-                table.add_row("금일 현재 손익", "-")
-                table.add_row("금일 실현 손익", "-")
+                table.add_row("오늘 시작 자산", "- (미설정)")
+                table.add_row("오늘 현재 자산", f"{current_asset:,}원")
+                table.add_row("오늘 현재 손익", "-")
+                table.add_row("오늘 실현 손익", "-")
         else:
-            table.add_row("자산 정보", "[bold red]조회 실패 (KIS 서버 응답 없음/장애 가능성)[/bold red]")
             if self.initial_asset > 0:
-                table.add_row("금일 시작 자산", f"{self.initial_asset:,}원")
+                table.add_row("오늘 시작 자산", f"{self.initial_asset:,}원")
 
         table.add_section()
 
@@ -2250,7 +2249,7 @@ class AutoTrader:
             err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
         table.add_row("연속 에러", err_display)
         
-        table.add_row("금일 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
+        table.add_row("오늘 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
 
         console.print(table)
         
