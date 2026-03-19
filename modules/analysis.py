@@ -851,6 +851,42 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # [추가] 기간별 시세 30일치 출력
     _print_period_price_30(code, is_overseas)
+    
+    # [추가] 개별 종목 분석 완료 후 AI 종목 심층 진단 연동
+    config.console.print()
+    if Prompt.ask("🤖 AI 종목 심층 진단을 수행하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+        # 순환 참조(Circular Import) 방지를 위해 함수 내부에서 import
+        from modules import theme_analysis
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.padding import Padding
+        
+        rsi_val_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+        adx_val_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+        cci_val_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+        
+        tech_info = (
+            f"• 현재가: {price_str}\n"
+            f"• 시스템 상태: {state} (사유: {state_reason})\n"
+            f"• 퀀트 점수: {score}점 / 10점 만점\n"
+            f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str}"
+        )
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[green]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/green]", total=None)
+            answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
+            
+        if answer:
+            md = Markdown(answer)
+            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2))
+            config.console.print(Padding(panel, (0, 4)))
+        else:
+            config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
 
 def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_map):
     """(내부함수) 관심 종목 일괄 분석용 단일 워커 (병렬 처리용)"""

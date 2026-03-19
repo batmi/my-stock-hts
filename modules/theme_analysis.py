@@ -657,8 +657,8 @@ def _analyze_stock_ui():
         config.console.print(f"[red]진단 중 오류 발생: {e}[/red]")
 
 def run_theme_analysis():
-    """테마 트랜드 분석 메인 함수 (서브 메뉴)"""
-    config.console.print("\n[bold magenta]=== 테마 트랜드 분석 (Theme Trend Analysis) ===[/]")
+    """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
+    config.console.print("\n[bold magenta]=== 종목 트랜드 분석 (Stock Trend Analysis) ===[/]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")

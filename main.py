@@ -611,7 +611,7 @@ def main():
             grid.add_row("[4] 종목 주문 관리", "(Order Management)")
             grid.add_row("[5] 시스템 트레이딩", f"(System Trading){trader_status}")
             grid.add_row("[6] 전략 백테스팅", "(Backtesting)")
-            grid.add_row("[7] 테마 트랜드 분석", "(Theme Analysis)")
+            grid.add_row("[7] 종목 트랜드 분석", "(Stock Trend Analysis)")
             grid.add_row("[8] 관심 종목 관리", "(Watchlist Management)")
             grid.add_row("[9] 자산 관리", "(Asset Management)")
             config.console.print(grid)
@@ -627,7 +627,7 @@ def main():
                 menu_map = {
                     "0": "시스템 설정", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
                     "4": "종목 주문 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
-                    "7": "테마 트랜드 분석", "8": "관심 종목 관리", "9": "자산 관리",
+                    "7": "종목 트랜드 분석", "8": "관심 종목 관리", "9": "자산 관리",
                     "q": "종료", "h": "도움말"
                 }
                 menu_name = menu_map.get(choice.lower(), '')
