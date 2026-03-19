@@ -28,7 +28,7 @@ def mock_db_queue():
 @patch('main.account.asset_management_menu')
 def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest, mock_auto, mock_order, mock_analysis, mock_market, mock_settings, mock_ask, mock_exit):
     """메인 메뉴 네비게이션 테스트"""
-    # 순서대로 메뉴 선택 후 종료 (0 -> 1 -> ... -> q)
+    # 변경된 순서에 맞춰 메뉴 선택 후 종료 (0:설정, 1:지수, 2:시세, 4:트랜드, 5:백테스팅, 6:자동매매, 7:종목관리, 8:주문, 9:자산)
     mock_ask.side_effect = ["0", "1", "2", "4", "5", "6", "7", "8", "9", "q"]
     
     # 무한 루프 방지를 위해 KeyboardInterrupt 발생 시뮬레이션 대신 side_effect로 종료 유도
@@ -51,12 +51,12 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
     mock_settings.assert_called()
     mock_market.assert_called()
     mock_analysis.assert_called()
-    mock_order.assert_called()
-    mock_auto.assert_called()
-    mock_backtest.assert_called()
-    mock_theme.assert_called()
-    mock_manage.assert_called()
-    mock_asset.assert_called()
+    mock_theme.assert_called()     # [4] 종목 트랜드 분석
+    mock_backtest.assert_called()  # [5] 전략 백테스팅
+    mock_auto.assert_called()      # [6] 시스템 트레이딩
+    mock_manage.assert_called()    # [7] 관심 종목 관리
+    mock_order.assert_called()     # [8] 종목 주문 관리
+    mock_asset.assert_called()     # [9] 자산 관리
     
     # os._exit(0) 호출 확인
     assert mock_exit.called
