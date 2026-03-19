@@ -465,8 +465,16 @@ class TelegramCommander:
         else:
             title = f"📅 [기간별 실현 손익 (최근 {days}일)]"
             
-        trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
+        raw_trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
         
+        trades = []
+        for r in raw_trades:
+            type_str = r.get('type', '')
+            simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+            parsed_r = dict(r)
+            parsed_r['type'] = simple_type
+            trades.append(parsed_r)
+
         # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
         if hasattr(self.trader, '_refine_trade_records'):
             trades = self.trader._refine_trade_records(trades)
