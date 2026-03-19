@@ -3282,8 +3282,8 @@ class AutoTrader:
                         daily_profit_rate = (daily_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
                         order_possible = deposit_res.get('order_possible', deposit_d2) if deposit_res else 0
                         
-                        self.log(f"   [자산 현황] 증권 매입 금액: {tot_pchs:,}원 | 증권 평가 금액: {total_eval:,}원 | 증권 평가 손익: {total_profit:+,}원 ({profit_rate:+.2f}%) | 주문 가능 금액: {order_possible:,}원")
-                        self.log(f"              금일 시작 자산: {self.initial_asset:,}원 | 금일 현재 자산: {current_total:,}원 | 금일 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 금일 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)")
+                        self.log(f"[증권 자산 현황] 증권 매입 금액: {tot_pchs:,}원 | 증권 평가 금액: {total_eval:,}원 | 증권 평가 손익: {total_profit:+,}원 ({profit_rate:+.2f}%) | 주문 가능 금액: {order_possible:,}원")
+                        self.log(f"[오늘 자산 현황] 오늘 시작 자산: {self.initial_asset:,}원 | 오늘 현재 자산: {current_total:,}원 | 오늘 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)")
 
                         self.risk_manager.check_loss_limit(current_total)
                     else:
