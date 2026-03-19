@@ -883,7 +883,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             
         if answer:
             md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2))
+            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=100)
             config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")

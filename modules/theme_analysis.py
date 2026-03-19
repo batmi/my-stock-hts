@@ -480,7 +480,7 @@ def _analyze_with_gemini_ui():
         md = Markdown(result)
         
         # Panel 생성 (내부 패딩 적용)
-        panel = Panel(md, title="실시간 테마 분석 리포트", border_style="cyan", padding=(1, 2))
+        panel = Panel(md, title="실시간 테마 분석 리포트", border_style="cyan", padding=(1, 2), width=100)
         
         # 화면 출력 시 양쪽 마진 적용 (Padding: top, right, bottom, left)
         config.console.print(Padding(panel, (0, 4)))
@@ -504,7 +504,7 @@ def _analyze_with_custom_prompt_ui():
 
         if result:
             md = Markdown(result)
-            panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2))
+            panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2), width=100)
             config.console.print(Padding(panel, (0, 4)))
             
             config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
@@ -646,7 +646,7 @@ def _analyze_stock_ui():
             
         if answer:
             md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2))
+            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=100)
             config.console.print(Padding(panel, (0, 4)))
             config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
             config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
