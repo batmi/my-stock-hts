@@ -2641,12 +2641,6 @@ class AutoTrader:
                 msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
                 msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
             
-        instance_name = getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')
-        acc_type = "모의" if config.session.is_simulation else "실전"
-        t_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        if not t_cano: t_cano = config.session.cano
-        msg += f"\n[{instance_name} | {acc_type} {t_cano}]"
-
         return msg.strip()
 
     def _calculate_statistics(self, records=None):
