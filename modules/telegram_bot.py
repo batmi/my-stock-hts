@@ -594,7 +594,11 @@ class TelegramCommander:
             msg += "\n[매매 요약]\n"
             msg += f"총 매입금액: {int(total_buy_amt_for_sell):,}원\n"
             msg += f"총 매도금액: {int(total_sell_amt):,}원\n"
-            msg += f"총 평가손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
+            
+            trade_profit = total_sell_amt - total_buy_amt_for_sell
+            trade_roi = (trade_profit / total_buy_amt_for_sell * 100) if total_buy_amt_for_sell > 0 else 0.0
+            msg += f"총 매매손익: {int(trade_profit):+,}원 ({trade_roi:+.2f}%)\n"
+            
             pf_str = f"{profit_factor:.2f}" if profit_factor != 99.9 else "Inf"
             msg += f"평균 손익비: {pf_str}\n"
 
