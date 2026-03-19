@@ -517,42 +517,80 @@ def _analyze_stock_ui():
     from modules import analysis
     
     config.console.print("\n[bold cyan]=== AI 종목 심층 진단 ===[/bold cyan]")
-    keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](취소: q)[/dim]")
+    config.console.print("\n[bold]분석할 종목을 선택하세요:[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
+    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
+    grid.add_row("[3] 미국 주식", "(US Stock)")
+    grid.add_row("[4] 미국 ETF", "(US ETF)")
+    grid.add_row("[5] 직접 입력", "(Direct Input)")
+    config.console.print(grid)
+    config.console.print()
     
-    if not keyword or keyword.lower() == 'q': return
-    
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+    if choice.lower() == 'q': return
+
     code = None
     name = None
     is_overseas = False
     
-    # 1. 등록된 관심 종목에서 검색
-    all_stocks = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
-    for item in all_stocks:
-        if keyword == item['code'] or keyword == item['name']:
-            code, name, is_overseas = item['code'], item['name'], False
-            break
-            
-    if not code:
-        all_us = config.session.stock_data.get("stocks_us", []) + config.session.stock_data.get("etfs_us", [])
-        for item in all_us:
-            if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
-                code, name, is_overseas = item['code'], item['name'], True
+    if choice == '5':
+        keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](취소: q)[/dim]")
+        if not keyword or keyword.lower() == 'q': return
+        
+        # 1. 등록된 관심 종목에서 검색
+        all_stocks = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
+        for item in all_stocks:
+            if keyword == item['code'] or keyword == item['name']:
+                code, name, is_overseas = item['code'], item['name'], False
                 break
                 
-    # 2. 미등록 종목인 경우 입력값 분석
-    if not code:
-        if len(keyword) == 6 and keyword[0].isdigit() and keyword.isalnum():
-            code = keyword
-            name = api.get_stock_name_by_code(code, False) or keyword
-            is_overseas = False
-        elif all(ord(c) < 128 for c in keyword):
-            code = keyword.upper()
-            name = api.get_stock_name_by_code(code, True) or keyword
-            is_overseas = True
+        if not code:
+            all_us = config.session.stock_data.get("stocks_us", []) + config.session.stock_data.get("etfs_us", [])
+            for item in all_us:
+                if keyword.upper() == item['code'] or keyword.lower() == item['name'].lower():
+                    code, name, is_overseas = item['code'], item['name'], True
+                    break
+                    
+        # 2. 미등록 종목인 경우 입력값 분석
+        if not code:
+            if len(keyword) == 6 and keyword[0].isdigit() and keyword.isalnum():
+                code = keyword
+                name = api.get_stock_name_by_code(code, False) or keyword
+                is_overseas = False
+            elif all(ord(c) < 128 for c in keyword):
+                code = keyword.upper()
+                name = api.get_stock_name_by_code(code, True) or keyword
+                is_overseas = True
+                
+        if not code:
+            config.console.print(f"[red]'{keyword}' 종목을 찾을 수 없습니다.[/red]")
+            return
+    else:
+        # 리스트 선택
+        key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+        target_key = key_map.get(choice)
+        stock_list = config.session.stock_data.get(target_key, [])
+        
+        if not stock_list:
+            config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
+            return
             
-    if not code:
-        config.console.print(f"[red]'{keyword}' 종목을 찾을 수 없습니다.[/red]")
-        return
+        for i, s in enumerate(stock_list):
+            config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+        
+        config.console.print()
+        sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+        if sel.lower() == 'q': return
+        if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
+            item = stock_list[int(sel)-1]
+            code, name = item['code'], item['name']
+            is_overseas = (choice in ["3", "4"])
+        else:
+            config.console.print("[red]잘못된 번호입니다.[/red]")
+            return
         
     config.console.print(f"\n[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 뉴스 검색)[/dim]")
     
