@@ -2610,19 +2610,13 @@ class AutoTrader:
             msg += f"건당 평균 보유: {stats['avg_holding_str']}\n"
             msg += f"총 실현 손익: {total_profit:+,}원\n"
             
-            if holdings_summary:
-                msg += f"\n[현재 보유 현황]\n"
-                msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
-                msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
-                msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
-
-            msg += f"\n[최고/최악 거래]\n"
+            msg += f"\n[최고 / 최다 손익]\n"
             if stats.get('best_trade'):
                 b = stats['best_trade']
-                msg += f"Best: {b['name']} ({b['profit_amt']:+,}원 / {b['profit_rate']:+.2f}%)\n"
+                msg += f"최고 수익: {b['name']} ({b['profit_amt']:+,}원 / {b['profit_rate']:+.2f}%)\n"
             if stats.get('worst_trade'):
                 w = stats['worst_trade']
-                msg += f"Worst: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n"
+                msg += f"최다 손실: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n"
             
             msg += f"\n[매도 사유 분포]\n"
             reasons = stats.get('sell_reasons', {})
@@ -2630,6 +2624,12 @@ class AutoTrader:
             if total_sells > 0:
                 for r, count in reasons.most_common():
                     msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
+                    
+            if holdings_summary:
+                msg += f"\n[현재 보유 현황]\n"
+                msg += f"총 매입금액: {holdings_summary['tot_pchs']:,}원\n"
+                msg += f"총 평가금액: {holdings_summary['tot_evlu']:,}원\n"
+                msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
         else:
             msg += f"[매매 현황 요약]\n"
             msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']} / 보유 {holding_count})\n"
