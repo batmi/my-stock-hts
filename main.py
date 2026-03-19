@@ -608,11 +608,11 @@ def main():
             grid.add_row("[1] 시장 지수 조회", "(Market Indices)")
             grid.add_row("[2] 종목 시세 분석", "(Stock Analysis)")
             grid.add_row("[3] 종목 차트 분석", "(Chart Analysis)")
-            grid.add_row("[4] 종목 주문 관리", "(Order Management)")
-            grid.add_row("[5] 시스템 트레이딩", f"(System Trading){trader_status}")
-            grid.add_row("[6] 전략 백테스팅", "(Backtesting)")
-            grid.add_row("[7] 종목 트랜드 분석", "(Stock Trend Analysis)")
-            grid.add_row("[8] 관심 종목 관리", "(Watchlist Management)")
+            grid.add_row("[4] 종목 트랜드 분석", "(Stock Trend Analysis)")
+            grid.add_row("[5] 전략 백테스팅", "(Backtesting)")
+            grid.add_row("[6] 시스템 트레이딩", f"(System Trading){trader_status}")
+            grid.add_row("[7] 관심 종목 관리", "(Watchlist Management)")
+            grid.add_row("[8] 종목 주문 관리", "(Order Management)")
             grid.add_row("[9] 자산 관리", "(Asset Management)")
             config.console.print(grid)
             config.console.print("[Q] 종료 (Quit)  |  [H] 도움말 (Help)")
@@ -626,8 +626,8 @@ def main():
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
                     "0": "시스템 설정", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
-                    "4": "종목 주문 관리", "5": "시스템 트레이딩", "6": "전략 백테스팅",
-                    "7": "종목 트랜드 분석", "8": "관심 종목 관리", "9": "자산 관리",
+                    "4": "종목 트랜드 분석", "5": "전략 백테스팅", "6": "시스템 트레이딩",
+                    "7": "관심 종목 관리", "8": "종목 주문 관리", "9": "자산 관리",
                     "q": "종료", "h": "도움말"
                 }
                 menu_name = menu_map.get(choice.lower(), '')
@@ -726,11 +726,11 @@ def main():
                             if c_type == '2': p_type = 'hourly'
                             elif c_type == '3': p_type = 'intraday'
                             chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
-                elif choice == "4": trading.stock_order_menu()
-                elif choice == "5": auto_trade.system_trading_menu() 
-                elif choice == "6": backtest.run_backtest()
-                elif choice == "7": theme_analysis.run_theme_analysis() # [수정] 기능 연결
-                elif choice == "8": manage.manage_stock_menu()
+                elif choice == "4": theme_analysis.run_theme_analysis()
+                elif choice == "5": backtest.run_backtest()
+                elif choice == "6": auto_trade.system_trading_menu() 
+                elif choice == "7": manage.manage_stock_menu()
+                elif choice == "8": trading.stock_order_menu()
                 elif choice == "9": 
                     try:
                         account.asset_management_menu()
