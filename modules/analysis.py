@@ -1765,7 +1765,7 @@ def save_all_market_analysis():
                 analyzed_data = []
                 task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
 
-                max_w = 2 if config.session.is_simulation else 4
+                max_w = 4 if config.session.is_simulation else 10
                 
                 # 1. 기술적 분석 병렬 처리
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
@@ -2321,8 +2321,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [최적화] 병렬 처리 통합 (모의: 2, 실전: 4 스레드)
-    max_w = 2 if config.session.is_simulation else 4
+    # [최적화] 병렬 처리 스레드 수 상향 (모의: 4, 실전: 10 스레드)
+    max_w = 4 if config.session.is_simulation else 10
     try:
         with Progress(
             SpinnerColumn(),
