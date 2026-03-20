@@ -16,7 +16,7 @@ def _save_dynamic_config():
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1),
+        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
         "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 10),
         "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
@@ -82,7 +82,7 @@ def view_system_config():
     
     table.add_section()
     
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)}")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
     table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
     
     slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
@@ -559,7 +559,7 @@ def modify_system_trading_general():
              "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
 
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
+             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
@@ -647,7 +647,7 @@ def reset_to_default():
         "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
     })
     
-    config.SYSTEM_INVEST_PER_STOCK = 0.1
+    config.SYSTEM_INVEST_PER_STOCK = 0.2
     config.SYSTEM_MAX_HOLDINGS = 10
     config.SYSTEM_TRADING_INTERVAL = 180
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
