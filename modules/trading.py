@@ -941,7 +941,13 @@ def send_order(order_type):
                 
                 # 텔레그램 알림
                 t_type = "매수" if order_type == 'buy' else "매도"
-                msg = f"🚀 [수동 주문] {t_type} 접수\n종목: {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}\n주문번호: {odno}"
+                msg = f"🚀 [수동 주문] {t_type} {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}"
+                if total_amt > 0:
+                    if is_overseas:
+                        msg += f"\n금액: ${total_amt:,.2f}"
+                    else:
+                        msg += f"\n금액: {int(total_amt):,}원"
+                msg += f"\n주문번호: {odno}"
                 
                 if order_type == 'buy':
                     if calculated_score > 0:
@@ -1168,7 +1174,18 @@ def modify_order():
                 
                 config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
                 
-                api.send_telegram_message(f"🚀 [수동 주문] {full_action_name} 접수\n종목: {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}\n주문번호: {odno}")
+                msg = f"🚀 [수동 주문] {full_action_name} {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}"
+                if action == "1":
+                    try:
+                        c_price = float(price) if price != "0" else float(api.get_current_price(pdno, is_overseas) or 0)
+                        if c_price > 0:
+                            t_amt = float(final_qty) * c_price
+                            if is_overseas: msg += f"\n금액: ${t_amt:,.2f}"
+                            else: msg += f"\n금액: {int(t_amt):,}원"
+                    except: pass
+                msg += f"\n주문번호: {odno}"
+                
+                api.send_telegram_message(msg)
                 
                 db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}")
                 

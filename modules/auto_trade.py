@@ -1032,7 +1032,8 @@ class OrderManager:
                 if rule:
                     title_tag += " [개별]"
                 
-                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display}\n수량: {qty}주\n단가: {price_log}"
+                t_type = "매수" if type_str == 'buy' else "매도"
+                msg = f"🚀 {title_tag} {t_type} {stock_display}\n수량: {qty}주\n단가: {price_log}"
                 if price > 0:
                     msg += f"\n금액: {int(price * qty):,}원"
                 msg += f"\n주문번호: {odno}"
