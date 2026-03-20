@@ -279,7 +279,7 @@ def show_help():
     market_status_info = None
     filter_info = None
     try:
-        with config.console.status("[dim]현재 시장 상태 및 필터링 분석 중...[/]"):
+        with config.console.status("[cyan]현재 시장 상태 및 필터링 분석 중...[/cyan]"):
             kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
@@ -511,7 +511,7 @@ def main():
 
     # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
     if args.mode:
-        with config.console.status("[bold green]시스템 초기화 및 환경 설정 로드 중...[/]") as status:
+        with config.console.status("[cyan]시스템 초기화 및 환경 설정 로드 중...[/cyan]") as status:
             # 1. 환경 설정 로드
             config.session.initialize(mode=args.mode)
             
@@ -520,7 +520,7 @@ def main():
                 config.console.print()
                 config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
 
-            status.update("[bold green]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/]")
+            status.update("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]")
             time.sleep(1) # 인지용 대기
 
             # 2. 종목 데이터 로드
@@ -548,7 +548,7 @@ def main():
             config.ENABLE_TELEGRAM = False
             config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
 
-        with config.console.status("[bold green]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/]"):
+        with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
             time.sleep(1)
             config.session.load_stock_config()
             if config.session.is_simulation:
@@ -752,29 +752,29 @@ def main():
     finally:
         config.console.print()
         # [수정] 종료 프로세스를 console.status로 변경하고 완료 메시지 출력
-        with config.console.status("[bold green]시스템 종료 프로세스 진행 중...[/]") as status:
+        with config.console.status("[cyan]시스템 종료 프로세스 진행 중...[/cyan]") as status:
             # 1. 자동매매 종료
-            status.update("[bold green][1/4] 자동매매 스레드 안전 종료 중...[/]")
+            status.update("[cyan][1/4] 자동매매 스레드 안전 종료 중...[/cyan]")
             if trader.is_running:
                 trader.stop(use_status=False)
             time.sleep(0.5)
             config.console.print("[1/4] 자동매매 스레드 안전 종료 [bold green][완료][/]")
             
             # 2. 백그라운드 서비스 종료
-            status.update("[bold green][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/]")
+            status.update("[cyan][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/cyan]")
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
             time.sleep(0.5)
             config.console.print("[2/4] 백그라운드 서비스(텔레그램/감시) 종료 [bold green][완료][/]")
             
             # 3. DB 큐 종료
-            status.update("[bold green][3/4] DB 작업 큐 처리 및 종료 중...[/]")
+            status.update("[cyan][3/4] DB 작업 큐 처리 및 종료 중...[/cyan]")
             db_queue.shutdown()
             time.sleep(0.5)
             config.console.print("[3/4] DB 작업 큐 처리 및 종료 [bold green][완료][/]")
             
             # 4. DB 최적화 (VACUUM)
-            status.update("[bold green][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/]")
+            status.update("[cyan][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/cyan]")
             try:
                 # [수정] DB Proxy가 종료되었으므로 원본 DB 객체에 직접 접근하여 실행 (타임아웃 방지)
                 real_db = db_manager.db

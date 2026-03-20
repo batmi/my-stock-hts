@@ -374,7 +374,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
             }
     return df
 
-def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True):
+def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None):
     """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)"""
     if not codes: return
     
@@ -393,8 +393,11 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                     }
                     _set_micro_cache(f"yf_fi_{code}", data)
                 except: pass
+                if progress_updater: progress_updater()
         except Exception as e:
             logger.debug(f"[Cache] yfinance bulk fetch error: {e}")
+            if progress_updater:
+                for _ in codes: progress_updater()
     else:
         def fetch_worker(code):
             try: get_current_price_data(code, False)
@@ -407,7 +410,9 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
             
         max_w = 4 if config.session.is_simulation else 10
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-            list(executor.map(fetch_worker, codes))
+            futures = [executor.submit(fetch_worker, c) for c in codes]
+            for future in concurrent.futures.as_completed(futures):
+                if progress_updater: progress_updater()
 
 def prefetch_watchlists_async():
     """백그라운드에서 관심 종목의 차트 데이터를 캐싱(Warming)합니다."""
@@ -1117,22 +1122,28 @@ def _get_hourly_chart_data(code, is_overseas):
             # 1시간 간격, 최근 3개월 (지표 계산을 위해 충분한 데이터 확보)
             df = fetch_yfinance_data(t, period="3mo", interval="1h")
             if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    try: df.columns = df.columns.get_level_values(0)
-                    except: pass
+                # 1. 컬럼 평탄화 및 튜플 방어
+                flat_cols = []
+                for col in df.columns:
+                    if isinstance(col, tuple):
+                        flat_cols.append(str(col[0]).lower())
+                    else:
+                        flat_cols.append(str(col).lower())
+                df.columns = flat_cols
                 
+                # 2. 인덱스 리셋 (Datetime을 컬럼으로)
                 df.reset_index(inplace=True)
                 
-                # 컬럼명 표준화
-                rename_map = {'Datetime': 'date', 'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}
-                df.rename(columns=rename_map, inplace=True)
+                # 3. 모든 컬럼명을 소문자로 강제 변환
+                df.columns = [str(c).lower() for c in df.columns]
+                df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
+                if 'datetime' in df.columns: df.rename(columns={'datetime': 'date'}, inplace=True)
                 
                 cols = ['date', 'open', 'high', 'low', 'close', 'volume']
                 for c in cols:
                     if c not in df.columns: df[c] = 0
                 
                 df = df[cols].copy()
-                
                 # 시간대 변환 (UTC -> KST)
                 if pd.api.types.is_datetime64_any_dtype(df['date']):
                     if df['date'].dt.tz is None:
@@ -1167,16 +1178,25 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         try:
             df = fetch_yfinance_data(code, period="2y")
             if df is None or df.empty: return pd.DataFrame()
-            if isinstance(df.columns, pd.MultiIndex):
-                try: df.columns = df.columns.get_level_values(0)
-                except: pass
+                
+            # 1. 컬럼 평탄화 및 튜플 방어
+            flat_cols = []
+            for col in df.columns:
+                if isinstance(col, tuple):
+                    flat_cols.append(str(col[0]).lower())
+                else:
+                    flat_cols.append(str(col).lower())
+            df.columns = flat_cols
+            
             df.reset_index(inplace=True)
-            df.rename(columns={'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}, inplace=True)
-            cols = ['date', 'close', 'high', 'low', 'volume']
+            df.columns = [str(c).lower() for c in df.columns]
+            df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
+            
+            cols = ['date', 'open', 'high', 'low', 'close', 'volume']
             for c in cols:
                 if c not in df.columns: df[c] = 0
             df = df[cols].copy()
-            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d'))
+            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
             df = df[df['date'] >= start_date_origin]
             return df.sort_values('date', ascending=True).reset_index(drop=True)
         except Exception: return pd.DataFrame()
@@ -1280,26 +1300,34 @@ def _get_intraday_chart_data(code, is_overseas):
             # [수정] 5일치를 가져와서 최근 390개(약 1일 거래시간)만 추출하여 차트 여백 최소화
             df = fetch_yfinance_data(code, period="5d", interval="1m")
             if df is not None and not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    try: df.columns = df.columns.get_level_values(0)
-                    except: pass
+                # 1. 컬럼 평탄화 및 튜플 방어
+                flat_cols = []
+                for col in df.columns:
+                    if isinstance(col, tuple):
+                        flat_cols.append(str(col[0]).lower())
+                    else:
+                        flat_cols.append(str(col).lower())
+                df.columns = flat_cols
                 
                 df.reset_index(inplace=True)
-                # 컬럼명 표준화 (KIS API 포맷과 통일)
                 
+                # 2. 소문자 변환
+                df.columns = [str(c).lower() for c in df.columns]
+                df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
+                if 'datetime' in df.columns: df.rename(columns={'datetime': 'date'}, inplace=True)
+
                 # [추가] yfinance 시간대 변환 (UTC/현지시간 -> 한국 시간 KST)
-                if 'Datetime' in df.columns:
-                    if df['Datetime'].dt.tz is not None:
-                        df['Datetime'] = df['Datetime'].dt.tz_convert('Asia/Seoul')
+                if 'date' in df.columns and pd.api.types.is_datetime64_any_dtype(df['date']):
+                    if df['date'].dt.tz is not None:
+                        df['date'] = df['date'].dt.tz_convert('Asia/Seoul')
                     else:
-                        # 시간대가 없는 경우(naive) UTC로 가정하고 변환하거나 그대로 둠
-                        # yfinance는 보통 tz-aware 객체를 반환함
                         pass
 
-                rename_map = {'Datetime': 'date', 'Date': 'date', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}
-                df.rename(columns=rename_map, inplace=True)
-                
-                df = df[['date', 'open', 'high', 'low', 'close', 'volume']].sort_values('date', ascending=True)
+                cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+                for c in cols:
+                    if c not in df.columns: df[c] = 0
+                    
+                df = df[cols].copy().sort_values('date', ascending=True)
                 
                 # 최근 390개 (약 6시간 30분 = 1일 장 운영 시간) 데이터만 유지
                 if len(df) > 390:

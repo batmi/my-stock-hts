@@ -458,7 +458,7 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[green]시뮬레이션 진행 중...[/]", total=1000)
+        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=1000)
         
         for _ in range(1000):
             # 1. 데이터 노이즈 주입 (복사본 사용)
@@ -891,7 +891,7 @@ def run_backtest():
     if mode_choice.lower() == 'q': return
 
     # 3. 데이터 준비
-    with config.console.status(f"[green]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/]"):
+    with config.console.status(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]"):
         # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
         original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
         needed_days = days + 120 
@@ -1348,7 +1348,7 @@ def run_backtest():
     best_win_score = 0
     best_win_rate = -1.0
     
-    with config.console.status("[green]점수별 시뮬레이션 진행 중...[/]"):
+    with config.console.status("[cyan]점수별 시뮬레이션 진행 중...[/cyan]"):
         # [수정] 0.5점 단위로 시뮬레이션 (4.0 ~ 9.5)
         scores = [x * 0.5 for x in range(8, 20)]
         for score in scores:
@@ -1410,7 +1410,7 @@ def run_backtest():
     
     rsi_candidates = [45, 50, 55, 60, 65, 70, 75, 80]
     
-    with config.console.status("[green]RSI 기준별 시뮬레이션 진행 중...[/]"):
+    with config.console.status("[cyan]RSI 기준별 시뮬레이션 진행 중...[/cyan]"):
         for rsi_limit in rsi_candidates:
             res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas,
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
@@ -1463,7 +1463,7 @@ def run_backtest():
     row_count = 0
     total_combinations = len(tp_candidates) * len(sl_candidates)
 
-    with config.console.status("[green]다양한 익절/손절 조합 시뮬레이션 중...[/]"):
+    with config.console.status("[cyan]다양한 익절/손절 조합 시뮬레이션 중...[/cyan]"):
         for tp in tp_candidates:
             for sl in sl_candidates:
                 res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
@@ -1545,7 +1545,7 @@ def run_backtest():
     best_opt_return = -999.0
     best_opt_scenario = None
 
-    with config.console.status("[green]가중치 최적화 시뮬레이션 진행 중...[/]"):
+    with config.console.status("[cyan]가중치 최적화 시뮬레이션 진행 중...[/cyan]"):
         for sc in scenarios:
             weights_opt = {k: v for k, v in sc.items() if k != "DESC"}
             res_opt = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 

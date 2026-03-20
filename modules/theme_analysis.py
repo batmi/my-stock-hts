@@ -223,7 +223,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[bold green]Google Gemini가 실시간 시장 정보를 분석 중입니다...[/bold green]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 실시간 시장 정보를 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
             # 1. Gemini API 설정
             genai.configure(api_key=config.GEMINI_API_KEY)
@@ -402,7 +402,7 @@ def ask_gemini(question):
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""
-    with config.console.status("[green]네이버 금융 테마 데이터 수집 중...[/]"):
+    with config.console.status("[cyan]네이버 금융 테마 데이터 수집 중...[/cyan]"):
         themes = fetch_naver_themes()
         
     if not themes:
@@ -417,7 +417,7 @@ def _show_naver_themes():
     display_themes = themes[:top_n]
     
     # [추가] 상위 테마에 대해 상세 페이지 병렬 크롤링으로 주도주 정보 수집
-    with config.console.status("[green]상위 테마의 주도주 정보를 수집 중... (상세 페이지 분석)[/]"):
+    with config.console.status("[cyan]상위 테마의 주도주 정보를 수집 중... (상세 페이지 분석)[/cyan]"):
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             executor.map(_fetch_theme_detail, display_themes)
 
@@ -606,7 +606,7 @@ def _analyze_stock_ui():
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[green]차트 데이터 및 기술적 지표 분석 중...[/]", total=None)
+            progress.add_task("[cyan]차트 데이터 및 기술적 지표 분석 중...[/cyan]", total=None)
             
             df = api.get_chart_data(code, is_overseas)
             if df is None or df.empty:
@@ -646,7 +646,7 @@ def _analyze_stock_ui():
                 f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
             )
             
-            progress.add_task(f"[green]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/green]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/cyan]", total=None)
             answer = analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:

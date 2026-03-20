@@ -1478,7 +1478,7 @@ class AutoTrader:
             console=console,
             transient=True
         ) as progress:
-            task = progress.add_task("[green]시스템 시작 준비 중...[/]", total=None)
+            task = progress.add_task("[cyan]시스템 시작 준비 중...[/cyan]", total=None)
             
             self.is_running = True
             self.start_time = datetime.now()
@@ -1495,7 +1495,7 @@ class AutoTrader:
                 
                 try:
                     # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도(MAX_RETRIES) 활용
-                    progress.update(task, description="[green]자산 및 잔고 조회 중...[/]")
+                    progress.update(task, description="[cyan]자산 및 잔고 조회 중...[/cyan]")
                     # 1. 잔고 및 평가금 조회
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                     
@@ -1591,7 +1591,7 @@ class AutoTrader:
             # [추가] API 모듈에서 로그를 남길 수 있도록 연결
             context.SYSTEM_LOGGER = self.log
             
-            progress.update(task, description="[green]트레이딩 스레드 시작 중...[/]")
+            progress.update(task, description="[cyan]트레이딩 스레드 시작 중...[/cyan]")
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
 
@@ -1686,7 +1686,7 @@ class AutoTrader:
                 console=console,
                 transient=True
             ) as progress:
-                progress.add_task("[red]시스템 중단 요청 처리 중...[/]", total=None)
+                progress.add_task("[cyan]시스템 중단 요청 처리 중...[/cyan]", total=None)
                 _stop_logic()
         else:
             _stop_logic()
@@ -2013,8 +2013,8 @@ class AutoTrader:
                 console=console,
                 transient=True
             ) as progress:
-                task = progress.add_task("[green]보유 종목 및 자산 정보 조회 중...[/]", total=None)
-                progress.update(task, description="[green]보유 종목 및 잔고 조회 중...[/]")
+                task = progress.add_task("[cyan]보유 종목 및 자산 정보 조회 중...[/cyan]", total=None)
+                progress.update(task, description="[cyan]보유 종목 및 잔고 조회 중...[/cyan]")
                 # [추가] 보유 종목 확인
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 try:
@@ -2023,7 +2023,7 @@ class AutoTrader:
                     holdings = []
                     summary = []
                 
-                progress.update(task, description="[green]예수금 정보 확인 중...[/]")
+                progress.update(task, description="[cyan]예수금 정보 확인 중...[/cyan]")
                 # 예수금 별도 조회 (매수 여력 확인용)
                 try:
                     if summary and len(summary) > 0:
@@ -2048,7 +2048,7 @@ class AutoTrader:
 
                 current_asset = deposit + tot_evlu
                 
-                progress.update(task, description="[green]시장 국면(KOSPI/KOSDAQ) 분석 중...[/]")
+                progress.update(task, description="[cyan]시장 국면(KOSPI/KOSDAQ) 분석 중...[/cyan]")
                 try:
                     kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
                     kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
@@ -2066,7 +2066,7 @@ class AutoTrader:
                         need_update = True
                     
                     if need_update:
-                        progress.update(task, description="[green]시장 지수(KOSPI/KOSDAQ) 상태 업데이트 중...[/]")
+                        progress.update(task, description="[cyan]시장 지수(KOSPI/KOSDAQ) 상태 업데이트 중...[/cyan]")
                         self._update_market_indices_status(notify=False)
 
         console.print()
@@ -2463,7 +2463,7 @@ class AutoTrader:
             console=console,
             transient=True
         ) as progress:
-            progress.add_task("[green]DB에서 매매 내역 조회 및 분석 중...[/]", total=None)
+            progress.add_task("[cyan]DB에서 매매 내역 조회 및 분석 중...[/cyan]", total=None)
             
             # [수정] DB에서 매매 내역 조회 (수동 매매 포함을 위해 is_auto 필터 제거)
             # 시스템 매매와 수동 매매를 모두 포함하여 평가
@@ -3033,7 +3033,7 @@ class AutoTrader:
             console=console,
             transient=True
         ) as progress:
-            progress.add_task("[green]로그 파일 로딩 중...[/]", total=None)
+            progress.add_task("[cyan]로그 파일 로딩 중...[/cyan]", total=None)
 
         f = None
         try:
@@ -4236,7 +4236,7 @@ def _input_and_save_rule(code, name):
     is_overseas = not (code.isdigit() and len(code) == 6)
     current_price = 0
     # [수정] 단순 조회이므로 status 사용
-    with console.status("[bold green]현재가 조회 중...[/]"):
+    with console.status("[cyan]현재가 조회 중...[/cyan]"):
         current_price = api.get_current_price(code, is_overseas)
 
     if current_price > 0:
@@ -4503,7 +4503,7 @@ def _view_restricted_stocks():
     use_adaptive = False
     if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
         try:
-            with console.status("[dim]시장 국면 분석 중...[/dim]"):
+            with console.status("[cyan]시장 국면 분석 중...[/cyan]"):
                 _, kospi_adj = analysis.get_market_regime("KOSPI")
                 _, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
                 market_regime_adj["KOSPI"] = kospi_adj
@@ -4537,7 +4537,7 @@ def _view_restricted_stocks():
         console=console,
         transient=True
     ) as progress:
-        task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(data))
+        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(data))
 
         for code, info in data.items():
             name = info.get('name', code)
@@ -4714,7 +4714,7 @@ def _remove_restricted_stock():
         console=console,
         transient=True
     ) as progress:
-        task = progress.add_task("[green]데이터 조회 및 지표 계산 중...[/]", total=len(codes))
+        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(codes))
 
         for i, code in enumerate(codes):
             info = data[code]

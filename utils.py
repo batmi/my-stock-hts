@@ -128,7 +128,7 @@ def select_stock_for_chart():
             config.console.print(f"\n[bold red]오류: '{code}'에 대한 정보를 찾을 수 없습니다.[/bold red]\n")
             return None, None, None
 
-        with config.console.status("[bold green]종목 유효성 최종 확인 중 (API)...[/]"):
+        with config.console.status("[cyan]종목 유효성 최종 확인 중 (API)...[/cyan]"):
             res = api.get_current_price_data(code, is_overseas)
             
             if not res or res.get('rt_cd') != '0':

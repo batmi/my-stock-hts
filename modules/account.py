@@ -100,7 +100,7 @@ def sync_today_trades():
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[green]최신 체결 내역 동기화 중...[/]", total=len(accounts))
+        task = progress.add_task("[cyan]최신 체결 내역 동기화 중...[/cyan]", total=len(accounts))
         
         try:
             for acc in accounts:
@@ -195,7 +195,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         console=config.console,
         transient=True
     ) as progress:
-        progress.add_task("[green]국내 잔고 조회 중...[/]", total=None)
+        progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
         # [수정] api.get_domestic_balance 직접 호출
         raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
         
@@ -303,7 +303,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         console=config.console,
         transient=True
     ) as progress:
-        progress.add_task("[green]해외 잔고 조회 중...[/]", total=None)
+        progress.add_task("[cyan]해외 잔고 조회 중...[/cyan]", total=None)
         # [수정] api.get_overseas_balance 직접 호출
         all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd)
 
@@ -439,7 +439,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     }
     
     # 1. 금일 데이터 조회
-    if progress: progress.update(task, description="[green]금일 매매 손익 조회 중...[/]")
+    if progress: progress.update(task, description="[cyan]금일 매매 손익 조회 중...[/cyan]")
     try:
         # [원복] 항상 현재 날짜 기준 조회 (새벽 로직 제거)
         profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
@@ -500,7 +500,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     except: pass
 
     # 2. 국내 주식 잔고 및 자산
-    if progress: progress.update(task, description="[green]국내 주식 잔고 및 평가금 조회 중...[/]")
+    if progress: progress.update(task, description="[cyan]국내 주식 잔고 및 평가금 조회 중...[/cyan]")
     try:
         # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
         output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
@@ -550,7 +550,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         pass
         
     # [추가] 해외 주식 잔고 합산 (원화 환산)
-    if progress: progress.update(task, description="[green]해외 주식 잔고 및 환산액 계산 중...[/]")
+    if progress: progress.update(task, description="[cyan]해외 주식 잔고 및 환산액 계산 중...[/cyan]")
     try:
         ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
         ovrs_buy_usd = 0.0
@@ -586,7 +586,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         pass
 
     # 3. 예수금 조회
-    if progress: progress.update(task, description="[green]예수금 조회 및 최종 집계 중...[/]")
+    if progress: progress.update(task, description="[cyan]예수금 조회 및 최종 집계 중...[/cyan]")
     try:
         with utils.AccountContext(cano):
             dep_data = api.get_deposit_balance(cano, acnt_prdt_cd)
@@ -631,7 +631,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[green]자산 현황 조회 시작...[/]", total=None)
+        task = progress.add_task("[cyan]자산 현황 조회 시작...[/cyan]", total=None)
         summary_data = get_asset_status_data(cano, acnt_prdt_cd, progress, task)
 
     display_tot_deposit = summary_data['dep_dom'] + summary_data['dep_ovs']
@@ -840,7 +840,7 @@ def export_trade_history_to_excel():
                 console=config.console,
                 transient=True
             ) as progress:
-                task = progress.add_task(f"[green]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/]", total=None)
+                task = progress.add_task(f"[cyan]'{os.path.basename(filename_xlsx)}' 파일로 저장 중...[/cyan]", total=None)
                 
                 with pd.ExcelWriter(filename_xlsx, engine='openpyxl') as writer:
                     # [추가] 컬럼 너비 자동 조절 헬퍼 함수

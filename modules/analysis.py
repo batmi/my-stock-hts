@@ -506,10 +506,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task(f"[green]{name}({code}) 데이터 분석 중...[/]", total=None)
+        task = progress.add_task(f"[cyan]{name}({code}) 데이터 분석 중...[/cyan]", total=None)
 
         # 1. [최적화] 데이터 병렬 조회 (차트 캐시 확인 및 체결강도 동시 호출)
-        progress.update(task, description=f"[green]{name}({code}) 지표 및 수급 데이터 병렬 수집 중...[/]")
+        progress.update(task, description=f"[cyan]{name}({code}) 지표 및 수급 데이터 병렬 수집 중...[/cyan]")
         
         df = None
         vol_strength = None
@@ -526,7 +526,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             return
 
         # 2. 지표 계산
-        progress.update(task, description="[green]기술적 지표 계산 및 상태 분류 중...[/]")
+        progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")
         ind = indicators.calculate_indicators(df)
         
         # 전일 RSI 계산
@@ -885,7 +885,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[green]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/green]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/cyan]", total=None)
             answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
@@ -996,7 +996,7 @@ def diagnose_group_stocks(market_filter=None):
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task(f"[green]등록된 종목 병렬 분석 중{title_suffix}...[/]", total=len(targets))
+        task = progress.add_task(f"[cyan]등록된 종목 병렬 분석 중{title_suffix}...[/cyan]", total=len(targets))
         
         # [최적화] ThrottledSession 제어 기반으로 모의투자(2) / 실전(4) 통합 병렬 처리 허용
         max_w = 2 if config.session.is_simulation else 4
@@ -1190,7 +1190,7 @@ def _get_master_stock_list(market_type):
                 TimeRemainingColumn(),
                 console=config.console
             ) as progress:
-                task_id = progress.add_task(f"[green]{market_type} 마스터 파일 다운로드...", total=None)
+                task_id = progress.add_task(f"[cyan]{market_type} 마스터 파일 다운로드...[/cyan]", total=None)
                 
                 def report_hook(block_num, block_size, total_size):
                     progress.update(task_id, total=total_size, completed=block_num * block_size)
@@ -1203,7 +1203,7 @@ def _get_master_stock_list(market_type):
                 console=config.console,
                 transient=True
             ) as progress:
-                progress.add_task(f"[green]{market_type} 데이터 압축 해제 중...[/]", total=None)
+                progress.add_task(f"[cyan]{market_type} 데이터 압축 해제 중...[/cyan]", total=None)
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(base_dir)
         
@@ -1217,7 +1217,7 @@ def _get_master_stock_list(market_type):
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task(f"[green]{market_type} 종목 리스트 파싱 중...[/]", total=file_size)
+            task = progress.add_task(f"[cyan]{market_type} 종목 리스트 파싱 중...[/cyan]", total=file_size)
             
             with open(extract_path, 'rb') as f:
                 for line in f:
@@ -1534,7 +1534,7 @@ def analyze_market_stocks(market_type):
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task("[green]선별된 종목의 업종 정보를 조회 중...[/]", total=len(buy_candidates))
+            task = progress.add_task("[cyan]선별된 종목의 업종 정보를 조회 중...[/cyan]", total=len(buy_candidates))
             
             # 병렬 처리로 업종 정보 조회
             def fetch_sector(item):
@@ -1779,7 +1779,7 @@ def save_all_market_analysis():
                 
                 # 2. 업종 정보 조회 (Price Data) 및 데이터 정제
                 if analyzed_data:
-                    task_sector = progress.add_task(f"[green]{market_type} 업종 정보 조회 및 정리 중...[/green]", total=len(analyzed_data))
+                    task_sector = progress.add_task(f"[cyan]{market_type} 업종 정보 조회 및 정리 중...[/cyan]", total=len(analyzed_data))
                     
                     def fetch_sector_and_format(item):
                         sector = "-"
@@ -1879,7 +1879,7 @@ def save_all_market_analysis():
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task(f"[green]엑셀 파일 저장 중... ({os.path.basename(filename)})[/]", total=len(results))
+            task = progress.add_task(f"[cyan]엑셀 파일 저장 중... ({os.path.basename(filename)})[/cyan]", total=len(results))
             
             with pd.ExcelWriter(filename, engine='openpyxl') as writer:
                 for market_type, data in results.items():
@@ -2244,7 +2244,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[bold green]수급 데이터 확인 중 (KIS API)...[/]", total=None)
+            progress.add_task("[cyan]수급 데이터 확인 중 (KIS API)...[/cyan]", total=None)
             test_data = api.get_investor_trend(data_list[0][1])
             if test_data:
                 sample = test_data[0]
@@ -2264,7 +2264,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                     console=config.console,
                     transient=True
                 ) as progress:
-                    progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
+                    progress.add_task("[cyan]시장 국면 분석 중 (KIS API)...[/cyan]", total=None)
                     _, kospi_adj = get_market_regime("KOSPI")
                     _, kosdaq_adj = get_market_regime("KOSDAQ")
                     market_regime_adj["KOSPI"] = kospi_adj
@@ -2516,7 +2516,7 @@ def show_stock_analysis():
                         console=config.console,
                         transient=True
                     ) as progress:
-                        progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
+                        progress.add_task("[cyan]시장 국면 분석 중 (KIS API)...[/cyan]", total=None)
                         _, k_adj = get_market_regime("KOSPI")
                         _, q_adj = get_market_regime("KOSDAQ")
                         shared_regime_adj["KOSPI"] = k_adj
@@ -2534,18 +2534,24 @@ def show_stock_analysis():
                 else: all_kr_codes.extend(codes)
 
             if all_kr_codes or all_us_codes:
+                total_len = len(all_kr_codes) + len(all_us_codes)
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
                     BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                     console=config.console,
                     transient=True
                 ) as progress:
-                    progress.add_task("[bold green]관심 종목 실시간 데이터 통합 수집 중...[/]", total=None)
+                    task = progress.add_task("[cyan]관심 종목 실시간 데이터 통합 수집 중...[/cyan]", total=total_len)
+                    
+                    def update_progress():
+                        progress.advance(task)
+
                     if all_kr_codes: 
-                        api.prefetch_multiple_current_prices(all_kr_codes, is_overseas=False)
+                        api.prefetch_multiple_current_prices(all_kr_codes, is_overseas=False, progress_updater=update_progress)
                     if all_us_codes: 
-                        api.prefetch_multiple_current_prices(all_us_codes, is_overseas=True)
+                        api.prefetch_multiple_current_prices(all_us_codes, is_overseas=True, progress_updater=update_progress)
 
             try:
                 for title, d_list, is_ovs in target_list:
@@ -2611,7 +2617,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
         console=config.console,
         transient=True
     ) as progress:
-        progress.add_task("[bold green]기간별 시세 데이터 조회 중...[/]", total=None)
+        progress.add_task("[cyan]기간별 시세 데이터 조회 중...[/cyan]", total=None)
         df = api.get_chart_data(code, is_overseas)
         # [추가] 수급 데이터 조회
         frgn_rates_map = {} # [추가] 실제 지분율 맵

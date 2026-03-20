@@ -550,7 +550,7 @@ def _show_market_indices_core(target_indices=None):
                 if other_tickers:
                     groups_to_fetch.append(("기타", other_tickers))
 
-            task_dl = progress.add_task("[green]지수 데이터 수신 준비 중...[/green]", total=None)
+            task_dl = progress.add_task("[cyan]지수 데이터 수신 준비 중...[/cyan]", total=None)
 
             # 그룹별 순차 요청
             for group_name, t_list in groups_to_fetch:
@@ -578,7 +578,8 @@ def _show_market_indices_core(target_indices=None):
                     continue
                 
                 tickers_str = " ".join(tickers_to_fetch)
-                progress.update(task_dl, description=f"[green]지수 데이터 수신 중 (yfinance - {group_name})...[/green]")
+                disp_group = group_name.split(" (")[0] if " (" in group_name else group_name
+                progress.update(task_dl, description=f"[cyan]지수 데이터 수신 중 ({disp_group})...[/cyan]")
 
                 for attempt in range(2):
                     try:

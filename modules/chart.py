@@ -45,7 +45,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
     with status_ctx as progress:
         if not quiet:
-            progress.add_task(f"[bold green]{name} 맞춤형 분석 차트 생성 중...[/]", total=None)
+            progress.add_task(f"[cyan]{name} 맞춤형 분석 차트 생성 중...[/cyan]", total=None)
             
         df = api.get_chart_data(code, is_overseas, period_type)
         

@@ -79,7 +79,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[green]국내 잔고 조회 중...[/]", total=None)
+            progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
             holdings, _ = account.fetch_domestic_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = int(item.get('hldg_qty', 0))
@@ -112,7 +112,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[green]해외 잔고 조회 중...[/]", total=None)
+            progress.add_task("[cyan]해외 잔고 조회 중...[/cyan]", total=None)
             holdings = account.fetch_overseas_balance(cano, acnt_prdt_cd)
             for item in holdings:
                 qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
@@ -312,7 +312,7 @@ def show_open_orders():
     selectable_orders = []
 
     # [수정] Progress -> status 변경
-    with config.console.status("[bold green]전체 계좌 미체결 내역 조회 중...[/]"):
+    with config.console.status("[cyan]전체 계좌 미체결 내역 조회 중...[/cyan]"):
         table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No", justify="right")
         table.add_column("계좌번호", justify="center")
@@ -926,7 +926,7 @@ def send_order(order_type):
         try:
             result = None
             # [수정] 단일 API 호출이므로 status 사용
-            with config.console.status("[bold green]주문 전송 중...[/]"):
+            with config.console.status("[cyan]주문 전송 중...[/cyan]"):
                 result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
             
             if result['rt_cd'] == '0':
@@ -1164,7 +1164,7 @@ def modify_order():
         try:
             res_json = None
             # [수정] 단일 API 호출이므로 status 사용
-            with config.console.status(f"[bold green]주문 {action_name} 요청 전송 중...[/]"):
+            with config.console.status(f"[cyan]주문 {action_name} 요청 전송 중...[/cyan]"):
                 res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
             
             if res_json['rt_cd'] == '0':
