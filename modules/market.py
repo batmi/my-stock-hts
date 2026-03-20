@@ -665,13 +665,19 @@ def _show_market_indices_core(target_indices=None):
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
-
-            # [최적화/수정] 분석 스레드 실행 전, yfinance 다중 호출 차단(Rate Limit)을 방지하기 위해
-            # 해외 지수들에 대해 일괄(Bulk)로 현재가를 예열(Prefetch)하여 마이크로 캐시에 담아둡니다.
             overseas_tickers = [t for n, t in indices_map.items() if n not in ["코스피", "코스닥", "코스피200", "코스닥150"]]
+            
+            # 전체 작업량 = 예열 작업 수(해외 지수) + 지표 연산 작업 수(전체 지수)
+            total_tasks = len(overseas_tickers) + len(indices_map)
+            
+            task = progress.add_task("[cyan]해외 지수 실시간 데이터 일괄 수집 중...[/cyan]", total=total_tasks)
+
             if overseas_tickers:
-                api.prefetch_multiple_current_prices(overseas_tickers, is_overseas=True)
+                # 예열 과정에서도 프로그래스바가 차오르도록 updater 전달
+                def update_prefetch(): progress.advance(task)
+                api.prefetch_multiple_current_prices(overseas_tickers, is_overseas=True, progress_updater=update_prefetch)
+
+            progress.update(task, description="[cyan]지수 지표 및 추세 연산 중...[/cyan]")
 
             # [수정] 지수 지표 분석 루프 병렬화 (ThreadPoolExecutor)
             results_dict = {}
