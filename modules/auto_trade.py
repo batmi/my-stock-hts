@@ -3789,17 +3789,17 @@ class AutoTrader:
                     if not market_stat.get('is_healthy', True):
                         return {'type': 'market_skip', 'name': name}
             
-            # 5. 데이터 조회 및 분석
-            df = api.get_chart_data(code, is_overseas=False)
+            # 5. [최적화] 데이터 조회 및 분석 (병렬 Fan-out)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code)
+                
+                df = fut_chart.result()
+                try: vol_strength = fut_vol.result()
+                except: vol_strength = None
+                
             if df is None or df.empty: return None
-            
             current_price = float(df.iloc[-1]['close'])
-            
-            # 실시간 체결강도 조회 (매수 유력 시 호출하는 게 좋지만, 로직 단순화를 위해 수행)
-            # [최적화] 여기서 에러나도 무시하고 진행
-            vol_strength = None
-            try: vol_strength = api.get_realtime_vol_strength(code)
-            except: pass
             
             # 룰 및 임계값 설정
             rule = rules_map.get(code)
@@ -3873,8 +3873,8 @@ class AutoTrader:
                     self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
 
         # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
-        # (실전: 5개, 모의: 1개 - 순차 처리로 안정성 확보)
-        max_workers = 5 if not config.session.is_simulation else 1
+        # (실전: 5개, 모의: 2개 - ThrottledSession이 병목 없이 안전하게 제어함)
+        max_workers = 5 if not config.session.is_simulation else 2
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay) for item in targets]
@@ -4569,7 +4569,8 @@ def _view_restricted_stocks():
                 
                 s_color = state_color.replace('[', '').replace(']', '')
                 score_str = f"[{s_color}]{score}점[/]"
-                state_str = f"[{s_color}]{state}[/]"
+                display_state = "역매수" if state == "역추세매수" else state
+                state_str = f"[{s_color}]{display_state}[/]"
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')
@@ -4733,7 +4734,8 @@ def _remove_restricted_stock():
                 
                 s_color = state_color.replace('[', '').replace(']', '')
                 score_str = f"[{s_color}]{score}점[/]"
-                state_str = f"[{s_color}]{state}[/]"
+                display_state = "역매수" if state == "역추세매수" else state
+                state_str = f"[{s_color}]{display_state}[/]"
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')

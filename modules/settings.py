@@ -26,6 +26,7 @@ def _save_dynamic_config():
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
         "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100),
         "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
+        "CHART_CACHE_TTL_MINUTES": getattr(config, 'CHART_CACHE_TTL_MINUTES', 180),
         "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
         "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
         "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
@@ -102,6 +103,7 @@ def view_system_config():
     table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
     table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
     table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
+    table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config, 'CHART_CACHE_TTL_MINUTES', 180)}")
     
     table.add_section()
     
@@ -589,6 +591,8 @@ def modify_system_trading_general():
              "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
             {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
              "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
+            {"desc": "차트 데이터 캐시(분)", "help": "일봉 메모리 캐시 유지 시간", "name": "CHART_CACHE_TTL_MINUTES", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config, 'CHART_CACHE_TTL_MINUTES', v)},
              
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
@@ -672,6 +676,7 @@ def reset_to_default():
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.5
     config.UNFILLED_ORDER_CANCEL_SECONDS = 120
+    config.CHART_CACHE_TTL_MINUTES = 180
     config.SLIPPAGE_RATE = 0.002
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")

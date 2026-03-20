@@ -20,6 +20,14 @@ import concurrent.futures # [추가] 병렬 처리용
 
 logger = logging.getLogger(__name__)
 
+# [추가] 시장 지수 (yfinance 다중 다운로드) 전용 메모리 캐시
+_MARKET_YF_CACHE = {}
+_MARKET_YF_CACHE_LOCK = threading.RLock()
+
+def clear_market_yf_cache():
+    with _MARKET_YF_CACHE_LOCK:
+        _MARKET_YF_CACHE.clear()
+
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
@@ -492,39 +500,12 @@ def _show_market_indices_core(target_indices=None):
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
-    # [추가] KOSPI/KOSDAQ 시장 국면 미리 조회 (도움말 화면과 데이터 동기화)
-    # KIS API 데이터를 사용하는 analysis.get_market_regime 결과와 yfinance 데이터를 사용하는 현재 화면의 불일치 해소
-    market_regime_cache = {}
-    
     indices_map = INDICES_MAP.copy()
     if target_indices:
         indices_map = {k: v for k, v in indices_map.items() if k in target_indices}
         
     if not indices_map:
         return []
-
-    # [수정] KIS API 국면 분석 대상 확대 (신규 지수 포함)
-    regime_map = {
-        "코스피": "KOSPI", "코스닥": "KOSDAQ", "코스피200": "KOSPI200", "코스닥150": "KOSDAQ150"
-    }
-    targets_regime = [m_type for k_name, m_type in regime_map.items() if k_name in indices_map]
-
-    try:
-        # [수정] console.status -> Progress (Bar 포함, Percentage 제외)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=config.console,
-            transient=True
-        ) as progress:
-            if targets_regime:
-                progress.add_task("[green]지수 데이터 수신 중(KIS API - 국내 지수)...[/green]", total=None)
-                for m_type in targets_regime:
-                    regime, _ = analysis.get_market_regime(m_type)
-                    market_regime_cache[m_type] = regime
-    except Exception:
-        pass
 
     data_storage = {}
     yf_tickers = None
@@ -575,8 +556,29 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
                 
+                tickers_to_fetch = []
+                now = datetime.now()
+                ttl_seconds = getattr(config, 'CHART_CACHE_TTL_MINUTES', 180) * 60
+                
+                # [추가] 지수 캐시 적중(Hit) 검사
+                with _MARKET_YF_CACHE_LOCK:
+                    for t in t_list:
+                        cached = _MARKET_YF_CACHE.get(t)
+                        if cached and ttl_seconds > 0 and (now - cached['time']).total_seconds() < ttl_seconds:
+                            # 날짜가 같을 때만 유효 (자정 무효화)
+                            if cached['date'] == now.strftime("%Y-%m-%d"):
+                                data_storage[t] = cached['data']
+                                continue
+                        tickers_to_fetch.append(t)
+
+                # 모든 티커가 캐시에 있으면 다운로드 생략
+                if not tickers_to_fetch:
+                    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                        config.console.print(f"[dim cyan][TRACE] Cache Hit (All) for {group_name}[/dim cyan]")
+                    continue
+                
+                tickers_str = " ".join(tickers_to_fetch)
                 progress.update(task_dl, description=f"[green]지수 데이터 수신 중 (yfinance - {group_name})...[/green]")
-                tickers_str = " ".join(t_list)
 
                 for attempt in range(2):
                     try:
@@ -615,25 +617,37 @@ def _show_market_indices_core(target_indices=None):
                             i_shape = i_data.shape if not i_data.empty else "Empty"
                             config.console.print(f"[dim magenta][TRACE] RES ({group_name}) | Daily: {d_shape}, Intra: {i_shape}[/dim magenta]")
 
-                        for t in t_list:
-                            d_df = pd.DataFrame()
-                            i_df = pd.DataFrame()
-                            
-                            try:
-                                if not d_data.empty:
-                                    if isinstance(d_data.columns, pd.MultiIndex):
-                                        if t in d_data.columns.levels[0]: d_df = d_data[t].copy()
-                                    elif 'Close' in d_data.columns: d_df = d_data.copy()
-                            except: pass
+                        # [추가] 받아온 데이터 파싱 후 스토리지 및 캐시 저장
+                        with _MARKET_YF_CACHE_LOCK:
+                            for t_fetch in tickers_to_fetch:
+                                d_df = pd.DataFrame()
+                                i_df = pd.DataFrame()
+                                
+                                try:
+                                    if not d_data.empty:
+                                        if isinstance(d_data.columns, pd.MultiIndex):
+                                            if t_fetch in d_data.columns.levels[0]: d_df = d_data[t_fetch].copy()
+                                        elif 'Close' in d_data.columns: d_df = d_data.copy()
+                                        elif 'close' in d_data.columns: d_df = d_data.copy()
+                                except: pass
 
-                            try:
-                                if not i_data.empty:
-                                    if isinstance(i_data.columns, pd.MultiIndex):
-                                        if t in i_data.columns.levels[0]: i_df = i_data[t].copy()
-                                    elif 'Close' in i_data.columns: i_df = i_data.copy()
-                            except: pass
-                            
-                            data_storage[t] = {'daily': d_df, 'intra': i_df}
+                                try:
+                                    if not i_data.empty:
+                                        if isinstance(i_data.columns, pd.MultiIndex):
+                                            if t_fetch in i_data.columns.levels[0]: i_df = i_data[t_fetch].copy()
+                                        elif 'Close' in i_data.columns: i_df = i_data.copy()
+                                        elif 'close' in i_data.columns: i_df = i_data.copy()
+                                except: pass
+                                
+                                stored_data = {'daily': d_df, 'intra': i_df}
+                                data_storage[t_fetch] = stored_data
+                                
+                                if not d_df.empty:
+                                    _MARKET_YF_CACHE[t_fetch] = {
+                                        'data': stored_data,
+                                        'time': now,
+                                        'date': now.strftime("%Y-%m-%d")
+                                    }
                         break
                     except KeyboardInterrupt:
                         raise # 상위 핸들러로 전파
@@ -679,8 +693,8 @@ def _show_market_indices_core(target_indices=None):
                 if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
                     table.add_section()
 
+                    # --- A. DataFrame 준비 ---
                 try:
-                    # --- A. DataFrame 준비 및 지표 계산 ---
                     stored = data_storage.get(ticker, {'daily': pd.DataFrame(), 'intra': pd.DataFrame()})
                     df_daily = stored['daily']
                     df_intraday = stored['intra']
@@ -758,27 +772,11 @@ def _show_market_indices_core(target_indices=None):
                         else:
                             config.console.print(f"[dim red][DEBUG]    [Intra] Empty[/dim red]")
 
-                    # 지표 계산
-                    ema5, ema20, ema60, ema120 = None, None, None, None
-                    val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
+                    # --- B. 가격 결정 및 실시간 캔들 보정 (Prioritize: fast_info > Intraday > Daily) ---
                     high_52_daily = 0.0
-
-                    if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
-                        df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
-                        df_calc.dropna(subset=['close'], inplace=True)
-                        ind = indicators.calculate_indicators(df_calc)
+                    if not df_daily.empty and 'close' in df_daily.columns:
+                        high_52_daily = float(df_daily['close'].tail(250).max())
                         
-                        ema5, ema20 = ind['ema_5'], ind['ema_20']
-                        ema60, ema120 = ind['ema_60'], ind['ema_120']
-                        val_psar = ind.get('psar')
-                        val_rsi = ind.get('rsi')
-                        val_adx = ind.get('adx')
-                        val_cci = ind.get('cci')
-                        val_macd = ind.get('macd')
-                        val_macd_sig = ind.get('macd_signal')
-                        high_52_daily = float(df_calc['close'].tail(250).max())
-
-                    # --- B. 가격 결정 로직 (Prioritize: fast_info > Intraday > Daily) ---
                     current = 0.0
                     prev = 0.0
                     high_52 = high_52_daily
@@ -788,28 +786,9 @@ def _show_market_indices_core(target_indices=None):
                     is_crypto = name in ["비트코인", "이더리움"]
                     debug_tag = "[MARKET_INDEX_DEBUG]"
                     
-                    # [추가] 국내 지수 KIS API 현재가 우선 적용
-                    use_kis_price = False
-                    if is_domestic_index:
-                        try:
-                            res = api.get_domestic_index_price(kis_code)
-                            if res.get('rt_cd') == '0':
-                                out = res.get('output', {})
-                                current = float(out.get('bstp_nmix_prpr', 0))
-                                prev = float(out.get('bstp_nmix_prdy_clpr', 0)) # 전일 종가
-                                
-                                # 52주 고가 갱신 (일봉 데이터 기준과 비교)
-                                # API 출력에 52주 고가가 없으므로 일봉 데이터의 max값 사용 유지
-                                
-                                use_kis_price = True
-                                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                                    config.console.print(f"[dim green][DEBUG]    -> Result: Cur={current:,.2f} Prev={prev:,.2f} (Source: KIS API)[/dim green]")
-                        except Exception as e:
-                            if config.SCREEN_DEBUG_LEVEL == "DEBUG": config.console.print(f"[dim red]KIS Price Error: {e}[/dim red]")
-
                     # 1. fast_info 시도 (가장 정확)
                     use_fast_info = False
-                    if not use_kis_price: # KIS API 성공 시 건너뜀
+                    if not is_domestic_index: # KIS API 데이터(국내 지수)는 fast_info 스킵
                         try:
                             ticker_obj = yf_tickers.tickers[ticker]
                             fi = ticker_obj.fast_info
@@ -863,7 +842,7 @@ def _show_market_indices_core(target_indices=None):
                                 config.console.print(f"[dim red][DEBUG]    fast_info error: {e}[/dim red]")
 
                     # 2. DataFrame 기반 Fallback (fast_info 실패 또는 NaN 시)
-                    if not use_fast_info and not use_kis_price:
+                    if not use_fast_info:
                         if is_target_debug:
                             logger.debug(f"{debug_tag} {name} entering fallback. Daily len: {len(df_daily)}")
                         
@@ -982,7 +961,34 @@ def _show_market_indices_core(target_indices=None):
                         if is_target_debug:
                             logger.debug(f"{debug_tag} {name} fallback final: current={current}, prev={prev}")
 
-                    # C. 결과 계산
+                    # --- C. 실시간 가격 차트 합성(Stitching) 및 지표 계산 ---
+                    ema5, ema20, ema60, ema120 = None, None, None, None
+                    val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
+                    df_calc = pd.DataFrame() # [추가] 변수 스코프 사전 선언
+                    
+                    if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
+                        df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
+                        df_calc.dropna(subset=['close'], inplace=True)
+                        
+                        # [추가] 실시간 현재가를 마지막 일봉 종가에 덮어씀 (지표의 실시간성 보장)
+                        if not math.isnan(current) and current > 0:
+                            df_calc.iloc[-1, df_calc.columns.get_loc('close')] = current
+                            # 고가/저가 보정
+                            if current > df_calc.iloc[-1]['high']: df_calc.iloc[-1, df_calc.columns.get_loc('high')] = current
+                            if current < df_calc.iloc[-1]['low']: df_calc.iloc[-1, df_calc.columns.get_loc('low')] = current
+                        
+                        ind = indicators.calculate_indicators(df_calc)
+                        
+                        ema5, ema20 = ind['ema_5'], ind['ema_20']
+                        ema60, ema120 = ind['ema_60'], ind['ema_120']
+                        val_psar = ind.get('psar')
+                        val_rsi = ind.get('rsi')
+                        val_adx = ind.get('adx')
+                        val_cci = ind.get('cci')
+                        val_macd = ind.get('macd')
+                        val_macd_sig = ind.get('macd_signal')
+
+                    # --- D. 결과 계산 및 포맷팅 ---
                     if math.isnan(current): current = 0.0
                     if math.isnan(prev): prev = 0.0
 
@@ -1107,51 +1113,37 @@ def _show_market_indices_core(target_indices=None):
                         "금", "은", "구리", "비트코인", "이더리움"
                     ]
 
-                    used_kis_regime = False
                     if name in adaptive_targets:
-                        # [추가] KOSPI/KOSDAQ은 캐시된 국면 정보 우선 사용 (데이터 정합성 보장)
-                        regime_override = None
-                        
-                        # [수정] 신규 지수 매핑 추가
-                        regime_key_map = {
-                            "코스피": "KOSPI", "코스닥": "KOSDAQ", "코스피200": "KOSPI200", "코스닥150": "KOSDAQ150"
-                        }
-                        if name in regime_key_map:
-                            regime_override = market_regime_cache.get(regime_key_map[name])
-                        
-                        if regime_override:
-                            used_kis_regime = True
+                        try:
+                            ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+                            adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
                             
-                            # [수정] KIS API 데이터 소스일 때만 * 표시 및 하단 안내 활성화
+                            regime_state = "Sideways"
+                                
+                            # [수정] 현재가가 보정된 최신 데이터프레임(df_calc) 우선 참조
+                            target_df = df_calc if not df_calc.empty else df_daily
+                            if not target_df.empty and len(target_df) >= ma_period:
+                                ma_series = target_df['close'].ewm(span=ma_period, adjust=False).mean()
+                                ma_val = ma_series.iloc[-1]
+                                
+                                slope = 0
+                                if len(ma_series) >= 5:
+                                    slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
+                                
+                                adx_val = val_adx if val_adx is not None else 0
+                                
+                                if current > ma_val and slope > 0 and adx_val >= adx_threshold:
+                                    regime_state = "Bull"
+                                elif current < ma_val:
+                                    regime_state = "Bear"
+                            
                             suffix = "*" if is_kis_source else ""
                             if is_kis_source: any_kis_used = True
 
-                            if regime_override == "Bull": display_name = f"[red]{name}{suffix}[/]"
-                            elif regime_override == "Bear": display_name = f"[blue]{name}{suffix}[/]"
+                            if regime_state == "Bull": display_name = f"[red]{name}{suffix}[/]"
+                            elif regime_state == "Bear": display_name = f"[blue]{name}{suffix}[/]"
                             else: display_name = f"[white]{name}{suffix}[/]"
-                        else:
-                            # 기존 로직 (yfinance 데이터 기반 계산)
-                            try:
-                                ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
-                                adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-                                
-                                if not df_daily.empty and len(df_daily) >= ma_period:
-                                    ma_series = df_daily['close'].ewm(span=ma_period, adjust=False).mean()
-                                    ma_val = ma_series.iloc[-1]
-                                    
-                                    slope = 0
-                                    if len(ma_series) >= 5:
-                                        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-                                    
-                                    adx_val = val_adx if val_adx is not None else 0
-                                    
-                                    if current > ma_val and slope > 0 and adx_val >= adx_threshold:
-                                        display_name = f"[red]{name}[/]"
-                                    elif current < ma_val:
-                                        display_name = f"[blue]{name}[/]"
-                                    else:
-                                        display_name = f"[white]{name}[/]"
-                            except: pass
+                        except: pass
                     elif name == "SOX (반도체)":
                         if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
                         elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"

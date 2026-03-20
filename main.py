@@ -400,7 +400,7 @@ def show_help():
     
     use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
     mr_status = "[green]ON[/green]" if use_mr else "[red]OFF[/red]"
-    score_table.add_row("매수 (역추세)", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역추세매수[/]", f"낙폭과대 기술적 반등 노리기 ({mr_status})")
+    score_table.add_row("매수 (역추세)", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역매수[/]", f"낙폭과대 기술적 반등 노리기 ({mr_status})")
     
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
@@ -536,6 +536,7 @@ def main():
                     api.get_auto_access_token()
 
             # 백그라운드 서비스 시작
+            api.prefetch_watchlists_async() # [추가] 차트 데이터 캐시 백그라운드 예열
             auto_trade.ConclusionMonitor().start()
             telegram_cmd = telegram_bot.TelegramCommander()
             telegram_cmd.start()
@@ -558,6 +559,7 @@ def main():
                 if config.session.auto_app_key:
                     api.get_auto_access_token()
             
+            api.prefetch_watchlists_async() # [추가] 차트 데이터 캐시 백그라운드 예열
             auto_trade.ConclusionMonitor().start()
             telegram_cmd = telegram_bot.TelegramCommander()
             telegram_cmd.start()

@@ -645,12 +645,13 @@ def manage_stock_menu():
     grid.add_row("[1] 종목 추가", "(Add Stock)")
     grid.add_row("[2] 종목 삭제", "(Delete Stock)")
     grid.add_row("[3] 종목 순서 변경", "(Reorder Stock)")
+    grid.add_row("[4] 차트 캐시 수동 갱신", "(Clear Cache)")
     config.console.print(grid)
     config.console.print()
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
     
-    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경"}
+    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경", "4": "차트 캐시 갱신"}
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -662,3 +663,8 @@ def manage_stock_menu():
         delete_stock()
     elif choice == "3":
         reorder_stock()
+    elif choice == "4":
+        import api
+        from modules import market
+        api.clear_chart_cache()
+        market.clear_market_yf_cache()

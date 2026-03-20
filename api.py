@@ -207,6 +207,176 @@ def send_telegram_message(message):
 
 _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 
+# ==========================================================
+# [추가] 차트 데이터 인메모리 캐싱 시스템 (하이브리드 패치)
+# ==========================================================
+_CHART_CACHE = {}
+_CHART_CACHE_LOCK = threading.RLock()
+
+def clear_chart_cache():
+    """모든 차트 데이터 캐시 초기화 (수동 갱신용)"""
+    with _CHART_CACHE_LOCK:
+        _CHART_CACHE.clear()
+    if _is_screen_output_allowed():
+        config.console.print("[bold green]차트 데이터 캐시(메모리)가 전체 초기화되었습니다.[/bold green]")
+    logger.info("[Cache] 차트 데이터 캐시 수동 초기화")
+
+def _get_cached_chart(code, is_overseas, is_index, fetch_func):
+    """캐시된 차트를 반환하되, 당일 최신 캔들은 실시간 현재가로 덮어씌워 반환합니다."""
+    ttl_minutes = getattr(config, 'CHART_CACHE_TTL_MINUTES', 60)
+    if ttl_minutes <= 0:
+        return fetch_func()
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    cache_key = f"{code}_{is_overseas}_{is_index}"
+
+    with _CHART_CACHE_LOCK:
+        cached = _CHART_CACHE.get(cache_key)
+        if cached:
+            # 날짜 변경선 감지 (자정이 지나면 무효화)
+            if cached['date'] != today_str:
+                del _CHART_CACHE[cache_key]
+                cached = None
+            # TTL 감지
+            elif (now - cached['timestamp']).total_seconds() > (ttl_minutes * 60):
+                del _CHART_CACHE[cache_key]
+                cached = None
+
+    if cached:
+        df = cached['df'].copy()
+        try:
+            today_ymd = now.strftime("%Y%m%d")
+            last_date = str(df.iloc[-1]['date'])
+            
+            curr, open_p, high_p, low_p, vol, prev = 0, 0, 0, 0, 0, 0
+
+            def _safe_float(val):
+                if val is None: return 0.0
+                s = str(val).strip().replace(',', '')
+                if not s: return 0.0
+                try: return float(s)
+                except: return 0.0
+
+            # 1. 가장 가벼운 현재가 API로 오늘 데이터만 가져오기
+            if is_index and not is_overseas:
+                res = get_domestic_index_price(code)
+                if res and res.get('rt_cd') == '0':
+                    out = res.get('output', {})
+                    curr = _safe_float(out.get('bstp_nmix_prpr', 0))
+                    prev = _safe_float(out.get('bstp_nmix_prdy_clpr', 0))
+                    open_p, high_p, low_p = curr, curr, curr # 지수는 당일 고가/저가를 주지 않으므로 근사치 사용
+                    vol = 0
+            elif is_index and is_overseas:
+                # yfinance 단건 현재가 빠른 조회
+                try:
+                    fi = yf.Ticker(code).fast_info
+                    curr = _safe_float(fi.last_price)
+                    prev = _safe_float(fi.regular_market_previous_close)
+                    open_p, high_p, low_p = curr, curr, curr
+                    vol = _safe_float(getattr(fi, 'last_volume', 0))
+                except Exception as e:
+                    logger.debug(f"[Cache] yfinance fast_info error for {code}: {e}")
+                    pass
+            else:
+                cp_data = get_current_price_data(code, is_overseas)
+                if cp_data and cp_data.get('rt_cd') == '0':
+                    out = cp_data.get('output', {})
+                    if is_overseas:
+                        curr = _safe_float(out.get('last', 0))
+                        open_p = _safe_float(out.get('open', 0)) if out.get('open') else curr
+                        high_p = _safe_float(out.get('high', 0)) if out.get('high') else curr
+                        low_p = _safe_float(out.get('low', 0)) if out.get('low') else curr
+                        vol = _safe_float(out.get('tvol', 0) or out.get('vol', 0))
+                        diff = _safe_float(out.get('diff', 0))
+                        prev = curr - diff
+                    else:
+                        curr = _safe_float(out.get('stck_prpr', 0))
+                        open_p = _safe_float(out.get('stck_oprc', 0))
+                        high_p = _safe_float(out.get('stck_hgpr', 0))
+                        low_p = _safe_float(out.get('stck_lwpr', 0))
+                        vol = _safe_float(out.get('acml_vol', 0))
+                        prev = _safe_float(out.get('stck_prdy_clpr', 0))
+
+            if curr > 0:
+                # 2. 정합성(수정주가) 검증 로직: 전일 종가가 1.5% 이상 차이나면 오염된 캐시로 판단하고 파기
+                target_prev = float(df.iloc[-2]['close']) if len(df) >= 2 else 0
+                if last_date < today_ymd: target_prev = float(df.iloc[-1]['close'])
+                
+                if target_prev > 0 and prev > 0 and abs(target_prev - prev) / target_prev > 0.015:
+                    if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[Cache] {code} 수정주가 감지 (캐시:{target_prev} != 실시간:{prev}). 파기 후 재조회.")
+                    with _CHART_CACHE_LOCK:
+                        if cache_key in _CHART_CACHE: del _CHART_CACHE[cache_key]
+                    return fetch_func()
+
+                # 3. 실시간 가격 패치(Patch)
+                if last_date == today_ymd:
+                    # 오늘 날짜 행 덮어쓰기 (고가/저가는 캐시된 데이터와 비교하여 최대/최소 유지)
+                    old_high = float(df.iloc[-1]['high'])
+                    old_low = float(df.iloc[-1]['low'])
+                    high_p = max(old_high, high_p, curr)
+                    low_p = min(old_low, low_p, curr) if low_p > 0 else min(old_low, curr)
+                    df.loc[df.index[-1], ['open', 'high', 'low', 'close', 'volume']] = [open_p, high_p, low_p, curr, vol]
+                else:
+                    # 오늘 날짜 행이 없으면 새로 추가
+                    new_row = pd.DataFrame([{'date': today_ymd, 'open': open_p, 'high': high_p, 'low': low_p, 'close': curr, 'volume': vol}])
+                    df = pd.concat([df, new_row], ignore_index=True)
+                
+                return df
+        except Exception as e:
+            logger.debug(f"[Cache] Update failed for {code}: {e}")
+            pass # 실패 시 그냥 원본 받아옴
+            
+    df = fetch_func()
+    if df is not None and not df.empty:
+        with _CHART_CACHE_LOCK:
+            _CHART_CACHE[cache_key] = {
+                'df': df.copy(),
+                'timestamp': now,
+                'date': today_str
+            }
+    return df
+
+def prefetch_watchlists_async():
+    """백그라운드에서 관심 종목의 차트 데이터를 캐싱(Warming)합니다."""
+    def worker():
+        try:
+            import config
+            stocks = []
+            for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
+                stocks.extend([(s['code'], 'us' in key) for s in config.session.stock_data.get(key, [])])
+            
+            if not stocks: return
+            
+            # 중복 제거
+            unique_stocks = []
+            seen = set()
+            for c, ovs in stocks:
+                if c not in seen:
+                    seen.add(c)
+                    unique_stocks.append((c, ovs))
+            
+            logger.info(f"[Cache] 백그라운드 예열(Warming) 시작: 총 {len(unique_stocks)}종목")
+            
+            # 모의투자는 시스템 트레이딩 API 호출 방해를 피하기 위해 여유를 둠 (실전:0.1초, 모의:1.0초)
+            delay = 1.0 if config.session.is_simulation else 0.1
+            
+            for code, is_overseas in unique_stocks:
+                try:
+                    # 캐시 적중 시 API 호출 생략 처리 로직은 _get_cached_chart 안에 이미 포함됨
+                    get_chart_data(code, is_overseas=is_overseas)
+                except Exception as e:
+                    logger.debug(f"[Cache] 예열 중 오류({code}): {e}")
+                
+                time.sleep(delay)
+                
+            logger.info("[Cache] 백그라운드 예열 완료")
+        except Exception as e:
+            logger.error(f"[Cache] 예열 워커 오류: {e}")
+
+    t = threading.Thread(target=worker, daemon=True, name="CacheWarmer")
+    t.start()
+
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
@@ -1111,61 +1281,59 @@ def _get_intraday_chart_data(code, is_overseas):
 
 def get_domestic_index_chart(code):
     """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""
-    # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
-    url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
-    tr_id = "FHKUP03500100" # [수정] 업종기간별시세 TR ID (FHKST03010200은 주식분봉용)
-    
-    now = datetime.now()
-    today = now.strftime("%Y%m%d")
-    start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
-    
-    all_items = []
-    current_end_date = today
-    
-    retry_count = 0
-    while len(all_items) < 300 and retry_count < 10:
-        params = {
-            "FID_COND_MRKT_DIV_CODE": "U", # U: 업종(Index)
-            "FID_INPUT_ISCD": code,        # 0001(KOSPI), 1001(KOSDAQ)
-            "FID_INPUT_DATE_1": start_date,
-            "FID_INPUT_DATE_2": current_end_date,
-            "FID_PERIOD_DIV_CODE": "D"     # D: 일봉
-        }
+    def fetch_func():
+        # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
+        url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+        tr_id = "FHKUP03500100" 
         
-        data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
+        now = datetime.now()
+        today = now.strftime("%Y%m%d")
+        start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
         
-        if data.get('rt_cd') == '0':
-            items = data.get('output2', [])
-            if items:
-                all_items.extend(items)
-                # 다음 조회를 위해 종료일을 가장 과거 데이터의 전일로 설정
-                last_date = items[-1]['stck_bsop_date']
-                current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+        all_items = []
+        current_end_date = today
+        
+        retry_count = 0
+        while len(all_items) < 300 and retry_count < 10:
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": code,        
+                "FID_INPUT_DATE_1": start_date,
+                "FID_INPUT_DATE_2": current_end_date,
+                "FID_PERIOD_DIV_CODE": "D"     
+            }
+            
+            data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
+            
+            if data.get('rt_cd') == '0':
+                items = data.get('output2', [])
+                if items:
+                    all_items.extend(items)
+                    last_date = items[-1]['stck_bsop_date']
+                    current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                    retry_count += 1
+                    time.sleep(0.1) 
+                else:
+                    break
+            elif data.get('msg_cd') == 'EGW00201':
+                time.sleep(0.5)
                 retry_count += 1
-                time.sleep(0.1) # API 부하 방지
             else:
+                if not all_items:
+                    logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
                 break
-        elif data.get('msg_cd') == 'EGW00201':
-            time.sleep(0.5)
-            retry_count += 1
-        else:
-            if not all_items:
-                logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
-            break
 
-    if all_items:
-        df = pd.DataFrame(all_items)
-        # 중복 제거 (날짜 기준)
-        df.drop_duplicates(subset=['stck_bsop_date'], inplace=True)
-        
-        # 컬럼 매핑 (KIS API 응답 -> 내부 표준)
-        df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
-        df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
-        df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-        logger.debug(f"[API] 지수({code}) 조회 성공: {len(df)}건 반환 (반복 조회)")
-        return df.sort_values('date', ascending=True).reset_index(drop=True)
+        if all_items:
+            df = pd.DataFrame(all_items)
+            df.drop_duplicates(subset=['stck_bsop_date'], inplace=True)
+            df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
+            df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
+            df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+            return df.sort_values('date', ascending=True).reset_index(drop=True)
 
-    return pd.DataFrame()
+        return pd.DataFrame()
+
+    return _get_cached_chart(code, is_overseas=False, is_index=True, fetch_func=fetch_func)
 
 def get_domestic_index_price(code):
     """업종/지수 현재가 조회 (KIS API)"""

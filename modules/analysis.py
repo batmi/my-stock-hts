@@ -507,9 +507,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     ) as progress:
         task = progress.add_task(f"[green]{name}({code}) 데이터 분석 중...[/]", total=None)
 
-        # 1. 데이터 조회 (실시간 시세 반영된 일봉)
-        progress.update(task, description=f"[green]{name}({code}) 차트 데이터 조회 중...[/]")
-        df = api.get_chart_data(code, is_overseas=is_overseas)
+        # 1. [최적화] 데이터 병렬 조회 (차트 캐시 확인 및 체결강도 동시 호출)
+        progress.update(task, description=f"[green]{name}({code}) 지표 및 수급 데이터 병렬 수집 중...[/]")
+        
+        df = None
+        vol_strength = None
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
+            fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
+            
+            df = fut_chart.result()
+            vol_strength = fut_vol.result() if fut_vol else None
+            
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
@@ -541,12 +551,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
             weights=weights
         )
-
-        # [추가] 체결강도 조회 (국내주식인 경우만)
-        vol_strength = None
-        if not is_overseas:
-            progress.update(task, description="[green]실시간 체결강도 조회 중...[/]")
-            vol_strength = api.get_realtime_vol_strength(code)
 
     # 4. 결과 출력
     config.console.print()
@@ -773,7 +777,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_logic.add_row("적용 가중치", w_val, w_desc)
     
     # 상태 분류
-    table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
+    display_state = "역매수" if state == "역추세매수" else state
+    table_logic.add_row("상태 분류", f"[bold {s_color}]{display_state}[/]", state_reason)
     
     # 매수 조건 체크
     buy_score_limit = buy_score
@@ -867,7 +872,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         tech_info = (
             f"• 현재가: {price_str}\n"
-            f"• 시스템 상태: {state} (사유: {state_reason})\n"
+            f"• 시스템 상태: {display_state} (사유: {state_reason})\n"
             f"• 퀀트 점수: {score}점 / 10점 만점\n"
             f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str}"
         )
@@ -899,25 +904,26 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         code = item['code']
         name = item['name']
         
-        # 1. 시장 구분 확인 (필터링이 필요한 경우)
-        if market_filter:
-            try:
-                # 현재가 조회로 시장 구분 확인
-                cp_data = api.get_current_price_data(code, is_overseas=False)
-                if cp_data.get('rt_cd') != '0': return None
-                
-                mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
-                # 유가증권(KOSPI), 코스닥(KOSDAQ)
-                is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
-                is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
-                
-                if market_filter == "KOSPI" and not is_kospi: return None
-                if market_filter == "KOSDAQ" and not is_kosdaq: return None
-            except:
-                return None
+        # 1. [최적화] 시장 구분 확인(선택), 차트 데이터, 체결강도 병렬(동시) 조회
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+            fut_cp = ex.submit(api.get_current_price_data, code, False) if market_filter else None
+            fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
+            fut_vol = ex.submit(api.get_realtime_vol_strength, code)
+            
+            cp_data = fut_cp.result() if fut_cp else None
+            df = fut_chart.result()
+            try: vol_strength = fut_vol.result()
+            except: vol_strength = None
 
-        # 2. 차트 데이터 및 지표 계산
-        df = api.get_chart_data(code, is_overseas=False)
+        if market_filter and cp_data:
+            if cp_data.get('rt_cd') != '0': return None
+            mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
+            is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
+            is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
+            
+            if market_filter == "KOSPI" and not is_kospi: return None
+            if market_filter == "KOSDAQ" and not is_kosdaq: return None
+
         if df is None or df.empty: return None
         
         ind = indicators.calculate_indicators(df)
@@ -942,9 +948,6 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
         )
-        
-        # [추가] 체결강도 조회
-        vol_strength = api.get_realtime_vol_strength(code)
         
         # [추가] 개별 룰 여부 확인
         is_custom_rule = code in rules_map
@@ -993,19 +996,14 @@ def diagnose_group_stocks(market_filter=None):
     ) as progress:
         task = progress.add_task(f"[green]등록된 종목 병렬 분석 중{title_suffix}...[/]", total=len(targets))
         
-        # [최적화] 실전: 4개 스레드 병렬 처리, 모의: 순차 처리(단일 스레드)
-        if config.session.is_simulation:
-            for item in targets:
-                res = _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_map)
+        # [최적화] ThrottledSession 제어 기반으로 모의투자(2) / 실전(4) 통합 병렬 처리 허용
+        max_w = 2 if config.session.is_simulation else 4
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+            futures = [executor.submit(_diagnose_group_stock_worker, item, market_filter, restricted_stocks, rules_map) for item in targets]
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
                 if res: results.append(res)
                 progress.advance(task)
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(_diagnose_group_stock_worker, item, market_filter, restricted_stocks, rules_map) for item in targets]
-                for future in concurrent.futures.as_completed(futures):
-                    res = future.result()
-                    if res: results.append(res)
-                    progress.advance(task)
 
     # 결과 출력
     if not results:
@@ -1037,7 +1035,8 @@ def diagnose_group_stocks(market_filter=None):
     for r in results:
         s_color = r['state_color'].replace('[', '').replace(']', '')
         score_str = f"[{s_color}]{r['score']:.2f}점[/]"
-        state_str = f"[{s_color}]{r['state']}[/]"
+        display_state = "역매수" if r['state'] == "역추세매수" else r['state']
+        state_str = f"[{s_color}]{display_state}[/]"
         
         rsi_val = r['rsi']
         rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
@@ -1643,6 +1642,7 @@ def analyze_market_stocks(market_type):
                 macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
 
             s_color = item.get('state_color', '[white]').replace('[', '').replace(']', '')
+            display_state = "역매수" if item['state'] == "역추세매수" else item['state']
             
             # 52주 위치 색상
             pos = item.get('w52_pos', 0)
@@ -1677,7 +1677,7 @@ def analyze_market_stocks(market_type):
                 f"{int(item['price']):,}원",
                 f"{w_color}{pos:.1f}%[/]",
                 f"[{s_color}]{item['score']}[/]",
-                f"[{s_color}]{item['state']}[/]",
+                f"[{s_color}]{display_state}[/]",
                 trend_str,
                 rsi_str,
                 adx_str,
@@ -1763,25 +1763,17 @@ def save_all_market_analysis():
                 analyzed_data = []
                 task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
 
-                # [최적화] 실전: 멀티스레드 병렬 처리, 모의: 순차 처리(단일 스레드)
-                if config.session.is_simulation:
-                    for stock in stock_list:
+                max_w = 2 if config.session.is_simulation else 4
+                
+                # 1. 기술적 분석 병렬 처리
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                    futures = {executor.submit(_analyze_stock_worker, stock, None): stock for stock in stock_list}
+                    for future in concurrent.futures.as_completed(futures):
                         try:
-                            result = _analyze_stock_worker(stock, None)
-                            if result:
-                                analyzed_data.append(result)
+                            result = future.result()
+                            if result: analyzed_data.append(result)
                         except Exception: pass
                         progress.advance(task)
-                else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                        futures = {executor.submit(_analyze_stock_worker, stock, None): stock for stock in stock_list}
-                        for future in concurrent.futures.as_completed(futures):
-                            try:
-                                result = future.result()
-                                if result:
-                                    analyzed_data.append(result)
-                            except Exception: pass
-                            progress.advance(task)
                 
                 # 2. 업종 정보 조회 (Price Data) 및 데이터 정제
                 if analyzed_data:
@@ -1848,7 +1840,7 @@ def save_all_market_analysis():
                             "현재가(원)": item['price'],
                             "52주위치(%)": w52,
                             "점수": item['score'],
-                            "상태": item['state'],
+                            "상태": "역매수" if item['state'] == "역추세매수" else item['state'],
                             "상태사유": item['state_reason'],
                             "RSI": rsi,
                             "ADX": adx,
@@ -1860,22 +1852,14 @@ def save_all_market_analysis():
                             "비고": note # [추가]
                         }
 
-                    if config.session.is_simulation:
-                        for item in analyzed_data:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                        futures_sector = {executor.submit(fetch_sector_and_format, item): item for item in analyzed_data}
+                        for future in concurrent.futures.as_completed(futures_sector):
                             try:
-                                formatted_result = fetch_sector_and_format(item)
+                                formatted_result = future.result()
                                 results[market_type].append(formatted_result)
                             except Exception: pass
                             progress.advance(task_sector)
-                    else:
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                            futures_sector = {executor.submit(fetch_sector_and_format, item): item for item in analyzed_data}
-                            for future in concurrent.futures.as_completed(futures_sector):
-                                try:
-                                    formatted_result = future.result()
-                                    results[market_type].append(formatted_result)
-                                except Exception: pass
-                                progress.advance(task_sector)
 
         # 엑셀 저장
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1962,10 +1946,6 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
     """(내부함수) print_table용 단일 종목 데이터 조회 및 가공 워커"""
     try:
         name, code = item
-        curr_data = api.get_current_price_data(code, is_overseas)
-        chart_df = api.get_chart_data(code, is_overseas)
-        
-        ind = indicators.calculate_indicators(chart_df)
         w52_pos_str, per_str, pbr_str, shar_str = "-", "-", "-", "-"
         foreign_rate_str = "-"
         inv_str = "-"
@@ -1977,34 +1957,48 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         is_us_stock_context = is_overseas and ("주식" in title)
         is_us_etf_context = is_overseas and ("ETF" in title)
 
+        # [최적화] 필요한 다수의 API를 병렬(Fan-out)로 일제히 호출하여 체감 속도 극대화
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            fut_curr = ex.submit(api.get_current_price_data, code, is_overseas)
+            fut_chart = ex.submit(api.get_chart_data, code, is_overseas)
+            fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
+            fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex) if not is_overseas and not use_investor_data else None
+            fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
+            
+            curr_data = fut_curr.result()
+            chart_df = fut_chart.result()
+            inv_list = fut_inv.result() if fut_inv else None
+            rt_strength = None
+            if fut_vol:
+                try: rt_strength = fut_vol.result()
+                except: pass
+            detail = fut_detail.result() if fut_detail else None
+
+        ind = indicators.calculate_indicators(chart_df)
+
         if not is_overseas:
-            if use_investor_data:
-                inv_list = api.get_investor_trend(code)
-                if inv_list:
-                    p = api.safe_int(inv_list[0].get('prsn_ntby_qty'))
-                    f = api.safe_int(inv_list[0].get('frgn_ntby_qty'))
-                    i = api.safe_int(inv_list[0].get('orgn_ntby_qty'))
-                    def fmt_inv(val):
-                        if val == 0: return "[dim]-[/dim]"
-                        abs_val = abs(val)
-                        if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
-                        elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
-                        else: s = f"{val:,}"
-                        return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
-                    inv_str = f"{fmt_inv(p)} {fmt_inv(f)} {fmt_inv(i)}"
+            if use_investor_data and inv_list:
+                p = api.safe_int(inv_list[0].get('prsn_ntby_qty'))
+                f = api.safe_int(inv_list[0].get('frgn_ntby_qty'))
+                i = api.safe_int(inv_list[0].get('orgn_ntby_qty'))
+                def fmt_inv(val):
+                    if val == 0: return "[dim]-[/dim]"
+                    abs_val = abs(val)
+                    if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                    elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
+                    else: s = f"{val:,}"
+                    return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
+                inv_str = f"{fmt_inv(p)} {fmt_inv(f)} {fmt_inv(i)}"
             if not use_investor_data:
-                try:
-                    rt_strength = api.get_realtime_vol_strength(code, is_overseas, cached_ex)
-                    if rt_strength is not None:
-                        if rt_strength >= 150: s_color = "[magenta]"
-                        elif rt_strength >= 120: s_color = "[red]"
-                        elif rt_strength > 100: s_color = "[orange3]"
-                        elif rt_strength == 100: s_color = "[white]"
-                        elif rt_strength >= 80: s_color = "[yellow]"
-                        else: s_color = "[blue]"
-                        strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
-                    else: strength_display = " [dim][0%][/dim]"
-                except: strength_display = " [dim][0%][/dim]"
+                if rt_strength is not None:
+                    if rt_strength >= 150: s_color = "[magenta]"
+                    elif rt_strength >= 120: s_color = "[red]"
+                    elif rt_strength > 100: s_color = "[orange3]"
+                    elif rt_strength == 100: s_color = "[white]"
+                    elif rt_strength >= 80: s_color = "[yellow]"
+                    else: s_color = "[blue]"
+                    strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
+                else: strength_display = " [dim][0%][/dim]"
             if curr_data.get('rt_cd') == '0':
                 out = curr_data.get('output', {})
                 foreign_rate_str = f"{out.get('hts_frgn_ehrt', '-')}%"
@@ -2020,9 +2014,6 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                         w52_pos_str = f"{w_color}{pos:.1f}%[/]"
                 except: pass
         else:
-            detail = api.fetch_overseas_detail_price(code, cached_ex)
-            
-            # [추가] 원인 분석을 위한 디버그 로그 (상장주수 0.00 등 데이터 확인용)
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ANALYSIS_DEBUG] {code} Detail: {detail} | StockCtx:{is_us_stock_context} EtfCtx:{is_us_etf_context}")
 
@@ -2093,6 +2084,9 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds)
             
+            if class_name == "역추세매수":
+                class_name = "역매수"
+
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
 
@@ -2237,7 +2231,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         logger.error(f"[{code}] 분석 오류: {e}")
         return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
 
-def print_table(title, data_list, is_overseas=False):
+def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
     if not is_overseas and data_list:
@@ -2255,25 +2249,30 @@ def print_table(title, data_list, is_overseas=False):
                 if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
     
     # [이동] 적응형 임계값 준비 (테이블 생성 전으로 이동)
-    market_regime_adj = {}
     use_adaptive = False
     if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
         use_adaptive = True
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=config.console,
-                transient=True
-            ) as progress:
-                progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
-                _, kospi_adj = get_market_regime("KOSPI")
-                _, kosdaq_adj = get_market_regime("KOSDAQ")
-                market_regime_adj["KOSPI"] = kospi_adj
-                market_regime_adj["KOSDAQ"] = kosdaq_adj
-        except:
+        if market_regime_adj is None:
+            market_regime_adj = {}
+            try:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    console=config.console,
+                    transient=True
+                ) as progress:
+                    progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
+                    _, kospi_adj = get_market_regime("KOSPI")
+                    _, kosdaq_adj = get_market_regime("KOSDAQ")
+                    market_regime_adj["KOSPI"] = kospi_adj
+                    market_regime_adj["KOSDAQ"] = kosdaq_adj
+            except:
+                use_adaptive = False
+        elif not market_regime_adj:
             use_adaptive = False
+    elif market_regime_adj is None:
+        market_regime_adj = {}
 
     display_title = f"\n{title}" + (" [bold magenta](*)[/]" if use_adaptive else "")
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -2320,7 +2319,8 @@ def print_table(title, data_list, is_overseas=False):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [최적화] 실전: 4개 스레드 병렬 처리, 모의: 순차 처리(단일 스레드)
+    # [최적화] 병렬 처리 통합 (모의: 2, 실전: 4 스레드)
+    max_w = 2 if config.session.is_simulation else 4
     try:
         with Progress(
             SpinnerColumn(),
@@ -2333,45 +2333,32 @@ def print_table(title, data_list, is_overseas=False):
             task = progress.add_task(f"[cyan]{title}[/cyan]", total=len(data_list))
             results = [None] * len(data_list)
 
-            if config.session.is_simulation:
-                for idx, item in enumerate(data_list):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures = [
+                    executor.submit(
+                        _print_table_worker, 
+                        item, 
+                        title,
+                        is_overseas, 
+                        use_investor_data, 
+                        restricted_stocks, 
+                        rules_map, 
+                        market_regime_adj
+                    ) for item in data_list
+                ]
+                
+                future_to_idx = {f: i for i, f in enumerate(futures)}
+                
+                for future in concurrent.futures.as_completed(futures):
+                    idx = future_to_idx[future]
                     try:
-                        results[idx] = _print_table_worker(
-                            item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj
-                        )
+                        results[idx] = future.result()
                     except Exception as e:
-                        logger.error(f"Print table sequential worker error: {e}")
+                        logger.error(f"Print table worker error: {e}")
                         name, code = data_list[idx]
                         results[idx] = ([name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False)
+                    
                     progress.advance(task)
-            else:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    futures = [
-                        executor.submit(
-                            _print_table_worker, 
-                            item, 
-                            title, # [수정] title 전달
-                            is_overseas, 
-                            use_investor_data, 
-                            restricted_stocks, 
-                            rules_map, 
-                            market_regime_adj
-                        ) for item in data_list
-                    ]
-                    
-                    # 순서 보장을 위해 인덱스 매핑 후 as_completed 사용
-                    future_to_idx = {f: i for i, f in enumerate(futures)}
-                    
-                    for future in concurrent.futures.as_completed(futures):
-                        idx = future_to_idx[future]
-                        try:
-                            results[idx] = future.result()
-                        except Exception as e:
-                            logger.error(f"Print table worker error: {e}")
-                            name, code = data_list[idx]
-                            results[idx] = ([name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False)
-                        
-                        progress.advance(task)
             
             # 결과 테이블 추가
             for result_item in results:
@@ -2514,9 +2501,30 @@ def show_stock_analysis():
                 now_str = datetime.now().strftime("%H:%M:%S")
                 config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
             
+            # [최적화] 조회 주기마다 한 번만 시장 국면 분석 수행 (중복 API 호출 방지)
+            shared_regime_adj = None
+            has_domestic = any(not is_ovs for _, _, is_ovs in target_list)
+            if has_domestic and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                shared_regime_adj = {}
+                try:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        BarColumn(),
+                        console=config.console,
+                        transient=True
+                    ) as progress:
+                        progress.add_task("[bold green]시장 국면 분석 중 (KIS API)...[/]", total=None)
+                        _, k_adj = get_market_regime("KOSPI")
+                        _, q_adj = get_market_regime("KOSDAQ")
+                        shared_regime_adj["KOSPI"] = k_adj
+                        shared_regime_adj["KOSDAQ"] = q_adj
+                except:
+                    pass
+
             try:
                 for title, d_list, is_ovs in target_list:
-                    if d_list: print_table(title, d_list, is_ovs)
+                    if d_list: print_table(title, d_list, is_ovs, market_regime_adj=shared_regime_adj)
             except Exception as e:
                 logger.error(f"분석 루프 실행 중 오류: {e}")
                 config.console.print(f"[red]분석 중 오류 발생: {e}[/red]")

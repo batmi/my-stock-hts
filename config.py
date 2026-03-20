@@ -190,6 +190,12 @@ CONCLUSION_CHECK_ACTIVE_DURATION = 60
 # 지정가 주문 후 이 시간이 지나도 체결되지 않으면 주문을 취소하여 현금을 확보합니다. (기본값: 600초 = 10분)
 UNFILLED_ORDER_CANCEL_SECONDS = 120
 
+# [추가] 차트 데이터 메모리 캐시 TTL (분)
+# 일봉 데이터 조회 시 불필요한 네트워크 통신을 줄이고 시스템 전체의 응답 속도를 높입니다.
+# 당일 현재가는 실시간으로 갱신되며, 과거 데이터만 캐싱됩니다. 자정(날짜 변경선)이 지나면 자동 무효화됩니다.
+# (기본값: 180분, 0으로 설정 시 캐시 미사용)
+CHART_CACHE_TTL_MINUTES = 180
+
 # ==========================================================
 # [설정] 종목 분석 및 상태 분류 임계값
 # ==========================================================
@@ -523,6 +529,7 @@ def load_dynamic_config():
             global UNFILLED_ORDER_CANCEL_SECONDS
             global SYSTEM_MAX_HOLDINGS
             global SLIPPAGE_RATE
+            global CHART_CACHE_TTL_MINUTES
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
             if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
@@ -556,6 +563,7 @@ def load_dynamic_config():
             if "VOLATILITY_SCALING_MIN" in data: VOLATILITY_SCALING_MIN = data.get("VOLATILITY_SCALING_MIN", 0.5)
             
             if "SLIPPAGE_RATE" in data: SLIPPAGE_RATE = data["SLIPPAGE_RATE"]
+            if "CHART_CACHE_TTL_MINUTES" in data: CHART_CACHE_TTL_MINUTES = data["CHART_CACHE_TTL_MINUTES"]
 
         except Exception as e:
             print(f"[Config] 동적 설정 로드 실패: {e}")

@@ -1321,11 +1321,12 @@ def run_backtest():
             elif state == "관망": state_color = "white"
             elif state == "주의": state_color = "yellow"
             elif state == "매도": state_color = "blue"
+            display_state = "역매수" if state == "역추세매수" else state
 
             adx_str = f"{m.get('adx', 0):.1f}"
             cci_str = f"{m.get('cci', 0):.1f}"
             price_str = fmt_money(m.get('price', 0))
-            m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{m['state']}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+            m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{display_state}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
             
         config.console.print(m_table)
 
