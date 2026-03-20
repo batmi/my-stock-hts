@@ -502,6 +502,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:
@@ -880,6 +881,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             console=config.console,
             transient=True
         ) as progress:
@@ -2535,6 +2537,7 @@ def show_stock_analysis():
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
                     console=config.console,
                     transient=True
                 ) as progress:

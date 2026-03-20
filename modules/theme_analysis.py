@@ -602,6 +602,7 @@ def _analyze_stock_ui():
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             console=config.console,
             transient=True
         ) as progress:
