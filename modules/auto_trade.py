@@ -552,9 +552,16 @@ class ConclusionMonitor:
                                                 adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
                                                 cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
                                                 
-                                                strategy_info = f"\n\n📊 [전략 지표]{rule_tag}\n• 점수: {score}점 ({state})\n• 상태: {state_reason}\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                                strategy_info = f"\n\n📊 [전략 지표]{rule_tag}\n점수: {score}점 ({state})\n상태: {state_reason}\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                         except Exception as e:
                                             logger.error(f"체결 지표 계산 중 오류: {e}")
+                                            
+                                    if strategy_info:
+                                        strategy_info += cur_info
+                                        cur_info = ""
+                                    elif cur_info:
+                                        strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
+                                        cur_info = ""
 
                                     # 알림 발송
                                     title_tag = "[체결 알림]"
@@ -573,7 +580,7 @@ class ConclusionMonitor:
                                         price_str = f"{avg_price:,.0f}원"
                                         amt_str = f"{int(exec_amt):,}원"
 
-                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주 / 단가: {price_str} / 금액: {amt_str}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {odno}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
@@ -791,8 +798,15 @@ class ConclusionMonitor:
                                 rsi_str = f"{ind.get('rsi', 0):.1f}"
                                 adx_str = f"{ind.get('adx', 0):.1f}"
                                 cci_str = f"{ind.get('cci', 0):.1f}"
-                                strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n점수: {score}점\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                         except: pass
+                                
+                    if strategy_info:
+                        strategy_info += cur_info
+                        cur_info = ""
+                    elif cur_info:
+                        strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
+                        cur_info = ""
 
                     exec_amt = int(price * qty)
                     price_fmt = f"{price:,.0f}원" if price > 0 else "시장가"
@@ -806,7 +820,7 @@ class ConclusionMonitor:
                         if p_amt is not None and p_rate is not None:
                             profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                             
-                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
                 except Exception as e:
@@ -1018,7 +1032,7 @@ class OrderManager:
                 if rule:
                     title_tag += " [개별]"
                 
-                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display} {qty}주 ({price_log})"
+                msg = f"🚀 {title_tag} {type_str.upper()} {stock_display}\n수량: {qty}주\n단가: {price_log}"
                 if price > 0:
                     msg += f"\n금액: {int(price * qty):,}원"
                 msg += f"\n주문번호: {odno}"
@@ -2596,15 +2610,13 @@ class AutoTrader:
                     holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
         except Exception: pass
         
-        holding_count = max(0, stats['buy_count'] - stats['sell_count'])
-
         if stats['sell_trades_exist']:
             win_rate = stats['win_rate']
             total_profit = stats['total_profit']
             avg_profit_rate = stats['avg_profit_rate']
             
             msg += f"[매매 현황 요약]\n"
-            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']} / 보유 {holding_count})\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
             msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
             msg += f"건당 평균 수익률: {avg_profit_rate:+.2f}%\n"
             msg += f"건당 평균 보유: {stats['avg_holding_str']}\n"
@@ -2632,7 +2644,7 @@ class AutoTrader:
                 msg += f"총 평가손익: {holdings_summary['tot_profit']:+,}원 ({holdings_summary['rate']:+.2f}%)\n"
         else:
             msg += f"[매매 현황 요약]\n"
-            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']} / 보유 {holding_count})\n"
+            msg += f"총 매매: {stats['total_trades']}건 (매수 {stats['buy_count']} / 매도 {stats['sell_count']})\n"
             msg += "(청산된 내역이 없어 수익률 산출 불가)\n"
             
             if holdings_summary:

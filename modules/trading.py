@@ -449,8 +449,15 @@ def show_open_orders():
                                             rsi_str = f"{ind.get('rsi', 0):.1f}"
                                             adx_str = f"{ind.get('adx', 0):.1f}"
                                             cci_str = f"{ind.get('cci', 0):.1f}"
-                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n점수: {score}점\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                     except: pass
+                                    
+                                if strategy_info:
+                                    strategy_info += cur_info
+                                    cur_info = ""
+                                elif cur_info:
+                                    strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
+                                    cur_info = ""
 
                                 exec_amt = price * qty
                                 price_fmt = f"${price:,.2f}" if is_overseas and price > 0 else (f"{price:,.0f}원" if price > 0 else "시장가")
@@ -464,7 +471,8 @@ def show_open_orders():
                                     if p_amt is not None and p_rate is not None:
                                         profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                                         
-                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                                db_odno = db_order.get('odno', '')
+                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {db_odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
