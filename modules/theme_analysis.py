@@ -482,10 +482,8 @@ def _analyze_with_gemini_ui():
         panel = Panel(md, title="실시간 테마 분석 리포트", border_style="cyan", padding=(1, 2), width=120)
         
         # 화면 출력 시 양쪽 마진 적용 (Padding: top, right, bottom, left)
+        config.console.print()
         config.console.print(Padding(panel, (0, 4)))
-        
-        config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
-        config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
 
 def _analyze_with_custom_prompt_ui():
     """사용자 정의 프롬프트로 Gemini 분석 실행"""
@@ -504,10 +502,8 @@ def _analyze_with_custom_prompt_ui():
         if result:
             md = Markdown(result)
             panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2), width=120)
+            config.console.print()
             config.console.print(Padding(panel, (0, 4)))
-            
-            config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
-            config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
 
 def _analyze_stock_ui():
     """개별 종목 AI 심층 진단 UI"""
@@ -655,9 +651,8 @@ def _analyze_stock_ui():
         if answer:
             md = Markdown(answer)
             panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+            config.console.print()
             config.console.print(Padding(panel, (0, 4)))
-            config.console.print("\n[dim]※ 위 내용은 AI가 실시간 웹 검색을 통해 생성한 정보입니다.[/dim]", justify="center")
-            config.console.print("[dim]   실제 투자 시에는 반드시 HTS/MTS에서 시세를 다시 확인하시기 바랍니다.[/dim]", justify="center")
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
             
