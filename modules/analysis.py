@@ -1485,20 +1485,29 @@ def analyze_market_stocks(market_type):
                     else:
                         progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock_info['name']}({stock_info['code']}) - 데이터 부족 또는 API 응답 없음[/dim red]")
 
-                # [최적화] 전체 종목 분석 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
-                max_w = 2 if config.session.is_simulation else 4
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                    futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
-                    for future in concurrent.futures.as_completed(futures):
+                if config.session.is_simulation:
+                    for stock in stock_list:
                         completed_count += 1
-                        stock = futures[future]
                         try:
-                            result = future.result()
+                            result = _analyze_stock_worker(stock, params)
                             _process_result(stock, result)
                         except Exception as e:
                             progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [오류] {stock['name']}({stock['code']}) - {e}[/dim red]")
                         
                         progress.advance(task)
+                else:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                        futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
+                        for future in concurrent.futures.as_completed(futures):
+                            completed_count += 1
+                            stock = futures[future]
+                            try:
+                                result = future.result()
+                                _process_result(stock, result)
+                            except Exception as e:
+                                progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [오류] {stock['name']}({stock['code']}) - {e}[/dim red]")
+                            
+                            progress.advance(task)
                     
         except KeyboardInterrupt:
             config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
@@ -1536,13 +1545,16 @@ def analyze_market_stocks(market_type):
                 except: pass
                 return '-'
 
-            # [최적화] 업종 정보 조회 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
-            max_w_sec = 2 if config.session.is_simulation else 4
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w_sec) as executor:
-                future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
-                for future in concurrent.futures.as_completed(future_to_idx):
-                    buy_candidates[future_to_idx[future]]['sector'] = future.result()
+            if config.session.is_simulation:
+                for i, item in enumerate(buy_candidates):
+                    buy_candidates[i]['sector'] = fetch_sector(item)
                     progress.advance(task)
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                    future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
+                    for future in concurrent.futures.as_completed(future_to_idx):
+                        buy_candidates[future_to_idx[future]]['sector'] = future.result()
+                        progress.advance(task)
         
         # 새로 분석했거나 sector 정보가 추가된 경우 DB 저장
         if not use_cache:
