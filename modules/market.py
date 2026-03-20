@@ -658,10 +658,6 @@ def _show_market_indices_core(target_indices=None):
                 # 그룹 처리 사이 인터럽트 감지 기회 제공
                 time.sleep(0.1)
 
-        # 2. Tickers 객체 생성 (fast_info 접근용)
-        all_tickers_list = list(indices_map.values())
-        yf_tickers = yf.Tickers(" ".join(all_tickers_list))
-
         # 테이블 생성
         table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table.add_column("지수명", justify="left", style="white")
@@ -790,10 +786,10 @@ def _show_market_indices_core(target_indices=None):
                     use_fast_info = False
                     if not is_domestic_index: # KIS API 데이터(국내 지수)는 fast_info 스킵
                         try:
-                            ticker_obj = yf_tickers.tickers[ticker]
-                            fi = ticker_obj.fast_info
-                            last_price = fi.last_price
-                            prev_close = fi.regular_market_previous_close # 공식 전일 종가
+                            fi = api.get_yf_fast_info(ticker)
+                            if fi:
+                                last_price = fi['last_price']
+                                prev_close = fi['regular_market_previous_close']
                             
                             # [추가] fast_info 값 로깅
                             if is_target_debug:
@@ -821,8 +817,8 @@ def _show_market_indices_core(target_indices=None):
                                 current = float(last_price)
                                 prev = float(prev_close)
                                 
-                                if hasattr(fi, 'year_high') and fi.year_high is not None and not math.isnan(fi.year_high):
-                                    high_52 = max(high_52, float(fi.year_high))
+                                if fi.get('year_high') is not None and not math.isnan(fi['year_high']):
+                                    high_52 = max(high_52, float(fi['year_high']))
                                 else:
                                     high_52 = max(high_52, current)
                                 

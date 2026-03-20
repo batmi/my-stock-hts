@@ -9,6 +9,7 @@ import urllib3
 import re
 import os
 import threading
+import concurrent.futures
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
@@ -208,6 +209,41 @@ def send_telegram_message(message):
 _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 
 # ==========================================================
+# [추가] 실시간 단건 API용 초단기 마이크로 캐시 (Micro-Cache)
+# 화면 렌더링 중 발생하는 동일 종목의 동시다발적 중복 호출 방지 (TTL: 3~10초)
+# ==========================================================
+_MICRO_CACHE = {}
+_MICRO_CACHE_LOCK = threading.RLock()
+
+def _get_micro_cache(key, ttl=60.0): # [수정] 잦은 중복 호출 방지를 위해 기본 TTL 상향
+    with _MICRO_CACHE_LOCK:
+        item = _MICRO_CACHE.get(key)
+        if item and time.time() - item['time'] < ttl:
+            return item['data']
+    return None
+
+def _set_micro_cache(key, data):
+    with _MICRO_CACHE_LOCK:
+        _MICRO_CACHE[key] = {'time': time.time(), 'data': data}
+
+def get_yf_fast_info(code):
+    """yfinance 단건 조회(fast_info) 중복 호출 방지용 캐싱 래퍼"""
+    cache_key = f"yf_fi_{code}"
+    cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] TTL 상향
+    if cached: return cached
+    try:
+        fi = yf.Ticker(code).fast_info
+        data = {
+            'last_price': getattr(fi, 'last_price', None),
+            'regular_market_previous_close': getattr(fi, 'regular_market_previous_close', None),
+            'last_volume': getattr(fi, 'last_volume', 0),
+            'year_high': getattr(fi, 'year_high', None)
+        }
+        _set_micro_cache(cache_key, data)
+        return data
+    except Exception: return None
+
+# ==========================================================
 # [추가] 차트 데이터 인메모리 캐싱 시스템 (하이브리드 패치)
 # ==========================================================
 _CHART_CACHE = {}
@@ -270,11 +306,12 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
             elif is_index and is_overseas:
                 # yfinance 단건 현재가 빠른 조회
                 try:
-                    fi = yf.Ticker(code).fast_info
-                    curr = _safe_float(fi.last_price)
-                    prev = _safe_float(fi.regular_market_previous_close)
-                    open_p, high_p, low_p = curr, curr, curr
-                    vol = _safe_float(getattr(fi, 'last_volume', 0))
+                    fi = get_yf_fast_info(code)
+                    if fi:
+                        curr = _safe_float(fi['last_price'])
+                        prev = _safe_float(fi['regular_market_previous_close'])
+                        open_p, high_p, low_p = curr, curr, curr
+                        vol = _safe_float(fi['last_volume'])
                 except Exception as e:
                     logger.debug(f"[Cache] yfinance fast_info error for {code}: {e}")
                     pass
@@ -337,10 +374,86 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
             }
     return df
 
+def prefetch_multiple_current_prices(codes, is_overseas=False):
+    """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)"""
+    if not codes: return
+    
+    if is_overseas:
+        tickers_str = " ".join(codes)
+        try:
+            tickers_obj = yf.Tickers(tickers_str)
+            for code in codes:
+                try:
+                    fi = tickers_obj.tickers[code].fast_info
+                    data = {
+                        'last_price': getattr(fi, 'last_price', None),
+                        'regular_market_previous_close': getattr(fi, 'regular_market_previous_close', None),
+                        'last_volume': getattr(fi, 'last_volume', 0),
+                        'year_high': getattr(fi, 'year_high', None)
+                    }
+                    _set_micro_cache(f"yf_fi_{code}", data)
+                except: pass
+        except Exception as e:
+            logger.debug(f"[Cache] yfinance bulk fetch error: {e}")
+    else:
+        def fetch_worker(code):
+            try: get_current_price_data(code, False)
+            except: pass
+            try: get_investor_trend(code)
+            except: pass
+            try: get_realtime_vol_strength(code)
+            except: pass
+            
+        max_w = 4 if config.session.is_simulation else 10
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+            list(executor.map(fetch_worker, codes))
+
 def prefetch_watchlists_async():
     """백그라운드에서 관심 종목의 차트 데이터를 캐싱(Warming)합니다."""
     def worker():
         try:
+            # [추가] 1. 글로벌 지수 데이터 백그라운드 예열 (시장 지수 메뉴 속도 극대화)
+            logger.info("[Cache] 글로벌 지수 데이터 백그라운드 예열 시작")
+            from modules import market
+            indices_tickers = [ticker for name, ticker in market.ALL_INDICES]
+            
+            chunk_size = 15
+            now = datetime.now()
+            for i in range(0, len(indices_tickers), chunk_size):
+                chunk = indices_tickers[i:i+chunk_size]
+                tickers_str = " ".join(chunk)
+                try:
+                    d_data = fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
+                    i_data = fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
+                    
+                    with market._MARKET_YF_CACHE_LOCK:
+                        for t_fetch in chunk:
+                            d_df = pd.DataFrame()
+                            i_df = pd.DataFrame()
+                            try:
+                                if not d_data.empty:
+                                    if isinstance(d_data.columns, pd.MultiIndex):
+                                        if t_fetch in d_data.columns.levels[0]: d_df = d_data[t_fetch].copy()
+                                    elif 'Close' in d_data.columns or 'close' in d_data.columns: d_df = d_data.copy()
+                            except: pass
+                            
+                            try:
+                                if not i_data.empty:
+                                    if isinstance(i_data.columns, pd.MultiIndex):
+                                        if t_fetch in i_data.columns.levels[0]: i_df = i_data[t_fetch].copy()
+                                    elif 'Close' in i_data.columns or 'close' in i_data.columns: i_df = i_data.copy()
+                            except: pass
+                            
+                            stored_data = {'daily': d_df, 'intra': i_df}
+                            if not d_df.empty:
+                                market._MARKET_YF_CACHE[t_fetch] = {
+                                    'data': stored_data,
+                                    'time': now,
+                                    'date': now.strftime("%Y-%m-%d")
+                                }
+                except Exception as e:
+                    logger.debug(f"[Cache] 지수 예열 오류: {e}")
+
             import config
             stocks = []
             for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
@@ -376,6 +489,7 @@ def prefetch_watchlists_async():
 
     t = threading.Thread(target=worker, daemon=True, name="CacheWarmer")
     t.start()
+    return t # [수정] 테스트 코드에서 제어할 수 있도록 스레드 객체 반환
 
 class ThrottledSession(requests.Session):
     def __init__(self):
@@ -1337,16 +1451,28 @@ def get_domestic_index_chart(code):
 
 def get_domestic_index_price(code):
     """업종/지수 현재가 조회 (KIS API)"""
+    cache_key = f"idx_price_{code}"
+    cached = _get_micro_cache(cache_key)
+    if cached: return cached
+
     url = "uapi/domestic-stock/v1/quotations/inquire-index-price"
     params = {
         "FID_COND_MRKT_DIV_CODE": "U",
         "FID_INPUT_ISCD": code
     }
-    return call_api(url, "domestic", "quotations", "index_price", params=params)
+    res = call_api(url, "domestic", "quotations", "index_price", params=params)
+    _set_micro_cache(cache_key, res)
+    return res
 
 def get_current_price_data(code, is_overseas):
+    cache_key = f"cp_{code}_{is_overseas}"
+    cached = _get_micro_cache(cache_key)
+    if cached: return cached
+
     if not is_overseas:
-        return call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
+        res = call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
+        _set_micro_cache(cache_key, res)
+        return res
     
     if is_overseas:
         cached_ex = config.session.exchange_cache.get(code)
@@ -1361,8 +1487,11 @@ def get_current_price_data(code, is_overseas):
             if data.get('rt_cd') == '0':
                 if float(data.get('output', {}).get('last', 0) or 0) > 0:
                     if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                    _set_micro_cache(cache_key, data)
                     return data
-        return {'rt_cd': '9999'}
+        res_err = {'rt_cd': '9999'}
+        _set_micro_cache(cache_key, res_err)
+        return res_err
     return {'rt_cd': '9999'}
 
 def get_current_price(code, is_overseas):
@@ -1378,6 +1507,10 @@ def get_current_price(code, is_overseas):
     return 0
 
 def get_investor_trend(code, market_div="J"):
+    cache_key = f"inv_{code}_{market_div}"
+    cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 수급 정보 유지 시간 연장
+    if cached is not None: return cached
+
     # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용
     action = "investor"
     url = "uapi/domestic-stock/v1/quotations/inquire-investor"
@@ -1403,7 +1536,9 @@ def get_investor_trend(code, market_div="J"):
         
         if data.get('rt_cd') == '0':
             output = data.get('output', [])
-            if output: return output
+            if output:
+                _set_micro_cache(cache_key, output)
+                return output
             
         # 2. 실패/빈값 시 현재가 투자자 조회 (FHKUP01010900) Fallback
         if config.FILE_DEBUG_LEVEL == "DEBUG":
@@ -1426,6 +1561,7 @@ def get_investor_trend(code, market_div="J"):
         if isinstance(output, dict):
             output = [output]
         
+        _set_micro_cache(cache_key, output)
         return output
             
     return []
@@ -1446,17 +1582,28 @@ def get_daily_foreign_rate(code):
 
 def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     if is_overseas: return None
+
+    cache_key = f"vol_{code}"
+    cached = _get_micro_cache(cache_key)
+    if cached is not None: return cached
     
     for _ in range(3):
         data = call_api("uapi/domestic-stock/v1/quotations/inquire-ccnl", "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
         if data.get('rt_cd') == '0':
             items = data.get('output', [])
-            if items and items[0].get('tday_rltv'): return float(str(items[0].get('tday_rltv')).replace(',', ''))
+            if items and items[0].get('tday_rltv'):
+                val = float(str(items[0].get('tday_rltv')).replace(',', ''))
+                _set_micro_cache(cache_key, val)
+                return val
         elif data.get('msg_cd') == 'EGW00201': time.sleep(0.2)
         else: time.sleep(0.2)
     return None
 
 def fetch_overseas_detail_price(code, excd):
+    cache_key = f"detail_{code}"
+    cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 상세 정보 유지 시간 연장
+    if cached is not None: return cached
+
     exchanges = []
     if excd: exchanges.append(excd)
     for e in ["NASD", "NAS", "NYSE", "NYS", "AMEX", "AMS"]:
@@ -1469,6 +1616,7 @@ def fetch_overseas_detail_price(code, excd):
             output = data.get('output', {})
             if output.get('h52p') and float(output.get('h52p')) > 0:
                 if target_excd != excd: config.session.update_cache_and_save(code, target_excd)
+                _set_micro_cache(cache_key, output)
                 return output
     return {}
 
