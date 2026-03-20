@@ -883,7 +883,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             
         if answer:
             md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=100)
+            
+            table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
+            print_table(table_title, [(name, code)], is_overseas=is_overseas)
+            
+            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
             config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
@@ -2386,16 +2390,15 @@ def print_table(title, data_list, is_overseas=False):
 
     try:
         config.console.print(table, crop=False)
-        sys.stdout.flush()
         
         if use_adaptive:
             config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
-
         if any_restricted:
             config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
-
         if any_custom_rule:
             config.console.print("[dim] (+) 시스템 트레이딩 시 개별 룰이 적용된 종목입니다.[/dim]")
+            
+        sys.stdout.flush()
     except Exception as e:
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
