@@ -3485,10 +3485,20 @@ class AutoTrader:
         # [추가] 트레이딩 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
 
-        # [추가] Rate Limit 준수를 위한 딜레이 설정
-        # 모의투자: 초당 2건 -> 0.5초 + 여유 / 실전투자: 초당 20건 -> 0.05초 + 여유
+        # [최적화] 보유 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
+        codes_to_prefetch = []
+        for item in holdings:
+            code = item['pdno']
+            qty = api.safe_int(item.get('ord_psbl_qty'))
+            if not self.order_manager.is_pending(code) and qty > 0:
+                codes_to_prefetch.append(code)
+                
+        if codes_to_prefetch:
+            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False)
+
+        # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
-        safe_delay = (1.0 / tps) * 1.2  # 20% 여유 버퍼
+        safe_delay = (1.0 / tps) * 0.1  
         
         # [추가] 시장 국면 판단 (적응형 임계값용) - 매도 분석 시에도 상태 분류를 위해 필요
         market_regime_adj = {}
@@ -3859,10 +3869,6 @@ class AutoTrader:
         # [추가] 트레이딩 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
         
-        # [추가] Rate Limit 준수를 위한 딜레이 설정
-        tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
-        safe_delay = (1.0 / tps) * 1.2  # 20% 여유 버퍼
-        
         # [추가] 시장 국면 판단 (적응형 임계값용)
         market_regime_adj = {} # Market Type -> Score Adj
         if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
@@ -3871,6 +3877,30 @@ class AutoTrader:
                 market_regime_adj[m_type] = adj
                 if self.consecutive_errors == 0:
                     self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
+
+        # [최적화] 분석 대상 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
+        codes_to_prefetch = []
+        for item in targets:
+            code = item['code']
+            if code in restricted_stocks or code in holding_codes or self.order_manager.is_pending(code):
+                continue
+            
+            # 시장 필터링 적용 시 하락장 종목 제외 (API 호출 절약)
+            if getattr(config, 'USE_MARKET_FILTER', True):
+                market_type = self._get_stock_market_type(code)
+                market_stat = self.market_index_status.get(market_type)
+                if market_stat and isinstance(market_stat, dict):
+                    if not market_stat.get('is_healthy', True):
+                        continue
+            
+            codes_to_prefetch.append(code)
+            
+        if codes_to_prefetch:
+            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False)
+
+        # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
+        tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
+        safe_delay = (1.0 / tps) * 0.1
 
         # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
         # (실전: 5개, 모의: 2개 - ThrottledSession이 병목 없이 안전하게 제어함)

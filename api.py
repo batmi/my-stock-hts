@@ -374,7 +374,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
             }
     return df
 
-def prefetch_multiple_current_prices(codes, is_overseas=False):
+def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True):
     """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)"""
     if not codes: return
     
@@ -399,8 +399,9 @@ def prefetch_multiple_current_prices(codes, is_overseas=False):
         def fetch_worker(code):
             try: get_current_price_data(code, False)
             except: pass
-            try: get_investor_trend(code)
-            except: pass
+            if include_investor:
+                try: get_investor_trend(code)
+                except: pass
             try: get_realtime_vol_strength(code)
             except: pass
             

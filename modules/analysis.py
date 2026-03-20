@@ -2319,19 +2319,6 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [추가] 출력할 종목들의 실시간 단건 데이터를 사전에 일괄 수집(Micro-Cache Warming)
-    # 이 과정을 통해 아래 개별 워커들의 병목(API Throttling 대기) 현상이 사라집니다.
-    codes = [item[1] for item in data_list]
-    if codes:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=config.console,
-            transient=True
-        ) as progress:
-            progress.add_task(f"[bold green]다중 종목 실시간 데이터 일괄 수집 중...[/]", total=None)
-            api.prefetch_multiple_current_prices(codes, is_overseas)
-
     # [최적화] 병렬 처리 통합 (모의: 2, 실전: 4 스레드)
     max_w = 2 if config.session.is_simulation else 4
     try:
@@ -2534,6 +2521,28 @@ def show_stock_analysis():
                         shared_regime_adj["KOSDAQ"] = q_adj
                 except:
                     pass
+
+            # [최적화] 그룹별로 나뉘어 있던 일괄 수집을 하나로 통합하여 최상단에서 1회 수행
+            all_kr_codes = []
+            all_us_codes = []
+            for _, d_list, is_ovs in target_list:
+                if not d_list: continue
+                codes = [item[1] for item in d_list]
+                if is_ovs: all_us_codes.extend(codes)
+                else: all_kr_codes.extend(codes)
+
+            if all_kr_codes or all_us_codes:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=config.console,
+                    transient=True
+                ) as progress:
+                    progress.add_task("[bold green]관심 종목 실시간 데이터 통합 수집 중...[/]", total=None)
+                    if all_kr_codes: 
+                        api.prefetch_multiple_current_prices(all_kr_codes, is_overseas=False)
+                    if all_us_codes: 
+                        api.prefetch_multiple_current_prices(all_us_codes, is_overseas=True)
 
             try:
                 for title, d_list, is_ovs in target_list:
