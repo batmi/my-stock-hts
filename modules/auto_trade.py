@@ -664,14 +664,14 @@ class ConclusionMonitor:
                             current_qty = holdings_map.get(code, 0)
                             if current_qty >= qty:
                                 is_filled = True
-                                reason = "잔고 입고 확인 (API 누락 보정)"
+                                reason = "잔고 입고 확인"
                         
                         # 매도 주문: 잔고가 0이면 체결로 간주 (전량 매도 가정)
                         elif "sell" in type_str.lower() or "매도" in type_str:
                             current_qty = holdings_map.get(code, 0)
                             if current_qty == 0:
                                 is_filled = True
-                                reason = "잔고 0 확인 (API 누락 보정)"
+                                reason = "잔고 0 확인"
                         
                         if is_filled:
                             logger.debug(f"[ORDER_DEBUG] 모의투자 잔고 기반 체결 감지: {code} (No.{odno})")
@@ -1188,7 +1188,7 @@ class OrderManager:
                                                         # [수정] 원본 주문 상태 변경 제거 (접수 이력 보존)
                                                         # db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
-                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(API누락보정)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(잔고 확인)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
                                                         # [수정] 텔레그램 알림 발송 (실전 포맷 적용)
                                                         try:
@@ -1242,7 +1242,7 @@ class OrderManager:
                                                             exec_amt = fill_price * qty
                                                             price_fmt = f"${fill_price:,.2f}" if is_overseas else f"{fill_price:,.0f}원"
                                                             amt_fmt = f"${exec_amt:,.2f}" if is_overseas else f"{int(exec_amt):,}원"
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: API 누락 보정 (잔고 확인됨){cur_info}{strategy_info}{rule_info}"
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: 잔고 확인{cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
                                                         except Exception as e:
                                                             self.trader.log(f"알림 전송 실패: {e}")

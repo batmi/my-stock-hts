@@ -512,13 +512,13 @@ def show_open_orders():
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
-                                    fill_price = _create_fill_history(db_o, "잔고 0 확인 (API 누락 보정)")
+                                    fill_price = _create_fill_history(db_o, "잔고 0 확인")
 
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 체결 처리 완료 (알림 전송 예정)")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매도", db_o, "잔고 0 확인 (API 누락 보정)", fill_price)
+                                    _send_sim_alert("매도", db_o, "잔고 0 확인", fill_price)
                                     
                                     continue
                                 else:
@@ -539,10 +539,10 @@ def show_open_orders():
                                     # db_manager.db.update_trade(db_odno, order_status="체결(추정)")
                                     
                                     # [추가] 체결 히스토리 생성
-                                    fill_price = _create_fill_history(db_o, "잔고 입고 확인 (API 누락 보정)")
+                                    fill_price = _create_fill_history(db_o, "잔고 입고 확인")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매수", db_o, "잔고 입고 확인 (API 누락 보정)", fill_price)
+                                    _send_sim_alert("매수", db_o, "잔고 입고 확인", fill_price)
                                     
                                     continue
 
