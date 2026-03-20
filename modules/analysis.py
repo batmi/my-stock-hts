@@ -1242,6 +1242,11 @@ def _analyze_stock_worker(stock, params=None):
     name = stock['name']
     is_custom_rule = stock.get('is_custom_rule', False) # [추가]
     
+    # [최적화] 시스템 트레이딩(AutoTrader)과의 API 대역폭 경합 방지 (유동적 Pacing)
+    # 모의투자는 0.3초, 실전은 0.05초의 지연을 주어 백그라운드 자동매매가 즉시 호출될 수 있는 틈을 양보합니다.
+    delay = 0.3 if config.session.is_simulation else 0.05
+    time.sleep(delay)
+
     try:
         # API 호출 (api.py 내부에서 Rate Limit 처리됨)
         df = api.get_chart_data(code, is_overseas=False)
@@ -1485,29 +1490,20 @@ def analyze_market_stocks(market_type):
                     else:
                         progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock_info['name']}({stock_info['code']}) - 데이터 부족 또는 API 응답 없음[/dim red]")
 
-                if config.session.is_simulation:
-                    for stock in stock_list:
+                # [최적화] 전체 종목 분석 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
+                max_w = 2 if config.session.is_simulation else 4
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                    futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
+                    for future in concurrent.futures.as_completed(futures):
                         completed_count += 1
+                        stock = futures[future]
                         try:
-                            result = _analyze_stock_worker(stock, params)
+                            result = future.result()
                             _process_result(stock, result)
                         except Exception as e:
                             progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [오류] {stock['name']}({stock['code']}) - {e}[/dim red]")
                         
                         progress.advance(task)
-                else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                        futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
-                        for future in concurrent.futures.as_completed(futures):
-                            completed_count += 1
-                            stock = futures[future]
-                            try:
-                                result = future.result()
-                                _process_result(stock, result)
-                            except Exception as e:
-                                progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [오류] {stock['name']}({stock['code']}) - {e}[/dim red]")
-                            
-                            progress.advance(task)
                     
         except KeyboardInterrupt:
             config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
@@ -1538,6 +1534,8 @@ def analyze_market_stocks(market_type):
             
             # 병렬 처리로 업종 정보 조회
             def fetch_sector(item):
+                delay = 0.3 if config.session.is_simulation else 0.05
+                time.sleep(delay)
                 try:
                     res = api.get_current_price_data(item['code'], is_overseas=False)
                     if res.get('rt_cd') == '0':
@@ -1545,16 +1543,13 @@ def analyze_market_stocks(market_type):
                 except: pass
                 return '-'
 
-            if config.session.is_simulation:
-                for i, item in enumerate(buy_candidates):
-                    buy_candidates[i]['sector'] = fetch_sector(item)
+            # [최적화] 업종 정보 조회 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
+            max_w_sec = 2 if config.session.is_simulation else 4
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w_sec) as executor:
+                future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    buy_candidates[future_to_idx[future]]['sector'] = future.result()
                     progress.advance(task)
-            else:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
-                    for future in concurrent.futures.as_completed(future_to_idx):
-                        buy_candidates[future_to_idx[future]]['sector'] = future.result()
-                        progress.advance(task)
         
         # 새로 분석했거나 sector 정보가 추가된 경우 DB 저장
         if not use_cache:
