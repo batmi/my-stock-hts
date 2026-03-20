@@ -259,32 +259,46 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if high_52 != 0: high_52_rate = ((current - high_52) / high_52) * 100
         if math.isnan(high_52_rate): high_52_rate = 0.0
 
-        diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-        change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
+        is_invalid_data = False
+        if current == 0.0:
+            is_invalid_data = True
+        elif not is_domestic_index and not use_fast_info:
+            # 해외 지수 실시간 단건 조회 실패 (Rate Limit 등) 시 과거 캐시 출력 방지
+            is_invalid_data = True
+        elif is_domestic_index and df_daily.empty:
+            is_invalid_data = True
 
-        curr_price_color = "[white]"
-        if ema5 and ema20 and ema60:
-            if ema5 > ema20 and ema20 > ema60:
-                if current > ema5: curr_price_color = "[red]"
-                elif current < ema60: curr_price_color = "[blue]"
-                else: curr_price_color = "[dim]"
-            elif ema5 < ema20 and ema5 < ema60:
-                if current < ema5: curr_price_color = "[blue]"
-                elif current > ema20: curr_price_color = "[orange3]"
-                else: curr_price_color = "[white]"
-            else:
-                if current < ema5: curr_price_color = "[blue]"
-                elif current > ema20: curr_price_color = "[orange3]"
-                else: curr_price_color = "[white]"
-        
-        curr_fmt = f"{current:,.2f}"
-        if name == "달러환율": curr_fmt += "원"
-        curr_str = f"{curr_price_color}{curr_fmt}[/]"
+        if is_invalid_data:
+            curr_str = "[dim]-[/]"
+            change_str = "[dim]-[/]"
+            high_52_str = "[dim]-[/]"
+        else:
+            diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+            change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
 
-        h_color = "[white]"
-        if high_52_rate > -3.0: h_color = "[red]"
-        elif high_52_rate < -20.0: h_color = "[blue]"
-        high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
+            curr_price_color = "[white]"
+            if ema5 and ema20 and ema60:
+                if ema5 > ema20 and ema20 > ema60:
+                    if current > ema5: curr_price_color = "[red]"
+                    elif current < ema60: curr_price_color = "[blue]"
+                    else: curr_price_color = "[dim]"
+                elif ema5 < ema20 and ema5 < ema60:
+                    if current < ema5: curr_price_color = "[blue]"
+                    elif current > ema20: curr_price_color = "[orange3]"
+                    else: curr_price_color = "[white]"
+                else:
+                    if current < ema5: curr_price_color = "[blue]"
+                    elif current > ema20: curr_price_color = "[orange3]"
+                    else: curr_price_color = "[white]"
+            
+            curr_fmt = f"{current:,.2f}"
+            if name == "달러환율": curr_fmt += "원"
+            curr_str = f"{curr_price_color}{curr_fmt}[/]"
+
+            h_color = "[white]"
+            if high_52_rate > -3.0: h_color = "[red]"
+            elif high_52_rate < -20.0: h_color = "[blue]"
+            high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
         def fmt_val(val, color_tag):
             if val is None: return "-"
@@ -652,6 +666,12 @@ def _show_market_indices_core(target_indices=None):
             transient=True
         ) as progress:
             task = progress.add_task("[cyan]지수 지표 분석 중...[/cyan]", total=len(indices_map))
+
+            # [최적화/수정] 분석 스레드 실행 전, yfinance 다중 호출 차단(Rate Limit)을 방지하기 위해
+            # 해외 지수들에 대해 일괄(Bulk)로 현재가를 예열(Prefetch)하여 마이크로 캐시에 담아둡니다.
+            overseas_tickers = [t for n, t in indices_map.items() if n not in ["코스피", "코스닥", "코스피200", "코스닥150"]]
+            if overseas_tickers:
+                api.prefetch_multiple_current_prices(overseas_tickers, is_overseas=True)
 
             # [수정] 지수 지표 분석 루프 병렬화 (ThreadPoolExecutor)
             results_dict = {}
