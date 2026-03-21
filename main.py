@@ -31,7 +31,7 @@ def show_help():
 
     table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
     table.add_row("(글로벌/원자재/코인)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
-    table.add_row("", "그 외 구간", "[white]흰색[/]", "횡보장 (Sideways)")
+    table.add_row("", "그 외 구간", "[yellow]노란색[/]", "횡보장 (Sideways)")
     table.add_section()
 
     table.add_row("브랜트유", "가격 ≥ 125", "[magenta]보라색[/]", "에너지 쇼크: 강제적 수요 파괴 및 스태그플레이션 확정")
@@ -283,7 +283,7 @@ def show_help():
             kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
-            r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[white]횡보장[/]"}
+            r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
             k_r_str = r_map.get(kospi_regime, kospi_regime) + "*"
             q_r_str = r_map.get(kosdaq_regime, kosdaq_regime) + "*"
 
@@ -361,7 +361,7 @@ def show_help():
     adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
     score_table.add_row(f"적응형 임계값 ({adaptive_status})", f"강세장: 지수 > EMA {ma_p}일선 & 이평선우상향 & ADX≥{adx_th}", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
     score_table.add_row("", f"약세장: 지수 < EMA {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
-    score_table.add_row("", "횡보장: 그 외 구간", "[white]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row("", "횡보장: 그 외 구간", "[yellow]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
     
     if market_status_info:
         k_adj_str = f"보정: {market_status_info['kospi_adj']:+.1f}점"
@@ -380,8 +380,8 @@ def show_help():
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
         score_table.add_row("현재 필터링 상태", "확인 불가", "-", "-")
     elif filter_info:
-        k_stat = "[red]허용[/]" if filter_info.get("KOSPI", True) else "[blue]보류[/]"
-        q_stat = "[red]허용[/]" if filter_info.get("KOSDAQ", True) else "[blue]보류[/]"
+        k_stat = "[green]허용[/]" if filter_info.get("KOSPI", True) else "[red]보류[/]"
+        q_stat = "[green]허용[/]" if filter_info.get("KOSDAQ", True) else "[red]보류[/]"
         score_table.add_row("현재 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
 
     # [추가] 필터링 (위험/주의) 섹션
