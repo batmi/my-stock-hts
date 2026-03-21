@@ -454,6 +454,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     gross_losses = []
     missed_cautions = []
     missed_dangers = []
+    max_scores = []
+    score_8_counts = []
     
     with Progress(
         SpinnerColumn(),
@@ -501,6 +503,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             gross_losses.append(res['gross_loss'])
             missed_cautions.append(res.get('missed_caution_count', 0))
             missed_dangers.append(res.get('missed_danger_count', 0))
+            max_scores.append(res.get('max_score_observed', 0))
+            score_8_counts.append(res.get('score_8_count', 0))
             
             # [추가] 상세 통계 수집
             trades = res['trades']
@@ -552,6 +556,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     avg_gross_loss = np.nanmean(gross_losses) if gross_losses else 0.0
     avg_missed_caution = np.nanmean(missed_cautions) if missed_cautions else 0.0
     avg_missed_danger = np.nanmean(missed_dangers) if missed_dangers else 0.0
+    avg_max_score = np.nanmean(max_scores) if max_scores else 0.0
+    avg_score_8_count = np.nanmean(score_8_counts) if score_8_counts else 0.0
     
     # 포맷팅 헬퍼
     def fmt_money(val):
@@ -642,6 +648,14 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     
     config.console.print(summary_table)
     
+    # [추가] 매매가 없을 경우 진단 정보 출력
+    if avg_trades == 0:
+        config.console.print("\n[yellow]※ 매매가 발생하지 않았습니다. (조건 미충족)[/yellow]")
+        config.console.print(f"  - 기간 내 최고 점수(평균): {avg_max_score:.1f}점 (매수 기준: {buy_score}점)")
+        config.console.print(f"  - {buy_score}점 이상 도달 횟수(평균): {avg_score_8_count:.1f}회")
+        config.console.print(f"  [안내] 현재 설정된 매수 조건({buy_score}점 이상 & RSI<{buy_rsi})이 엄격하여 진입 기회가 없었습니다.")
+        config.console.print("  [Tip] 매수 조건을 완화하거나 분석 기간을 늘려보세요.")
+
     # [추가] 공백 라인
     config.console.print()
 
@@ -727,6 +741,29 @@ def run_backtest():
                 code = raw_input.upper()
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
+                
+            with config.console.status("[cyan]종목 유효성 확인 중 (API)...[/cyan]"):
+                res = api.get_current_price_data(code, is_overseas)
+                
+                is_valid = False
+                msg = "시세 데이터를 찾을 수 없는 종목입니다."
+                if res and res.get('rt_cd') == '0':
+                    output = res.get('output', {})
+                    if is_overseas:
+                        if float(output.get('last') or 0) > 0: is_valid = True
+                    else:
+                        if int(output.get('stck_prpr') or 0) > 0: is_valid = True
+                elif res:
+                    msg = res.get('msg1') or msg
+                
+                if not is_valid:
+                    config.console.print(f"\n[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
+                    config.console.print(f"[dim]사유: {msg}[/dim]\n")
+                    return
+            
+            config.console.print(f"\n[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
+            if Prompt.ask("이 종목으로 백테스팅을 진행하시겠습니까?", choices=["y", "n"], default="y").lower() == "n":
+                return
     elif sub_choice == '5':
         # [수정] 통합 지수 리스트 사용 (백테스팅용)
         indices_list = market.ALL_INDICES

@@ -131,9 +131,19 @@ def select_stock_for_chart():
         with config.console.status("[cyan]종목 유효성 최종 확인 중 (API)...[/cyan]"):
             res = api.get_current_price_data(code, is_overseas)
             
-            if not res or res.get('rt_cd') != '0':
-                msg = res.get('msg1') or "시세 데이터를 찾을 수 없는 종목입니다."
-                config.console.print(f"\n[bold red]오류: 유효하지 않은 종목입니다. ({code})[/bold red]")
+            is_valid = False
+            msg = "시세 데이터를 찾을 수 없는 종목입니다."
+            if res and res.get('rt_cd') == '0':
+                output = res.get('output', {})
+                if is_overseas:
+                    if float(output.get('last') or 0) > 0: is_valid = True
+                else:
+                    if int(output.get('stck_prpr') or 0) > 0: is_valid = True
+            elif res:
+                msg = res.get('msg1') or msg
+                
+            if not is_valid:
+                config.console.print(f"\n[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
                 config.console.print(f"[dim]사유: {msg}[/dim]\n")
                 return None, None, None
 
