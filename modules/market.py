@@ -10,7 +10,7 @@ import context # [추가] 상태 관리 모듈
 import indicators
 import api
 from modules import analysis # [추가] 분석 모듈 임포트
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 import logging
 import time
@@ -114,7 +114,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     if is_crypto and not df_daily.empty and len(df_daily) >= 2:
                         try:
                             last_dt = df_daily.index[-1].date()
-                            utc_today = datetime.utcnow().date()
+                            utc_today = datetime.now(timezone.utc).date()
                             target_idx = -2 if last_dt >= utc_today else -1
                             check_prev = float(df_daily['close'].iloc[target_idx])
                             if not math.isnan(check_prev):
