@@ -732,9 +732,7 @@ def run_backtest():
     code, name, is_overseas = None, None, False
 
     if sub_choice == '6':
-        config.console.print()
         raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
-        config.console.print()
         if raw_input and raw_input.lower() != 'q':
             if raw_input.isdigit() and len(raw_input) == 6:
                 code = raw_input
@@ -805,7 +803,6 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    config.console.print()
     change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
     config.console.print()
     if change_settings == 'q': return
