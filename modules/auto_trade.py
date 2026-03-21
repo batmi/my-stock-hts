@@ -2010,6 +2010,7 @@ class AutoTrader:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
                 console=console,
                 transient=True
             ) as progress:
@@ -2365,6 +2366,27 @@ class AutoTrader:
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
         if valid_holdings:
+            holding_rows = []
+            # [추가] 시장 구분 등 추가 정보를 가져오는 지연 시간에 대응하기 위한 프로그레스 바 적용
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("[cyan]보유 종목 세부 정보 조회 중...[/cyan]", total=None)
+                for item in valid_holdings:
+                    name = item['prdt_name']
+                    code = item['pdno']
+                    market_type = self._get_stock_market_type(code)
+                    qty = int(item['hldg_qty'])
+                    buy_price = float(item['pchs_avg_pric'])
+                    cur_price = int(item['prpr'])
+                    profit = int(item['evlu_pfls_amt'])
+                    rate = float(item['evlu_pfls_rt'])
+                    holding_rows.append((name, code, market_type, qty, buy_price, cur_price, profit, rate))
+
             console.print("\n[bold]보유 종목 리스트[/bold]")
             h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
             h_table.add_column("종목명(코드)", justify="left")
@@ -2375,16 +2397,7 @@ class AutoTrader:
             h_table.add_column("평가손익", justify="right")
             h_table.add_column("수익률", justify="right")
             
-            for item in valid_holdings:
-                name = item['prdt_name']
-                code = item['pdno']
-                market_type = self._get_stock_market_type(code)
-                qty = int(item['hldg_qty'])
-                buy_price = float(item['pchs_avg_pric'])
-                cur_price = int(item['prpr'])
-                profit = int(item['evlu_pfls_amt'])
-                rate = float(item['evlu_pfls_rt'])
-                
+            for name, code, market_type, qty, buy_price, cur_price, profit, rate in holding_rows:
                 p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 h_table.add_row(
                     f"{name}({code})", 
