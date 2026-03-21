@@ -462,7 +462,9 @@ def _analyze_with_gemini_ui():
         grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
         config.console.print(grid)
         
+        config.console.print()
         choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
+        config.console.print()
         if choice.lower() == 'q': return
         
         if choice == '1':
@@ -490,7 +492,9 @@ def _analyze_with_custom_prompt_ui():
     while True:
         config.console.print("\n[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
         
+        config.console.print()
         user_prompt = Prompt.ask("입력 [dim](종료: q 또는 Enter)[/dim]")
+        config.console.print()
         if user_prompt.lower() == 'q' or not user_prompt.strip():
             return
 
@@ -511,8 +515,7 @@ def _analyze_stock_ui():
     import indicators
     from modules import analysis
     
-    config.console.print("\n[bold cyan]=== AI 종목 심층 진단 ===[/bold cyan]")
-    config.console.print("\n[bold]분석할 종목을 선택하세요:[/bold]")
+    config.console.print("\n[bold]AI 종목 심층 진단 (AI Stock Analysis)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -522,9 +525,10 @@ def _analyze_stock_ui():
     grid.add_row("[4] 미국 ETF", "(US ETF)")
     grid.add_row("[5] 직접 입력", "(Direct Input)")
     config.console.print(grid)
-    config.console.print()
     
+    config.console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+    config.console.print()
     if choice.lower() == 'q': return
 
     code = None
@@ -532,7 +536,9 @@ def _analyze_stock_ui():
     is_overseas = False
     
     if choice == '5':
+        config.console.print()
         keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](취소: q)[/dim]")
+        config.console.print()
         if not keyword or keyword.lower() == 'q': return
         
         # 1. 등록된 관심 종목에서 검색
@@ -578,6 +584,7 @@ def _analyze_stock_ui():
         
         config.console.print()
         sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+        config.console.print()
         if sel.lower() == 'q': return
         if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
             item = stock_list[int(sel)-1]
@@ -662,7 +669,7 @@ def _analyze_stock_ui():
 
 def run_theme_analysis():
     """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
-    config.console.print("\n[bold magenta]=== 종목 트랜드 분석 (Stock Trend Analysis) ===[/]")
+    config.console.print("\n[bold]종목 트랜드 분석 (Stock Trend Analysis)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -673,6 +680,7 @@ def run_theme_analysis():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+    config.console.print()
     
     if choice == '1':
         _show_naver_themes()

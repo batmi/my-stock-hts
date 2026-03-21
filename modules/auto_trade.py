@@ -2415,7 +2415,7 @@ class AutoTrader:
         console.print()
 
     def print_report(self):
-        console.print("\n[bold yellow]=== 시스템 트레이딩 리포트 (Trading Report) ===[/]")
+        console.print("\n[bold]시스템 트레이딩 평가 리포트 (Trading Report)[/bold]")
         
         grid = Table.grid(padding=(0, 2))
         grid.add_column(justify="left")
@@ -2425,9 +2425,10 @@ class AutoTrader:
         grid.add_row("[3] 월간 (최근 30일)", "(Monthly)")
         grid.add_row("[4] 기간 직접 입력", "(Custom Days)")
         console.print(grid)
-        console.print()
         
+        console.print()
         choice = Prompt.ask("조회할 기간을 선택하세요 [dim](Enter: 4)[/dim]", choices=["1", "2", "3", "4"], default="4")
+        console.print()
         
         days = None
         if choice == "1": days = 0
@@ -4355,6 +4356,7 @@ def _input_and_save_rule(code, name):
             console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10.0점 설정)[/dim]")
             
             def ask_weight(key, desc, default_val):
+                console.print()
                 v = Prompt.ask(f"{desc} [dim](현재: {default_val})[/dim]", default=str(default_val))
                 if v.lower() == 'q': raise QuitInput()
                 return float(v)
@@ -4482,7 +4484,9 @@ def _modify_stock_rules():
             
     console.print(table)
     
+    console.print()
     sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]", default="q")
+    console.print()
     if sel.lower() == 'q': return
     
     if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
@@ -4504,6 +4508,7 @@ def _delete_stock_rules():
     
     console.print()
     sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+    console.print()
     if sel.lower() == 'q': return
     
     if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
@@ -4858,7 +4863,7 @@ def _remove_restricted_stock():
 
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
-    console.print("\n[bold cyan]=== 종목별 트레이딩 룰 관리 (Manage Stock Rules) ===[/]")
+    console.print("\n[bold]종목별 트레이딩 룰 관리 (Manage Stock Rules)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -4867,9 +4872,10 @@ def manage_stock_rules():
     grid.add_row("[3] 룰 변경", "(Modify)")
     grid.add_row("[4] 룰 삭제", "(Delete)")
     console.print(grid)
-    console.print()
     
+    console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    console.print()
     if choice.lower() == 'q': return
 
     if choice == "1":
@@ -4883,7 +4889,7 @@ def manage_stock_rules():
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
-    console.print("\n[bold cyan]=== 트레이딩 제한 종목 관리 (Restricted Stocks) ===[/]")
+    console.print("\n[bold]트레이딩 제한 종목 관리 (Restricted Stocks)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -4891,9 +4897,10 @@ def manage_restricted_stocks_menu():
     grid.add_row("[2] 제한 종목 추가", "(Add)")
     grid.add_row("[3] 제한 종목 해제", "(Remove)")
     console.print(grid)
-    console.print()
     
+    console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q", "Q"], default="1")
+    console.print()
     if choice.lower() == 'q': return
     
     if choice == "1": _view_restricted_stocks()
@@ -4905,10 +4912,10 @@ def system_trading_menu():
 
     trader = AutoTrader()
 
-    console.print("\n[bold yellow]=== 시스템 트레이딩 (System Trading) ===[/]")
-    console.print("[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]")
+    console.print("\n[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]")
     console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
     console.print()
+    console.print("[bold]시스템 트레이딩 (System Trading)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -4920,10 +4927,11 @@ def system_trading_menu():
     grid.add_row("[6] 종목별 트레이딩 룰", "(Rule)")
     grid.add_row("[7] 트레이딩 제한 종목", "(Restrict)")
     console.print(grid)
-    console.print()
     
     try:
+        console.print()
         choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "q"], default="3")
+        console.print()
         
         menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정", "7": "거래제한"}
         if choice in menu_map:

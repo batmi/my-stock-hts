@@ -620,6 +620,7 @@ def main():
             print("─" * 50); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
+                config.console.print() # 입력 후 공백 라인 추가
                 
                 # [추가] 루프 시작 시 입력 경로 초기화
                 context.USER_ACTION_BREADCRUMB = []
@@ -650,7 +651,8 @@ def main():
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
                     # [수정] 차트 분석 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
-                    config.console.print("\n[bold]차트 분석할 대상을 선택하세요:[/bold]")
+                    config.console.print()
+                    config.console.print("[bold]종목 차트 분석 (Chart Analysis)[/bold]")
                     grid = Table.grid(padding=(0, 2))
                     grid.add_column(justify="left")
                     grid.add_column(justify="left", style="dim")
@@ -661,14 +663,16 @@ def main():
                     grid.add_row("[5] 시장 지수", "(Market Indices)")
                     grid.add_row("[6] 직접 입력", "(Direct Input)")
                     config.console.print(grid)
+
                     config.console.print()
-                    
                     sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
+                    config.console.print()
                     
                     target_code, target_name, target_ovs = None, None, False
                     
                     if sub_choice == '6':
                         raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+                        config.console.print()
                         if raw_input and raw_input.lower() != 'q':
                             if raw_input.isdigit() and len(raw_input) == 6:
                                 target_code = raw_input
@@ -682,12 +686,13 @@ def main():
                         # [수정] 통합 지수 리스트 사용
                         indices_list = market.ALL_INDICES
                         
-                        config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
+                        config.console.print(f"[bold]시장 지수 목록:[/bold]")
                         for i, (name, code) in enumerate(indices_list):
                             config.console.print(f"[{i+1}] {name}")
                         
                         config.console.print()
                         sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                        config.console.print()
                         if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(indices_list):
                             target_name, target_code = indices_list[int(sel)-1]
                             target_ovs = True
@@ -700,6 +705,7 @@ def main():
                             
                             config.console.print()
                             sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                            config.console.print()
                             if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
                                 item = s_list[int(sel)-1]
                                 target_code, target_name = item['code'], item['name']
@@ -711,7 +717,7 @@ def main():
                         logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                         
                         # [추가] 차트 유형 선택 (일봉/분봉)
-                        config.console.print("\n[bold]차트 유형을 선택하세요:[/bold]")
+                        config.console.print("[bold]차트 유형을 선택하세요:[/bold]")
                         grid = Table.grid(padding=(0, 2))
                         grid.add_column(justify="left")
                         grid.add_column(justify="left", style="dim")
@@ -721,6 +727,7 @@ def main():
                         config.console.print(grid)
                         config.console.print()
                         c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "3", "q"], default="2")
+                        config.console.print()
                         
                         if c_type != 'q':
                             p_type = 'daily'
@@ -742,6 +749,7 @@ def main():
                 config.console.print()
                 config.console.print()
                 try:
+                    config.console.print()
                     if Prompt.ask("프로그램을 종료하시겠습니까?", choices=["y", "n"], default="n") == "y":
                         break
                 except KeyboardInterrupt:

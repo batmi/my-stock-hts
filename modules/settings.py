@@ -235,7 +235,9 @@ def _edit_config_table(title_source, items_source):
         
         console.print(table)
         
+        console.print()
         choice = Prompt.ask("\n수정할 항목 번호 선택 [dim](a: 전체, q: 종료)[/dim]", choices=[str(i+1) for i in range(len(items))] + ['a', 'q', 'A', 'Q'], default='q')
+        console.print()
         
         if choice.lower() == 'q':
             break
@@ -257,7 +259,9 @@ def _edit_config_table(title_source, items_source):
                 
                 canceled = False
                 while True:
+                    console.print()
                     val = Prompt.ask(prompt_msg, default="y", show_default=False)
+                    console.print()
                     val_lower = val.lower()
                     
                     if val_lower == 'q':
@@ -297,7 +301,9 @@ def _edit_config_table(title_source, items_source):
                 if 'Q' not in choices: choices.append('Q')
                 prompt_kwargs["choices"] = choices
                 
+            console.print()
             val = Prompt.ask(f"새로운 값 입력 [dim](취소: q)[/dim]", **prompt_kwargs)
+            console.print()
             
             if val.lower() == 'q':
                 console.print("[yellow]입력이 취소되었습니다.[/yellow]")
@@ -464,7 +470,7 @@ def modify_scoring_weights():
         weights = config.SCORING_WEIGHTS
         total_score = sum(weights.values())
         
-        console.print("\n[bold cyan]=== 스코어링 모델 가중치 설정 (Scoring Weights) ===[/]")
+        console.print("\n[bold]스코어링 모델 가중치 설정 (Scoring Weights)[/bold]")
         console.print(f"[dim]현재 총점: {total_score:.1f}점 (목표: 10.0점)[/dim]")
         
         table = Table(box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -487,7 +493,9 @@ def modify_scoring_weights():
         
         console.print(table)
         
+        console.print()
         choice = Prompt.ask("\n수정할 여부 선택 [dim](a: 전체, q: 종료)[/dim]", choices=['a', 'q', 'A', 'Q'], default='q')
+        console.print()
         
         if choice.lower() == 'q':
             break
@@ -502,7 +510,9 @@ def modify_scoring_weights():
                 for key, label, detail in items_info:
                     current_val = weights[key]
                     prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
+                    console.print()
                     val = Prompt.ask(prompt_msg, default=str(current_val))
+                    console.print()
                     if val.lower() == 'q': 
                         raise ValueError("canceled")
                     new_weights[key] = float(val)
@@ -610,8 +620,10 @@ def modify_system_trading_general():
     _edit_config_table("시스템 트레이딩 일반설정 (Trading General)", get_items)
 
 def reset_to_default():
+    console.print()
     if Prompt.ask("모든 설정을 시스템 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n") != "y":
         return
+    console.print()
 
     # 1. 파일 삭제
     config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
@@ -682,7 +694,7 @@ def reset_to_default():
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 
 def system_config_menu():
-    console.print("\n[bold cyan]=== 시스템 전체 설정 변경 ===[/]")
+    console.print("\n[bold]시스템 설정 (System Settings)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -697,9 +709,10 @@ def system_config_menu():
     grid.add_row("[9] 시스템 설정 조회", "(View Config)")
     grid.add_row("[0] 설정 초기화", "(Reset to Default)")
     console.print(grid)
-    console.print()
     
+    console.print()
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "Q"], default="9")
+    console.print()
     if choice.lower() == 'q': return
     
     if choice == "1": modify_system_trading_general()

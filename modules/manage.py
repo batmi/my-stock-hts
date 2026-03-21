@@ -397,7 +397,9 @@ def get_current_price(mode='add'):
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 종목 검색/추가 메뉴 진입[/dim cyan]")
 
+    config.console.print()
     raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
+    config.console.print()
     if raw_input.lower() != 'q' and raw_input.strip():
         context.USER_ACTION_BREADCRUMB.append(f"[종목조회] {raw_input}")
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
@@ -449,8 +451,13 @@ def get_current_price(mode='add'):
         # [수정] 단순 조회 모드일 경우 여기서 종료
         if mode == 'simple': return
 
-        if Prompt.ask("\n이 종목을 관심 종목 리스트에 추가하시겠습니까?", choices=["y", "n"], default="n") == "y":
+        config.console.print()
+        ans = Prompt.ask("이 종목을 관심 종목 리스트에 추가하시겠습니까?", choices=["y", "n"], default="n")
+        
+        if ans == "y":
+            config.console.print()
             input_name = Prompt.ask("저장할 종목명 입력", default=stock_name)
+            config.console.print()
             config.console.print("\n[bold]어떤 그룹에 추가할까요?[/bold]")
             grid = Table.grid(padding=(0, 2))
             grid.add_column(justify="left")
@@ -460,8 +467,10 @@ def get_current_price(mode='add'):
             grid.add_row("[3] 미국 주식", "(US Stock)")
             grid.add_row("[4] 미국 ETF", "(US ETF)")
             config.console.print(grid)
+            
             config.console.print()
             cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+            config.console.print()
             
             if cat_choice.lower() != 'q':
                 context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
@@ -484,7 +493,10 @@ def get_current_price(mode='add'):
                         config.console.print(f"[{i+1}] {item['name']} ({item['code']})")
                 
                 config.console.print(f"\n현재 '{group_name}' 그룹에 {len(target_list)}개의 종목이 있습니다.")
+                
+                config.console.print()
                 pos_input = Prompt.ask("추가할 위치 번호를 입력하세요 [dim](그냥 Enter 입력 시 맨 끝에 추가, 취소: q)[/dim]", default="")
+                config.console.print()
                 
                 if pos_input.lower() == 'q':
                     config.console.print("[yellow]종목 추가가 취소되었습니다.[/yellow]")
@@ -519,9 +531,10 @@ def delete_stock():
     grid.add_row("[3] 미국 주식", "(US Stock)")
     grid.add_row("[4] 미국 ETF", "(US ETF)")
     config.console.print(grid)
-    config.console.print()
     
+    config.console.print()
     cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    config.console.print()
     if cat_choice.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
     if cat_choice.lower() == 'q': return
@@ -545,6 +558,7 @@ def delete_stock():
         
     config.console.print()
     del_idx = Prompt.ask("삭제할 번호 선택 [dim](취소: q)[/dim]")
+    config.console.print()
     if del_idx.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[번호선택] {del_idx}")
     if del_idx.lower() == 'q': return
@@ -553,7 +567,11 @@ def delete_stock():
         idx = int(del_idx) - 1
         if 0 <= idx < len(target_list):
             item_to_del = target_list[idx]
-            if Prompt.ask(f"\n정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
+            
+            config.console.print()
+            ans = Prompt.ask(f"정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n")
+            config.console.print()
+            if ans == "y":
                 logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
                 del config.session.stock_data[target_key][idx]
                 config.session.save_stock_config(config.session.stock_data)
@@ -576,9 +594,10 @@ def reorder_stock():
     grid.add_row("[3] 미국 주식", "(US Stock)")
     grid.add_row("[4] 미국 ETF", "(US ETF)")
     config.console.print(grid)
-    config.console.print()
     
+    config.console.print()
     cat_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    config.console.print()
     if cat_choice.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
     if cat_choice.lower() == 'q': return
@@ -598,6 +617,7 @@ def reorder_stock():
         
     config.console.print()
     from_idx_str = Prompt.ask("이동할 종목의 현재 번호를 입력하세요 [dim](취소: q)[/dim]")
+    config.console.print()
     if from_idx_str.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {from_idx_str}")
     if from_idx_str.lower() == 'q' or not from_idx_str.isdigit(): return
@@ -610,6 +630,7 @@ def reorder_stock():
     target_stock = target_list[from_idx]
     
     to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](취소: q)[/dim]")
+    config.console.print()
     if to_idx_str.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[목표위치] {to_idx_str}")
     if to_idx_str.lower() == 'q' or not to_idx_str.isdigit(): return
@@ -650,6 +671,7 @@ def manage_stock_menu():
     config.console.print()
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
+    config.console.print()
     
     menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경", "4": "차트 캐시 갱신"}
     if choice in menu_map:

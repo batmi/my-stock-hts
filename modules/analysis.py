@@ -362,15 +362,14 @@ def _load_analysis_result(market_type):
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
-    config.console.print("\n[bold cyan]=== 개별 종목 분석 (Analysis) ===[/]")
     
     code, name, is_overseas = None, None, False
 
     if target_code:
         code, name, is_overseas = target_code, target_name, target_is_overseas
     else:
+        config.console.print("\n[bold]개별 종목 분석 (Individual Analysis)[/bold]")
         # [수정] 종목 선택 메뉴 확장 ([5] 직접 입력 추가 및 기본값 설정)
-        config.console.print("\n[bold]분석할 종목을 선택하세요:[/bold]")
         grid = Table.grid(padding=(0, 2))
         grid.add_column(justify="left")
         grid.add_column(justify="left", style="dim")
@@ -380,16 +379,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         grid.add_row("[4] 미국 ETF", "(US ETF)")
         grid.add_row("[5] 직접 입력", "(Direct Input)")
         config.console.print(grid)
-        config.console.print()
         
+        config.console.print()
         choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+        config.console.print()
         if choice.lower() == 'q': return
 
         if choice == '5':
             # 직접 입력 로직
             from modules import manage
             # manage.get_current_price는 출력을 포함하므로, 여기서는 간단히 입력만 받음
+            config.console.print()
             raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+            config.console.print()
             if not raw_input or raw_input.lower() == 'q': return
             
             # manage 모듈의 _resolve_stock 로직과 유사하게 처리하거나 utils 활용
@@ -1088,22 +1090,27 @@ def get_analysis_params():
     
     config.console.print("\n[bold]분석 파라미터 설정 (Enter: 기본값 사용, q: 취소)[/bold]")
     
+    config.console.print()
     val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})", default=str(params['BUY_SCORE']))
+    config.console.print()
     if val.lower() == 'q': return None
     try: params['BUY_SCORE'] = float(val)
     except: pass
     
+    config.console.print()
     val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})", default=str(params['BUY_RSI_MAX']))
     if val.lower() == 'q': return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
     # [추가] 체결강도 입력
     current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+    config.console.print()
     val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)", default=str(current_vol))
     if val.lower() == 'q': return None
     try: params['BUY_VOL_STRENGTH'] = float(val)
     except: params['BUY_VOL_STRENGTH'] = current_vol
 
+    config.console.print()
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
     if val.lower() == 'q': return None
     try: params['RISE_SCORE'] = float(val)
@@ -1117,6 +1124,7 @@ def get_analysis_params():
         
         try:
             def ask_w(key, desc, default_v):
+                config.console.print()
                 v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
                 if v.lower() == 'q': raise ValueError("quit")
                 return float(v)
@@ -1141,7 +1149,9 @@ def get_analysis_params():
             config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
             continue
 
-    filter_choice = Prompt.ask("\n출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
+    config.console.print()
+    filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
+    config.console.print()
     if filter_choice.lower() == 'q': return None
     if filter_choice == '1': params['OUTPUT_FILTER'] = 'BUY'
     elif filter_choice == '2': params['OUTPUT_FILTER'] = 'RISE'
@@ -1726,7 +1736,7 @@ def analyze_market_stocks(market_type):
 def save_all_market_analysis():
     """코스피/코스닥 전 종목 분석 결과를 엑셀로 저장"""
     
-    config.console.print("\n[bold cyan]=== 전체종목 분석결과 저장 (Excel) ===[/bold cyan]")
+    config.console.print("\n[bold]전체 종목 분석결과 저장 (Export to Excel)[/bold]")
     config.console.print("[dim]코스피 및 코스닥 전 종목을 분석하여 파일로 저장합니다.[/dim]")
     config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
     
@@ -2393,7 +2403,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
 def show_stock_analysis():
-    config.console.print("\n[bold]분석할 종목 그룹을 선택하세요 (쉼표로 구분):[/bold]")
+    config.console.print("\n[bold]종목 시세 분석 (Stock Analysis)[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -2405,9 +2415,10 @@ def show_stock_analysis():
     grid.add_row("[6] 개별 종목 분석", "(Individual Analysis)")
     grid.add_row("[7] 전체 종목 분석", "(Market Analysis)")
     config.console.print(grid)
-    config.console.print()
     
+    config.console.print()
     choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 취소: q)[/dim]", default="5")
+    config.console.print()
     if choice_str.lower() == 'q': return
 
     interval = 0

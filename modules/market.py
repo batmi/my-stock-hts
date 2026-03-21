@@ -753,7 +753,7 @@ def show_market_indices(interval=0):
     target_indices = None
     
     if interval == 0:
-        config.console.print("\n[bold]조회할 지수 그룹을 선택하세요 (쉼표로 구분):[/bold]")
+        config.console.print("\n[bold]시장 지수 조회 (Market Indices)[/bold]")
         
         grid = Table.grid(padding=(0, 2))
         grid.add_column(justify="left")
@@ -812,8 +812,8 @@ def show_market_indices(interval=0):
 
             if interval <= 0:
                 if failed_list:
-                    config.console.print()
                     if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
+                        config.console.print()
                         target_indices = failed_list
                         continue
                 break

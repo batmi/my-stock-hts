@@ -72,7 +72,8 @@ def get_exchange_rate():
     return rate
 
 def select_stock_for_chart():
-    config.console.print("\n[bold]분석할 종목 그룹을 선택하세요:[/bold]")
+    config.console.print()
+    config.console.print("[bold]분석할 종목 그룹을 선택하세요:[/bold]")
     config.console.print("[1] 국내 주식")
     config.console.print("[2] 국내 ETF")
     config.console.print("[3] 미국 주식")
@@ -80,9 +81,10 @@ def select_stock_for_chart():
     config.console.print("[5] 직접 입력 (코드 검색)")
     config.console.print("[6] 시장 지수")  # [복구] 시장 지수 옵션 추가
     
-    config.console.print()
     # choices에 "6" 추가
+    config.console.print()
     group_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="5")
+    config.console.print()
     if group_choice.lower() != 'q':
         group_map = {"1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "직접입력", "6": "시장지수"}
         context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
@@ -100,6 +102,7 @@ def select_stock_for_chart():
         
         config.console.print()
         idx_choice = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+        config.console.print()
         if idx_choice.lower() != 'q':
             context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {idx_choice}")
         if idx_choice.lower() == 'q': return None, None, None
@@ -113,6 +116,7 @@ def select_stock_for_chart():
     if group_choice == "5":
         config.console.print()
         raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
+        config.console.print()
         if raw_input.lower() != 'q' and raw_input.strip():
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
         if raw_input.lower() == 'q' or not raw_input.strip(): return None, None, None
@@ -149,7 +153,9 @@ def select_stock_for_chart():
 
         config.console.print(f"\n[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
         config.console.print()
-        if Prompt.ask("이 종목으로 분석을 진행하시겠습니까?", choices=["y", "n"], default="y").lower() == "n":
+        ans = Prompt.ask("이 종목으로 분석을 진행하시겠습니까?", choices=["y", "n"], default="y")
+        config.console.print()
+        if ans.lower() == "n":
             return None, None, None
 
         return code, name, is_overseas
@@ -165,6 +171,7 @@ def select_stock_for_chart():
     
     config.console.print()
     choice_idx = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+    config.console.print()
     if choice_idx.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
     if choice_idx.lower() == 'q': return None, None, None
@@ -177,11 +184,13 @@ def select_stock_for_chart():
 
 # [수정] 매수/매도 주문 시 주식/ETF 구분 헤더 및 연속 번호 출력
 def select_target_stock():
-    config.console.print("\n[bold]거래 국가를 선택하세요:[/bold]")
+    config.console.print()
+    config.console.print("[bold]거래 국가를 선택하세요:[/bold]")
     config.console.print("[1] 국내 (Domestic)")
     config.console.print("[2] 미국 (Overseas/US)")
     config.console.print()
     nation_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    config.console.print()
     if nation_choice.lower() != 'q':
         nation_map = {"1": "국내", "2": "미국"}
         context.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
@@ -220,6 +229,7 @@ def select_target_stock():
     config.console.print(f"[{idx}] 직접 입력")
     config.console.print()
     choice_idx = Prompt.ask("선택 [dim](취소: q)[/dim]", default=str(idx))
+    config.console.print()
     if choice_idx.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
     
@@ -230,7 +240,9 @@ def select_target_stock():
         if 1 <= c_idx <= len(all_stocks):
             return all_stocks[c_idx-1][1], all_stocks[c_idx-1][0], is_overseas
         elif c_idx == idx:
+            config.console.print()
             code = Prompt.ask("종목코드(티커) 입력").upper()
+            config.console.print()
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code

@@ -35,9 +35,10 @@ def select_account():
         grid.add_row(f"[1] {acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}")
         grid.add_row(f"[2] 자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
         config.console.print(grid)
-        config.console.print()
         
+        config.console.print()
         choice = Prompt.ask("선택 [dim](기본값: 1, 취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+        config.console.print()
         if choice.lower() == 'q':
             return None, None, None
             
@@ -192,7 +193,9 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
 
     config.console.print(table)
     
-    sel_idx = Prompt.ask("\n매도할 종목 번호를 입력하세요 [dim](취소: q)[/dim]")
+    config.console.print()
+    sel_idx = Prompt.ask("매도할 종목 번호를 입력하세요 [dim](취소: q)[/dim]")
+    config.console.print()
     if sel_idx.lower() == 'q': return None, None, False, None, None
 
     try:
@@ -662,7 +665,7 @@ def send_order(order_type):
     # 1. 타이틀 출력
     title_color = 'red' if order_type == 'buy' else 'blue'
     title_text = "매수" if order_type == 'buy' else "매도"
-    config.console.print(f"\n[bold {title_color}]=== 주식 {title_text.upper()} 주문 (현금 전용) ===[/]")
+    config.console.print(f"\n[bold]주식 {title_text} 주문 (Order)[/bold]")
     config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
     # 컨텍스트 적용 (이후 모든 API 호출은 이 계좌 기준)
@@ -678,7 +681,6 @@ def send_order(order_type):
             stock_code, stock_name, is_overseas, pre_selected_excd, stock_info = res
         else:
             # [수정] 매수 시 종목 선택 메뉴 확장 ([5] 직접 입력 추가)
-            config.console.print("\n[bold]매수할 종목을 선택하세요:[/bold]")
             grid = Table.grid(padding=(0, 2))
             grid.add_column(justify="left")
             grid.add_column(justify="left", style="dim")
@@ -688,15 +690,18 @@ def send_order(order_type):
             grid.add_row("[4] 미국 ETF", "(US ETF)")
             grid.add_row("[5] 직접 입력", "(Direct Input)")
             config.console.print(grid)
-            config.console.print()
             
+            config.console.print()
             choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+            config.console.print()
             if choice.lower() == 'q': return
 
             stock_code, stock_name, is_overseas = None, None, False
 
             if choice == '5':
+                config.console.print()
                 raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+                config.console.print()
                 if not raw_input or raw_input.lower() == 'q': return
                 
                 # 간단 검색 로직
@@ -745,7 +750,9 @@ def send_order(order_type):
                 excd = pre_selected_excd
             else:
                 found_excd = api.find_best_exchange_code(stock_code)
+                config.console.print()
                 excd = found_excd if found_excd else Prompt.ask("거래소 코드 수동 입력 (NAS/NYS/AMS)", default="NAS").upper()
+                config.console.print()
             config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan] (거래소: {excd})")
         else:
             config.console.print(f"선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan]")
@@ -783,14 +790,18 @@ def send_order(order_type):
                 config.console.print("[yellow]매도 가능 수량이 0입니다.[/yellow]")
 
         # 5. 수량 및 단가 입력
-        qty = Prompt.ask(f"\n[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
+        config.console.print()
+        qty = Prompt.ask(f"[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
+        config.console.print()
         if qty.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         qty = qty.replace(',', '')
 
         unit = "달러" if is_overseas else "원"
         price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: q[/dim]"
+        config.console.print()
         price = Prompt.ask(price_prompt, default="0")
+        config.console.print()
         if price.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
@@ -911,7 +922,8 @@ def send_order(order_type):
         )
         config.console.print(Panel(confirm_msg, expand=False, width=60))
         
-        if Prompt.ask("\n위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        config.console.print()
+        if Prompt.ask("위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
             return
 
@@ -1009,7 +1021,7 @@ def send_order(order_type):
             config.console.print(f"[bold red]통신/시스템 에러: {str(e)}[/bold red]")
 
 def modify_order():
-    config.console.print("\n[bold magenta]=== 통합 정정/취소 주문 ===[/]")
+    config.console.print("\n[bold]통합 정정/취소 주문 (Modify/Cancel Order)[/bold]")
     # config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})") # 계좌 선택 제거로 주석 처리
 
     # [추가] 메뉴 진입 시점 로깅 (미체결 내역이 없어도 기록 남기기 위함)
@@ -1024,7 +1036,9 @@ def modify_order():
     # =========================================================================
     # 4. 선택 및 분기 처리
     # =========================================================================
-    choice = Prompt.ask("\n선택 번호 [dim](취소: q/Enter)[/dim]", default="q", show_default=False)
+    config.console.print()
+    choice = Prompt.ask("선택 번호 [dim](취소: q/Enter)[/dim]", default="q", show_default=False)
+    config.console.print()
     if choice.lower() == 'q': return
     context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {choice}")
     
@@ -1081,19 +1095,25 @@ def modify_order():
     # 입력 로직 (정정/취소 공통)
     if action == "1": # 정정
         rvse_cncl_dvsn_cd = "01"
-        qty = Prompt.ask(f"\n[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+        config.console.print()
+        qty = Prompt.ask(f"[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+        config.console.print()
         if qty.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         
         price_prompt = "[magenta]정정 단가($)[/]" if is_overseas else "[magenta]정정 단가[/] (0: 시장가)"
+        config.console.print()
         price = Prompt.ask(f"{price_prompt} [dim](취소: q)[/dim]", default="0")
+        config.console.print()
         if price.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: 
             config.console.print("[red]가격 입력 필요[/]"); return
     else: # 취소
         rvse_cncl_dvsn_cd = "02"
-        qty = Prompt.ask(f"\n[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+        config.console.print()
+        qty = Prompt.ask(f"[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
+        config.console.print()
         if qty.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         price = "0"
@@ -1144,7 +1164,8 @@ def modify_order():
         f"{amt_msg}"
     )
     config.console.print(Panel(confirm_msg, expand=False, width=60))
-    if Prompt.ask("\n진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
+    config.console.print()
+    if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
 
     api_action = "revise" if action == "1" else "cancel"
     ord_dvsn = "00"
