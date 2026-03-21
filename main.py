@@ -313,7 +313,7 @@ def show_help():
     score_table = Table(title="스코어링 및 매매 전략 가이드", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     score_table.add_column("구분", style="cyan", justify="center")
     score_table.add_column("조건", justify="left")
-    score_table.add_column("점수/행동", justify="center", style="red")
+    score_table.add_column("점수/행동", justify="center", style="white")
     score_table.add_column("의미", justify="left")
 
     # 1. Trend Factor
@@ -351,11 +351,11 @@ def show_help():
     # [추가] 현재 설정 및 적응형 임계값, 시장 상태 정보
     score_table.add_section()
     score_table.add_row("스코어링 가중치", "현재 설정", f"{weights['TREND']} / {weights['MOMENTUM']} / {weights['STRENGTH']} / {weights['SYNERGY']}", "추세/모멘텀/강도/시너지")
-    score_table.add_row("", "(기본값)", "4.0 / 2.5 / 1.5 / 2.0", "[dim]초기 시스템 권장값[/dim]")
-    score_table.add_row("", "(추세 중시)", "5.0 / 2.0 / 1.0 / 2.0", "[dim]확실한 상승 추세를 타는 종목 집중[/dim]")
-    score_table.add_row("", "(모멘텀 중시)", "3.0 / 3.5 / 1.5 / 2.0", "[dim]빠른 단기 반등 및 시세 탄력 집중[/dim]")
-    score_table.add_row("", "(수급 중시)", "3.0 / 2.0 / 3.0 / 2.0", "[dim]거래량 및 외인/기관 매수세 포착[/dim]")
-    score_table.add_row("", "(균등 배분)", "2.5 / 2.5 / 2.5 / 2.5", "[dim]모든 팩터를 균형있게 고려[/dim]")
+    score_table.add_row("", "[dim](기본값)[/dim]", "[dim]4.0 / 2.5 / 1.5 / 2.0[/dim]", "[dim]초기 시스템 권장값[/dim]")
+    score_table.add_row("", "[dim](추세 중시)[/dim]", "[dim]5.0 / 2.0 / 1.0 / 2.0[/dim]", "[dim]확실한 상승 추세를 타는 종목 집중[/dim]")
+    score_table.add_row("", "[dim](모멘텀 중시)[/dim]", "[dim]3.0 / 3.5 / 1.5 / 2.0[/dim]", "[dim]빠른 단기 반등 및 시세 탄력 집중[/dim]")
+    score_table.add_row("", "[dim](수급 중시)[/dim]", "[dim]3.0 / 2.0 / 3.0 / 2.0[/dim]", "[dim]거래량 및 외인/기관 매수세 포착[/dim]")
+    score_table.add_row("", "[dim](균등 배분)[/dim]", "[dim]2.5 / 2.5 / 2.5 / 2.5[/dim]", "[dim]모든 팩터를 균형있게 고려[/dim]")
     
     score_table.add_section()
     adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
@@ -384,10 +384,10 @@ def show_help():
         q_stat = "[green]허용[/]" if filter_info.get("KOSDAQ", True) else "[red]보류[/]"
         score_table.add_row("현재 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
 
-    # [추가] 필터링 (위험/주의) 섹션
+    # [추가] 매매 필터링 섹션
     score_table.add_section()
-    score_table.add_row("필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (점수 무관)")
-    score_table.add_row("필터링 (주의)", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
+    score_table.add_row("매매 필터링 (위험)", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (점수 무관)")
+    score_table.add_row("매매 필터링 (주의)", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
 
     # [추가] 매수 타이밍 섹션
     score_table.add_section()
@@ -400,7 +400,7 @@ def show_help():
     
     use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
     mr_status = "[green]ON[/green]" if use_mr else "[red]OFF[/red]"
-    score_table.add_row("매수 (역추세)", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역매수[/]", f"낙폭과대 기술적 반등 노리기 ({mr_status})")
+    score_table.add_row(f"매수 (역추세) ({mr_status})", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역매수[/]", "낙폭과대 기술적 반등 노리기")
     
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
@@ -423,17 +423,16 @@ def show_help():
     score_table.add_row("매도 (익절)", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
     
     half_tp_status = "[green]ON[/green]" if half_tp_use else "[red]OFF[/red]"
-    score_table.add_row("매도 (반익절)", f"수익률 +{take_profit/2:.1f}% 도달", "[red]반익절[/]", f"절반(50%) 선매도로 수익 확보 ({half_tp_status})")
+    score_table.add_row(f"매도 (반익절) ({half_tp_status})", f"수익률 +{take_profit/2:.1f}% 도달", "[red]반익절[/]", "절반(50%) 선매도로 수익 확보")
     
-    score_table.add_row("매도 (고정손절)", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
+    fixed_sl_status = "[red]OFF[/red]" if use_atr else "[green]ON[/green]"
+    score_table.add_row(f"매도 (고정손절) ({fixed_sl_status})", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
     
-    atr_desc = "변동성 기반 동적 손절"
-    if not use_atr:
-        atr_desc += " [dim](현재 미사용)[/dim]"
-    score_table.add_row("매도 (ATR손절)", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", atr_desc)
+    atr_status = "[green]ON[/green]" if use_atr else "[red]OFF[/red]"
+    score_table.add_row(f"매도 (ATR손절) ({atr_status})", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", "변동성 기반 동적 손절")
     
     time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
-    score_table.add_row("매도 (시간청산)", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}%", "[blue]시간청산[/]", f"장기 횡보 종목 기회비용 보전 ({time_stop_status})")
+    score_table.add_row(f"매도 (시간청산) ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}%", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
     
     score_table.add_row("매도 (트레일링)", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
     score_table.add_row("매도 (과열)", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
