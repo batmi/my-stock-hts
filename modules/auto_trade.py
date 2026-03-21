@@ -2120,6 +2120,7 @@ class AutoTrader:
         custom_rules = db_manager.db.get_all_stock_strategies()
         custom_rules = _enrich_rules_with_weights(custom_rules) # [Fix] 가중치 JSON 파싱
         rule_table = None
+        rule_summary = None
         
         # 보유 종목 코드 집합 생성 (강조 표시용)
         held_codes = set()
@@ -2130,7 +2131,6 @@ class AutoTrader:
 
         if custom_rules:
             rule_summary = f"총 {len(custom_rules)}개 종목 개별 설정됨"
-            table.add_row("개별 룰 설정", rule_summary)
             
             # 별도 테이블로 상세 표시
             rule_table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -2165,7 +2165,6 @@ class AutoTrader:
                 )
                 if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
                     rule_table.add_section()
-            table.add_section()
 
         # 금일 매매 & 실현 손익 계산 (상단 이동)
         today_profit = 0
@@ -2277,11 +2276,11 @@ class AutoTrader:
 
         # [추가] 역추세 매수 표시
         use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
-        if use_mr:
-            mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
-            mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
-            mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-            table.add_row("", f"역추세매수 [green]ON[/] (RSI {mr_rsi}↓ / 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑)")
+        mr_status = "[green]ON[/]" if use_mr else "[red]OFF[/]"
+        mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
+        mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
+        mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+        table.add_row("", f"역추세매수 (RSI {mr_rsi}↓ / 20일선 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑) {mr_status}")
 
         # 매도 조건
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
@@ -2300,16 +2299,23 @@ class AutoTrader:
 
         table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
         
-        cond_str = f"익절 (+{tp}%)"
-        if use_half_tp: cond_str += f" / 반익절 (+{tp/2:.1f}%, 50%)"
-        cond_str += f" / 손절 ({sl}%)"
-        if use_atr: cond_str += f" / ATR손절 (x{atr_mult})"
+        # 익절 / 반익절
+        tp_str = f"익절 (+{tp}%)"
+        half_tp_status = "[green]ON[/]" if use_half_tp else "[red]OFF[/]"
+        tp_str += f" / 반익절 (+{tp/2:.1f}%, 50%) {half_tp_status}"
+        table.add_row("", tp_str)
         
-        table.add_row("", cond_str)
+        # ATR손절 / 고정손절
+        atr_status = "[green]ON[/]" if use_atr else "[red]OFF[/]"
+        sl_str = f"ATR손절 (x{atr_mult}) {atr_status}"
+        fixed_sl_status = "[red]OFF[/]" if use_atr else "[green]ON[/]"
+        sl_str += f" / 고정손절 ({sl}%) {fixed_sl_status}"
+        table.add_row("", sl_str)
+
+        time_stop_status = "[green]ON[/]" if use_time_stop else "[red]OFF[/]"
+        table.add_row("", f"시간청산 ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만) {time_stop_status}")
+        
         table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
-        
-        if use_time_stop:
-            table.add_row("", f"시간청산 [green]ON[/] ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만)")
 
         # 투자 설정
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
@@ -2342,6 +2348,10 @@ class AutoTrader:
         table.add_row("연속 에러", err_display)
         
         table.add_row("오늘 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
+        
+        if rule_summary:
+            table.add_section()
+            table.add_row("개별 룰 설정", rule_summary)
 
         console.print(table)
         
