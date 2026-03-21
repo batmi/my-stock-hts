@@ -1,6 +1,7 @@
 # modules/backtest.py
 import pandas as pd
 import numpy as np
+import math
 import random
 from rich.table import Table
 from rich.prompt import Prompt
@@ -177,6 +178,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         price = row['close']
         high_price = row['high']
         
+        # [추가] 결측치(NaN) 또는 유효하지 않은 가격 데이터 방어 로직
+        if pd.isna(price) or price <= 0:
+            prev_row = row
+            continue
+
         # [추가] 체결 노이즈: 1% 확률로 매매 기회 놓침 (체결 누락/지연 시뮬레이션)
         if execution_noise and random.random() < 0.01:
             prev_row = row
@@ -526,31 +532,35 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             progress.advance(task)
             
     # 통계 계산 (평균)
-    avg_return = np.mean(returns)
-    avg_mdd = np.mean(mdds)
-    avg_asset = np.mean(final_assets)
-    avg_wr = np.mean(win_rates)
-    avg_pf = np.mean(profit_factors)
-    avg_sr = np.mean(sharpe_ratios)
-    avg_trades = np.mean(trade_counts)
+    avg_return = np.nanmean(returns) if returns else 0.0
+    avg_mdd = np.nanmean(mdds) if mdds else 0.0
+    avg_asset = np.nanmean(final_assets) if final_assets else 0.0
+    avg_wr = np.nanmean(win_rates) if win_rates else 0.0
+    avg_pf = np.nanmean(profit_factors) if profit_factors else 0.0
+    avg_sr = np.nanmean(sharpe_ratios) if sharpe_ratios else 0.0
+    avg_trades = np.nanmean(trade_counts) if trade_counts else 0.0
     
     # [추가] 상세 통계 평균
-    avg_trade_profit_val = np.mean(avg_trade_profits) if avg_trade_profits else 0.0
-    avg_trade_loss_val = np.mean(avg_trade_losses) if avg_trade_losses else 0.0
-    avg_holding_val = np.mean(avg_holding_days) if avg_holding_days else 0.0
+    avg_trade_profit_val = np.nanmean(avg_trade_profits) if avg_trade_profits else 0.0
+    avg_trade_loss_val = np.nanmean(avg_trade_losses) if avg_trade_losses else 0.0
+    avg_holding_val = np.nanmean(avg_holding_days) if avg_holding_days else 0.0
     
     # [추가] 추가 통계 평균
-    avg_win_count = np.mean(win_counts)
-    avg_loss_count = np.mean(loss_counts)
-    avg_gross_profit = np.mean(gross_profits)
-    avg_gross_loss = np.mean(gross_losses)
-    avg_missed_caution = np.mean(missed_cautions)
-    avg_missed_danger = np.mean(missed_dangers)
+    avg_win_count = np.nanmean(win_counts) if win_counts else 0.0
+    avg_loss_count = np.nanmean(loss_counts) if loss_counts else 0.0
+    avg_gross_profit = np.nanmean(gross_profits) if gross_profits else 0.0
+    avg_gross_loss = np.nanmean(gross_losses) if gross_losses else 0.0
+    avg_missed_caution = np.nanmean(missed_cautions) if missed_cautions else 0.0
+    avg_missed_danger = np.nanmean(missed_dangers) if missed_dangers else 0.0
     
     # 포맷팅 헬퍼
     def fmt_money(val):
-        if is_overseas: return f"${val:,.2f}"
-        return f"{int(val):,}원"
+        try:
+            if pd.isna(val) or math.isnan(float(val)): return "-"
+            if is_overseas: return f"${float(val):,.2f}"
+            return f"{int(float(val)):,}원"
+        except:
+            return "-"
 
     # [추가] 테이블 위 공백 라인
     config.console.print()
@@ -621,14 +631,14 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     if avg_sr >= 1.0: sr_color = "red"; sharpe_desc = " (매우 우수)"
     elif avg_sr >= 0.5: sr_color = "green"; sharpe_desc = " (양호)"
     else: sr_color = "blue"; sharpe_desc = " (미흡)"
-    summary_table.add_row("샤프 지수 (Sharpe)", f"[{sr_color}]{avg_sr:.2f}[/]{sharpe_desc}")
+    summary_table.add_row("위험 대비 수익 (샤프지수)", f"[{sr_color}]{avg_sr:.2f}[/]{sharpe_desc}")
     
     # MDD 상세 표시
     mdd_color = "red"; mdd_desc = " (위험)"
     if avg_mdd >= -10: mdd_color = "green"; mdd_desc = " (안정)"
     elif avg_mdd >= -20: mdd_color = "yellow"; mdd_desc = " (보통)"
     elif avg_mdd >= -30: mdd_color = "orange3"; mdd_desc = " (주의)"
-    summary_table.add_row("최대 낙폭 (MDD)", f"[{mdd_color}]{avg_mdd:.2f}%[/]{mdd_desc}")
+    summary_table.add_row("평균 최대 낙폭 (Average MDD)", f"[{mdd_color}]{avg_mdd:.2f}%[/]{mdd_desc}")
     
     config.console.print(summary_table)
     
@@ -636,13 +646,38 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
     config.console.print()
 
     # 추가 통계 (분포 정보)
-    risk_table = Table(title="리스크 분석 (분포)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    risk_table.add_column("항목", style="cyan"); risk_table.add_column("값", justify="right")
-    risk_table.add_row("수익률 표준편차", f"{np.std(returns):.2f}%")
-    risk_table.add_row("최악의 경우 (Min Return)", f"[blue]{np.min(returns):+.2f}%[/]")
-    risk_table.add_row("VaR (95% 신뢰수준)", f"[magenta]{np.percentile(returns, 5):+.2f}%[/] [dim](하위 5% 수익률)[/dim]")
-    risk_table.add_section()
-    risk_table.add_row("양호 기준", "[dim]손익비 > 2.0, Sharpe > 0.7, MDD < -10%, VaR < -1%[/dim]")
+    # [수정] 테이블 폭을 80으로 고정하여 상단 요약 테이블과 시각적 균형을 맞추고 깔끔하게 출력
+    risk_table = Table(title="리스크 분석 (분포)", box=box.HORIZONTALS, header_style="dim", border_style="dim", width=80)
+    risk_table.add_column("항목", style="cyan", justify="left")
+    risk_table.add_column("값", justify="right")
+    
+    min_ret = np.nanmin(returns) if returns else 0.0
+    min_color = "[red]" if min_ret > 0 else ("[blue]" if min_ret < 0 else "[white]")
+    var_95 = np.nanpercentile(returns, 5) if returns else 0.0
+    var_color = "[red]" if var_95 > 0 else ("[blue]" if var_95 < 0 else "[white]")
+
+    # [추가] 고급 리스크 지표 계산
+    prob_profit = len([r for r in returns if r >= 0]) / len(returns) * 100 if returns else 0.0
+    median_ret = np.nanmedian(returns) if returns else 0.0
+    median_color = "[red]" if median_ret > 0 else ("[blue]" if median_ret < 0 else "[white]")
+    
+    tail_returns = [r for r in returns if r <= var_95]
+    cvar_95 = np.nanmean(tail_returns) if tail_returns else 0.0
+    cvar_color = "[red]" if cvar_95 > 0 else ("[blue]" if cvar_95 < 0 else "[white]")
+    
+    worst_mdd = np.nanmin(mdds) if mdds else 0.0
+    worst_mdd_color = "red"
+    if worst_mdd >= -10: worst_mdd_color = "green"
+    elif worst_mdd >= -20: worst_mdd_color = "yellow"
+    elif worst_mdd >= -30: worst_mdd_color = "orange3"
+
+    risk_table.add_row("수익 발생 확률", f"{prob_profit:.1f}%")
+    risk_table.add_row("가장 흔한 수익률 (중앙값)", f"{median_color}{median_ret:+.2f}%[/]")
+    risk_table.add_row("수익률 변동폭 (표준편차)", f"{np.std(returns):.2f}%")
+    risk_table.add_row("가장 운이 나쁠 때 (최저)", f"{min_color}{min_ret:+.2f}%[/]")
+    risk_table.add_row("하위 5% 수익률 마지노선", f"[dim](VaR 95%)[/dim] {var_color}{var_95:+.2f}%[/]")
+    risk_table.add_row("최악의 하위 5% 평균 수익", f"[dim](CVaR)[/dim] {cvar_color}{cvar_95:+.2f}%[/]")
+    risk_table.add_row("최악의 낙폭 (Worst MDD)", f"[{worst_mdd_color}]{worst_mdd:.2f}%[/]")
     config.console.print(risk_table)
     
     # [추가] 텍스트 히스토그램 및 이미지 차트 생성
@@ -982,8 +1017,12 @@ def run_backtest():
 
     # [추가] 포맷팅 헬퍼 함수
     def fmt_money(val):
-        if is_overseas: return f"${val:,.2f}"
-        return f"{int(val):,}원"
+        try:
+            if pd.isna(val) or math.isnan(float(val)): return "-"
+            if is_overseas: return f"${float(val):,.2f}"
+            return f"{int(float(val)):,}원"
+        except:
+            return "-"
 
     # [수정] 결과 리포트를 테이블로 출력
     config.console.print()
@@ -1079,7 +1118,7 @@ def run_backtest():
         if sharpe_ratio >= 1.0: sharpe_color = "red"; sharpe_desc = " (매우 우수)"
         elif sharpe_ratio >= 0.5: sharpe_color = "green"; sharpe_desc = " (양호)"
         else: sharpe_color = "blue"; sharpe_desc = " (미흡)"
-        summary_table.add_row("샤프 지수 (Sharpe)", f"[{sharpe_color}]{sharpe_ratio:.2f}[/]{sharpe_desc}")
+        summary_table.add_row("위험 대비 수익 (샤프지수)", f"[{sharpe_color}]{sharpe_ratio:.2f}[/]{sharpe_desc}")
     
     mdd_color = "red"
     mdd_desc = " (위험)"
