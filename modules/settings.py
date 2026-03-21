@@ -672,7 +672,7 @@ def reset_to_default():
     config.SYSTEM_TRADING_END_TIME = "1510"
     config.SYSTEM_RISK_PER_TRADE = 5.0
     config.USE_VOLATILITY_TARGETING = True
-    config.TARGET_VOLATILITY = 0.30
+    config.TARGET_VOLATILITY = 0.20
     config.VOLATILITY_SCALING_MAX = 2.0
     config.VOLATILITY_SCALING_MIN = 0.5
     config.UNFILLED_ORDER_CANCEL_SECONDS = 120

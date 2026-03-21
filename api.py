@@ -132,6 +132,11 @@ def send_telegram_message(message):
     def add_stock_link(match):
         code = match.group(1)
         
+        # [추가] 일반 영문 단어나 보조지표명 등이 해외 티커로 오인되어 링크되는 현상 방지
+        exclude_words = {"ON", "OFF", "RSI", "MACD", "ATR", "SMA", "EMA", "CCI", "ADX", "SAR", "OBV", "ETF", "TS", "RUN", "STOP", "WAIT"}
+        if code in exclude_words:
+            return f"({code})"
+
         # 1. 국내 주식 (6자리)
         if len(code) == 6:
             # 국내 주식: 네이버 증권 모바일 (최신 URL 구조 적용)

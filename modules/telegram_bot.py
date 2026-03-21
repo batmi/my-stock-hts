@@ -1183,15 +1183,25 @@ class TelegramCommander:
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         
+        use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+
         msg += f"\n[매도 조건]\n"
         msg += f"• 익절: +{tp}%\n"
         
         half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else "OFF"
         msg += f"• 반익절: {half_tp_str}\n"
         
-        msg += f"• 손절: {sl}%\n"
+        fixed_sl_status = "OFF" if use_atr else "ON"
+        msg += f"• 고정 손절: {fixed_sl_status} ({sl}%)\n"
+
         atr_str = f"ON (x{atr_mult})" if use_atr else "OFF"
         msg += f"• ATR 손절: {atr_str}\n"
+        
+        time_stop_str = f"ON ({time_stop_days}일 경과 & 수익 < {time_stop_min}%)" if use_time_stop else "OFF"
+        msg += f"• 시간 청산: {time_stop_str}\n"
+
         msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시\n"
         msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
         msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
@@ -1246,10 +1256,15 @@ class TelegramCommander:
         filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.001)
 
+        use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+        vol_target = getattr(config, 'TARGET_VOLATILITY', 0.2)
+        vol_str = f"ON (목표 {vol_target*100:.0f}%)" if use_vol else "OFF"
+
         msg += f"\n[기타]\n"
         msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}% (최대 {max_holdings}종목)\n"
         msg += f"• 슬리피지 비율: {slippage:.4f} ({slippage*100:.2f}%)\n"
         msg += f"• 시장 필터링: {filter_str}\n"
+        msg += f"• 변동성 타겟팅: {vol_str}\n"
         
         # [추가] 개별 종목 룰 정보
         custom_rules = db_manager.db.get_all_stock_strategies()
