@@ -665,23 +665,14 @@ def _show_market_indices_core(target_indices=None):
             console=config.console,
             transient=True
         ) as progress:
-            overseas_tickers = [t for n, t in indices_map.items() if n not in ["코스피", "코스닥", "코스피200", "코스닥150"]]
-            
-            # 전체 작업량 = 예열 작업 수(해외 지수) + 지표 연산 작업 수(전체 지수)
-            total_tasks = len(overseas_tickers) + len(indices_map)
-            
-            task = progress.add_task("[cyan]해외 지수 실시간 데이터 일괄 수집 중...[/cyan]", total=total_tasks)
-
-            if overseas_tickers:
-                # 예열 과정에서도 프로그래스바가 차오르도록 updater 전달
-                def update_prefetch(): progress.advance(task)
-                api.prefetch_multiple_current_prices(overseas_tickers, is_overseas=True, progress_updater=update_prefetch)
-
-            progress.update(task, description="[cyan]지수 지표 및 추세 연산 중...[/cyan]")
+            # [최적화] 통신과 연산의 작업 시간 편차로 인한 프로그레스 바 불규칙 증가를 해결하기 위해,
+            # 예열(Prefetch) 단계와 연산 단계를 하나로 통합하고 병렬 스레드 내에서 순차 처리하도록 리팩토링합니다.
+            task = progress.add_task("[cyan]지수 실시간 데이터 수집 및 지표 연산 중...[/cyan]", total=len(indices_map))
 
             # [수정] 지수 지표 분석 루프 병렬화 (ThreadPoolExecutor)
             results_dict = {}
-            max_w = 10
+            # 야후 API 동시 호출 차단을 방지하고 부드러운 진행을 위해 max_workers를 5로 조정
+            max_w = 5
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 futures = {}
                 for name, ticker in indices_map.items():

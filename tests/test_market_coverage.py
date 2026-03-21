@@ -3,11 +3,11 @@ from unittest.mock import patch, MagicMock
 from modules import market
 import yfinance as yf
 
-@patch('modules.market.yf.Tickers')
-def test_show_market_indices_core_ticker_fail(mock_tickers):
-    """yf.Tickers 객체 생성 실패 시 예외 처리 테스트"""
-    # Tickers 객체 생성 시 예외 발생
-    mock_tickers.side_effect = Exception("Failed to create Tickers")
+@patch('modules.market.api.prefetch_multiple_current_prices')
+def test_show_market_indices_core_error(mock_prefetch):
+    """지수 분석 중 일반 예외 발생 시 처리 테스트"""
+    # 데이터 수집 단계에서 예외 발생 시뮬레이션
+    mock_prefetch.side_effect = Exception("Forced Error")
     
     with patch('config.console.print') as mock_print:
         market._show_market_indices_core()

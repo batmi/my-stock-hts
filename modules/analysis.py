@@ -2316,8 +2316,11 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [최적화] 병렬 처리 스레드 수 상향 (모의: 4, 실전: 10 스레드)
-    max_w = 4 if config.session.is_simulation else 10
+    # [최적화] 통신+연산 통합 처리를 위한 스레드 수 안정화
+    if is_overseas:
+        max_w = 4 if config.session.is_simulation else 5 # 야후 API 동시 호출 차단 방지
+    else:
+        max_w = 4 if config.session.is_simulation else 10
     try:
         with Progress(
             SpinnerColumn(),
@@ -2327,7 +2330,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task(f"[cyan]{title}[/cyan]", total=len(data_list))
+            # [수정] 통신과 연산 시간 편차로 인한 점프 현상을 해결하고 일괄 처리함을 안내
+            task = progress.add_task(f"[cyan]{title} (수집 및 분석 중)[/cyan]", total=len(data_list))
             results = [None] * len(data_list)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
@@ -2518,35 +2522,6 @@ def show_stock_analysis():
                         shared_regime_adj["KOSDAQ"] = q_adj
                 except:
                     pass
-
-            # [최적화] 그룹별로 나뉘어 있던 일괄 수집을 하나로 통합하여 최상단에서 1회 수행
-            all_kr_codes = []
-            all_us_codes = []
-            for _, d_list, is_ovs in target_list:
-                if not d_list: continue
-                codes = [item[1] for item in d_list]
-                if is_ovs: all_us_codes.extend(codes)
-                else: all_kr_codes.extend(codes)
-
-            if all_kr_codes or all_us_codes:
-                total_len = len(all_kr_codes) + len(all_us_codes)
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    console=config.console,
-                    transient=True
-                ) as progress:
-                    task = progress.add_task("[cyan]관심 종목 실시간 데이터 통합 수집 중...[/cyan]", total=total_len)
-                    
-                    def update_progress():
-                        progress.advance(task)
-
-                    if all_kr_codes: 
-                        api.prefetch_multiple_current_prices(all_kr_codes, is_overseas=False, progress_updater=update_progress)
-                    if all_us_codes: 
-                        api.prefetch_multiple_current_prices(all_us_codes, is_overseas=True, progress_updater=update_progress)
 
             try:
                 for title, d_list, is_ovs in target_list:

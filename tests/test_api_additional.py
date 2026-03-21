@@ -5,6 +5,15 @@ import config
 import pandas as pd
 import os
 
+@pytest.fixture(autouse=True)
+def clear_micro_cache():
+    """테스트 간 마이크로 캐시 오염을 방지하기 위한 초기화"""
+    with api._MICRO_CACHE_LOCK:
+        api._MICRO_CACHE.clear()
+    yield
+    with api._MICRO_CACHE_LOCK:
+        api._MICRO_CACHE.clear()
+
 @patch('api.call_api')
 def test_get_investor_trend(mock_call):
     """투자자 동향 조회 테스트"""

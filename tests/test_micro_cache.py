@@ -50,7 +50,7 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
     assert mock_call_api.call_count == 1  # 호출 횟수가 증가하지 않음!
     
     # 시간 경과 시뮬레이션 (TTL 만료 시 재호출 여부 확인)
-    with patch('time.time', return_value=time.time() + 5.0):
+    with patch('time.time', return_value=time.time() + 65.0): # 기본 TTL 60초 초과
         res3 = api.get_current_price_data("005930", is_overseas=False)
         assert mock_call_api.call_count == 2  # 캐시 만료로 다시 API가 호출되어야 함
 

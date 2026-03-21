@@ -232,6 +232,7 @@ def get_yf_fast_info(code):
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] TTL 상향
     if cached: return cached
     try:
+        time.sleep(0.05) # 야후 API 동시 호출 차단 완화용 미세 지연
         fi = yf.Ticker(code).fast_info
         data = {
             'last_price': getattr(fi, 'last_price', None),
@@ -379,25 +380,18 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
     if not codes: return
     
     if is_overseas:
-        tickers_str = " ".join(codes)
-        try:
-            tickers_obj = yf.Tickers(tickers_str)
-            for code in codes:
-                try:
-                    fi = tickers_obj.tickers[code].fast_info
-                    data = {
-                        'last_price': getattr(fi, 'last_price', None),
-                        'regular_market_previous_close': getattr(fi, 'regular_market_previous_close', None),
-                        'last_volume': getattr(fi, 'last_volume', 0),
-                        'year_high': getattr(fi, 'year_high', None)
-                    }
-                    _set_micro_cache(f"yf_fi_{code}", data)
-                except: pass
-                if progress_updater: progress_updater()
-        except Exception as e:
-            logger.debug(f"[Cache] yfinance bulk fetch error: {e}")
-            if progress_updater:
-                for _ in codes: progress_updater()
+        def fetch_yf_worker(code):
+            try:
+                # get_yf_fast_info 내부에 마이크로 캐시 저장 로직 포함
+                get_yf_fast_info(code)
+            except Exception: pass
+            if progress_updater: progress_updater()
+
+        # 야후 API Rate Limit 방지를 위해 스레드 수를 제한하여 병렬 수집
+        max_w = 4 if config.session.is_simulation else 5
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+            futures = [executor.submit(fetch_yf_worker, c) for c in codes]
+            concurrent.futures.wait(futures)
     else:
         def fetch_worker(code):
             try: get_current_price_data(code, False)
