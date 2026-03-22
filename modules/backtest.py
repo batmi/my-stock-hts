@@ -708,32 +708,24 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             config.console.print(f"{range_str} : [cyan]{bar}[/] ({count})")
             
 def run_backtest():
-    config.console.print()
-    config.console.print("[bold]전략 백테스팅 (Backtest)[/bold]")
-    
-    # 1. 종목 선택
-    # [수정] 백테스팅 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-    grid.add_row("[3] 미국 주식", "(US Stock)")
-    grid.add_row("[4] 미국 ETF", "(US ETF)")
-    grid.add_row("[5] 시장 지수", "(Market Indices)")
-    grid.add_row("[6] 직접 입력", "(Direct Input)")
-    config.console.print(grid)
-    
-    config.console.print()
-    sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
-    config.console.print()
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+        ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
+    ]
+    sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice="6")
     if sub_choice.lower() == 'q': return
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {menu_map_dict[sub_choice]}")
 
     code, name, is_overseas = None, None, False
 
     if sub_choice == '6':
-        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+        utils.print_breadcrumb()
+        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
+        config.console.print()
         if raw_input and raw_input.lower() != 'q':
+            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
             if raw_input.isdigit() and len(raw_input) == 6:
                 code = raw_input
                 name = api.get_stock_name_by_code(code, False) or code
@@ -771,31 +763,21 @@ def run_backtest():
     elif sub_choice == '5':
         # [수정] 통합 지수 리스트 사용 (백테스팅용)
         indices_list = market.ALL_INDICES
-        
-        config.console.print(f"[bold]시장 지수 목록:[/bold]")
-        for i, (n, c) in enumerate(indices_list):
-            config.console.print(f"[{i+1}] {n}")
-        
-        config.console.print()
-        sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-        config.console.print()
-        if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(indices_list):
-            name, code = indices_list[int(sel)-1]
+        dict_list = [{'name': n, 'code': c} for n, c in indices_list]
+        idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록")
+        if item:
+            name, code = item['name'], item['code']
             is_overseas = True
+            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {name}")
     elif sub_choice in ["1", "2", "3", "4"]:
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
         s_list = config.session.stock_data.get(key_map[sub_choice], [])
         if s_list:
-            for i, s in enumerate(s_list):
-                config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
-            
-            config.console.print()
-            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-            config.console.print()
-            if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
-                item = s_list[int(sel)-1]
+            idx, item = utils.search_stock_in_list(s_list, title=f"{menu_map_dict[sub_choice]} 목록")
+            if item:
                 code, name = item['code'], item['name']
                 is_overseas = (sub_choice in ["3", "4"])
+                context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
         else:
             config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
             return
@@ -803,6 +785,7 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
+    config.console.print()
     change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
     config.console.print()
     if change_settings == 'q': return
@@ -972,19 +955,12 @@ def run_backtest():
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
     # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
-    config.console.print()
-    config.console.print("[bold]실행 모드를 선택하세요:[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 단일 백테스팅", "(Single Run)")
-    grid.add_row("[2] Monte Carlo 시뮬레이션", "(Monte Carlo Sim)")
-    config.console.print(grid)
-    config.console.print()
-    mode_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
-    config.console.print()
+    mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim")]
+    mode_choice = utils.show_menu("실행 모드를 선택하세요", mode_items, default_choice="1")
 
     if mode_choice.lower() == 'q': return
+    mode_map_dict = dict((k, v) for k, v, _ in mode_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{mode_choice}] {mode_map_dict.get(mode_choice, '')}")
 
     # 3. 데이터 준비
     with config.console.status(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]"):

@@ -12,6 +12,8 @@ from rich.table import Table
 from rich import box
 from rich.prompt import Prompt
 from rich.padding import Padding
+import utils
+import context # [추가]
 
 # [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
 # (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)
@@ -455,17 +457,12 @@ def _analyze_with_gemini_ui():
         updated_at = cached['updated_at']
         config.console.print(f"\n[bold cyan]기존 분석 결과가 존재합니다. (분석 일시: {updated_at})[/bold cyan]")
         
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        grid.add_row("[1] 기존 결과 보기", "(View Cached)")
-        grid.add_row("[2] 새로 분석 시작", "(Analyze New)")
-        config.console.print(grid)
-        
-        config.console.print()
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
-        config.console.print()
+        menu_items = [("1", "기존 결과 보기", "View Cached"), ("2", "새로 분석 시작", "Analyze New")]
+        choice = utils.show_menu("실시간 테마 분석", menu_items, default_choice="2")
         if choice.lower() == 'q': return
+        
+        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict[choice]}")
         
         if choice == '1':
             result = cached['data']
@@ -490,15 +487,14 @@ def _analyze_with_gemini_ui():
 def _analyze_with_custom_prompt_ui():
     """사용자 정의 프롬프트로 Gemini 분석 실행"""
     while True:
-        config.console.print("\n[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
-        
+        config.console.print("[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
         config.console.print()
         user_prompt = Prompt.ask("입력 [dim](종료: q 또는 Enter)[/dim]")
         config.console.print()
         if user_prompt.lower() == 'q' or not user_prompt.strip():
             return
 
-        config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]\n")
+        config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]")
         
         # 사용자 프롬프트 실행 (캐시 저장 안함)
         result = analyze_market_trends_with_gemini(custom_prompt=user_prompt)
@@ -515,31 +511,26 @@ def _analyze_stock_ui():
     import indicators
     from modules import analysis
     
-    config.console.print("\n[bold]AI 종목 심층 진단 (AI Stock Analysis)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-    grid.add_row("[3] 미국 주식", "(US Stock)")
-    grid.add_row("[4] 미국 ETF", "(US ETF)")
-    grid.add_row("[5] 직접 입력", "(Direct Input)")
-    config.console.print(grid)
-    
-    config.console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
-    config.console.print()
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
+    ]
+    choice = utils.show_menu("AI 종목 심층 진단 (AI Stock Analysis)", menu_items, default_choice="5")
     if choice.lower() == 'q': return
+    
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
 
     code = None
     name = None
     is_overseas = False
     
     if choice == '5':
-        config.console.print()
-        keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](취소: q)[/dim]")
+        utils.print_breadcrumb()
+        keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](이전: q)[/dim]")
         config.console.print()
         if not keyword or keyword.lower() == 'q': return
+        context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {keyword}")
         
         # 1. 등록된 관심 종목에서 검색
         all_stocks = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
@@ -579,22 +570,13 @@ def _analyze_stock_ui():
             config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
             return
             
-        for i, s in enumerate(stock_list):
-            config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+        idx, item = utils.search_stock_in_list(stock_list, title=f"{menu_map_dict[choice]} 목록")
+        if not item: return
+        code, name = item['code'], item['name']
+        is_overseas = (choice in ["3", "4"])
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
         
-        config.console.print()
-        sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-        config.console.print()
-        if sel.lower() == 'q': return
-        if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
-            item = stock_list[int(sel)-1]
-            code, name = item['code'], item['name']
-            is_overseas = (choice in ["3", "4"])
-        else:
-            config.console.print("[red]잘못된 번호입니다.[/red]")
-            return
-        
-    config.console.print(f"\n[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 뉴스 검색)[/dim]")
+    config.console.print(f"[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 뉴스 검색)[/dim]")
     
     table_title = ""
     if choice == '1': table_title = "국내 주식 분석 정보"
@@ -669,18 +651,16 @@ def _analyze_stock_ui():
 
 def run_theme_analysis():
     """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
-    config.console.print("\n[bold]종목 트랜드 분석 (Stock Trend Analysis)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 네이버 금융 테마 순위", "(Naver Theme Ranking)")
-    grid.add_row("[2] 시장 주도 테마 분석", "(Market Theme Analysis)")
-    grid.add_row("[3] AI 종목 심층 진단", "(AI Stock Analysis)")
-    config.console.print(grid)
-    config.console.print()
+    menu_items = [
+        ("1", "네이버 금융 테마 순위", "Naver Theme Ranking"),
+        ("2", "시장 주도 테마 분석", "Market Theme Analysis"),
+        ("3", "AI 종목 심층 진단", "AI Stock Analysis")
+    ]
+    choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice="1")
+    if choice.lower() == 'q': return
     
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
-    config.console.print()
+    menu_map = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
     
     if choice == '1':
         _show_naver_themes()

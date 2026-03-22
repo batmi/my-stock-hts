@@ -8,6 +8,8 @@ import api
 import constants
 from modules import market # [추가] 통합 지수 리스트 참조용
 import math
+from rich.table import Table
+from rich import box
 
 logger = logging.getLogger(__name__)
 
@@ -71,51 +73,137 @@ def get_exchange_rate():
     
     return rate
 
-def select_stock_for_chart():
-    config.console.print()
-    config.console.print("[bold]분석할 종목 그룹을 선택하세요:[/bold]")
-    config.console.print("[1] 국내 주식")
-    config.console.print("[2] 국내 ETF")
-    config.console.print("[3] 미국 주식")
-    config.console.print("[4] 미국 ETF")
-    config.console.print("[5] 직접 입력 (코드 검색)")
-    config.console.print("[6] 시장 지수")  # [복구] 시장 지수 옵션 추가
-    
-    # choices에 "6" 추가
-    config.console.print()
-    group_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="5")
-    config.console.print()
-    if group_choice.lower() != 'q':
-        group_map = {"1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "직접입력", "6": "시장지수"}
-        context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
+def print_breadcrumb():
+    """현재 메뉴 경로를 출력합니다."""
+    if getattr(context, 'USER_ACTION_BREADCRUMB', None):
+        config.console.print(f"[dim]경로: {' > '.join(context.USER_ACTION_BREADCRUMB)}[/dim]")
+        config.console.print()
 
+def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_before=None, custom_prompt=None):
+    """
+    통합 메뉴 출력 및 입력 헬퍼 함수
+    menu_items: [("1", "이름", "설명"), ...] 또는 [("1", "이름"), ...]
+    """
+    config.console.print()
+    print_breadcrumb()
+    
+    if text_before:
+        config.console.print(text_before)
+        config.console.print()
+        
+    config.console.print(f"[bold]{title}[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="dim")
+    
+    valid_choices = []
+    for item in menu_items:
+        if len(item) == 3:
+            key, name, desc = item
+            grid.add_row(f"[{key}] {name}", f"({desc})" if desc else "")
+        else:
+            key, name = item
+            grid.add_row(f"[{key}] {name}", "")
+        valid_choices.append(str(key))
+    
+    if cancel_choice:
+        valid_choices.append(str(cancel_choice))
+        valid_choices.append(str(cancel_choice).upper())
+        
+    config.console.print(grid)
+    config.console.print()
+    
+    if custom_prompt:
+        choice = Prompt.ask(custom_prompt, default=str(default_choice))
+    else:
+        prompt_str = f"선택 [dim](이전: {cancel_choice})[/dim]" if cancel_choice else "선택"
+        choice = Prompt.ask(prompt_str, choices=valid_choices, default=str(default_choice))
+        
+    config.console.print()
+    return choice
+
+def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
+    """리스트에서 종목을 번호, 이름, 코드로 검색하여 선택하는 통합 헬퍼 함수"""
+    current_list = stock_list
+    while True:
+        config.console.print(f"[bold]{title}[/bold]")
+        if len(current_list) > 15:
+            config.console.print("[dim]목록이 깁니다. 종목명이나 코드로 검색해보세요.[/dim]")
+        
+        for i, s in enumerate(current_list):
+            if display_func:
+                config.console.print(display_func(i, s))
+            else:
+                name = s.get('name', 'Unknown')
+                code = s.get('code', 'Unknown')
+                config.console.print(f"[{i+1}] {name} ({code})")
+            
+        config.console.print()
+        sel = Prompt.ask("번호, 종목명 또는 코드 검색 [dim](이전: q)[/dim]")
+        config.console.print()
+        
+        if sel.lower() == 'q': return None, None
+        
+        if sel.isdigit():
+            idx = int(sel) - 1
+            if 0 <= idx < len(current_list):
+                selected_item = current_list[idx]
+                try: original_idx = stock_list.index(selected_item)
+                except ValueError: original_idx = idx
+                return original_idx, selected_item
+            else:
+                config.console.print("[red]잘못된 번호입니다.[/red]\n")
+                continue
+        
+        # 검색 로직
+        filtered = []
+        for s in stock_list:
+            name = s.get('name', '')
+            code = s.get('code', '')
+            if sel.lower() in name.lower() or sel.upper() in code.upper():
+                filtered.append(s)
+                
+        if not filtered:
+            config.console.print(f"[yellow]'{sel}' 검색 결과가 없습니다.[/yellow]\n")
+            current_list = stock_list
+            continue
+            
+        if len(filtered) == 1:
+            selected_item = filtered[0]
+            try: original_idx = stock_list.index(selected_item)
+            except ValueError: original_idx = 0
+            name = selected_item.get('name', '')
+            code = selected_item.get('code', '')
+            config.console.print(f"[green]검색됨: {name} ({code})[/green]\n")
+            return original_idx, selected_item
+            
+        config.console.print(f"[yellow]{len(filtered)}개의 항목이 검색되었습니다. 번호를 선택해주세요.[/yellow]\n")
+        current_list = filtered
+
+def select_stock_for_chart():
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+        ("5", "직접 입력", "Direct Input"), ("6", "시장 지수", "Market Indices")
+    ]
+    group_choice = show_menu("분석할 종목 그룹을 선택하세요", menu_items, default_choice="5")
     if group_choice.lower() == 'q': return None, None, None
     
-    # [복구] 시장 지수 선택 로직 추가
+    group_map = {"1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "직접입력", "6": "시장지수"}
+    context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
+
     if group_choice == "6":
-        # [수정] 통합 지수 리스트 사용
         indices_list = market.ALL_INDICES
-
-        config.console.print(f"\n[bold]시장 지수 목록:[/bold]")
-        for i, (name, code) in enumerate(indices_list):
-            config.console.print(f"[{i+1}] {name}")
-        
-        config.console.print()
-        idx_choice = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-        config.console.print()
-        if idx_choice.lower() != 'q':
-            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {idx_choice}")
-        if idx_choice.lower() == 'q': return None, None, None
-
-        if idx_choice.isdigit() and 1 <= int(idx_choice) <= len(indices_list):
-            name, code = indices_list[int(idx_choice)-1]
-            return code, name, True # 지수는 해외/기타로 처리
-        else:
-            return None, None, None
+        dict_list = [{'name': n, 'code': c} for n, c in indices_list]
+        idx, item = search_stock_in_list(dict_list, title="시장 지수 목록")
+        if item:
+            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {item['name']}")
+            return item['code'], item['name'], True
+        return None, None, None
 
     if group_choice == "5":
-        config.console.print()
-        raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](취소: q)[/dim]")
+        print_breadcrumb()
+        raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](이전: q)[/dim]")
         config.console.print()
         if raw_input.lower() != 'q' and raw_input.strip():
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
@@ -160,93 +248,55 @@ def select_stock_for_chart():
 
         return code, name, is_overseas
 
-    target_info = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
-    target_key, group_name = target_info[group_choice]
-    target_list = config.session.stock_data[target_key]
-    is_overseas = True if "us" in target_key else False
-
-    config.console.print(f"\n[bold]{group_name} 목록:[/bold]")
-    for i, item in enumerate(target_list):
-        config.console.print(f"[{i+1}] {item['name']} ({item['code']})")
+    key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+    target_key = key_map[group_choice]
+    target_list = config.session.stock_data.get(target_key, [])
+    is_overseas = (group_choice in ["3", "4"])
     
-    config.console.print()
-    choice_idx = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-    config.console.print()
-    if choice_idx.lower() != 'q':
-        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
-    if choice_idx.lower() == 'q': return None, None, None
-    
-    if choice_idx.isdigit() and 1 <= int(choice_idx) <= len(target_list):
-        item = target_list[int(choice_idx)-1]
+    if not target_list:
+        config.console.print(f"[yellow]{group_map[group_choice]} 목록이 비어있습니다.[/yellow]")
+        return None, None, None
+        
+    idx, item = search_stock_in_list(target_list, title=f"{group_map[group_choice]} 목록")
+    if item:
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {item['name']}")
         return item['code'], item['name'], is_overseas
     
     return None, None, None
 
-# [수정] 매수/매도 주문 시 주식/ETF 구분 헤더 및 연속 번호 출력
 def select_target_stock():
-    config.console.print()
-    config.console.print("[bold]거래 국가를 선택하세요:[/bold]")
-    config.console.print("[1] 국내 (Domestic)")
-    config.console.print("[2] 미국 (Overseas/US)")
-    config.console.print()
-    nation_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
-    config.console.print()
-    if nation_choice.lower() != 'q':
-        nation_map = {"1": "국내", "2": "미국"}
-        context.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
+    menu_items = [("1", "국내 (Domestic)", ""), ("2", "미국 (Overseas/US)", "")]
+    nation_choice = show_menu("거래 국가를 선택하세요", menu_items, default_choice="1")
     if nation_choice.lower() == 'q': return None, None, None
+    
+    nation_map = {"1": "국내", "2": "미국"}
+    context.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
     
     is_overseas = (nation_choice == "2")
     all_stocks = []
-    idx = 1
-    
-    config.console.print()
-    config.console.print("\n[bold]주문할 종목을 선택하세요:[/bold]")
     
     if is_overseas:
-        config.console.print("[yellow]-- 미국 주식 --[/yellow]")
-        for item in config.session.stock_data["stocks_us"]:
-            config.console.print(f"[{idx}] {item['name']} ({item['code']})")
-            all_stocks.append((item['name'], item['code']))
-            idx += 1
-        config.console.print("[yellow]-- 미국 ETF --[/yellow]")
-        for item in config.session.stock_data["etfs_us"]:
-            config.console.print(f"[{idx}] {item['name']} ({item['code']})")
-            all_stocks.append((item['name'], item['code']))
-            idx += 1
+        all_stocks.extend(config.session.stock_data.get("stocks_us", []))
+        all_stocks.extend(config.session.stock_data.get("etfs_us", []))
     else:
-        config.console.print("[yellow]-- 국내 주식 --[/yellow]")
-        for item in config.session.stock_data["stocks_kr"]:
-            config.console.print(f"[{idx}] {item['name']} ({item['code']})")
-            all_stocks.append((item['name'], item['code']))
-            idx += 1
-        config.console.print("[yellow]-- 국내 ETF --[/yellow]")
-        for item in config.session.stock_data["etfs_kr"]:
-            config.console.print(f"[{idx}] {item['name']} ({item['code']})")
-            all_stocks.append((item['name'], item['code']))
-            idx += 1
+        all_stocks.extend(config.session.stock_data.get("stocks_kr", []))
+        all_stocks.extend(config.session.stock_data.get("etfs_kr", []))
 
-    config.console.print(f"[{idx}] 직접 입력")
-    config.console.print()
-    choice_idx = Prompt.ask("선택 [dim](취소: q)[/dim]", default=str(idx))
-    config.console.print()
-    if choice_idx.lower() != 'q':
-        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {choice_idx}")
+    all_stocks.append({'name': '직접 입력', 'code': 'DIRECT'})
     
-    if choice_idx.lower() == 'q': return None, None, None
-    
-    if choice_idx.isdigit():
-        c_idx = int(choice_idx)
-        if 1 <= c_idx <= len(all_stocks):
-            return all_stocks[c_idx-1][1], all_stocks[c_idx-1][0], is_overseas
-        elif c_idx == idx:
-            config.console.print()
+    idx, item = search_stock_in_list(all_stocks, title="주문할 종목을 선택하세요")
+    if item:
+        if item['code'] == 'DIRECT':
+            print_breadcrumb()
             code = Prompt.ask("종목코드(티커) 입력").upper()
             config.console.print()
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
             return code, name, is_overseas
+        else:
+            context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {item['name']}")
+            return item['code'], item['name'], is_overseas
     return None, None, None
 
 class AccountContext:

@@ -9,6 +9,7 @@ import config
 import context # [추가] 상태 관리 모듈
 import indicators
 import api
+import utils
 from modules import analysis # [추가] 분석 모듈 임포트
 from datetime import datetime, timedelta, timezone
 import math
@@ -753,26 +754,26 @@ def show_market_indices(interval=0):
     target_indices = None
     
     if interval == 0:
-        config.console.print("\n[bold]시장 지수 조회 (Market Indices)[/bold]")
-        
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        
+        menu_items = []
         for key, info in config.INDICES_GROUPS.items():
             name = info['name']
             if " (" in name:
                 parts = name.split(" (", 1)
-                grid.add_row(f"[{key}] {parts[0]}", "(" + parts[1])
+                menu_items.append((key, parts[0], parts[1].replace(")", "")))
             else:
-                grid.add_row(f"[{key}] {name}", "")
+                menu_items.append((key, name, ""))
                 
-        grid.add_row("[8] 전체 지수", "(All Indices)")
-        config.console.print(grid)
-        
-        config.console.print()
-        sel = Prompt.ask("번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 취소: q)[/dim]", default="8")
+        menu_items.append(("8", "전체 지수", "All Indices"))
+        sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="8", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
         if sel.lower() == 'q': return
+        
+        # [추가] 트래킹 기록
+        sel_clean = sel.replace('@', '')
+        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        if sel_clean in menu_map_dict:
+            context.USER_ACTION_BREADCRUMB.append(f"[{sel_clean}] {menu_map_dict[sel_clean]}")
+        else:
+            context.USER_ACTION_BREADCRUMB.append(f"[선택] {sel_clean}")
         
         try:
             if sel.endswith('@'):

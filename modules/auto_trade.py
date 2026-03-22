@@ -1460,6 +1460,7 @@ class AutoTrader:
             console.print(f"운용 계좌: [bold yellow]{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}[/bold yellow] (시스템 트레이딩 전용)")
             
             if interactive:
+                utils.print_breadcrumb()
                 if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
                     console.print("[yellow]시작을 취소했습니다.[/yellow]")
                     return
@@ -4161,26 +4162,23 @@ class AutoTrader:
 
 def _select_stock_for_rules():
     """룰 설정을 위한 종목 선택 헬퍼"""
-    console.print("\n[bold]개별 설정할 대상을 선택하세요:[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-    grid.add_row("[3] 미국 주식", "(US Stock)")
-    grid.add_row("[4] 미국 ETF", "(US ETF)")
-    grid.add_row("[5] 직접 입력", "(Direct Input)")
-    console.print(grid)
-    console.print()
-    
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
+    ]
+    choice = utils.show_menu("개별 설정할 대상을 선택하세요", menu_items, default_choice="5")
     if choice.lower() == 'q': return None, None, False
+    
+    menu_map = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
 
     code, name, is_overseas = None, None, False
     
     if choice == '5':
-        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+        utils.print_breadcrumb()
+        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
         if raw_input and raw_input.lower() != 'q':
+            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
             if raw_input.isdigit() and len(raw_input) == 6:
                 code = raw_input
                 name = api.get_stock_name_by_code(code, False) or code
@@ -4193,14 +4191,11 @@ def _select_stock_for_rules():
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
         s_list = config.session.stock_data.get(key_map[choice], [])
         if s_list:
-            for i, s in enumerate(s_list):
-                console.print(f"[{i+1}] {s['name']} ({s['code']})")
-            console.print()
-            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-            if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
-                item = s_list[int(sel)-1]
-                code, name = item['code'], item['name']
-                is_overseas = (choice in ["3", "4"])
+            idx, item = utils.search_stock_in_list(s_list, title=f"{menu_map[choice]} 목록")
+            if not item: return None, None, False
+            code, name = item['code'], item['name']
+            is_overseas = (choice in ["3", "4"])
+            context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
         else:
             console.print("[yellow]목록이 비어있습니다.[/yellow]")
             return None, None, False
@@ -4254,7 +4249,8 @@ def _view_stock_rules():
 
 def _input_and_save_rule(code, name):
     """(내부함수) 룰 입력 및 저장 공통 로직"""
-    console.print(f"\n[bold green]선택 종목: {name} ({code})[/bold green]")
+    utils.print_breadcrumb()
+    console.print(f"[bold green]선택 종목: {name} ({code})[/bold green]")
     
     # [추가] 현재가 조회 (예상 가격 계산용)
     is_overseas = not (code.isdigit() and len(code) == 6)
@@ -4446,54 +4442,14 @@ def _modify_stock_rules():
         console.print("\n[yellow]저장된 개별 룰이 없습니다.[/yellow]")
         return
 
-    console.print("\n[bold]변경할 룰을 선택하세요:[/bold]")
-    
-    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table.add_column("No.", justify="right", style="cyan", width=4)
-    table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI/체결)", justify="center")
-    table.add_column("청산(익절/TS/RSI/기한)", justify="center")
-    table.add_column("리스크(비중/손절)", justify="center")
-    table.add_column("가중치", justify="center")
-    table.add_column("수정일", justify="center", style="dim")
-    
-    for i, r in enumerate(custom_rules):
-        w_str = "기본"
-        if r.get('weights'):
-            w = r['weights']
-            if isinstance(w, str):
-                try: w = json.loads(w)
-                except: pass
-            if isinstance(w, dict):
-                w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
-                
+    def _disp_func(i, r):
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
-
-        table.add_row(
-            str(i+1),
-            f"{r['name']} ({r['code']})",
-            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
-            f"{ratio_str} / {sl_str}",
-            w_str,
-            r['updated_at']
-        )
-        if (i + 1) % 5 == 0 and (i + 1) < len(custom_rules):
-            table.add_section()
-            
-    console.print(table)
-    
-    console.print()
-    sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]", default="q")
-    console.print()
-    if sel.lower() == 'q': return
-    
-    if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
-        target = custom_rules[int(sel)-1]
+        return f"[{i+1}] {r['name']} ({r['code']}) | 매수: {r['buy_score']}점 | 익절: +{r['take_profit']}% | 손절: {sl_str}"
+        
+    idx, target = utils.search_stock_in_list(custom_rules, title="변경할 룰을 선택하세요", display_func=_disp_func)
+    if target:
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target['name']}")
         _input_and_save_rule(target['code'], target['name'])
-    else:
-        console.print("[red]잘못된 번호입니다.[/red]")
 
 def _delete_stock_rules():
     """룰 삭제"""
@@ -4502,22 +4458,13 @@ def _delete_stock_rules():
         console.print("\n[yellow]삭제할 룰이 없습니다.[/yellow]")
         return
 
-    console.print("\n[bold]삭제할 룰을 선택하세요:[/bold]")
-    for i, r in enumerate(custom_rules):
-        console.print(f"[{i+1}] {r['name']} ({r['code']})")
-    
-    console.print()
-    sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-    console.print()
-    if sel.lower() == 'q': return
-    
-    if sel.isdigit() and 1 <= int(sel) <= len(custom_rules):
-        target = custom_rules[int(sel)-1]
+    idx, target = utils.search_stock_in_list(custom_rules, title="삭제할 룰을 선택하세요")
+    if target:
+        context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target['name']}")
+        utils.print_breadcrumb()
         if Prompt.ask(f"정말 '{target['name']}'의 룰을 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
             db_manager.db.delete_stock_strategy(target['code'])
             console.print(f"\n[bold green]삭제되었습니다.[/bold green]")
-    else:
-        console.print("[red]잘못된 번호입니다.[/red]")
 
 def _view_restricted_stocks():
     """트레이딩 제한 종목 목록 및 후행지표 조회"""
@@ -4693,9 +4640,11 @@ def _add_restricted_stock():
     data = load_restricted_stocks()
     if code in data:
         console.print(f"\n[yellow]이미 제한 목록에 있는 종목입니다.[/yellow]")
+        utils.print_breadcrumb()
         if Prompt.ask("메모를 수정하시겠습니까?", choices=["y", "n"], default="y") == "n":
             return
             
+    utils.print_breadcrumb()
     memo = Prompt.ask("제한 사유(메모) 입력")
     
     data[code] = {
@@ -4848,12 +4797,14 @@ def _remove_restricted_stock():
     console.print(table)
     console.print()
     
-    choice = Prompt.ask("해제할 번호 선택 [dim](취소: q)[/dim]")
+    utils.print_breadcrumb()
+    choice = Prompt.ask("해제할 번호 선택 [dim](이전: q)[/dim]")
     if choice.lower() == 'q': return
     
     if choice.isdigit() and 1 <= int(choice) <= len(codes):
         target_code = codes[int(choice)-1]
         target_name = data[target_code]['name']
+        context.USER_ACTION_BREADCRUMB.append(f"[해제] {target_name}")
         del data[target_code]
         save_restricted_stocks(data)
         console.print(f"\n[green]'{target_name}' 종목이 제한 목록에서 해제되었습니다.[/green]")
@@ -4863,20 +4814,12 @@ def _remove_restricted_stock():
 
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
-    console.print("\n[bold]종목별 트레이딩 룰 관리 (Manage Stock Rules)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 룰 조회", "(View)")
-    grid.add_row("[2] 룰 설정", "(Set)")
-    grid.add_row("[3] 룰 변경", "(Modify)")
-    grid.add_row("[4] 룰 삭제", "(Delete)")
-    console.print(grid)
-    
-    console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
-    console.print()
+    menu_items = [("1", "룰 조회", "View"), ("2", "룰 설정", "Set"), ("3", "룰 변경", "Modify"), ("4", "룰 삭제", "Delete")]
+    choice = utils.show_menu("종목별 트레이딩 룰 관리 (Manage Stock Rules)", menu_items, default_choice="1")
     if choice.lower() == 'q': return
+    
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
 
     if choice == "1":
         _view_stock_rules()
@@ -4889,19 +4832,12 @@ def manage_stock_rules():
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
-    console.print("\n[bold]트레이딩 제한 종목 관리 (Restricted Stocks)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 제한 종목 조회", "(List)")
-    grid.add_row("[2] 제한 종목 추가", "(Add)")
-    grid.add_row("[3] 제한 종목 해제", "(Remove)")
-    console.print(grid)
-    
-    console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q", "Q"], default="1")
-    console.print()
+    menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"), ("3", "제한 종목 해제", "Remove")]
+    choice = utils.show_menu("트레이딩 제한 종목 관리 (Restricted Stocks)", menu_items, default_choice="1")
     if choice.lower() == 'q': return
+    
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
     
     if choice == "1": _view_restricted_stocks()
     elif choice == "2": _add_restricted_stock()
@@ -4912,28 +4848,17 @@ def system_trading_menu():
 
     trader = AutoTrader()
 
-    console.print("\n[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]")
-    console.print(f"현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}")
-    console.print()
-    console.print("[bold]시스템 트레이딩 (System Trading)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 트레이딩 실행", "(Start)")
-    grid.add_row("[2] 트레이딩 중단", "(Stop)")
-    grid.add_row("[3] 트레이딩 상태", "(Status)")
-    grid.add_row("[4] 트레이딩 평가", "(Report)")
-    grid.add_row("[5] 트레이딩 로그", "(Log Viewer)")
-    grid.add_row("[6] 종목별 트레이딩 룰", "(Rule)")
-    grid.add_row("[7] 트레이딩 제한 종목", "(Restrict)")
-    console.print(grid)
+    text_before = f"[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]\n현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}"
+    menu_items = [
+        ("1", "트레이딩 실행", "Start"), ("2", "트레이딩 중단", "Stop"), ("3", "트레이딩 상태", "Status"),
+        ("4", "트레이딩 평가", "Report"), ("5", "트레이딩 로그", "Log Viewer"),
+        ("6", "종목별 트레이딩 룰", "Rule"), ("7", "트레이딩 제한 종목", "Restrict")
+    ]
     
     try:
-        console.print()
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "q"], default="3")
-        console.print()
+        choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice="3", text_before=text_before)
         
-        menu_map = {"1": "실행", "2": "중단", "3": "상태", "4": "평가", "5": "로그", "6": "룰설정", "7": "거래제한"}
+        menu_map = dict((k, v) for k, v, _ in menu_items)
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
             

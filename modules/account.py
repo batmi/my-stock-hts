@@ -900,6 +900,7 @@ def export_trade_history_to_excel():
             config.console.print("\n[yellow]openpyxl 라이브러리가 설치되지 않아 엑셀(.xlsx) 저장이 불가능합니다.[/yellow]")
             config.console.print()
             if Prompt.ask("대신 CSV 파일로 저장하시겠습니까?", choices=["y", "n"], default="y") == "y":
+                config.console.print()
                 filename_csv = os.path.join(config.DATA_DIR, f"trade_history_{timestamp}.csv")
                 df.to_csv(filename_csv, index=False, encoding='utf-8-sig')
                 config.console.print(f"\n[bold green]성공적으로 저장되었습니다: {os.path.basename(filename_csv)}[/bold green]")
@@ -913,19 +914,11 @@ def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
     logger.debug("[HISTORY_DEBUG] view_trade_history() 진입")
     
-    config.console.print("\n[bold]거래 내역 조회 옵션 (Trade History Options)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 전체 내역 (최신순 50건)", "(All - Latest 50)")
-    grid.add_row("[2] 최근 30일 내역", "(Last 30 Days)")
-    grid.add_row("[3] 종목코드(티커) 검색", "(Search by Ticker)")
-    grid.add_row("[4] 전체 거래 내역 저장", "(Save to Excel)")
-    config.console.print(grid)
-    
-    config.console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "q"], default="1")
-    config.console.print()
+    menu_items = [
+        ("1", "전체 내역 (최신순 50건)", "All - Latest 50"), ("2", "최근 30일 내역", "Last 30 Days"),
+        ("3", "종목코드(티커) 검색", "Search by Ticker"), ("4", "전체 거래 내역 저장", "Save to Excel")
+    ]
+    choice = utils.show_menu("거래 내역 조회 옵션 (Trade History Options)", menu_items, default_choice="1")
     logger.debug(f"[HISTORY_DEBUG] 사용자 선택: {choice}")
     
     menu_map = {"1": "전체 내역", "2": "최근 30일", "3": "종목 검색", "4": "엑셀 저장"}
@@ -968,8 +961,9 @@ def view_trade_history():
             return
     elif choice == "3":
         config.console.print()
-        keyword = Prompt.ask("검색할 종목코드(티커) 입력")
+        keyword = Prompt.ask("검색할 종목코드(티커) 입력 [dim](이전: q)[/dim]")
         config.console.print()
+        if keyword.lower() == 'q': return
         context.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
@@ -1175,18 +1169,8 @@ def view_trade_history():
 
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
-    config.console.print("\n[bold]자산 관리 (Asset Management)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 자산 조회", "(Asset Inquiry)")
-    grid.add_row("[2] 보유 잔고", "(Holdings)")
-    grid.add_row("[3] 거래 내역", "(Trade History)")
-    config.console.print(grid)
-    
-    config.console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="2")
-    config.console.print()
+    menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
+    choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice="2")
     
     menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
     if choice in menu_map:

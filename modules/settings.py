@@ -5,6 +5,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 import config
+import utils # [추가]
+import context # [추가]
 
 console = config.console
 
@@ -207,6 +209,7 @@ def view_system_config():
 def _edit_config_table(title_source, items_source):
     """설정 변경을 위한 공통 테이블 UI 함수"""
     while True:
+        utils.print_breadcrumb()
         # items_source가 함수면 호출하여 최신 리스트 가져오기 (동적 메뉴 지원)
         items = items_source() if callable(items_source) else items_source
         
@@ -694,26 +697,23 @@ def reset_to_default():
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
 
 def system_config_menu():
-    console.print("\n[bold]시스템 설정 (System Settings)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 시스템 트레이딩 일반설정", "(Trading General)")
-    grid.add_row("[2] 매수/분석 임계값", "(Analysis Thresholds)")
-    grid.add_row("[3] 매도 전략", "(Sell Strategy)")
-    grid.add_row("[4] 스코어링 가중치", "(Scoring Weights)")
-    grid.add_row("[5] 적응형 임계값", "(Adaptive Thresholds)")
-    grid.add_row("[6] 기술적 지표 파라미터", "(Indicators)")
-    grid.add_row("[7] 텔레그램 설정", "(Telegram)")
-    grid.add_row("[8] 로그 레벨 설정", "(Log Level)")
-    grid.add_row("[9] 시스템 설정 조회", "(View Config)")
-    grid.add_row("[0] 설정 초기화", "(Reset to Default)")
-    console.print(grid)
-    
-    console.print()
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "Q"], default="9")
-    console.print()
+    menu_items = [
+        ("1", "시스템 트레이딩 일반설정", "Trading General"),
+        ("2", "매수/분석 임계값", "Analysis Thresholds"),
+        ("3", "매도 전략", "Sell Strategy"),
+        ("4", "스코어링 가중치", "Scoring Weights"),
+        ("5", "적응형 임계값", "Adaptive Thresholds"),
+        ("6", "기술적 지표 파라미터", "Indicators"),
+        ("7", "텔레그램 설정", "Telegram"),
+        ("8", "로그 레벨 설정", "Log Level"),
+        ("9", "시스템 설정 조회", "View Config"),
+        ("0", "설정 초기화", "Reset to Default")
+    ]
+    choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice="9")
     if choice.lower() == 'q': return
+    
+    menu_map = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
     
     if choice == "1": modify_system_trading_general()
     elif choice == "2": modify_analysis_thresholds()

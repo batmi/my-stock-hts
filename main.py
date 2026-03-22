@@ -650,30 +650,25 @@ def main():
                 elif choice == "1": market.show_market_indices()
                 elif choice == "2": analysis.show_stock_analysis()
                 elif choice == "3": 
-                    # [수정] 차트 분석 메뉴 순서 변경 (5번: 시장 지수, 6번: 직접 입력)
-                    config.console.print()
-                    config.console.print("[bold]종목 차트 분석 (Chart Analysis)[/bold]")
-                    grid = Table.grid(padding=(0, 2))
-                    grid.add_column(justify="left")
-                    grid.add_column(justify="left", style="dim")
-                    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-                    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-                    grid.add_row("[3] 미국 주식", "(US Stock)")
-                    grid.add_row("[4] 미국 ETF", "(US ETF)")
-                    grid.add_row("[5] 시장 지수", "(Market Indices)")
-                    grid.add_row("[6] 직접 입력", "(Direct Input)")
-                    config.console.print(grid)
-
-                    config.console.print()
-                    sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "6", "q"], default="6")
-                    config.console.print()
+                    menu_items = [
+                        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+                        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+                        ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
+                    ]
+                    sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice="6")
+                    
+                    if sub_choice.lower() == 'q': continue
+                    sub_map = dict((k, v) for k, v, _ in menu_items)
+                    context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
                     
                     target_code, target_name, target_ovs = None, None, False
                     
                     if sub_choice == '6':
-                        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](취소: q)[/dim]")
+                        utils.print_breadcrumb()
+                        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
                         config.console.print()
                         if raw_input and raw_input.lower() != 'q':
+                            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
                             if raw_input.isdigit() and len(raw_input) == 6:
                                 target_code = raw_input
                                 target_name = api.get_stock_name_by_code(target_code, False) or target_code
@@ -683,53 +678,35 @@ def main():
                                 target_name = api.get_stock_name_by_code(target_code, True) or target_code
                                 target_ovs = True
                     elif sub_choice == '5':
-                        # [수정] 통합 지수 리스트 사용
                         indices_list = market.ALL_INDICES
-                        
-                        config.console.print(f"[bold]시장 지수 목록:[/bold]")
-                        for i, (name, code) in enumerate(indices_list):
-                            config.console.print(f"[{i+1}] {name}")
-                        
-                        config.console.print()
-                        sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-                        config.console.print()
-                        if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(indices_list):
-                            target_name, target_code = indices_list[int(sel)-1]
+                        dict_list = [{'name': n, 'code': c} for n, c in indices_list]
+                        idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록")
+                        if item:
+                            target_name, target_code = item['name'], item['code']
                             target_ovs = True
+                            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {target_name}")
                     elif sub_choice in ["1", "2", "3", "4"]:
                         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
                         s_list = config.session.stock_data.get(key_map[sub_choice], [])
                         if s_list:
-                            for i, s in enumerate(s_list):
-                                config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
-                            
-                            config.console.print()
-                            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-                            config.console.print()
-                            if sel.lower() != 'q' and sel.isdigit() and 1 <= int(sel) <= len(s_list):
-                                item = s_list[int(sel)-1]
+                            idx, item = utils.search_stock_in_list(s_list, title=f"{sub_map[sub_choice]} 목록")
+                            if item:
                                 target_code, target_name = item['code'], item['name']
                                 target_ovs = (sub_choice in ["3", "4"])
+                                context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target_name}")
                         else:
                             config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
 
                     if target_code: 
                         logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                         
-                        # [추가] 차트 유형 선택 (일봉/분봉)
-                        config.console.print("[bold]차트 유형을 선택하세요:[/bold]")
-                        grid = Table.grid(padding=(0, 2))
-                        grid.add_column(justify="left")
-                        grid.add_column(justify="left", style="dim")
-                        grid.add_row("[1] 일봉", "(Daily)")
-                        grid.add_row("[2] 시봉", "(Hourly)")
-                        grid.add_row("[3] 분봉", "(Intraday)")
-                        config.console.print(grid)
-                        config.console.print()
-                        c_type = Prompt.ask("선택 (취소: q)", choices=["1", "2", "3", "q"], default="2")
-                        config.console.print()
+                        menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
+                        c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
                         
                         if c_type != 'q':
+                            type_map = dict((k, v) for k, v, _ in menu_items_type)
+                            context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
+                            
                             p_type = 'daily'
                             if c_type == '2': p_type = 'hourly'
                             elif c_type == '3': p_type = 'intraday'

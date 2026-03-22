@@ -28,19 +28,16 @@ def select_account():
 
     # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
     if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
-        config.console.print("\n[bold]주문을 수행할 계좌를 선택하세요:[/bold]")
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        grid.add_row(f"[1] {acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}")
-        grid.add_row(f"[2] 자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
-        config.console.print(grid)
-        
-        config.console.print()
-        choice = Prompt.ask("선택 [dim](기본값: 1, 취소: q)[/dim]", choices=["1", "2", "q"], default="1")
-        config.console.print()
+        menu_items = [
+            ("1", f"{acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}"),
+            ("2", "자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
+        ]
+        choice = utils.show_menu("주문을 수행할 계좌를 선택하세요", menu_items, default_choice="1")
         if choice.lower() == 'q':
             return None, None, None
+            
+        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] 계좌: {menu_map_dict.get(choice, '')}")
             
         if choice == "2":
             target_cano = config.session.auto_cano
@@ -54,7 +51,8 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     매도 시 보유 잔고에서 종목을 선택하는 함수
     (메뉴 4번 잔고 조회와 동일한 상세 정보를 출력)
     """
-    config.console.print("\n[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
+    config.console.print()
+    config.console.print("[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -63,9 +61,13 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     config.console.print(grid)
     config.console.print()
     market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1", show_choices=False, show_default=False)
+    config.console.print()
     
     if market_choice == 'q':
         return None, None, False, None, None
+
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{market_choice}] 잔고: {menu_map_dict.get(market_choice, '')}")
 
     is_overseas = (market_choice == "2")
     candidates = []
@@ -665,7 +667,8 @@ def send_order(order_type):
     # 1. 타이틀 출력
     title_color = 'red' if order_type == 'buy' else 'blue'
     title_text = "매수" if order_type == 'buy' else "매도"
-    config.console.print(f"\n[bold]주식 {title_text} 주문 (Order)[/bold]")
+    config.console.print()
+    config.console.print(f"[bold]주식 {title_text} 주문 (Order)[/bold]")
     config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
     # 컨텍스트 적용 (이후 모든 API 호출은 이 계좌 기준)
@@ -690,8 +693,8 @@ def send_order(order_type):
             grid.add_row("[4] 미국 ETF", "(US ETF)")
             grid.add_row("[5] 직접 입력", "(Direct Input)")
             config.console.print(grid)
-            
             config.console.print()
+            
             choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
             config.console.print()
             if choice.lower() == 'q': return
@@ -732,6 +735,7 @@ def send_order(order_type):
                 
                 config.console.print()
                 sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
+                config.console.print()
                 if sel.lower() == 'q': return
                 if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
                     item = stock_list[int(sel)-1]
@@ -923,7 +927,9 @@ def send_order(order_type):
         config.console.print(Panel(confirm_msg, expand=False, width=60))
         
         config.console.print()
-        if Prompt.ask("위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        ans = Prompt.ask("위 내용으로 주문을 전송하시겠습니까?", choices=["y", "n"], default="n")
+        config.console.print()
+        if ans != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
             return
 
@@ -1021,7 +1027,8 @@ def send_order(order_type):
             config.console.print(f"[bold red]통신/시스템 에러: {str(e)}[/bold red]")
 
 def modify_order():
-    config.console.print("\n[bold]통합 정정/취소 주문 (Modify/Cancel Order)[/bold]")
+    config.console.print()
+    config.console.print("[bold]통합 정정/취소 주문 (Modify/Cancel Order)[/bold]")
     # config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})") # 계좌 선택 제거로 주석 처리
 
     # [추가] 메뉴 진입 시점 로깅 (미체결 내역이 없어도 기록 남기기 위함)
@@ -1036,17 +1043,18 @@ def modify_order():
     # =========================================================================
     # 4. 선택 및 분기 처리
     # =========================================================================
-    config.console.print()
-    choice = Prompt.ask("선택 번호 [dim](취소: q/Enter)[/dim]", default="q", show_default=False)
-    config.console.print()
-    if choice.lower() == 'q': return
-    context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {choice}")
-    
-    if not choice.isdigit() or int(choice) < 1 or int(choice) > len(selectable_orders):
-        config.console.print("[red]잘못된 번호입니다.[/red]")
-        return
+    def disp_func(i, o):
+        name = o.get('prdt_name')
+        code = o.get('pdno')
+        origin = o.get('_origin')
+        qty = o.get('ord_qty') if origin == 'KR' else o.get('ft_ord_qty')
+        odno = o.get('odno')
+        return f"[{i+1}] {name}({code}) | 수량: {qty} | 주문번호: {odno}"
         
-    target_order = selectable_orders[int(choice)-1]
+    idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func)
+    if not target_order: return
+    
+    context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {target_order.get('odno')}") # [추가]
     origin = target_order['_origin']
     
     # [추가] 선택된 주문의 계좌 정보 추출
@@ -1058,14 +1066,8 @@ def modify_order():
     config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
     
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 정정", "(Modify)")
-    grid.add_row("[2] 취소", "(Cancel)")
-    config.console.print(grid)
-    config.console.print()
-    action = Prompt.ask("작업 선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    menu_items = [("1", "정정", "Modify"), ("2", "취소", "Cancel")]
+    action = utils.show_menu(f"작업 선택", menu_items, default_choice="1")
     if action.lower() == 'q': return
     
     action_map = {"1": "정정", "2": "취소"}
@@ -1165,7 +1167,9 @@ def modify_order():
     )
     config.console.print(Panel(confirm_msg, expand=False, width=60))
     config.console.print()
-    if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y": return
+    ans = Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n")
+    config.console.print()
+    if ans != "y": return
 
     api_action = "revise" if action == "1" else "cancel"
     ord_dvsn = "00"
@@ -1237,17 +1241,12 @@ def modify_order():
 
 def order_menu():
     """매수/매도 주문 선택 메뉴"""
-    config.console.print("\n[bold]주문 유형을 선택하세요:[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 매수 주문", "(Buy Order)")
-    grid.add_row("[2] 매도 주문", "(Sell Order)")
-    config.console.print(grid)
-    config.console.print()
-    
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
+    menu_items = [("1", "매수 주문", "Buy Order"), ("2", "매도 주문", "Sell Order")]
+    choice = utils.show_menu("주문 유형을 선택하세요", menu_items, default_choice="1")
     if choice.lower() == 'q': return
+
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
 
     if choice == "1":
         send_order("buy")
@@ -1256,17 +1255,8 @@ def order_menu():
 
 def stock_order_menu():
     """종목 주문 관리 통합 메뉴"""
-    config.console.print("\n[bold]종목 주문 관리 (Stock Order Management)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] [red]매수[/red] 주문", "(Buy)")
-    grid.add_row("[2] [blue]매도[/blue] 주문", "(Sell)")
-    grid.add_row("[3] [magenta]정정/취소[/magenta] 주문", "(Modify/Cancel)")
-    config.console.print(grid)
-    config.console.print()
-    
-    choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="3")
+    menu_items = [("1", "[red]매수[/red] 주문", "Buy"), ("2", "[blue]매도[/blue] 주문", "Sell"), ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel")]
+    choice = utils.show_menu("종목 주문 관리 (Stock Order Management)", menu_items, default_choice="3")
     
     menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문"}
     if choice in menu_map:

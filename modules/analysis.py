@@ -368,31 +368,25 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     if target_code:
         code, name, is_overseas = target_code, target_name, target_is_overseas
     else:
-        config.console.print("\n[bold]개별 종목 분석 (Individual Analysis)[/bold]")
-        # [수정] 종목 선택 메뉴 확장 ([5] 직접 입력 추가 및 기본값 설정)
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-        grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-        grid.add_row("[3] 미국 주식", "(US Stock)")
-        grid.add_row("[4] 미국 ETF", "(US ETF)")
-        grid.add_row("[5] 직접 입력", "(Direct Input)")
-        config.console.print(grid)
-        
-        config.console.print()
-        choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
-        config.console.print()
+        menu_items = [
+            ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+            ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
+        ]
+        choice = utils.show_menu("개별 종목 분석 (Individual Analysis)", menu_items, default_choice="5")
         if choice.lower() == 'q': return
+        
+        menu_map = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
 
         if choice == '5':
             # 직접 입력 로직
             from modules import manage
             # manage.get_current_price는 출력을 포함하므로, 여기서는 간단히 입력만 받음
-            config.console.print()
-            raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+            utils.print_breadcrumb()
+            raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: q)[/dim]")
             config.console.print()
             if not raw_input or raw_input.lower() == 'q': return
+            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
             
             # manage 모듈의 _resolve_stock 로직과 유사하게 처리하거나 utils 활용
             # 여기서는 utils가 없으므로 telegram_bot의 로직을 참고하여 간단히 구현
@@ -434,19 +428,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
                 return
                 
-            # 간이 리스트 출력 및 선택
-            for i, s in enumerate(stock_list):
-                config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
-            
-            config.console.print()
-            sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-            if sel.lower() == 'q': return
-            if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
-                item = stock_list[int(sel)-1]
-                code, name = item['code'], item['name']
-                is_overseas = (choice in ["3", "4"])
-            else:
-                return
+            idx, item = utils.search_stock_in_list(stock_list, title=f"{menu_map[choice]} 목록")
+            if not item: return
+            code, name = item['code'], item['name']
+            is_overseas = (choice in ["3", "4"])
+            context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
 
     if not code: return
 
@@ -2403,22 +2389,13 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
 def show_stock_analysis():
-    config.console.print("\n[bold]종목 시세 분석 (Stock Analysis)[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-    grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-    grid.add_row("[3] 미국 주식", "(US Stock)")
-    grid.add_row("[4] 미국 ETF", "(US ETF)")
-    grid.add_row("[5] 전체 보기", "(View All)")
-    grid.add_row("[6] 개별 종목 분석", "(Individual Analysis)")
-    grid.add_row("[7] 전체 종목 분석", "(Market Analysis)")
-    config.console.print(grid)
-    
-    config.console.print()
-    choice_str = Prompt.ask("번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 취소: q)[/dim]", default="5")
-    config.console.print()
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+        ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
+        ("7", "전체 종목 분석", "Market Analysis")
+    ]
+    choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice="5", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
     if choice_str.lower() == 'q': return
 
     interval = 0
@@ -2443,20 +2420,14 @@ def show_stock_analysis():
 
     if '7' in choices:
         context.USER_ACTION_BREADCRUMB.append("[7] 전체분석")
-        config.console.print("\n[bold]분석할 시장을 선택하세요:[/bold]")
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        grid.add_row("[1] 코스피", "(KOSPI)")
-        grid.add_row("[2] 코스닥", "(KOSDAQ)")
-        grid.add_row("[3] 전체 종목 분석 결과 저장", "(Save to Excel)")
-        config.console.print(grid)
-        config.console.print()
-        sub_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "q"], default="1")
+        sub_menu = [("1", "코스피", "KOSPI"), ("2", "코스닥", "KOSDAQ"), ("3", "전체 종목 분석 결과 저장", "Save to Excel")]
+        sub_choice = utils.show_menu("분석할 시장을 선택하세요", sub_menu, default_choice="1")
         
         if sub_choice.lower() == 'q': return
         
         if sub_choice == "3":
+            sub_map = dict((k, v) for k, v, _ in sub_menu)
+            context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
             save_all_market_analysis()
             return
 
