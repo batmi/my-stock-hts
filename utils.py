@@ -10,6 +10,7 @@ from modules import market # [추가] 통합 지수 리스트 참조용
 import math
 from rich.table import Table
 from rich import box
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,18 @@ def get_exchange_rate():
     
     return rate
 
+def clear_screen():
+    """config 설정에 따라 터미널 화면을 지웁니다."""
+    if getattr(config, 'CLEAR_SCREEN_ON_MENU', False):
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+def pause():
+    """화면 자동 지우기 설정이 켜져 있을 때, 사용자가 결과를 확인할 수 있도록 대기합니다."""
+    if getattr(config, 'CLEAR_SCREEN_ON_MENU', False):
+        config.console.print()
+        config.console.print("[dim]엔터를 누르면 메인 메뉴로 돌아갑니다...[/dim]")
+        input()
+
 def print_breadcrumb():
     """현재 메뉴 경로를 출력합니다."""
     if getattr(context, 'USER_ACTION_BREADCRUMB', None):
@@ -84,6 +97,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
     통합 메뉴 출력 및 입력 헬퍼 함수
     menu_items: [("1", "이름", "설명"), ...] 또는 [("1", "이름"), ...]
     """
+    clear_screen()
     config.console.print()
     print_breadcrumb()
     
@@ -180,6 +194,34 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
         config.console.print(f"[yellow]{len(filtered)}개의 항목이 검색되었습니다. 번호를 선택해주세요.[/yellow]\n")
         current_list = filtered
 
+def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하시겠습니까?"):
+    """API를 통해 종목 유효성을 검증하고 사용자에게 진행 여부를 확인합니다."""
+    with config.console.status("[cyan]종목 유효성 확인 중 (API)...[/cyan]"):
+        res = api.get_current_price_data(code, is_overseas)
+        
+        is_valid = False
+        msg = "시세 데이터를 찾을 수 없는 종목입니다."
+        if res and res.get('rt_cd') == '0':
+            output = res.get('output', {})
+            if is_overseas:
+                if float(output.get('last') or 0) > 0: is_valid = True
+            else:
+                if int(output.get('stck_prpr') or 0) > 0: is_valid = True
+        elif res:
+            msg = res.get('msg1') or msg
+            
+        if not is_valid:
+            config.console.print(f"[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
+            config.console.print(f"[dim]사유: {msg}[/dim]\n")
+            return False
+
+    config.console.print(f"[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
+    config.console.print()
+    ans = Prompt.ask(action_text, choices=["y", "n"], default="y")
+    config.console.print()
+    
+    return ans.lower() == 'y'
+
 def select_stock_for_chart():
     menu_items = [
         ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
@@ -220,30 +262,7 @@ def select_stock_for_chart():
             config.console.print(f"\n[bold red]오류: '{code}'에 대한 정보를 찾을 수 없습니다.[/bold red]\n")
             return None, None, None
 
-        with config.console.status("[cyan]종목 유효성 최종 확인 중 (API)...[/cyan]"):
-            res = api.get_current_price_data(code, is_overseas)
-            
-            is_valid = False
-            msg = "시세 데이터를 찾을 수 없는 종목입니다."
-            if res and res.get('rt_cd') == '0':
-                output = res.get('output', {})
-                if is_overseas:
-                    if float(output.get('last') or 0) > 0: is_valid = True
-                else:
-                    if int(output.get('stck_prpr') or 0) > 0: is_valid = True
-            elif res:
-                msg = res.get('msg1') or msg
-                
-            if not is_valid:
-                config.console.print(f"\n[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
-                config.console.print(f"[dim]사유: {msg}[/dim]\n")
-                return None, None, None
-
-        config.console.print(f"\n[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
-        config.console.print()
-        ans = Prompt.ask("이 종목으로 분석을 진행하시겠습니까?", choices=["y", "n"], default="y")
-        config.console.print()
-        if ans.lower() == "n":
+        if not validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 분석을 진행하시겠습니까?"):
             return None, None, None
 
         return code, name, is_overseas
@@ -288,11 +307,18 @@ def select_target_stock():
     if item:
         if item['code'] == 'DIRECT':
             print_breadcrumb()
-            code = Prompt.ask("종목코드(티커) 입력").upper()
+            code = Prompt.ask("종목코드(티커) 입력 [dim](이전: q)[/dim]").upper()
             config.console.print()
+            if code.lower() == 'Q':
+                return None, None, None
+                
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
+            
+            if not validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 주문을 진행하시겠습니까?"):
+                return None, None, None
+                
             return code, name, is_overseas
         else:
             context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {item['name']}")

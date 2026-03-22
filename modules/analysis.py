@@ -105,7 +105,7 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
 
     # 4. Synergy Bonus (2.0점)
     # Trend Confirmation
-    if (ema20 and ema60 and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
+    if (ema20 is not None and ema60 is not None and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"추세 확증: 정배열+MACD양수+ADX (+{s:.2f})")
@@ -418,6 +418,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if not found:
                     config.console.print(f"[red]'{raw_input}'을(를) 찾을 수 없습니다. 코드로 입력해주세요.[/red]")
                     return
+                    
+            if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 분석을 진행하시겠습니까?"):
+                return
         else:
             # 리스트 선택
             key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
@@ -554,7 +557,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 현재가
     curr_price_color = "[white]"
-    if ind['ema_5'] and ind['ema_20'] and ind['ema_60']:
+    if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None:
         if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
             if current_price > ind['ema_5']: curr_price_color = "[red]"
             elif current_price < ind['ema_60']: curr_price_color = "[blue]"
@@ -581,8 +584,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("변동성 (ATR)", f"{int(atr_val):,} ({vol_str})", "연환산 변동성 (리스크)")
 
     # SAR
-    sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
-    sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
+    if ind.get('psar') is not None:
+        sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
+        sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
+    else:
+        sar_pos = "-"
+        sar_color = "[white]"
     table_tech.add_row("SAR 위치", f"{sar_color}{sar_pos}[/]", "파라볼릭 추세 전환")
 
     # MACD
@@ -604,80 +611,95 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", "이동평균 상회 여부")
     
     # RSI
-    rsi_val = ind['rsi']
-    rsi_str = f"{rsi_val:.2f}"
-    rsi_desc = ""
-    if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: 
-        rsi_str = f"[magenta]{rsi_str}[/]"
-        rsi_desc = "과열 (추격금지)"
-    elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: 
-        rsi_str = f"[red]{rsi_str}[/]"
-        rsi_desc = "강세 유지"
-    elif 45 <= rsi_val < 55: 
-        rsi_str = f"[orange3]{rsi_str}[/]"
-        rsi_desc = "강세 조정 (진입후보)"
-    elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: 
-        rsi_str = f"[yellow]{rsi_str}[/]"
-        rsi_desc = "약세/하락전환 가능"
-    else: 
-        rsi_str = f"[blue]{rsi_str}[/]"
-        rsi_desc = "침체 (과매도)"
+    rsi_val = ind.get('rsi')
+    if rsi_val is not None:
+        rsi_str = f"{rsi_val:.2f}"
+        rsi_desc = ""
+        if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: 
+            rsi_str = f"[magenta]{rsi_str}[/]"
+            rsi_desc = "과열 (추격금지)"
+        elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: 
+            rsi_str = f"[red]{rsi_str}[/]"
+            rsi_desc = "강세 유지"
+        elif 45 <= rsi_val < 55: 
+            rsi_str = f"[orange3]{rsi_str}[/]"
+            rsi_desc = "강세 조정 (진입후보)"
+        elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: 
+            rsi_str = f"[yellow]{rsi_str}[/]"
+            rsi_desc = "약세/하락전환 가능"
+        else: 
+            rsi_str = f"[blue]{rsi_str}[/]"
+            rsi_desc = "침체 (과매도)"
+    else:
+        rsi_str = "-"
+        rsi_desc = "데이터 부족"
     table_tech.add_row("RSI (14)", f"{rsi_str} [dim]({rsi_desc})[/dim]", "과매수(70)/과매도(30)")
 
     # ADX
-    adx_val = ind['adx']
-    adx_str = f"{adx_val:.2f}"
-    adx_desc = ""
-    if adx_val >= 40: 
-        adx_str = f"[magenta]{adx_str}[/]" 
-        adx_desc = "과열 (조정 주의)"
-    elif adx_val >= 30: 
-        adx_str = f"[red]{adx_str}[/]"     
-        adx_desc = "강한 추세"
-    elif adx_val >= 20: 
-        adx_str = f"[orange3]{adx_str}[/]"
-        adx_desc = "안정적 추세"
-    elif adx_val >= 15: 
-        adx_str = f"[yellow]{adx_str}[/]"
-        adx_desc = "추세 형성 중"
-    else: 
-        adx_str = f"[white]{adx_str}[/]"
-        adx_desc = "추세 없음 (횡보)"
+    adx_val = ind.get('adx')
+    if adx_val is not None:
+        adx_str = f"{adx_val:.2f}"
+        adx_desc = ""
+        if adx_val >= 40: 
+            adx_str = f"[magenta]{adx_str}[/]" 
+            adx_desc = "과열 (조정 주의)"
+        elif adx_val >= 30: 
+            adx_str = f"[red]{adx_str}[/]"     
+            adx_desc = "강한 추세"
+        elif adx_val >= 20: 
+            adx_str = f"[orange3]{adx_str}[/]"
+            adx_desc = "안정적 추세"
+        elif adx_val >= 15: 
+            adx_str = f"[yellow]{adx_str}[/]"
+            adx_desc = "추세 형성 중"
+        else: 
+            adx_str = f"[white]{adx_str}[/]"
+            adx_desc = "추세 없음 (횡보)"
+    else:
+        adx_str = "-"
+        adx_desc = "데이터 부족"
     table_tech.add_row("ADX (14)", f"{adx_str} [dim]({adx_desc})[/dim]", "추세 강도 (25 이상 강세)")
 
     # CCI
-    cci_val = ind['cci']
-    cci_str = f"{cci_val:.2f}"
-    cci_desc = ""
-    if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
-        cci_str = f"[red]{cci_str}[/]"
-        cci_desc = "과열 (추격 금물)"
-    elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
-        cci_str = f"[orange3]{cci_str}[/]"
-        cci_desc = "상승 추세"
-    elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
-        cci_str = f"[yellow]{cci_str}[/]"
-        cci_desc = "반등 시도"
-    else: 
-        cci_str = f"[blue]{cci_str}[/]"
-        cci_desc = "과매도 (저점 탐색)"
+    cci_val = ind.get('cci')
+    if cci_val is not None:
+        cci_str = f"{cci_val:.2f}"
+        cci_desc = ""
+        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[red]{cci_str}[/]"
+            cci_desc = "과열 (추격 금물)"
+        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[orange3]{cci_str}[/]"
+            cci_desc = "상승 추세"
+        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
+            cci_str = f"[yellow]{cci_str}[/]"
+            cci_desc = "반등 시도"
+        else: 
+            cci_str = f"[blue]{cci_str}[/]"
+            cci_desc = "과매도 (저점 탐색)"
+    else:
+        cci_str = "-"
+        cci_desc = "데이터 부족"
     table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
 
     # 이평 배열
     ema_align = "알 수 없음"
     ema_color = "[white]"
-    if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: 
-        ema_align = "정배열 (20>60>120)"; ema_color = "[red]"
-    elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: 
-        ema_align = "역배열 (20<60<120)"; ema_color = "[blue]"
-    else: 
-        ema_align = "혼조세"; ema_color = "[yellow]"
+    if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
+        if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: 
+            ema_align = "정배열 (20>60>120)"; ema_color = "[red]"
+        elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: 
+            ema_align = "역배열 (20<60<120)"; ema_color = "[blue]"
+        else: 
+            ema_align = "혼조세"; ema_color = "[yellow]"
+    else:
+        ema_align = "데이터 부족"; ema_color = "[dim]"
     table_tech.add_row("이평 배열", f"{ema_color}{ema_align}[/]", "5/20/60/120일선 배열")
 
     # 이격도
-    d_20 = (current_price / ind['ema_20'] * 100) if ind['ema_20'] else 0
-    d_60 = (current_price / ind['ema_60'] * 100) if ind['ema_60'] else 0
-    d_120 = (current_price / ind['ema_120'] * 100) if ind['ema_120'] else 0
+    d_20 = (current_price / ind['ema_20'] * 100) if ind['ema_20'] is not None else 0
+    d_60 = (current_price / ind['ema_60'] * 100) if ind['ema_60'] is not None else 0
+    d_120 = (current_price / ind['ema_120'] * 100) if ind['ema_120'] is not None else 0
     
     def dc(val): return "[red]" if val >= 100 else "[blue]"
     
@@ -782,8 +804,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             buy_vol_limit = custom_rule['buy_vol_strength']
         
     is_buy_score = score >= buy_score_limit
-    is_buy_rsi = ind['rsi'] < buy_rsi_limit
-    is_safe_state = state not in ["위험", "주의"]
+    is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
+    is_safe_state = state not in ["매도", "주의", "-"]
     is_buy_vol = True
     if vol_strength is not None:
         is_buy_vol = vol_strength >= buy_vol_limit
@@ -801,7 +823,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
         else:
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
-    if not is_buy_rsi and not is_mr_state: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
+    if not is_buy_rsi and not is_mr_state:
+        if ind['rsi'] is None: buy_reason_list.append("RSI 데이터 부족")
+        else: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
     buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
     
@@ -873,7 +897,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/cyan]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
@@ -1078,25 +1102,21 @@ def get_analysis_params():
     
     config.console.print()
     val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})", default=str(params['BUY_SCORE']))
-    config.console.print()
     if val.lower() == 'q': return None
     try: params['BUY_SCORE'] = float(val)
     except: pass
     
-    config.console.print()
     val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})", default=str(params['BUY_RSI_MAX']))
     if val.lower() == 'q': return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
     # [추가] 체결강도 입력
     current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    config.console.print()
     val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)", default=str(current_vol))
     if val.lower() == 'q': return None
     try: params['BUY_VOL_STRENGTH'] = float(val)
     except: params['BUY_VOL_STRENGTH'] = current_vol
 
-    config.console.print()
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
     if val.lower() == 'q': return None
     try: params['RISE_SCORE'] = float(val)
@@ -1107,10 +1127,10 @@ def get_analysis_params():
     curr_weights = params['WEIGHTS'].copy()
     while True:
         config.console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10점 권장)[/dim]")
+        config.console.print()
         
         try:
             def ask_w(key, desc, default_v):
-                config.console.print()
                 v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
                 if v.lower() == 'q': raise ValueError("quit")
                 return float(v)
@@ -1135,7 +1155,6 @@ def get_analysis_params():
             config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
             continue
 
-    config.console.print()
     filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승)", choices=["1", "2", "3", "q"], default="1")
     config.console.print()
     if filter_choice.lower() == 'q': return None
@@ -1388,7 +1407,7 @@ def analyze_market_stocks(market_type):
         
         config.console.print()
         choice = Prompt.ask("기존 결과를 보시겠습니까?", choices=["y", "n", "q"], default="y")
-        if choice == 'q': return
+        if choice == 'q': return False
         if choice == "y":
             buy_candidates = cached_data['data']
             params = c_params
@@ -1417,11 +1436,11 @@ def analyze_market_stocks(market_type):
         config.console.print()
         # 파라미터 설정
         change_settings = Prompt.ask("분석 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
-        if change_settings == 'q': return
+        if change_settings == 'q': return False
 
         if change_settings == 'y':
             params = get_analysis_params()
-            if params is None: return
+            if params is None: return False
         else:
             params = {
                 "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
@@ -1466,7 +1485,10 @@ def analyze_market_stocks(market_type):
                         obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
                         
                         sar_val = res_data.get('psar')
-                        sar_str = "상승" if sar_val and res_data['price'] > sar_val else "하락"
+                        if sar_val is not None:
+                            sar_str = "상승" if res_data['price'] > sar_val else "하락"
+                        else:
+                            sar_str = "-"
                         
                         macd_val = res_data.get('macd')
                         sig_val = res_data.get('macd_signal')
@@ -1700,7 +1722,7 @@ def analyze_market_stocks(market_type):
         choice = Prompt.ask("선택", default="q", show_default=False)
         
         if choice.lower() == 'q':
-            break
+            return False
             
         if choice.isdigit():
             idx = int(choice) - 1
@@ -1727,7 +1749,7 @@ def save_all_market_analysis():
     config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
     
     if Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
-        return
+        return False
 
     # [추가] 개별 룰 로드 (전체 조회 최적화)
     custom_rules = db_manager.db.get_all_stock_strategies()
@@ -2084,7 +2106,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
 
             curr_price_color = "[white]"
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60']:
+            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None:
                 if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
                     if curr > ind['ema_5']: curr_price_color = "[red]"
                     elif curr < ind['ema_60']: curr_price_color = "[blue]"
@@ -2100,7 +2122,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             ema_5_color = "[white]"
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
                 if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[red]"
                 elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[blue]"
                 elif (ind['ema_20'] < ind['ema_5'] < ind['ema_60']) or (ind['ema_60'] < ind['ema_5'] < ind['ema_20']): ema_5_color = "[yellow]"
@@ -2108,20 +2130,20 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             ema_5_str = f"{ema_5_color}{fmt_idx(ind['ema_5'])}[/]"
 
             ema_20_color = "[white]"
-            if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+            if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
                 if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[red]"
                 elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[blue]"
                 elif (ind['ema_60'] < ind['ema_20'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_20'] < ind['ema_60']): ema_20_color = "[yellow]"
             ema_20_str = f"{ema_20_color}{fmt_idx(ind['ema_20'])}[/]"
 
             ema_60_color = "[yellow]"
-            if ind['ema_60'] and ind['ema_5'] and ind['ema_20'] and ind['ema_120']:
+            if ind['ema_60'] is not None and ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_120'] is not None:
                 if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[blue]"
                 elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[red]"
             ema_60_str = f"{ema_60_color}{fmt_idx(ind['ema_60'])}[/]"
             
             ema_120_color = "[white]"
-            if ind['ema_120'] and ind['ema_60']:
+            if ind['ema_120'] is not None and ind['ema_60'] is not None:
                 if ind['ema_60'] > ind['ema_120']: ema_120_color = "[red]" 
                 elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
             ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
@@ -2187,7 +2209,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 else: cci_str = f"[blue]{cci_str}[/]"
 
             final_name_str = name
-            if ind['ema_5'] and ind['ema_20'] and ind['ema_60'] and ind['adx'] and ind['rsi'] and ind['cci']:
+            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None and ind['adx'] is not None and ind['rsi'] is not None and ind['cci'] is not None:
                 all_ema_green = (ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60'])
                 all_ema_red = (ind['ema_5'] < ind['ema_20'] and ind['ema_20'] < ind['ema_60'])
                 price_above_ema5 = (curr > ind['ema_5'])
@@ -2396,7 +2418,7 @@ def show_stock_analysis():
         ("7", "전체 종목 분석", "Market Analysis")
     ]
     choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice="5", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
-    if choice_str.lower() == 'q': return
+    if choice_str.lower() == 'q': return False
 
     interval = 0
     if choice_str.endswith('@'):
@@ -2428,13 +2450,13 @@ def show_stock_analysis():
         if sub_choice == "3":
             sub_map = dict((k, v) for k, v, _ in sub_menu)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
-            save_all_market_analysis()
+            if save_all_market_analysis() is False: return False
             return
 
         market_type = "KOSPI" if sub_choice == "1" else "KOSDAQ"
         context.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
         
-        analyze_market_stocks(market_type)
+        if analyze_market_stocks(market_type) is False: return False
         return
 
     selected_groups = set()

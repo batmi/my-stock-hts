@@ -3865,7 +3865,10 @@ class AutoTrader:
             adx_val = f"{result['adx']:.1f}" if result['adx'] is not None else "-"
             cci_val = f"{result['cci']:.1f}" if result['cci'] is not None else "-"
             sar_val = result.get('psar')
-            sar_str = "상승" if sar_val and current_price > sar_val else "하락"
+            if sar_val is not None:
+                sar_str = "상승" if current_price > sar_val else "하락"
+            else:
+                sar_str = "-"
             macd_val = result.get('macd'); sig_val = result.get('macd_signal')
             macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
             obv_trend = result.get('obv_trend')
@@ -3959,7 +3962,7 @@ class AutoTrader:
 
         # [수정] 우선순위 정렬 (1. 점수 높은 순, 2. RSI 낮은 순)
         # 점수가 같다면 RSI가 낮을수록 상승 여력이 있다고 판단하여 우선순위를 둡니다.
-        candidates.sort(key=lambda x: (-x['score'], x['rsi']))
+        candidates.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999.0))
         
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
@@ -4057,10 +4060,10 @@ class AutoTrader:
                 self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty}) | 예수금:{avail_cash:,}원, 필요:{order_price:,}원(1주)")
                 continue
             
-            rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] else "-"
-            adx_val = f"{cand['adx']:.1f}" if cand['adx'] else "-"
-            cci_val = f"{cand['cci']:.1f}" if cand.get('cci') else "-"
-            vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') else "-"
+            rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] is not None else "-"
+            adx_val = f"{cand['adx']:.1f}" if cand['adx'] is not None else "-"
+            cci_val = f"{cand['cci']:.1f}" if cand.get('cci') is not None else "-"
+            vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') is not None else "-"
             
             # [수정] 사유 포맷 변경 (줄바꿈 제거)
             reason = "조건 만족"
@@ -4187,6 +4190,9 @@ def _select_stock_for_rules():
                 code = raw_input.upper()
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
+                
+            if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목을 선택하시겠습니까?"):
+                return None, None, False
     elif choice in ["1", "2", "3", "4"]:
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
         s_list = config.session.stock_data.get(key_map[choice], [])
@@ -4350,9 +4356,9 @@ def _input_and_save_rule(code, name):
             temp_weights = curr_weights.copy() if curr_weights else config.SCORING_WEIGHTS.copy()
             
             console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10.0점 설정)[/dim]")
+            console.print()
             
             def ask_weight(key, desc, default_val):
-                console.print()
                 v = Prompt.ask(f"{desc} [dim](현재: {default_val})[/dim]", default=str(default_val))
                 if v.lower() == 'q': raise QuitInput()
                 return float(v)
@@ -4431,8 +4437,8 @@ def _input_and_save_rule(code, name):
 def _set_stock_rules():
     """룰 설정 (신규/검색)"""
     code, name, _ = _select_stock_for_rules()
-    if not code: return
-    _input_and_save_rule(code, name)
+    if not code: return False
+    if _input_and_save_rule(code, name) is False: return False
 
 def _modify_stock_rules():
     """룰 변경 (기존 목록에서 선택)"""
@@ -4449,7 +4455,8 @@ def _modify_stock_rules():
     idx, target = utils.search_stock_in_list(custom_rules, title="변경할 룰을 선택하세요", display_func=_disp_func)
     if target:
         context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target['name']}")
-        _input_and_save_rule(target['code'], target['name'])
+        if _input_and_save_rule(target['code'], target['name']) is False: return False
+    else: return False
 
 def _delete_stock_rules():
     """룰 삭제"""
@@ -4465,6 +4472,8 @@ def _delete_stock_rules():
         if Prompt.ask(f"정말 '{target['name']}'의 룰을 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
             db_manager.db.delete_stock_strategy(target['code'])
             console.print(f"\n[bold green]삭제되었습니다.[/bold green]")
+        else: return False
+    else: return False
 
 def _view_restricted_stocks():
     """트레이딩 제한 종목 목록 및 후행지표 조회"""
@@ -4579,7 +4588,10 @@ def _view_restricted_stocks():
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')
-                sar_icon = "[red]⬆[/]" if sar_val and current_price > sar_val else "[blue]⬇[/]"
+                if sar_val is not None:
+                    sar_icon = "[red]⬆[/]" if current_price > sar_val else "[blue]⬇[/]"
+                else:
+                    sar_icon = "-"
                 
                 macd_val = ind.get('macd')
                 sig_val = ind.get('macd_signal')
@@ -4635,14 +4647,14 @@ def _view_restricted_stocks():
 def _add_restricted_stock():
     """트레이딩 제한 종목 추가"""
     code, name, is_overseas = _select_stock_for_rules()
-    if not code: return
+    if not code: return False
     
     data = load_restricted_stocks()
     if code in data:
         console.print(f"\n[yellow]이미 제한 목록에 있는 종목입니다.[/yellow]")
         utils.print_breadcrumb()
         if Prompt.ask("메모를 수정하시겠습니까?", choices=["y", "n"], default="y") == "n":
-            return
+            return False
             
     utils.print_breadcrumb()
     memo = Prompt.ask("제한 사유(메모) 입력")
@@ -4664,7 +4676,7 @@ def _remove_restricted_stock():
     data = load_restricted_stocks()
     if not data:
         console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
-        return
+        return False
 
     console.print()
     table = Table(title="트레이딩 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -4746,7 +4758,10 @@ def _remove_restricted_stock():
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')
-                sar_icon = "[red]⬆[/]" if sar_val and current_price > sar_val else "[blue]⬇[/]"
+                if sar_val is not None:
+                    sar_icon = "[red]⬆[/]" if current_price > sar_val else "[blue]⬇[/]"
+                else:
+                    sar_icon = "-"
                 
                 macd_val = ind.get('macd')
                 sig_val = ind.get('macd_signal')
@@ -4799,7 +4814,7 @@ def _remove_restricted_stock():
     
     utils.print_breadcrumb()
     choice = Prompt.ask("해제할 번호 선택 [dim](이전: q)[/dim]")
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
     
     if choice.isdigit() and 1 <= int(choice) <= len(codes):
         target_code = codes[int(choice)-1]
@@ -4824,11 +4839,11 @@ def manage_stock_rules():
     if choice == "1":
         _view_stock_rules()
     elif choice == "2":
-        _set_stock_rules()
+        if _set_stock_rules() is False: return False
     elif choice == "3":
-        _modify_stock_rules()
+        if _modify_stock_rules() is False: return False
     elif choice == "4":
-        _delete_stock_rules()
+        if _delete_stock_rules() is False: return False
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
@@ -4840,8 +4855,10 @@ def manage_restricted_stocks_menu():
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
     
     if choice == "1": _view_restricted_stocks()
-    elif choice == "2": _add_restricted_stock()
-    elif choice == "3": _remove_restricted_stock()
+    elif choice == "2": 
+        if _add_restricted_stock() is False: return False
+    elif choice == "3": 
+        if _remove_restricted_stock() is False: return False
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
@@ -4864,9 +4881,9 @@ def system_trading_menu():
             
     except KeyboardInterrupt:
         console.print()
-        return
+        return False
 
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
     
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
     
@@ -4881,6 +4898,6 @@ def system_trading_menu():
     elif choice == "5":
         trader.view_log_file()
     elif choice == "6":
-        manage_stock_rules()
+        if manage_stock_rules() is False: return False
     elif choice == "7":
-        manage_restricted_stocks_menu()
+        if manage_restricted_stocks_menu() is False: return False

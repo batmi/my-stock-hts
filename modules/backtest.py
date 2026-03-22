@@ -714,7 +714,7 @@ def run_backtest():
         ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
     ]
     sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice="6")
-    if sub_choice.lower() == 'q': return
+    if sub_choice.lower() == 'q': return False
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {menu_map_dict[sub_choice]}")
 
@@ -735,30 +735,7 @@ def run_backtest():
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
                 
-            with config.console.status("[cyan]종목 유효성 확인 중 (API)...[/cyan]"):
-                res = api.get_current_price_data(code, is_overseas)
-                
-                is_valid = False
-                msg = "시세 데이터를 찾을 수 없는 종목입니다."
-                if res and res.get('rt_cd') == '0':
-                    output = res.get('output', {})
-                    if is_overseas:
-                        if float(output.get('last') or 0) > 0: is_valid = True
-                    else:
-                        if int(output.get('stck_prpr') or 0) > 0: is_valid = True
-                elif res:
-                    msg = res.get('msg1') or msg
-                
-                if not is_valid:
-                    config.console.print(f"\n[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
-                    config.console.print(f"[dim]사유: {msg}[/dim]\n")
-                    return
-            
-            config.console.print(f"\n[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
-            config.console.print()
-            ans = Prompt.ask("이 종목으로 백테스팅을 진행하시겠습니까?", choices=["y", "n"], default="y")
-            config.console.print()
-            if ans.lower() == "n":
+            if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 백테스팅을 진행하시겠습니까?"):
                 return
     elif sub_choice == '5':
         # [수정] 통합 지수 리스트 사용 (백테스팅용)
@@ -785,7 +762,6 @@ def run_backtest():
     if not code: return
 
     # 2. 설정 입력
-    config.console.print()
     change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까?", choices=["y", "n", "q"], default="n")
     config.console.print()
     if change_settings == 'q': return
@@ -826,85 +802,74 @@ def run_backtest():
         
         # 매수 조건
         def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        config.console.print()
-        val = Prompt.ask(f"매수 기준 점수 (기본: {def_buy_score}점)\n[dim]설명: 이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(def_buy_score))
+        val = Prompt.ask(f"매수 기준 점수 (기본: {def_buy_score}점)\n[dim]이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(def_buy_score))
         if val.lower() == 'q': return
         try: buy_score = float(val)
         except: buy_score = float(def_buy_score)
         
         def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        config.console.print()
-        val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]설명: RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
+        val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
         if val.lower() == 'q': return
         buy_rsi = float(val)
         
         def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        config.console.print()
-        val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]설명: RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
+        val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
         if val.lower() == 'q': return
         take_profit_rsi = float(val)
         
         # 매도 조건
         def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-        config.console.print()
-        val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]설명: 점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
+        val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
         if val.lower() == 'q': return
         try: sell_score = float(val)
         except: sell_score = float(def_sell_score)
         
         def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        config.console.print()
-        val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]설명: 손실이 이 비율에 도달하면 손절매[/dim]", default=str(def_sl))
+        val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]손실이 이 비율에 도달하면 손절매[/dim]", default=str(def_sl))
         if val.lower() == 'q': return
         stop_loss = float(val)
         
         def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        config.console.print()
-        val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]설명: 수익이 이 비율에 도달하면 이익 실현[/dim]", default=str(def_tp))
+        val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현[/dim]", default=str(def_tp))
         if val.lower() == 'q': return
         take_profit = float(val)
         
         def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        config.console.print()
-        val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]설명: 수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
+        val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
         if val.lower() == 'q': return
         ts_activation = float(val)
         
         def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
-        config.console.print()
-        val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]설명: 최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
+        val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
         if val.lower() == 'q': return
         ts_callback = float(val)
         
         def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-        config.console.print()
-        val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]설명: 매수 후 목표 기간 내 수익 미달 시 강제 청산[/dim]", default=str(def_time_stop))
+        val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산[/dim]", default=str(def_time_stop))
         if val.lower() == 'q': return
         time_stop_days = int(val)
         
         curr_use_atr = "y" if use_atr_stop else "n"
-        config.console.print()
-        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) (기본: {curr_use_atr})\n[dim]설명: 종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
+        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) (기본: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
         if val.lower() == 'q': return
         use_atr_stop = (val.lower() == 'y')
         
         if use_atr_stop:
-            config.console.print()
-            val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]설명: ATR 값의 몇 배를 손절폭으로 할지 설정[/dim]", default=str(atr_mult))
+            val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정[/dim]", default=str(atr_mult))
             if val.lower() == 'q': return
             atr_mult = float(val)
         
         # [추가] 가중치 설정 입력
         config.console.print("\n[스코어링 가중치 설정]")
-        config.console.print()
         if Prompt.ask("가중치를 변경하시겠습니까?", choices=["y", "n"], default="n") == "y":
             curr_weights = weights.copy() if weights else config.SCORING_WEIGHTS.copy()
             while True:
+                config.console.print()
                 config.console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10점 권장)[/dim]")
+                config.console.print()
                 
                 try:
                     def ask_w(key, desc, default_v):
-                        config.console.print()
                         v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
                         if v.lower() == 'q': raise ValueError("quit")
                         return float(v)
@@ -934,13 +899,13 @@ def run_backtest():
              w_str = f", 가중치: {weights['TREND']}/{weights['MOMENTUM']}/{weights['STRENGTH']}/{weights['SYNERGY']}"
 
         atr_str = f", ATR손절: x{atr_mult}" if use_atr_stop else ""
-        config.console.print(f"[dim]설정한 조건으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
+        config.console.print(f"\n[dim]설정한 조건으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
     else:
         w_str = ""
         if weights:
              w_str = f", 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
         atr_str = f", ATR손절: x{atr_mult}" if use_atr_stop else ""
-        config.console.print(f"[dim]기본 설정으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
+        config.console.print(f"\n[dim]기본 설정으로 진행합니다. (기간: {days}일, 매수: {buy_score}점/RSI{buy_rsi}, 매도: {sell_score}점, 익절: {take_profit}%/RSI{take_profit_rsi}, 손절: {stop_loss}%, 트레일링: {ts_activation}%/{ts_callback}%, 시간청산: {time_stop_days}일{atr_str}{w_str})[/dim]")
     
     # [수정] 초기 자본금 및 환율 설정
     initial_capital_krw = 10_000_000

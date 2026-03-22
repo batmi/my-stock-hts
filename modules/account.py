@@ -925,9 +925,9 @@ def view_trade_history():
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': 
+    if choice.lower() == 'q':
         logger.debug("[HISTORY_DEBUG] 사용자 취소(q)로 종료")
-        return
+        return False
 
     # [추가] 조회 전 금일 체결 내역 동기화 (시장가 주문 단가 업데이트)
     try:
@@ -963,7 +963,7 @@ def view_trade_history():
         config.console.print()
         keyword = Prompt.ask("검색할 종목코드(티커) 입력 [dim](이전: q)[/dim]")
         config.console.print()
-        if keyword.lower() == 'q': return
+        if keyword.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
@@ -1176,7 +1176,7 @@ def asset_management_menu():
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
 
     if choice == "1":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
@@ -1185,4 +1185,4 @@ def asset_management_menu():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         get_account_balance()
     elif choice == "3":
-        view_trade_history()
+        if view_trade_history() is False: return False

@@ -404,7 +404,7 @@ def get_current_price(mode='add'):
         context.USER_ACTION_BREADCRUMB.append(f"[종목조회] {raw_input}")
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
-    if raw_input.lower() == 'q': return
+    if raw_input.lower() == 'q': return False
     if not raw_input.strip(): 
         config.console.print("[yellow]종목코드가 입력되지 않았습니다.[/yellow]")
         return
@@ -475,7 +475,7 @@ def get_current_price(mode='add'):
                 context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
                 logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
             
-            if cat_choice.lower() == 'q': return
+            if cat_choice.lower() == 'q': return False
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
 
             new_item = {"name": input_name, "code": code}
@@ -498,7 +498,7 @@ def get_current_price(mode='add'):
                 
                 if pos_input.lower() == 'q':
                     config.console.print("[yellow]종목 추가가 취소되었습니다.[/yellow]")
-                    return
+                    return False
                 
                 if pos_input.isdigit() and 1 <= int(pos_input) <= len(target_list) + 1:
                     insert_idx = int(pos_input) - 1
@@ -525,7 +525,7 @@ def delete_stock():
     if cat_choice.lower() != 'q':
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{cat_choice}] {menu_map_dict[cat_choice]}")
-    if cat_choice.lower() == 'q': return
+    if cat_choice.lower() == 'q': return False
 
     group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = group_map[cat_choice]
@@ -540,32 +540,21 @@ def delete_stock():
         config.console.print(f"[yellow]'{group_name}' 그룹에 저장된 종목이 없습니다.[/yellow]")
         return
         
-    config.console.print(f"[bold]{group_name} 목록:[/bold]")
-    for i, item in enumerate(target_list):
-        config.console.print(f"[{i+1}] {item['name']} ({item['code']})")
-        
-    config.console.print()
-    del_idx = Prompt.ask("삭제할 번호 선택 [dim](취소: q)[/dim]")
-    config.console.print()
-    if del_idx.lower() != 'q':
-        context.USER_ACTION_BREADCRUMB.append(f"[번호선택] {del_idx}")
-    if del_idx.lower() == 'q': return
+    idx, item_to_del = utils.search_stock_in_list(target_list, title=f"{group_name} 목록")
+    if not item_to_del: return False
     
-    if del_idx.isdigit():
-        idx = int(del_idx) - 1
-        if 0 <= idx < len(target_list):
-            item_to_del = target_list[idx]
-            config.console.print()
-            ans = Prompt.ask(f"정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n")
-            config.console.print()
-            if ans == "y":
-                logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-                del config.session.stock_data[target_key][idx]
-                config.session.save_stock_config(config.session.stock_data)
-                config.session.load_stock_config()
-                config.console.print(f"\n[green]삭제되었습니다.[/green]")
-        else: config.console.print(f"\n[red]잘못된 번호입니다.[/red]")
-    else: config.console.print(f"\n[red]숫자를 입력해주세요.[/red]")
+    context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {item_to_del['name']}")
+    utils.print_breadcrumb()
+    ans = Prompt.ask(f"정말 '{item_to_del['name']}'을(를) 삭제하시겠습니까?", choices=["y", "n"], default="n")
+    config.console.print()
+    if ans == "y":
+        logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+        del config.session.stock_data[target_key][idx]
+        config.session.save_stock_config(config.session.stock_data)
+        config.session.load_stock_config()
+        config.console.print(f"\n[green]삭제되었습니다.[/green]")
+    else:
+        return False
 
 def reorder_stock():
     """관심 종목 순서 재배치"""
@@ -577,7 +566,7 @@ def reorder_stock():
     if cat_choice.lower() != 'q':
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{cat_choice}] {menu_map_dict[cat_choice]}")
-    if cat_choice.lower() == 'q': return
+    if cat_choice.lower() == 'q': return False
 
     group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = group_map[cat_choice]
@@ -589,7 +578,7 @@ def reorder_stock():
         return
         
     from_idx, target_stock = utils.search_stock_in_list(target_list, title=f"{group_name} 목록")
-    if not target_stock: return
+    if not target_stock: return False
     context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {target_stock['name']}")
     
     config.console.print()
@@ -597,7 +586,7 @@ def reorder_stock():
     config.console.print()
     if to_idx_str.lower() != 'q':
         context.USER_ACTION_BREADCRUMB.append(f"[목표위치] {to_idx_str}")
-    if to_idx_str.lower() == 'q' or not to_idx_str.isdigit(): return
+    if to_idx_str.lower() == 'q' or not to_idx_str.isdigit(): return False
     
     to_idx = int(to_idx_str) - 1
     if to_idx < 0 or to_idx >= len(target_list):
@@ -630,14 +619,14 @@ def manage_stock_menu():
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
 
     if choice == "1":
-        get_current_price(mode='add')
+        if get_current_price(mode='add') is False: return False
     elif choice == "2":
-        delete_stock()
+        if delete_stock() is False: return False
     elif choice == "3":
-        reorder_stock()
+        if reorder_stock() is False: return False
     elif choice == "4":
         import api
         from modules import market

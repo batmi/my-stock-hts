@@ -578,6 +578,9 @@ def main():
     
     try:
         while True:
+            # [추가] 메인 메뉴 진입 시 화면 정리
+            utils.clear_screen()
+            
             # [추가] 화면 출력 안정화를 위한 플러시 및 지연 (저사양 환경 대응)
             sys.stdout.flush()
             time.sleep(0.2)
@@ -646,9 +649,11 @@ def main():
                 context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
                     
                 last_choice = choice
-                if choice == "0": settings.system_config_menu()
-                elif choice == "1": market.show_market_indices()
-                elif choice == "2": analysis.show_stock_analysis()
+                action_taken = None
+
+                if choice == "0": action_taken = settings.system_config_menu()
+                elif choice == "1": action_taken = market.show_market_indices()
+                elif choice == "2": action_taken = analysis.show_stock_analysis()
                 elif choice == "3": 
                     menu_items = [
                         ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
@@ -657,71 +662,90 @@ def main():
                     ]
                     sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice="6")
                     
-                    if sub_choice.lower() == 'q': continue
-                    sub_map = dict((k, v) for k, v, _ in menu_items)
-                    context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
-                    
-                    target_code, target_name, target_ovs = None, None, False
-                    
-                    if sub_choice == '6':
-                        utils.print_breadcrumb()
-                        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
-                        config.console.print()
-                        if raw_input and raw_input.lower() != 'q':
-                            context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
-                            if raw_input.isdigit() and len(raw_input) == 6:
-                                target_code = raw_input
-                                target_name = api.get_stock_name_by_code(target_code, False) or target_code
-                                target_ovs = False
+                    if sub_choice.lower() == 'q': 
+                        action_taken = False
+                    else:
+                        sub_map = dict((k, v) for k, v, _ in menu_items)
+                        context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+                        
+                        target_code, target_name, target_ovs = None, None, False
+                        
+                        if sub_choice == '6':
+                            utils.print_breadcrumb()
+                            raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
+                            config.console.print()
+                            if raw_input and raw_input.lower() != 'q':
+                                context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
+                                if raw_input.isdigit() and len(raw_input) == 6:
+                                    target_code = raw_input
+                                    target_name = api.get_stock_name_by_code(target_code, False) or target_code
+                                    target_ovs = False
+                                else:
+                                    target_code = raw_input.upper()
+                                    target_name = api.get_stock_name_by_code(target_code, True) or target_code
+                                    target_ovs = True
+                                    
+                                if not utils.validate_and_confirm_stock(target_code, target_name, target_ovs, "이 종목으로 차트 분석을 진행하시겠습니까?"):
+                                    target_code = None
+                                    action_taken = False
                             else:
-                                target_code = raw_input.upper()
-                                target_name = api.get_stock_name_by_code(target_code, True) or target_code
-                                target_ovs = True
-                    elif sub_choice == '5':
-                        indices_list = market.ALL_INDICES
-                        dict_list = [{'name': n, 'code': c} for n, c in indices_list]
-                        idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록")
-                        if item:
-                            target_name, target_code = item['name'], item['code']
-                            target_ovs = True
-                            context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {target_name}")
-                    elif sub_choice in ["1", "2", "3", "4"]:
-                        key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
-                        s_list = config.session.stock_data.get(key_map[sub_choice], [])
-                        if s_list:
-                            idx, item = utils.search_stock_in_list(s_list, title=f"{sub_map[sub_choice]} 목록")
+                                action_taken = False
+                        elif sub_choice == '5':
+                            indices_list = market.ALL_INDICES
+                            dict_list = [{'name': n, 'code': c} for n, c in indices_list]
+                            idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록")
                             if item:
-                                target_code, target_name = item['code'], item['name']
-                                target_ovs = (sub_choice in ["3", "4"])
-                                context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target_name}")
-                        else:
-                            config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
+                                target_name, target_code = item['name'], item['code']
+                                target_ovs = True
+                                context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {target_name}")
+                            else:
+                                action_taken = False
+                        elif sub_choice in ["1", "2", "3", "4"]:
+                            key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
+                            s_list = config.session.stock_data.get(key_map[sub_choice], [])
+                            if s_list:
+                                idx, item = utils.search_stock_in_list(s_list, title=f"{sub_map[sub_choice]} 목록")
+                                if item:
+                                    target_code, target_name = item['code'], item['name']
+                                    target_ovs = (sub_choice in ["3", "4"])
+                                    context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target_name}")
+                                else:
+                                    action_taken = False
+                            else:
+                                config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
+                                action_taken = False
 
-                    if target_code: 
-                        logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
-                        
-                        menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
-                        c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
-                        
-                        if c_type != 'q':
-                            type_map = dict((k, v) for k, v, _ in menu_items_type)
-                            context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
+                        if target_code: 
+                            logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                             
-                            p_type = 'daily'
-                            if c_type == '2': p_type = 'hourly'
-                            elif c_type == '3': p_type = 'intraday'
-                            chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
-                elif choice == "4": theme_analysis.run_theme_analysis()
-                elif choice == "5": backtest.run_backtest()
-                elif choice == "6": auto_trade.system_trading_menu() 
-                elif choice == "7": manage.manage_stock_menu()
-                elif choice == "8": trading.stock_order_menu()
+                            menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
+                            c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
+                            
+                            if c_type != 'q':
+                                type_map = dict((k, v) for k, v, _ in menu_items_type)
+                                context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
+                                
+                                p_type = 'daily'
+                                if c_type == '2': p_type = 'hourly'
+                                elif c_type == '3': p_type = 'intraday'
+                                chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
+                            else:
+                                action_taken = False
+                elif choice == "4": action_taken = theme_analysis.run_theme_analysis()
+                elif choice == "5": action_taken = backtest.run_backtest()
+                elif choice == "6": action_taken = auto_trade.system_trading_menu() 
+                elif choice == "7": action_taken = manage.manage_stock_menu()
+                elif choice == "8": action_taken = trading.stock_order_menu()
                 elif choice == "9": 
                     try:
-                        account.asset_management_menu()
+                        action_taken = account.asset_management_menu()
                     except Exception as e:
                         config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
                         logging.error(f"자산 관리 메뉴 오류: {e}")
+                        action_taken = False
+                
+                if action_taken is not False:
+                    utils.pause()
             except KeyboardInterrupt:
                 config.console.print()
                 config.console.print()
@@ -770,6 +794,7 @@ def main():
             config.console.print("[4/4] 데이터베이스 최적화(VACUUM) 수행 [bold green][완료][/]")
 
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
+        config.console.print()
         os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)
         
 if __name__ == "__main__":

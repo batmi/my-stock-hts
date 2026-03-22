@@ -560,6 +560,9 @@ def _analyze_stock_ui():
         if not code:
             config.console.print(f"[red]'{keyword}' 종목을 찾을 수 없습니다.[/red]")
             return
+            
+        if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 AI 심층 진단을 진행하시겠습니까?"):
+            return
     else:
         # 리스트 선택
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
@@ -635,7 +638,7 @@ def _analyze_stock_ui():
                 f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
             )
             
-            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중... (모델: {config.GEMINI_MODEL})[/cyan]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             answer = analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
@@ -657,7 +660,7 @@ def run_theme_analysis():
         ("3", "AI 종목 심층 진단", "AI Stock Analysis")
     ]
     choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice="1")
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
     
     menu_map = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")

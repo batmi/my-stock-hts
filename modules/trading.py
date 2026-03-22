@@ -34,7 +34,7 @@ def select_account():
         ]
         choice = utils.show_menu("주문을 수행할 계좌를 선택하세요", menu_items, default_choice="1")
         if choice.lower() == 'q':
-            return None, None, None
+            return False, False, False
             
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] 계좌: {menu_map_dict.get(choice, '')}")
@@ -51,20 +51,11 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     매도 시 보유 잔고에서 종목을 선택하는 함수
     (메뉴 4번 잔고 조회와 동일한 상세 정보를 출력)
     """
-    config.console.print()
-    config.console.print("[bold]어떤 시장의 보유 주식을 매도하시겠습니까?[/bold]")
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
-    grid.add_column(justify="left", style="dim")
-    grid.add_row("[1] 국내 주식", "(Domestic)")
-    grid.add_row("[2] 해외 주식", "(Overseas)")
-    config.console.print(grid)
-    config.console.print()
-    market_choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1", show_choices=False, show_default=False)
-    config.console.print()
+    menu_items = [("1", "국내 주식", "Domestic"), ("2", "해외 주식", "Overseas")]
+    market_choice = utils.show_menu("어떤 시장의 보유 주식을 매도하시겠습니까?", menu_items, default_choice="1")
     
     if market_choice == 'q':
-        return None, None, False, None, None
+        return False, False, False, False, False
 
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{market_choice}] 잔고: {menu_map_dict.get(market_choice, '')}")
@@ -680,30 +671,24 @@ def send_order(order_type):
         if order_type == 'sell':
             # 매도 시 상세 잔고 리스트에서 선택
             res = select_stock_from_balance(target_cano, target_acnt)
-            if not res or res[0] is None: return
+            if not res or res[0] in [None, False]: return False
             stock_code, stock_name, is_overseas, pre_selected_excd, stock_info = res
         else:
-            # [수정] 매수 시 종목 선택 메뉴 확장 ([5] 직접 입력 추가)
-            grid = Table.grid(padding=(0, 2))
-            grid.add_column(justify="left")
-            grid.add_column(justify="left", style="dim")
-            grid.add_row("[1] 국내 주식", "(Domestic Stock)")
-            grid.add_row("[2] 국내 ETF", "(Domestic ETF)")
-            grid.add_row("[3] 미국 주식", "(US Stock)")
-            grid.add_row("[4] 미국 ETF", "(US ETF)")
-            grid.add_row("[5] 직접 입력", "(Direct Input)")
-            config.console.print(grid)
-            config.console.print()
-            
-            choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "3", "4", "5", "q"], default="5")
-            config.console.print()
+            menu_items = [
+                ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"), 
+                ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
+            ]
+            choice = utils.show_menu("매수할 종목 분류", menu_items, default_choice="5")
             if choice.lower() == 'q': return
+
+            menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
 
             stock_code, stock_name, is_overseas = None, None, False
 
             if choice == '5':
-                config.console.print()
-                raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](취소: q)[/dim]")
+                utils.print_breadcrumb()
+                raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: q)[/dim]")
                 config.console.print()
                 if not raw_input or raw_input.lower() == 'q': return
                 
@@ -720,6 +705,9 @@ def send_order(order_type):
                     # 한글명 검색 등은 생략하거나 utils 활용 필요하나 여기선 코드로 유도
                     config.console.print("[yellow]정확한 종목 코드를 입력해주세요.[/yellow]")
                     return
+                    
+                if not utils.validate_and_confirm_stock(stock_code, stock_name, is_overseas, "이 종목으로 매수를 진행하시겠습니까?"):
+                    return False
             else:
                 # 리스트 선택
                 key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
@@ -730,18 +718,12 @@ def send_order(order_type):
                     config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
                     return
                     
-                for i, s in enumerate(stock_list):
-                    config.console.print(f"[{i+1}] {s['name']} ({s['code']})")
+                idx, item = utils.search_stock_in_list(stock_list, title=f"{menu_map_dict[choice]} 목록")
+                if not item: return False
                 
-                config.console.print()
-                sel = Prompt.ask("번호 선택 [dim](취소: q)[/dim]")
-                config.console.print()
-                if sel.lower() == 'q': return
-                if sel.isdigit() and 1 <= int(sel) <= len(stock_list):
-                    item = stock_list[int(sel)-1]
-                    stock_code, stock_name = item['code'], item['name']
-                    is_overseas = (choice in ["3", "4"])
-                else: return
+                stock_code, stock_name = item['code'], item['name']
+                is_overseas = (choice in ["3", "4"])
+                context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {stock_name}")
         
         if not stock_code: 
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
@@ -796,17 +778,15 @@ def send_order(order_type):
         # 5. 수량 및 단가 입력
         config.console.print()
         qty = Prompt.ask(f"[{title_color}]{title_text} 수량(주)[/] [dim](취소: q)[/dim]", default=default_qty)
-        config.console.print()
-        if qty.lower() == 'q': return
+        if qty.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         qty = qty.replace(',', '')
 
         unit = "달러" if is_overseas else "원"
         price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: q[/dim]"
-        config.console.print()
         price = Prompt.ask(price_prompt, default="0")
         config.console.print()
-        if price.lower() == 'q': return
+        if price.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
         price = price.replace(',', '')
@@ -931,7 +911,7 @@ def send_order(order_type):
         config.console.print()
         if ans != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
-            return
+            return False
 
         # 8. 주문 전송
         market_api_param = "overseas" if is_overseas else "domestic"
@@ -1052,7 +1032,7 @@ def modify_order():
         return f"[{i+1}] {name}({code}) | 수량: {qty} | 주문번호: {odno}"
         
     idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func)
-    if not target_order: return
+    if not target_order: return False
     
     context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {target_order.get('odno')}") # [추가]
     origin = target_order['_origin']
@@ -1068,7 +1048,7 @@ def modify_order():
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
     menu_items = [("1", "정정", "Modify"), ("2", "취소", "Cancel")]
     action = utils.show_menu(f"작업 선택", menu_items, default_choice="1")
-    if action.lower() == 'q': return
+    if action.lower() == 'q': return False
     
     action_map = {"1": "정정", "2": "취소"}
     if action in action_map: context.USER_ACTION_BREADCRUMB.append(f"[{action}] {action_map[action]}")
@@ -1099,15 +1079,13 @@ def modify_order():
         rvse_cncl_dvsn_cd = "01"
         config.console.print()
         qty = Prompt.ask(f"[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
-        config.console.print()
-        if qty.lower() == 'q': return
+        if qty.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         
         price_prompt = "[magenta]정정 단가($)[/]" if is_overseas else "[magenta]정정 단가[/] (0: 시장가)"
-        config.console.print()
         price = Prompt.ask(f"{price_prompt} [dim](취소: q)[/dim]", default="0")
         config.console.print()
-        if price.lower() == 'q': return
+        if price.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: 
             config.console.print("[red]가격 입력 필요[/]"); return
@@ -1116,7 +1094,7 @@ def modify_order():
         config.console.print()
         qty = Prompt.ask(f"[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: q)[/dim]", default="0")
         config.console.print()
-        if qty.lower() == 'q': return
+        if qty.lower() == 'q': return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         price = "0"
 
@@ -1169,7 +1147,7 @@ def modify_order():
     config.console.print()
     ans = Prompt.ask("진행하시겠습니까?", choices=["y", "n"], default="n")
     config.console.print()
-    if ans != "y": return
+    if ans != "y": return False
 
     api_action = "revise" if action == "1" else "cancel"
     ord_dvsn = "00"
@@ -1243,7 +1221,7 @@ def order_menu():
     """매수/매도 주문 선택 메뉴"""
     menu_items = [("1", "매수 주문", "Buy Order"), ("2", "매도 주문", "Sell Order")]
     choice = utils.show_menu("주문 유형을 선택하세요", menu_items, default_choice="1")
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
 
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -1262,11 +1240,11 @@ def stock_order_menu():
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
 
     if choice == "1":
-        send_order("buy")
+        if send_order("buy") is False: return False
     elif choice == "2":
-        send_order("sell")
+        if send_order("sell") is False: return False
     elif choice == "3":
-        modify_order()
+        if modify_order() is False: return False

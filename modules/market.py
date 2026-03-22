@@ -765,7 +765,7 @@ def show_market_indices(interval=0):
                 
         menu_items.append(("8", "전체 지수", "All Indices"))
         sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="8", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
-        if sel.lower() == 'q': return
+        if sel.lower() == 'q': return False
         
         # [추가] 트래킹 기록
         sel_clean = sel.replace('@', '')

@@ -22,6 +22,12 @@ console = Console()
 SCREEN_DEBUG_LEVEL = "OFF"
 
 # ==========================================================
+# [설정] 화면 자동 지우기 (Clear Screen)
+# ==========================================================
+# 메뉴 이동 시 이전 터미널 내용을 지우고 깔끔하게 유지할지 여부입니다.
+CLEAR_SCREEN_ON_MENU = False
+
+# ==========================================================
 # [설정] 파일 로그 레벨 설정 (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 # ==========================================================
 FILE_DEBUG_LEVEL = "WARNING"
@@ -530,6 +536,7 @@ def load_dynamic_config():
             global SYSTEM_MAX_HOLDINGS
             global SLIPPAGE_RATE
             global CHART_CACHE_TTL_MINUTES
+            global CLEAR_SCREEN_ON_MENU
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
             if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
@@ -551,6 +558,7 @@ def load_dynamic_config():
             if "AUTO_MORNING_BRIEFING_TIME" in data: AUTO_MORNING_BRIEFING_TIME = data["AUTO_MORNING_BRIEFING_TIME"]
             
             if "SCREEN_DEBUG_LEVEL" in data: SCREEN_DEBUG_LEVEL = data["SCREEN_DEBUG_LEVEL"]
+            if "CLEAR_SCREEN_ON_MENU" in data: CLEAR_SCREEN_ON_MENU = data["CLEAR_SCREEN_ON_MENU"]
             if "FILE_DEBUG_LEVEL" in data: FILE_DEBUG_LEVEL = data["FILE_DEBUG_LEVEL"]
             
             if "SYSTEM_MAX_CONSECUTIVE_ERRORS" in data: SYSTEM_MAX_CONSECUTIVE_ERRORS = data["SYSTEM_MAX_CONSECUTIVE_ERRORS"]

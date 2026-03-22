@@ -1003,7 +1003,7 @@ class TelegramCommander:
 
             # 이평선 상태
             ema_state = "혼조/역배열"
-            if ind['ema_20'] and ind['ema_60'] and ind['ema_120']:
+            if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
                 if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
             

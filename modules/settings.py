@@ -35,6 +35,7 @@ def _save_dynamic_config():
         "AUTO_MORNING_BRIEFING_USE": getattr(config, 'AUTO_MORNING_BRIEFING_USE', False),
         "AUTO_MORNING_BRIEFING_TIME": getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
         "SCREEN_DEBUG_LEVEL": getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"),
+        "CLEAR_SCREEN_ON_MENU": getattr(config, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
         "SYSTEM_TRADING_START_TIME": getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"),
@@ -198,16 +199,19 @@ def view_system_config():
 
     table.add_section()
 
-    # 8. 로그 레벨
-    table.add_row("[bold]8. 로그 레벨[/]", "", "")
-    table.add_row("화면 (Screen)\n[dim]터미널 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
-    table.add_row("파일 (File)\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
+    # 8. 화면 및 로그 설정
+    table.add_row("[bold]8. 화면 및 로그 설정[/]", "", "")
+    table.add_row("화면 자동 지우기\n[dim]메뉴 이동 시 터미널 클리어[/dim]", "CLEAR_SCREEN_ON_MENU", f"{getattr(config, 'CLEAR_SCREEN_ON_MENU', False)}")
+    table.add_row("화면 로그 레벨\n[dim]터미널 디버그 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
+    table.add_row("파일 로그 레벨\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
 
     console.print(table)
     console.print()
+    return True
 
 def _edit_config_table(title_source, items_source):
     """설정 변경을 위한 공통 테이블 UI 함수"""
+    action_taken = False
     while True:
         utils.print_breadcrumb()
         # items_source가 함수면 호출하여 최신 리스트 가져오기 (동적 메뉴 지원)
@@ -251,6 +255,7 @@ def _edit_config_table(title_source, items_source):
         else:
             targets = [items[int(choice)-1]]
             
+        changed_in_this_loop = False
         for item in targets:
             curr_val = item['get']()
             console.print(f"\n[bold cyan]>> {item['desc']} 수정[/bold cyan]")
@@ -290,6 +295,7 @@ def _edit_config_table(title_source, items_source):
                         if 'callback' in item:
                             item['callback']()
                         console.print(f"[cyan]>> 설정이 변경되었습니다: {target_val}[/cyan]")
+                        changed_in_this_loop = True
                     break
                 
                 if canceled:
@@ -337,10 +343,16 @@ def _edit_config_table(title_source, items_source):
                 if 'callback' in item:
                     item['callback']()
                     
+                changed_in_this_loop = True
+                    
             except Exception as e:
                 console.print(f"[red]잘못된 입력입니다: {e}[/red]")
         
-        _save_dynamic_config()
+        if changed_in_this_loop:
+            _save_dynamic_config()
+            action_taken = True
+            
+    return action_taken
 
 def modify_analysis_thresholds():
     items = [
@@ -361,7 +373,7 @@ def modify_analysis_thresholds():
         {"desc": "역추세 최소 체결강도", "help": "바닥 매수세 확인 (예: 120%)", "name": "MR_VOL_STRENGTH", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_VOL_STRENGTH": v})}
     ]
-    _edit_config_table("매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)", items)
+    return _edit_config_table("매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)", items)
 
 def modify_sell_strategy():
     items = [
@@ -390,7 +402,7 @@ def modify_sell_strategy():
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정", "name": "ATR_STOP_MULTIPLIER", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})}
     ]
-    _edit_config_table("매도 전략 설정 (SELL_STRATEGY)", items)
+    return _edit_config_table("매도 전략 설정 (SELL_STRATEGY)", items)
 
 def modify_indicator_params():
     items = [
@@ -438,7 +450,7 @@ def modify_indicator_params():
         {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "ATR",
          "get": lambda: config.INDICATOR_PARAMS.get("ATR_PERIOD", 14), "set": lambda v: config.INDICATOR_PARAMS.update({"ATR_PERIOD": v})}
     ]
-    _edit_config_table("기술적 지표 파라미터 (Indicators)", items)
+    return _edit_config_table("기술적 지표 파라미터 (Indicators)", items)
 
 def modify_telegram_settings():
     items = [
@@ -453,21 +465,24 @@ def modify_telegram_settings():
         {"desc": "장전 AI 브리핑 시간", "help": "발송 시각 (예: 0830)", "name": "AUTO_MORNING_BRIEFING_TIME", "type": "time",
          "get": lambda: getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config, 'AUTO_MORNING_BRIEFING_TIME', v)}
     ]
-    _edit_config_table("텔레그램 설정 (Telegram)", items)
+    return _edit_config_table("텔레그램 설정 (Telegram)", items)
 
 def modify_log_settings():
     items = [
+        {"desc": "화면 자동 지우기", "help": "메뉴 이동 시 터미널 화면 클리어 여부", "name": "CLEAR_SCREEN_ON_MENU", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: getattr(config, 'CLEAR_SCREEN_ON_MENU', False), "set": lambda v: setattr(config, 'CLEAR_SCREEN_ON_MENU', v)},
         {"desc": "화면 로그 레벨", "help": "터미널 출력 레벨", "name": "SCREEN_DEBUG_LEVEL", "type": "str", "choices": ["OFF", "TRACE", "DEBUG"],
          "get": lambda: getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"), "set": lambda v: setattr(config, 'SCREEN_DEBUG_LEVEL', v)},
         {"desc": "파일 로그 레벨", "help": "로그 파일 저장 레벨", "name": "FILE_DEBUG_LEVEL", "type": "str", "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
          "get": lambda: getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"), "set": lambda v: setattr(config, 'FILE_DEBUG_LEVEL', v),
          "callback": config.setup_logging}
     ]
-    _edit_config_table("로그 레벨 설정 (Log Level)", items)
+    return _edit_config_table("화면 및 로그 설정 (Screen & Log)", items)
 
 def modify_scoring_weights():
     # 기본값 정의
     defaults = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
+    action_taken = False
 
     while True:
         weights = config.SCORING_WEIGHTS
@@ -506,6 +521,7 @@ def modify_scoring_weights():
         if choice.lower() == 'a':
             console.print("\n[bold]각 항목의 가중치를 순서대로 입력하세요.[/bold]")
             console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (취소: q)[/dim]")
+            console.print()
             
             new_weights = {}
             
@@ -513,9 +529,7 @@ def modify_scoring_weights():
                 for key, label, detail in items_info:
                     current_val = weights[key]
                     prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
-                    console.print()
                     val = Prompt.ask(prompt_msg, default=str(current_val))
-                    console.print()
                     if val.lower() == 'q': 
                         raise ValueError("canceled")
                     new_weights[key] = float(val)
@@ -531,12 +545,14 @@ def modify_scoring_weights():
                 
                 _save_dynamic_config()
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
+                action_taken = True
                 
             except ValueError as e:
                 if str(e) == "canceled":
                     console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
                 else:
                     console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
+    return action_taken
 
 def modify_market_regime_params():
     items = [
@@ -553,7 +569,7 @@ def modify_market_regime_params():
         {"desc": "추세 판단 ADX", "help": "강세장 판단용 ADX 기준 (기본 20)", "name": "REGIME_ADX_THRESHOLD", "type": "int",
          "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_ADX_THRESHOLD": v})}
     ]
-    _edit_config_table("시장 국면 및 적응형 임계값 (Adaptive Thresholds)", items)
+    return _edit_config_table("시장 국면 및 적응형 임계값 (Adaptive Thresholds)", items)
 
 def _validate_time_format(val):
     if len(val) == 4 and val.isdigit():
@@ -620,12 +636,12 @@ def modify_system_trading_general():
         ])
         return items
 
-    _edit_config_table("시스템 트레이딩 일반설정 (Trading General)", get_items)
+    return _edit_config_table("시스템 트레이딩 일반설정 (Trading General)", get_items)
 
 def reset_to_default():
     console.print()
     if Prompt.ask("모든 설정을 시스템 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n") != "y":
-        return
+        return False
     console.print()
 
     # 1. 파일 삭제
@@ -681,6 +697,7 @@ def reset_to_default():
     config.AUTO_MORNING_BRIEFING_USE = False
     config.AUTO_MORNING_BRIEFING_TIME = "0830"
     config.SCREEN_DEBUG_LEVEL = "OFF"
+    config.CLEAR_SCREEN_ON_MENU = False
     config.FILE_DEBUG_LEVEL = "WARNING"
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
     config.SYSTEM_TRADING_START_TIME = "0920"
@@ -695,6 +712,7 @@ def reset_to_default():
     config.SLIPPAGE_RATE = 0.002
 
     console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
+    return True
 
 def system_config_menu():
     menu_items = [
@@ -705,23 +723,23 @@ def system_config_menu():
         ("5", "적응형 임계값", "Adaptive Thresholds"),
         ("6", "기술적 지표 파라미터", "Indicators"),
         ("7", "텔레그램 설정", "Telegram"),
-        ("8", "로그 레벨 설정", "Log Level"),
+        ("8", "화면 및 로그 설정", "Screen & Log"),
         ("9", "시스템 설정 조회", "View Config"),
         ("0", "설정 초기화", "Reset to Default")
     ]
     choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice="9")
-    if choice.lower() == 'q': return
+    if choice.lower() == 'q': return False
     
     menu_map = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
     
-    if choice == "1": modify_system_trading_general()
-    elif choice == "2": modify_analysis_thresholds()
-    elif choice == "3": modify_sell_strategy()
-    elif choice == "4": modify_scoring_weights()
-    elif choice == "5": modify_market_regime_params()
-    elif choice == "6": modify_indicator_params()
-    elif choice == "7": modify_telegram_settings()
-    elif choice == "8": modify_log_settings()
-    elif choice == "9": view_system_config()
-    elif choice == "0": reset_to_default()
+    if choice == "1": return modify_system_trading_general()
+    elif choice == "2": return modify_analysis_thresholds()
+    elif choice == "3": return modify_sell_strategy()
+    elif choice == "4": return modify_scoring_weights()
+    elif choice == "5": return modify_market_regime_params()
+    elif choice == "6": return modify_indicator_params()
+    elif choice == "7": return modify_telegram_settings()
+    elif choice == "8": return modify_log_settings()
+    elif choice == "9": return view_system_config()
+    elif choice == "0": return reset_to_default()
