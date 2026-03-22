@@ -310,6 +310,39 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         logger.error(f"Gemini Stock Analyze Error: {e}")
         return f"⚠️ 분석 중 오류 발생: {e}"
 
+def evaluate_backtest_with_gemini(code, name, backtest_info):
+    """백테스팅 결과를 바탕으로 Gemini에게 평가 및 조언을 요청"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 여의도 최고의 퀀트 전략가이자 시스템 트레이딩 전문가입니다.
+    다음은 '{name}({code})' 종목에 대해 현재 트레이딩 전략을 적용한 백테스팅 결과입니다.
+    
+    {backtest_info}
+    
+    이 백테스팅 결과를 바탕으로 다음 항목들을 심층 분석해 주세요:
+    
+    1. 📊 [전략 성과 평가]: 수익률, 승률, 손익비, 샤프지수 등을 종합하여 현재 전략이 이 종목의 특성(변동성, 추세성 등)과 얼마나 잘 맞는지 평가해 주세요.
+    2. ⚠️ [리스크 분석]: MDD (최대 낙폭) 및 기타 위험 지표를 고려했을 때 예상되는 최대 위험과 심리적/자금 관리 측면에서 주의할 점을 짚어 주세요.
+    3. 💡 [최적 파라미터 설정 조언]: 현재 적용된 파라미터(설정값)와 시스템의 최적화 결과를 참고하여, 이 종목에 가장 적합한 매수/매도 조건(매수 기준 점수, RSI, 익절/손절률, 트레일링스탑 등)을 구체적인 수치로 제안해 주세요.
+    
+    터미널 화면에서 읽기 편하도록 간결하고 명확하게, 불릿 포인트(•)와 이모지를 적극적으로 활용하여 작성해 주세요.
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        res = model.generate_content(prompt)
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"Gemini Backtest Evaluate Error: {e}")
+        return f"⚠️ 분석 중 오류 발생: {e}"
+
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
     if genai is None or not config.GEMINI_API_KEY:

@@ -707,6 +707,51 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             range_str = f"{bin_edges[i]:>6.1f}% ~ {bin_edges[i+1]:>6.1f}%"
             config.console.print(f"{range_str} : [cyan]{bar}[/] ({count})")
             
+    # [추가] AI 백테스팅 진단
+    config.console.print()
+    if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+        from modules import theme_analysis
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.padding import Padding
+        
+        param_info = f"매수 {buy_score}점/RSI{buy_rsi}, 매도 {sell_score}점, 익절 +{take_profit}%/RSI{take_profit_rsi}, 손절 {stop_loss}%, 트레일링 +{ts_activation}%/-{ts_callback}%, 시간청산 {time_stop_days}일"
+        if use_atr_stop: param_info += f", ATR손절 x{atr_mult}"
+        
+        backtest_info = f"""
+        [시뮬레이션 요약]
+        - 종목: {name} ({code})
+        - 기간: {days}일 ({start_date_str} ~ {end_date_str})
+        - 적용 파라미터: {param_info}
+        - 누적 수익률 (평균): {avg_return:+.2f}%
+        - 승률: {avg_wr:.1f}%
+        - 평균 수익률 (건당): {avg_trade_profit_val:+.2f}%
+        - 평균 손실률 (건당): {avg_trade_loss_val:+.2f}%
+        - 손익비 (Profit Factor): {avg_pf:.2f}
+        - 위험 대비 수익 (샤프지수): {avg_sr:.2f}
+        - 평균 최대 낙폭 (Average MDD): {avg_mdd:.2f}%
+        - 수익 발생 확률: {prob_profit:.1f}%
+        - 최악의 낙폭 (Worst MDD): {worst_mdd:.2f}%
+        - 최악의 하위 5% 평균 수익 (CVaR): {cvar_95:+.2f}%
+        """
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]Google Gemini가 몬테카를로 백테스팅 결과를 심층 분석 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info)
+            
+        if answer:
+            md = Markdown(answer)
+            panel = Panel(md, title=f"🤖 AI 몬테카를로 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+            config.console.print(Padding(panel, (0, 4)))
+        else:
+            config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
+            
 def run_backtest():
     menu_items = [
         ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
@@ -1623,6 +1668,53 @@ def run_backtest():
     # [추가] 추천 가중치 출력
     if best_opt_scenario:
         config.console.print(f"\n[green]추천 (수익률):[/] {best_opt_scenario['DESC']} (수익률 {best_opt_return:+.2f}%)")
+
+    # [추가] 단일 백테스팅 AI 진단 연동
+    config.console.print()
+    if Prompt.ask("🤖 AI 백테스팅 성과 진단 및 최적 파라미터 조언을 받으시겠습니까?", choices=["y", "n"], default="y") == 'y':
+        from modules import theme_analysis
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.padding import Padding
+        
+        param_info = f"매수 {buy_score}점/RSI{buy_rsi}, 매도 {sell_score}점, 익절 +{take_profit}%/RSI{take_profit_rsi}, 손절 {stop_loss}%, 트레일링 +{ts_activation}%/-{ts_callback}%, 시간청산 {time_stop_days}일"
+        if use_atr_stop: param_info += f", ATR손절 x{atr_mult}"
+        
+        tp_opt = best_return_set[0] if best_return_set else take_profit
+        sl_opt = best_return_set[1] if best_return_set else stop_loss
+        w_opt = best_opt_scenario['DESC'] if best_opt_scenario else "기본값"
+        
+        backtest_info = f"""
+        [시뮬레이션 요약 (단일 실행)]
+        - 종목: {name} ({code})
+        - 기간: {days}일 ({start_date_str} ~ {end_date_str})
+        - 현재 적용 파라미터: {param_info}
+        - 누적 수익률: {total_return:+.2f}%
+        - 승률: {win_rate:.1f}% ({win_trades}승 {loss_trades}패)
+        - 평균 수익률 (건당): {avg_profit:+.2f}%
+        - 평균 손실률 (건당): {avg_loss:+.2f}%
+        - 손익비 (Profit Factor): {pf:.2f}
+        - 샤프지수 (Sharpe Ratio): {sharpe_ratio:.2f}
+        - 최대 낙폭 (MDD): {mdd:.2f}%
+        - [시스템 산출 최적화 추천값]: 매수 {best_return_score}점, RSI < {best_return_rsi}, 익절 +{tp_opt}% / 손절 {sl_opt}%, 가중치: {w_opt}
+        """
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]Google Gemini가 최적 파라미터를 계산하고 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info)
+            
+        if answer:
+            md = Markdown(answer)
+            panel = Panel(md, title=f"🤖 AI 단일 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+            config.console.print(Padding(panel, (0, 4)))
+        else:
+            config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 
     # [이동] 경고 문구 출력 (가장 마지막)
     config.console.print("\n[bold red]경고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/bold red]")
