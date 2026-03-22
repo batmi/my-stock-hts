@@ -97,7 +97,8 @@ class DBManager:
                         invest_ratio REAL,
                         time_stop_days INTEGER,
                         use_atr_stop INTEGER,
-                        atr_stop_multiplier REAL
+                        atr_stop_multiplier REAL,
+                        half_take_profit_use INTEGER
                     )
                 ''')
                 
@@ -140,7 +141,8 @@ class DBManager:
                 new_strat_columns = {
                     "buy_vol_strength": "REAL", "memo": "TEXT", "weights": "TEXT",
                     "invest_ratio": "REAL", "time_stop_days": "INTEGER",
-                    "use_atr_stop": "INTEGER", "atr_stop_multiplier": "REAL"
+                    "use_atr_stop": "INTEGER", "atr_stop_multiplier": "REAL",
+                    "half_take_profit_use": "INTEGER"
                 }
                 for col, dtype in new_strat_columns.items():
                     if col not in strat_columns:
@@ -437,17 +439,18 @@ class DBManager:
             time_stop_days = strategy.get('time_stop_days')
             use_atr_stop = strategy.get('use_atr_stop')
             atr_stop_multiplier = strategy.get('atr_stop_multiplier')
+            half_take_profit_use = strategy.get('half_take_profit_use', 1)
             
             cursor.execute('''
                 INSERT OR REPLACE INTO stock_strategies 
-                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (code, name, 
                   strategy['buy_score'], strategy['buy_rsi'], buy_vol_strength,
                   strategy['sell_score'], strategy['stop_loss'], 
                   strategy['take_profit'], strategy['take_profit_rsi'], 
                   strategy['ts_activation'], strategy['ts_callback'], 
-                  now, memo, weights_json, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier))
+                  now, memo, weights_json, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use))
             conn.commit()
 
     def get_stock_strategy(self, code):

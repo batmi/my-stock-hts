@@ -899,7 +899,7 @@ class DefaultStrategy:
         sell_score_limit = thresholds.get("SELL_SCORE", config.SELL_STRATEGY["SELL_SCORE"]) if thresholds else config.SELL_STRATEGY["SELL_SCORE"]
         
         # [추가] 반익절 설정 및 계산 (익절 설정의 절반)
-        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+        use_half_tp = thresholds.get("HALF_TAKE_PROFIT_USE", config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)) if thresholds else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
         half_tp_rate = tp_rate / 2.0
         
         # [추가] 시간 청산 설정 로드
@@ -3580,7 +3580,8 @@ class AutoTrader:
                     "SELL_SCORE": rule['sell_score'],
                     "WEIGHTS": rule.get('weights'), # [추가] 가중치 전달
                     "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 매도 분석 시에도 시장 보정 무시 (절대값)
-                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10))
+                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)),
+                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)))
                 }
             else:
                 # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
@@ -4239,11 +4240,12 @@ def _view_stock_rules():
 
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
         ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100:.0f}%"
+        half_tp_str = " (반익절 O)" if r.get('half_take_profit_use', 1) else " (반익절 X)"
 
         table.add_row(
             f"{r['name']}({r['code']})",
             f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
-            f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
+            f"+{r['take_profit']}%{half_tp_str} / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
             r.get('memo', ''),
@@ -4289,7 +4291,8 @@ def _input_and_save_rule(code, name):
         "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
         "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
-        "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+        "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0),
+        "half_take_profit_use": 1 if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else 0
     }
     
     current = existing if existing else defaults.copy()
@@ -4315,18 +4318,26 @@ def _input_and_save_rule(code, name):
         return type_func(val)
 
     try:
-        console.print("\n[bold]1. 기본 매수 및 청산 타점 설정[/bold]")
+        console.print("\n[bold]1. 기본 매수 타점 설정[/bold]")
         new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (기본: 7.5점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한 (기본: 65)", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
+
+        console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
         new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현", float)
+        
+        curr_half_tp = "y" if current.get('half_take_profit_use', defaults['half_take_profit_use']) else "n"
+        val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "q"], default=curr_half_tp)
+        if val.lower() == 'q': raise QuitInput()
+        new_strategy['half_take_profit_use'] = 1 if val.lower() == 'y' else 0
+        
         new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준 (기본: 75)", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
         new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수 (기본: 5.0점)", "점수가 이 값 미만으로 떨어지면 매도", float)
         new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 10.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
         new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 3.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
         new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산", int)
             
-        console.print("\n[bold]2. 리스크 관리 및 자산 비중 설정[/bold]")
+        console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
         curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
         val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})\n[dim]전체 자산 대비 이 종목에 투자할 비중 한도[/dim]", default=str(int(curr_ratio_pct)))
         if val.lower() == 'q': raise QuitInput()
@@ -4346,7 +4357,7 @@ def _input_and_save_rule(code, name):
             new_strategy['atr_stop_multiplier'] = current.get('atr_stop_multiplier', defaults['atr_stop_multiplier']) # 배수는 숨김
         
         # [추가] 가중치 설정 입력
-        console.print("\n[스코어링 가중치 설정]")
+        console.print("\n[bold]4. 스코어링 가중치 설정[/bold]")
         curr_weights = current.get('weights')
         
         while True:
@@ -4407,7 +4418,8 @@ def _input_and_save_rule(code, name):
         table.add_column("설정값", justify="left")
         
         table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑")
-        table.add_row("청산 타점", f"익절 +{new_strategy['take_profit']}% / 과열 RSI {new_strategy['take_profit_rsi']}↑ / 시간청산 {new_strategy['time_stop_days']}일")
+        half_tp_str = "ON" if new_strategy['half_take_profit_use'] else "OFF"
+        table.add_row("청산 타점", f"익절 +{new_strategy['take_profit']}% (반익절: {half_tp_str}) / 과열 RSI {new_strategy['take_profit_rsi']}↑ / 시간청산 {new_strategy['time_stop_days']}일")
         table.add_row("트레일링", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
         
         if new_strategy['use_atr_stop']:
