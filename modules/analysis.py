@@ -1112,23 +1112,23 @@ def get_analysis_params():
     config.console.print("\n[bold]분석 파라미터 설정 (Enter: 기본값 사용, q: 취소)[/bold]")
     
     config.console.print()
-    val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})", default=str(params['BUY_SCORE']))
+    val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']})\n[dim]이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(params['BUY_SCORE']))
     if val.lower() == 'q': return None
     try: params['BUY_SCORE'] = float(val)
     except: pass
     
-    val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})", default=str(params['BUY_RSI_MAX']))
+    val = Prompt.ask(f"매수 허용 최대 RSI (기본: {params['BUY_RSI_MAX']})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(params['BUY_RSI_MAX']))
     if val.lower() == 'q': return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
     # [추가] 체결강도 입력
     current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)", default=str(current_vol))
+    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", default=str(current_vol))
     if val.lower() == 'q': return None
     try: params['BUY_VOL_STRENGTH'] = float(val)
     except: params['BUY_VOL_STRENGTH'] = current_vol
 
-    val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})", default=str(params['RISE_SCORE']))
+    val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']})\n[dim]매수에는 미달하지만 관망/상승으로 판단할 점수 기준[/dim]", default=str(params['RISE_SCORE']))
     if val.lower() == 'q': return None
     try: params['RISE_SCORE'] = float(val)
     except: pass

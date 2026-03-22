@@ -4309,43 +4309,41 @@ def _input_and_save_rule(code, name):
     
     class QuitInput(Exception): pass
 
-    def ask_val(key, desc, type_func):
-        val = Prompt.ask(f"{desc} [dim](현재: {current[key]})[/dim]", default=str(current[key]))
+    def ask_val(key, desc, help_text, type_func):
+        val = Prompt.ask(f"{desc} [dim](현재: {current[key]})\n[dim]{help_text}[/dim]", default=str(current[key]))
         if val.lower() == 'q': raise QuitInput()
         return type_func(val)
 
     try:
         console.print("\n[bold]1. 기본 매수 및 청산 타점 설정[/bold]")
-        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (종합 점수)", float)
-        new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한", float)
-        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 하한(%)", float)
-        new_strategy['take_profit'] = ask_val('take_profit', "목표 익절 수익률(%)", float)
-        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "과열 매도 RSI 기준", float)
-        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%)", float)
-        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%)", float)
-        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한 (보유 허용 일수)", int)
+        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (기본: 7.5점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
+        new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한 (기본: 65)", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
+        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
+        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현", float)
+        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준 (기본: 75)", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
+        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수 (기본: 5.0점)", "점수가 이 값 미만으로 떨어지면 매도", float)
+        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 10.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
+        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 3.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
+        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산", int)
             
         console.print("\n[bold]2. 리스크 관리 및 자산 비중 설정[/bold]")
         curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
-        val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})[/dim]", default=str(int(curr_ratio_pct)))
+        val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})\n[dim]전체 자산 대비 이 종목에 투자할 비중 한도[/dim]", default=str(int(curr_ratio_pct)))
         if val.lower() == 'q': raise QuitInput()
         new_strategy['invest_ratio'] = float(val) / 100.0
         
         curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0) else "n"
-        val = Prompt.ask(f"손절 방식 선택 (y: 개별 ATR 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
+        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
         if val.lower() == 'q': raise QuitInput()
         use_atr = (val.lower() == 'y')
         new_strategy['use_atr_stop'] = 1 if use_atr else 0
         
         if use_atr:
-            new_strategy['atr_stop_multiplier'] = ask_val('atr_stop_multiplier', "ATR 손절 배수 (기본 2.0)", float)
+            new_strategy['atr_stop_multiplier'] = ask_val('atr_stop_multiplier', "ATR 손절 배수 (기본: 2.0)", "ATR 값의 몇 배를 손절폭으로 할지 설정", float)
             new_strategy['stop_loss'] = current.get('stop_loss', defaults['stop_loss']) # 고정 손절률은 숨김
         else:
-            new_strategy['stop_loss'] = ask_val('stop_loss', "고정 손절 수익률(%) (예: -5.0)", float)
+            new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%) (기본: -7.0%)", "손실이 이 비율에 도달하면 손절매", float)
             new_strategy['atr_stop_multiplier'] = current.get('atr_stop_multiplier', defaults['atr_stop_multiplier']) # 배수는 숨김
-            
-        # 숨김 처리된 세부 지표는 기존 값 또는 기본값 유지
-        new_strategy['sell_score'] = current.get('sell_score', defaults['sell_score'])
         
         # [추가] 가중치 설정 입력
         console.print("\n[스코어링 가중치 설정]")
@@ -4385,7 +4383,7 @@ def _input_and_save_rule(code, name):
             break
 
         # [추가] 메모 입력
-        new_strategy['memo'] = ask_val('memo', "메모 (Memo)", str)
+        new_strategy['memo'] = ask_val('memo', "메모 (Memo)", "종목에 대한 투자 아이디어 및 참고사항", str)
         
         # [추가] 기본값과 동일 여부 확인
         if new_strategy == defaults:

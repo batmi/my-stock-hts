@@ -743,7 +743,7 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             transient=True
         ) as progress:
             progress.add_task(f"[cyan]Google Gemini가 몬테카를로 백테스팅 결과를 심층 분석 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
-            answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info)
+            answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info, mode='monte_carlo')
             
         if answer:
             md = Markdown(answer)
