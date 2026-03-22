@@ -456,22 +456,29 @@ def ask_gemini(question):
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""
-    with config.console.status("[cyan]네이버 금융 테마 데이터 수집 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[cyan]네이버 금융 테마 데이터 수집 중...[/cyan]", total=None)
         themes = fetch_naver_themes()
         
-    if not themes:
-        config.console.print("[red]테마 데이터를 가져올 수 없습니다.[/red]")
-        return
+        if not themes:
+            config.console.print("[red]테마 데이터를 가져올 수 없습니다.[/red]")
+            return
 
-    # 등락률 순 정렬
-    themes.sort(key=lambda x: x['rate'], reverse=True)
-    
-    # 상위 30개 표시
-    top_n = 30
-    display_themes = themes[:top_n]
-    
-    # [추가] 상위 테마에 대해 상세 페이지 병렬 크롤링으로 주도주 정보 수집
-    with config.console.status("[cyan]상위 테마의 주도주 정보를 수집 중... (상세 페이지 분석)[/cyan]"):
+        # 등락률 순 정렬
+        themes.sort(key=lambda x: x['rate'], reverse=True)
+        
+        # 상위 30개 표시
+        top_n = 30
+        display_themes = themes[:top_n]
+        
+        # 상위 테마에 대해 상세 페이지 병렬 크롤링으로 주도주 정보 수집
+        progress.update(task, description="[cyan]상위 테마의 주도주 정보를 수집 중... (상세 페이지 분석)[/cyan]")
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             executor.map(_fetch_theme_detail, display_themes)
 

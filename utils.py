@@ -262,8 +262,6 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
     current_list = stock_list
     while True:
         config.console.print(f"[bold]{title}[/bold]")
-        if len(current_list) > 15:
-            config.console.print("[dim]목록이 깁니다. 종목명이나 코드로 검색해보세요.[/dim]")
         
         for i, s in enumerate(current_list):
             if display_func:
