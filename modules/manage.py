@@ -540,7 +540,8 @@ def delete_stock():
         config.console.print(f"[yellow]'{group_name}' 그룹에 저장된 종목이 없습니다.[/yellow]")
         return
         
-    idx, item_to_del = utils.search_stock_in_list(target_list, title=f"{group_name} 목록")
+    m_codes = utils.get_memo_codes()
+    idx, item_to_del = utils.search_stock_in_list(target_list, title=f"{group_name} 목록", display_func=lambda i, item: f"[{i+1}] {item['name']} ({item['code']}) {'[M]' if item['code'] in m_codes else ''}".rstrip())
     if not item_to_del: return False
     
     context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {item_to_del['name']}")
@@ -552,6 +553,12 @@ def delete_stock():
         del config.session.stock_data[target_key][idx]
         config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config()
+        
+        if item_to_del['code'] in m_codes:
+            if Prompt.ask("이 종목에 작성된 메모도 모두 삭제하시겠습니까?", choices=["y", "n"], default="n") == 'y':
+                utils.delete_all_stock_memos(item_to_del['code'])
+                config.console.print("[dim]관련 메모가 모두 삭제되었습니다.[/dim]")
+                
         config.console.print(f"\n[green]삭제되었습니다.[/green]")
     else:
         return False
@@ -577,7 +584,8 @@ def reorder_stock():
         config.console.print(f"[yellow]'{group_name}' 그룹에 순서를 변경할 만큼 종목이 충분하지 않습니다.[/yellow]")
         return
         
-    from_idx, target_stock = utils.search_stock_in_list(target_list, title=f"{group_name} 목록")
+    m_codes = utils.get_memo_codes()
+    from_idx, target_stock = utils.search_stock_in_list(target_list, title=f"{group_name} 목록", display_func=lambda i, item: f"[{i+1}] {item['name']} ({item['code']}) {'[M]' if item['code'] in m_codes else ''}".rstrip())
     if not target_stock: return False
     context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {target_stock['name']}")
     
@@ -607,15 +615,224 @@ def reorder_stock():
     
     config.console.print(f"\n[bold green]'{target_stock['name']}' 종목이 {to_idx + 1}번 위치로 이동되었습니다.[/bold green]")
 
+def _manage_specific_stock_memos(code, name, mode='view'):
+    """(내부) 특정 종목의 메모 리스트 상세 관리"""
+    mode_name_map = {'view': '조회', 'delete': '삭제'}
+    context.USER_ACTION_BREADCRUMB.append(f"[{name}] 상세")
+    
+    while True:
+        utils.clear_screen()
+        config.console.print()
+        utils.print_breadcrumb()
+        
+        memos = utils.get_stock_memos(code)
+        if not memos:
+            config.console.print(f"[dim]'{name}'에 저장된 메모가 모두 삭제되어 이전 메뉴로 돌아갑니다.[/dim]")
+            time.sleep(1.5)
+            context.USER_ACTION_BREADCRUMB.pop()
+            return True # 이전 리스트로 돌아감
+        
+        config.console.print(f"[bold cyan][{name} ({code}) 메모 현황][/bold cyan]")
+        table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        table.add_column("No.", justify="right", width=4)
+        table.add_column("수정일", justify="center", width=19)
+        table.add_column("메모 요약", justify="left")
+        
+        for i, m in enumerate(memos):
+            first_line = m['memo'].split('\n')[0][:40]
+            if len(m['memo']) > len(first_line) or len(m['memo'].split('\n')[0]) > 40:
+                first_line += "..."
+            table.add_row(str(i+1), m['updated_at'], first_line)
+        config.console.print(table)
+        config.console.print()
+        
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim](메인메뉴: q / 이전: Enter)[/dim]")
+        
+        if idx_str.lower() == 'q': 
+            context.USER_ACTION_BREADCRUMB.pop()
+            return 'quit_to_main'
+            
+        if idx_str == "":
+            context.USER_ACTION_BREADCRUMB.pop()
+            return True
+        
+        if idx_str.isdigit() and 1 <= int(idx_str) <= len(memos):
+            m = memos[int(idx_str)-1]
+            
+            if mode == 'view':
+                # 메모 내용 중 가장 긴 줄의 시각적 길이를 계산 (한글=2, 영문/숫자=1)
+                memo_lines = m['memo'].split('\n')
+                max_len = 50
+                for line in memo_lines:
+                    line_len = sum(2 if ord(c) > 127 else 1 for c in line)
+                    if line_len > max_len:
+                        max_len = line_len
+                max_len = min(max_len, 120) # 터미널 길이를 고려해 최대 120자로 제한
+                
+                config.console.print(f"\n[bold cyan]━━━ {name} ({code}) 메모 상세 ━━━[/bold cyan]")
+                config.console.print(f"[dim]작성/수정일: {m['updated_at']}[/dim]")
+                config.console.print("[dim]" + "─" * max_len + "[/dim]")
+                config.console.print(m['memo'])
+                config.console.print("[dim]" + "─" * max_len + "[/dim]")
+                ans = Prompt.ask("\n[dim](이전: Enter / 메인메뉴: q)[/dim]", default="", show_default=False)
+                if ans.lower() == 'q':
+                    context.USER_ACTION_BREADCRUMB.pop()
+                    return 'quit_to_main'
+                
+            elif mode == 'delete':
+                ans = Prompt.ask(f"정말 {idx_str}번 메모를 삭제하시겠습니까?", choices=["y", "n"], default="n")
+                if ans == 'y':
+                    if utils.delete_stock_memo_by_id(m['id']):
+                        config.console.print("\n[green]메모가 삭제되었습니다.[/green]")
+                    else:
+                        config.console.print("\n[red]메모 삭제에 실패했습니다.[/red]")
+                    time.sleep(1)
+        else:
+            config.console.print("\n[red]잘못된 번호입니다.[/red]")
+            time.sleep(1)
+
+def add_new_stock_memo():
+    """새 종목 메모 추가"""
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] 새 종목 메모 추가 메뉴 진입[/dim cyan]")
+
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"), 
+        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
+    ]
+    cat_choice = utils.show_menu("메모를 추가할 종목 선택", menu_items, default_choice="5")
+    if cat_choice.lower() == 'q': return False
+
+    code, name, is_overseas = None, None, False
+
+    if cat_choice == '5':
+        utils.print_breadcrumb()
+        raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: q)[/dim]")
+        config.console.print()
+        if not raw_input or raw_input.lower() == 'q': return False
+        
+        parts = raw_input.split()
+        code = parts[-1].upper()
+        guessed_name = " ".join(parts[:-1])
+        is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+        
+        name = guessed_name if guessed_name else api.get_stock_name_by_code(code, is_overseas)
+        if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
+    else:
+        group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
+        target_key, group_name = group_map[cat_choice]
+        target_list = config.session.stock_data[target_key]
+        
+        if not target_list:
+            config.console.print(f"[yellow]'{group_name}' 그룹에 저장된 종목이 없습니다.[/yellow]")
+            time.sleep(1)
+            return False
+            
+        idx, target_stock = utils.search_stock_in_list(target_list, title=f"{group_name} 목록")
+        if not target_stock: return False
+        
+        code = target_stock['code']
+        name = target_stock['name']
+
+    if not code: return False
+
+    config.console.print(f"\n[bold]{name} ({code})의 새 메모를 입력하세요.[/bold]")
+    config.console.print("[dim](입력을 완료하려면 새 줄에서 ':q' 또는 '종료'를 입력하세요)[/dim]\n")
+    
+    lines = []
+    while True:
+        line = input("> ")
+        if line.strip() in [':q', '종료']:
+            break
+        lines.append(line)
+        
+    if lines:
+        memo_text = "\n".join(lines)
+        if utils.add_stock_memo(code, name, memo_text):
+            config.console.print("\n[green]새 메모가 저장되었습니다.[/green]")
+        else:
+            config.console.print("\n[red]메모 저장에 실패했습니다.[/red]")
+        time.sleep(1)
+    else:
+        config.console.print("\n[yellow]입력된 내용이 없어 취소되었습니다.[/yellow]")
+        time.sleep(1)
+
+def manage_stock_memos_by_mode(mode):
+    """전체 종목 다중 라인 메모 통합 관리 (모드별 그룹핑)"""
+    mode_name_map = {'view': '조회', 'delete': '삭제'}
+    
+    if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+        config.console.print(f"[dim cyan][TRACE] 종목 메모 {mode_name_map[mode]} 메뉴 진입[/dim cyan]")
+
+    while True:
+        utils.clear_screen()
+        config.console.print()
+        utils.print_breadcrumb()
+        
+        memos = utils.get_all_stock_memos()
+        
+        # 종목별 그룹핑 (가장 최신 메모 1개와 해당 종목의 전체 메모 개수 표시)
+        grouped_memos = []
+        seen_codes = set()
+        for m in memos:
+            if m['code'] not in seen_codes:
+                count = sum(1 for x in memos if x['code'] == m['code'])
+                m_copy = dict(m)
+                m_copy['count'] = count
+                grouped_memos.append(m_copy)
+                seen_codes.add(m['code'])
+        
+        config.console.print("[bold cyan][전체 종목 메모 현황 (종목별)][/bold cyan]")
+        if grouped_memos:
+            table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            table.add_column("No.", justify="right", width=4)
+            table.add_column("종목명(코드)", justify="left")
+            table.add_column("건수", justify="right", style="yellow")
+            table.add_column("최근 수정일", justify="center", width=19)
+            table.add_column("최근 메모 요약", justify="left")
+            
+            for i, m in enumerate(grouped_memos):
+                first_line = m['memo'].split('\n')[0][:40]
+                if len(m['memo']) > len(first_line) or len(m['memo'].split('\n')[0]) > 40:
+                    first_line += "..."
+                name_disp = f"{m['name']} ({m['code']})"
+                table.add_row(str(i+1), name_disp, f"{m['count']}건", m['updated_at'], first_line)
+            config.console.print(table)
+        else:
+            config.console.print("[dim]저장된 메모가 없습니다.[/dim]\n")
+            time.sleep(1)
+            return False
+
+        config.console.print()
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](메인메뉴: q / 이전: Enter)[/dim]")
+        if idx_str.lower() == 'q': return False
+        if idx_str == "": return False
+        if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
+            target = grouped_memos[int(idx_str)-1]
+            res = _manage_specific_stock_memos(target['code'], target['name'], mode)
+            if res == 'quit_to_main':
+                return False
+        else:
+            config.console.print("\n[red]잘못된 번호입니다.[/red]")
+            time.sleep(1)
+
 def manage_stock_menu():
     """종목 추가 및 삭제를 통합 관리하는 메뉴"""
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 관심 종목 관리 메뉴 진입[/dim cyan]")
 
-    menu_items = [("1", "종목 추가", "Add Stock"), ("2", "종목 삭제", "Delete Stock"), ("3", "종목 순서 변경", "Reorder Stock"), ("4", "차트 캐시 수동 갱신", "Clear Cache")]
+    menu_items = [
+        ("1", "종목 추가", "Add Stock"), 
+        ("2", "종목 삭제", "Delete Stock"), 
+        ("3", "종목 순서 변경", "Reorder Stock"), 
+        ("4", "차트 캐시 삭제", "Clear Cache"),
+        ("5", "종목 메모 조회", "View Memo"), 
+        ("6", "종목 메모 추가", "Add Memo"), 
+        ("7", "종목 메모 삭제", "Delete Memo")
+    ]
     choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice="1")
     
-    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경", "4": "차트 캐시 갱신"}
+    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경", "4": "차트 캐시 삭제", "5": "종목 메모 조회", "6": "종목 메모 추가", "7": "종목 메모 삭제"}
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -632,3 +849,9 @@ def manage_stock_menu():
         from modules import market
         api.clear_chart_cache()
         market.clear_market_yf_cache()
+    elif choice == "5":
+        if manage_stock_memos_by_mode('view') is False: return False
+    elif choice == "6":
+        if add_new_stock_memo() is False: return False
+    elif choice == "7":
+        if manage_stock_memos_by_mode('delete') is False: return False

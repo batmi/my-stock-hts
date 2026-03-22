@@ -223,9 +223,12 @@ def _display_balance_details(cano, acnt_prdt_cd):
             calculated_total_pchs = 0
             calculated_total_eval = 0
             calculated_total_profit = 0
+            
+            m_codes = utils.get_memo_codes() # [추가]
             for item in output1:
-                name = f"{item['prdt_name']} ({item['pdno']})"
                 code = item['pdno']
+                m_mark = "[M]" if code in m_codes else ""
+                name = f"{item['prdt_name']} ({code}) {m_mark}".strip()
                 qty = int(item['hldg_qty'])
                 buy_price = float(item['pchs_avg_pric'])
                 cur_price = int(item['prpr'])
@@ -327,6 +330,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
         tot_ovrs_profit = 0.0
         tot_ovrs_pchs = 0.0
         has_ovrs_item = False
+        
+        m_codes = utils.get_memo_codes() # [추가]
 
         for item in all_overseas_holdings:
             qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
@@ -334,7 +339,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
             if qty > 0:
                 has_ovrs_item = True
                 code = item.get('ovrs_pdno', '-')
-                name = item.get('ovrs_item_name', '-')
+                m_mark = "[M]" if code in m_codes else ""
+                name = f"{item.get('ovrs_item_name', '-')} {m_mark}".strip()
                 pchs_avg = float(item.get('pchs_avg_pric', 0))
                 profit = float(item.get('frcr_evlu_pfls_amt', 0))
                 rate = float(item.get('evlu_pfls_rt', 0))

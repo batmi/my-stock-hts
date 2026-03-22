@@ -568,7 +568,7 @@ def main():
     
     # [추가] 자동 시작 모드 처리
     if args.auto:
-        config.console.print("\n[bold magenta]=== 자동 시작 모드 (Auto Start) ===[/]")
+        config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
         # 비대화형 모드로 트레이딩 시작
         trader.start(interactive=False)
         

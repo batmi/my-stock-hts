@@ -1008,7 +1008,7 @@ class OrderManager:
         """주문 전송 및 상태 등록"""
         ord_dvsn = "00" if price > 0 else "01"
         
-        self.trader.log(f"======== [주문 실행] {type_str.upper()} ========")
+        self.trader.log(f"━━━━━━━━ [주문 실행] {type_str.upper()} ━━━━━━━━")
         price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
         self.trader.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
 
@@ -1086,7 +1086,7 @@ class OrderManager:
             api.send_telegram_message(fail_msg)
             raise e
         finally:
-            self.trader.log("========================================")
+            self.trader.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return None
 
     def manage_unfilled_orders(self):
@@ -1447,7 +1447,7 @@ class AutoTrader:
             return
         
         # [추가] 로그 파일 생성을 보장하기 위해 시작 즉시 로그 기록
-        self.log("=== 자동매매 시스템 시작 프로세스 진입 ===")
+        self.log("━━━ 자동매매 시스템 시작 프로세스 진입 ━━━")
         
         # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.session.is_simulation:
@@ -3049,7 +3049,7 @@ class AutoTrader:
             console.print(f"\n[yellow]로그 파일({filename})이 없습니다.[/yellow]")
             return
 
-        console.print(f"\n[bold cyan]=== 실시간 로그 모니터링 ({filename}) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]━━━ 실시간 로그 모니터링 ({filename}) ━━━[/bold cyan]")
         console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
 
         with Progress(
@@ -3161,17 +3161,17 @@ class AutoTrader:
                     # [추가] 장 시작/마감 상태 변경 감지 및 로그
                     if self.was_market_open is not None:
                         if not self.was_market_open and current_market_status:
-                            self.log("=" * 80)
+                            self.log("━" * 80)
                             self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
-                            self.log("=" * 80)
+                            self.log("━" * 80)
                             
                             msg = "🔔 [장 시작] 거래 가능 시간이 되었습니다."
                             msg += self._get_holdings_message(target_cano)
                             api.send_telegram_message(msg)
                         elif self.was_market_open and not current_market_status:
-                            self.log("=" * 80)
+                            self.log("━" * 80)
                             self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
-                            self.log("=" * 80)
+                            self.log("━" * 80)
                             
                             msg = "🌙 [장 마감] 거래 시간이 종료되었습니다."
                             msg += self._get_holdings_message(target_cano)
@@ -3331,9 +3331,9 @@ class AutoTrader:
                     f"{pad('수익률', 10, '>')}"
                 )
                 
-                self.log("-" * 125)
+                self.log("─" * 125)
                 self.log(header)
-                self.log("-" * 125)
+                self.log("─" * 125)
                 
                 for item in valid_holdings:
                     name = f"{item['prdt_name']} ({item['pdno']})"
@@ -3357,7 +3357,7 @@ class AutoTrader:
                     )
                     self.log(row_str)
                 
-                self.log("-" * 125)
+                self.log("─" * 125)
                 if summary and len(summary) > 0:
                     s_data = summary[0]
                     

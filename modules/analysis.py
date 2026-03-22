@@ -547,6 +547,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # 4. 결과 출력
     config.console.print()
     
+    # [추가] 종목 메모 출력 (존재 시 패널 형태로 상단에 표시)
+    memo_data_list = utils.get_stock_memos(code)
+    if memo_data_list:
+        from rich.panel import Panel
+        memo_content = ""
+        for i, m in enumerate(memo_data_list):
+            if i > 0: memo_content += "\n[dim]" + "─" * 40 + "[/dim]\n"
+            memo_content += f"[dim]{m['updated_at']}[/dim]\n{m['memo']}"
+        config.console.print(Panel(memo_content, title=f"{name} ({code}) [M]", border_style="cyan", expand=False))
+        config.console.print()
+
     # [테이블 1] 기술적 지표 분석
     tech_title = f"기술적 지표 분석: {name} ({code})"
 
@@ -1459,7 +1470,7 @@ def analyze_market_stocks(market_type):
         config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
         config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = params["BUY_VOL_STRENGTH"]
         
-        config.console.print("\n[bold cyan]=== 전체 종목 분석 시작 (중단: Ctrl+C) ===[/bold cyan]")
+        config.console.print("\n[bold cyan]━━━ 전체 종목 분석 시작 (중단: Ctrl+C) ━━━[/bold cyan]")
 
         try:
             with Progress(

@@ -11,6 +11,8 @@ import math
 from rich.table import Table
 from rich import box
 import os
+import sqlite3
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,125 @@ def get_exchange_rate():
         pass
     
     return rate
+
+# ==========================================================
+# [추가] 종목 메모 DB 관리 기능
+# ==========================================================
+def init_memo_db():
+    try:
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS stock_memo_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT,
+                    name TEXT,
+                    memo TEXT,
+                    updated_at TEXT
+                )
+            """)
+            
+            # 기존 stock_memos 테이블이 있다면 데이터 마이그레이션 후 삭제
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_memos'")
+            if cursor.fetchone():
+                cursor.execute("SELECT code, name, memo, updated_at FROM stock_memos")
+                old_memos = cursor.fetchall()
+                if old_memos:
+                    for old_m in old_memos:
+                        cursor.execute("INSERT INTO stock_memo_entries (code, name, memo, updated_at) VALUES (?, ?, ?, ?)", old_m)
+                cursor.execute("DROP TABLE stock_memos")
+                
+            conn.commit()
+    except Exception as e:
+        logger.error(f"메모 DB 초기화 오류: {e}")
+
+def get_stock_memos(code):
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, memo, updated_at FROM stock_memo_entries WHERE code = ? ORDER BY updated_at DESC", (code,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"메모 DB 로드 오류: {e}")
+    return []
+
+def get_all_stock_memos():
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, code, name, memo, updated_at FROM stock_memo_entries ORDER BY updated_at DESC")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"메모 DB 전체 로드 오류: {e}")
+    return []
+
+def add_stock_memo(code, name, memo_text):
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("INSERT INTO stock_memo_entries (code, name, memo, updated_at) VALUES (?, ?, ?, ?)", (code, name, memo_text, now_str))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"메모 DB 추가 오류: {e}")
+        return False
+
+def update_stock_memo(memo_id, memo_text):
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("UPDATE stock_memo_entries SET memo = ?, updated_at = ? WHERE id = ?", (memo_text, now_str, memo_id))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"메모 DB 수정 오류: {e}")
+        return False
+
+def delete_stock_memo_by_id(memo_id):
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM stock_memo_entries WHERE id = ?", (memo_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"메모 DB 삭제 오류: {e}")
+    return False
+
+def delete_all_stock_memos(code):
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM stock_memo_entries WHERE code = ?", (code,))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"메모 DB 전체 삭제 오류: {e}")
+    return False
+
+def get_memo_codes():
+    """메모가 존재하는 종목 코드 목록 반환 (마킹용)"""
+    try:
+        init_memo_db()
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT code FROM stock_memo_entries")
+            return set(row[0] for row in cursor.fetchall())
+    except Exception as e:
+        logger.error(f"메모 DB 목록 조회 오류: {e}")
+    return set()
 
 def clear_screen():
     """config 설정에 따라 터미널 화면을 지웁니다."""
