@@ -19,11 +19,12 @@ def test_stock_order_menu(mock_modify, mock_send, mock_ask):
 @patch('modules.trading.api.place_order')
 @patch('modules.trading.api.fetch_buyable_quantity', return_value=100)
 @patch('modules.trading.api.get_current_price', return_value=50000)
-def test_send_buy_order_flow(mock_price, mock_qty, mock_place, mock_ask):
+@patch('modules.trading.api.get_current_price_data', return_value={'rt_cd': '0', 'output': {'stck_prpr': '50000'}})
+def test_send_buy_order_flow(mock_cp, mock_price, mock_qty, mock_place, mock_ask):
     """매수 주문 흐름 테스트"""
-    # 시나리오: 종목선택(5:직접) -> 코드(005930) -> 수량(10) -> 단가(0:시장가) -> 확인(y)
+    # 시나리오: 종목선택(5:직접) -> 코드(005930) -> 유효성확인(y) -> 수량(10) -> 단가(0:시장가) -> 확인(y)
     # select_account는 테스트 환경(모의투자)에서 입력을 받지 않음
-    mock_ask.side_effect = ["5", "005930", "10", "0", "y"]
+    mock_ask.side_effect = ["5", "005930", "y", "10", "0", "y"]
     
     # API 응답 Mock
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}

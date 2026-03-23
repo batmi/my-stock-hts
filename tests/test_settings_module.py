@@ -20,8 +20,8 @@ def test_modify_analysis_thresholds(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_telegram_settings(mock_ask):
     """텔레그램 설정 변경 테스트"""
-    # 1번 항목(사용여부) 선택 -> 변경(n) -> 종료(q)
-    mock_ask.side_effect = ["1", "n", "q"]
+    # 1번 항목(사용여부) 선택 -> 변경(y) -> 종료(q)
+    mock_ask.side_effect = ["1", "y", "q"]
     
     original_val = config.ENABLE_TELEGRAM
     config.ENABLE_TELEGRAM = True # 초기값 True로 고정

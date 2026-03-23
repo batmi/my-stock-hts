@@ -42,14 +42,11 @@ def test_bulk_fetch_domestic_prices(mock_vol, mock_inv, mock_price):
     assert mock_inv.call_count == len(codes)
     assert mock_vol.call_count == len(codes)
 
-@patch('api.yf.Tickers')
-def test_bulk_fetch_overseas_prices(mock_tickers):
-    """2번 기능: 다중 종목 일괄 조회 API (해외) - yfinance Tickers 동작 검증"""
-    mock_tickers_obj = MagicMock()
-    mock_tickers.return_value = mock_tickers_obj
-    
+@patch('api.get_yf_fast_info')
+def test_bulk_fetch_overseas_prices(mock_fi):
+    """2번 기능: 다중 종목 일괄 조회 API (해외) - get_yf_fast_info 병렬 호출 검증"""
     codes = ["AAPL", "TSLA", "NVDA"]
     api.prefetch_multiple_current_prices(codes, is_overseas=True)
     
-    # 해외 종목의 경우 Tickers 객체 생성(bulk fetch)이 1회 호출되었는지 검증
-    assert mock_tickers.called
+    # 해외 종목의 경우 get_yf_fast_info가 각 종목마다 호출되었는지 검증
+    assert mock_fi.call_count == len(codes)

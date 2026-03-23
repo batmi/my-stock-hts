@@ -90,8 +90,8 @@ def test_delete_stock_rules(mock_delete, mock_ask, mock_get_rules):
 def test_input_and_save_rule_new(mock_save_weights, mock_save, mock_ask, mock_get_strat, mock_price):
     """새로운 룰 입력 및 저장"""
     mock_ask.side_effect = [
-        "8.5", "60", "100", "10.0", "75", "5.0", "2.0", "5", "10",
-        "n", "-5.0", "4.0", "2.5", "1.5", "2.0", "Test Memo"
+        "8.5", "60", "100", "10.0", "y", "75", "5.0", "10.0", "3.0", "10",
+        "20", "n", "-5.0", "4.0", "2.5", "1.5", "2.0", "Test Memo"
     ]
     
     auto_trade._input_and_save_rule("005930", "Samsung")
@@ -216,7 +216,8 @@ def test_check_conclusions_api_error(mock_api):
     is_limited, has_error = monitor._check_conclusions()
     assert has_error is True
 
-def test_select_stock_for_rules_input():
+@patch('modules.auto_trade.utils.validate_and_confirm_stock', return_value=True)
+def test_select_stock_for_rules_input(mock_val):
     """종목 선택 헬퍼 - 직접 입력 테스트"""
     with patch('rich.prompt.Prompt.ask') as mock_ask:
         # 5(직접입력) -> 005930

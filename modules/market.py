@@ -139,8 +139,12 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         patched_name = None
         missing_name = None
+        is_delayed = False
         
         if not use_fast_info:
+            if not is_domestic_index:
+                is_delayed = True
+
             if df_daily.empty:
                 return {'status': 'failed', 'name': name}
             
@@ -262,9 +266,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         is_invalid_data = False
         if current == 0.0:
-            is_invalid_data = True
-        elif not is_domestic_index and not use_fast_info:
-            # 해외 지수 실시간 단건 조회 실패 (Rate Limit 등) 시 과거 캐시 출력 방지
             is_invalid_data = True
         elif is_domestic_index and df_daily.empty:
             is_invalid_data = True
@@ -473,7 +474,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             'patched_name': patched_name,
             'missing_name': missing_name,
             'mismatch_msg': mismatch_msg,
-            'is_kis_source': is_kis_source
+            'is_kis_source': is_kis_source,
+            'is_delayed': is_delayed
         }
     except Exception as e:
         return {'status': 'error', 'name': name, 'error': e}
@@ -499,6 +501,7 @@ def _show_market_indices_core(target_indices=None):
     missing_tickers = []
     mismatch_tickers = []
     failed_tickers = []
+    delayed_tickers = []
 
     try:
         # [변경] 1. 히스토리 데이터 다운로드 (그룹별 순차 요청 - Progress Bar 복원)
@@ -704,6 +707,7 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('missing_name'): missing_tickers.append(res['missing_name'])
                         if res.get('mismatch_msg'): mismatch_tickers.append(res['mismatch_msg'])
                         if res.get('is_kis_source'): any_kis_used = True
+                        if res.get('is_delayed'): delayed_tickers.append(name)
                     elif res['status'] == 'failed':
                         table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                         failed_tickers.append(name)
@@ -741,6 +745,10 @@ def _show_market_indices_core(target_indices=None):
     if mismatch_tickers:
         targets = ", ".join(mismatch_tickers)
         config.console.print(f"[dim][yellow] ⚠️ 데이터 불일치 경고: {targets} - KIS API 데이터가 yfinance보다 과거입니다. 지표 분석에 주의하세요.[/yellow][/dim]")
+
+    if delayed_tickers:
+        targets = ", ".join(delayed_tickers)
+        config.console.print(f"[dim][yellow] ⚠️ 실시간 시세 지연: {targets} - 실시간 단건 조회(fast_info)가 불가하여 최신 차트 데이터를 기준으로 표시했습니다.[/yellow][/dim]")
 
     if failed_tickers:
         targets = ", ".join(failed_tickers)

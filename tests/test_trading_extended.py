@@ -14,10 +14,11 @@ def test_send_order_cancel(mock_ask):
 
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.trading.api.place_order')
-def test_send_order_api_fail(mock_place, mock_ask):
+@patch('modules.trading.api.get_current_price_data', return_value={'rt_cd': '0', 'output': {'stck_prpr': '50000'}})
+def test_send_order_api_fail(mock_cp, mock_place, mock_ask):
     """주문 전송 API 실패 테스트"""
-    # 계좌(1) -> 직접입력(5) -> 코드(005930) -> 수량(1) -> 단가(0) -> 확인(y)
-    mock_ask.side_effect = ["5", "005930", "1", "0", "y"]
+    # 종목선택(5) -> 코드(005930) -> 유효성확인(y) -> 수량(1) -> 단가(0) -> 확인(y)
+    mock_ask.side_effect = ["5", "005930", "y", "1", "0", "y"]
     
     mock_place.return_value = {'rt_cd': '1', 'msg1': '주문 전송 실패'}
     

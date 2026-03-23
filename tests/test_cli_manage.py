@@ -56,8 +56,8 @@ def test_delete_stock_flow(mock_ask, mock_load_config):
         "etfs_kr": [], "stocks_us": [], "etfs_us": []
     }
     
-    # 시나리오: 그룹선택(1) -> 번호선택(1) -> 확인(y)
-    mock_ask.side_effect = ["1", "1", "y"]
+    # 시나리오: 그룹선택(1) -> 번호선택(1) -> 확인(y) -> 메모삭제(n)
+    mock_ask.side_effect = ["1", "1", "y", "n"]
     
     with patch('config.session.save_stock_config'):
         manage.delete_stock()

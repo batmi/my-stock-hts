@@ -239,15 +239,23 @@ def get_yf_fast_info(code):
     try:
         time.sleep(0.05) # 야후 API 동시 호출 차단 완화용 미세 지연
         fi = yf.Ticker(code).fast_info
+            
+        # [수정] regular_market_previous_close가 없는 지수(달러인덱스 등)를 위한 Fallback
+        prev_close = getattr(fi, 'regular_market_previous_close', None)
+        if prev_close is None or pd.isna(prev_close):
+            prev_close = getattr(fi, 'previous_close', None)
+                
         data = {
             'last_price': getattr(fi, 'last_price', None),
-            'regular_market_previous_close': getattr(fi, 'regular_market_previous_close', None),
+                'regular_market_previous_close': prev_close,
             'last_volume': getattr(fi, 'last_volume', 0),
             'year_high': getattr(fi, 'year_high', None)
         }
         _set_micro_cache(cache_key, data)
         return data
-    except Exception: return None
+    except Exception as e:
+        logger.debug(f"get_yf_fast_info Error ({code}): {e}")
+        return None
 
 # ==========================================================
 # [추가] 차트 데이터 인메모리 캐싱 시스템 (하이브리드 패치)

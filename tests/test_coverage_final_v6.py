@@ -301,7 +301,7 @@ def test_show_market_indices_fast_info_fail(mock_tickers, mock_fetch):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_log_settings(mock_ask):
     """로그 설정 변경 테스트"""
-    mock_ask.side_effect = ["1", "DEBUG", "q"]
+    mock_ask.side_effect = ["2", "DEBUG", "q"]
     with patch('config.setup_logging'):
         settings.modify_log_settings()
         assert config.SCREEN_DEBUG_LEVEL == "DEBUG"

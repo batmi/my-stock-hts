@@ -85,9 +85,10 @@ def test_simulate_strategy_missed_trades(sample_df):
     assert len(res['missed_trades']) > 0
     assert "RSI" in res['missed_trades'][0]['reason']
 
+@patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('modules.backtest.simulate_strategy')
 @patch('config.console.print')
-def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, sample_df):
+def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, mock_ask, sample_df):
     """몬테카를로 시뮬레이션 집계 로직 테스트"""
     mock_res = {
         "trades": [{'type': '매도', 'profit': 5.0, 'days': 10}],
@@ -108,23 +109,24 @@ def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, sample_df):
     
     backtest.run_monte_carlo_simulation(
         sample_df, sample_df.iloc[0], 10000000, 
-        8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0
+        8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0, False
     )
     
     assert mock_sim.call_count == 1000
     assert mock_print.call_count > 0
 
+@patch('modules.backtest.utils.validate_and_confirm_stock', return_value=True)
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.backtest.get_backtest_data')
 @patch('modules.backtest.api.get_stock_name_by_code', return_value="TestStock")
 @patch('config.console.print')
 @patch('config.console.status')
-def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_data, mock_ask, sample_df):
+def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_data, mock_ask, mock_val, sample_df):
     """백테스팅 전체 흐름 (단일 실행 + 최적화) 테스트"""
     mock_get_data.return_value = sample_df
     
-    # 6(Manual) -> Code -> n(No settings change) -> 1(Single Run)
-    mock_ask.side_effect = ["6", "005930", "n", "1"]
+    # 6(Manual) -> Code -> n(No settings change) -> 1(Single Run) -> n(AI)
+    mock_ask.side_effect = ["6", "005930", "n", "1", "n"]
     
     mock_status.return_value.__enter__.return_value = MagicMock()
     
@@ -140,17 +142,19 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
             found = True
     assert found
 
+@patch('modules.backtest.utils.validate_and_confirm_stock', return_value=True)
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.backtest.get_backtest_data')
 @patch('modules.backtest.api.get_stock_name_by_code', return_value="TestStock")
 @patch('config.console.print')
 @patch('config.console.status')
-def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_get_data, mock_ask, sample_df):
+def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_get_data, mock_ask, mock_val, sample_df):
     """백테스팅 설정 변경 테스트"""
     mock_get_data.return_value = sample_df
     
     mock_ask.side_effect = [
-        "6", "005930", "y", "100", "9.0", "60", "100", "6.0", "-5.0", "20.0", "5.0", "2.0", "5", "y", "2.0", "n", "1"
+        "6", "005930", "y", "100", "9.0", "60", "20.0", "n", "75", "5.0", 
+        "10.0", "3.0", "10", "n", "-5.0", "n", "1", "n"
     ]
     
     mock_status.return_value.__enter__.return_value = MagicMock()

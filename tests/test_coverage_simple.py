@@ -150,7 +150,7 @@ def test_get_tr_id_missing():
 @patch('rich.prompt.Prompt.ask')
 def test_edit_config_table_bool_toggle(mock_ask):
     """설정 변경 테이블 - 불리언 토글 테스트"""
-    # 1번 선택 -> y(유지) -> q(종료)
+    # 1번 선택 -> y(변경) -> q(종료)
     mock_ask.side_effect = ["1", "y", "q"]
     
     test_config = {"VALUE": True}
@@ -163,4 +163,4 @@ def test_edit_config_table_bool_toggle(mock_ask):
     with patch('config.console.print'):
         settings._edit_config_table("Test Title", items)
         
-    assert test_config["VALUE"] is True
+    assert test_config["VALUE"] is False

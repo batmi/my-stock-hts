@@ -30,8 +30,9 @@ def sample_backtest_df():
     })
     return df
 
+@patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('config.console.print')
-def test_run_monte_carlo_simulation(mock_print, sample_backtest_df):
+def test_run_monte_carlo_simulation(mock_print, mock_ask, sample_backtest_df):
     """몬테카를로 시뮬레이션 실행 테스트"""
     backtest.run_monte_carlo_simulation(
         sample_backtest_df, 
@@ -39,7 +40,7 @@ def test_run_monte_carlo_simulation(mock_print, sample_backtest_df):
         10000000, 
         8.0, 70, False, 
         -7.0, 30.0, 75, 5.0, 10.0, 3.0,
-        5, True, 2.0, name="TestStock", code="005930", days=100
+        5, True, 2.0, False, name="TestStock", code="005930", days=100
     )
     
     # 결과 출력 확인
@@ -53,13 +54,14 @@ def test_run_monte_carlo_simulation(mock_print, sample_backtest_df):
 @patch('modules.backtest.get_backtest_data')
 def test_run_backtest_menu(mock_get_data, mock_ask, sample_backtest_df):
     """백테스팅 메뉴 실행 테스트"""
-    # 6(직접입력) -> 코드(005930) -> 설정변경(n) -> 모드(1:단일)
-    mock_ask.side_effect = ["6", "005930", "n", "1"]
+    # 6(직접입력) -> 코드(005930) -> 설정변경(n) -> 모드(1:단일) -> AI진단(n)
+    mock_ask.side_effect = ["6", "005930", "n", "1", "n"]
     
     mock_get_data.return_value = sample_backtest_df
     
-    with patch('modules.backtest.api.get_stock_name_by_code', return_value="삼성전자"):
-        with patch('config.console.print'):
-            backtest.run_backtest()
+    with patch('modules.backtest.api.get_stock_name_by_code', return_value="삼성전자"), \
+         patch('modules.backtest.utils.validate_and_confirm_stock', return_value=True):
+         with patch('config.console.print'):
+             backtest.run_backtest()
             
     mock_get_data.assert_called()

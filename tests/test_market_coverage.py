@@ -2,12 +2,15 @@ import pytest
 from unittest.mock import patch, MagicMock
 from modules import market
 import yfinance as yf
+import pandas as pd
 
-@patch('modules.market.api.prefetch_multiple_current_prices')
-def test_show_market_indices_core_error(mock_prefetch):
+@patch('modules.market.Table')
+@patch('modules.market.api.fetch_yfinance_data')
+def test_show_market_indices_core_error(mock_prefetch, mock_table):
     """지수 분석 중 일반 예외 발생 시 처리 테스트"""
-    # 데이터 수집 단계에서 예외 발생 시뮬레이션
-    mock_prefetch.side_effect = Exception("Forced Error")
+    mock_prefetch.return_value = pd.DataFrame()
+    # 테이블 생성 단계에서 예외 발생 시뮬레이션
+    mock_table.side_effect = Exception("Forced Error")
     
     with patch('config.console.print') as mock_print:
         market._show_market_indices_core()

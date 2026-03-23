@@ -263,12 +263,12 @@ def _edit_config_table(title_source, items_source):
             
             if item['type'] == 'bool':
                 # [수정] True/False 입력 지원을 위해 Confirm 대신 Prompt 사용
-                prompt_msg = f"현재 설정을 유지하시겠습니까? [Y/n] ([bold cyan]{curr_val}[/bold cyan])"
+                prompt_msg = f"현재 설정을 변경하시겠습니까? \\[y/N] [dim](현재: {curr_val})[/dim]"
                 
                 canceled = False
                 while True:
                     console.print()
-                    val = Prompt.ask(prompt_msg, default="y", show_default=False)
+                    val = Prompt.ask(prompt_msg, default="n")
                     console.print()
                     val_lower = val.lower()
                     
@@ -279,9 +279,9 @@ def _edit_config_table(title_source, items_source):
                     target_val = curr_val
                     
                     if val_lower in ['y', 'yes', '1']:
-                        target_val = curr_val
-                    elif val_lower in ['n', 'no', '0']:
                         target_val = not curr_val
+                    elif val_lower in ['n', 'no', '0']:
+                        target_val = curr_val
                     elif val_lower == 'true':
                         target_val = True
                     elif val_lower == 'false':
