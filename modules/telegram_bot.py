@@ -256,8 +256,6 @@ class TelegramCommander:
         return self.trader.get_performance_report(days=days)
 
     def _cmd_market(self, args):
-        group_arg = args[0].lower() if args else None
-        
         group_map = {
             'k': "국내 지수 (Domestic Indices)",
             'u': "미국 지수 (US Indices)",
@@ -268,10 +266,25 @@ class TelegramCommander:
             'g': "글로벌 지수 (Global Indices)"
         }
         
-        target_group_name = group_map.get(group_arg)
-        if group_arg and not target_group_name:
-            return f"⚠️ 잘못된 그룹입니다. (사용 가능: {', '.join(group_map.keys())})"
-        return self._get_market_status(target_group_name)
+        if not args:
+            return self._get_market_status(None)
+            
+        keys = "".join(args).lower()
+        target_groups = []
+        invalid_keys = []
+        
+        for k in keys:
+            if k in group_map:
+                if group_map[k] not in target_groups:
+                    target_groups.append(group_map[k])
+            else:
+                if k not in invalid_keys:
+                    invalid_keys.append(k)
+                    
+        if invalid_keys:
+            return f"⚠️ 잘못된 그룹 키가 포함되어 있습니다: {', '.join(invalid_keys)}\n(사용 가능: {', '.join(group_map.keys())})"
+            
+        return self._get_market_status(target_groups)
 
     def _cmd_signal(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
@@ -766,7 +779,7 @@ class TelegramCommander:
     def _send_reply(self, text):
         api.send_telegram_message(text)
 
-    def _get_market_status(self, target_group_name=None):
+    def _get_market_status(self, target_group_names=None):
         """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
         msg = "📊 [시장 지수 현황]\n"
         
@@ -782,19 +795,26 @@ class TelegramCommander:
             "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
         }
 
-        # [추가] 그룹 필터링 로직
-        if target_group_name:
+        # [추가] 다중 그룹 필터링 로직
+        if target_group_names:
+            if isinstance(target_group_names, str):
+                target_group_names = [target_group_names]
+                
             group_indices = set()
+            found_group_labels = []
+            
             for g_info in config.INDICES_GROUPS.values():
-                if g_info['name'] == target_group_name:
+                if g_info['name'] in target_group_names:
                     group_indices.update(g_info['indices'])
-                    break
+                    label = g_info['name'].split(" (")[0]
+                    if label not in found_group_labels:
+                        found_group_labels.append(label)
             
             if group_indices:
                 targets = [(name, code) for name, code in targets if name in group_indices]
-                msg = f"📊 [{target_group_name} 현황]\n"
+                msg = f"📊 [{' + '.join(found_group_labels)} 현황]\n"
             else:
-                return f"⚠️ '{target_group_name}' 그룹을 찾을 수 없습니다."
+                return f"⚠️ 지정한 그룹을 찾을 수 없습니다."
 
         regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
         
