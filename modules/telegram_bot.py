@@ -177,7 +177,14 @@ class TelegramCommander:
                     prev_close = fi.regular_market_previous_close
                     if last_price and prev_close and not math.isnan(last_price) and not math.isnan(prev_close):
                         rate = ((last_price - prev_close) / prev_close) * 100
-                        market_data_str += f"{name}: {last_price:,.2f} ({rate:+.2f}%)\n"
+                        
+                        yh = getattr(fi, 'year_high', None)
+                        yh_str = ""
+                        if yh and not math.isnan(yh) and yh > 0:
+                            yh_rate = ((last_price - yh) / yh) * 100
+                            yh_str = f" (52주 고점대비 {yh_rate:+.1f}%)"
+                            
+                        market_data_str += f"{name}: {last_price:,.2f} (전일대비 {rate:+.2f}%){yh_str}\n"
                 except Exception: pass
             
             if not market_data_str:

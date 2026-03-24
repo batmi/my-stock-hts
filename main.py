@@ -644,6 +644,7 @@ def main():
                 if choice.lower() == "h": 
                     logging.info(f"운영자 실행: [{choice}] {menu_name}")
                     show_help()
+                    utils.pause()
                     continue
 
                 context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")

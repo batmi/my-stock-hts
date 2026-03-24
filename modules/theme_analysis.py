@@ -3,6 +3,8 @@ import requests
 import sqlite3
 import concurrent.futures
 import warnings
+import math
+import yfinance as yf
 from bs4 import BeautifulSoup
 from datetime import datetime
 from rich.panel import Panel
@@ -155,6 +157,78 @@ def _fetch_theme_detail(theme):
     except Exception:
         theme['leading'] = "-"
 
+def _get_macro_context_str():
+    """시스템이 직접 실시간 전체 시장 지표를 수집하여 AI에게 주입할 텍스트를 생성"""
+    import api
+    from modules import market, analysis
+    import concurrent.futures
+    
+    tickers_list = list(market.ALL_INDICES)
+    
+    # 매크로 핵심 지표 추가 (ALL_INDICES에 없는 경우 보강)
+    existing_names = [name for name, _ in tickers_list]
+    if "미 국채 10년물" not in existing_names:
+        tickers_list.append(("미 국채 10년물", "^TNX"))
+
+    context_lines = ["[시스템 제공 실시간 시장 전체 지표 (이 수치들을 절대적인 팩트로 반영할 것)]"]
+    results = {}
+
+    def fetch_ticker(name, ticker):
+        try:
+            # 1. 국내 지수는 KIS API 우선 활용
+            if name in ["코스피", "코스피200", "코스닥", "코스닥150"]:
+                m_type = "KOSPI"
+                if name == "코스닥": m_type = "KOSDAQ"
+                elif name == "코스피200": m_type = "KOSPI200"
+                elif name == "코스닥150": m_type = "KOSDAQ150"
+                
+                df = analysis.get_domestic_index_data(m_type)
+                if df is not None and not df.empty:
+                    curr = float(df.iloc[-1]['close'])
+                    prev = float(df.iloc[-2]['close']) if len(df) > 1 else curr
+                    rate = ((curr - prev) / prev * 100) if prev > 0 else 0.0
+                    high_52 = float(df['close'].tail(250).max())
+                    return name, curr, rate, high_52
+
+            # 2. 해외 지수, 원자재, 환율 등은 yfinance 단건 조회(마이크로 캐시) 활용
+            fi = api.get_yf_fast_info(ticker)
+            if fi:
+                price = fi.get('last_price')
+                prev = fi.get('regular_market_previous_close')
+                yh = fi.get('year_high')
+                if price is not None and not math.isnan(price):
+                    rate = ((price - prev) / prev * 100) if (prev and prev > 0) else 0.0
+                    return name, price, rate, yh
+        except Exception:
+            pass
+        return name, None, None, None
+
+    # 병렬 처리로 속도 최적화 (API Rate Limit을 고려하여 max_workers=5)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(fetch_ticker, name, ticker) for name, ticker in tickers_list]
+        for future in concurrent.futures.as_completed(futures):
+            name, price, rate, yh = future.result()
+            if price is not None:
+                results[name] = (price, rate, yh)
+
+    # 기존 리스트 순서대로 정리하여 텍스트 생성
+    for name, _ in tickers_list:
+        if name in results:
+            price, rate, yh = results[name]
+            if "환율" in name: val_str = f"{price:,.2f}원"
+            elif "국채" in name or "금리" in name: val_str = f"{price:,.3f}%"
+            elif name in ["비트코인", "이더리움"]: val_str = f"${price:,.2f}"
+            else: val_str = f"{price:,.2f}"
+            
+            yh_str = ""
+            if yh is not None and yh > 0 and price > 0:
+                yh_rate = ((price - yh) / yh) * 100
+                yh_str = f" / 52주 고점대비 {yh_rate:+.1f}%"
+                
+            context_lines.append(f" - {name}: {val_str} (전일대비 {rate:+.2f}%{yh_str})")
+
+    return "\n".join(context_lines) + "\n"
+
 def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
@@ -168,55 +242,6 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
         config.console.print("[dim]  Google AI Studio에서 키를 발급받아 설정해주세요.[/dim]")
         return None
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # 프롬프트 설계
-    if custom_prompt:
-        prompt = f"""
-        [현재 시각: {now} (KST)]
-        {custom_prompt}
-        """
-    else:
-        prompt = f"""
-        [현재 시각: {now} (KST)]
-        당신은 여의도 최고의 퀀트 전략가이자 국제 정세와 매크로 경제에 정통한 수석 주식 분석가입니다. 
-        구글 검색을 통해 최신 실시간 글로벌 뉴스, 경제 지표, 한국 증시(KOSPI/KOSDAQ) 데이터를 완벽하게 수집한 후, 
-        오늘 시장을 지배하는 '핵심 주도 테마 TOP 5'에 대한 **매우 심층적이고 전문적인** 마켓 인사이트 리포트를 작성해 주세요.
-
-        반드시 다음의 상세 가이드라인을 엄격히 준수하여 분량을 충분히 확보하고 깊이 있게 작성해야 합니다:
-
-        1. **글로벌 정세, 매크로 및 증시 환경 브리핑 (지정학적/거시적 관점)**:
-          - 글로벌 지정학적 핵심 이슈(미중 무역 갈등, 전쟁/지경학적 분쟁, 주요국 정책 변화 등)가 현재 증시와 공급망에 미치는 영향을 반드시 포함하여 심층 분석할 것.
-          - 전일 미 증시 동향 및 오늘 한국 증시에 미치는 영향 (구체적인 지수 등락률 및 주요 섹터 움직임 포함).
-          - 핵심 매크로 지표(달러 환율, 국채 금리, 주요 원자재 가격 등)의 현재 흐름과 이것이 투심에 미치는 영향.
-          - 오늘 시장의 전체적인 수급 동향(외인/기관 포지셔닝) 및 전반적인 시장 심리(투심) 평가.
-
-        2. **핵심 주도 테마 요약 표 (Markdown Table 필수)**:
-          - 오늘 시장을 주도하는 TOP 5 테마를 한눈에 파악할 수 있도록 반드시 **마크다운 표(Table)** 형태로 먼저 요약할 것.
-          - 표의 컬럼: [순위 | 테마명 | 상승 강도 | 핵심 트리거(한 줄 요약) | 대장주 및 관련주]
-
-        3. **테마별 딥다이브 심층 분석 및 대응 전략 (TOP 5 각각에 대해 매우 상세히 작성)**:
-          각 테마별로 아래 항목을 분리하여 **최소 3~4문장 이상** 구체적으로 서술할 것:
-          - **상승 배경 및 촉매제**: 단순 뉴스 나열이 아닌, 해당 뉴스가 왜 시장에서 강력한 매수세로 이어졌는지 논리적 배경 설명.
-          - **글로벌 밸류체인 연동성**: 이 테마가 글로벌 공급망이나 해외 빅테크(엔비디아, 테슬라, 애플 등)와 어떤 역학 관계로 연결되어 있는지 심층 분석.
-          - **주도주 수급 및 기술적 위치**: 대장주와 2~3등주의 이름과 현재 기술적 위치(예: 52주 신고가 돌파, 주요 이평선 지지 등). 외인/기관의 구체적인 수급 특징.
-          - **리스크 및 실전 대응 전략**: 단기적인 차익 실현 가능성, 밸류에이션 부담, 재료 소멸 타이밍 등을 경고. "지금 추격 매수해도 되는가?"에 대한 명확한 뷰(View)와 타점(눌림목 등) 제시.
-
-        4. **향후 체크포인트 (Upcoming Events)**:
-          - 이번 주 또는 단기적으로 해당 테마 및 증시 전체의 방향성을 바꿀 수 있는 주요 일정(주요국 경제 지표 발표, 빅테크 실적 발표, 정책 이벤트 등) 2~3가지를 날짜와 함께 구체적으로 제시.
-
-        5. **보고서 출력 형식**:
-          - 도입부: [🌟 마켓 브리핑, 매크로 및 글로벌 정세 요약]
-          - 요약부: [📊 오늘의 핵심 테마 TOP 5 요약 표] (반드시 표 형태로 출력)
-          - 본문: [🔍 테마별 심층 분석 (Deep Dive)] (각 테마별로 소제목을 달아 상세히 서술)
-          - 일정: [📅 단기 핵심 체크포인트]
-          - 결론: [💡 수석 전략가의 최종 투자 총평 및 포트폴리오 비중 조언]
-          - 가독성을 위해 불릿 포인트(•)와 적절한 이모지를 적극적으로 활용하되, 내용은 최대한 풍부하고 깊이 있게 작성할 것.
-
-        [중요] 반드시 실시간 구글 검색을 통해 수집된 최신 정보만을 기반으로 분석을 작성해야 하며, 과거 데이터나 일반적인 상식에 의존한 분석은 허용되지 않습니다.
-        또한 모든 숫자는 [현재 시각: {now} (KST)] 기준으로 최신 데이터를 반영해야 합니다.
-        """
-
     try:
         with Progress(
             SpinnerColumn(),
@@ -225,7 +250,77 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]Google Gemini가 실시간 시장 정보를 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            
+            macro_context = ""
+            if not custom_prompt:
+                task_macro = progress.add_task("[cyan]전체 시장 지표(국내/해외/원자재/환율 등) 실시간 수집 중...[/cyan]", total=None)
+                macro_context = _get_macro_context_str()
+                progress.remove_task(task_macro)
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if custom_prompt:
+                prompt = f"""
+                [현재 시각: {now} (KST)]
+                {custom_prompt}
+                """
+            else:
+                prompt = f"""
+                [현재 시각: {now} (KST)]
+                {macro_context}
+                당신은 여의도 최고의 퀀트 전략가이자 국제 정세와 매크로 경제에 정통한 수석 주식 분석가입니다. 
+                위 제공된 [시스템 제공 실시간 시장 전체 지표]의 정확한 수치들을 절대적인 기준으로 삼고, 당신이 학습한 최신 지식과 시장 데이터를 융합하여, 
+                오늘 시장을 지배하는 '핵심 주도 테마 TOP 5'에 대한 **매우 심층적이고 전문적인** 마켓 인사이트 리포트를 작성해 주세요.
+                (※ 유가(WTI), 환율, 국채 금리, 글로벌 지수, 암호화폐 등의 수치는 반드시 위 제공된 시스템 실시간 데이터를 사용해야 하며, 검색된 과거 기사의 수치로 덮어쓰지 마세요.)
+
+                [시장 지표 해석 가이드 (단기 등락이 아닌 '절대적 위치'와 '구조적 추세' 기준)]
+                * 매우 중요: 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 마세요. 아래 절대적 수치 레벨을 최우선 기준으로 거시 경제를 해석하세요.
+                - 브랜트유: 125 이상(에너지 쇼크), 105~125(임계점: 고금리 긴축 강요), 85~105(인플레 압력 상존), 65~85(골디락스), 45~65(수요 둔화), 45 미만(시스템 위기)
+                - WTI 원유: 120 이상(에너지 쇼크), 100~120(임계점: 고금리 긴축 강요), 80~100(인플레 압력 상존), 60~80(골디락스), 40~60(수요 둔화), 40 미만(시스템 위기)
+                - 가솔린 RBOB: 4.0 이상(에너지 쇼크), 3.2~4.0(임계점), 2.6~3.2(고유가 지속), 2.1~2.6(골디락스), 1.6~2.1(수요 둔화), 1.6 미만(시스템 위기)
+                - 천연가스: 10 이상(에너지 쇼크), 6~10(물가 비상), 4~6(수급 타이트), 2.5~4.0(골디락스), 1.5~2.5(수익성 악화), 1.5 미만(시스템 하강)
+                - 밀: 900 이상(식량 안보 위기), 750~900(식량 인플레 심각), 650~750(물가 부담), 500~650(적절한 균형점), 400~500(수요 둔화/공급 과잉), 400 미만(디플레/침체)
+                - 달러 인덱스: 120 이상(통화 시스템 붕괴 위기), 110~120(매우 강함/신흥국 위기), 103~110(강세/신흥국 경고등), 90~103(가장 안정적인 중립), 80~90(약세), 80 미만(매우 약함)
+                - 달러 환율: 1600원 이상(시스템 위기), 1500~1600(패닉 구간), 1400~1500(구조적 고환율), 1300~1400(강달러 뉴노멀 상단), 1200~1300(뉴노멀 중립), 1100~1200(비정상적 안정), 1100 미만(초강세 원화)
+                - VIX (변동성): 20 이하(안정), 20~30(시장 활발), 30~40(주의), 40~50(경계), 50 이상(위험)
+                - SOX (반도체 지수): 52주 고점 대비 낙폭 5% 이내(신고가 랠리/초강세), 5~12%(건전한 조정), 12~20%(기술적 조정기), 25% 초과(반도체 하락 사이클/침체)
+                - 52주 고점 대비: -3.0% 이상(신고가 근접/초강세), -3.0% ~ -20.0%(일반 조정/중립), -20.0% 이하(침체/약세장 진입)
+
+                반드시 다음의 상세 가이드라인을 엄격히 준수하여 분량을 충분히 확보하고 깊이 있게 작성해야 합니다:
+
+                1. **글로벌 정세, 매크로 및 증시 환경 브리핑 (지정학적/거시적 관점)**:
+                  - 글로벌 지정학적 핵심 이슈(미중 무역 갈등, 전쟁/지경학적 분쟁, 주요국 정책 변화 등)가 현재 증시와 공급망에 미치는 영향을 반드시 포함하여 심층 분석할 것.
+                  - 전일 미 증시 동향 및 오늘 한국 증시에 미치는 영향 (구체적인 지수 등락률 및 주요 섹터 움직임 포함).
+                  - 핵심 매크로 지표(달러 환율, 국채 금리, 주요 원자재 가격 등)의 현재 흐름과 이것이 투심에 미치는 영향.
+                  - 오늘 시장의 전체적인 수급 동향(외인/기관 포지셔닝) 및 전반적인 시장 심리(투심) 평가.
+
+                2. **핵심 주도 테마 요약 표 (Markdown Table 필수)**:
+                  - 오늘 시장을 주도하는 TOP 5 테마를 한눈에 파악할 수 있도록 반드시 **마크다운 표(Table)** 형태로 먼저 요약할 것.
+                  - 표의 컬럼: [순위 | 테마명 | 상승 강도 | 핵심 트리거(한 줄 요약) | 대장주 및 관련주]
+
+                3. **테마별 딥다이브 심층 분석 및 대응 전략 (TOP 5 각각에 대해 매우 상세히 작성)**:
+                  각 테마별로 아래 항목을 분리하여 **최소 3~4문장 이상** 구체적으로 서술할 것:
+                  - **상승 배경 및 촉매제**: 단순 뉴스 나열이 아닌, 해당 뉴스가 왜 시장에서 강력한 매수세로 이어졌는지 논리적 배경 설명.
+                  - **글로벌 밸류체인 연동성**: 이 테마가 글로벌 공급망이나 해외 빅테크(엔비디아, 테슬라, 애플 등)와 어떤 역학 관계로 연결되어 있는지 심층 분석.
+                  - **주도주 수급 및 기술적 위치**: 대장주와 2~3등주의 이름과 현재 기술적 위치(예: 52주 신고가 돌파, 주요 이평선 지지 등). 외인/기관의 구체적인 수급 특징.
+                  - **리스크 및 실전 대응 전략**: 단기적인 차익 실현 가능성, 밸류에이션 부담, 재료 소멸 타이밍 등을 경고. "지금 추격 매수해도 되는가?"에 대한 명확한 뷰(View)와 타점(눌림목 등) 제시.
+
+                4. **향후 체크포인트 (Upcoming Events)**:
+                  - 이번 주 또는 단기적으로 해당 테마 및 증시 전체의 방향성을 바꿀 수 있는 주요 일정(주요국 경제 지표 발표, 빅테크 실적 발표, 정책 이벤트 등) 2~3가지를 날짜와 함께 구체적으로 제시.
+
+                5. **보고서 출력 형식**:
+                  - 도입부: [🌟 마켓 브리핑, 매크로 및 글로벌 정세 요약]
+                  - 요약부: [📊 오늘의 핵심 테마 TOP 5 요약 표] (반드시 표 형태로 출력)
+                  - 본문: [🔍 테마별 심층 분석 (Deep Dive)] (각 테마별로 소제목을 달아 상세히 서술)
+                  - 일정: [📅 단기 핵심 체크포인트]
+                  - 결론: [💡 수석 전략가의 최종 투자 총평 및 포트폴리오 비중 조언]
+                  - 가독성을 위해 불릿 포인트(•)와 적절한 이모지를 적극적으로 활용하되, 내용은 최대한 풍부하고 깊이 있게 작성할 것.
+
+                [중요] 반드시 실시간 구글 검색을 통해 수집된 최신 정보만을 기반으로 분석을 작성해야 하며, 과거 데이터나 일반적인 상식에 의존한 분석은 허용되지 않습니다.
+                또한 모든 숫자는 [현재 시각: {now} (KST)] 기준으로 최신 데이터를 반영해야 합니다.
+                """
+
+            progress.add_task(f"[cyan]Google Gemini가 시장 데이터를 종합 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
             # 1. Gemini API 설정
             genai.configure(api_key=config.GEMINI_API_KEY)
@@ -241,13 +336,21 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                 }
             )
             
-            # 3. 콘텐츠 생성
-            response = model.generate_content(prompt)
+            # 3. 콘텐츠 생성 (500 Internal Error 대비 간헐적 서버 오류 재시도 로직)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = model.generate_content(prompt)
+                    if response and response.text:
+                        return response.text
+                    break
+                except Exception as e:
+                    if "500" in str(e) and attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    raise e
             
-            if response and response.text:
-                return response.text
-            else:
-                return "검색 결과가 없거나 응답을 생성하지 못했습니다."
+            return "검색 결과가 없거나 응답을 생성하지 못했습니다."
 
     except KeyboardInterrupt:
         config.console.print("\n[yellow]사용자에 의해 분석이 중단되었습니다.[/yellow]")
@@ -304,8 +407,17 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
             model_name=config.GEMINI_MODEL,
             generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
-        res = model.generate_content(prompt)
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                res = model.generate_content(prompt)
+                return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+            except Exception as e:
+                if "500" in str(e) and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                raise e
     except Exception as e:
         logger.error(f"Gemini Stock Analyze Error: {e}")
         return f"⚠️ 분석 중 오류 발생: {e}"
@@ -356,8 +468,17 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
             model_name=config.GEMINI_MODEL,
             generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
-        res = model.generate_content(prompt)
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                res = model.generate_content(prompt)
+                return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+            except Exception as e:
+                if "500" in str(e) and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                raise e
     except Exception as e:
         logger.error(f"Gemini Backtest Evaluate Error: {e}")
         return f"⚠️ 분석 중 오류 발생: {e}"
@@ -375,6 +496,20 @@ def generate_morning_briefing(market_data_str):
     
     [글로벌 마감 데이터]
     {market_data_str}
+    
+    [시장 지표 해석 가이드 (단기 등락이 아닌 '절대적 위치'와 '구조적 추세' 기준)]
+    * 매우 중요: 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 마세요. 아래 절대적 수치 레벨을 최우선 기준으로 거시 경제를 해석하세요.
+    - 시장 지수 (글로벌/원자재/코인): 지수 > EMA 20일선 & 이평선 우상향 & ADX 조건 충족 시 '강세장(Bull)', 지수 < EMA 20일선 시 '약세장(Bear)', 그 외 '횡보장(Sideways)'
+    - 브랜트유: 125 이상(에너지 쇼크), 105~125(임계점: 고금리 긴축 강요), 85~105(인플레 압력 상존), 65~85(골디락스), 45~65(수요 둔화), 45 미만(시스템 위기)
+    - WTI 원유: 120 이상(에너지 쇼크), 100~120(임계점: 고금리 긴축 강요), 80~100(인플레 압력 상존), 60~80(골디락스), 40~60(수요 둔화), 40 미만(시스템 위기)
+    - 가솔린 RBOB: 4.0 이상(에너지 쇼크), 3.2~4.0(임계점), 2.6~3.2(고유가 지속), 2.1~2.6(골디락스), 1.6~2.1(수요 둔화), 1.6 미만(시스템 위기)
+    - 천연가스: 10 이상(에너지 쇼크), 6~10(물가 비상), 4~6(수급 타이트), 2.5~4.0(골디락스), 1.5~2.5(수익성 악화), 1.5 미만(시스템 하강)
+    - 밀: 900 이상(식량 안보 위기), 750~900(식량 인플레 심각), 650~750(물가 부담), 500~650(적절한 균형점), 400~500(수요 둔화/공급 과잉), 400 미만(디플레/침체)
+    - 달러 인덱스: 120 이상(통화 시스템 붕괴 위기), 110~120(매우 강함/신흥국 위기), 103~110(강세/신흥국 경고등), 90~103(가장 안정적인 중립), 80~90(약세), 80 미만(매우 약함)
+    - 달러 환율: 1600원 이상(시스템 위기), 1500~1600(패닉 구간), 1400~1500(구조적 고환율), 1300~1400(강달러 뉴노멀 상단), 1200~1300(뉴노멀 중립), 1100~1200(비정상적 안정), 1100 미만(초강세 원화)
+    - VIX (변동성): 20 이하(안정), 20~30(시장 활발), 30~40(주의), 40~50(경계), 50 이상(위험)
+    - SOX (반도체 지수): 52주 고점 대비 낙폭 5% 이내(신고가 랠리/초강세), 5~12%(건전한 조정), 12~20%(기술적 조정기), 25% 초과(반도체 하락 사이클/침체)
+    - 52주 고점 대비: -3.0% 이상(신고가 근접/초강세), -3.0% ~ -20.0%(일반 조정/중립), -20.0% 이하(침체/약세장 진입)
     
     위 데이터를 분석하고 구글 검색을 통해 간밤의 미국 증시 주요 이슈(주도주 실적, 연준(Fed) 발언, 매크로 지표 발표 등)를 파악한 뒤,
     오늘 아침 개장할 한국 증시(코스피/코스닥)에 미칠 영향과 오늘 가장 주목해야 할 섹터 3가지를 정리해 주세요.
@@ -401,8 +536,17 @@ def generate_morning_briefing(market_data_str):
             model_name=config.GEMINI_MODEL,
             generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 4096}
         )
-        res = model.generate_content(prompt)
-        return res.text if res and res.text else None
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                res = model.generate_content(prompt)
+                return res.text if res and res.text else None
+            except Exception as e:
+                if "500" in str(e) and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                raise e
     except Exception as e:
         logger.error(f"Gemini Morning Briefing Error: {e}")
         return None
@@ -437,12 +581,20 @@ def ask_gemini(question):
                 "max_output_tokens": 4096,
             }
         )
-        response = model.generate_content(prompt)
         
-        if response and response.text:
-            return response.text
-        else:
-            return "검색 결과가 없거나 답변을 생성하지 못했습니다."
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(prompt)
+                if response and response.text:
+                    return response.text
+                break
+            except Exception as e:
+                if "500" in str(e) and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                raise e
+        return "검색 결과가 없거나 답변을 생성하지 못했습니다."
 
     except Exception as e:
         logger.error(f"Gemini Ask Error: {e}")
@@ -527,7 +679,7 @@ def _analyze_with_gemini_ui():
             result = cached['data']
     
     if not result:
-        config.console.print("[dim]Google Gemini의 실시간 검색(Grounding)을 통해 현재 시장 주도 테마를 분석합니다.[/dim]\n")
+        config.console.print("[dim]시스템이 최신 매크로 지표를 수집하고 Google Gemini가 실시간 검색을 융합하여 테마를 분석합니다.[/dim]\n")
         result = analyze_market_trends_with_gemini()
         if result:
             _save_theme_analysis(result)
