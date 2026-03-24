@@ -28,8 +28,8 @@ def test_show_market_indices_retry_on_fail(mock_ask, mock_core):
         []             # 3. 추가 호출 대비 (안전장치)
     ]
     
-    # 사용자 입력: 그룹 선택(8:전체) -> 재시도(y) -> 반복조회(n)
-    mock_ask.side_effect = ['8', 'y', 'n']
+    # 사용자 입력: 그룹 선택(9:전체) -> 재시도(y) -> 반복조회(n)
+    mock_ask.side_effect = ['9', 'y', 'n']
     
     market.show_market_indices()
     

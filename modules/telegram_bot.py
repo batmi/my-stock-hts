@@ -184,7 +184,10 @@ class TelegramCommander:
                             yh_rate = ((last_price - yh) / yh) * 100
                             yh_str = f" (52주 고점대비 {yh_rate:+.1f}%)"
                             
-                        market_data_str += f"{name}: {last_price:,.2f} (전일대비 {rate:+.2f}%){yh_str}\n"
+                        status_desc = theme_analysis.evaluate_market_indicator(name, last_price, yh_rate)
+                        status_str = f" -> [현재 상태: {status_desc}]" if status_desc else ""
+                        
+                        market_data_str += f"{name}: {last_price:,.2f} (전일대비 {rate:+.2f}%){yh_str}{status_str}\n"
                 except Exception: pass
             
             if not market_data_str:
@@ -242,7 +245,7 @@ class TelegramCommander:
             "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
             "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
-            "• /market [그룹] : 주요 지수 현황 (k/u/c/f/i/b/g)\n"
+            "• /market [그룹] : 주요 지수 현황 (k/u/t/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
             "• /analyze <종목> : AI 종목 기술적 분석 및 심층 진단\n"
@@ -266,6 +269,7 @@ class TelegramCommander:
         group_map = {
             'k': "국내 지수 (Domestic Indices)",
             'u': "미국 지수 (US Indices)",
+            't': "미국채 금리 (US Treasury Yields)",
             'c': "원자재 (Commodities)",
             'f': "환율 (Exchange Rates)",
             'i': "변동성/반도체 (Volatility/Semiconductors)",
@@ -792,7 +796,7 @@ class TelegramCommander:
         targets = market.ALL_INDICES
         
         # 구분선(공백라인)을 넣을 지수명 리스트
-        section_keys = ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
+        section_keys = ["나스닥 선물", "미국채 5년물 금리", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
         
         # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
         domestic_map = {
@@ -844,10 +848,13 @@ class TelegramCommander:
                 diff = current - prev
                 rate = (diff / prev) * 100
                 
-                val_fmt = f"{current:,.2f}"
-                if code == "KRW=X": val_fmt += "원"
-                
-                msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
+                if "미국채" in name:
+                    val_fmt = f"{current:,.2f}%"
+                    msg += f"\n• {name} {val_fmt} ({diff:+.2f}p)"
+                else:
+                    val_fmt = f"{current:,.2f}"
+                    if code == "KRW=X": val_fmt += "원"
+                    msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
                 
                 # 시장 국면 판단 로직 적용 (모든 지수)
                 ma_series = df['close'].ewm(span=regime_ma_period, adjust=False).mean()

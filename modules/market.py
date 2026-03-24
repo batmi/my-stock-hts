@@ -33,6 +33,7 @@ def clear_market_yf_cache():
 ALL_INDICES = [
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
+    ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
@@ -276,7 +277,14 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             high_52_str = "[dim]-[/]"
         else:
             diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-            change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
+            
+            if "미국채" in name:
+                change_str = f"{diff_color}{diff:+.2f}p ({rate:+.2f}%)[/]"
+                curr_fmt = f"{current:,.2f}%"
+            else:
+                change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
+                curr_fmt = f"{current:,.2f}"
+                if name == "달러환율": curr_fmt += "원"
 
             curr_price_color = "[white]"
             if ema5 and ema20 and ema60:
@@ -293,18 +301,23 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     elif current > ema20: curr_price_color = "[orange3]"
                     else: curr_price_color = "[white]"
             
-            curr_fmt = f"{current:,.2f}"
-            if name == "달러환율": curr_fmt += "원"
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             h_color = "[white]"
             if high_52_rate > -3.0: h_color = "[red]"
             elif high_52_rate < -20.0: h_color = "[blue]"
-            high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
+            
+            if "미국채" in name:
+                high_52_str = f"[dim]{high_52:,.2f}%[/] ({h_color}{high_52_rate:.1f}%[/])"
+            else:
+                high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
         def fmt_val(val, color_tag):
             if val is None: return "-"
-            s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
+            if "미국채" in name:
+                s = f"{val:,.2f}%"
+            else:
+                s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
             return f"{color_tag}{s}[/]" if color_tag else s
 
         ema5_color = "[white]"
@@ -404,8 +417,25 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
                 if regime_state == "Bull": display_name = f"[red]{name}{suffix}[/]"
                 elif regime_state == "Bear": display_name = f"[blue]{name}{suffix}[/]"
-                else: display_name = f"[white]{name}{suffix}[/]"
+                else: display_name = f"[yellow]{name}{suffix}[/]"
             except: pass
+        elif name == "미국채 10년물 금리":
+            if current >= 5.20: display_name = f"[magenta]{name}[/]"
+            elif 4.70 <= current < 5.20: display_name = f"[red]{name}[/]"
+            elif 4.20 <= current < 4.70: display_name = f"[orange3]{name}[/]"
+            elif 3.50 <= current < 4.20: display_name = f"[green]{name}[/]"
+            elif 2.80 <= current < 3.50: display_name = f"[yellow]{name}[/]"
+            elif current < 2.80: display_name = f"[blue]{name}[/]"
+        elif name == "미국채 5년물 금리":
+            if current >= 4.80: display_name = f"[red]{name}[/]"
+            elif 3.80 <= current < 4.80: display_name = f"[orange3]{name}[/]"
+            elif 3.20 <= current < 3.80: display_name = f"[green]{name}[/]"
+            elif current < 3.20: display_name = f"[blue]{name}[/]"
+        elif name == "미국채 30년물 금리":
+            if current >= 5.50: display_name = f"[magenta]{name}[/]"
+            elif 4.80 <= current < 5.50: display_name = f"[red]{name}[/]"
+            elif 4.20 <= current < 4.80: display_name = f"[green]{name}[/]"
+            elif current < 4.20: display_name = f"[blue]{name}[/]"
         elif name == "SOX (반도체)":
             if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
             elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"
@@ -696,7 +726,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
+                if name in ["나스닥 선물", "미국채 5년물 금리", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
                     table.add_section()
 
                 res = results_dict.get(name)
@@ -771,8 +801,8 @@ def show_market_indices(interval=0):
             else:
                 menu_items.append((key, name, ""))
                 
-        menu_items.append(("8", "전체 지수", "All Indices"))
-        sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="8", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+        menu_items.append(("9", "전체 지수", "All Indices"))
+        sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="9", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
         if sel.lower() == 'q': return False
         
         # [추가] 트래킹 기록
@@ -796,7 +826,7 @@ def show_market_indices(interval=0):
                 else:
                     keys.append(k)
             
-            if '8' in keys:
+            if '9' in keys:
                 target_indices = None
             else:
                 target_indices = []
