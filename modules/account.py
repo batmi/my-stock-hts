@@ -241,7 +241,6 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 calculated_total_profit += profit
                 
                 # [추가] 손절가 및 기준 계산
-                use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
                 sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
                 tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
                 
@@ -251,22 +250,24 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     sl_rate = rule['stop_loss']
                     tp_rate = rule['take_profit']
                 
-                applied_rate = sl_rate
-                label = "고정"
-                
-                if use_atr:
-                    last_buy = db_manager.db.get_latest_buy_trade(code)
-                    if last_buy and last_buy.get('stop_loss_rate'):
-                        val = float(last_buy['stop_loss_rate'])
-                        if val != 0.0:
-                            applied_rate = val
-                            label = "ATR"
-                
                 target_price = buy_price * (1 + tp_rate / 100)
-                stop_price = buy_price * (1 + applied_rate / 100)
+                target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:g}%)[/dim]"
                 
-                target_str = f"[red]{int(target_price):,}원[/] (+{tp_rate}%)"
-                stop_str = f"[blue]{int(stop_price):,}원[/] ({applied_rate:.2f}%, {label})"
+                fixed_stop_price = buy_price * (1 + sl_rate / 100)
+                stop_str_list = [f"[dim]고정:[/dim][blue]{int(fixed_stop_price):,}[/][dim]({sl_rate:g}%)[/dim]"]
+                
+                atr_sl_rate = None
+                last_buy = db_manager.db.get_latest_buy_trade(code)
+                if last_buy and last_buy.get('stop_loss_rate'):
+                    val = float(last_buy['stop_loss_rate'])
+                    if val != 0.0:
+                        atr_sl_rate = val
+                
+                if atr_sl_rate is not None:
+                    atr_stop_price = buy_price * (1 + atr_sl_rate / 100)
+                    stop_str_list.append(f"[dim]ATR:[/dim][blue]{int(atr_stop_price):,}[/][dim]({atr_sl_rate:g}%)[/dim]")
+                
+                stop_str = " ".join(stop_str_list)
                 
                 p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
                 table.add_row(
@@ -355,7 +356,6 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 tot_ovrs_profit += profit
 
                 # [추가] 손절가 및 기준 계산
-                use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
                 sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
                 tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
                 
@@ -365,22 +365,24 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     sl_rate = rule['stop_loss']
                     tp_rate = rule['take_profit']
                 
-                applied_rate = sl_rate
-                label = "고정"
-                
-                if use_atr:
-                    last_buy = db_manager.db.get_latest_buy_trade(code)
-                    if last_buy and last_buy.get('stop_loss_rate'):
-                        val = float(last_buy['stop_loss_rate'])
-                        if val != 0.0:
-                            applied_rate = val
-                            label = "ATR"
-                
                 target_price = pchs_avg * (1 + tp_rate / 100)
-                stop_price = pchs_avg * (1 + applied_rate / 100)
+                target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:g}%)[/dim]"
                 
-                target_str = f"[red]${target_price:,.2f}[/] (+{tp_rate}%)"
-                stop_str = f"[blue]${stop_price:,.2f}[/] ({applied_rate:.2f}%, {label})"
+                fixed_stop_price = pchs_avg * (1 + sl_rate / 100)
+                stop_str_list = [f"[dim]고정:[/dim][blue]${fixed_stop_price:,.2f}[/][dim]({sl_rate:g}%)[/dim]"]
+                
+                atr_sl_rate = None
+                last_buy = db_manager.db.get_latest_buy_trade(code)
+                if last_buy and last_buy.get('stop_loss_rate'):
+                    val = float(last_buy['stop_loss_rate'])
+                    if val != 0.0:
+                        atr_sl_rate = val
+                
+                if atr_sl_rate is not None:
+                    atr_stop_price = pchs_avg * (1 + atr_sl_rate / 100)
+                    stop_str_list.append(f"[dim]ATR:[/dim][blue]${atr_stop_price:,.2f}[/][dim]({atr_sl_rate:g}%)[/dim]")
+                    
+                stop_str = " ".join(stop_str_list)
 
                 color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 
