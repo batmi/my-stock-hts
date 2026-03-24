@@ -60,7 +60,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     )
     
     # 3. 백테스팅용 플래그 변환
-    can_buy_state = (state not in ["매도", "주의"]) # 매도/주의가 아니면 매수 후보 (역추세매수 포함)
+    can_buy_state = (state not in ["매도", "주의"]) # 매도/주의가 아니면 매수 후보 (역매수 포함)
     sell_check_score = 0 if state == "매도" else raw_score # 매도 상태면 점수 0점 처리 (매도 유도)
     
     return raw_score, sell_check_score, can_buy_state, state, reason
@@ -206,7 +206,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         if holdings == 0:
             # [수정] 매수 조건 체크 (역추세 허용)
             is_score_ok = raw_score >= buy_score_limit
-            is_mr_buy = (state == "역추세매수")
+            is_mr_buy = (state == "역매수")
             is_rsi_ok = row['RSI'] < buy_rsi_limit # MR은 기준이 40이라 무조건 통과됨
             
             if is_score_ok or is_mr_buy:
@@ -326,7 +326,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
-                if state in ["매수", "역추세매수", "상승"]:
+                if state in ["매수", "역매수", "상승"]:
                     pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
                 else:
                     sell_signal = True; reason = "시간청산"
@@ -1427,12 +1427,10 @@ def run_backtest():
             elif state == "관망": state_color = "white"
             elif state == "주의": state_color = "yellow"
             elif state == "매도": state_color = "blue"
-            display_state = "역매수" if state == "역추세매수" else state
-
             adx_str = f"{m.get('adx', 0):.1f}"
             cci_str = f"{m.get('cci', 0):.1f}"
             price_str = fmt_money(m.get('price', 0))
-            m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{display_state}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+            m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
             
         config.console.print(m_table)
 

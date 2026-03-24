@@ -229,7 +229,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
         disparity = (price / ema20) * 100
         # 조건: RSI 침체 도달 후 전일 대비 상승(반등 확인) & 이격도 충분히 하락
         if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp:
-            return "역추세매수", "[magenta]", "낙폭과대 (역추세 반등 신호)"
+            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호)"
 
     reasons = []
     is_severe_danger = False
@@ -799,14 +799,13 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_logic.add_row("적용 가중치", w_val, w_desc)
     
     # 상태 분류
-    display_state = "역매수" if state == "역추세매수" else state
-    table_logic.add_row("상태 분류", f"[bold {s_color}]{display_state}[/]", state_reason)
+    table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
     
     # 매수 조건 체크
     buy_score_limit = buy_score
     buy_rsi_limit = thresholds["BUY_RSI_MAX"]
     
-    is_mr_state = (state == "역추세매수")
+    is_mr_state = (state == "역매수")
     if is_mr_state:
         buy_vol_limit = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0))
     else:
@@ -896,7 +895,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         tech_info = (
             f"• 현재가: {price_str}\n"
-            f"• 시스템 상태: {display_state} (사유: {state_reason})\n"
+            f"• 시스템 상태: {state} (사유: {state_reason})\n"
             f"• 퀀트 점수: {score}점 / 10점 만점\n"
             f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str}"
         )
@@ -1060,8 +1059,7 @@ def diagnose_group_stocks(market_filter=None):
     for r in results:
         s_color = r['state_color'].replace('[', '').replace(']', '')
         score_str = f"[{s_color}]{r['score']:.2f}점[/]"
-        display_state = "역매수" if r['state'] == "역추세매수" else r['state']
-        state_str = f"[{s_color}]{display_state}[/]"
+        state_str = f"[{s_color}]{r['state']}[/]"
         
         rsi_val = r['rsi']
         rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
@@ -1323,7 +1321,7 @@ def _analyze_stock_worker(stock, params=None):
         vol_strength = None
         
         # 조회 대상 상태 정의 (기본: 매수, 상승)
-        target_vol_states = ["매수", "역추세매수", "상승"]
+        target_vol_states = ["매수", "역매수", "상승"]
         
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "ALL")
@@ -1340,9 +1338,9 @@ def _analyze_stock_worker(stock, params=None):
                 except: time.sleep(0.1)
 
         # [수정] 매수(역추세포함) 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
-        if state in ["매수", "역추세매수", "상승"] and vol_strength is not None:
+        if state in ["매수", "역매수", "상승"] and vol_strength is not None:
             try:
-                if state == "역추세매수":
+                if state == "역매수":
                     min_vol = params.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if params else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
                 elif params and 'BUY_VOL_STRENGTH' in params:
                     min_vol = params.get('BUY_VOL_STRENGTH', 100.0)
@@ -1510,7 +1508,7 @@ def analyze_market_stocks(market_type):
                         log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
                         if res_data['is_target']:
-                            log_style = "bold green" if res_data['state'] in ["매수", "역추세매수"] else "bold orange3"
+                            log_style = "bold green" if res_data['state'] in ["매수", "역매수"] else "bold orange3"
                             progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
                             buy_candidates.append(res_data)
                         else:
@@ -1667,7 +1665,7 @@ def analyze_market_stocks(market_type):
                 macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
 
             s_color = item.get('state_color', '[white]').replace('[', '').replace(']', '')
-            display_state = "역매수" if item['state'] == "역추세매수" else item['state']
+            display_state = item['state']
             
             # 52주 위치 색상
             pos = item.get('w52_pos', 0)
@@ -1865,7 +1863,7 @@ def save_all_market_analysis():
                             "현재가(원)": item['price'],
                             "52주위치(%)": w52,
                             "점수": item['score'],
-                            "상태": "역매수" if item['state'] == "역추세매수" else item['state'],
+                            "상태": item['state'],
                             "상태사유": item['state_reason'],
                             "RSI": rsi,
                             "ADX": adx,
@@ -2108,9 +2106,6 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                     }
 
             class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds)
-            
-            if class_name == "역추세매수":
-                class_name = "역매수"
 
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"

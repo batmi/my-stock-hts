@@ -861,8 +861,11 @@ class DefaultStrategy:
         # [수정] 가중치(WEIGHTS) 전달
         score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
         
-        # [추가] 체결강도 조건 체크
-        min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]) if thresholds else config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
+        # [수정] 역매수 상태에 따른 체결강도 분기
+        if state == "역매수":
+            min_vol = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+        else:
+            min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
         
         # [수정] 체결강도 미달 시 None 반환 대신 action을 wait로 처리하여 로그 출력 보장
         is_vol_ok = True
@@ -870,7 +873,7 @@ class DefaultStrategy:
             is_vol_ok = False
 
         return {
-            'action': 'buy' if (state == "매수" and is_vol_ok) else 'wait',
+            'action': 'buy' if (state in ["매수", "역매수"] and is_vol_ok) else 'wait',
             'state': state,
             'score': score,
             'rsi': ind['rsi'],
@@ -934,7 +937,7 @@ class DefaultStrategy:
             reason = f"손절({profit_rate}%)"
         # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
         elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            if state in ["매수", "역추세매수", "상승"]:
+            if state in ["매수", "역매수", "상승"]:
                 pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
             else:
                 reason = f"시간청산({holding_days}일경과, 기대수익미달)"
@@ -2282,7 +2285,7 @@ class AutoTrader:
         mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
         mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
         mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-        table.add_row("", f"역추세매수 (RSI {mr_rsi}↓ / 20일선 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑) {mr_status}")
+        table.add_row("", f"역매수 (RSI {mr_rsi}↓ / 20일선 이격도 {mr_disp}%↓ / 체결 {mr_vol}%↑) {mr_status}")
 
         # 매도 조건
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
@@ -3895,7 +3898,7 @@ class AutoTrader:
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
-                    'is_custom_rule': bool(rule), 'rule': rule
+                    'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state']
                 }
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
@@ -4078,8 +4081,9 @@ class AutoTrader:
             cci_val = f"{cand['cci']:.1f}" if cand.get('cci') is not None else "-"
             vol_val = f"{cand['vol_strength']:.1f}%" if cand.get('vol_strength') is not None else "-"
             
-            # [수정] 사유 포맷 변경 (줄바꿈 제거)
-            reason = "조건 만족"
+            # [수정] 매수 사유 포맷 분기 (일반/역매수)
+            is_mr_buy = cand.get('state') == "역매수"
+            reason = "역매수 반등" if is_mr_buy else "조건 만족"
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
             
@@ -4605,8 +4609,7 @@ def _view_restricted_stocks():
                 
                 s_color = state_color.replace('[', '').replace(']', '')
                 score_str = f"[{s_color}]{score}점[/]"
-                display_state = "역매수" if state == "역추세매수" else state
-                state_str = f"[{s_color}]{display_state}[/]"
+                state_str = f"[{s_color}]{state}[/]"
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')
@@ -4775,8 +4778,7 @@ def _remove_restricted_stock():
                 
                 s_color = state_color.replace('[', '').replace(']', '')
                 score_str = f"[{s_color}]{score}점[/]"
-                display_state = "역매수" if state == "역추세매수" else state
-                state_str = f"[{s_color}]{display_state}[/]"
+                state_str = f"[{s_color}]{state}[/]"
                 
                 # 추세SMO (SAR/MACD/OBV)
                 sar_val = ind.get('psar')

@@ -337,12 +337,10 @@ class TelegramCommander:
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
-            
-            display_state = "역매수" if state == "역추세매수" else state
             price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
             tech_info = (
                 f"• 현재가: {price_str}\n"
-                f"• 시스템 상태: {display_state} (사유: {state_reason})\n"
+                f"• 시스템 상태: {state} (사유: {state_reason})\n"
                 f"• 퀀트 점수: {score}점 / 10점 만점\n"
                 f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
             )
@@ -1064,15 +1062,14 @@ class TelegramCommander:
             else:
                 sell_result = "🟢 보유 (추세유지)"
 
-            state_emoji_map = {"매수": "🔴", "역추세매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+            state_emoji_map = {"매수": "🔴", "역매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
             state_emoji = state_emoji_map.get(state, "")
-            display_state = "역매수" if state == "역추세매수" else state
 
             msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"
             msg += f"현재가: {price_fmt}\n"
             msg += f"52주: {l52_fmt} ~ {h52_fmt} ({pos_52:.1f}%)\n"
             msg += f"종합 점수: {score}점 / 10점\n"
-            msg += f"상태 분류: {state_emoji} {display_state} ({reason})\n"
+            msg += f"상태 분류: {state_emoji} {state} ({reason})\n"
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
             msg += f"\n[주요 지표]\n"
