@@ -10,6 +10,7 @@ import context # [추가]
 import api
 import utils
 import constants
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -646,7 +647,8 @@ def _manage_specific_stock_memos(code, name, mode='view'):
         config.console.print(table)
         config.console.print()
         
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim](메인메뉴: q / 이전: Enter)[/dim]")
+        help_text = "다중: 1,3 / 전체: 0 / " if mode == 'view' else "다중: 1,3 / "
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim]({help_text}메인메뉴: q / 이전: Enter)[/dim]")
         
         if idx_str.lower() == 'q': 
             context.USER_ACTION_BREADCRUMB.pop()
@@ -656,40 +658,68 @@ def _manage_specific_stock_memos(code, name, mode='view'):
             context.USER_ACTION_BREADCRUMB.pop()
             return True
         
-        if idx_str.isdigit() and 1 <= int(idx_str) <= len(memos):
-            m = memos[int(idx_str)-1]
+        target_indices = []
+        if idx_str == '0':
+            target_indices = list(range(1, len(memos) + 1))
+        elif ',' in idx_str or ' ' in idx_str:
+            parts = re.split(r'[, ]+', idx_str)
+            target_indices = [int(p) for p in parts if p.isdigit()]
+        elif idx_str.isdigit():
+            target_indices = [int(idx_str)]
+
+        valid_indices = []
+        for i in target_indices:
+            if 1 <= i <= len(memos) and i not in valid_indices:
+                valid_indices.append(i)
+
+        if not valid_indices:
+            config.console.print("\n[red]잘못된 번호입니다.[/red]")
+            time.sleep(1)
+            continue
             
-            if mode == 'view':
-                # 메모 내용 중 가장 긴 줄의 시각적 길이를 계산 (한글=2, 영문/숫자=1)
+        if mode == 'view':
+            config.console.print(f"\n[bold cyan]━━━ {name} ({code}) 메모 상세 (총 {len(valid_indices)}건) ━━━[/bold cyan]")
+            
+            for idx, m_idx in enumerate(valid_indices):
+                m = memos[m_idx - 1]
+                
                 memo_lines = m['memo'].split('\n')
                 max_len = 50
                 for line in memo_lines:
                     line_len = sum(2 if ord(c) > 127 else 1 for c in line)
                     if line_len > max_len:
                         max_len = line_len
-                max_len = min(max_len, 120) # 터미널 길이를 고려해 최대 120자로 제한
+                max_len = min(max_len, 120)
                 
-                config.console.print(f"\n[bold cyan]━━━ {name} ({code}) 메모 상세 ━━━[/bold cyan]")
-                config.console.print(f"[dim]작성/수정일: {m['updated_at']}[/dim]")
+                if idx > 0:
+                    config.console.print()
+                
+                config.console.print(f"[bold]No.{m_idx}[/bold] [dim](수정일: {m['updated_at']})[/dim]")
                 config.console.print("[dim]" + "─" * max_len + "[/dim]")
                 config.console.print(m['memo'])
                 config.console.print("[dim]" + "─" * max_len + "[/dim]")
-                ans = Prompt.ask("\n[dim](이전: Enter / 메인메뉴: q)[/dim]", default="", show_default=False)
-                if ans.lower() == 'q':
-                    context.USER_ACTION_BREADCRUMB.pop()
-                    return 'quit_to_main'
                 
-            elif mode == 'delete':
-                ans = Prompt.ask(f"정말 {idx_str}번 메모를 삭제하시겠습니까?", choices=["y", "n"], default="n")
-                if ans == 'y':
+            ans = Prompt.ask("\n[dim](이전: Enter / 메인메뉴: q)[/dim]", default="", show_default=False)
+            if ans.lower() == 'q':
+                context.USER_ACTION_BREADCRUMB.pop()
+                return 'quit_to_main'
+                
+        elif mode == 'delete':
+            idx_display = ", ".join(map(str, valid_indices))
+            msg = f"정말 {idx_display}번 메모를 삭제하시겠습니까?" if len(valid_indices) > 1 else f"정말 {valid_indices[0]}번 메모를 삭제하시겠습니까?"
+            ans = Prompt.ask(msg, choices=["y", "n"], default="n")
+            if ans == 'y':
+                success_cnt = 0
+                for m_idx in valid_indices:
+                    m = memos[m_idx - 1]
                     if utils.delete_stock_memo_by_id(m['id']):
-                        config.console.print("\n[green]메모가 삭제되었습니다.[/green]")
-                    else:
-                        config.console.print("\n[red]메모 삭제에 실패했습니다.[/red]")
-                    time.sleep(1)
-        else:
-            config.console.print("\n[red]잘못된 번호입니다.[/red]")
-            time.sleep(1)
+                        success_cnt += 1
+                
+                if success_cnt == len(valid_indices):
+                    config.console.print(f"\n[green]선택한 메모 {success_cnt}건이 삭제되었습니다.[/green]")
+                else:
+                    config.console.print(f"\n[yellow]일부 메모 삭제에 실패했습니다. ({success_cnt}/{len(valid_indices)}건 성공)[/yellow]")
+                time.sleep(1)
 
 def add_new_stock_memo():
     """새 종목 메모 추가"""
