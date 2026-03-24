@@ -596,11 +596,11 @@ class TelegramCommander:
                 total_asset_profit = int(current_asset - initial_asset)
                 total_asset_roi = (total_asset_profit / initial_asset * 100) if initial_asset > 0 else 0.0
                 
-                msg += f"총 자산 증감: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
+                msg += f"총 계좌 자산 증감: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
             else:
-                msg += "총 자산 증감: - (데이터 부족)\n"
+                msg += "총 계좌 자산 증감: - (데이터 부족)\n"
                 
-            msg += f"총 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
+            msg += f"총 실현 손익: {total_profit:+,}원 (매매원금 대비 {tot_roi:+.2f}%)\n"
             unrealized_roi = (sec_pl / sec_buy * 100) if sec_buy > 0 else 0.0
             msg += f"현재 평가 손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
 
