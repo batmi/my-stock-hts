@@ -251,10 +251,10 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     tp_rate = rule['take_profit']
                 
                 target_price = buy_price * (1 + tp_rate / 100)
-                target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:g}%)[/dim]"
+                target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:.0f}%)[/dim]"
                 
                 fixed_stop_price = buy_price * (1 + sl_rate / 100)
-                stop_str_list = [f"[dim]고정:[/dim][blue]{int(fixed_stop_price):,}[/][dim]({sl_rate:g}%)[/dim]"]
+                stop_str_list = [f"[dim]고정:[/dim][blue]{int(fixed_stop_price):,}[/][dim]({sl_rate:.0f}%)[/dim]"]
                 
                 atr_sl_rate = None
                 last_buy = db_manager.db.get_latest_buy_trade(code)
@@ -265,7 +265,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 
                 if atr_sl_rate is not None:
                     atr_stop_price = buy_price * (1 + atr_sl_rate / 100)
-                    stop_str_list.append(f"[dim]ATR:[/dim][blue]{int(atr_stop_price):,}[/][dim]({atr_sl_rate:g}%)[/dim]")
+                    stop_str_list.append(f"[dim]ATR:[/dim][blue]{int(atr_stop_price):,}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
                 
                 stop_str = " ".join(stop_str_list)
                 
@@ -366,10 +366,10 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     tp_rate = rule['take_profit']
                 
                 target_price = pchs_avg * (1 + tp_rate / 100)
-                target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:g}%)[/dim]"
+                target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:.0f}%)[/dim]"
                 
                 fixed_stop_price = pchs_avg * (1 + sl_rate / 100)
-                stop_str_list = [f"[dim]고정:[/dim][blue]${fixed_stop_price:,.2f}[/][dim]({sl_rate:g}%)[/dim]"]
+                stop_str_list = [f"[dim]고정:[/dim][blue]${fixed_stop_price:,.2f}[/][dim]({sl_rate:.0f}%)[/dim]"]
                 
                 atr_sl_rate = None
                 last_buy = db_manager.db.get_latest_buy_trade(code)
@@ -380,7 +380,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 
                 if atr_sl_rate is not None:
                     atr_stop_price = pchs_avg * (1 + atr_sl_rate / 100)
-                    stop_str_list.append(f"[dim]ATR:[/dim][blue]${atr_stop_price:,.2f}[/][dim]({atr_sl_rate:g}%)[/dim]")
+                    stop_str_list.append(f"[dim]ATR:[/dim][blue]${atr_stop_price:,.2f}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
                     
                 stop_str = " ".join(stop_str_list)
 

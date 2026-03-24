@@ -4180,7 +4180,7 @@ class AutoTrader:
             
             if use_atr_stop:
                 if atr_msg: atr_msg += " "
-                atr_msg += f"[ATR손절:{sl_rate:.2f}%]"
+                atr_msg += f"[ATR손절:{sl_rate:.0f}%]"
             
             if atr_msg:
                 reason += f" {atr_msg}"
