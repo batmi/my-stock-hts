@@ -3309,6 +3309,27 @@ class AutoTrader:
                         self._check_buy_conditions(holdings, deposit_res, current_market_status)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
+                        
+                        # [추가] 루프 동안 매수/매도가 발생했을 수 있으므로, 
+                        # 최종 로깅 전 잔고와 예수금을 최신 상태로 갱신합니다.
+                        time.sleep(0.5)
+                        try:
+                            upd_holdings, upd_summary = api.get_domestic_balance(target_cano, acnt)
+                            if upd_holdings is not None:
+                                holdings = upd_holdings
+                                summary = upd_summary
+                                
+                            if not config.session.is_simulation:
+                                upd_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                                if upd_dep: deposit_res = upd_dep
+                            else:
+                                if summary:
+                                    dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                                    d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                                    deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
+                        except Exception as e:
+                            logger.debug(f"최종 상태 로깅을 위한 잔고 갱신 실패: {e}")
+
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                         self._monitor_account_status(holdings, summary, deposit_res)
                     
