@@ -2646,7 +2646,8 @@ class AutoTrader:
             msg += f"승률: {win_rate:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)\n"
             msg += f"건당 평균 수익률: {avg_profit_rate:+.2f}%\n"
             msg += f"건당 평균 보유: {stats['avg_holding_str']}\n"
-            msg += f"총 실현 손익: {total_profit:+,}원\n"
+            total_realized_rate = stats.get('total_realized_rate', 0.0)
+            msg += f"총 실현 손익: {total_profit:+,}원 ({total_realized_rate:+.2f}%)\n"
             
             msg += f"\n[최고 / 최다 손익]\n"
             if stats.get('best_trade'):
@@ -2695,6 +2696,7 @@ class AutoTrader:
         loss_trades = 0
         total_profit = 0
         total_profit_rate = 0.0
+        total_buy_amt_for_sell = 0
         
         # [추가] Best/Worst 및 사유 분석 변수
         best_trade = None
@@ -2745,6 +2747,13 @@ class AutoTrader:
             rate = t.get('profit_rate', 0.0)
             total_profit += profit
             total_profit_rate += rate
+            
+            qty = int(float(t.get('qty', 0)))
+            price = float(t.get('price', 0))
+            sell_amt = qty * price
+            buy_amt = sell_amt - profit
+            total_buy_amt_for_sell += buy_amt
+            
             if profit > 0: win_trades += 1
             else: loss_trades += 1
             
@@ -2770,6 +2779,7 @@ class AutoTrader:
             
         avg_profit_rate = (total_profit_rate / len(sell_trades)) if sell_trades else 0.0
         win_rate = (win_trades / len(sell_trades) * 100) if sell_trades else 0.0
+        total_realized_rate = (total_profit / total_buy_amt_for_sell * 100) if total_buy_amt_for_sell > 0 else 0.0
 
         # [추가] 평균 보유 기간 포맷팅
         avg_holding_str = "-"
@@ -2786,6 +2796,7 @@ class AutoTrader:
             "win_trades": win_trades,
             "loss_trades": loss_trades,
             "total_profit": total_profit,
+            "total_realized_rate": total_realized_rate,
             "avg_profit_rate": avg_profit_rate,
             "win_rate": win_rate,
             "avg_holding_str": avg_holding_str,
@@ -2813,10 +2824,11 @@ class AutoTrader:
         if stats['sell_trades_exist']:
             summary_table.add_row("승률 (Win Rate)", f"{stats['win_rate']:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)")
             tp = stats['total_profit']
-            summary_table.add_row("총 실현 손익", f"[red]{tp:+,}원[/]" if tp > 0 else f"[blue]{tp:+,}원[/]")
+            tr_rate = stats.get('total_realized_rate', 0.0)
+            summary_table.add_row("총 실현 손익", f"[red]{tp:+,}원 ({tr_rate:+.2f}%)[/]" if tp > 0 else f"[blue]{tp:+,}원 ({tr_rate:+.2f}%)[/]")
             apr = stats['avg_profit_rate']
-            summary_table.add_row("평균 수익률", f"[red]{apr:+.2f}%[/]" if apr > 0 else f"[blue]{apr:+.2f}%[/]")
-            summary_table.add_row("평균 보유 기간", stats['avg_holding_str'])
+            summary_table.add_row("건당 평균 수익률", f"[red]{apr:+.2f}%[/]" if apr > 0 else f"[blue]{apr:+.2f}%[/]")
+            summary_table.add_row("건당 평균 보유", stats['avg_holding_str'])
         
         if holdings_summary:
             summary_table.add_section()

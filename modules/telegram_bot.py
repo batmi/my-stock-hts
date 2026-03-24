@@ -600,7 +600,7 @@ class TelegramCommander:
             else:
                 msg += "총 자산 증감: - (데이터 부족)\n"
                 
-            msg += f"기간 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
+            msg += f"총 실현 손익: {total_profit:+,}원 ({tot_roi:+.2f}%)\n"
             unrealized_roi = (sec_pl / sec_buy * 100) if sec_buy > 0 else 0.0
             msg += f"현재 평가 손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
 
