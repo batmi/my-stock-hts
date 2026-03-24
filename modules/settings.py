@@ -130,6 +130,8 @@ def view_system_config():
         table.add_row("  └ 역추세 RSI\n    [dim]과매도/침체 기준[/dim]", "MR_RSI_MAX", f"{thresholds.get('MR_RSI_MAX', 40.0)}")
         table.add_row("  └ 역추세 이격도\n    [dim]20일선 기준 하락폭 한계[/dim]", "MR_DISPARITY_MAX", f"{thresholds.get('MR_DISPARITY_MAX', 90.0)}%")
         table.add_row("  └ 역추세 체결강도\n    [dim]바닥 매수세 확증 기준[/dim]", "MR_VOL_STRENGTH", f"{thresholds.get('MR_VOL_STRENGTH', 120.0)}%")
+        sell = config.SELL_STRATEGY
+        table.add_row("  └ 역매수 유예 손실\n    [dim]역매수 종목 유예 기간 내 허용 하락폭[/dim]", "MR_GRACE_LOSS_RATE", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%")
     
     table.add_section()
 
@@ -371,7 +373,9 @@ def modify_analysis_thresholds():
         {"desc": "역추세 이격도 상한", "help": "20일선 대비 이격도 (예: 90%)", "name": "MR_DISPARITY_MAX", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_DISPARITY_MAX": v})},
         {"desc": "역추세 최소 체결강도", "help": "바닥 매수세 확인 (예: 120%)", "name": "MR_VOL_STRENGTH", "type": "float",
-         "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_VOL_STRENGTH": v})}
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_VOL_STRENGTH": v})},
+        {"desc": "역매수 유예 손실(%)", "help": "역매수 진입 시 시간청산 기간 내 허용 하락폭", "name": "MR_GRACE_LOSS_RATE", "type": "float",
+         "get": lambda: config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0), "set": lambda v: config.SELL_STRATEGY.update({"MR_GRACE_LOSS_RATE": v})}
     ]
     return _edit_config_table("매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)", items)
 
@@ -665,7 +669,8 @@ def reset_to_default():
         "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
-        "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0
+        "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
+        "MR_GRACE_LOSS_RATE": -5.0
     })
     config.INDICATOR_PARAMS.update({
         "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,

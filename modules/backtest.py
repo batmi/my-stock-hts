@@ -261,7 +261,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         avg_price = buy_price
                         buy_date = date
                         ts_highest_price = buy_price
-                        buy_reason_str = "역추세" if is_mr_buy else "일반"
+                        buy_reason_str = "역매수" if is_mr_buy else "일반"
                         trades.append({
                             "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": qty, "balance": balance, 
                             "profit": 0, "profit_amt": 0, "days": 0, 
@@ -315,6 +315,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
             time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
             time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+            
+            mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
 
             if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
             elif use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
@@ -339,7 +341,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if not sell_signal and row['RSI'] > take_profit_rsi_limit: sell_signal = True; reason = "RSI과열"
             if not sell_signal and sell_check_score < sell_score_limit:
                 # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
-                if buy_reason_str == "역추세" and current_holding_days <= time_stop_days and loss_rate > -5.0:
+                if buy_reason_str == "역매수" and current_holding_days <= time_stop_days and loss_rate > mr_grace_loss_limit:
                     pass
                 else:
                     sell_signal = True; reason = "점수하락"

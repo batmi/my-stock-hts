@@ -909,6 +909,8 @@ class DefaultStrategy:
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
         time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+        
+        mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
 
         # 1. 기술적 지표 분석 (시간 청산 시 매수 상태 확인을 위해 우선 수행)
         if df is not None and not df.empty:
@@ -959,7 +961,7 @@ class DefaultStrategy:
                     reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                 else:
                     # [추가] 역추세 매수 종목은 유예 기간(TIME_STOP_DAYS) 및 허용 손실률(-5%) 내에서는 추세 이탈로 손절하지 않음
-                    if is_mr_holding and holding_days <= time_stop_days and profit_rate > -5.0:
+                    if is_mr_holding and holding_days <= time_stop_days and profit_rate > mr_grace_loss_rate:
                         pass # 유예 기간 적용
                     else:
                         reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
@@ -3692,7 +3694,7 @@ class AutoTrader:
             is_mr_holding = False # [추가] 역추세 진입 여부
             last_buy = db_manager.db.get_latest_buy_trade(code)
             if last_buy and last_buy.get('time'):
-                if '역추세' in str(last_buy.get('reason', '')):
+                if '역매수' in str(last_buy.get('reason', '')) or '역추세' in str(last_buy.get('reason', '')):
                     is_mr_holding = True
                 try:
                     buy_dt = datetime.strptime(last_buy['time'], "%Y-%m-%d %H:%M:%S")

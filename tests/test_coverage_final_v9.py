@@ -85,6 +85,39 @@ def test_simulate_strategy_missed_trades(sample_df):
     assert len(res['missed_trades']) > 0
     assert "RSI" in res['missed_trades'][0]['reason']
 
+def test_simulate_strategy_mr_grace_loss(sample_df):
+    """역매수 유예 기간 중 허용 손실률(MR_GRACE_LOSS_RATE) 이탈 시 매도 로직 테스트"""
+    # 시뮬레이션: 역매수 조건으로 진입 후, 유예 기간(10일) 내에 손실이 한도(-5.0%)를 초과하는 상황
+    
+    # 1. 초기 매수 조건을 역매수로 조작하기 위해 상태 분류 모킹
+    with patch('modules.backtest.calculate_daily_status') as mock_calc:
+        # 항상 역매수(점수 4.0) 상태로 반환하도록 설정
+        mock_calc.return_value = (4.0, 4.0, True, "역매수", "낙폭과대")
+        
+        # 2. 주가가 매수가(10000)에서 -6% 하락한 9400으로 떨어짐 (2일차)
+        sample_df.loc[1, 'close'] = 9400.0
+        sample_df.loc[1, 'high'] = 9400.0
+        sample_df.loc[1, 'low'] = 9300.0
+        
+        with patch.dict(config.SELL_STRATEGY, {
+            "MR_GRACE_LOSS_RATE": -5.0, 
+            "TIME_STOP_DAYS": 10, 
+            "SELL_SCORE": 5.0,
+            "USE_ATR_STOP": False,      # 일반 ATR 손절이 먼저 발동하는 것 방지
+            "STOP_LOSS_RATE": -10.0     # 고정 손절선도 -6%보다 낮게 설정
+        }):
+            res = backtest.simulate_strategy(
+                sample_df.head(5), sample_df.iloc[0], 10000000, 
+                buy_score_limit=8.0, buy_rsi_limit=70, is_overseas=False
+            )
+            
+            trades = res['trades']
+            sell_trades = [t for t in trades if "매도" in t['type']]
+            
+            # 유예 기간(10일 이내)이더라도 손실률(-6.0%)이 허용 한도(-5.0%)를 넘었으므로 '점수하락' 사유로 즉시 손절되어야 함
+            assert len(sell_trades) > 0
+            assert "점수하락" in sell_trades[0]['type']
+
 @patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('modules.backtest.simulate_strategy')
 @patch('config.console.print')
