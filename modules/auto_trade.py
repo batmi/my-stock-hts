@@ -997,6 +997,13 @@ class OrderManager:
                         if not self.pending_orders[code]:
                             del self.pending_orders[code]
                         self.trader.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
+                        
+                        # 체결 완료 시 지연 후 보유 종목 리스트 갱신 출력
+                        if status == OrderStatus.FILLED:
+                            def _delayed_log_holdings():
+                                time.sleep(1.5) # KIS API 잔고 갱신 대기
+                                self.trader.log_current_holdings()
+                            threading.Thread(target=_delayed_log_holdings, daemon=True).start()
                     else:
                         self.trader.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
 
@@ -1772,6 +1779,60 @@ class AutoTrader:
         
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
         context.SYSTEM_LOGGER = None
+
+    def log_current_holdings(self):
+        """현재 보유 종목 현황을 조회하여 로그에 출력합니다 (체결 후 호출용)"""
+        try:
+            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            
+            with utils.AccountContext(target_cano):
+                holdings, _ = api.get_domestic_balance(target_cano, acnt)
+                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                
+                def pad(s, width, align='>'):
+                    k = sum(1 for c in s if ord(c) > 127)
+                    real_len = len(s) + k
+                    pad_len = width - real_len
+                    if pad_len < 0: pad_len = 0
+                    if align == '<': return s + ' ' * pad_len
+                    else: return ' ' * pad_len + s
+
+                header = (
+                    f"{pad('종목명', 30, '<')} "
+                    f"{pad('보유수량', 10, '>')} "
+                    f"{pad('매입단가', 12, '>')} "
+                    f"{pad('현재가', 12, '>')} "
+                    f"{pad('매입금액', 15, '>')} "
+                    f"{pad('평가금액', 15, '>')} "
+                    f"{pad('평가손익', 14, '>')} "
+                    f"{pad('수익률', 10, '>')}"
+                )
+                
+                self.log("")
+                self.log("─" * 125)
+                self.log(header)
+                self.log("─" * 125)
+                
+                if not valid_holdings:
+                    self.log(f"{pad('보유 종목 없음', 30, '<')} ")
+                else:
+                    for item in valid_holdings:
+                        name = f"{item['prdt_name']} ({item['pdno']})"
+                        qty = int(item['hldg_qty'])
+                        buy_price = float(item['pchs_avg_pric'])
+                        cur_price = int(item['prpr'])
+                        pchs_amt = int(item.get('pchs_amt', 0))
+                        eval_amt = int(item.get('evlu_amt', 0))
+                        profit = int(item['evlu_pfls_amt'])
+                        rate = float(item['evlu_pfls_rt'])
+                        
+                        row_str = f"{pad(name, 30, '<')} {pad(f'{qty:,}주', 10, '>')} {pad(f'{buy_price:,.0f}원', 12, '>')} {pad(f'{cur_price:,.0f}원', 12, '>')} {pad(f'{pchs_amt:,}원', 15, '>')} {pad(f'{eval_amt:,}원', 15, '>')} {pad(f'{profit:+,}원', 14, '>')} {pad(f'{rate:.2f}%', 10, '>')}"
+                        self.log(row_str)
+                self.log("─" * 125)
+                self.log("")
+        except Exception as e:
+            self.log(f"보유 종목 로깅 실패: {e}")
 
     def get_status_message(self):
         """텔레그램 전송용 상태 요약 메시지 생성"""
