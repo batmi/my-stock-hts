@@ -748,9 +748,12 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info, mode='monte_carlo')
             
         if answer:
-            md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 몬테카를로 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-            config.console.print(Padding(panel, (0, 4)))
+            if answer.startswith("⚠️"):
+                config.console.print(f"\n{answer}")
+            else:
+                md = Markdown(answer)
+                panel = Panel(md, title=f"🤖 AI 몬테카를로 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+                config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
             
@@ -1730,9 +1733,12 @@ def run_backtest():
             answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info)
             
         if answer:
-            md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 단일 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-            config.console.print(Padding(panel, (0, 4)))
+            if answer.startswith("⚠️"):
+                config.console.print(f"\n{answer}")
+            else:
+                md = Markdown(answer)
+                panel = Panel(md, title=f"🤖 AI 단일 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+                config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 

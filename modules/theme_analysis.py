@@ -3,6 +3,7 @@ import requests
 import sqlite3
 import concurrent.futures
 import warnings
+import time
 import math
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -157,31 +158,119 @@ def _fetch_theme_detail(theme):
     except Exception:
         theme['leading'] = "-"
 
+def evaluate_market_indicator(name, price, yh_rate=None):
+    """지표의 현재가를 바탕으로 사용자 정의 룰에 따른 상태를 반환합니다."""
+    status_desc = ""
+    if name == "미국채 10년물 금리":
+        if price >= 5.20: status_desc = "시스템 위기/Valuation 붕괴"
+        elif 4.70 <= price < 5.20: status_desc = "임계점/고금리 쇼크"
+        elif 4.20 <= price < 4.70: status_desc = "고금리 지속/Sticky 인플레 경계"
+        elif 3.50 <= price < 4.20: status_desc = "골디락스/적정 성장"
+        elif 2.80 <= price < 3.50: status_desc = "수요 둔화/금리인하 선반영"
+        elif price < 2.80: status_desc = "침체 확정/안전자산 선호"
+    elif name == "미국채 5년물 금리":
+        if price >= 4.80: status_desc = "긴축 강화/금리 재인상 공포"
+        elif 3.80 <= price < 4.80: status_desc = "중립 상단/통화정책 불확실성"
+        elif 3.20 <= price < 3.80: status_desc = "안정/적정 유동성"
+        elif price < 3.20: status_desc = "금리 급락/유동성 경색"
+    elif name == "미국채 30년물 금리":
+        if price >= 5.50: status_desc = "하이퍼 인플레"
+        elif 4.80 <= price < 5.50: status_desc = "재정 적자 우려/기간 프리미엄 급증"
+        elif 4.20 <= price < 4.80: status_desc = "장기 안정"
+        elif price < 4.20: status_desc = "장기 저성장/디플레이션 우려"
+    elif name == "브랜트유":
+        if price >= 125: status_desc = "에너지 쇼크"
+        elif 105 <= price < 125: status_desc = "임계점/고금리 긴축 강요"
+        elif 85 <= price < 105: status_desc = "인플레 압력 상존"
+        elif 65 <= price < 85: status_desc = "골디락스"
+        elif 45 <= price < 65: status_desc = "수요 둔화"
+        elif price < 45: status_desc = "시스템 위기"
+    elif name == "WTI 원유":
+        if price >= 120: status_desc = "에너지 쇼크"
+        elif 100 <= price < 120: status_desc = "임계점/고금리 긴축 강요"
+        elif 80 <= price < 100: status_desc = "인플레 압력 상존"
+        elif 60 <= price < 80: status_desc = "골디락스"
+        elif 40 <= price < 60: status_desc = "수요 둔화"
+        elif price < 40: status_desc = "시스템 위기"
+    elif name == "가솔린 RBOB":
+        if price >= 4.0: status_desc = "에너지 쇼크"
+        elif 3.2 <= price < 4.0: status_desc = "임계점"
+        elif 2.6 <= price < 3.2: status_desc = "고유가 지속"
+        elif 2.1 <= price < 2.6: status_desc = "골디락스"
+        elif 1.6 <= price < 2.1: status_desc = "수요 둔화"
+        elif price < 1.6: status_desc = "시스템 위기"
+    elif name == "천연가스":
+        if price >= 10: status_desc = "에너지 쇼크"
+        elif 6 <= price < 10: status_desc = "물가 비상"
+        elif 4 <= price < 6: status_desc = "수급 타이트"
+        elif 2.5 <= price < 4: status_desc = "골디락스"
+        elif 1.5 <= price < 2.5: status_desc = "수익성 악화"
+        elif price < 1.5: status_desc = "시스템 하강"
+    elif name == "밀":
+        if price >= 900: status_desc = "식량 안보 위기"
+        elif 750 <= price < 900: status_desc = "식량 인플레 심각"
+        elif 650 <= price < 750: status_desc = "물가 부담"
+        elif 500 <= price < 650: status_desc = "적절한 균형점"
+        elif 400 <= price < 500: status_desc = "수요 둔화/공급 과잉"
+        elif price < 400: status_desc = "디플레/침체"
+    elif name == "달러인덱스":
+        if price >= 120: status_desc = "통화 시스템 붕괴 위기"
+        elif 110 <= price < 120: status_desc = "매우 강함/신흥국 위기"
+        elif 103 <= price < 110: status_desc = "강세/신흥국 경고등"
+        elif 90 <= price < 103: status_desc = "가장 안정적인 중립"
+        elif 80 <= price < 90: status_desc = "약세"
+        elif price < 80: status_desc = "매우 약함"
+    elif name == "달러환율":
+        if price >= 1600: status_desc = "시스템 위기"
+        elif 1500 <= price < 1600: status_desc = "패닉 구간"
+        elif 1400 <= price < 1500: status_desc = "구조적 고환율"
+        elif 1300 <= price < 1400: status_desc = "강달러 뉴노멀 상단"
+        elif 1200 <= price < 1300: status_desc = "뉴노멀 중립"
+        elif 1100 <= price < 1200: status_desc = "비정상적 안정"
+        elif price < 1100: status_desc = "초강세 원화"
+    elif name == "VIX (변동성)":
+        if price <= 20: status_desc = "안정"
+        elif 20 < price < 30: status_desc = "시장 활발"
+        elif 30 <= price < 40: status_desc = "주의"
+        elif 40 <= price < 50: status_desc = "경계"
+        elif price >= 50: status_desc = "위험"
+    
+    if yh_rate is not None:
+        if name == "SOX (반도체)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리/초강세"
+            elif yh_rate >= -12.0: status_desc = "건전한 조정"
+            elif yh_rate >= -20.0: status_desc = "기술적 조정기"
+            elif yh_rate < -25.0: status_desc = "반도체 하락 사이클/침체"
+        elif not status_desc:
+            if yh_rate >= -3.0: status_desc = "신고가 근접/초강세"
+            elif yh_rate <= -20.0: status_desc = "침체/약세장 진입"
+            else: status_desc = "일반 조정/중립"
+            
+    return status_desc
+
 def _get_macro_context_str():
-    """시스템이 직접 실시간 전체 시장 지표를 수집하여 AI에게 주입할 텍스트를 생성"""
+    """시스템이 직접 실시간 핵심 매크로 지표를 수집하여 AI에게 주입할 텍스트를 생성"""
     import api
-    from modules import market, analysis
+    from modules import analysis
     import concurrent.futures
     
-    tickers_list = list(market.ALL_INDICES)
-    
-    # 매크로 핵심 지표 추가 (ALL_INDICES에 없는 경우 보강)
-    existing_names = [name for name, _ in tickers_list]
-    if "미 국채 10년물" not in existing_names:
-        tickers_list.append(("미 국채 10년물", "^TNX"))
+    # 핵심 매크로 지표만 제한적으로 수집 (속도 및 프롬프트 최적화)
+    core_tickers = [
+        ("코스피", "^KS11"), ("코스닥", "^KQ11"),
+        ("나스닥", "^IXIC"), ("S&P500", "^GSPC"),
+        ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+        ("WTI 원유", "CL=F"), ("달러환율", "KRW=X"), ("달러인덱스", "DX-Y.NYB"),
+        ("VIX (변동성)", "^VIX"), ("비트코인", "BTC-USD")
+    ]
 
-    context_lines = ["[시스템 제공 실시간 시장 전체 지표 (이 수치들을 절대적인 팩트로 반영할 것)]"]
+    context_lines = ["[시스템 제공 실시간 핵심 매크로 지표 (이 수치들과 현재 상태를 절대적인 팩트로 반영할 것)]"]
     results = {}
 
     def fetch_ticker(name, ticker):
         try:
             # 1. 국내 지수는 KIS API 우선 활용
             if name in ["코스피", "코스피200", "코스닥", "코스닥150"]:
-                m_type = "KOSPI"
-                if name == "코스닥": m_type = "KOSDAQ"
-                elif name == "코스피200": m_type = "KOSPI200"
-                elif name == "코스닥150": m_type = "KOSDAQ150"
-                
+                m_type = "KOSPI" if "코스피" in name else "KOSDAQ"
                 df = analysis.get_domestic_index_data(m_type)
                 if df is not None and not df.empty:
                     curr = float(df.iloc[-1]['close'])
@@ -205,14 +294,14 @@ def _get_macro_context_str():
 
     # 병렬 처리로 속도 최적화 (API Rate Limit을 고려하여 max_workers=5)
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(fetch_ticker, name, ticker) for name, ticker in tickers_list]
+        futures = [executor.submit(fetch_ticker, name, ticker) for name, ticker in core_tickers]
         for future in concurrent.futures.as_completed(futures):
             name, price, rate, yh = future.result()
             if price is not None:
                 results[name] = (price, rate, yh)
 
-    # 기존 리스트 순서대로 정리하여 텍스트 생성
-    for name, _ in tickers_list:
+    # 원래 순서대로 출력
+    for name, _ in core_tickers:
         if name in results:
             price, rate, yh = results[name]
             if "환율" in name: val_str = f"{price:,.2f}원"
@@ -221,11 +310,15 @@ def _get_macro_context_str():
             else: val_str = f"{price:,.2f}"
             
             yh_str = ""
+            yh_rate = None
             if yh is not None and yh > 0 and price > 0:
                 yh_rate = ((price - yh) / yh) * 100
                 yh_str = f" / 52주 고점대비 {yh_rate:+.1f}%"
                 
-            context_lines.append(f" - {name}: {val_str} (전일대비 {rate:+.2f}%{yh_str})")
+            status_desc = evaluate_market_indicator(name, price, yh_rate)
+            status_str = f" -> [현재 상태: {status_desc}]" if status_desc else ""
+                
+            context_lines.append(f" - {name}: {val_str} (전일대비 {rate:+.2f}%{yh_str}){status_str}")
 
     return "\n".join(context_lines) + "\n"
 
@@ -253,7 +346,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             
             macro_context = ""
             if not custom_prompt:
-                task_macro = progress.add_task("[cyan]전체 시장 지표(국내/해외/원자재/환율 등) 실시간 수집 중...[/cyan]", total=None)
+                task_macro = progress.add_task("[cyan]핵심 매크로 지표 실시간 수집 중...[/cyan]", total=None)
                 macro_context = _get_macro_context_str()
                 progress.remove_task(task_macro)
 
@@ -268,86 +361,75 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                 prompt = f"""
                 [현재 시각: {now} (KST)]
                 {macro_context}
-                당신은 여의도 최고의 퀀트 전략가이자 국제 정세와 매크로 경제에 정통한 수석 주식 분석가입니다. 
-                위 제공된 [시스템 제공 실시간 시장 전체 지표]의 정확한 수치들을 절대적인 기준으로 삼고, 당신이 학습한 최신 지식과 시장 데이터를 융합하여, 
-                오늘 시장을 지배하는 '핵심 주도 테마 TOP 5'에 대한 **매우 심층적이고 전문적인** 마켓 인사이트 리포트를 작성해 주세요.
-                (※ 유가(WTI), 환율, 국채 금리, 글로벌 지수, 암호화폐 등의 수치는 반드시 위 제공된 시스템 실시간 데이터를 사용해야 하며, 검색된 과거 기사의 수치로 덮어쓰지 마세요.)
-
-                [시장 지표 해석 가이드 (단기 등락이 아닌 '절대적 위치'와 '구조적 추세' 기준)]
-                * 매우 중요: 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 마세요. 아래 절대적 수치 레벨을 최우선 기준으로 거시 경제를 해석하세요.
-                - 브랜트유: 125 이상(에너지 쇼크), 105~125(임계점: 고금리 긴축 강요), 85~105(인플레 압력 상존), 65~85(골디락스), 45~65(수요 둔화), 45 미만(시스템 위기)
-                - WTI 원유: 120 이상(에너지 쇼크), 100~120(임계점: 고금리 긴축 강요), 80~100(인플레 압력 상존), 60~80(골디락스), 40~60(수요 둔화), 40 미만(시스템 위기)
-                - 가솔린 RBOB: 4.0 이상(에너지 쇼크), 3.2~4.0(임계점), 2.6~3.2(고유가 지속), 2.1~2.6(골디락스), 1.6~2.1(수요 둔화), 1.6 미만(시스템 위기)
-                - 천연가스: 10 이상(에너지 쇼크), 6~10(물가 비상), 4~6(수급 타이트), 2.5~4.0(골디락스), 1.5~2.5(수익성 악화), 1.5 미만(시스템 하강)
-                - 밀: 900 이상(식량 안보 위기), 750~900(식량 인플레 심각), 650~750(물가 부담), 500~650(적절한 균형점), 400~500(수요 둔화/공급 과잉), 400 미만(디플레/침체)
-                - 달러 인덱스: 120 이상(통화 시스템 붕괴 위기), 110~120(매우 강함/신흥국 위기), 103~110(강세/신흥국 경고등), 90~103(가장 안정적인 중립), 80~90(약세), 80 미만(매우 약함)
-                - 달러 환율: 1600원 이상(시스템 위기), 1500~1600(패닉 구간), 1400~1500(구조적 고환율), 1300~1400(강달러 뉴노멀 상단), 1200~1300(뉴노멀 중립), 1100~1200(비정상적 안정), 1100 미만(초강세 원화)
-                - VIX (변동성): 20 이하(안정), 20~30(시장 활발), 30~40(주의), 40~50(경계), 50 이상(위험)
-                - SOX (반도체 지수): 52주 고점 대비 낙폭 5% 이내(신고가 랠리/초강세), 5~12%(건전한 조정), 12~20%(기술적 조정기), 25% 초과(반도체 하락 사이클/침체)
-                - 52주 고점 대비: -3.0% 이상(신고가 근접/초강세), -3.0% ~ -20.0%(일반 조정/중립), -20.0% 이하(침체/약세장 진입)
+                당신은 여의도 최고의 퀀트 전략가이자 수석 주식 분석가입니다. 
+                위 제공된 [시스템 제공 실시간 핵심 매크로 지표]의 수치와 [현재 상태]를 절대적인 팩트로 삼고, 오늘 시장을 지배하는 '핵심 주도 테마 TOP 5' 리포트를 작성해 주세요.
+                (※ 제공된 지표의 현재 상태 평가를 바탕으로 시장의 거시적 추세를 분석하세요.)
 
                 반드시 다음의 상세 가이드라인을 엄격히 준수하여 분량을 충분히 확보하고 깊이 있게 작성해야 합니다:
 
-                1. **글로벌 정세, 매크로 및 증시 환경 브리핑 (지정학적/거시적 관점)**:
-                  - 글로벌 지정학적 핵심 이슈(미중 무역 갈등, 전쟁/지경학적 분쟁, 주요국 정책 변화 등)가 현재 증시와 공급망에 미치는 영향을 반드시 포함하여 심층 분석할 것.
-                  - 전일 미 증시 동향 및 오늘 한국 증시에 미치는 영향 (구체적인 지수 등락률 및 주요 섹터 움직임 포함).
-                  - 핵심 매크로 지표(달러 환율, 국채 금리, 주요 원자재 가격 등)의 현재 흐름과 이것이 투심에 미치는 영향.
-                  - 오늘 시장의 전체적인 수급 동향(외인/기관 포지셔닝) 및 전반적인 시장 심리(투심) 평가.
+                1. **글로벌 정세 및 매크로 브리핑**: 글로벌 지정학적 이슈, 핵심 매크로 지표가 투심에 미치는 영향을 분석할 것.
 
                 2. **핵심 주도 테마 요약 표 (Markdown Table 필수)**:
-                  - 오늘 시장을 주도하는 TOP 5 테마를 한눈에 파악할 수 있도록 반드시 **마크다운 표(Table)** 형태로 먼저 요약할 것.
                   - 표의 컬럼: [순위 | 테마명 | 상승 강도 | 핵심 트리거(한 줄 요약) | 대장주 및 관련주]
 
-                3. **테마별 딥다이브 심층 분석 및 대응 전략 (TOP 5 각각에 대해 매우 상세히 작성)**:
-                  각 테마별로 아래 항목을 분리하여 **최소 3~4문장 이상** 구체적으로 서술할 것:
-                  - **상승 배경 및 촉매제**: 단순 뉴스 나열이 아닌, 해당 뉴스가 왜 시장에서 강력한 매수세로 이어졌는지 논리적 배경 설명.
-                  - **글로벌 밸류체인 연동성**: 이 테마가 글로벌 공급망이나 해외 빅테크(엔비디아, 테슬라, 애플 등)와 어떤 역학 관계로 연결되어 있는지 심층 분석.
-                  - **주도주 수급 및 기술적 위치**: 대장주와 2~3등주의 이름과 현재 기술적 위치(예: 52주 신고가 돌파, 주요 이평선 지지 등). 외인/기관의 구체적인 수급 특징.
-                  - **리스크 및 실전 대응 전략**: 단기적인 차익 실현 가능성, 밸류에이션 부담, 재료 소멸 타이밍 등을 경고. "지금 추격 매수해도 되는가?"에 대한 명확한 뷰(View)와 타점(눌림목 등) 제시.
+                3. **테마별 딥다이브 심층 분석 및 대응 전략**:
+                  각 테마별로 다음 내용을 서술: 상승 배경, 밸류체인 연동성, 주도주 기술적 위치, 리스크 대응.
 
                 4. **향후 체크포인트 (Upcoming Events)**:
-                  - 이번 주 또는 단기적으로 해당 테마 및 증시 전체의 방향성을 바꿀 수 있는 주요 일정(주요국 경제 지표 발표, 빅테크 실적 발표, 정책 이벤트 등) 2~3가지를 날짜와 함께 구체적으로 제시.
+                  - 이번 주 또는 단기적으로 방향성을 바꿀 수 있는 주요 일정 2~3가지 제시.
 
                 5. **보고서 출력 형식**:
                   - 도입부: [🌟 마켓 브리핑, 매크로 및 글로벌 정세 요약]
                   - 요약부: [📊 오늘의 핵심 테마 TOP 5 요약 표] (반드시 표 형태로 출력)
                   - 본문: [🔍 테마별 심층 분석 (Deep Dive)] (각 테마별로 소제목을 달아 상세히 서술)
                   - 일정: [📅 단기 핵심 체크포인트]
-                  - 결론: [💡 수석 전략가의 최종 투자 총평 및 포트폴리오 비중 조언]
-                  - 가독성을 위해 불릿 포인트(•)와 적절한 이모지를 적극적으로 활용하되, 내용은 최대한 풍부하고 깊이 있게 작성할 것.
-
-                [중요] 반드시 실시간 구글 검색을 통해 수집된 최신 정보만을 기반으로 분석을 작성해야 하며, 과거 데이터나 일반적인 상식에 의존한 분석은 허용되지 않습니다.
-                또한 모든 숫자는 [현재 시각: {now} (KST)] 기준으로 최신 데이터를 반영해야 합니다.
+                  - 결론: [💡 수석 전략가의 최종 투자 총평]
                 """
 
-            progress.add_task(f"[cyan]Google Gemini가 시장 데이터를 종합 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            task_ai = progress.add_task(f"[cyan]Google Gemini가 시장 데이터를 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
             # 1. Gemini API 설정
             genai.configure(api_key=config.GEMINI_API_KEY)
 
-            # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
-            # 2. 모델 설정
-            model = genai.GenerativeModel(
-                model_name=config.GEMINI_MODEL,
-                generation_config={
-                    "temperature": 0.2,
-                    "top_p": 0.95,
-                    "max_output_tokens": 8192,
-                }
-            )
-            
-            # 3. 콘텐츠 생성 (500 Internal Error 대비 간헐적 서버 오류 재시도 로직)
-            max_retries = 3
+            max_retries = 2
             for attempt in range(max_retries):
                 try:
-                    response = model.generate_content(prompt)
+                    if attempt > 0:
+                        progress.update(task_ai, description=f"[cyan]Google 서버 응답 지연. 재요청 중... ({attempt+1}/{max_retries})[/cyan]")
+
+                    model = genai.GenerativeModel(
+                        model_name=config.GEMINI_MODEL,
+                        generation_config={
+                            "temperature": 0.2,
+                            "top_p": 0.95,
+                            "max_output_tokens": 8192,
+                        }
+                    )
+                    
+                    logger.debug(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+                    
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    future = executor.submit(model.generate_content, prompt)
+                    try:
+                        response = future.result(timeout=90.0)
+                        executor.shutdown(wait=False)
+                    except concurrent.futures.TimeoutError:
+                        executor.shutdown(wait=False)
+                        raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
+                            
+                    logger.debug(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
                     if response and response.text:
                         return response.text
                     break
                 except Exception as e:
-                    if "500" in str(e) and attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
+                    err_str = str(e)
+                    logger.warning(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} 실패: {err_str}")
+                    if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]):
+                        if attempt < max_retries - 1:
+                            wait_time = 3
+                            progress.update(task_ai, description=f"[yellow]서버 지연 감지. {wait_time}초 후 재시도...[/yellow]")
+                            time.sleep(wait_time)
+                            continue
                     raise e
             
             return "검색 결과가 없거나 응답을 생성하지 못했습니다."
@@ -357,7 +439,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
         return None
     except Exception as e:
         error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
             config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]")
             config.console.print("[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]")
             logger.warning(f"Gemini API Rate Limit (Model: {config.GEMINI_MODEL}): {e}")
@@ -400,27 +482,50 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     📊 [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
     💡 [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
     """
+    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 종목 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                res = model.generate_content(prompt)
+                model = genai.GenerativeModel(
+                    model_name=config.GEMINI_MODEL,
+                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+                )
+                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+                
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(model.generate_content, prompt)
+                try:
+                    res = future.result(timeout=60.0)
+                    executor.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)
+                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+                        
+                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
                 return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
             except Exception as e:
-                if "500" in str(e) and attempt < max_retries - 1:
-                    time.sleep(2)
+                err_str = str(e)
+                logger.warning(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} 실패: {err_str}")
+                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
+                    time.sleep(3)
                     continue
                 raise e
     except Exception as e:
-        logger.error(f"Gemini Stock Analyze Error: {e}")
-        return f"⚠️ 분석 중 오류 발생: {e}"
+        logger.error(f"[GEMINI_AI_DEBUG] Gemini Stock Analyze Error: {e}", exc_info=True)
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
+        elif "400" in error_msg and "tools" in error_msg:
+            return f"⚠️ [red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]"
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
+        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
+            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
+        else:
+            return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
 
 def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     """백테스팅 결과를 바탕으로 Gemini에게 평가 및 조언을 요청"""
@@ -464,24 +569,45 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                res = model.generate_content(prompt)
+                model = genai.GenerativeModel(
+                    model_name=config.GEMINI_MODEL,
+                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+                )
+                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+                
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(model.generate_content, prompt)
+                try:
+                    res = future.result(timeout=60.0)
+                    executor.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)
+                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+                        
+                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
                 return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
             except Exception as e:
-                if "500" in str(e) and attempt < max_retries - 1:
-                    time.sleep(2)
+                err_str = str(e)
+                logger.warning(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} 실패: {err_str}")
+                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
+                    time.sleep(3)
                     continue
                 raise e
     except Exception as e:
         logger.error(f"Gemini Backtest Evaluate Error: {e}")
-        return f"⚠️ 분석 중 오류 발생: {e}"
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
+        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
+            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
+        else:
+            return f"⚠️ [red]진단 중 오류 발생: {error_msg}[/red]"
 
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
@@ -497,19 +623,9 @@ def generate_morning_briefing(market_data_str):
     [글로벌 마감 데이터]
     {market_data_str}
     
-    [시장 지표 해석 가이드 (단기 등락이 아닌 '절대적 위치'와 '구조적 추세' 기준)]
-    * 매우 중요: 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 마세요. 아래 절대적 수치 레벨을 최우선 기준으로 거시 경제를 해석하세요.
-    - 시장 지수 (글로벌/원자재/코인): 지수 > EMA 20일선 & 이평선 우상향 & ADX 조건 충족 시 '강세장(Bull)', 지수 < EMA 20일선 시 '약세장(Bear)', 그 외 '횡보장(Sideways)'
-    - 브랜트유: 125 이상(에너지 쇼크), 105~125(임계점: 고금리 긴축 강요), 85~105(인플레 압력 상존), 65~85(골디락스), 45~65(수요 둔화), 45 미만(시스템 위기)
-    - WTI 원유: 120 이상(에너지 쇼크), 100~120(임계점: 고금리 긴축 강요), 80~100(인플레 압력 상존), 60~80(골디락스), 40~60(수요 둔화), 40 미만(시스템 위기)
-    - 가솔린 RBOB: 4.0 이상(에너지 쇼크), 3.2~4.0(임계점), 2.6~3.2(고유가 지속), 2.1~2.6(골디락스), 1.6~2.1(수요 둔화), 1.6 미만(시스템 위기)
-    - 천연가스: 10 이상(에너지 쇼크), 6~10(물가 비상), 4~6(수급 타이트), 2.5~4.0(골디락스), 1.5~2.5(수익성 악화), 1.5 미만(시스템 하강)
-    - 밀: 900 이상(식량 안보 위기), 750~900(식량 인플레 심각), 650~750(물가 부담), 500~650(적절한 균형점), 400~500(수요 둔화/공급 과잉), 400 미만(디플레/침체)
-    - 달러 인덱스: 120 이상(통화 시스템 붕괴 위기), 110~120(매우 강함/신흥국 위기), 103~110(강세/신흥국 경고등), 90~103(가장 안정적인 중립), 80~90(약세), 80 미만(매우 약함)
-    - 달러 환율: 1600원 이상(시스템 위기), 1500~1600(패닉 구간), 1400~1500(구조적 고환율), 1300~1400(강달러 뉴노멀 상단), 1200~1300(뉴노멀 중립), 1100~1200(비정상적 안정), 1100 미만(초강세 원화)
-    - VIX (변동성): 20 이하(안정), 20~30(시장 활발), 30~40(주의), 40~50(경계), 50 이상(위험)
-    - SOX (반도체 지수): 52주 고점 대비 낙폭 5% 이내(신고가 랠리/초강세), 5~12%(건전한 조정), 12~20%(기술적 조정기), 25% 초과(반도체 하락 사이클/침체)
-    - 52주 고점 대비: -3.0% 이상(신고가 근접/초강세), -3.0% ~ -20.0%(일반 조정/중립), -20.0% 이하(침체/약세장 진입)
+    [시장 지표 해석 가이드]
+    * 각 지표 옆에 표시된 "[현재 상태: ...]"는 시스템이 사용자 설정 룰에 따라 절대적 수치를 기준으로 미리 평가한 결과입니다.
+    * 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 말고, 이 [현재 상태]를 최우선 기준으로 삼아 거시 경제와 추세를 해석하세요.
     
     위 데이터를 분석하고 구글 검색을 통해 간밤의 미국 증시 주요 이슈(주도주 실적, 연준(Fed) 발언, 매크로 지표 발표 등)를 파악한 뒤,
     오늘 아침 개장할 한국 증시(코스피/코스닥)에 미칠 영향과 오늘 가장 주목해야 할 섹터 3가지를 정리해 주세요.
@@ -532,19 +648,32 @@ def generate_morning_briefing(market_data_str):
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                res = model.generate_content(prompt)
+                model = genai.GenerativeModel(
+                    model_name=config.GEMINI_MODEL,
+                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+                )
+                logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+                
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(model.generate_content, prompt)
+                try:
+                    res = future.result(timeout=60.0)
+                    executor.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)
+                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+                        
+                logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
                 return res.text if res and res.text else None
             except Exception as e:
-                if "500" in str(e) and attempt < max_retries - 1:
-                    time.sleep(2)
+                err_str = str(e)
+                logger.warning(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} 실패: {err_str}")
+                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
+                    time.sleep(3)
                     continue
                 raise e
     except Exception as e:
@@ -572,26 +701,34 @@ def ask_gemini(question):
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        # [수정] tools="google_search_retrieval" 속성 사용 시 무료버젼의 Gemini API 에서 429 에러 발생함.
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={
-                "temperature": 0.3,
-                "top_p": 0.95,
-                "max_output_tokens": 4096,
-            }
-        )
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                response = model.generate_content(prompt)
+                model = genai.GenerativeModel(
+                    model_name=config.GEMINI_MODEL,
+                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+                )
+                logger.debug(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+                
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(model.generate_content, prompt)
+                try:
+                    response = future.result(timeout=60.0)
+                    executor.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)
+                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+                        
+                logger.debug(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
                 if response and response.text:
                     return response.text
                 break
             except Exception as e:
-                if "500" in str(e) and attempt < max_retries - 1:
-                    time.sleep(2)
+                err_str = str(e)
+                logger.warning(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} 실패: {err_str}")
+                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
+                    time.sleep(3)
                     continue
                 raise e
         return "검색 결과가 없거나 답변을 생성하지 못했습니다."
@@ -599,12 +736,14 @@ def ask_gemini(question):
     except Exception as e:
         logger.error(f"Gemini Ask Error: {e}")
         error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            return "⚠️ API 호출 한도 초과 (Rate Limit). 잠시 후 다시 시도해주세요."
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
         elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ 설정된 Gemini 모델({config.GEMINI_MODEL})을 찾을 수 없습니다."
+            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
+        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
+            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
         else:
-            return f"⚠️ AI 답변 생성 중 오류 발생: {e}"
+            return f"⚠️ [red]AI 답변 생성 중 오류 발생: {error_msg}[/red]"
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""

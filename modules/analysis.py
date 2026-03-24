@@ -551,11 +551,18 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     memo_data_list = utils.get_stock_memos(code)
     if memo_data_list:
         from rich.panel import Panel
-        memo_content = ""
+        from rich.rule import Rule
+        from rich.console import Group
+        from rich.text import Text
+        
+        renderables = []
         for i, m in enumerate(memo_data_list):
-            if i > 0: memo_content += "\n[dim]" + "─" * 40 + "[/dim]\n"
-            memo_content += f"[dim]{m['updated_at']}[/dim]\n{m['memo']}"
-        config.console.print(Panel(memo_content, title=f"{name} ({code}) [M]", border_style="cyan", expand=False))
+            if i > 0:
+                renderables.append(Rule(style="dim"))
+            text = Text.from_markup(f"[dim]{m['updated_at']}[/dim]\n{m['memo']}")
+            renderables.append(text)
+            
+        config.console.print(Panel(Group(*renderables), title=f"{name} ({code})", border_style="cyan", expand=False))
         config.console.print()
 
     # [테이블 1] 기술적 지표 분석
@@ -911,14 +918,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
-            md = Markdown(answer)
-            
-            table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
-            print_table(table_title, [(name, code)], is_overseas=is_overseas)
-            
-            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-            config.console.print()
-            config.console.print(Padding(panel, (0, 4)))
+            if answer.startswith("⚠️"):
+                config.console.print(f"\n{answer}")
+            else:
+                md = Markdown(answer)
+                
+                table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
+                print_table(table_title, [(name, code)], is_overseas=is_overseas)
+                
+                panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+                config.console.print()
+                config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
 

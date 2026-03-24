@@ -470,6 +470,8 @@ def setup_logging():
     # [추가] 외부 라이브러리 로그 레벨 조정 (노이즈 감소)
     for lib in ["httpcore", "httpx", "urllib3", "google", "google.genai", "mistune", "markdown_it", "yfinance", "peewee"]:
         logging.getLogger(lib).setLevel(logging.WARNING)
+        
+    logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
 
 # [추가] 시스템 트레이딩 전용 로거 설정 함수
 def get_autotrade_logger():
