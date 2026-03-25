@@ -33,7 +33,7 @@ def clear_market_yf_cache():
 ALL_INDICES = [
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-    ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
@@ -315,7 +315,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         else:
             diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
             
-            if "미국채" in name:
+            if "미국채" in name and "선물" not in name:
                 change_str = f"{diff_color}{diff:+.2f}p ({rate:+.2f}%)[/]"
                 curr_fmt = f"{current:,.2f}%"
             else:
@@ -344,14 +344,14 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if high_52_rate > -3.0: h_color = "[red]"
             elif high_52_rate < -20.0: h_color = "[blue]"
             
-            if "미국채" in name:
+            if "미국채" in name and "선물" not in name:
                 high_52_str = f"[dim]{high_52:,.2f}%[/] ({h_color}{high_52_rate:.1f}%[/])"
             else:
                 high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
         def fmt_val(val, color_tag):
             if val is None: return "-"
-            if "미국채" in name:
+            if "미국채" in name and "선물" not in name:
                 s = f"{val:,.2f}%"
             else:
                 s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
@@ -424,7 +424,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "금", "은", "구리", "비트코인", "이더리움"
+            "금", "은", "구리", "비트코인", "이더리움", "미국채 2년물 선물"
         ]
 
         if name in adaptive_targets:
@@ -766,7 +766,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "미국채 5년물 금리", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
+                if name in ["나스닥 선물", "미국채 2년물 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
                     table.add_section()
 
                 res = results_dict.get(name)

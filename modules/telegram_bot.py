@@ -888,7 +888,7 @@ class TelegramCommander:
         targets = market.ALL_INDICES
         
         # 구분선(공백라인)을 넣을 지수명 리스트
-        section_keys = ["나스닥 선물", "미국채 5년물 금리", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
+        section_keys = ["나스닥 선물", "미국채 2년물 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]
         
         # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
         domestic_map = {
@@ -978,7 +978,7 @@ class TelegramCommander:
                 diff = current - prev
                 rate = (diff / prev) * 100
                 
-                if "미국채" in name:
+                if "미국채" in name and "선물" not in name:
                     val_fmt = f"{current:,.2f}%"
                     msg += f"\n• {name} {val_fmt} ({diff:+.2f}p)"
                 else:

@@ -57,7 +57,7 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 INDICES_GROUPS = {
     "1": {"name": "국내 지수 (Domestic Indices)", "indices": ["코스피", "코스피200", "코스닥", "코스닥150"]},
     "2": {"name": "미국 지수 (US Indices)", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000"]},
-    "3": {"name": "미국채 금리 (US Treasury Yields)", "indices": ["미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리"]},
+    "3": {"name": "미국채 금리 (US Treasury Yields)", "indices": ["미국채 2년물 선물", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리"]},
     "4": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
     "5": {"name": "환율 (Exchange Rates)", "indices": ["달러인덱스", "달러환율"]},
     "6": {"name": "변동성/반도체 (Volatility/Semiconductors)", "indices": ["VIX (변동성)", "SOX (반도체)"]},
