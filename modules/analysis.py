@@ -217,7 +217,7 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
@@ -282,13 +282,29 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
         buy_score = thresholds.get("BUY_SCORE", config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
         rise_score = thresholds.get("RISE_SCORE", config.ANALYSIS_THRESHOLDS["RISE_SCORE"])
         buy_rsi_max = thresholds.get("BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
+        
+        use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
     else:
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        
+        use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
+        super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+        super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
+        super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
 
-    if score >= buy_score and rsi < buy_rsi_max: return "매수", "[red]", "매수 조건 충족"
-    elif score >= rise_score: return "상승", "[orange3]", "상승 추세 (점수 양호)"
+    is_super = use_super and score >= super_score and w52_pos is not None and w52_pos >= super_w52
+    actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
+
+    if score >= buy_score and rsi < actual_buy_rsi_max:
+        if is_super: return "강매수", "[bold magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
+        else: return "매수", "[red]", "매수 조건 충족"
+    elif score >= rise_score:
+        return "상승", "[orange3]", "상승 추세 (점수 양호)"
     else: return "관망", "[white]", "방향성 탐색 구간"
 
 def _get_db_connection():
@@ -531,11 +547,20 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             
         current_price = float(df.iloc[-1]['close'])
         
+        # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+        w52_pos = 0.0
+        if len(df) > 0:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
+        
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=thresholds # [수정] 임계값 및 가중치 전달
+            thresholds=thresholds, w52_pos=w52_pos
         )
         
         score, details = calculate_score(
@@ -810,7 +835,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     # 매수 조건 체크
     buy_score_limit = buy_score
-    buy_rsi_limit = thresholds["BUY_RSI_MAX"]
     
     is_mr_state = (state == "역매수")
     if is_mr_state:
@@ -819,7 +843,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
         if rule_applied and custom_rule.get('buy_vol_strength'):
             buy_vol_limit = custom_rule['buy_vol_strength']
-        
+            
+    use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+    super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+    super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+    super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
+    
+    is_super = use_super and score >= super_score and w52_pos >= super_w52
+    buy_rsi_limit = super_rsi if is_super else thresholds["BUY_RSI_MAX"]
+
     is_buy_score = score >= buy_score_limit
     is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
     is_safe_state = state not in ["매도", "주의", "-"]
@@ -830,7 +862,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     if is_mr_state:
         buy_result = "[bold magenta]매수 가능 (역추세)[/]" if is_buy_vol else "[bold blue]매수 불가 (체결강도 미달)[/]"
     else:
-        buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+        if state == "강매수":
+            buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+        else:
+            buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
     
     buy_reason_list = []
     if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
@@ -842,7 +877,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
     if not is_buy_rsi and not is_mr_state:
         if ind['rsi'] is None: buy_reason_list.append("RSI 데이터 부족")
-        else: buy_reason_list.append(f"RSI 과열 (기준: {buy_rsi_limit} 미만)")
+        else:
+            rsi_reason = f"RSI 과열 (기준: {buy_rsi_limit} 미만)"
+            if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
+            buy_reason_list.append(rsi_reason)
     if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
     buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
     
@@ -971,11 +1009,20 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
             except: pass
+            
+        # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+        w52_pos = 0.0
+        if len(df) > 0:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
 
         # 3. 점수 및 상태 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos
         )
         
         score, _ = calculate_score(
@@ -1296,12 +1343,21 @@ def _analyze_stock_worker(stock, params=None):
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
             except: pass
+            
+        # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+        w52_pos = 0.0
+        if len(df) > 0:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
 
         # 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=params
+            thresholds=params, w52_pos=w52_pos
         )
         
         if state == "-": return None # 데이터 부족
@@ -1317,25 +1373,16 @@ def _analyze_stock_worker(stock, params=None):
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
             , weights=weights
         )
-        
-        # 52주 위치 계산 (최근 250일 기준)
-        w52_pos = 0.0
-        if len(df) > 0:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
-            if h52 > l52:
-                w52_pos = (current_price - l52) / (h52 - l52) * 100
 
         # [수정] 체결강도 조회 최적화: 필터 조건에 맞는 종목만 조회
         vol_strength = None
         
         # 조회 대상 상태 정의 (기본: 매수, 상승)
-        target_vol_states = ["매수", "역매수", "상승"]
+        target_vol_states = ["매수", "강매수", "역매수", "상승"]
         
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "ALL")
-            if filter_mode == "BUY": target_vol_states = ["매수"]
+            if filter_mode == "BUY": target_vol_states = ["매수", "강매수"]
             elif filter_mode == "RISE": target_vol_states = ["상승"]
         
         # 현재 상태가 조회 대상에 포함될 때만 체결강도 API 호출
@@ -1347,8 +1394,8 @@ def _analyze_stock_worker(stock, params=None):
                     if vol_strength is not None: break
                 except: time.sleep(0.1)
 
-        # [수정] 매수(역추세포함) 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
-        if state in ["매수", "역매수", "상승"] and vol_strength is not None:
+        # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
+        if state in ["매수", "강매수", "역매수", "상승"] and vol_strength is not None:
             try:
                 if state == "역매수":
                     min_vol = params.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if params else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
@@ -1368,9 +1415,9 @@ def _analyze_stock_worker(stock, params=None):
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "BUY")
             target_states = []
-            if filter_mode == "BUY": target_states = ["매수"]
+            if filter_mode == "BUY": target_states = ["매수", "강매수"]
             elif filter_mode == "RISE": target_states = ["상승"]
-            elif filter_mode == "ALL": target_states = ["매수", "상승"]
+            elif filter_mode == "ALL": target_states = ["매수", "강매수", "상승"]
             if state in target_states:
                 is_target = True
         else:
@@ -1518,7 +1565,7 @@ def analyze_market_stocks(market_type):
                         log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
                         if res_data['is_target']:
-                            log_style = "bold green" if res_data['state'] in ["매수", "역매수"] else "bold orange3"
+                            log_style = "bold green" if res_data['state'] in ["매수", "강매수", "역매수"] else "bold orange3"
                             progress.console.print(f"[{log_style}]{log_msg}[/{log_style}]")
                             buy_candidates.append(res_data)
                         else:
@@ -1960,7 +2007,7 @@ def save_all_market_analysis():
                                 # 상태 컬럼 색상 적용
                                 cell = ws.cell(row=row, column=col_state)
                                 val = cell.value
-                                if val == "매수": cell.font = Font(color="FF0000", bold=True)
+                                if val in ["매수", "강매수"]: cell.font = Font(color="FF0000", bold=True)
                                 elif val == "상승": cell.font = Font(color="FF8C00", bold=True)
                                 elif val == "주의": cell.font = Font(color="DAA520", bold=True)
                                 elif val == "매도": cell.font = Font(color="0000FF", bold=True)
@@ -2114,8 +2161,22 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
                         "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
                     }
+                    
+            # 52주 위치 계산 (슈퍼 모멘텀 마킹용)
+            w52_pos_val = 0.0
+            if not is_overseas:
+                try:
+                    h52, l52, c = float(curr_data['output'].get('w52_hgpr', 0)), float(curr_data['output'].get('w52_lwpr', 0)), float(curr_data['output'].get('stck_prpr', 0))
+                    if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
+                except: pass
+            else:
+                try:
+                    if detail:
+                        h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
+                        if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
+                except: pass
 
-            class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds)
+            class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos_val)
 
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"

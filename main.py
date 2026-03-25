@@ -299,7 +299,14 @@ def show_help():
     market_status_info = None
     filter_info = None
     try:
-        with config.console.status("[cyan]현재 시장 상태 및 필터링 분석 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]현재 시장 상태 및 필터링 분석 중...[/cyan]", total=None)
             kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
@@ -420,8 +427,19 @@ def show_help():
     
     use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
     mr_status = "[green]ON[/green]" if use_mr else "[red]OFF[/red]"
-    score_table.add_row(f"매수 (역추세) ({mr_status})", f"이격도 ≤ 90% & RSI ≤ 40 반등 & 체결 > 120%", "[magenta]역매수[/]", "낙폭과대 기술적 반등 노리기")
+    mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
+    mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
+    mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+    score_table.add_row(f"매수 (역추세) ({mr_status})", f"이격도 ≤ {mr_disp}% & RSI ≤ {mr_rsi} 반등 & 체결 > {mr_vol}%", "[magenta]역매수[/]", "낙폭과대 기술적 반등 노리기")
     
+    use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
+    super_status = "[green]ON[/green]" if use_super else "[red]OFF[/red]"
+    super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+    super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
+    super_buy_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
+    super_sell_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
+    score_table.add_row(f"매수 (슈퍼 모멘텀) ({super_status})", f"종합 점수 ≥ {super_score}점 & 52주 고점 {super_w52}% 이상 근접", "[magenta]강매수[/]", f"주도주 랠리 추종. 매수 RSI {super_buy_rsi}, 과열 매도 RSI {super_sell_rsi} 까지 허용")
+
     score_table.add_row("관망 (상승)", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
     score_table.add_row("관망 (중립)", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     

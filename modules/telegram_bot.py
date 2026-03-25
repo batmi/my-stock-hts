@@ -972,6 +972,15 @@ class TelegramCommander:
                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
+                
+            # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+            w52_pos = 0.0
+            if len(df) > 0:
+                recent_df = df.tail(250)
+                h52 = recent_df['high'].max()
+                l52 = recent_df['low'].min()
+                if h52 > l52:
+                    w52_pos = (current_price - l52) / (h52 - l52) * 100
 
             # [수정] 적응형 임계값 적용
             score_adj = 0.0
@@ -998,9 +1007,9 @@ class TelegramCommander:
             }
 
             state, _, reason = analysis.classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                thresholds=thresholds # [수정] thresholds 전달
+                thresholds=thresholds, w52_pos=w52_pos # [수정] thresholds 및 w52_pos 전달
             )
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
@@ -1069,7 +1078,7 @@ class TelegramCommander:
             else:
                 sell_result = "🟢 보유 (추세유지)"
 
-            state_emoji_map = {"매수": "🔴", "역매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
             state_emoji = state_emoji_map.get(state, "")
 
             msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"

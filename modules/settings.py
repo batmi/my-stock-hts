@@ -132,6 +132,14 @@ def view_system_config():
         table.add_row("  └ 역추세 체결강도\n    [dim]바닥 매수세 확증 기준[/dim]", "MR_VOL_STRENGTH", f"{thresholds.get('MR_VOL_STRENGTH', 120.0)}%")
         sell = config.SELL_STRATEGY
         table.add_row("  └ 역매수 유예 손실\n    [dim]역매수 종목 유예 기간 내 허용 하락폭[/dim]", "MR_GRACE_LOSS_RATE", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%")
+        
+    table.add_row("슈퍼 모멘텀 (RSI 유연화)\n[dim]주도주 랠리 시 RSI 허용치 완화[/dim]", "SUPER_MOMENTUM_USE", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}")
+    if thresholds.get('SUPER_MOMENTUM_USE', True):
+        table.add_row("  └ 슈퍼 매수 발동 점수\n    [dim]기준 점수 이상 & 신고가 90% 이상 시 발동[/dim]", "SUPER_MOMENTUM_SCORE", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}")
+        table.add_row("  └ 슈퍼 52주 위치 기준\n    [dim]신고가 근접 여부 (예: 90.0% 이상)[/dim]", "SUPER_MOMENTUM_W52_POS", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%")
+        table.add_row("  └ 완화된 매수 RSI 상한\n    [dim]발동 시 적용되는 진입 최대 RSI[/dim]", "SUPER_BUY_RSI_MAX", f"{thresholds.get('SUPER_BUY_RSI_MAX', 75.0)}")
+        sell = config.SELL_STRATEGY
+        table.add_row("  └ 슈퍼 매도 과열 RSI\n    [dim]추세 유지 시 매도 지연 RSI 기준[/dim]", "SUPER_TAKE_PROFIT_RSI", f"{sell.get('SUPER_TAKE_PROFIT_RSI', 85.0)}")
     
     table.add_section()
 
@@ -375,7 +383,15 @@ def modify_analysis_thresholds():
         {"desc": "역추세 최소 체결강도", "help": "바닥 매수세 확인 (예: 120%)", "name": "MR_VOL_STRENGTH", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_VOL_STRENGTH": v})},
         {"desc": "역매수 유예 손실(%)", "help": "역매수 진입 시 시간청산 기간 내 허용 하락폭", "name": "MR_GRACE_LOSS_RATE", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0), "set": lambda v: config.SELL_STRATEGY.update({"MR_GRACE_LOSS_RATE": v})}
+         "get": lambda: config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0), "set": lambda v: config.SELL_STRATEGY.update({"MR_GRACE_LOSS_RATE": v})},
+        {"desc": "슈퍼 모멘텀(RSI 유연화) 사용", "help": "주도주 랠리 시 RSI 허용치 상향", "name": "SUPER_MOMENTUM_USE", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_MOMENTUM_USE": v})},
+        {"desc": "슈퍼 모멘텀 발동 점수", "help": "기준 점수 이상 & 신고가 90% 근접 시 발동", "name": "SUPER_MOMENTUM_SCORE", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_MOMENTUM_SCORE": v})},
+        {"desc": "슈퍼 52주 위치 기준", "help": "신고가 근접 여부 (예: 90.0% 이상)", "name": "SUPER_MOMENTUM_W52_POS", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_MOMENTUM_W52_POS": v})},
+        {"desc": "슈퍼 모멘텀 매수 RSI", "help": "발동 시 완화되는 진입 허용 RSI (예: 75.0)", "name": "SUPER_BUY_RSI_MAX", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_BUY_RSI_MAX": v})}
     ]
     return _edit_config_table("매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)", items)
 
@@ -397,6 +413,8 @@ def modify_sell_strategy():
          "get": lambda: config.SELL_STRATEGY["SELL_SCORE"], "set": lambda v: config.SELL_STRATEGY.update({"SELL_SCORE": v})},
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
+        {"desc": "슈퍼 모멘텀 과열 매도 RSI", "help": "추세 유지 시 매도 지연 RSI (예: 85.0)", "name": "SUPER_TAKE_PROFIT_RSI", "type": "float",
+         "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})},
         {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TS_ACTIVATION", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TS_CALLBACK", "type": "float",
@@ -662,7 +680,9 @@ def reset_to_default():
         "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
         "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
-        "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0
+        "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
+        "SUPER_MOMENTUM_USE": True, "SUPER_MOMENTUM_SCORE": 8.5,
+        "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
     })
     config.SELL_STRATEGY.update({
         "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
@@ -670,7 +690,7 @@ def reset_to_default():
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
         "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
-        "MR_GRACE_LOSS_RATE": -5.0
+        "MR_GRACE_LOSS_RATE": -5.0, "SUPER_TAKE_PROFIT_RSI": 85.0
     })
     config.INDICATOR_PARAMS.update({
         "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,

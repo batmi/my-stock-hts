@@ -852,10 +852,19 @@ class DefaultStrategy:
         gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
         loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
         prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+        
+        # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
+        w52_pos = 0.0
+        if df is not None and not df.empty:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
 
         state, _, state_reason = analysis.classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos
         )
         
         # [수정] 가중치(WEIGHTS) 전달
@@ -873,8 +882,9 @@ class DefaultStrategy:
             is_vol_ok = False
 
         return {
-            'action': 'buy' if (state in ["매수", "역매수"] and is_vol_ok) else 'wait',
+            'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',
             'state': state,
+            'state_reason': state_reason,
             'score': score,
             'rsi': ind['rsi'],
             'adx': ind['adx'],
@@ -911,9 +921,18 @@ class DefaultStrategy:
         time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
         
         mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
+        
+        # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
+        w52_pos = 0.0
 
         # 1. 기술적 지표 분석 (시간 청산 시 매수 상태 확인을 위해 우선 수행)
         if df is not None and not df.empty:
+            recent_df = df.tail(250)
+            h52 = recent_df['high'].max()
+            l52 = recent_df['low'].min()
+            if h52 > l52:
+                w52_pos = (current_price - l52) / (h52 - l52) * 100
+                
             ind = indicators.calculate_indicators(df)
             # 전일 RSI 계산 (상태 분류용)
             delta = df['close'].diff()
@@ -922,8 +941,8 @@ class DefaultStrategy:
             prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
 
             state, _, state_reason = analysis.classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos
             )
             
             # [수정] 가중치(WEIGHTS) 전달
@@ -939,7 +958,7 @@ class DefaultStrategy:
             reason = f"손절({profit_rate}%)"
         # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
         elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            if state in ["매수", "역매수", "상승"]:
+            if state in ["매수", "강매수", "역매수", "상승"]:
                 pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
             else:
                 reason = f"시간청산({holding_days}일경과, 기대수익미달)"
@@ -948,9 +967,24 @@ class DefaultStrategy:
             reason = ts_msg
         
         if df is not None and not df.empty:
+            # [추가] 슈퍼 모멘텀 동적 매도 평가 로직
+            use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
+            super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+            super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
+            super_tp_rsi = thresholds.get("SUPER_TAKE_PROFIT_RSI", config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)) if thresholds else config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
+            
+            actual_tp_rsi = tp_rsi
+            is_super = False
+            if use_super and score >= super_score and w52_pos >= super_w52:
+                actual_tp_rsi = super_tp_rsi
+                is_super = True
+                
             # 4. RSI 과열 익절
-            if not reason and ind.get('rsi') is not None and ind['rsi'] > tp_rsi:
-                reason = f"RSI 과열 익절 (RSI: {ind['rsi']:.1f})"
+            if not reason and ind.get('rsi') is not None and ind['rsi'] > actual_tp_rsi:
+                if is_super:
+                    reason = f"RSI과열(슈퍼모멘텀, 기준:{actual_tp_rsi})"
+                else:
+                    reason = f"RSI과열(기준:{actual_tp_rsi})"
             
             # 5. 추세 이탈
             if not reason and (state == "매도" or score < sell_score_limit):
@@ -3982,7 +4016,8 @@ class AutoTrader:
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
-                    'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state']
+                    'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state'],
+                    'state_reason': result.get('state_reason', '')
                 }
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
@@ -4167,7 +4202,13 @@ class AutoTrader:
             
             # [수정] 매수 사유 포맷 분기 (일반/역매수)
             is_mr_buy = cand.get('state') == "역매수"
+            state_reason = cand.get('state_reason', '')
+            is_super = "슈퍼 모멘텀" in state_reason
+            
             reason = "역매수 반등" if is_mr_buy else "조건 만족"
+            if is_super:
+                reason += "(슈퍼모멘텀)"
+                
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
             
@@ -4667,6 +4708,15 @@ def _view_restricted_stocks():
                     try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                     except: pass
 
+                # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+                w52_pos_val = 0.0
+                if df is not None and not df.empty:
+                    recent_df = df.tail(250)
+                    h52 = recent_df['high'].max()
+                    l52 = recent_df['low'].min()
+                    if h52 > l52:
+                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+
                 # [추가] 적응형 임계값 적용
                 thresholds = None
                 if use_adaptive and not is_overseas:
@@ -4683,7 +4733,7 @@ def _view_restricted_stocks():
                 # 상태 및 점수 계산
                 state, state_color, _ = analysis.classify_stock_state(
                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos_val
                 )
                 
                 score, _ = analysis.calculate_score(
@@ -4849,10 +4899,19 @@ def _remove_restricted_stock():
                     try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                     except: pass
 
+                # 52주 위치 계산 (슈퍼 모멘텀 판정용)
+                w52_pos_val = 0.0
+                if df is not None and not df.empty:
+                    recent_df = df.tail(250)
+                    h52 = recent_df['high'].max()
+                    l52 = recent_df['low'].min()
+                    if h52 > l52:
+                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+
                 # 상태 및 점수 계산
                 state, state_color, _ = analysis.classify_stock_state(
                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos_val
                 )
                 
                 score, _ = analysis.calculate_score(

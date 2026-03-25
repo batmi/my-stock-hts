@@ -45,12 +45,13 @@ def calculate_daily_status(row, prev_row, thresholds=None):
 
     # Previous RSI for divergence check
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
+    w52_pos = row.get('w52_pos', 0.0)
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
     state, _, reason = analysis.classify_stock_state(
         price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
-        thresholds=thresholds
+        thresholds=thresholds, w52_pos=w52_pos
     )
     
     # 2. 점수 계산
@@ -162,6 +163,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     half_tp_executed = False # [추가] 백테스트용 반익절 추적 변수
     prev_row = prev_row_init
     
+    # [추가] 52주 고점/저점 및 위치 사전 계산 (벡터화 처리)
+    sim_df['roll_high_250'] = sim_df['high'].rolling(250, min_periods=1).max()
+    sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
+    sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
+    sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
+    
     # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
     # ※ 백테스팅은 사용자가 설정한 기준 점수 검증이 목적이므로, 
     #    적응형 임계값(시장 국면 보정)은 적용하지 않고 입력된 값을 그대로 사용합니다.
@@ -207,7 +214,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             # [수정] 매수 조건 체크 (역추세 허용)
             is_score_ok = raw_score >= buy_score_limit
             is_mr_buy = (state == "역매수")
-            is_rsi_ok = row['RSI'] < buy_rsi_limit # MR은 기준이 40이라 무조건 통과됨
+            
+            # 슈퍼 모멘텀 로직 (시뮬레이션 임계값 반영)
+            use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+            super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+            super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+            is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
+            actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
+            is_rsi_ok = row['RSI'] < actual_buy_rsi
             
             if is_score_ok or is_mr_buy:
                 if is_rsi_ok and can_buy_state:
@@ -278,7 +292,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if not can_buy_state:
                         missed_reason = f"{state}: {state_reason}"
                     elif not is_rsi_ok:
-                        missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {buy_rsi_limit})"
+                        missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {actual_buy_rsi})"
 
                     # [추가] 보류 내역 저장
                     missed_trades.append({
@@ -328,7 +342,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
-                if state in ["매수", "역매수", "상승"]:
+                if state in ["매수", "강매수", "역매수", "상승"]:
                     pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
                 else:
                     sell_signal = True; reason = "시간청산"
@@ -337,8 +351,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 if max_profit_rate >= ts_activation:
                     drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
                     if drop_rate >= ts_callback: sell_signal = True; reason = "트레일링스탑"
+                    
+            # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
+            actual_tp_rsi = take_profit_rsi_limit
+            if use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52:
+                actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
             
-            if not sell_signal and row['RSI'] > take_profit_rsi_limit: sell_signal = True; reason = "RSI과열"
+            if not sell_signal and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
             if not sell_signal and sell_check_score < sell_score_limit:
                 # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
                 if buy_reason_str == "역매수" and current_holding_days <= time_stop_days and loss_rate > mr_grace_loss_limit:
@@ -1427,7 +1446,7 @@ def run_backtest():
             
             state = m['state']
             state_color = "white"
-            if state == "매수": state_color = "red"
+            if state in ["매수", "강매수"]: state_color = "red"
             elif state == "상승": state_color = "orange3"
             elif state == "관망": state_color = "white"
             elif state == "주의": state_color = "yellow"
