@@ -588,6 +588,10 @@ class ConclusionMonitor:
                                     if context.SYSTEM_LOGGER:
                                         context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {price_str})")
                                     
+                                    # [추가] 매도 체결 시 AI 매매 복기 실행
+                                    if type_name == "매도" and found_record:
+                                        threading.Thread(target=self._send_trading_autopsy, args=(code, name, found_record), daemon=True).start()
+                                        
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
                                     if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] 초기화 중이라 알림 스킵됨: {odno}")
@@ -835,6 +839,29 @@ class ConclusionMonitor:
                 trader.update_order_status(code, odno, OrderStatus.FILLED)
         except Exception as e:
             logger.error(f"[Monitor] 체결 처리 핸들러 오류: {e}", exc_info=True)
+
+    def _send_trading_autopsy(self, code, name, sell_trade):
+        """AI 매매 복기 알림 생성 및 전송"""
+        try:
+            last_buy = db_manager.db.get_latest_buy_trade(code)
+            buy_time = last_buy.get('time') if last_buy else "알 수 없음"
+            buy_score = last_buy.get('score', 0) if last_buy else 0
+            
+            sell_reason = sell_trade.get('reason', '알 수 없음')
+            profit_rate = sell_trade.get('profit_rate', 0.0)
+            holding_days = 0
+            if buy_time != "알 수 없음":
+                try:
+                    buy_dt = datetime.strptime(buy_time, "%Y-%m-%d %H:%M:%S")
+                    holding_days = (datetime.now() - buy_dt).days
+                except: pass
+            
+            from modules import theme_analysis
+            autopsy = theme_analysis.generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days)
+            if autopsy:
+                api.send_telegram_message(f"📝 [AI 매매 복기 리포트] {name}({code})\n\n{autopsy}")
+        except Exception as e:
+            logger.error(f"Trading autopsy error: {e}")
 
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
@@ -1305,6 +1332,10 @@ class OrderManager:
                                                             amt_fmt = f"${exec_amt:,.2f}" if is_overseas else f"{int(exec_amt):,}원"
                                                             msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: 잔고 확인{cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
+                                                            
+                                                            # [추가] 매도 체결(추정) 시 AI 매매 복기 실행 (모의투자용)
+                                                            if type_name == "매도":
+                                                                threading.Thread(target=self._send_trading_autopsy, args=(code, trade['name'], trade), daemon=True).start()
                                                         except Exception as e:
                                                             self.trader.log(f"알림 전송 실패: {e}")
                                                     else:

@@ -609,6 +609,85 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
         else:
             return f"⚠️ [red]진단 중 오류 발생: {error_msg}[/red]"
 
+def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days):
+    """건별 매도 체결 시 AI 매매 복기 리포트 작성"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return None
+
+    prompt = f"""
+    당신은 여의도 최고의 퀀트 전략가입니다.
+    방금 시스템 트레이딩에 의해 다음 종목의 매도가 완료되었습니다.
+    
+    [매매 정보]
+    • 종목명: {name}({code})
+    • 진입 일시: {buy_time}
+    • 진입 당시 퀀트 점수: {buy_score}점 (10점 만점)
+    • 보유 기간: {holding_days}일
+    • 최종 수익률: {profit_rate:+.2f}%
+    • 청산 사유: {sell_reason}
+    
+    이 거래가 통계적으로 옳은 결정이었는지, 아니면 시장 이슈 때문이었는지 구글 검색을 통해 해당 기간의 뉴스를 파악하여 객관적으로 리뷰해주세요.
+    수익이 났다면 성공 요인을, 손실이 났다면 실패 요인(함정, 휩쏘, 돌발 악재 등)을 분석하고, 향후 파라미터(손절폭, 익절 등) 조정을 위한 조언을 1줄로 남겨주세요.
+    
+    출력 형식:
+    🤖 **수석 전략가 분석**:
+    (분석 내용)
+    
+    💡 **조언**:
+    (1~2줄의 핵심 조언)
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        res = future.result(timeout=60.0)
+        executor.shutdown(wait=False)
+        return res.text if res and res.text else None
+    except Exception as e:
+        logger.error(f"Trading autopsy AI error: {e}")
+        return None
+
+def generate_portfolio_diagnosis(portfolio_str):
+    """현재 포트폴리오 비중과 매크로 지표를 종합하여 리스크 진단"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return None
+
+    macro_context = _get_macro_context_str()
+    prompt = f"""
+    당신은 포트폴리오 리스크 관리 및 자산 배분 전문가입니다.
+    현재 운용 중인 시스템 트레이딩 계좌의 포트폴리오 현황과 핵심 매크로 지표 상황입니다.
+    
+    [현재 포트폴리오]
+    {portfolio_str}
+    
+    {macro_context}
+    
+    위 데이터를 바탕으로 단순 증권사 업종 분류를 넘어서, 실제 이 기업들의 비즈니스 모델이 특정 테마(AI, 금리, 수출 등)에 얼마나 편중되어 있는지 분석해 주세요.
+    그리고 현재 매크로 상황을 고려할 때 이 포트폴리오의 가장 큰 취약점(Risk)은 무엇인지 파악하고, 포트폴리오 안정성을 높이기 위한 리밸런싱 및 방어주(헷지) 편입 조언을 제공해 주세요.
+    
+    출력 형식:
+    📊 **섹터/테마 편중도 요약**
+    (요약 내용)
+    
+    🔍 **숨겨진 리스크 분석 (Correlation Risk)**
+    (분석 내용)
+    
+    💡 **리밸런싱 및 대응 제안 (Action Plan)**
+    (대체/추가할 섹터 등 구체적 대응 전략)
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        res = future.result(timeout=60.0)
+        executor.shutdown(wait=False)
+        return res.text if res and res.text else None
+    except Exception as e:
+        logger.error(f"Portfolio diagnosis AI error: {e}")
+        return None
+
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
     if genai is None or not config.GEMINI_API_KEY:

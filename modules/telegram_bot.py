@@ -26,6 +26,7 @@ class TelegramCommander:
         self.thread = None
         self.last_update_id = 0
         self.last_briefing_date = None # [추가] 브리핑 중복 전송 방지용
+        self.last_portfolio_date = None # [추가] 포트폴리오 진단 중복 방지용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
         
         # [리팩토링] 명령어 핸들러 매핑
@@ -47,6 +48,7 @@ class TelegramCommander:
             "/log": self._cmd_log,
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
+            "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
             "/restrict": self._cmd_restricted
@@ -80,6 +82,9 @@ class TelegramCommander:
                 # [추가] 장전 브리핑 발송 확인 스케줄러
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
                     self._check_morning_briefing()
+
+                # [추가] 장 종료 후 AI 포트폴리오 진단 리포트 스케줄러
+                self._check_after_market_portfolio()
 
                 params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
                 response = requests.get(url, params=params, timeout=timeout + 5)
@@ -201,6 +206,67 @@ class TelegramCommander:
         except Exception as e:
             logger.error(f"Morning briefing send error: {e}")
 
+    def _check_after_market_portfolio(self):
+        """장 종료 시간 5분 후 포트폴리오 진단 리포트 발송"""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
+        if self.last_portfolio_date == today_str:
+            return
+            
+        end_time_str = getattr(config, 'SYSTEM_TRADING_END_TIME', "1510") # 기본값 1510 (15:10)
+        try:
+            end_time = datetime.strptime(end_time_str, "%H%M").time()
+            target_dt = datetime.combine(now.date(), end_time) + timedelta(minutes=5)
+            
+            if target_dt <= now <= target_dt + timedelta(hours=1):
+                if now.weekday() < 5: # 주말 제외
+                    self.last_portfolio_date = today_str
+                    self._send_reply("🌅 [장 마감 알림] 정규장이 종료되었습니다.\n오늘의 AI 포트폴리오 리스크 진단을 시작합니다...")
+                    threading.Thread(target=self._execute_portfolio_diagnosis, daemon=True).start()
+        except Exception as e:
+            logger.error(f"After market portfolio check error: {e}")
+            
+    def _cmd_portfolio(self, args):
+        self._send_reply("⏳ [AI 포트폴리오 진단] 현재 자산 및 종목 데이터를 수집하여 AI 분석을 요청합니다. 잠시만 기다려주세요...")
+        threading.Thread(target=self._execute_portfolio_diagnosis, daemon=True).start()
+        return None
+        
+    def _execute_portfolio_diagnosis(self):
+        try:
+            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            
+            with utils.AccountContext(target_cano):
+                holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                deposit = res['d2_deposit'] if res else 0
+                
+                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+                if not valid_holdings:
+                    self._send_reply("📭 보유 종목이 없어 포트폴리오 진단을 수행할 수 없습니다.")
+                    return
+                    
+                tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                total_asset = deposit + tot_evlu
+                
+                portfolio_str = f"총 자산: {total_asset:,}원 (보유 {len(valid_holdings)}종목)\n\n[보유 종목 비중]\n"
+                for item in valid_holdings:
+                    name = item['prdt_name']
+                    eval_amt = int(item['evlu_amt'])
+                    weight = (eval_amt / total_asset) * 100
+                    profit_rate = float(item['evlu_pfls_rt'])
+                    portfolio_str += f"- {name}: 비중 {weight:.1f}% (수익률 {profit_rate:+.2f}%)\n"
+                    
+                diagnosis = theme_analysis.generate_portfolio_diagnosis(portfolio_str)
+                if diagnosis:
+                    self._send_reply(f"🛡️ [AI 포트폴리오 리스크 진단]\n\n{diagnosis}")
+                else:
+                    self._send_reply("⚠️ AI 포트폴리오 진단에 실패했습니다.")
+        except Exception as e:
+            logger.error(f"Portfolio diagnosis error: {e}")
+            self._send_reply("⚠️ 포트폴리오 진단 중 오류가 발생했습니다.")
+
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
         return self.trader.get_status_message()
@@ -253,6 +319,7 @@ class TelegramCommander:
             "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회"
+            "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행"
         )
 
     def _cmd_report(self, args):
