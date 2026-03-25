@@ -318,7 +318,7 @@ class TelegramCommander:
             "• /ask <질문> : AI에게 주식/경제 관련 자유 질문\n"
             "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
-            "• /holdings : 현재 보유 종목 및 수익률 조회"
+            "• /holdings : 현재 보유 종목 및 수익률 조회\n"
             "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행"
         )
 
