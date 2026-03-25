@@ -744,7 +744,8 @@ def generate_morning_briefing(market_data_str):
     🇰🇷 오늘 한국 증시 관전 포인트 & 시황 예측
     (내용 서술)
     
-    🎯 오늘의 주목 섹터 TOP 3 (각 섹터별 상승 명분 1줄 포함)
+    🎯 오늘의 주목 섹터 TOP 3 및 추천 주도주 (관심 종목 편입 후보)
+    (각 섹터별 상승 명분 1줄 및 해당 테마의 수혜가 예상되는 대장주 1~2개를 반드시 '종목명(종목코드)' 형태로 추천해 주세요.)
     1. 
     2. 
     3. 
@@ -781,6 +782,41 @@ def generate_morning_briefing(market_data_str):
                 raise e
     except Exception as e:
         logger.error(f"Gemini Morning Briefing Error: {e}")
+        return None
+
+def generate_stock_curation():
+    """현재 시점 매크로 지표 및 뉴스를 기반으로 관심 종목 큐레이션 (수동 추가용)"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return None
+
+    macro_context = _get_macro_context_str()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 여의도 최고의 퀀트 전략가입니다.
+    아래 실시간 핵심 매크로 지표와 현재 시장 상황을 종합하여, 지금 당장 시스템 트레이딩 관심 종목(Watchlist)에 편입할 만한 주도주를 큐레이션해 주세요.
+    
+    {macro_context}
+    
+    [가이드라인]
+    1. 현재 장세(또는 간밤의 미국장)를 분석하여 오늘 자금이 몰릴 확률이 가장 높은 핵심 테마 2~3가지를 선정하세요.
+    2. 각 테마별로 실질적인 수혜를 받는 대장주(시총 1천억 이상 우량주 위주)를 1~2개씩 선별하세요.
+    3. 추천 종목은 반드시 '종목명(종목코드 6자리)' 형태로 정확히 표기하세요. (예: 삼성전자(005930))
+    
+    출력 형식:
+    🎯 [AI 관심 종목 큐레이션]
+    
+    📊 1. [테마명] (간략한 추천 사유)
+    • 종목명(종목코드) - 선정 이유 한 줄
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3})
+        res = model.generate_content(prompt)
+        return res.text if res and res.text else None
+    except Exception as e:
+        logger.error(f"Stock curation AI error: {e}")
         return None
 
 def ask_gemini(question):

@@ -145,3 +145,54 @@ def test_check_after_market_portfolio_trigger(mock_reply, mock_thread, mock_date
     mock_reply.assert_called_once()
     assert "장 마감 알림" in mock_reply.call_args[0][0]
     mock_thread.assert_called_once()
+
+# ==========================================================
+# 3. AI 관심 종목 큐레이션 (Stock Curation) 테스트
+# ==========================================================
+
+@patch('modules.theme_analysis._get_macro_context_str')
+def test_generate_stock_curation_success(mock_macro, mock_genai):
+    """관심 종목 큐레이션 프롬프트 생성 및 응답 정상 처리 테스트"""
+    mock_macro.return_value = "[시스템 제공 실시간 핵심 매크로 지표]"
+    mock_model = MagicMock()
+    mock_genai.GenerativeModel.return_value = mock_model
+    
+    mock_response = MagicMock()
+    mock_response.text = "🎯 [AI 관심 종목 큐레이션]\n\n📊 1. AI 반도체 장비\n• 한미반도체(042700) - HBM 수혜"
+    mock_model.generate_content.return_value = mock_response
+
+    res = theme_analysis.generate_stock_curation()
+    
+    assert res is not None
+    assert "한미반도체(042700)" in res
+    mock_model.generate_content.assert_called_once()
+    
+    # 전달된 프롬프트에 주요 파라미터가 포함되었는지 확인
+    prompt_args = mock_model.generate_content.call_args[0][0]
+    assert "[시스템 제공 실시간 핵심 매크로 지표]" in prompt_args
+    assert "핵심 테마 2~3가지" in prompt_args
+
+@patch('modules.telegram_bot.threading.Thread')
+@patch('modules.telegram_bot.TelegramCommander._send_reply')
+def test_cmd_curate_trigger(mock_reply, mock_thread):
+    """/curate 명령어 입력 시 비동기 스레드 트리거 테스트"""
+    cmd = TelegramCommander()
+    cmd._cmd_curate([])
+    
+    mock_reply.assert_called_once()
+    assert "주도주를 발굴 중" in mock_reply.call_args[0][0]
+    mock_thread.assert_called_once()
+
+@patch('modules.theme_analysis.generate_stock_curation')
+@patch('modules.telegram_bot.TelegramCommander._send_reply')
+def test_execute_curate_success(mock_reply, mock_generate):
+    """큐레이션 결과가 있을 때 텔레그램 메시지 발송 확인 테스트"""
+    cmd = TelegramCommander()
+    mock_generate.return_value = "Mock Curation Report"
+    
+    cmd._execute_curate()
+    
+    mock_generate.assert_called_once()
+    mock_reply.assert_called_once()
+    assert "Mock Curation Report" in mock_reply.call_args[0][0]
+    assert "터미널 HTS 메뉴" in mock_reply.call_args[0][0]

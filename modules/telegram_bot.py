@@ -49,6 +49,7 @@ class TelegramCommander:
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
             "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
+            "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
             "/restrict": self._cmd_restricted
@@ -266,6 +267,23 @@ class TelegramCommander:
         except Exception as e:
             logger.error(f"Portfolio diagnosis error: {e}")
             self._send_reply("⚠️ 포트폴리오 진단 중 오류가 발생했습니다.")
+            
+    def _cmd_curate(self, args):
+        self._send_reply("⏳ [AI 종목 큐레이션] 실시간 시장 매크로 데이터 및 뉴스를 분석하여 주도주를 발굴 중입니다. 잠시만 기다려주세요...")
+        threading.Thread(target=self._execute_curate, daemon=True).start()
+        return None
+        
+    def _execute_curate(self):
+        try:
+            result = theme_analysis.generate_stock_curation()
+            if result:
+                msg = f"{result}\n\n💡 마음에 드는 종목이 있다면 터미널 HTS 메뉴 [7] 관심 종목 관리 -> [1] 종목 추가 를 통해 수동으로 등록해주세요."
+                self._send_reply(msg)
+            else:
+                self._send_reply("⚠️ AI 큐레이션 생성에 실패했습니다.")
+        except Exception as e:
+            logger.error(f"Curation error: {e}")
+            self._send_reply("⚠️ 큐레이션 실행 중 오류가 발생했습니다.")
 
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
@@ -319,7 +337,8 @@ class TelegramCommander:
             "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회\n"
-            "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행"
+            "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행\n"
+            "• /curate : 실시간 시장 주도주 AI 추천 (관심종목 발굴)"
         )
 
     def _cmd_report(self, args):
