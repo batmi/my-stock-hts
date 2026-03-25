@@ -803,7 +803,6 @@ def main():
                     from modules.auto_trade import get_mystock_log_tail
                     log_tail = get_mystock_log_tail(20)
                     msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {e}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
-                    import api
                     api.send_telegram_message(msg)
                 except: pass
     finally:
