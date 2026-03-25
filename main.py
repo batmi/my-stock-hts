@@ -797,6 +797,15 @@ def main():
                     break
             except Exception as e:
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
+                
+                # [추가] 치명적 오류 발생 시 텔레그램 긴급 알림 및 로그 전송
+                try:
+                    from modules.auto_trade import get_mystock_log_tail
+                    log_tail = get_mystock_log_tail(20)
+                    msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {e}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                    import api
+                    api.send_telegram_message(msg)
+                except: pass
     finally:
         config.console.print()
         # [수정] 종료 프로세스를 console.status로 변경하고 완료 메시지 출력

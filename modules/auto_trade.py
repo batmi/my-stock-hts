@@ -28,6 +28,21 @@ console = config.console
 
 logger = logging.getLogger(__name__)
 
+def get_mystock_log_tail(lines=20):
+    """에러 발생 시 전송할 mystock.log의 꼬리 부분을 반환합니다."""
+    log_path = os.path.join(getattr(config, 'LOG_DIR', 'logs'), 'mystock.log')
+    if not os.path.exists(log_path):
+        return "로그 파일이 존재하지 않습니다."
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f:
+            content = f.readlines()
+            tail = "".join(content[-lines:])
+            if len(tail) > 2000: # 텔레그램 메시지 길이 제한 방어
+                tail = tail[-2000:]
+            return tail
+    except Exception as e:
+        return f"로그 읽기 실패: {e}"
+
 # [추가] 거래 제한 종목 파일 경로 및 관리 함수
 RESTRICTED_FILE = os.path.join(config.JSON_DIR, "restricted_stocks.json")
 
@@ -1432,6 +1447,13 @@ class RiskManager:
             
             msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
             
+            # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
+            now = time.time()
+            if now - getattr(self.trader, 'last_emergency_alert_time', 0) > 3600:
+                log_tail = get_mystock_log_tail(20)
+                msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                self.trader.last_emergency_alert_time = now
+            
             api.send_telegram_message(msg)
             self.trader.stop()
 
@@ -1465,6 +1487,7 @@ class AutoTrader:
             cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
             cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
+            cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
@@ -3442,6 +3465,13 @@ class AutoTrader:
                     # [개선] 상세 알림 메시지 구성
                     err_reason = str(e)
                     msg = f"🚨 [시스템 긴급 대기] 연속 에러 {max_err}회 발생\n매매를 일시 중단하고 서버 복구를 대기합니다.\n\n원인: {err_reason}\n\n서버 복구 확인 시 자동으로 재개됩니다."
+                    
+                    # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
+                    now = time.time()
+                    if now - self.last_emergency_alert_time > 3600:
+                        log_tail = get_mystock_log_tail(20)
+                        msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                        self.last_emergency_alert_time = now
                     
                     api.send_telegram_message(msg)
                     
