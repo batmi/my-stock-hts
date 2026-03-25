@@ -285,6 +285,30 @@ def _get_macro_context_str():
                 price = fi.get('last_price')
                 prev = fi.get('regular_market_previous_close')
                 yh = fi.get('year_high')
+                
+                # [수정] 미국채 금리 아시아장 실시간 추정 (선물 연동)
+                fut_mapping = {
+                    "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
+                    "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
+                    "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
+                }
+                if name in fut_mapping and price is not None and prev is not None:
+                    try:
+                        fut_info = fut_mapping[name]
+                        fut_fi = api.get_yf_fast_info(fut_info["ticker"])
+                        if fut_fi and fut_fi.get('last_price') and fut_fi.get('regular_market_previous_close'):
+                            f_curr = float(fut_fi['last_price'])
+                            f_prev = float(fut_fi['regular_market_previous_close'])
+                            if f_prev > 0:
+                                utc_hour = datetime.now(timezone.utc).hour
+                                if utc_hour < 13 or utc_hour >= 21:
+                                    f_rate = (f_curr - f_prev) / f_prev * 100
+                                    est_yield = price - (f_rate / fut_info["duration"])
+                                    prev = price
+                                    price = est_yield
+                                    name = f"{name}(선물적용)"
+                    except: pass
+                
                 if price is not None and not math.isnan(price):
                     rate = ((price - prev) / prev * 100) if (prev and prev > 0) else 0.0
                     return name, price, rate, yh

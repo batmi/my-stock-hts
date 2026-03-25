@@ -912,6 +912,44 @@ class TelegramCommander:
                 
                 current = df.iloc[-1]['close']
                 prev = df.iloc[-2]['close'] if len(df) > 1 else current
+                
+                eval_price = current # 상태 판별용 원본 지수
+                
+                # [추가] 해외 지수는 fast_info 우선 적용 (실시간 국채 금리 추정 포함)
+                if name not in domestic_map:
+                    try:
+                        fi = api.get_yf_fast_info(code)
+                        if fi and fi.get('last_price'):
+                            fast_current = float(fi['last_price'])
+                            fast_prev = float(fi.get('regular_market_previous_close', fast_current))
+                            
+                            eval_price = fast_current
+                            
+                            # 금리 프록시 로직
+                            fut_mapping = {
+                                "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
+                                "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
+                                "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
+                            }
+                            if name in fut_mapping:
+                                fut_info = fut_mapping[name]
+                                fut_fi = api.get_yf_fast_info(fut_info["ticker"])
+                                if fut_fi and fut_fi.get('last_price') and fut_fi.get('regular_market_previous_close'):
+                                    f_curr = float(fut_fi['last_price'])
+                                    f_prev = float(fut_fi['regular_market_previous_close'])
+                                    if f_prev > 0:
+                                        utc_hour = datetime.now(timezone.utc).hour
+                                        if utc_hour < 13 or utc_hour >= 21:
+                                            f_rate = (f_curr - f_prev) / f_prev * 100
+                                            est_yield = fast_current - (f_rate / fut_info["duration"])
+                                            fast_prev = fast_current
+                                            fast_current = est_yield
+                                            name = f"{name}(선물적용)"
+                            
+                            current = fast_current
+                            prev = fast_prev
+                    except: pass
+                
                 diff = current - prev
                 rate = (diff / prev) * 100
                 
@@ -936,9 +974,9 @@ class TelegramCommander:
                 adx_val = adx if adx is not None else 0
                 adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
                 
-                if current > ma_val and slope > 0 and adx_val >= adx_threshold:
+                if eval_price > ma_val and slope > 0 and adx_val >= adx_threshold:
                     trend = "📈" # 강세장
-                elif current < ma_val:
+                elif eval_price < ma_val:
                     trend = "📉" # 약세장
                 else:
                     trend = "📊" # 횡보장

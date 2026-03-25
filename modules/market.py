@@ -104,6 +104,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움"]
+        is_proxy_yield = False # [추가] 금리 추정 여부 플래그
+        chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
         use_fast_info = False
         if not is_domestic_index:
@@ -128,6 +130,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                         
                         current = float(last_price)
                         prev = float(prev_close)
+                        chart_calc_price = current # 프록시 적용 전 원본 가격(실제 지수) 저장
                         
                         yh = fi.get('year_high')
                         if yh is not None and not math.isnan(yh):
@@ -136,6 +139,32 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                             high_52 = max(high_52, current)
                         
                         use_fast_info = True
+
+                # --- [수정] 미국채 금리 아시아장 실시간 추정 (선물 연동) ---
+                fut_mapping = {
+                    "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
+                    "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
+                    "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
+                }
+                if name in fut_mapping:
+                    fut_info = fut_mapping[name]
+                    try:
+                        fut_fi = api.get_yf_fast_info(fut_info["ticker"])
+                        if fut_fi:
+                            f_curr = fut_fi.get('last_price')
+                            f_prev = fut_fi.get('regular_market_previous_close')
+                            if f_curr and f_prev and not math.isnan(f_curr) and not math.isnan(f_prev) and f_prev > 0:
+                                utc_hour = datetime.now(timezone.utc).hour
+                                # 미국 정규장 외(아시아장) 시간대 (00:00~13:00 UTC = 09:00~22:00 KST)
+                                if utc_hour < 13 or utc_hour >= 21:
+                                    f_rate = (f_curr - f_prev) / f_prev * 100
+                                    est_yield = current - (f_rate / fut_info["duration"])
+                                    
+                                    # 선물처럼 정규장 종가(current)를 prev로 삼아 오버나이트 등락을 표시
+                                    prev = current
+                                    current = est_yield
+                                    is_proxy_yield = True
+                    except: pass
             except Exception: pass
 
         patched_name = None
@@ -224,6 +253,12 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif is_gap: 
                 if target_date < today: missing_name = f"{name}(Old:{target_date})"
                 else: missing_name = f"{name}(Last:{prev_date_src})"
+                
+        if chart_calc_price is None:
+            chart_calc_price = current
+            
+        # [추가] 지표 및 상태 판별용 오리지널 가격 (프록시 적용 시 원본 가격 유지)
+        eval_price = chart_calc_price if is_proxy_yield else current
 
         # C. 실시간 가격 패치
         ema5, ema20, ema60, ema120 = None, None, None, None
@@ -234,10 +269,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
             df_calc.dropna(subset=['close'], inplace=True)
             
-            if not math.isnan(current) and current > 0:
-                df_calc.iloc[-1, df_calc.columns.get_loc('close')] = current
-                if current > df_calc.iloc[-1]['high']: df_calc.iloc[-1, df_calc.columns.get_loc('high')] = current
-                if current < df_calc.iloc[-1]['low']: df_calc.iloc[-1, df_calc.columns.get_loc('low')] = current
+            # [수정] 프록시 추정값은 지표 연산에서 철저히 배제 (원본 차트 가격 유지)
+            if not math.isnan(chart_calc_price) and chart_calc_price > 0 and not is_proxy_yield:
+                df_calc.iloc[-1, df_calc.columns.get_loc('close')] = chart_calc_price
+                if chart_calc_price > df_calc.iloc[-1]['high']: df_calc.iloc[-1, df_calc.columns.get_loc('high')] = chart_calc_price
+                if chart_calc_price < df_calc.iloc[-1]['low']: df_calc.iloc[-1, df_calc.columns.get_loc('low')] = chart_calc_price
             
             ind = indicators.calculate_indicators(df_calc)
             
@@ -253,6 +289,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         # D. 결과 포맷팅
         if math.isnan(current): current = 0.0
         if math.isnan(prev): prev = 0.0
+        if math.isnan(eval_price): eval_price = 0.0
 
         diff = current - prev
         rate = 0.0
@@ -262,7 +299,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if math.isnan(rate): rate = 0.0
 
         high_52_rate = 0.0
-        if high_52 != 0: high_52_rate = ((current - high_52) / high_52) * 100
+        if high_52 != 0: high_52_rate = ((eval_price - high_52) / high_52) * 100
         if math.isnan(high_52_rate): high_52_rate = 0.0
 
         is_invalid_data = False
@@ -289,16 +326,16 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             curr_price_color = "[white]"
             if ema5 and ema20 and ema60:
                 if ema5 > ema20 and ema20 > ema60:
-                    if current > ema5: curr_price_color = "[red]"
-                    elif current < ema60: curr_price_color = "[blue]"
+                    if eval_price > ema5: curr_price_color = "[red]"
+                    elif eval_price < ema60: curr_price_color = "[blue]"
                     else: curr_price_color = "[dim]"
                 elif ema5 < ema20 and ema5 < ema60:
-                    if current < ema5: curr_price_color = "[blue]"
-                    elif current > ema20: curr_price_color = "[orange3]"
+                    if eval_price < ema5: curr_price_color = "[blue]"
+                    elif eval_price > ema20: curr_price_color = "[orange3]"
                     else: curr_price_color = "[white]"
                 else:
-                    if current < ema5: curr_price_color = "[blue]"
-                    elif current > ema20: curr_price_color = "[orange3]"
+                    if eval_price < ema5: curr_price_color = "[blue]"
+                    elif eval_price > ema20: curr_price_color = "[orange3]"
                     else: curr_price_color = "[white]"
             
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
@@ -345,7 +382,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         sar_icon = "-"
         if val_psar is not None:
-            sar_icon = "[red]⬆[/]" if current > val_psar else "[blue]⬇[/]"
+            sar_icon = "[red]⬆[/]" if eval_price > val_psar else "[blue]⬇[/]"
         
         macd_icon = "-"
         if val_macd is not None and val_macd_sig is not None:
@@ -408,9 +445,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     
                     adx_val = val_adx if val_adx is not None else 0
                     
-                    if current > ma_val and slope > 0 and adx_val >= adx_threshold:
+                    if eval_price > ma_val and slope > 0 and adx_val >= adx_threshold:
                         regime_state = "Bull"
-                    elif current < ma_val:
+                    elif eval_price < ma_val:
                         regime_state = "Bear"
                 
                 suffix = "*" if is_kis_source else ""
@@ -420,22 +457,22 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 else: display_name = f"[yellow]{name}{suffix}[/]"
             except: pass
         elif name == "미국채 10년물 금리":
-            if current >= 5.20: display_name = f"[magenta]{name}[/]"
-            elif 4.70 <= current < 5.20: display_name = f"[red]{name}[/]"
-            elif 4.20 <= current < 4.70: display_name = f"[orange3]{name}[/]"
-            elif 3.50 <= current < 4.20: display_name = f"[green]{name}[/]"
-            elif 2.80 <= current < 3.50: display_name = f"[yellow]{name}[/]"
-            elif current < 2.80: display_name = f"[blue]{name}[/]"
+            if eval_price >= 5.20: display_name = f"[magenta]{name}[/]"
+            elif 4.70 <= eval_price < 5.20: display_name = f"[red]{name}[/]"
+            elif 4.20 <= eval_price < 4.70: display_name = f"[orange3]{name}[/]"
+            elif 3.50 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
+            elif 2.80 <= eval_price < 3.50: display_name = f"[yellow]{name}[/]"
+            elif eval_price < 2.80: display_name = f"[blue]{name}[/]"
         elif name == "미국채 5년물 금리":
-            if current >= 4.80: display_name = f"[red]{name}[/]"
-            elif 3.80 <= current < 4.80: display_name = f"[orange3]{name}[/]"
-            elif 3.20 <= current < 3.80: display_name = f"[green]{name}[/]"
-            elif current < 3.20: display_name = f"[blue]{name}[/]"
+            if eval_price >= 4.80: display_name = f"[red]{name}[/]"
+            elif 3.80 <= eval_price < 4.80: display_name = f"[orange3]{name}[/]"
+            elif 3.20 <= eval_price < 3.80: display_name = f"[green]{name}[/]"
+            elif eval_price < 3.20: display_name = f"[blue]{name}[/]"
         elif name == "미국채 30년물 금리":
-            if current >= 5.50: display_name = f"[magenta]{name}[/]"
-            elif 4.80 <= current < 5.50: display_name = f"[red]{name}[/]"
-            elif 4.20 <= current < 4.80: display_name = f"[green]{name}[/]"
-            elif current < 4.20: display_name = f"[blue]{name}[/]"
+            if eval_price >= 5.50: display_name = f"[magenta]{name}[/]"
+            elif 4.80 <= eval_price < 5.50: display_name = f"[red]{name}[/]"
+            elif 4.20 <= eval_price < 4.80: display_name = f"[green]{name}[/]"
+            elif eval_price < 4.20: display_name = f"[blue]{name}[/]"
         elif name == "SOX (반도체)":
             if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
             elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"
@@ -497,6 +534,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 500 <= current < 650: display_name = f"[green]{name}[/]"
             elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
             elif current < 400: display_name = f"[blue]{name}[/]"
+
+        if is_proxy_yield:
+            display_name += " [dim](선물적용)[/dim]"
 
         return {
             'status': 'success',
