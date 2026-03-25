@@ -876,7 +876,10 @@ class ConclusionMonitor:
             from modules import theme_analysis
             autopsy = theme_analysis.generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days)
             if autopsy:
-                api.send_telegram_message(f"📝 [AI 매매 복기 리포트] {name}({code})\n\n{autopsy}")
+                if autopsy.startswith("⚠️"):
+                    api.send_telegram_message(f"📝 [AI 매매 복기 리포트] {name}({code})\n{autopsy}")
+                else:
+                    api.send_telegram_message(f"📝 [AI 매매 복기 리포트] {name}({code})\n\n{autopsy}")
         except Exception as e:
             logger.error(f"Trading autopsy error: {e}")
 

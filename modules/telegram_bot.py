@@ -261,7 +261,10 @@ class TelegramCommander:
                     
                 diagnosis = theme_analysis.generate_portfolio_diagnosis(portfolio_str)
                 if diagnosis:
-                    self._send_reply(f"🛡️ [AI 포트폴리오 리스크 진단]\n\n{diagnosis}")
+                    if diagnosis.startswith("⚠️"):
+                        self._send_reply(diagnosis)
+                    else:
+                        self._send_reply(f"🛡️ [AI 포트폴리오 리스크 진단]\n\n{diagnosis}")
                 else:
                     self._send_reply("⚠️ AI 포트폴리오 진단에 실패했습니다.")
         except Exception as e:
@@ -277,8 +280,11 @@ class TelegramCommander:
         try:
             result = theme_analysis.generate_stock_curation()
             if result:
-                msg = f"{result}\n\n💡 마음에 드는 종목이 있다면 터미널 HTS 메뉴 [7] 관심 종목 관리 -> [1] 종목 추가 를 통해 수동으로 등록해주세요."
-                self._send_reply(msg)
+                if result.startswith("⚠️"):
+                    self._send_reply(result)
+                else:
+                    msg = f"{result}\n\n💡 마음에 드는 종목이 있다면 터미널 HTS 메뉴 [7] 관심 종목 관리 -> [1] 종목 추가 를 통해 수동으로 등록해주세요."
+                    self._send_reply(msg)
             else:
                 self._send_reply("⚠️ AI 큐레이션 생성에 실패했습니다.")
         except Exception as e:
