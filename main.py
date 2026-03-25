@@ -361,7 +361,8 @@ def show_help():
 
     # 3. Strength & Volume
     score_table.add_row("Strength/Volume", "ADX ≥ 20", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
-    score_table.add_row("(강도/수급 1.5)", "OBV > OBV 이동평균", f"+{1.0 * r_str:.1f}", "수급 양호")
+    score_table.add_row("(강도/수급 1.5)", "OBV > OBV 이동평균", f"+{0.5 * r_str:.1f}", "수급 양호 (단순 거래량)")
+    score_table.add_row("", "스마트머니", f"+{0.5 * r_str:.1f}", "최근 2일(당일/전일) 외인/기관 쌍끌이 or 순매수 전환")
     score_table.add_section()
 
     # 4. Synergy Bonus

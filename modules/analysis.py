@@ -14,6 +14,7 @@ from datetime import datetime
 import urllib.request
 import sys
 import zipfile
+import threading # [추가]
 import os
 import pandas as pd
 import concurrent.futures
@@ -28,7 +29,64 @@ from modules import db_manager
 
 logger = logging.getLogger(__name__)
 
-def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None):
+# [수정] 스마트머니 캐시 (종목코드 -> {'time': datetime, 'flag': bool, 'reason': str})
+_SMART_MONEY_CACHE = {}
+_SMART_MONEY_CACHE_LOCK = threading.RLock() # [추가] 스레드 동기화 락
+
+def clear_smart_money_cache():
+    """스마트머니 수급 캐시 초기화 (수동 갱신용)"""
+    with _SMART_MONEY_CACHE_LOCK:
+        _SMART_MONEY_CACHE.clear()
+
+def check_smart_money_turnaround(code, is_overseas=False):
+    """외국인/기관 수급 턴어라운드 및 쌍끌이 발생 여부 확인"""
+    if is_overseas: return False, ""
+    
+    now = datetime.now()
+    ttl_seconds = 3600 # 1시간(60분) 유지
+    
+    with _SMART_MONEY_CACHE_LOCK:
+        if code in _SMART_MONEY_CACHE:
+            if (now - _SMART_MONEY_CACHE[code]['time']).total_seconds() < ttl_seconds:
+                return _SMART_MONEY_CACHE[code]['flag'], _SMART_MONEY_CACHE[code]['reason']
+        
+    try:
+        inv_list = api.get_investor_trend(code)
+        if not inv_list or len(inv_list) < 3: 
+            return False, ""
+            
+        flag = False
+        reason = ""
+        
+        for i in range(min(2, len(inv_list))): # [수정] 최근 5일 -> 당일(0)과 전일(1) 2일만 검사
+            f_net = api.safe_int(inv_list[i].get('frgn_ntby_qty', 0))
+            i_net = api.safe_int(inv_list[i].get('orgn_ntby_qty', 0))
+            
+            if f_net > 0 and i_net > 0:
+                flag, reason = True, "쌍끌이 매수"
+                break
+                
+            if i + 2 < len(inv_list):
+                f_prev1 = api.safe_int(inv_list[i+1].get('frgn_ntby_qty', 0))
+                f_prev2 = api.safe_int(inv_list[i+2].get('frgn_ntby_qty', 0))
+                if f_net > 0 and f_prev1 < 0 and f_prev2 < 0:
+                    flag, reason = True, "외국인 턴어라운드"
+                    break
+                    
+                i_prev1 = api.safe_int(inv_list[i+1].get('orgn_ntby_qty', 0))
+                i_prev2 = api.safe_int(inv_list[i+2].get('orgn_ntby_qty', 0))
+                if i_net > 0 and i_prev1 < 0 and i_prev2 < 0:
+                    flag, reason = True, "기관 턴어라운드"
+                    break
+        
+        with _SMART_MONEY_CACHE_LOCK:
+            _SMART_MONEY_CACHE[code] = {'time': now, 'flag': flag, 'reason': reason}
+        return flag, reason
+    except Exception as e:
+        logger.debug(f"Smart Money Check Error for {code}: {e}")
+        return False, ""
+
+def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None, smart_money=False):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
     
@@ -99,9 +157,14 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
         details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.2f})")
 
     if obv_trend: 
-        s = round(1.0 * r_str, 2)
+        s = round(0.5 * r_str, 2) # [수정] 1.0 -> 0.5 변경
         score += s
         details.append(f"OBV: 이동평균 상회 (수급 양호) (+{s:.2f})")
+        
+    if smart_money:
+        s = round(0.5 * r_str, 2) # [추가] 스마트머니 가산점
+        score += s
+        details.append(f"SM: 메이저 수급 턴어라운드 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
     # Trend Confirmation
@@ -217,7 +280,7 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
@@ -275,7 +338,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights)
+    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -556,17 +619,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
         
+        sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
+        
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=thresholds, w52_pos=w52_pos
+            thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         score, details = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            weights=weights
+            weights=weights, smart_money=sm_flag
         )
 
     # 4. 결과 출력
@@ -761,6 +826,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # [추가] 외인 소진율
     if not is_overseas:
         table_tech.add_row("외인 소진율", foreign_rate_str, "외국인 보유 비중")
+        
+        sm_str = f"[red]{sm_reason}[/]" if sm_flag else "[dim]특이사항 없음[/]"
+        table_tech.add_row("스마트머니", sm_str, "외인/기관 쌍끌이 및 순매수 전환")
 
     config.console.print(table_tech)
     config.console.print()
@@ -1019,15 +1087,17 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
+        sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas=False)
+
         # 3. 점수 및 상태 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos, smart_money=sm_flag
         )
         
         score, _ = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), smart_money=sm_flag
         )
         
         # [추가] 개별 룰 여부 확인
@@ -1353,11 +1423,13 @@ def _analyze_stock_worker(stock, params=None):
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
+        sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas=False)
+
         # 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=params, w52_pos=w52_pos
+            thresholds=params, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         if state == "-": return None # 데이터 부족
@@ -1371,7 +1443,7 @@ def _analyze_stock_worker(stock, params=None):
         score, _ = calculate_score(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            , weights=weights
+            , weights=weights, smart_money=sm_flag
         )
 
         # [수정] 체결강도 조회 최적화: 필터 조건에 맞는 종목만 조회

@@ -877,8 +877,12 @@ def manage_stock_menu():
     elif choice == "4":
         import api
         from modules import market
+        from modules import analysis # [추가]
         api.clear_chart_cache()
         market.clear_market_yf_cache()
+        analysis.clear_smart_money_cache() # [추가] 스마트머니 캐시 동시 삭제
+        config.console.print("\n[bold green]차트 및 지수, 수급 데이터 캐시가 초기화되었습니다.[/bold green]")
+        time.sleep(1)
     elif choice == "5":
         if manage_stock_memos_by_mode('view') is False: return False
     elif choice == "6":

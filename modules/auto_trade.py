@@ -525,6 +525,8 @@ class ConclusionMonitor:
                                                 gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
                                                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                                                 prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+                                                
+                                                sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas_stock)
 
                                                 thresholds = None
                                                 rule_tag = ""
@@ -540,12 +542,12 @@ class ConclusionMonitor:
                                                 state, _, state_reason = analysis.classify_stock_state(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                                                     ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                                                    thresholds=thresholds
+                                                    thresholds=thresholds, smart_money=sm_flag
                                                 )
 
                                                 score, _ = analysis.calculate_score(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), smart_money=sm_flag
                                                 )
                                                 
                                                 rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
@@ -888,14 +890,17 @@ class DefaultStrategy:
             l52 = recent_df['low'].min()
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
+                
+        is_overseas = not (code.isdigit() and len(code) == 6)
+        sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
         state, _, state_reason = analysis.classify_stock_state(
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         # [수정] 가중치(WEIGHTS) 전달
-        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
+        score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
         
         # [수정] 역매수 상태에 따른 체결강도 분기
         if state == "역매수":
@@ -921,7 +926,8 @@ class DefaultStrategy:
             'macd': ind.get('macd'),
             'macd_signal': ind.get('macd_signal'),
             'obv_trend': ind.get('obv_trend'),
-            'vol_strength': vol_strength
+            'vol_strength': vol_strength,
+            'smart_money': sm_flag
         }
 
     def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False, holding_days=0, is_mr_holding=False):
@@ -966,14 +972,17 @@ class DefaultStrategy:
             gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+            
+            is_overseas = not (code.isdigit() and len(code) == 6)
+            sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
             
             # [수정] 가중치(WEIGHTS) 전달
-            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None)
+            score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
 
         # 2. 고정 익절/손절 및 시간 청산
         if profit_rate >= tp_rate:
@@ -4038,10 +4047,11 @@ class AutoTrader:
             macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
             obv_trend = result.get('obv_trend')
             obv_str = "상승" if obv_trend is True else ("하락" if obv_trend is False else "-")
+            sm_str = "O" if result.get('smart_money') else "X"
             vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             rule_msg = " [개별 룰 적용]" if rule else ""
             
-            log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}, 체결={vol_val}{rule_msg}"
+            log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}"
             
             if result['action'] == "buy":
                 candidate_data = {

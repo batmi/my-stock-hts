@@ -46,18 +46,19 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     # Previous RSI for divergence check
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
     w52_pos = row.get('w52_pos', 0.0)
+    smart_money = row.get('smart_money', False) # [추가] 사전 병합된 스마트머니 시그널 확인
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
     state, _, reason = analysis.classify_stock_state(
         price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
-        thresholds=thresholds, w52_pos=w52_pos
+        thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money
     )
     
     # 2. 점수 계산
     weights = thresholds.get("WEIGHTS") if thresholds else None
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money
     )
     
     # 3. 백테스팅용 플래그 변환
@@ -102,6 +103,58 @@ def get_backtest_data(code, is_overseas, days):
 
     # 2. KIS API 시도 (Fallback)
     return api.get_chart_data(code, is_overseas)
+
+def _append_smart_money_signal(df, code, is_overseas):
+    """과거 수급 데이터를 API로 조회하여 DataFrame에 병합하고 스마트머니 시그널을 사전 계산 (Vectorized)"""
+    df['smart_money'] = False
+    if is_overseas:
+        return df
+        
+    try:
+        inv_list = api.get_investor_trend(code)
+        if not inv_list: 
+            config.console.print("[dim yellow]※ 안내: 과거 수급 데이터를 불러올 수 없어 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
+            return df
+            
+        inv_df = pd.DataFrame(inv_list)
+        if 'stck_bsop_date' not in inv_df.columns: 
+            config.console.print("[dim yellow]※ 안내: 유효한 수급 데이터가 없어 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
+            return df
+            
+        inv_df = inv_df[['stck_bsop_date', 'frgn_ntby_qty', 'orgn_ntby_qty']].copy()
+        inv_df.rename(columns={'stck_bsop_date': 'date', 'frgn_ntby_qty': 'f_net', 'orgn_ntby_qty': 'o_net'}, inplace=True)
+        
+        inv_df['f_net'] = pd.to_numeric(inv_df['f_net'], errors='coerce').fillna(0)
+        inv_df['o_net'] = pd.to_numeric(inv_df['o_net'], errors='coerce').fillna(0)
+        inv_df['date'] = inv_df['date'].astype(str)
+        df['date'] = df['date'].astype(str)
+        
+        merged = pd.merge(df, inv_df, on='date', how='left')
+        merged['f_net'] = merged['f_net'].fillna(0)
+        merged['o_net'] = merged['o_net'].fillna(0)
+        
+        f_net = merged['f_net']
+        o_net = merged['o_net']
+        
+        # 벡터화 연산 (df는 과거->최신 순서이므로 shift(1)은 전일 데이터)
+        c1_today = (f_net > 0) & (o_net > 0)
+        c1_yest = (f_net.shift(1) > 0) & (o_net.shift(1) > 0)
+        
+        c2_today = (f_net > 0) & (f_net.shift(1) < 0) & (f_net.shift(2) < 0)
+        c2_yest = (f_net.shift(1) > 0) & (f_net.shift(2) < 0) & (f_net.shift(3) < 0)
+        
+        c3_today = (o_net > 0) & (o_net.shift(1) < 0) & (o_net.shift(2) < 0)
+        c3_yest = (o_net.shift(1) > 0) & (o_net.shift(2) < 0) & (o_net.shift(3) < 0)
+        
+        merged['smart_money'] = c1_today | c1_yest | c2_today | c2_yest | c3_today | c3_yest
+        merged.drop(columns=['f_net', 'o_net'], inplace=True)
+        
+        return merged
+    except Exception as e:
+        logger.error(f"스마트머니 데이터 병합 오류: {e}")
+        config.console.print("[dim yellow]※ 안내: 수급 데이터 병합 중 오류가 발생하여 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
+        df['smart_money'] = False
+        return df
 
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
                       stop_loss_rate=None, take_profit_rate=None, 
@@ -1034,6 +1087,9 @@ def run_backtest():
         if df is None or df.empty:
             config.console.print("[red]데이터를 불러올 수 없습니다.[/red]")
             return
+            
+        # [추가] 스마트머니(수급) 시그널 사전 병합
+        df = _append_smart_money_signal(df, code, is_overseas)
 
         # 지표 계산
         df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()

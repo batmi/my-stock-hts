@@ -1123,6 +1123,8 @@ class TelegramCommander:
                     if not custom_rule: # [수정] 개별 룰이 없을 때만 보정 적용
                         buy_score += score_adj
                         regime_msg = f" [시장국면 보정 {score_adj:+.1f}점]"
+                        
+            sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas)
 
             thresholds = {
                 "BUY_SCORE": buy_score,
@@ -1133,12 +1135,12 @@ class TelegramCommander:
             state, _, reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                thresholds=thresholds, w52_pos=w52_pos # [수정] thresholds 및 w52_pos 전달
+                thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                weights=weights # [수정] weights 전달
+                weights=weights, smart_money=sm_flag
             )
             
             # 4. 메시지 구성
