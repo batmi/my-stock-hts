@@ -2744,10 +2744,17 @@ class AutoTrader:
                         mask = (dates >= s_dt) & (dates <= e_dt)
                         period_df = kospi_df[mask]
                         if not period_df.empty:
-                            start_idx = period_df.iloc[0]['close']
-                            end_idx = period_df.iloc[-1]['close']
-                            if start_idx > 0:
-                                kospi_rate = ((end_idx - start_idx) / start_idx) * 100
+                        first_idx = kospi_df.index.get_loc(period_df.index[0])
+                        last_idx = kospi_df.index.get_loc(period_df.index[-1])
+                        
+                        if first_idx > 0:
+                            start_val = kospi_df.iloc[first_idx - 1]['close']
+                        else:
+                            start_val = kospi_df.iloc[first_idx]['close']
+                            
+                        end_val = kospi_df.iloc[last_idx]['close']
+                        if start_val > 0:
+                            kospi_rate = ((end_val - start_val) / start_val) * 100
             except Exception: pass
             stats['kospi_rate'] = kospi_rate
 
@@ -3140,6 +3147,20 @@ class AutoTrader:
             tp = stats['total_profit']
             tr_rate = stats.get('total_realized_rate', 0.0)
             summary_table.add_row("총 실현 손익", f"[red]{tp:+,}원 (매매원금 대비 {tr_rate:+.2f}%)[/]" if tp > 0 else f"[blue]{tp:+,}원 (매매원금 대비 {tr_rate:+.2f}%)[/]")
+            
+            total_buy = stats.get('total_buy_amt_for_sell', 0)
+            sec_pl = holdings_summary['tot_profit'] if holdings_summary else 0
+            sec_buy = holdings_summary['tot_pchs'] if holdings_summary else 0
+            total_invested = total_buy + sec_buy
+            total_net_profit = tp + sec_pl
+            
+            strategy_roi = 0.0
+            if total_invested > 0:
+                strategy_roi = (total_net_profit / total_invested) * 100
+            
+            sp_color = "[red]" if total_net_profit > 0 else ("[blue]" if total_net_profit < 0 else "[white]")
+            summary_table.add_row("현재 전략 손익", f"{sp_color}{total_net_profit:+,}원 (실현+평가 손익 {strategy_roi:+.2f}%)[/]")
+
             apr = stats['avg_profit_rate']
             summary_table.add_row("건당 평균 수익률", f"[red]{apr:+.2f}%[/]" if apr > 0 else f"[blue]{apr:+.2f}%[/]")
             summary_table.add_row("건당 평균 보유", stats['avg_holding_str'])
@@ -3149,17 +3170,10 @@ class AutoTrader:
             k_color = "[red]" if kospi_rate > 0 else ("[blue]" if kospi_rate < 0 else "[white]")
             market_perf_str = f"코스피 지수: {k_color}{kospi_rate:+.2f}%[/]"
             
-            total_buy = stats.get('total_buy_amt_for_sell', 0)
-            sec_pl = holdings_summary['tot_profit'] if holdings_summary else 0
-            sec_buy = holdings_summary['tot_pchs'] if holdings_summary else 0
-            total_invested = total_buy + sec_buy
-            total_net_profit = tp + sec_pl
-            
             if total_invested > 0:
-                strategy_roi = (total_net_profit / total_invested) * 100
                 alpha = strategy_roi - kospi_rate
                 a_color = "[red]" if alpha > 0 else ("[blue]" if alpha < 0 else "[white]")
-                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/] [dim](전략 수익률 {strategy_roi:+.2f}% 기준)[/dim]"
+                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/]"
             summary_table.add_row("시장 대비 성과", market_perf_str)
         
         if holdings_summary:

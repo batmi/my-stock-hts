@@ -612,10 +612,17 @@ class TelegramCommander:
                     mask = (dates >= s_dt) & (dates <= e_dt)
                     period_df = kospi_df[mask]
                     if not period_df.empty:
-                        start_idx = period_df.iloc[0]['close']
-                        end_idx = period_df.iloc[-1]['close']
-                        if start_idx > 0:
-                            kospi_rate = ((end_idx - start_idx) / start_idx) * 100
+                        first_idx = kospi_df.index.get_loc(period_df.index[0])
+                        last_idx = kospi_df.index.get_loc(period_df.index[-1])
+                        
+                        if first_idx > 0:
+                            start_val = kospi_df.iloc[first_idx - 1]['close']
+                        else:
+                            start_val = kospi_df.iloc[first_idx]['close']
+                            
+                        end_val = kospi_df.iloc[last_idx]['close']
+                        if start_val > 0:
+                            kospi_rate = ((end_val - start_val) / start_val) * 100
         except Exception as e:
             logger.error(f"KOSPI 지수 조회 실패: {e}")
 
@@ -699,17 +706,20 @@ class TelegramCommander:
             msg += f"총 실현 손익: {total_profit:+,}원 (매매원금 대비 {tot_roi:+.2f}%)\n"
             unrealized_roi = (sec_pl / sec_buy * 100) if sec_buy > 0 else 0.0
             msg += f"현재 평가 손익: {sec_pl:+,}원 ({unrealized_roi:+.2f}%)\n"
+            
+            total_invested = total_buy_amt_for_sell + sec_buy
+            total_net_profit = total_profit + sec_pl
+            strategy_roi = 0.0
+            if total_invested > 0:
+                strategy_roi = (total_net_profit / total_invested) * 100
+            msg += f"현재 전략 손익: {total_net_profit:+,}원 (실현+평가 손익 {strategy_roi:+.2f}%)\n"
 
             msg += "\n[시장 대비 성과]\n"
             msg += f"코스피 지수: {kospi_rate:+.2f}%\n"
             
-            # [수정] 입출금 왜곡을 방지하기 위해 '순수 매매 원금' 대비 수익률로 알파 계산
-            total_invested = total_buy_amt_for_sell + sec_buy
-            total_net_profit = total_profit + sec_pl
             if total_invested > 0:
-                strategy_roi = (total_net_profit / total_invested) * 100
                 alpha = strategy_roi - kospi_rate
-                msg += f"시장 대비 초과 수익: {alpha:+.2f}% (전략 수익률 {strategy_roi:+.2f}% 기준)\n"
+                msg += f"시장 대비 초과 수익: {alpha:+.2f}%\n"
             else:
                 msg += "시장 대비 초과 수익: -\n"
                 
