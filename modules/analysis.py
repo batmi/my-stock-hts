@@ -364,7 +364,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
 
     if score >= buy_score and rsi < actual_buy_rsi_max:
-        if is_super: return "강매수", "[bold magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
+        if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
         else: return "매수", "[red]", "매수 조건 충족"
     elif score >= rise_score:
         return "상승", "[orange3]", "상승 추세 (점수 양호)"
@@ -612,6 +612,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
+        h52 = 0.0
+        l52 = 0.0
         if len(df) > 0:
             recent_df = df.tail(250)
             h52 = recent_df['high'].max()
@@ -690,6 +692,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         vol_str = f"{annual_vol:.1f}%"
     
     table_tech.add_row("변동성 (ATR)", f"{int(atr_val):,} ({vol_str})", "연환산 변동성 (리스크)")
+
+    # 52주 위치
+    w_color = "[white]"
+    if w52_pos >= 90: w_color = "[red]"
+    elif w52_pos >= 80: w_color = "[orange3]"
+    elif w52_pos <= 30: w_color = "[blue]"
+    elif w52_pos <= 50: w_color = "[yellow]"
+    
+    h52_str = f"${h52:,.2f}" if is_overseas else f"{int(h52):,}원"
+    l52_str = f"${l52:,.2f}" if is_overseas else f"{int(l52):,}원"
+    table_tech.add_row("52주 위치", f"{w_color}{w52_pos:.1f}%[/] [dim]({l52_str} ~ {h52_str})[/dim]", "최고가/최저가 밴드 내 현 위치")
 
     # SAR
     if ind.get('psar') is not None:

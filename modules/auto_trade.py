@@ -747,8 +747,8 @@ class ConclusionMonitor:
             if isinstance(snapshot_data, dict):
                 snapshot_data = json.dumps(snapshot_data, ensure_ascii=False)
             
-            # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 (접수 이력 보존)
-            # db_manager.db.update_trade(odno, order_status="체결(추정)")
+            # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 문제로 재개 (상태 업데이트)
+            db_manager.db.update_trade(odno, order_status="체결(추정)")
             
             # 2. 체결 히스토리 생성 (중복 방지 및 재시도 로직)
             success_db = False
@@ -1257,13 +1257,13 @@ class OrderManager:
                                                 self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
                                                 api.send_telegram_message(f"🗑 [주문 취소] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
                                                 
-                                                # [수정] 원본 업데이트 제거 -> 취소 히스토리 생성
-                                                # db_manager.db.update_trade(odno, order_status="취소")
+                                                # [수정] 원본 업데이트 복원
+                                                db_manager.db.update_trade(odno, order_status="취소")
                                                 
                                                 # 취소 주문 번호는 API 응답(res)에서 파싱해야 하나, revise_cancel_order는 현재 json을 반환함
                                                 cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
                                                 
-                                                db_manager.db.insert_trade("취소(자동)", code, trade['name'], qty, 0, cancel_odno, org_odno=odno, reason="미체결 시간 초과 (자동 취소)")
+                                                db_manager.db.insert_trade("취소(자동)", code, trade['name'], qty, 0, cancel_odno, org_odno=odno, reason="미체결 시간 초과 (자동 취소)", order_status="취소")
                                                 
                                                 # 로컬 상태 정리
                                                 if code in self.pending_orders and odno in self.pending_orders[code]:
@@ -1288,9 +1288,12 @@ class OrderManager:
                                                                         is_filled = True
                                                                         break
                                                         except: pass
+                                                    elif "sell" in trade.get('type', '').lower() or "매도" in trade.get('type', ''):
+                                                        # [추가] 매도 주문인 경우 40330000 에러는 대부분 체결 완료를 의미함
+                                                        is_filled = True
                                                     
                                                     if is_filled:
-                                                        self.trader.log(f"-> 잔고 확인됨. '체결(추정)'으로 기록합니다.")
+                                                        self.trader.log(f"-> 체결/잔고 확인됨. '체결(추정)'으로 기록합니다.")
                                                         
                                                         fill_price = float(trade['price'])
                                                         is_overseas = not (code.isdigit() and len(code) == 6) if code else False
@@ -1300,8 +1303,8 @@ class OrderManager:
                                                                 if cp > 0: fill_price = float(cp)
                                                             except: pass
 
-                                                        # [수정] 원본 주문 상태 변경 제거 (접수 이력 보존)
-                                                        # db_manager.db.update_trade(odno, order_status="체결(추정)")
+                                                        # [수정] 원본 주문 상태 변경 복원
+                                                        db_manager.db.update_trade(odno, order_status="체결(추정)")
                                                         # 체결 내역 강제 생성 (히스토리 보정)
                                                         db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(잔고 확인)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
@@ -1366,10 +1369,9 @@ class OrderManager:
                                                         except Exception as e:
                                                             self.trader.log(f"알림 전송 실패: {e}")
                                                     else:
-                                                        self.trader.log(f"-> 잔고 없음. '취소/거부'로 기록합니다.")
-                                                        # [수정] 원본 업데이트 제거 -> 취소/거부 히스토리 생성
-                                                        # db_manager.db.update_trade(odno, order_status="취소/거부")
-                                                        db_manager.db.insert_trade("취소/거부(자동)", code, trade['name'], qty, 0, f"REJECT_{odno}", org_odno=odno, reason="체결 확인 실패 (잔고 없음)")
+                                                        self.trader.log(f"-> 잔고/체결 확인 안됨. '취소'로 상태를 변경합니다.")
+                                                        # [수정] 원본 업데이트 복원 (REJECT 더미 생성 안 함)
+                                                        db_manager.db.update_trade(odno, order_status="취소")
 
                                                     if code in self.pending_orders and odno in self.pending_orders[code]:
                                                         del self.pending_orders[code][odno]
@@ -3336,6 +3338,45 @@ class AutoTrader:
                     
                     current_market_status = self.is_market_open()
                     
+                    # [추가] 날짜 변경 감지 및 당일 기준 자산 재설정 (무중단 24시간 운용 지원)
+                    current_date = datetime.now().date()
+                    if current_date > self.last_log_date:
+                        self.log("━" * 80)
+                        self.log(f"📅 날짜 변경 감지: {self.last_log_date} -> {current_date}")
+                        self.log("당일 기준 자산(initial_asset)을 새로 측정하여 갱신합니다.")
+                        self.log("━" * 80)
+                        self.last_log_date = current_date
+                        self.initial_asset = 0
+                        
+                        try:
+                            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                            h_temp, s_temp = api.get_domestic_balance(target_cano, acnt)
+                            dep_temp = 0
+                            if s_temp:
+                                dep_temp = api.safe_int(s_temp[0].get('prvs_rcdl_excc_amt', 0))
+                                if dep_temp == 0: dep_temp = api.safe_int(s_temp[0].get('dnca_tot_amt', 0))
+                            if dep_temp == 0 and not config.session.is_simulation:
+                                res_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                                if res_dep: dep_temp = res_dep['deposit'] + res_dep['foreign_deposit']
+                            
+                            tot_eval_temp = 0
+                            if h_temp:
+                                valid_h = [x for x in h_temp if int(x.get('hldg_qty', 0)) > 0]
+                                tot_eval_temp = sum(int(x['evlu_amt']) for x in valid_h)
+                            elif s_temp:
+                                tot_eval_temp = api.safe_int(s_temp[0].get('scts_evlu_amt', 0))
+                            
+                            new_initial = dep_temp + tot_eval_temp
+                            if new_initial > 0:
+                                self.initial_asset = new_initial
+                                save_daily_initial_asset(self.initial_asset)
+                                today_str = datetime.now().strftime("%Y-%m-%d")
+                                acc_str = f"{target_cano}-{acnt}"
+                                db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                                self.log(f"[초기화 완료] 새로운 당일 시작 자산 갱신: {self.initial_asset:,}원")
+                        except Exception as e:
+                            self.log(f"당일 시작 자산 갱신 실패: {e}")
+
                     # [추가] 장 시작/마감 상태 변경 감지 및 로그
                     if self.was_market_open is not None:
                         if not self.was_market_open and current_market_status:
