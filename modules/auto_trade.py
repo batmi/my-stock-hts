@@ -3122,10 +3122,10 @@ class AutoTrader:
             if initial_asset and current_asset > 0:
                 asset_profit = current_asset - initial_asset
                 asset_roi = (asset_profit / initial_asset) * 100
-                summary_table.add_row("총 계좌 시작 자산", f"{initial_asset:,}원")
+                summary_table.add_row("총 계좌 시작 자산", f"{int(initial_asset):,}원")
                 summary_table.add_row("총 계좌 현재 자산", f"{current_asset:,}원")
                 ap_color = "[red]" if asset_profit > 0 else ("[blue]" if asset_profit < 0 else "[white]")
-                summary_table.add_row("총 계좌 자산 증감", f"{ap_color}{asset_profit:+,}원 ({asset_roi:+.2f}%)[/]")
+                summary_table.add_row("총 계좌 자산 증감", f"{ap_color}{int(asset_profit):+,}원 ({asset_roi:+.2f}%)[/]")
                 
             tp = stats['total_profit']
             tr_rate = stats.get('total_realized_rate', 0.0)

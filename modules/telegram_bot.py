@@ -690,7 +690,7 @@ class TelegramCommander:
                 total_asset_profit = int(current_asset - initial_asset)
                 total_asset_roi = (total_asset_profit / initial_asset * 100) if initial_asset > 0 else 0.0
                 
-                msg += f"총 계좌 시작 자산: {initial_asset:,}원\n"
+                msg += f"총 계좌 시작 자산: {int(initial_asset):,}원\n"
                 msg += f"총 계좌 현재 자산: {current_asset:,}원\n"
                 msg += f"총 계좌 자산 증감: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
             else:
