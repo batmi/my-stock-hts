@@ -2690,6 +2690,58 @@ class AutoTrader:
             
         stats = self._calculate_statistics()
         
+        # [추가] 자산 증감 및 시장 성과 통계 추가
+        now = datetime.now()
+        end_dt = now.strftime("%Y-%m-%d")
+        
+        if days is not None:
+            start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        else:
+            start_dt = self.trade_records[0]['time'][:10] if self.trade_records else end_dt
+            
+        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        if not config.session.is_simulation and not target_cano:
+            target_cano = config.session.cano
+            acnt = config.session.acnt_prdt_cd
+            
+        target_account = f"{target_cano}-{acnt}"
+        
+        current_asset = 0
+        try:
+            with utils.AccountContext(target_cano):
+                asset_data = account.get_asset_status_data(target_cano, acnt)
+                if asset_data:
+                    current_asset = asset_data.get('tot_asset', 0)
+        except Exception: pass
+        
+        initial_asset = db_manager.db.get_daily_asset(start_dt, target_account)
+        stats['current_asset'] = current_asset
+        stats['initial_asset'] = initial_asset
+        
+        kospi_rate = 0.0
+        try:
+            kospi_df = analysis.get_domestic_index_data("KOSPI")
+            if kospi_df is not None and not kospi_df.empty:
+                s_dt = start_dt.replace('-', '')
+                e_dt = end_dt.replace('-', '')
+                
+                if 'date' in kospi_df.columns:
+                    def to_yyyymmdd(x):
+                        if hasattr(x, 'strftime'): return x.strftime('%Y%m%d')
+                        return str(x).replace('-', '')[:8]
+                    
+                    dates = kospi_df['date'].apply(to_yyyymmdd)
+                    mask = (dates >= s_dt) & (dates <= e_dt)
+                    period_df = kospi_df[mask]
+                    if not period_df.empty:
+                        start_idx = period_df.iloc[0]['close']
+                        end_idx = period_df.iloc[-1]['close']
+                        if start_idx > 0:
+                            kospi_rate = ((end_idx - start_idx) / start_idx) * 100
+        except Exception: pass
+        stats['kospi_rate'] = kospi_rate
+
         # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
         holdings_summary = None
         try:
@@ -3063,12 +3115,34 @@ class AutoTrader:
         
         if stats['sell_trades_exist']:
             summary_table.add_row("승률 (Win Rate)", f"{stats['win_rate']:.1f}% ({stats['win_trades']}승 {stats['loss_trades']}패)")
+            
+            # [추가] 시작 자산 및 현재 자산 비교 표시
+            initial_asset = stats.get('initial_asset', 0)
+            current_asset = stats.get('current_asset', 0)
+            if initial_asset and current_asset > 0:
+                asset_profit = current_asset - initial_asset
+                asset_roi = (asset_profit / initial_asset) * 100
+                summary_table.add_row("총 계좌 시작 자산", f"{initial_asset:,}원")
+                summary_table.add_row("총 계좌 현재 자산", f"{current_asset:,}원")
+                ap_color = "[red]" if asset_profit > 0 else ("[blue]" if asset_profit < 0 else "[white]")
+                summary_table.add_row("총 계좌 자산 증감", f"{ap_color}{asset_profit:+,}원 ({asset_roi:+.2f}%)[/]")
+                
             tp = stats['total_profit']
             tr_rate = stats.get('total_realized_rate', 0.0)
             summary_table.add_row("총 실현 손익", f"[red]{tp:+,}원 (매매원금 대비 {tr_rate:+.2f}%)[/]" if tp > 0 else f"[blue]{tp:+,}원 (매매원금 대비 {tr_rate:+.2f}%)[/]")
             apr = stats['avg_profit_rate']
             summary_table.add_row("건당 평균 수익률", f"[red]{apr:+.2f}%[/]" if apr > 0 else f"[blue]{apr:+.2f}%[/]")
             summary_table.add_row("건당 평균 보유", stats['avg_holding_str'])
+            
+            # [추가] 시장 대비 성과 표시
+            kospi_rate = stats.get('kospi_rate', 0.0)
+            k_color = "[red]" if kospi_rate > 0 else ("[blue]" if kospi_rate < 0 else "[white]")
+            market_perf_str = f"코스피 지수: {k_color}{kospi_rate:+.2f}%[/]"
+            if initial_asset and current_asset > 0:
+                alpha = asset_roi - kospi_rate
+                a_color = "[red]" if alpha > 0 else ("[blue]" if alpha < 0 else "[white]")
+                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/]"
+            summary_table.add_row("시장 대비 성과", market_perf_str)
         
         if holdings_summary:
             summary_table.add_section()
