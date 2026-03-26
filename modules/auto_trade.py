@@ -4022,8 +4022,36 @@ class AutoTrader:
         custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
         rules_map = {r['code']: r for r in custom_rules}
 
+        # [추가] 당일 매도 이력 확인 및 재진입 허들(체결강도) 설정
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        target_account = None
+        if config.session.is_simulation:
+            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+        elif config.session.auto_cano:
+            target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            
+        try:
+            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation, account=target_account)
+        except TypeError:
+            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation)
+            if target_account:
+                today_trades = [t for t in today_trades if t.get('account') == target_account]
+                
+        sold_today = set(t['code'] for t in today_trades if "sell" in t.get('type', '').lower() or "매도" in t.get('type', ''))
+        
+        reentry_hurdles = {}
+        for scode in sold_today:
+            last_buy = db_manager.db.get_latest_buy_trade(scode)
+            if last_buy:
+                reason = last_buy.get('reason', '')
+                match = re.search(r'체결강도:\s*([0-9.]+)%', reason)
+                if match:
+                    reentry_hurdles[scode] = float(match.group(1))
+                else:
+                    reentry_hurdles[scode] = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles)
         
         # 2. 매수 집행
         if candidates:
@@ -4035,7 +4063,7 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay):
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles):
         """(내부함수) 매수 후보 분석용 단일 워커"""
         try:
             # [추가] 시스템 트레이딩 스레드임을 마킹 (API 우선순위 획득용)
@@ -4121,18 +4149,31 @@ class AutoTrader:
             log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}"
             
             if result['action'] == "buy":
+                reentry_msg = ""
+                if code in reentry_hurdles:
+                    req_vol = reentry_hurdles[code]
+                    vol_strength_val = result.get('vol_strength')
+                    if vol_strength_val is None or vol_strength_val <= req_vol:
+                        log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (체결강도 {vol_strength_val if vol_strength_val else 0:.1f}% <= 기존매수 {req_vol:.1f}%)"
+                        return {'type': 'log_only', 'log': log_msg}
+                    else:
+                        reentry_msg = f"당일 재진입(기존 {req_vol:.1f}% 경신)"
+
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
                     'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state'],
-                    'state_reason': result.get('state_reason', '')
+                    'state_reason': result.get('state_reason', ''),
+                    'reentry_msg': reentry_msg
                 }
+                reentry_log = f" [{reentry_msg}]" if reentry_msg else ""
+                log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{reentry_log}"
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles):
         candidates = []
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
@@ -4178,7 +4219,7 @@ class AutoTrader:
         max_workers = 5 if not config.session.is_simulation else 2
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay) for item in targets]
+            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles) for item in targets]
             
             for future in concurrent.futures.as_completed(futures):
                 if not self.is_running: break
@@ -4316,6 +4357,9 @@ class AutoTrader:
             reason = "역매수 반등" if is_mr_buy else "조건 만족"
             if is_super:
                 reason += "(슈퍼모멘텀)"
+                
+            if cand.get('reentry_msg'):
+                reason += f" [{cand['reentry_msg']}]"
                 
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
