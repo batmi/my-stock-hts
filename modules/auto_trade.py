@@ -3116,7 +3116,7 @@ class AutoTrader:
         }
 
     def _print_summary_table(self, stats, holdings_summary=None):
-        summary_table = Table(box=box.HORIZONTALS, show_header=False, border_style="dim")
+        summary_table = Table(title="[bold]시스템 트레이딩 성과 요약[/bold]", box=box.HORIZONTALS, show_header=False, border_style="dim")
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
         
