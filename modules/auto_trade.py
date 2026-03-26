@@ -2744,17 +2744,17 @@ class AutoTrader:
                         mask = (dates >= s_dt) & (dates <= e_dt)
                         period_df = kospi_df[mask]
                         if not period_df.empty:
-                        first_idx = kospi_df.index.get_loc(period_df.index[0])
-                        last_idx = kospi_df.index.get_loc(period_df.index[-1])
-                        
-                        if first_idx > 0:
-                            start_val = kospi_df.iloc[first_idx - 1]['close']
-                        else:
-                            start_val = kospi_df.iloc[first_idx]['close']
+                            first_idx = kospi_df.index.get_loc(period_df.index[0])
+                            last_idx = kospi_df.index.get_loc(period_df.index[-1])
                             
-                        end_val = kospi_df.iloc[last_idx]['close']
-                        if start_val > 0:
-                            kospi_rate = ((end_val - start_val) / start_val) * 100
+                            if first_idx > 0:
+                                start_val = kospi_df.iloc[first_idx - 1]['close']
+                            else:
+                                start_val = kospi_df.iloc[first_idx]['close']
+                                
+                            end_val = kospi_df.iloc[last_idx]['close']
+                            if start_val > 0:
+                                kospi_rate = ((end_val - start_val) / start_val) * 100
             except Exception: pass
             stats['kospi_rate'] = kospi_rate
 
