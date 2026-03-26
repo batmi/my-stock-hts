@@ -2688,86 +2688,95 @@ class AutoTrader:
             console.print("\n[yellow]선택한 기간에 해당하는 매매 기록이 없습니다.[/yellow]")
             return
             
-        stats = self._calculate_statistics()
-        
-        # [추가] 자산 증감 및 시장 성과 통계 추가
-        now = datetime.now()
-        end_dt = now.strftime("%Y-%m-%d")
-        
-        if days is not None:
-            start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-        else:
-            start_dt = self.trade_records[0]['time'][:10] if self.trade_records else end_dt
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]리포트 통계 분석 및 시장 데이터 수집 중...[/cyan]", total=None)
             
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-        if not config.session.is_simulation and not target_cano:
-            target_cano = config.session.cano
-            acnt = config.session.acnt_prdt_cd
+            stats = self._calculate_statistics()
             
-        target_account = f"{target_cano}-{acnt}"
-        
-        current_asset = 0
-        try:
-            with utils.AccountContext(target_cano):
-                asset_data = account.get_asset_status_data(target_cano, acnt)
-                if asset_data:
-                    current_asset = asset_data.get('tot_asset', 0)
-        except Exception: pass
-        
-        initial_asset = db_manager.db.get_daily_asset(start_dt, target_account)
-        stats['current_asset'] = current_asset
-        stats['initial_asset'] = initial_asset
-        
-        kospi_rate = 0.0
-        try:
-            kospi_df = analysis.get_domestic_index_data("KOSPI")
-            if kospi_df is not None and not kospi_df.empty:
-                s_dt = start_dt.replace('-', '')
-                e_dt = end_dt.replace('-', '')
+            # [추가] 자산 증감 및 시장 성과 통계 추가
+            now = datetime.now()
+            end_dt = now.strftime("%Y-%m-%d")
+            
+            if days is not None:
+                start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+            else:
+                start_dt = self.trade_records[0]['time'][:10] if self.trade_records else end_dt
                 
-                if 'date' in kospi_df.columns:
-                    def to_yyyymmdd(x):
-                        if hasattr(x, 'strftime'): return x.strftime('%Y%m%d')
-                        return str(x).replace('-', '')[:8]
-                    
-                    dates = kospi_df['date'].apply(to_yyyymmdd)
-                    mask = (dates >= s_dt) & (dates <= e_dt)
-                    period_df = kospi_df[mask]
-                    if not period_df.empty:
-                        start_idx = period_df.iloc[0]['close']
-                        end_idx = period_df.iloc[-1]['close']
-                        if start_idx > 0:
-                            kospi_rate = ((end_idx - start_idx) / start_idx) * 100
-        except Exception: pass
-        stats['kospi_rate'] = kospi_rate
-
-        # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
-        holdings_summary = None
-        try:
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            with utils.AccountContext(target_cano):
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                holdings, summary = api.get_domestic_balance(target_cano, acnt)
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            if not config.session.is_simulation and not target_cano:
+                target_cano = config.session.cano
+                acnt = config.session.acnt_prdt_cd
                 
-                tot_pchs = 0
-                tot_profit = 0
-                tot_evlu = 0
-                
-                if summary and len(summary) > 0:
-                    tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
-                    tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
-                    tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
-                
-                if tot_pchs == 0 and holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                    tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                
-                if tot_pchs > 0 or tot_profit != 0:
-                    rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-                    holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
-        except Exception: pass
+            target_account = f"{target_cano}-{acnt}"
+            
+            current_asset = 0
+            try:
+                with utils.AccountContext(target_cano):
+                    asset_data = account.get_asset_status_data(target_cano, acnt)
+                    if asset_data:
+                        current_asset = asset_data.get('tot_asset', 0)
+            except Exception: pass
+            
+            initial_asset = db_manager.db.get_daily_asset(start_dt, target_account)
+            stats['current_asset'] = current_asset
+            stats['initial_asset'] = initial_asset
+            
+            kospi_rate = 0.0
+            try:
+                kospi_df = analysis.get_domestic_index_data("KOSPI")
+                if kospi_df is not None and not kospi_df.empty:
+                    s_dt = start_dt.replace('-', '')
+                    e_dt = end_dt.replace('-', '')
+                    
+                    if 'date' in kospi_df.columns:
+                        def to_yyyymmdd(x):
+                            if hasattr(x, 'strftime'): return x.strftime('%Y%m%d')
+                            return str(x).replace('-', '')[:8]
+                        
+                        dates = kospi_df['date'].apply(to_yyyymmdd)
+                        mask = (dates >= s_dt) & (dates <= e_dt)
+                        period_df = kospi_df[mask]
+                        if not period_df.empty:
+                            start_idx = period_df.iloc[0]['close']
+                            end_idx = period_df.iloc[-1]['close']
+                            if start_idx > 0:
+                                kospi_rate = ((end_idx - start_idx) / start_idx) * 100
+            except Exception: pass
+            stats['kospi_rate'] = kospi_rate
+
+            # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
+            holdings_summary = None
+            try:
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                with utils.AccountContext(target_cano):
+                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                    
+                    tot_pchs = 0
+                    tot_profit = 0
+                    tot_evlu = 0
+                    
+                    if summary and len(summary) > 0:
+                        tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt'))
+                        tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl'))
+                        tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
+                    
+                    if tot_pchs == 0 and holdings:
+                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                        tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    
+                    if tot_pchs > 0 or tot_profit != 0:
+                        rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+                        holdings_summary = {'tot_pchs': tot_pchs, 'tot_evlu': tot_evlu, 'tot_profit': tot_profit, 'rate': rate}
+            except Exception: pass
 
         self._print_summary_table(stats, holdings_summary)
         self._print_current_holdings()
