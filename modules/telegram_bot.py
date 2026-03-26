@@ -702,9 +702,14 @@ class TelegramCommander:
 
             msg += "\n[시장 대비 성과]\n"
             msg += f"코스피 지수: {kospi_rate:+.2f}%\n"
-            if initial_asset and current_asset > 0:
-                alpha = total_asset_roi - kospi_rate
-                msg += f"시장 대비 초과 수익: {alpha:+.2f}%\n"
+            
+            # [수정] 입출금 왜곡을 방지하기 위해 '순수 매매 원금' 대비 수익률로 알파 계산
+            total_invested = total_buy_amt_for_sell + sec_buy
+            total_net_profit = total_profit + sec_pl
+            if total_invested > 0:
+                strategy_roi = (total_net_profit / total_invested) * 100
+                alpha = strategy_roi - kospi_rate
+                msg += f"시장 대비 초과 수익: {alpha:+.2f}% (전략 수익률 {strategy_roi:+.2f}% 기준)\n"
             else:
                 msg += "시장 대비 초과 수익: -\n"
                 

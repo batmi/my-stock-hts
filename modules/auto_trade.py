@@ -3098,6 +3098,7 @@ class AutoTrader:
             "loss_trades": loss_trades,
             "total_profit": total_profit,
             "total_realized_rate": total_realized_rate,
+            "total_buy_amt_for_sell": total_buy_amt_for_sell, # [추가] 투자 원금 기준 알파 계산용
             "avg_profit_rate": avg_profit_rate,
             "win_rate": win_rate,
             "avg_holding_str": avg_holding_str,
@@ -3147,10 +3148,18 @@ class AutoTrader:
             kospi_rate = stats.get('kospi_rate', 0.0)
             k_color = "[red]" if kospi_rate > 0 else ("[blue]" if kospi_rate < 0 else "[white]")
             market_perf_str = f"코스피 지수: {k_color}{kospi_rate:+.2f}%[/]"
-            if initial_asset and current_asset > 0:
-                alpha = asset_roi - kospi_rate
+            
+            total_buy = stats.get('total_buy_amt_for_sell', 0)
+            sec_pl = holdings_summary['tot_profit'] if holdings_summary else 0
+            sec_buy = holdings_summary['tot_pchs'] if holdings_summary else 0
+            total_invested = total_buy + sec_buy
+            total_net_profit = tp + sec_pl
+            
+            if total_invested > 0:
+                strategy_roi = (total_net_profit / total_invested) * 100
+                alpha = strategy_roi - kospi_rate
                 a_color = "[red]" if alpha > 0 else ("[blue]" if alpha < 0 else "[white]")
-                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/]"
+                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/] [dim](전략 수익률 {strategy_roi:+.2f}% 기준)[/dim]"
             summary_table.add_row("시장 대비 성과", market_perf_str)
         
         if holdings_summary:
