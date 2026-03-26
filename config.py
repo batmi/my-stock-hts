@@ -62,7 +62,7 @@ INDICES_GROUPS = {
     "5": {"name": "환율 (Exchange Rates)", "indices": ["달러인덱스", "달러환율"]},
     "6": {"name": "변동성/반도체 (Volatility/Semiconductors)", "indices": ["VIX (변동성)", "SOX (반도체)"]},
     "7": {"name": "암호화폐 (Cryptocurrency)", "indices": ["비트코인", "이더리움"]},
-    "8": {"name": "글로벌 지수 (Global Indices)", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50"]}
+    "8": {"name": "글로벌 지수 (Global Indices)", "indices": ["Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50", "London - Samsung GDR"]}
 }
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)

@@ -41,7 +41,7 @@ ALL_INDICES = [
     ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
     ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
     ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
-    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E")
+    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"), ("London - Samsung GDR", "SMSN.IL")
 ]
 
 # 이름 -> 티커 매핑 (기존 호환성 유지)
@@ -424,7 +424,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "금", "은", "구리", "비트코인", "이더리움", "미국채 2년물 선물"
+            "금", "은", "구리", "비트코인", "이더리움", "미국채 2년물 선물", "London - Samsung GDR"
         ]
 
         if name in adaptive_targets:

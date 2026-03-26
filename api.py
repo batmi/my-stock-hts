@@ -1180,7 +1180,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
     today = now.strftime("%Y%m%d")
     start_date_origin = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
     
-    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS'))
+    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if is_index:
         try:
             df = fetch_yfinance_data(code, period="2y")
@@ -1205,7 +1205,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
             df = df[cols].copy()
             df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
             df = df[df['date'] >= start_date_origin]
-            return df.sort_values('date', ascending=True).reset_index(drop=True)
+            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
         except Exception: return pd.DataFrame()
 
     if not is_overseas:

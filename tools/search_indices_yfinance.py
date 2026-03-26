@@ -18,6 +18,7 @@ MAJOR_INDICES = [
     {"ticker": "^KS11", "name": "KOSPI", "country": "South Korea"},
     {"ticker": "^KQ11", "name": "KOSDAQ", "country": "South Korea"},
     {"ticker": "^KS200", "name": "KOSPI200", "country": "South Korea"},
+    {"ticker": "SMSN.IL", "name": "London - Samsung GDR", "country": "South Korea"},
     {"ticker": "^DJI", "name": "Dow Jones Industrial Average", "country": "USA"},
     {"ticker": "^IXIC", "name": "NASDAQ Composite", "country": "USA"},
     {"ticker": "^GSPC", "name": "S&P 500", "country": "USA"},
