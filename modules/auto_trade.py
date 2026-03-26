@@ -1765,7 +1765,8 @@ class AutoTrader:
         sl_str = f"{sl}%"
         if use_atr_stop: sl_str += f" (ATR x{atr_mult})"
         
-        msg += f"\n• 익절: {tp_str} / 손절: {sl_str}"
+        msg += f"\n• 익절: {tp_str}"
+        msg += f"\n• 손절: {sl_str}"
         msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
         if use_time_stop:
             msg += f"\n• 시간청산: {time_stop_days}일 경과"
