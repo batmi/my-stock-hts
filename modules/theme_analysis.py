@@ -6,6 +6,7 @@ import warnings
 import time
 import math
 import yfinance as yf
+import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime
 from rich.panel import Panel
@@ -1195,12 +1196,138 @@ def _analyze_stock_ui():
     except Exception as e:
         config.console.print(f"[red]진단 중 오류 발생: {e}[/red]")
 
+def _run_tradingview_screener():
+    """트레이딩뷰 스크리너 기반 조건 검색 및 종목 발굴"""
+    try:
+        from tradingview_screener import Query, Column
+        import api
+    except ImportError:
+        config.console.print("\n[red]※ tradingview-screener 라이브러리가 설치되지 않았습니다.[/red]")
+        config.console.print("[dim]명령어: pip install tradingview-screener[/dim]")
+        return
+
+    menu_items = [
+        ("1", "국내 주식", "Domestic Stock"),
+        ("2", "미국 주식", "US Stock")
+    ]
+    market_choice = utils.show_menu("검색할 시장을 선택하세요", menu_items, default_choice="1")
+    if market_choice.lower() == 'q': return
+    
+    market = "korea" if market_choice == "1" else "america"
+    vol_cond_str = "거래량 10만, 1달러 이상" if market == "america" else "거래량 10만 이상"
+    
+    preset_items = [
+        ("1", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)", "Pullback"),
+        ("2", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
+        ("3", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
+        ("4", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
+        ("5", f"당일 급상승 상위 20종목 ({vol_cond_str})", "Top Gainers"),
+        ("6", f"당일 급하락 상위 20종목 ({vol_cond_str})", "Top Losers")
+    ]
+    preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="1")
+    if preset_choice.lower() == 'q': return
+    
+    market_display = "Domestic Stock" if market == "korea" else "US Stock"
+    
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]TradingView 스크리너로 종목을 검색 중입니다... ({market_display})[/cyan]", total=None)
+            
+            query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
+
+            if preset_choice == "1":
+                query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+            elif preset_choice == "2":
+                query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+            elif preset_choice == "3":
+                query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
+            elif preset_choice == "4":
+                query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+            elif preset_choice == "5":
+                if market == "america":
+                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
+                else:
+                    query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
+            elif preset_choice == "6":
+                if market == "america":
+                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
+                else:
+                    query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
+                
+            query = query.limit(20)
+            
+            count, df = query.get_scanner_data()
+            
+            if df is None or df.empty:
+                config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
+                return
+                
+            table = Table(title="TradingView 스크리너 검색 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            table.add_column("티커/코드", justify="left", style="cyan")
+            table.add_column("종목명", justify="left")
+            table.add_column("현재가", justify="right")
+            table.add_column("등락률", justify="right")
+            table.add_column("거래량", justify="right")
+            table.add_column("RSI", justify="right")
+            
+            for idx, row in df.iterrows():
+                ticker = str(row.get('name', '')).strip()
+                name = str(row.get('description', ticker)).strip()
+                
+                # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
+                if market == "korea":
+                    kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
+                    if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
+                        try:
+                            res = api.get_current_price_data(ticker, is_overseas=False)
+                            if res and res.get('rt_cd') == '0':
+                                out = res.get('output', {})
+                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
+                                if fetched_name: kor_name = fetched_name
+                        except Exception:
+                            pass
+                    if kor_name: name = kor_name
+                    
+                close = row.get('close', 0)
+                change = row.get('change', 0)
+                volume = row.get('volume', 0)
+                rsi = row.get('RSI', 0)
+                
+                close_str = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
+                change_color = "[red]" if change > 0 else ("[blue]" if change < 0 else "[white]")
+                change_str = f"{change_color}{change:+.2f}%[/]"
+                vol_str = f"{volume:,.0f}"
+                rsi_str = f"{rsi:.1f}" if pd.notna(rsi) else "-"
+                
+                table.add_row(ticker, name, close_str, change_str, vol_str, rsi_str)
+            
+        config.console.print()
+        config.console.print(table)
+        
+        # 관심 종목 추가 연동
+        config.console.print()
+        ans = Prompt.ask("검색된 종목 중 하나를 관심 종목에 추가하시겠습니까?", choices=["y", "n"], default="n")
+        if ans == 'y':
+            from modules import manage
+            manage.get_current_price(mode='add')
+                    
+    except Exception as e:
+        config.console.print(f"\n[red]TradingView 스크리너 실행 중 오류 발생: {e}[/red]")
+        logger.error(f"TradingView Screener Error: {e}", exc_info=True)
+
 def run_theme_analysis():
     """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
     menu_items = [
         ("1", "네이버 금융 테마 순위", "Naver Theme Ranking"),
         ("2", "시장 주도 테마 분석", "Market Theme Analysis"),
-        ("3", "AI 종목 심층 진단", "AI Stock Analysis")
+        ("3", "트레이딩뷰 종목 검색", "TradingView Screener"),
+        ("4", "AI 종목 심층 진단", "AI Stock Analysis")
     ]
     choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice="1")
     if choice.lower() == 'q': return False
@@ -1213,4 +1340,6 @@ def run_theme_analysis():
     elif choice == '2':
         _analyze_with_gemini_ui()
     elif choice == '3':
+        _run_tradingview_screener()
+    elif choice == '4':
         _analyze_stock_ui()

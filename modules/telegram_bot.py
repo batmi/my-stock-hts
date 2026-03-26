@@ -50,6 +50,7 @@ class TelegramCommander:
             "/holdings": self._cmd_holdings,
             "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
             "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
+            "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
             "/restrict": self._cmd_restricted
@@ -291,6 +292,112 @@ class TelegramCommander:
             logger.error(f"Curation error: {e}")
             self._send_reply("⚠️ 큐레이션 실행 중 오류가 발생했습니다.")
 
+    def _cmd_scan(self, args):
+        self._send_reply("⏳ [TradingView Screener] 시장을 스캔 중입니다. 잠시만 기다려주세요...")
+        threading.Thread(target=self._execute_scan, args=(args,), daemon=True).start()
+        return None
+        
+    def _execute_scan(self, args):
+        try:
+            from tradingview_screener import Query, Column
+            import pandas as pd
+        except ImportError:
+            self._send_reply("⚠️ tradingview-screener 라이브러리가 설치되지 않았습니다. 터미널에서 pip install tradingview-screener 명령어를 실행해주세요.")
+            return
+
+        market = "korea"
+        preset = "Pullback"
+        
+        if args:
+            arg_str = " ".join(args).lower()
+            if "미국" in arg_str or "us" in arg_str:
+                market = "america"
+                
+            if "급상승" in arg_str:
+                preset = "TopGainers"
+            elif "급하락" in arg_str:
+                preset = "TopLosers"
+            elif "모멘텀" in arg_str or "급등" in arg_str:
+                preset = "Momentum"
+            elif "바닥" in arg_str or "반등" in arg_str:
+                preset = "Rebound"
+            elif "거래량" in arg_str:
+                preset = "Volume"
+
+        try:
+            query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
+            
+            if preset == "Pullback":
+                query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+                desc = "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)"
+            elif preset == "Momentum":
+                query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+                desc = "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)"
+            elif preset == "Rebound":
+                query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
+                desc = "바닥 반등 (RSI < 30 & 상승 반전)"
+            elif preset == "Volume":
+                query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+                desc = "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)"
+            elif preset == "TopGainers":
+                if market == "america":
+                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
+                    desc = "당일 급상승 상위 20종목 (거래량 10만, 1달러 이상)"
+                else:
+                    query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
+                    desc = "당일 급상승 상위 20종목 (거래량 10만 이상)"
+            elif preset == "TopLosers":
+                if market == "america":
+                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
+                    desc = "당일 급하락 상위 20종목 (거래량 10만, 1달러 이상)"
+                else:
+                    query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
+                    desc = "당일 급하락 상위 20종목 (거래량 10만 이상)"
+                
+            query = query.limit(20)
+            count, df = query.get_scanner_data()
+            
+            if df is None or df.empty:
+                self._send_reply(f"📭 조건에 맞는 종목이 없습니다.\n조건: {desc}")
+                return
+                
+            msg = f"🔎 [시장 스캔 결과]\n• 시장: {'미국' if market == 'america' else '국내'}\n• 조건: {desc}\n\n"
+            
+            for idx, row in df.iterrows():
+                ticker = str(row.get('name', '')).strip()
+                name = str(row.get('description', ticker)).strip()
+                
+                # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
+                if market == "korea":
+                    kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
+                    if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
+                        try:
+                            res = api.get_current_price_data(ticker, is_overseas=False)
+                            if res and res.get('rt_cd') == '0':
+                                out = res.get('output', {})
+                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
+                                if fetched_name: kor_name = fetched_name
+                        except Exception:
+                            pass
+                    if kor_name: name = kor_name
+
+                close = row.get('close', 0)
+                change = row.get('change', 0)
+                rsi = row.get('RSI', 0)
+                
+                close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
+                change_icon = "🔺" if change > 0 else ("🔻" if change < 0 else "➖")
+                rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
+                
+                msg += f"• {name} ({ticker})\n  {close_str} ({change_icon}{change:+.2f}%) {rsi_str}\n\n"
+                
+            msg += "💡 상세 분석을 원하시면 '/analyze 종목명'을 입력하세요."
+            self._send_reply(msg.strip())
+            
+        except Exception as e:
+            logger.error(f"Screener Scan Error: {e}")
+            self._send_reply(f"⚠️ 스크리너 실행 중 오류가 발생했습니다.\n{e}")
+
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
         return self.trader.get_status_message()
@@ -345,6 +452,7 @@ class TelegramCommander:
             "• /holdings : 현재 보유 종목 및 수익률 조회\n"
             "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행\n"
             "• /curate : 실시간 시장 주도주 AI 추천 (관심종목 발굴)"
+            "• /scan [조건] : 트레이딩뷰 시장 스캔 (예: /scan 미국 모멘텀)"
         )
 
     def _cmd_report(self, args):

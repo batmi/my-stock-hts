@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener"
 MISSING_LIBS=""
 
 # 2. 운영체제 확인 (macOS vs Linux)
@@ -61,6 +61,9 @@ for lib in $REQUIRED_LIBS; do
         "python-dotenv")
             IMPORT_NAME="dotenv"
             ;;
+            "tradingview-screener")
+                IMPORT_NAME="tradingview_screener"
+                ;;
     esac
 
     $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1

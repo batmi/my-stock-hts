@@ -7,7 +7,7 @@ cd /d "%~dp0"
 :: ---------------------------------------------------------
 :: 필수 라이브러리 목록
 :: ---------------------------------------------------------
-set REQUIRED_LIBS=rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv
+set REQUIRED_LIBS=rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener
 set MISSING_LIBS=
 
 :: 2. 실행할 파이썬 및 핍(PIP) 경로 찾기 (윈도우는 Scripts 폴더 사용)
@@ -31,6 +31,7 @@ for %%L in (%REQUIRED_LIBS%) do (
     if "%%L"=="beautifulsoup4" set "IMPORT_NAME=bs4"
     if "%%L"=="google-generativeai" set "IMPORT_NAME=google.generativeai"
     if "%%L"=="python-dotenv" set "IMPORT_NAME=dotenv"
+    if "%%L"=="tradingview-screener" set "IMPORT_NAME=tradingview_screener"
     
     %PYTHON_PATH% -c "import !IMPORT_NAME!" >nul 2>&1
     if errorlevel 1 (
