@@ -2677,6 +2677,7 @@ class AutoTrader:
         elif choice == "3": days = 30
         elif choice == "4":
             val = Prompt.ask("조회할 기간(일) 입력 [dim](Enter: 전체 내역)[/dim]", default="")
+            console.print()
             if val.strip() and val.isdigit():
                 days = int(val)
             else:
@@ -3116,7 +3117,7 @@ class AutoTrader:
         }
 
     def _print_summary_table(self, stats, holdings_summary=None):
-        summary_table = Table(title="[bold]시스템 트레이딩 성과 요약[/bold]", box=box.HORIZONTALS, show_header=False, border_style="dim")
+        summary_table = Table(title="시스템 트레이딩 성과 요약", title_justify="center", box=box.HORIZONTALS, show_header=False, border_style="dim")
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
         
@@ -3196,8 +3197,8 @@ class AutoTrader:
                 holdings, _ = api.get_domestic_balance(target_cano, acnt)
                 
                 if holdings:
-                    console.print("\n[bold]현재 보유 종목 현황[/bold]")
-                    h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+                    console.print()
+                    h_table = Table(title="현재 보유 종목 현황", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
                     h_table.add_column("종목명(코드)", justify="left")
                     h_table.add_column("보유수량", justify="right")
                     h_table.add_column("매입단가", justify="right")
@@ -3278,8 +3279,8 @@ class AutoTrader:
                     stock_stats[code]['holding_secs'].append(hold_sec)
 
         if stock_stats:
-            console.print("\n[bold]종목별 성과 분석[/bold]")
-            s_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            console.print()
+            s_table = Table(title="종목별 성과 분석", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             s_table.add_column("종목명(코드)", justify="left")
             s_table.add_column("매매(매수/매도)", justify="center")
             s_table.add_column("승률", justify="right")
@@ -3335,8 +3336,8 @@ class AutoTrader:
             console.print(s_table)
         
         # 상세 내역 테이블
-        console.print("\n[bold]상세 매매 내역 (최신순)[/bold]")
-        detail_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        console.print()
+        detail_table = Table(title="상세 매매 내역 (최신순)", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         detail_table.add_column("시간", justify="center")
         detail_table.add_column("구분", justify="center")
         detail_table.add_column("종목명", justify="left")
