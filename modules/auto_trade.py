@@ -1733,7 +1733,8 @@ class AutoTrader:
                 tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
             
             rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-            msg += f"\n현재 평가(자산): {current_total_asset:,}원 (평가손익: {total_profit:+,}원 / {rate:+.2f}%)"
+            msg += f"\n증권 평가 자산: {stock_eval_amt:,}원"
+            msg += f"\n증권 평가 손익: {total_profit:+,}원 ({rate:+.2f}%)"
 
         # [추가] 전략 설정 요약 정보 추가
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -1747,11 +1748,27 @@ class AutoTrader:
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         
+        # [추가] 코드를 분석하여 실제 반영 중인 고급 전략 추가
+        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+        use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+        atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+        use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", False)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+
         msg += "\n\n⚙️ [적용 전략]"
         msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
         msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
-        msg += f"\n• 익절: +{tp}% / 손절: {sl}%"
+        
+        tp_str = f"+{tp}%"
+        if use_half_tp: tp_str += f" (반익절 +{tp/2:.1f}%)"
+        
+        sl_str = f"{sl}%"
+        if use_atr_stop: sl_str += f" (ATR x{atr_mult})"
+        
+        msg += f"\n• 익절: {tp_str} / 손절: {sl_str}"
         msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
+        if use_time_stop:
+            msg += f"\n• 시간청산: {time_stop_days}일 경과"
         msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
             
         # [수정] 보유수량 0 초과인 종목만 필터링
@@ -1833,20 +1850,80 @@ class AutoTrader:
                     # 2. 잔고 및 평가금 조회
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                     
+                    tot_profit = 0
+                    tot_pchs = 0
+
                     if holdings:
                         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
                         stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
+                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
                     elif summary and len(summary) > 0:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
+                        tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt', 0))
+                        tot_pchs = api.safe_int(summary[0].get('pchs_amt_smtl', 0))
 
                     if is_data_valid:
                         final_asset = deposit + stock_eval
                         profit = final_asset - self.initial_asset
                         profit_rate = 0.0 if self.initial_asset <= 0 else (profit / self.initial_asset) * 100
+                        stock_rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
 
-                        msg += f"\n종료 자산: {final_asset:,}원\n최종 예수금: {deposit:,}원\n금일 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
+                        msg += f"\n최종 예수금: {deposit:,}원"
+                        msg += f"\n증권 평가 자산: {stock_eval:,}원"
+                        msg += f"\n증권 평가 손익: {tot_profit:+,}원 ({stock_rate:+.2f}%)"
+                        msg += f"\n금일 최종 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
                     else:
                         msg += "\n(⚠️ 종료 시 자산 정보 조회 실패 - 서버 응답 없음)"
+
+                    # [추가] 금일 매매 요약 집계
+                    buy_cnt = 0
+                    sell_cnt = 0
+                    best_stock = None
+                    worst_stock = None
+                    max_p = 0
+                    min_p = 0
+                    try:
+                        today_str = datetime.now().strftime("%Y-%m-%d")
+                        target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}" if config.session.is_simulation else (f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}" if config.session.auto_cano else None)
+                        today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation, account=target_account)
+                        
+                        today_trades_parsed = []
+                        for r in today_trades:
+                            simple_type = "buy" if "매수" in r['type'] or "buy" in r['type'].lower() else "sell"
+                            parsed_r = dict(r)
+                            parsed_r['type'] = simple_type
+                            today_trades_parsed.append(parsed_r)
+                            
+                        today_trades_refined = self._refine_trade_records(today_trades_parsed)
+                        buy_cnt = len([x for x in today_trades_refined if x['type'] == 'buy'])
+                        sell_cnt = len([x for x in today_trades_refined if x['type'] == 'sell'])
+                        
+                        stock_profits = {}
+                        for t in today_trades_refined:
+                            if t['type'] == 'sell':
+                                code = t.get('code', 'unknown')
+                                name = t.get('name', 'Unknown')
+                                p_amt = int(float(t.get('profit_amt') or 0))
+                                if code not in stock_profits:
+                                    stock_profits[code] = {'name': name, 'profit': 0}
+                                stock_profits[code]['profit'] += p_amt
+                                
+                        for code, info in stock_profits.items():
+                            if info['profit'] > max_p:
+                                best_stock = info
+                                max_p = info['profit']
+                            if info['profit'] < min_p:
+                                worst_stock = info
+                                min_p = info['profit']
+                    except Exception as e:
+                        self.log(f"종료 시 매매 요약 조회 실패: {e}")
+                        
+                    msg += f"\n오늘 매매 요약: 매수 {buy_cnt}건 / 매도 {sell_cnt}건"
+                    if best_stock:
+                        msg += f"\n최고 수익: {best_stock['name']} (+{max_p:,}원)"
+                    if worst_stock:
+                        msg += f"\n최대 손실: {worst_stock['name']} ({min_p:,}원)"
 
                     # [수정] 보유수량 0 초과인 종목만 필터링
                     valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -2041,7 +2118,8 @@ class AutoTrader:
             
             realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
             msg += f"오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
-            msg += f"오늘 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
+            msg += f"증권 평가 자산: {tot_evlu:,}원\n"
+            msg += f"증권 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
             msg += f"주문 가능 금액: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
