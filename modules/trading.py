@@ -512,8 +512,7 @@ def show_open_orders():
                                 if cur_qty == 0:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리 시작")
-                                    # [수정] 원본 업데이트 복원
-                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    # 원본 업데이트 제거 (접수 기록 보존)
                                     
                                     # [추가] 체결 히스토리 생성
                                     fill_price = _create_fill_history(db_o, "잔고 0 확인")
@@ -539,8 +538,7 @@ def show_open_orders():
                                 if current_qty >= order_qty:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매수 주문({db_odno}) 잔고 입고 확인({current_qty}>={order_qty}) -> 체결 처리")
-                                    # [수정] 원본 업데이트 복원
-                                    db_manager.db.update_trade(db_odno, order_status="체결(추정)")
+                                    # 원본 업데이트 제거 (접수 기록 보존)
                                     
                                     # [추가] 체결 히스토리 생성
                                     fill_price = _create_fill_history(db_o, "잔고 입고 확인")
@@ -1192,10 +1190,7 @@ def modify_order():
                 
                 db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}", order_status=action_name)
                 
-                # [수정] 원본 주문 상태 업데이트 복원
-                if config.session.is_simulation:
-                    status_update = "정정" if action == "1" else "취소"
-                    db_manager.db.update_trade(org_odno, order_status=status_update)
+                # 원본 접수 기록 보존을 위해 상태 업데이트 로직 제거
                 
                 auto_trade.ConclusionMonitor().check_now()
                 
@@ -1209,8 +1204,8 @@ def modify_order():
                 # [추가] 이미 체결/취소된 주문(40330000)인 경우 DB 상태 업데이트 (유령 주문 정리)
                 if msg_cd == '40330000' and config.session.is_simulation:
                     config.console.print("[yellow]안내: 이미 체결되었거나 취소된 주문입니다. 상태를 업데이트합니다.[/yellow]")
-                    # [수정] 더미 이력(CLEAN) 생성 대신 원본 주문 상태 업데이트
-                    db_manager.db.update_trade(org_odno, order_status="체결/취소(추정)")
+                    # 원본 주문 보존 및 더미 이력(CLEAN) 생성으로 변경
+                    db_manager.db.insert_trade(f"확인요망", pdno, prdt_name, final_qty, price, org_odno, order_status="체결/취소(추정)", reason="이미 체결/취소된 주문")
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 

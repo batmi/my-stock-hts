@@ -626,12 +626,8 @@ class ConclusionMonitor:
                                     db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
                                     
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
-                                    # [수정] 전량 체결 시 상태를 '체결'로 업데이트하여 미체결 목록(DB Fallback)에서 제거
-                                    update_params = {'price': avg_price}
-                                    if ord_qty > 0 and ccld_qty >= ord_qty:
-                                        update_params['order_status'] = "체결"
-                                    
-                                    db_manager.db.update_trade(odno, **update_params)
+                                    # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
+                                    db_manager.db.update_trade(odno, price=avg_price)
                                 else:
                                     logger.debug(f"[ORDER_DEBUG] DB 저장 스킵 (이미 존재): {odno}")
                                     logger.debug(f"[AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})")
@@ -747,8 +743,7 @@ class ConclusionMonitor:
             if isinstance(snapshot_data, dict):
                 snapshot_data = json.dumps(snapshot_data, ensure_ascii=False)
             
-            # 1. DB 업데이트 (원본 주문 상태 변경) -> [수정] 원본 유지 문제로 재개 (상태 업데이트)
-            db_manager.db.update_trade(odno, order_status="체결(추정)")
+            # 1. 원본 '접수' 기록 보존을 위해 상태 덮어쓰기 로직 제거
             
             # 2. 체결 히스토리 생성 (중복 방지 및 재시도 로직)
             success_db = False
@@ -1257,8 +1252,7 @@ class OrderManager:
                                                 self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
                                                 api.send_telegram_message(f"🗑 [주문 취소] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
                                                 
-                                                # [수정] 원본 업데이트 복원
-                                                db_manager.db.update_trade(odno, order_status="취소")
+                                                # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
                                                 
                                                 # 취소 주문 번호는 API 응답(res)에서 파싱해야 하나, revise_cancel_order는 현재 json을 반환함
                                                 cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
@@ -1303,8 +1297,7 @@ class OrderManager:
                                                                 if cp > 0: fill_price = float(cp)
                                                             except: pass
 
-                                                        # [수정] 원본 주문 상태 변경 복원
-                                                        db_manager.db.update_trade(odno, order_status="체결(추정)")
+                                                        # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
                                                         # 체결 내역 강제 생성 (히스토리 보정)
                                                         db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(잔고 확인)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                                                         
@@ -1370,8 +1363,8 @@ class OrderManager:
                                                             self.trader.log(f"알림 전송 실패: {e}")
                                                     else:
                                                         self.trader.log(f"-> 잔고/체결 확인 안됨. '취소'로 상태를 변경합니다.")
-                                                        # [수정] 원본 업데이트 복원 (REJECT 더미 생성 안 함)
-                                                        db_manager.db.update_trade(odno, order_status="취소")
+                                                        # 원본 접수 기록 보존 및 취소 더미 이력 생성
+                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="취소(추정)", reason="잔고/체결 확인 안됨 (취소 간주)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
                                                     if code in self.pending_orders and odno in self.pending_orders[code]:
                                                         del self.pending_orders[code][odno]
