@@ -2312,7 +2312,7 @@ class AutoTrader:
                         self._update_market_indices_status(notify=False)
 
         console.print()
-        table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_style=status_color, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table.add_column("구분", justify="left", style="cyan", width=15)
         table.add_column("상세 내용", justify="left")
 
@@ -2375,7 +2375,7 @@ class AutoTrader:
             rule_summary = f"총 {len(custom_rules)}개 종목 개별 설정됨"
             
             # 별도 테이블로 상세 표시
-            rule_table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            rule_table = Table(title="종목별 개별 트레이딩 룰 목록", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             rule_table.add_column("종목명(코드)", justify="left")
             rule_table.add_column("매수(점수/RSI/체결)", justify="center")
             rule_table.add_column("청산(익절/TS/RSI/기한)", justify="center")
@@ -2628,8 +2628,8 @@ class AutoTrader:
                     rate = float(item['evlu_pfls_rt'])
                     holding_rows.append((name, code, market_type, qty, buy_price, cur_price, profit, rate))
 
-            console.print("\n[bold]보유 종목 리스트[/bold]")
-            h_table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            console.print()
+            h_table = Table(title="보유 종목 리스트", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             h_table.add_column("종목명(코드)", justify="left")
             h_table.add_column("시장", justify="center")
             h_table.add_column("수량", justify="right")
@@ -3117,7 +3117,7 @@ class AutoTrader:
         }
 
     def _print_summary_table(self, stats, holdings_summary=None):
-        summary_table = Table(title="시스템 트레이딩 성과 요약", title_justify="center", box=box.HORIZONTALS, show_header=False, border_style="dim")
+        summary_table = Table(title="시스템 트레이딩 성과 요약", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=False, border_style="dim")
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
         
@@ -3198,7 +3198,7 @@ class AutoTrader:
                 
                 if holdings:
                     console.print()
-                    h_table = Table(title="현재 보유 종목 현황", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+                    h_table = Table(title="현재 보유 종목 현황", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
                     h_table.add_column("종목명(코드)", justify="left")
                     h_table.add_column("보유수량", justify="right")
                     h_table.add_column("매입단가", justify="right")
@@ -3280,7 +3280,7 @@ class AutoTrader:
 
         if stock_stats:
             console.print()
-            s_table = Table(title="종목별 성과 분석", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+            s_table = Table(title="종목별 성과 분석", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             s_table.add_column("종목명(코드)", justify="left")
             s_table.add_column("매매(매수/매도)", justify="center")
             s_table.add_column("승률", justify="right")
@@ -3337,7 +3337,7 @@ class AutoTrader:
         
         # 상세 내역 테이블
         console.print()
-        detail_table = Table(title="상세 매매 내역 (최신순)", title_justify="center", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        detail_table = Table(title="상세 매매 내역 (최신순)", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         detail_table.add_column("시간", justify="center")
         detail_table.add_column("구분", justify="center")
         detail_table.add_column("종목명", justify="left")
