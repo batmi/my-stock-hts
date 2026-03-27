@@ -104,6 +104,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움"]
+        is_futures = name in ["나스닥 선물", "미국채 2년물 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
@@ -115,7 +116,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     last_price = fi.get('last_price')
                     prev_close = fi.get('regular_market_previous_close')
                     
-                    if is_crypto and not df_daily.empty and len(df_daily) >= 2:
+                    # [수정] 선물/암호화폐는 yfinance의 전일 종가 대신 일봉 데이터의 종가를 사용 (정확도 향상)
+                    if (is_crypto or is_futures) and not df_daily.empty and len(df_daily) >= 2:
                         try:
                             last_dt = df_daily.index[-1].date()
                             utc_today = datetime.now(timezone.utc).date()
