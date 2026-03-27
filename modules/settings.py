@@ -474,10 +474,24 @@ def modify_indicator_params():
     ]
     return _edit_config_table("기술적 지표 파라미터 (Indicators)", items)
 
+def _on_telegram_enable_changed():
+    """텔레그램 알림 사용 여부 변경 시 봇 스레드 제어"""
+    from modules.telegram_bot import TelegramCommander
+    bot = TelegramCommander()
+    if getattr(config, 'ENABLE_TELEGRAM', True):
+        if not bot.is_running:
+            bot.start()
+            config.console.print("\n[green]텔레그램 봇 수신 스레드가 시작되었습니다.[/green]")
+    else:
+        if bot.is_running:
+            bot.stop()
+            config.console.print("\n[yellow]텔레그램 봇 수신 스레드가 중지되었습니다.[/yellow]")
+
 def modify_telegram_settings():
     items = [
         {"desc": "텔레그램 알림 사용", "help": "알림 기능 활성화 여부", "name": "ENABLE_TELEGRAM", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: getattr(config, 'ENABLE_TELEGRAM', True), "set": lambda v: setattr(config, 'ENABLE_TELEGRAM', v)},
+         "get": lambda: getattr(config, 'ENABLE_TELEGRAM', True), "set": lambda v: setattr(config, 'ENABLE_TELEGRAM', v),
+         "callback": _on_telegram_enable_changed},
         {"desc": "인스턴스 이름", "help": "알림 메시지 머리말", "name": "TELEGRAM_INSTANCE_NAME", "type": "str",
          "get": lambda: getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"), "set": lambda v: setattr(config, 'TELEGRAM_INSTANCE_NAME', v)},
         {"desc": "폴링 타임아웃(초)", "help": "봇 명령어 수신 대기 시간", "name": "TELEGRAM_POLLING_TIMEOUT", "type": "int",

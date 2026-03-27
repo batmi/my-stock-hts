@@ -426,12 +426,12 @@ def show_open_orders():
                                         if is_overseas:
                                             curr = float(cp_data['output'].get('last', 0))
                                             rate = float(cp_data['output'].get('rate', 0))
-                                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                            icon = "🔺" if rate > 0 else ("" if rate < 0 else "➖")
                                             cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
                                         else:
                                             curr = float(cp_data['output']['stck_prpr'])
                                             rate = float(cp_data['output']['prdy_ctrt'])
-                                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                            icon = "🔺" if rate > 0 else ("🔽" if rate < 0 else "➖")
                                             cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
                                 except: pass
                                 

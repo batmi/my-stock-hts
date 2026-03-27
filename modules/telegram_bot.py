@@ -20,7 +20,17 @@ console = config.console
 
 class TelegramCommander:
     """텔레그램 명령어를 수신하고 처리하는 클래스"""
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(TelegramCommander, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        if self._initialized: return
+        self._initialized = True
         self.bot_token = config.TELEGRAM_BOT_TOKEN
         self.is_running = False
         self.thread = None
@@ -59,6 +69,7 @@ class TelegramCommander:
     def start(self):
         if not self.bot_token: return
         if not config.ENABLE_TELEGRAM: return # [추가] 텔레그램 비활성화 시 시작 안 함
+        if self.is_running: return # [추가] 중복 실행 방지
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="TelegramBot")
         self.thread.start()
@@ -402,12 +413,11 @@ class TelegramCommander:
                 rsi = row.get('RSI', 0)
                 
                 close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
-                change_icon = "🔺" if change > 0 else ("🔻" if change < 0 else "➖")
                 rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
                 
-                msg += f"• {name} ({ticker})\n  {close_str} ({change_icon}{change:+.2f}%) {rsi_str}\n\n"
+                msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}\n\n"
                 
-            msg += "💡 상세 분석을 원하시면 '/analyze 종목명'을 입력하세요."
+            msg += "💡 상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(msg.strip())
             
         except Exception as e:
@@ -458,18 +468,18 @@ class TelegramCommander:
             "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
             "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
-            "• /market [그룹] : 주요 지수 현황 (k/u/t/c/f/i/b/g)\n"
+            "• /market [그룹] : 지수 현황 (k/u/t/c/f/i/b/g)\n"
             "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
             "• /signal <종목> : 종목 기술적 분석 및 진단\n"
-            "• /analyze <종목> : AI 종목 기술적 분석 및 심층 진단\n"
+            "• /analyze <종목> : AI 종목 기술적 분석\n"
             "• /ask <질문> : AI에게 주식/경제 관련 자유 질문\n"
-            "• /chart [기간] <종목> : 차트 이미지 전송 (d/h/m)\n"
+            "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
             "• /balance : 계좌 자산 및 예수금 조회\n"
-            "• /holdings : 현재 보유 종목 및 수익률 조회\n"
-            "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행\n"
-            "• /curate : 실시간 시장 주도주 AI 추천 (관심종목 발굴)\n"
-            "• /scan [조건] : 트레이딩뷰 시장 스캔 (k/u | t/m/b/v/u/d)\n"
-            "  └ k:국내, u:미국 | t:눌림목, m:모멘텀, b:반등, v:거래량, u:급상승, d:급하락"
+            "• /holdings : 보유 종목 및 수익률 조회\n"
+            "• /portfolio : AI 포트폴리오 리스크 진단\n"
+            "• /curate : 실시간 시장 주도주 AI 추천\n"
+            "• /scan [조건] : TV 스캔 (k/u & t/m/b/v/u/d)"
+
         )
 
     def _cmd_report(self, args):
