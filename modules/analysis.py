@@ -721,8 +721,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     macd_desc = "추세 확인"
     if macd_val is not None and sig_val is not None:
         m_color = "[red]" if macd_val >= sig_val else "[blue]"
-        macd_str = f"{m_color}{macd_val:.2f}[/] / {sig_val:.2f}"
-        macd_desc = "골든크로스 (매수 우위)" if macd_val >= sig_val else "데드크로스 (매도 우위)"
+        macd_str = f"{m_color}{macd_val:+.2f}[/]"
+        
+        cross_desc = "골든 (매수 우위)" if macd_val >= sig_val else "데드 (매도 우위)"
+        phase_desc = "상승 국면" if macd_val > 0 else "하락 국면"
+        macd_desc = f"{cross_desc} / {phase_desc}"
+        
+        # 시그널 값도 참고용으로 작게 표시
+        macd_str += f" [dim](Sig: {sig_val:+.2f})[/dim]"
             
     table_tech.add_row("MACD (12/26/9)", macd_str, macd_desc)
 

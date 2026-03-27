@@ -1201,6 +1201,7 @@ def _run_tradingview_screener():
     try:
         from tradingview_screener import Query, Column
         import api
+        import pandas as pd
     except ImportError:
         config.console.print("\n[red]※ tradingview-screener 라이브러리가 설치되지 않았습니다.[/red]")
         config.console.print("[dim]명령어: pip install tradingview-screener[/dim]")
@@ -1239,7 +1240,9 @@ def _run_tradingview_screener():
         ) as progress:
             progress.add_task(f"[cyan]TradingView 스크리너로 종목을 검색 중입니다... ({market_display})[/cyan]", total=None)
             
-            query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
+            # [수정] 조회할 컬럼 추가 (52주 고점 제거)
+            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume']
+            query = Query().set_markets(market).select(*select_cols)
 
             if preset_choice == "1":
                 query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
@@ -1271,13 +1274,18 @@ def _run_tradingview_screener():
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
                 return
                 
+            # [수정] 컬럼 순서 및 내용 재구성 (52주 고점 대비 제거, 이름 변경)
             table = Table(title="TradingView 스크리너 검색 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             table.add_column("티커/코드", justify="left", style="cyan")
             table.add_column("종목명", justify="left")
             table.add_column("현재가", justify="right")
             table.add_column("등락률", justify="right")
-            table.add_column("거래량", justify="right")
+            table.add_column("SMA20", justify="right")
+            table.add_column("MACD (Sig)", justify="right")
             table.add_column("RSI", justify="right")
+            table.add_column("ADX", justify="right")
+            table.add_column("거래량", justify="right")
+            table.add_column("평균거래량", justify="right")
             
             for idx, row in df.iterrows():
                 ticker = str(row.get('name', '')).strip()
@@ -1286,29 +1294,82 @@ def _run_tradingview_screener():
                 # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
                 if market == "korea":
                     kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
+                    if ticker is None: continue
                     if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
                         try:
                             res = api.get_current_price_data(ticker, is_overseas=False)
                             if res and res.get('rt_cd') == '0':
                                 out = res.get('output', {})
-                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
+                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name')
                                 if fetched_name: kor_name = fetched_name
                         except Exception:
                             pass
+
                     if kor_name: name = kor_name
-                    
+
+                # [수정] 모든 데이터 가져오기
                 close = row.get('close', 0)
                 change = row.get('change', 0)
                 volume = row.get('volume', 0)
                 rsi = row.get('RSI', 0)
+                sma20 = row.get('SMA20', 0)
+                macd = row.get('MACD.macd', 0)
+                macd_signal = row.get('MACD.signal', 0)
+                adx = row.get('ADX', 0)
+                average_volume = row.get('average_volume', 0)
                 
-                close_str = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
+                # --- Formatting and Color Rules ---
+                
+                # 현재가
+                close_str_raw = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
+                c_color = "[red]" if close > sma20 else "[blue]"
+                close_str = f"{c_color}{close_str_raw}[/]"
+
+                # 등락률
                 change_color = "[red]" if change > 0 else ("[blue]" if change < 0 else "[white]")
                 change_str = f"{change_color}{change:+.2f}%[/]"
-                vol_str = f"{volume:,.0f}"
+
+                # SMA20
+                sma20_str = f"{sma20:,.2f}" if market == "america" else f"{int(sma20):,}"
+
+                # MACD
+                macd_str = f"{macd:+.2f}" if pd.notna(macd) else "-"
+                if pd.notna(macd) and pd.notna(macd_signal):
+                    m_color = "red" if macd > macd_signal else "blue"
+                    macd_str = f"[{m_color}]{macd:+.2f}[/] [dim]({macd_signal:+.2f})[/dim]"
+
+                # RSI
                 rsi_str = f"{rsi:.1f}" if pd.notna(rsi) else "-"
+                if pd.notna(rsi):
+                    if rsi > 70: rsi_str = f"[magenta]{rsi_str}[/]"
+                    elif 50 <= rsi <= 70: rsi_str = f"[red]{rsi_str}[/]"
+                    elif 30 <= rsi < 50: rsi_str = f"[orange3]{rsi_str}[/]"
+                    elif rsi < 30: rsi_str = f"[blue]{rsi_str}[/]"
+
+                # ADX
+                adx_str = f"{adx:.1f}" if pd.notna(adx) else "-"
+                if pd.notna(adx):
+                    if adx > 40: adx_str = f"[magenta]{adx_str}[/]"
+                    elif adx >= 30: adx_str = f"[red]{adx_str}[/]"
+                    elif adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
+
+                # 거래량
+                vol_k = volume / 1000
+                vol_str = f"{vol_k:,.0f}K"
+                if volume > average_volume:
+                    vol_str = f"[red]{vol_str}[/]"
+                else:
+                    vol_str = f"[blue]{vol_str}[/]"
                 
-                table.add_row(ticker, name, close_str, change_str, vol_str, rsi_str)
+                # 평균거래량
+                avg_vol_k = average_volume / 1000
+                avg_vol_str = f"{avg_vol_k:,.0f}K"
+
+                # [수정] 단일 행으로 모든 데이터 추가
+                table.add_row(
+                    ticker, name, close_str, change_str, sma20_str,
+                    macd_str, rsi_str, adx_str, vol_str, avg_vol_str
+                )
             
         config.console.print()
         config.console.print(table)
