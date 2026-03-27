@@ -320,7 +320,7 @@ class TelegramCommander:
         preset = "Pullback"
         
         if args:
-            # New logic for single-letter options
+            # [수정] /scan km, /scan k m 형태 모두 지원
             arg_str = "".join(args).lower()
             
             # Market check: 'u' for US, 'k' for Korea (default)
@@ -332,8 +332,8 @@ class TelegramCommander:
 
             # Preset check
             preset_map = {
-                't': "Pullback", 'm': "Momentum", 'b': "Rebound",
-                'v': "Volume", 'd': "TopLosers"
+                'p': "Pullback", 'm': "Momentum", 'r': "Rebound",
+                'v': "Volume", 'g': "TopGainers", 'l': "TopLosers"
             }
             
             found_preset = False
@@ -342,10 +342,6 @@ class TelegramCommander:
                     preset = p_val
                     found_preset = True
                     break
-            
-            # If no other preset is found, check for 'u' as a preset
-            if not found_preset and 'u' in arg_str:
-                preset = "TopGainers"
 
         try:
             query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
