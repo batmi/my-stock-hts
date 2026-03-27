@@ -1307,16 +1307,21 @@ def _run_tradingview_screener():
 
                     if kor_name: name = kor_name
 
-                # [수정] 모든 데이터 가져오기
+                # [수정] 모든 데이터 가져오기 (NaN 값 안전하게 처리)
                 close = row.get('close', 0)
+                close = close if pd.notna(close) else 0
                 change = row.get('change', 0)
+                change = change if pd.notna(change) else 0
                 volume = row.get('volume', 0)
-                rsi = row.get('RSI', 0)
+                volume = volume if pd.notna(volume) else 0
+                rsi = row.get('RSI', None)
                 sma20 = row.get('SMA20', 0)
-                macd = row.get('MACD.macd', 0)
-                macd_signal = row.get('MACD.signal', 0)
-                adx = row.get('ADX', 0)
+                sma20 = sma20 if pd.notna(sma20) else 0
+                macd = row.get('MACD.macd', None)
+                macd_signal = row.get('MACD.signal', None)
+                adx = row.get('ADX', None)
                 average_volume = row.get('average_volume', 0)
+                average_volume = average_volume if pd.notna(average_volume) else 0
                 
                 # --- Formatting and Color Rules ---
                 
