@@ -416,47 +416,33 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             # 1. Gemini API 설정
             genai.configure(api_key=config.GEMINI_API_KEY)
 
-            max_retries = 2
-            for attempt in range(max_retries):
+            try:
+                model = genai.GenerativeModel(
+                    model_name=config.GEMINI_MODEL,
+                    generation_config={
+                        "temperature": 0.2,
+                        "top_p": 0.95,
+                        "max_output_tokens": 8192,
+                    }
+                )
+                
+                logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 호출 대기 시작")
+                
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(model.generate_content, prompt)
                 try:
-                    if attempt > 0:
-                        progress.update(task_ai, description=f"[cyan]Google 서버 응답 지연. 재요청 중... ({attempt+1}/{max_retries})[/cyan]")
-
-                    model = genai.GenerativeModel(
-                        model_name=config.GEMINI_MODEL,
-                        generation_config={
-                            "temperature": 0.2,
-                            "top_p": 0.95,
-                            "max_output_tokens": 8192,
-                        }
-                    )
-                    
-                    logger.debug(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
-                    
-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                    future = executor.submit(model.generate_content, prompt)
-                    try:
-                        response = future.result(timeout=90.0)
-                        executor.shutdown(wait=False)
-                    except concurrent.futures.TimeoutError:
-                        executor.shutdown(wait=False)
-                        raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
-                            
-                    logger.debug(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
-                    if response and response.text:
-                        return response.text
-                    break
-                except Exception as e:
-                    err_str = str(e)
-                    logger.warning(f"[GEMINI_AI_DEBUG] 테마 분석 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                    if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]):
-                        if attempt < max_retries - 1:
-                            wait_time = 3
-                            progress.update(task_ai, description=f"[yellow]서버 지연 감지. {wait_time}초 후 재시도...[/yellow]")
-                            time.sleep(wait_time)
-                            continue
-                    raise e
-            
+                    response = future.result(timeout=90.0)
+                    executor.shutdown(wait=False)
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)
+                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
+                        
+                logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
+                if response and response.text:
+                    return response.text
+            except Exception as e:
+                raise e
+                
             return "검색 결과가 없거나 응답을 생성하지 못했습니다."
 
     except KeyboardInterrupt:
@@ -511,33 +497,23 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(
-                    model_name=config.GEMINI_MODEL,
-                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-                )
-                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
+        
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                        
-                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
-                return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
         logger.error(f"[GEMINI_AI_DEBUG] Gemini Stock Analyze Error: {e}", exc_info=True)
         error_msg = str(e)
@@ -595,33 +571,23 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(
-                    model_name=config.GEMINI_MODEL,
-                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-                )
-                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 호출 대기 시작")
+        
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                        
-                logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
-                return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
         logger.error(f"Gemini Backtest Evaluate Error: {e}")
         error_msg = str(e)
@@ -663,26 +629,18 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                return res.text if res and res.text else None
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] 매매 복기 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else None
     except Exception as e:
         logger.error(f"Trading autopsy AI error: {e}")
         err_str = str(e)
@@ -720,26 +678,18 @@ def generate_portfolio_diagnosis(portfolio_str):
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                return res.text if res and res.text else None
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
+        logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 호출 대기 시작")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else None
     except Exception as e:
         logger.error(f"Portfolio diagnosis AI error: {e}")
         err_str = str(e)
@@ -788,33 +738,23 @@ def generate_morning_briefing(market_data_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(
-                    model_name=config.GEMINI_MODEL,
-                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-                )
-                logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
+        
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                        
-                logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
-                return res.text if res and res.text else None
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] 장전 브리핑 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else None
     except Exception as e:
         logger.error(f"Gemini Morning Briefing Error: {e}")
         return None
@@ -847,26 +787,18 @@ def generate_stock_curation():
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3})
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    res = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                return res.text if res and res.text else None
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] 큐레이션 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3})
+        logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else None
     except Exception as e:
         logger.error(f"Stock curation AI error: {e}")
         err_str = str(e)
@@ -896,35 +828,24 @@ def ask_gemini(question):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                model = genai.GenerativeModel(
-                    model_name=config.GEMINI_MODEL,
-                    generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-                )
-                logger.debug(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} - API 호출 대기 시작")
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
+        
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            response = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
-                try:
-                    response = future.result(timeout=60.0)
-                    executor.shutdown(wait=False)
-                except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                        
-                logger.debug(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} - API 응답 수신 성공")
-                if response and response.text:
-                    return response.text
-                break
-            except Exception as e:
-                err_str = str(e)
-                logger.warning(f"[GEMINI_AI_DEBUG] Q&A 시도 {attempt+1}/{max_retries} 실패: {err_str}")
-                if any(c in err_str.lower() for c in ["500", "503", "504", "deadline", "timeout"]) and attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                raise e
+        logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 응답 수신 성공")
+        if response and response.text:
+            return response.text
         return "검색 결과가 없거나 답변을 생성하지 못했습니다."
 
     except Exception as e:

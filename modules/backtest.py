@@ -215,6 +215,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     ts_highest_price = 0
     half_tp_executed = False # [추가] 백테스트용 반익절 추적 변수
     prev_row = prev_row_init
+    last_valid_price = 0 # [추가] 마지막 유효 가격 추적용
     
     # [추가] 52주 고점/저점 및 위치 사전 계산 (벡터화 처리)
     sim_df['roll_high_250'] = sim_df['high'].rolling(250, min_periods=1).max()
@@ -242,6 +243,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         if pd.isna(price) or price <= 0:
             prev_row = row
             continue
+            
+        last_valid_price = price # [추가] 정상적인 가격일 경우에만 업데이트
 
         # [추가] 체결 노이즈: 1% 확률로 매매 기회 놓침 (체결 누락/지연 시뮬레이션)
         if execution_noise and random.random() < 0.01:
@@ -479,7 +482,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         
         prev_row = row
 
-    final_asset = balance + (holdings * sim_df.iloc[-1]['close'])
+    # [수정] 마지막 행이 NaN일 수 있으므로 기록해둔 마지막 유효 가격(last_valid_price) 사용
+    final_asset = balance + (holdings * last_valid_price)
     total_return = (final_asset - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
     
     return {
@@ -1035,7 +1039,6 @@ def run_backtest():
         if weights:
              msg += f"\n - 가중치: {weights['TREND']}/{weights['MOMENTUM']}/{weights['STRENGTH']}/{weights['SYNERGY']}"
         msg += "[/dim]"
-        config.console.print(msg)
     else:
         msg = f"\n[dim]기본 설정으로 진행합니다.\n"
         msg += f" - 기간: {days}일\n"
@@ -1048,7 +1051,6 @@ def run_backtest():
         if weights:
              msg += f"\n - 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
         msg += "[/dim]"
-        config.console.print(msg)
     
     # [수정] 초기 자본금 및 환율 설정
     initial_capital_krw = 10_000_000
@@ -1064,7 +1066,7 @@ def run_backtest():
 
     # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
     mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim")]
-    mode_choice = utils.show_menu("실행 모드를 선택하세요", mode_items, default_choice="1")
+    mode_choice = utils.show_menu("실행 모드를 선택하세요", mode_items, default_choice="1", text_before=msg)
 
     if mode_choice.lower() == 'q': return
     mode_map_dict = dict((k, v) for k, v, _ in mode_items)
