@@ -1221,8 +1221,8 @@ def _run_tradingview_screener():
         ("2", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
         ("3", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
         ("4", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
-        ("5", f"당일 급상승 상위 20종목 ({vol_cond_str})", "Top Gainers"),
-        ("6", f"당일 급하락 상위 20종목 ({vol_cond_str})", "Top Losers")
+        ("5", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
+        ("6", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="1")
     if preset_choice.lower() == 'q': return
@@ -1260,7 +1260,10 @@ def _run_tradingview_screener():
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                 
-            query = query.limit(20)
+            if preset_choice in ["5", "6"]:
+                query = query.limit(15)
+            else:
+                query = query.limit(20)
             
             count, df = query.get_scanner_data()
             

@@ -309,20 +309,32 @@ class TelegramCommander:
         preset = "Pullback"
         
         if args:
-            arg_str = " ".join(args).lower()
-            if "미국" in arg_str or "us" in arg_str:
+            # New logic for single-letter options
+            arg_str = "".join(args).lower()
+            
+            # Market check: 'u' for US, 'k' for Korea (default)
+            # If 'k' is present, it forces Korea even if 'u' is also there.
+            if 'k' in arg_str:
+                market = "korea"
+            elif 'u' in arg_str:
                 market = "america"
-                
-            if "급상승" in arg_str:
+
+            # Preset check
+            preset_map = {
+                't': "Pullback", 'm': "Momentum", 'b': "Rebound",
+                'v': "Volume", 'd': "TopLosers"
+            }
+            
+            found_preset = False
+            for p_key, p_val in preset_map.items():
+                if p_key in arg_str:
+                    preset = p_val
+                    found_preset = True
+                    break
+            
+            # If no other preset is found, check for 'u' as a preset
+            if not found_preset and 'u' in arg_str:
                 preset = "TopGainers"
-            elif "급하락" in arg_str:
-                preset = "TopLosers"
-            elif "모멘텀" in arg_str or "급등" in arg_str:
-                preset = "Momentum"
-            elif "바닥" in arg_str or "반등" in arg_str:
-                preset = "Rebound"
-            elif "거래량" in arg_str:
-                preset = "Volume"
 
         try:
             query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
@@ -342,19 +354,23 @@ class TelegramCommander:
             elif preset == "TopGainers":
                 if market == "america":
                     query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
-                    desc = "당일 급상승 상위 20종목 (거래량 10만, 1달러 이상)"
+                    desc = "당일 급상승 상위 15종목 (거래량 10만, 1달러 이상)"
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-                    desc = "당일 급상승 상위 20종목 (거래량 10만 이상)"
+                    desc = "당일 급상승 상위 15종목 (거래량 10만 이상)"
             elif preset == "TopLosers":
                 if market == "america":
                     query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
-                    desc = "당일 급하락 상위 20종목 (거래량 10만, 1달러 이상)"
+                    desc = "당일 급하락 상위 15종목 (거래량 10만, 1달러 이상)"
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
-                    desc = "당일 급하락 상위 20종목 (거래량 10만 이상)"
+                    desc = "당일 급하락 상위 15종목 (거래량 10만 이상)"
+            
+            if preset in ["TopGainers", "TopLosers"]:
+                query = query.limit(15)
+            else:
+                query = query.limit(20)
                 
-            query = query.limit(20)
             count, df = query.get_scanner_data()
             
             if df is None or df.empty:
@@ -451,8 +467,9 @@ class TelegramCommander:
             "• /balance : 계좌 자산 및 예수금 조회\n"
             "• /holdings : 현재 보유 종목 및 수익률 조회\n"
             "• /portfolio : 현재 AI 포트폴리오 리스크 진단 수행\n"
-            "• /curate : 실시간 시장 주도주 AI 추천 (관심종목 발굴)"
-            "• /scan [조건] : 트레이딩뷰 시장 스캔 (예: /scan 미국 모멘텀)"
+            "• /curate : 실시간 시장 주도주 AI 추천 (관심종목 발굴)\n"
+            "• /scan [조건] : 트레이딩뷰 시장 스캔 (k/u | t/m/b/v/u/d)\n"
+            "  └ k:국내, u:미국 | t:눌림목, m:모멘텀, b:반등, v:거래량, u:급상승, d:급하락"
         )
 
     def _cmd_report(self, args):
