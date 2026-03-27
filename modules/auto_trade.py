@@ -4388,17 +4388,11 @@ class AutoTrader:
             if code in restricted_stocks or code in holding_codes or self.order_manager.is_pending(code):
                 continue
             
-            # 시장 필터링 적용 시 하락장 종목 제외 (API 호출 절약)
-            if getattr(config, 'USE_MARKET_FILTER', True):
-                market_type = self._get_stock_market_type(code)
-                market_stat = self.market_index_status.get(market_type)
-                if market_stat and isinstance(market_stat, dict):
-                    if not market_stat.get('is_healthy', True):
-                        continue
-            
             codes_to_prefetch.append(code)
             
         if codes_to_prefetch:
+            # [수정] 시장 구분(_get_stock_market_type)에 필요한 현재가 정보를 먼저 일괄 prefetch 합니다.
+            # 이렇게 하면 _analyze_candidate_worker 내부에서 개별 API 호출을 방지할 수 있습니다.
             api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False)
 
         # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
