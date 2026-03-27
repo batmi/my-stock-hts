@@ -478,7 +478,7 @@ class TelegramCommander:
             "• /holdings : 보유 종목 및 수익률 조회\n"
             "• /portfolio : AI 포트폴리오 리스크 진단\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
-            "• /scan [조건] : TV 스캔 (k/u & t/m/b/v/u/d)"
+            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)"
 
         )
 
@@ -854,9 +854,13 @@ class TelegramCommander:
             
             if total_invested > 0:
                 alpha = strategy_roi - kospi_rate
-                msg += f"시장 대비 초과 수익: {alpha:+.2f}%\n"
+                # [수정] 초과/부진 여부를 명시적으로 표시하여 가독성 향상
+                if alpha > 0:
+                    msg += f"시장 대비 초과 수익 (Outperform): +{alpha:.2f}%\n"
+                else:
+                    msg += f"시장 대비 성과 (Underperform): {alpha:.2f}%\n"
             else:
-                msg += "시장 대비 초과 수익: -\n"
+                msg += "시장 대비 성과: -\n"
                 
             msg += "\n[매매 요약]\n"
             msg += f"총 매입금액: {int(total_buy_amt_for_sell):,}원\n"

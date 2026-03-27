@@ -3170,11 +3170,16 @@ class AutoTrader:
             kospi_rate = stats.get('kospi_rate', 0.0)
             k_color = "[red]" if kospi_rate > 0 else ("[blue]" if kospi_rate < 0 else "[white]")
             market_perf_str = f"코스피 지수: {k_color}{kospi_rate:+.2f}%[/]"
-            
+
             if total_invested > 0:
                 alpha = strategy_roi - kospi_rate
                 a_color = "[red]" if alpha > 0 else ("[blue]" if alpha < 0 else "[white]")
-                market_perf_str += f" / 시장 대비 초과 수익: {a_color}{alpha:+.2f}%[/]"
+                # [수정] 가독성 향상을 위해 초과/부진 여부 명시
+                if alpha > 0:
+                    alpha_label = "시장 대비 초과 수익 (Outperform)"
+                else:
+                    alpha_label = "시장 대비 성과 (Underperform)"
+                market_perf_str += f" / {alpha_label}: {a_color}{alpha:+.2f}%[/]"
             summary_table.add_row("시장 대비 성과", market_perf_str)
         
         if holdings_summary:
