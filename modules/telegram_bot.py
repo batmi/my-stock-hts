@@ -61,6 +61,7 @@ class TelegramCommander:
             "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
             "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
             "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
+            "/memo": self._cmd_memo, # [추가] 종목 메모 관리
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
             "/restrict": self._cmd_restricted
@@ -474,7 +475,8 @@ class TelegramCommander:
             "• /holdings : 보유 종목 및 수익률 조회\n"
             "• /portfolio : AI 포트폴리오 리스크 진단\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
-            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)"
+            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)\n"
+            "• /memo [a/d/종목] : 종목 메모 조회/추가/삭제"
 
         )
 
@@ -576,6 +578,63 @@ class TelegramCommander:
             return f"🤖 [AI 종목 심층 진단] {name}({code})\n\n{answer}"
         except Exception as e:
             return f"⚠️ 진단 중 오류 발생: {e}"
+
+    def _cmd_memo(self, args):
+        """종목 메모 관리 (조회, 추가, 삭제)"""
+        if not args:
+            # 전체 메모 요약 조회
+            memos = utils.get_all_stock_memos()
+            if not memos: return "📭 저장된 종목 메모가 없습니다."
+            
+            grouped_memos = {}
+            for m in memos:
+                if m['code'] not in grouped_memos:
+                    grouped_memos[m['code']] = {'name': m['name'], 'count': 0, 'latest': m['memo'], 'date': m['updated_at']}
+                grouped_memos[m['code']]['count'] += 1
+                
+            msg = "📋 [전체 종목 메모 현황]\n\n"
+            for code, data in grouped_memos.items():
+                msg += f"• {data['name']}({code}) : {data['count']}건\n"
+            msg += "\n상세조회 : /memo [종목명]\n추가 : /memo a [종목] [내용]"
+            return msg
+            
+        subcmd = args[0].lower()
+        
+        if subcmd == "a":
+            if len(args) < 3: return "⚠️ 사용법: /memo a [종목명/코드] [메모 내용...]"
+            code, name, _ = self._resolve_stock(args[1])
+            if not code: return f"⚠️ '{args[1]}' 종목을 찾을 수 없습니다."
+            memo_text = " ".join(args[2:])
+            if utils.add_stock_memo(code, name, memo_text):
+                return f"✅ '{name}' 종목에 메모가 추가되었습니다."
+            return "⚠️ 메모 추가에 실패했습니다."
+            
+        elif subcmd == "d":
+            if len(args) < 2: return "⚠️ 사용법: /memo d [메모ID 또는 종목명]"
+            target = args[1]
+            if target.isdigit():
+                if utils.delete_stock_memo_by_id(int(target)):
+                    return f"🗑 메모(ID: {target})가 삭제되었습니다."
+                return "⚠️ 메모 삭제 실패. (존재하지 않는 ID)"
+            else:
+                code, name, _ = self._resolve_stock(" ".join(args[1:]))
+                if not code: return f"⚠️ '{target}' 종목을 찾을 수 없습니다."
+                utils.delete_all_stock_memos(code)
+                return f"🗑 '{name}' 종목에 작성된 모든 메모가 삭제되었습니다."
+                
+        else:
+            # 특정 종목 상세 조회
+            keyword = " ".join(args)
+            code, name, _ = self._resolve_stock(keyword)
+            if not code: return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
+            memos = utils.get_stock_memos(code)
+            if not memos: return f"📭 '{name}' 종목에 저장된 메모가 없습니다."
+            
+            msg = f"📝 [{name} ({code}) 메모 현황]\n\n"
+            for m in memos:
+                msg += f"ID: {m['id']} | {m['updated_at']}\n{m['memo']}\n\n"
+            msg += "메모 삭제 : /memo d [ID]"
+            return msg.strip()
 
     def _cmd_ask(self, args):
         if not args:
