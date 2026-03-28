@@ -78,49 +78,12 @@ def view_system_config():
     table.add_column("변수명 (Config Name)", justify="left", style="dim")
     table.add_column("설정값 (Value)", justify="right", style="cyan")
 
-    # 1. 시스템 트레이딩 일반
-    table.add_row("[bold]1. 트레이딩 일반[/]", "", "")
-    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0920')}")
-    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1510')}")
-    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
-    
-    table.add_section()
-    
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
-    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
-    
-    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
-    slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
-    table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
-    
-    table.add_section()
-    
-    table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
-    if getattr(config, 'USE_VOLATILITY_TARGETING', True):
-        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
-        table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config, 'VOLATILITY_SCALING_MIN', 0.3)} ~ {getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)}")
-    
-    table.add_section()
-    
-    table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
-    table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
-    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
-    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
-    table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config, 'CHART_CACHE_TTL_MINUTES', 180)}")
-    
-    table.add_section()
-    
-    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
-    table.add_row("시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
-    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
-    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
-    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
-    
-    table.add_section()
-
-    # 2. 매수/분석 임계값
+    # =========================================================
+    # 1. 매수 및 매도 전략 설정
+    # =========================================================
+    table.add_row("[bold]1. 매수 및 매도 전략 설정[/]", "", "")
+    table.add_row("[bold dim]  1-1. 매수/분석 임계값[/]", "", "")
     thresholds = config.ANALYSIS_THRESHOLDS
-    table.add_row("[bold]2. 매수/분석[/]", "", "")
     table.add_row("매수 기준 점수\n[dim]진입 임계값 (종합 점수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_SCORE']", f"{thresholds.get('BUY_SCORE')}")
     table.add_row("상승 추세 점수\n[dim]관망/상승 판단 기준[/dim]", "ANALYSIS_THRESHOLDS['RISE_SCORE']", f"{thresholds.get('RISE_SCORE')}")
     table.add_row("매수 허용 RSI 상한\n[dim]과열 방지 (이 값보다 낮아야 매수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_RSI_MAX']", f"{thresholds.get('BUY_RSI_MAX')}")
@@ -143,9 +106,8 @@ def view_system_config():
     
     table.add_section()
 
-    # 3. 매도 전략
+    table.add_row("[bold dim]  1-2. 매도/청산 전략[/]", "", "")
     sell = config.SELL_STRATEGY
-    table.add_row("[bold]3. 매도 전략[/]", "", "")
     table.add_row("익절 수익률\n[dim]목표 수익 달성 시 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RATE']", f"{sell.get('TAKE_PROFIT_RATE')}%")
     table.add_row("반익절 사용\n[dim]익절 수익률의 절반 도달 시 50% 선매도[/dim]", "SELL_STRATEGY['HALF_TAKE_PROFIT_USE']", f"{sell.get('HALF_TAKE_PROFIT_USE', True)}")
     table.add_row("시간 청산 사용\n[dim]장기 횡보 종목 강제 매도[/dim]", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}")
@@ -161,20 +123,21 @@ def view_system_config():
 
     table.add_section()
 
-    # 4. 스코어링 가중치
+    # =========================================================
+    # 2. 스코어링 및 시장 국면 설정
+    # =========================================================
+    table.add_row("[bold]2. 스코어링 및 시장 국면 설정[/]", "", "")
     weights = config.SCORING_WEIGHTS
     total_score = sum(weights.values())
-    table.add_row(f"[bold]4. 스코어링 가중치 (총점: {total_score:.1f})[/]", "", "")
+    table.add_row(f"[bold dim]  2-1. 스코어링 가중치 (총점: {total_score:.1f})[/]", "", "")
     table.add_row("추세 팩터\n[dim]이평선, MACD, SAR[/dim]", "SCORING_WEIGHTS['TREND']", f"{weights.get('TREND')}")
     table.add_row("모멘텀 팩터\n[dim]RSI, CCI[/dim]", "SCORING_WEIGHTS['MOMENTUM']", f"{weights.get('MOMENTUM')}")
     table.add_row("강도/수급 팩터\n[dim]ADX, OBV[/dim]", "SCORING_WEIGHTS['STRENGTH']", f"{weights.get('STRENGTH')}")
     table.add_row("시너지 가산점\n[dim]지표 동조화 보너스[/dim]", "SCORING_WEIGHTS['SYNERGY']", f"{weights.get('SYNERGY')}")
 
     table.add_section()
-
-    # 5. 적응형 임계값
+    table.add_row("[bold dim]  2-2. 적응형 임계값 (시장국면)[/]", "", "")
     regime = config.MARKET_REGIME_PARAMS
-    table.add_row("[bold]5. 적응형 임계값[/]", "", "")
     table.add_row("사용 여부\n[dim]시장 국면 반영[/dim]", "MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD']", f"{regime.get('USE_ADAPTIVE_THRESHOLD')}")
     table.add_row("강세장 보정\n[dim]기준 점수 완화값[/dim]", "MARKET_REGIME_PARAMS['BULL_SCORE_ADJ']", f"{regime.get('BULL_SCORE_ADJ')}")
     table.add_row("약세장 보정\n[dim]기준 점수 강화값[/dim]", "MARKET_REGIME_PARAMS['BEAR_SCORE_ADJ']", f"{regime.get('BEAR_SCORE_ADJ')}")
@@ -184,9 +147,35 @@ def view_system_config():
 
     table.add_section()
 
-    # 6. 기술적 지표
+    # =========================================================
+    # 3. 리스크 및 자산 배분 설정
+    # =========================================================
+    table.add_row("[bold]3. 리스크 및 자산 배분 설정[/]", "", "")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
+    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
+    
+    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+    slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
+    table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
+    
+    table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
+    if getattr(config, 'USE_VOLATILITY_TARGETING', True):
+        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
+        table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)} ~ {getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)}")
+        
+    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
+    table.add_row("시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
+    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
+    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
+    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
+
+    table.add_section()
+
+    # =========================================================
+    # 4. 기술적 지표 파라미터
+    # =========================================================
     ind = config.INDICATOR_PARAMS
-    table.add_row("[bold]6. 기술적 지표[/]", "", "")
+    table.add_row("[bold]4. 기술적 지표 파라미터[/]", "", "")
     table.add_row("데이터 조회 기간\n[dim]일봉 데이터 조회 범위[/dim]", "INDICATOR_PARAMS['CHART_LOOKBACK_DAYS']", f"{ind.get('CHART_LOOKBACK_DAYS')}일")
     table.add_row("SAR (Start/Step/Max)\n[dim]파라볼릭 SAR 가속변수[/dim]", "INDICATOR_PARAMS['SAR_AF_START', 'SAR_AF_STEP', 'SAR_AF_MAX']", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
     table.add_row("RSI (Period/Signal)\n[dim]상대강도지수 기간[/dim]", "INDICATOR_PARAMS['RSI_PERIOD', 'RSI_SIGNAL']", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
@@ -199,8 +188,22 @@ def view_system_config():
 
     table.add_section()
 
-    # 7. 텔레그램
-    table.add_row("[bold]7. 텔레그램[/]", "", "")
+    # =========================================================
+    # 5. 환경 및 시스템 설정
+    # =========================================================
+    table.add_row("[bold]5. 환경 및 시스템 설정[/]", "", "")
+    table.add_row("[bold dim]  5-1. 트레이딩 시간 및 주기[/]", "", "")
+    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0920')}")
+    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1510')}")
+    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
+    table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
+    table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
+    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
+    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
+    table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config, 'CHART_CACHE_TTL_MINUTES', 180)}")
+    
+    table.add_section()
+    table.add_row("[bold dim]  5-2. 텔레그램 및 AI 브리핑[/]", "", "")
     table.add_row("사용 여부\n[dim]알림 기능 활성화 여부[/dim]", "ENABLE_TELEGRAM", f"{getattr(config, 'ENABLE_TELEGRAM', True)}")
     table.add_row("인스턴스 이름\n[dim]알림 메시지 머리말[/dim]", "TELEGRAM_INSTANCE_NAME", f"{getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
     table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
@@ -208,9 +211,7 @@ def view_system_config():
     table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
 
     table.add_section()
-
-    # 8. 화면 및 로그 설정
-    table.add_row("[bold]8. 화면 및 로그 설정[/]", "", "")
+    table.add_row("[bold dim]  5-3. 화면 및 로그 설정[/]", "", "")
     table.add_row("화면 자동 지우기\n[dim]메뉴 이동 시 터미널 클리어[/dim]", "CLEAR_SCREEN_ON_MENU", f"{getattr(config, 'CLEAR_SCREEN_ON_MENU', False)}")
     table.add_row("화면 로그 레벨\n[dim]터미널 디버그 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
     table.add_row("파일 로그 레벨\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
@@ -615,16 +616,10 @@ def _validate_time_format(val):
             return True
     return False
 
-def modify_system_trading_general():
+def modify_risk_portfolio_settings():
+    """리스크 관리 및 자산 배분 설정 분리"""
     def get_items():
         items = [
-            {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
-            {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
-            {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
-
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
@@ -648,17 +643,6 @@ def modify_system_trading_general():
             ])
             
         items.extend([
-            {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
-            {"desc": "대기 모드 주기(초)", "help": "주문이 없는 평상시 체결 확인 간격", "name": "CONCLUSION_CHECK_IDLE_INTERVAL", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
-            {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
-            {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
-            {"desc": "차트 데이터 캐시(분)", "help": "일봉 메모리 캐시 유지 시간", "name": "CHART_CACHE_TTL_MINUTES", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config, 'CHART_CACHE_TTL_MINUTES', v)},
-             
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
              "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
             {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
@@ -672,7 +656,33 @@ def modify_system_trading_general():
         ])
         return items
 
-    return _edit_config_table("시스템 트레이딩 일반설정 (Trading General)", get_items)
+    return _edit_config_table("리스크 및 자산 배분 설정 (Risk & Portfolio)", get_items)
+
+def modify_trading_cycle_settings():
+    """트레이딩 시간 및 주기 설정 분리"""
+    def get_items():
+        items = [
+            {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
+            {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
+            {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
+             "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
+
+            {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
+            {"desc": "대기 모드 주기(초)", "help": "주문이 없는 평상시 체결 확인 간격", "name": "CONCLUSION_CHECK_IDLE_INTERVAL", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
+            {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
+            {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
+            {"desc": "차트 데이터 캐시(분)", "help": "일봉 메모리 캐시 유지 시간", "name": "CHART_CACHE_TTL_MINUTES", "type": "int", "section": "Execution",
+             "get": lambda: getattr(config, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config, 'CHART_CACHE_TTL_MINUTES', v)},
+        ]
+        return items
+
+    return _edit_config_table("트레이딩 시간 및 주기 (Time & Cycle)", get_items)
 
 def reset_to_default():
     console.print()
@@ -754,31 +764,61 @@ def reset_to_default():
     return True
 
 def system_config_menu():
-    menu_items = [
-        ("1", "시스템 트레이딩 일반설정", "Trading General"),
-        ("2", "매수/분석 임계값", "Analysis Thresholds"),
-        ("3", "매도 전략", "Sell Strategy"),
-        ("4", "스코어링 가중치", "Scoring Weights"),
-        ("5", "적응형 임계값", "Adaptive Thresholds"),
-        ("6", "기술적 지표 파라미터", "Indicators"),
-        ("7", "텔레그램 설정", "Telegram"),
-        ("8", "화면 및 로그 설정", "Screen & Log"),
-        ("9", "시스템 설정 조회", "View Config"),
-        ("0", "설정 초기화", "Reset to Default")
-    ]
-    choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice="9")
-    if choice.lower() == 'q': return False
-    
-    menu_map = dict((k, v) for k, v, _ in menu_items)
-    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
-    
-    if choice == "1": return modify_system_trading_general()
-    elif choice == "2": return modify_analysis_thresholds()
-    elif choice == "3": return modify_sell_strategy()
-    elif choice == "4": return modify_scoring_weights()
-    elif choice == "5": return modify_market_regime_params()
-    elif choice == "6": return modify_indicator_params()
-    elif choice == "7": return modify_telegram_settings()
-    elif choice == "8": return modify_log_settings()
-    elif choice == "9": return view_system_config()
-    elif choice == "0": return reset_to_default()
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        # 경로 누적 방지를 위해 루프 시작 시 진입 시점의 길이로 복원
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        
+        menu_items = [
+            ("1", "매수 및 매도 전략 설정", "Buy & Sell Strategy"),
+            ("2", "스코어링 및 시장 국면 설정", "Scoring & Regime"),
+            ("3", "리스크 및 자산 배분 설정", "Risk & Portfolio"),
+            ("4", "기술적 지표 파라미터", "Indicators"),
+            ("5", "환경 및 시스템 설정", "Environment & System"),
+            ("9", "시스템 설정 전체 조회", "View Config"),
+            ("0", "설정 초기화", "Reset to Default")
+        ]
+        choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice="9")
+        if choice.lower() == 'q': return False
+        
+        menu_map = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
+        
+        if choice == "1":
+            sub_items = [("1", "매수/분석 임계값", "Buy"), ("2", "매도/청산 전략", "Sell")]
+            sub_choice = utils.show_menu("매수 및 매도 전략 설정", sub_items, default_choice="q")
+            if sub_choice.lower() == 'q': continue
+            
+            sub_map = dict((k, v) for k, v, _ in sub_items)
+            context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+            
+            if sub_choice == "1": modify_analysis_thresholds()
+            elif sub_choice == "2": modify_sell_strategy()
+            
+        elif choice == "2":
+            sub_items = [("1", "스코어링 가중치 설정", "Weights"), ("2", "적응형 임계값 (시장국면) 설정", "Regime")]
+            sub_choice = utils.show_menu("스코어링 및 시장 국면 설정", sub_items, default_choice="q")
+            if sub_choice.lower() == 'q': continue
+            
+            sub_map = dict((k, v) for k, v, _ in sub_items)
+            context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+            
+            if sub_choice == "1": modify_scoring_weights()
+            elif sub_choice == "2": modify_market_regime_params()
+            
+        elif choice == "3": modify_risk_portfolio_settings()
+        elif choice == "4": modify_indicator_params()
+        elif choice == "5":
+            sub_items = [("1", "트레이딩 시간 및 주기", "Time & Cycle"), ("2", "텔레그램 및 AI 브리핑", "Telegram"), ("3", "화면 및 로그", "Log")]
+            sub_choice = utils.show_menu("환경 및 시스템 설정", sub_items, default_choice="q")
+            if sub_choice.lower() == 'q': continue
+            
+            sub_map = dict((k, v) for k, v, _ in sub_items)
+            context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+            
+            if sub_choice == "1": modify_trading_cycle_settings()
+            elif sub_choice == "2": modify_telegram_settings()
+            elif sub_choice == "3": modify_log_settings()
+            
+        elif choice == "9": view_system_config()
+        elif choice == "0": reset_to_default()
