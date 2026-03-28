@@ -31,17 +31,22 @@ def clear_market_yf_cache():
 
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
+    # 1. 국내 지수
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
+    # 2. 글로벌 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-    ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
+    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
+    # 3. 섹터 및 주요 지표
+    ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("VIX (변동성)", "^VIX"),
+    # 4. 금리 및 환율
+    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    # 5. 원자재
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
-    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"),
-    ("VIX (변동성)", "^VIX"), ("SOX (반도체)", "^SOX"),
-    ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"),
-    ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
-    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"), ("London - Samsung GDR", "SMSN.IL")
+    # 6. 암호화폐
+    ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD")
 ]
 
 # 이름 -> 티커 매핑 (기존 호환성 유지)
@@ -676,7 +681,8 @@ def _show_market_indices_core(target_indices=None):
                             i_shape = i_data.shape if not i_data.empty else "Empty"
                             config.console.print(f"[dim magenta][TRACE] RES ({group_name}) | Daily: {d_shape}, Intra: {i_shape}[/dim magenta]")
 
-                        # [추가] 받아온 데이터 파싱 후 스토리지 및 캐시 저장
+                        # [수정] 받아온 데이터 파싱 후 누락 검증 (yfinance 다중 요청 시 일부 누락 방지)
+                        success_tickers = []
                         with _MARKET_YF_CACHE_LOCK:
                             for t_fetch in tickers_to_fetch:
                                 d_df = pd.DataFrame()
@@ -685,7 +691,9 @@ def _show_market_indices_core(target_indices=None):
                                 try:
                                     if not d_data.empty:
                                         if isinstance(d_data.columns, pd.MultiIndex):
-                                            if t_fetch in d_data.columns.levels[0]: d_df = d_data[t_fetch].copy()
+                                            # levels[0] 대신 get_level_values 사용으로 안정성 확보
+                                            if t_fetch in d_data.columns.get_level_values(0): 
+                                                d_df = d_data[t_fetch].copy()
                                         elif 'Close' in d_data.columns: d_df = d_data.copy()
                                         elif 'close' in d_data.columns: d_df = d_data.copy()
                                 except: pass
@@ -693,21 +701,40 @@ def _show_market_indices_core(target_indices=None):
                                 try:
                                     if not i_data.empty:
                                         if isinstance(i_data.columns, pd.MultiIndex):
-                                            if t_fetch in i_data.columns.levels[0]: i_df = i_data[t_fetch].copy()
+                                            if t_fetch in i_data.columns.get_level_values(0): 
+                                                i_df = i_data[t_fetch].copy()
                                         elif 'Close' in i_data.columns: i_df = i_data.copy()
                                         elif 'close' in i_data.columns: i_df = i_data.copy()
                                 except: pass
                                 
-                                stored_data = {'daily': d_df, 'intra': i_df}
-                                data_storage[t_fetch] = stored_data
-                                
+                                # 유효성 검사: 모든 값이 NaN으로 돌아온 경우 캐시하지 않음
+                                is_valid = False
                                 if not d_df.empty:
-                                    _MARKET_YF_CACHE[t_fetch] = {
-                                        'data': stored_data,
-                                        'time': now,
-                                        'date': now.strftime("%Y-%m-%d")
-                                    }
-                        break
+                                    close_col = next((c for c in d_df.columns if str(c).lower() == 'close'), None)
+                                    if close_col and not d_df[close_col].dropna().empty:
+                                        is_valid = True
+
+                                if is_valid:
+                                    stored_data = {'daily': d_df, 'intra': i_df}
+                                    data_storage[t_fetch] = stored_data
+                                    success_tickers.append(t_fetch)
+                                    
+                                    if not d_df.empty:
+                                        _MARKET_YF_CACHE[t_fetch] = {
+                                            'data': stored_data,
+                                            'time': now,
+                                            'date': now.strftime("%Y-%m-%d")
+                                        }
+                                        
+                        # 누락된 티커 추출 후 재시도
+                        missing_tickers = [t for t in tickers_to_fetch if t not in success_tickers]
+                        if missing_tickers and attempt < 1:
+                            tickers_to_fetch = missing_tickers
+                            tickers_str = " ".join(tickers_to_fetch)
+                            time.sleep(0.5)
+                            continue # 다음 attempt로 즉시 이동하여 누락분만 재다운로드
+                            
+                        break # 모두 성공했거나 최대 재시도 도달 시 루프 종료
                     except KeyboardInterrupt:
                         raise # 상위 핸들러로 전파
                     except Exception as e:
@@ -768,7 +795,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "미국채 2년물 선물", "금", "달러인덱스", "VIX (변동성)", "비트코인", "Japan - 닛케이"]: 
+                if name in ["나스닥 선물", "Japan - 닛케이", "London - Samsung GDR", "달러인덱스", "미국채 2년물 선물", "금", "비트코인"]: 
                     table.add_section()
 
                 res = results_dict.get(name)

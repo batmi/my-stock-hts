@@ -855,8 +855,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # [테이블 2] 시스템 트레이딩 판단 결과
     logic_title = "시스템 트레이딩 판단 결과"
     changes_summary = None
-    if score_adj != 0:
-        logic_title += " [bold magenta](*)[/]"
         
     if rule_applied:
         # [추가] 변경된 룰 요약
@@ -1004,9 +1002,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     config.console.print(table_logic)
     
-    if score_adj != 0:
-        config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
-
     config.console.print()
 
     # [추가] 기간별 시세 30일치 출력
@@ -1014,7 +1009,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     # [추가] 개별 종목 분석 완료 후 AI 종목 심층 진단 연동
     config.console.print()
-    if Prompt.ask("🤖 AI 종목 심층 진단을 수행하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+    if Prompt.ask("🤖 AI 종목 심층 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         # 순환 참조(Circular Import) 방지를 위해 함수 내부에서 import
         from modules import theme_analysis
         from rich.markdown import Markdown
@@ -1063,16 +1058,22 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         code = item['code']
         name = item['name']
         
-        # 1. [최적화] 시장 구분 확인(선택), 차트 데이터, 체결강도 병렬(동시) 조회
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-            fut_cp = ex.submit(api.get_current_price_data, code, False) if market_filter else None
-            fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
-            fut_vol = ex.submit(api.get_realtime_vol_strength, code)
+        # 1. [최적화] 시장 구분 확인(선택), 차트 데이터, 체결강도 병렬(동시) 조회 (누락 방지 포함)
+        for attempt in range(2):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                fut_cp = ex.submit(api.get_current_price_data, code, False) if market_filter else None
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code)
+                
+                cp_data = fut_cp.result() if fut_cp else None
+                df = fut_chart.result()
+                try: vol_strength = fut_vol.result()
+                except: vol_strength = None
             
-            cp_data = fut_cp.result() if fut_cp else None
-            df = fut_chart.result()
-            try: vol_strength = fut_vol.result()
-            except: vol_strength = None
+            is_cp_valid = True if not market_filter else (cp_data and cp_data.get('rt_cd') == '0')
+            if is_cp_valid and df is not None and not df.empty:
+                break
+            time.sleep(0.5)
 
         if market_filter and cp_data:
             if cp_data.get('rt_cd') != '0': return None
@@ -1417,8 +1418,14 @@ def _analyze_stock_worker(stock, params=None):
     time.sleep(delay)
 
     try:
-        # API 호출 (api.py 내부에서 Rate Limit 처리됨)
-        df = api.get_chart_data(code, is_overseas=False)
+        # API 호출 (KIS API Rate Limit 처리 및 누락 방지 재시도)
+        df = None
+        for attempt in range(2):
+            df = api.get_chart_data(code, is_overseas=False)
+            if df is not None and not df.empty:
+                break
+            time.sleep(0.5)
+            
         if df is None or df.empty: return None
         
         current_price = float(df.iloc[-1]['close'])
@@ -1934,7 +1941,7 @@ def save_all_market_analysis():
                 analyzed_data = []
                 task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
 
-                max_w = 4 if config.session.is_simulation else 10
+                max_w = 4 if config.session.is_simulation else 5
                 
                 # 1. 기술적 분석 병렬 처리
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
@@ -2129,21 +2136,27 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         is_us_etf_context = is_overseas and ("ETF" in title)
 
         # [최적화] 필요한 다수의 API를 병렬(Fan-out)로 일제히 호출하여 체감 속도 극대화
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-            fut_curr = ex.submit(api.get_current_price_data, code, is_overseas)
-            fut_chart = ex.submit(api.get_chart_data, code, is_overseas)
-            fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
-            fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex) if not is_overseas and not use_investor_data else None
-            fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
+        # [수정] KIS API 등 동시 다발적 요청 시 발생하는 Rate Limit / Timeout 누락 방지 (재시도 로직 추가)
+        for attempt in range(2):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas)
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas)
+                fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex) if not is_overseas and not use_investor_data else None
+                fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
+                
+                curr_data = fut_curr.result()
+                chart_df = fut_chart.result()
+                inv_list = fut_inv.result() if fut_inv else None
+                rt_strength = None
+                if fut_vol:
+                    try: rt_strength = fut_vol.result()
+                    except: pass
+                detail = fut_detail.result() if fut_detail else None
             
-            curr_data = fut_curr.result()
-            chart_df = fut_chart.result()
-            inv_list = fut_inv.result() if fut_inv else None
-            rt_strength = None
-            if fut_vol:
-                try: rt_strength = fut_vol.result()
-                except: pass
-            detail = fut_detail.result() if fut_detail else None
+            if curr_data and curr_data.get('rt_cd') == '0' and chart_df is not None and not chart_df.empty:
+                break
+            time.sleep(0.5)
 
         ind = indicators.calculate_indicators(chart_df)
 
@@ -2456,7 +2469,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     elif market_regime_adj is None:
         market_regime_adj = {}
 
-    display_title = f"\n{title}" + (" [bold magenta](*)[/]" if use_adaptive else "")
+    display_title = f"\n{title}"
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
@@ -2505,7 +2518,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     if is_overseas:
         max_w = 4 if config.session.is_simulation else 5 # 야후 API 동시 호출 차단 방지
     else:
-        max_w = 4 if config.session.is_simulation else 10
+        # KIS API 동시 호출 제한(TPS) 방지를 위해 실전투자 시 5로 하향
+        max_w = 4 if config.session.is_simulation else 5
     try:
         with Progress(
             SpinnerColumn(),
@@ -2565,8 +2579,6 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     try:
         config.console.print(table, crop=False)
         
-        if use_adaptive:
-            config.console.print("[dim] (*) 적응형 임계값(시장 국면 보정)이 적용된 분류 결과입니다.[/dim]")
         if any_restricted:
             config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
         if any_custom_rule:

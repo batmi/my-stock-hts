@@ -831,61 +831,123 @@ def manage_stock_memos_by_mode(mode):
         else:
             config.console.print("[dim]저장된 메모가 없습니다.[/dim]\n")
             time.sleep(1)
-            return False
+            return 'back'
 
         config.console.print()
         idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](메인메뉴: q / 이전: Enter)[/dim]")
-        if idx_str.lower() == 'q': return False
-        if idx_str == "": return False
+        if idx_str.lower() == 'q': return 'quit_to_main'
+        if idx_str == "": return 'back'
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
             target = grouped_memos[int(idx_str)-1]
             res = _manage_specific_stock_memos(target['code'], target['name'], mode)
             if res == 'quit_to_main':
-                return False
+                return 'quit_to_main'
         else:
             config.console.print("\n[red]잘못된 번호입니다.[/red]")
             time.sleep(1)
+
+def view_watchlist():
+    """현재 관심 종목 리스트 출력"""
+    utils.clear_screen()
+    config.console.print("\n[bold cyan]📋 [현재 감시 중인 관심 종목][/bold cyan]\n")
+    
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
+    from modules import db_manager
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: True for r in custom_rules}
+    m_codes = utils.get_memo_codes()
+
+    groups = {
+        "stocks_kr": "🇰🇷 국내 주식",
+        "etfs_kr": "🇰🇷 국내 ETF",
+        "stocks_us": "🇺🇸 미국 주식",
+        "etfs_us": "🇺🇸 미국 ETF"
+    }
+    
+    has_stock = False
+    for key, label in groups.items():
+        stocks = config.session.stock_data.get(key, [])
+        if stocks:
+            has_stock = True
+            config.console.print(f"[bold]{label}[/bold]")
+            
+            table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+            table.add_column("No.", justify="right", style="dim")
+            table.add_column("종목명")
+            table.add_column("코드", style="dim")
+            table.add_column("상태")
+            
+            for i, s in enumerate(stocks):
+                code = s['code']
+                name = s['name']
+                
+                status_tags = []
+                if code in restricted_stocks: status_tags.append("[blue]제한(-)[/]")
+                if code in rules_map: status_tags.append("[magenta]개별(+)[/]")
+                if code in m_codes: status_tags.append("[yellow]메모(M)[/]")
+                
+                tag_str = " ".join(status_tags)
+                
+                table.add_row(str(i+1), name, code, tag_str)
+                
+            config.console.print(table)
+            config.console.print()
+            
+    if not has_stock:
+        config.console.print("[dim]등록된 관심 종목이 없습니다.[/dim]\n")
 
 def manage_stock_menu():
     """종목 추가 및 삭제를 통합 관리하는 메뉴"""
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print(f"[dim cyan][TRACE] 관심 종목 관리 메뉴 진입[/dim cyan]")
 
-    menu_items = [
-        ("1", "종목 추가", "Add Stock"), 
-        ("2", "종목 삭제", "Delete Stock"), 
-        ("3", "종목 순서 변경", "Reorder Stock"), 
-        ("4", "차트 캐시 삭제", "Clear Cache"),
-        ("5", "종목 메모 조회", "View Memo"), 
-        ("6", "종목 메모 추가", "Add Memo"), 
-        ("7", "종목 메모 삭제", "Delete Memo")
-    ]
-    choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice="1")
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     
-    menu_map = {"1": "종목 추가", "2": "종목 삭제", "3": "종목 순서 변경", "4": "차트 캐시 삭제", "5": "종목 메모 조회", "6": "종목 메모 추가", "7": "종목 메모 삭제"}
-    if choice in menu_map:
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        
+        menu_items = [
+            ("1", "관심 종목 전체 조회", "View Watchlist"),
+            ("2", "새 관심 종목 추가", "Add Stock"), 
+            ("3", "관심 종목 삭제", "Delete Stock"), 
+            ("4", "관심 종목 순서 변경", "Reorder Stock"), 
+            ("5", "종목 메모 전체 조회", "View Memo"), 
+            ("6", "새 종목 메모 추가", "Add Memo"), 
+            ("7", "종목 메모 삭제", "Delete Memo"),
+            ("8", "차트 및 데이터 캐시 초기화", "Clear Cache")
+        ]
+        choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice="1")
+        
+        if choice.lower() == 'q': return False
+        
+        menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return False
-
-    if choice == "1":
-        if get_current_price(mode='add') is False: return False
-    elif choice == "2":
-        if delete_stock() is False: return False
-    elif choice == "3":
-        if reorder_stock() is False: return False
-    elif choice == "4":
-        import api
-        from modules import market
-        from modules import analysis # [추가]
-        api.clear_chart_cache()
-        market.clear_market_yf_cache()
-        analysis.clear_smart_money_cache() # [추가] 스마트머니 캐시 동시 삭제
-        config.console.print("\n[bold green]차트 및 지수, 수급 데이터 캐시가 초기화되었습니다.[/bold green]")
-        time.sleep(1)
-    elif choice == "5":
-        if manage_stock_memos_by_mode('view') is False: return False
-    elif choice == "6":
-        if add_new_stock_memo() is False: return False
-    elif choice == "7":
-        if manage_stock_memos_by_mode('delete') is False: return False
+        if choice == "1":
+            view_watchlist()
+        elif choice == "2":
+            get_current_price(mode='add')
+        elif choice == "3":
+            delete_stock()
+        elif choice == "4":
+            reorder_stock()
+        elif choice == "5":
+            if manage_stock_memos_by_mode('view') == 'quit_to_main':
+                return False
+        elif choice == "6":
+            add_new_stock_memo()
+        elif choice == "7":
+            manage_stock_memos_by_mode('delete')
+        elif choice == "8":
+            import api
+            from modules import market
+            from modules import analysis 
+            api.clear_chart_cache()
+            market.clear_market_yf_cache()
+            analysis.clear_smart_money_cache() 
+            config.console.print("\n[bold green]차트 및 지수, 수급 데이터 캐시가 초기화되었습니다.[/bold green]")
+            time.sleep(1)
+            
+        if choice != "5":
+            return True

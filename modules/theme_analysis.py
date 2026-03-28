@@ -1135,6 +1135,9 @@ def _run_tradingview_screener():
     market_choice = utils.show_menu("검색할 시장을 선택하세요", menu_items, default_choice="1")
     if market_choice.lower() == 'q': return
     
+    market_map = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{market_choice}] {market_map.get(market_choice, '')}")
+    
     market = "korea" if market_choice == "1" else "america"
     vol_cond_str = "거래량 10만, 1달러 이상" if market == "america" else "거래량 10만 이상"
     
@@ -1148,6 +1151,10 @@ def _run_tradingview_screener():
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="1")
     if preset_choice.lower() == 'q': return
+    
+    preset_map = dict((k, v) for k, v, _ in preset_items)
+    preset_name = preset_map.get(preset_choice, '').split(' (')[0] # 괄호 안의 긴 설명은 제외하고 이름만 추출
+    context.USER_ACTION_BREADCRUMB.append(f"[{preset_choice}] {preset_name}")
     
     market_display = "Domestic Stock" if market == "korea" else "US Stock"
     
@@ -1315,8 +1322,8 @@ def run_theme_analysis():
     """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
     menu_items = [
         ("1", "네이버 금융 테마 순위", "Naver Theme Ranking"),
-        ("2", "시장 주도 테마 분석", "Market Theme Analysis"),
-        ("3", "트레이딩뷰 종목 검색", "TradingView Screener"),
+        ("2", "트레이딩뷰 종목 검색", "TradingView Screener"),
+        ("3", "AI 시장 테마 분석", "AI Market Theme Analysis"),
         ("4", "AI 종목 심층 진단", "AI Stock Analysis")
     ]
     choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice="1")
@@ -1328,8 +1335,8 @@ def run_theme_analysis():
     if choice == '1':
         _show_naver_themes()
     elif choice == '2':
-        _analyze_with_gemini_ui()
-    elif choice == '3':
         _run_tradingview_screener()
+    elif choice == '3':
+        _analyze_with_gemini_ui()
     elif choice == '4':
         _analyze_stock_ui()

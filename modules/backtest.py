@@ -787,7 +787,7 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             
     # [추가] AI 백테스팅 진단
     config.console.print()
-    if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+    if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
         from rich.markdown import Markdown
         from rich.panel import Panel
@@ -1772,7 +1772,7 @@ def run_backtest():
 
     # [추가] 단일 백테스팅 AI 진단 연동
     config.console.print()
-    if Prompt.ask("🤖 AI 백테스팅 성과 진단 및 최적 파라미터 조언을 받으시겠습니까?", choices=["y", "n"], default="y") == 'y':
+    if Prompt.ask("🤖 AI 백테스팅 성과 진단 및 최적 파라미터 조언을 받으시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
         from rich.markdown import Markdown
         from rich.panel import Panel
