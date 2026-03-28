@@ -720,6 +720,8 @@ def _manage_specific_stock_memos(code, name, mode='view'):
                 else:
                     config.console.print(f"\n[yellow]일부 메모 삭제에 실패했습니다. ({success_cnt}/{len(valid_indices)}건 성공)[/yellow]")
                 time.sleep(1)
+                context.USER_ACTION_BREADCRUMB.pop()
+                return 'deleted'
 
 def add_new_stock_memo():
     """새 종목 메모 추가"""
@@ -771,7 +773,7 @@ def add_new_stock_memo():
     
     lines = []
     while True:
-        line = input("> ")
+        line = config.console.input("> ")
         if line.strip() in [':q', '종료']:
             break
         lines.append(line)
@@ -842,6 +844,8 @@ def manage_stock_memos_by_mode(mode):
             res = _manage_specific_stock_memos(target['code'], target['name'], mode)
             if res == 'quit_to_main':
                 return 'quit_to_main'
+            elif res == 'deleted':
+                return 'deleted'
         else:
             config.console.print("\n[red]잘못된 번호입니다.[/red]")
             time.sleep(1)
@@ -926,19 +930,20 @@ def manage_stock_menu():
 
         if choice == "1":
             view_watchlist()
+            utils.pause()
         elif choice == "2":
-            get_current_price(mode='add')
+            if get_current_price(mode='add') is not False: utils.pause()
         elif choice == "3":
-            delete_stock()
+            if delete_stock() is not False: utils.pause()
         elif choice == "4":
-            reorder_stock()
+            if reorder_stock() is not False: utils.pause()
         elif choice == "5":
             if manage_stock_memos_by_mode('view') == 'quit_to_main':
                 return False
         elif choice == "6":
-            add_new_stock_memo()
+            if add_new_stock_memo() is not False: utils.pause()
         elif choice == "7":
-            manage_stock_memos_by_mode('delete')
+            if manage_stock_memos_by_mode('delete') == 'quit_to_main': return False
         elif choice == "8":
             import api
             from modules import market
@@ -947,7 +952,4 @@ def manage_stock_menu():
             market.clear_market_yf_cache()
             analysis.clear_smart_money_cache() 
             config.console.print("\n[bold green]차트 및 지수, 수급 데이터 캐시가 초기화되었습니다.[/bold green]")
-            time.sleep(1)
-            
-        if choice != "5":
-            return True
+            utils.pause()

@@ -5333,75 +5333,92 @@ def _remove_restricted_stock():
 
 def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
-    menu_items = [("1", "룰 조회", "View"), ("2", "룰 설정", "Set"), ("3", "룰 변경", "Modify"), ("4", "룰 삭제", "Delete")]
-    choice = utils.show_menu("종목별 트레이딩 룰 관리 (Manage Stock Rules)", menu_items, default_choice="1")
-    if choice.lower() == 'q': return
-    
-    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
-    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        menu_items = [("1", "룰 조회", "View"), ("2", "룰 설정", "Set"), ("3", "룰 변경", "Modify"), ("4", "룰 삭제", "Delete")]
+        choice = utils.show_menu("종목별 트레이딩 룰 관리 (Manage Stock Rules)", menu_items, default_choice="1")
+        if choice.lower() == 'q': return False
+        
+        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
 
-    if choice == "1":
-        _view_stock_rules()
-    elif choice == "2":
-        if _set_stock_rules() is False: return False
-    elif choice == "3":
-        if _modify_stock_rules() is False: return False
-    elif choice == "4":
-        if _delete_stock_rules() is False: return False
+        if choice == "1":
+            _view_stock_rules()
+            utils.pause()
+        elif choice == "2":
+            if _set_stock_rules() is not False: utils.pause()
+        elif choice == "3":
+            if _modify_stock_rules() is not False: utils.pause()
+        elif choice == "4":
+            if _delete_stock_rules() is not False: utils.pause()
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
-    menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"), ("3", "제한 종목 해제", "Remove")]
-    choice = utils.show_menu("트레이딩 제한 종목 관리 (Restricted Stocks)", menu_items, default_choice="1")
-    if choice.lower() == 'q': return
-    
-    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
-    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
-    
-    if choice == "1": _view_restricted_stocks()
-    elif choice == "2": 
-        if _add_restricted_stock() is False: return False
-    elif choice == "3": 
-        if _remove_restricted_stock() is False: return False
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"), ("3", "제한 종목 해제", "Remove")]
+        choice = utils.show_menu("트레이딩 제한 종목 관리 (Restricted Stocks)", menu_items, default_choice="1")
+        if choice.lower() == 'q': return False
+        
+        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
+        
+        if choice == "1": 
+            _view_restricted_stocks()
+            utils.pause()
+        elif choice == "2": 
+            if _add_restricted_stock() is not False: utils.pause()
+        elif choice == "3": 
+            if _remove_restricted_stock() is not False: utils.pause()
 
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 
     trader = AutoTrader()
 
-    text_before = f"[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]\n현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}"
-    menu_items = [
-        ("1", "트레이딩 실행", "Start"), ("2", "트레이딩 중단", "Stop"), ("3", "트레이딩 상태", "Status"),
-        ("4", "트레이딩 평가", "Report"), ("5", "트레이딩 로그", "Log Viewer"),
-        ("6", "종목별 트레이딩 룰", "Rule"), ("7", "트레이딩 제한 종목", "Restrict")
-    ]
-    
-    try:
-        choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice="3", text_before=text_before)
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_map = dict((k, v) for k, v, _ in menu_items)
-        if choice in menu_map:
-            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+        text_before = f"[dim]안내: 시스템 트레이딩은 '국내주식' 및 '국내ETF' 리스트를 대상으로 작동합니다.[/dim]\n현재 상태: {'[green]실행 중[/green]' if trader.is_running else '[red]중지됨[/red]'}"
+        menu_items = [
+            ("1", "트레이딩 실행", "Start"), ("2", "트레이딩 중단", "Stop"), ("3", "트레이딩 상태", "Status"),
+            ("4", "트레이딩 평가", "Report"), ("5", "트레이딩 로그", "Log Viewer"),
+            ("6", "종목별 트레이딩 룰", "Rule"), ("7", "트레이딩 제한 종목", "Restrict")
+        ]
+        
+        try:
+            choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice="3", text_before=text_before)
             
-    except KeyboardInterrupt:
-        console.print()
-        return False
+            if choice.lower() == 'q': return False
+            
+            menu_map = dict((k, v) for k, v, _ in menu_items)
+            if choice in menu_map:
+                context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+                
+        except KeyboardInterrupt:
+            console.print()
+            return False
 
-    if choice.lower() == 'q': return False
-    
-    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
-    
-    if choice == "1":
-        trader.start()
-    elif choice == "2":
-        trader.stop()
-    elif choice == "3":
-        trader.print_status()
-    elif choice == "4":
-        trader.print_report()
-    elif choice == "5":
-        trader.view_log_file()
-    elif choice == "6":
-        if manage_stock_rules() is False: return False
-    elif choice == "7":
-        if manage_restricted_stocks_menu() is False: return False
+        logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
+        
+        if choice == "1":
+            trader.start()
+            utils.pause()
+        elif choice == "2":
+            trader.stop()
+            utils.pause()
+        elif choice == "3":
+            trader.print_status()
+            utils.pause()
+        elif choice == "4":
+            trader.print_report()
+            utils.pause()
+        elif choice == "5":
+            trader.view_log_file()
+        elif choice == "6":
+            if manage_stock_rules() is not False: utils.pause()
+        elif choice == "7":
+            if manage_restricted_stocks_menu() is not False: utils.pause()

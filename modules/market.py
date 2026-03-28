@@ -858,84 +858,95 @@ def _show_market_indices_core(target_indices=None):
 def show_market_indices(interval=0):
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
     
-    target_indices = None
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     
-    if interval == 0:
-        menu_items = []
-        for key, info in config.INDICES_GROUPS.items():
-            name = info['name']
-            if " (" in name:
-                parts = name.split(" (", 1)
-                menu_items.append((key, parts[0], parts[1].replace(")", "")))
-            else:
-                menu_items.append((key, name, ""))
-                
-        menu_items.append(("9", "전체 지수", "All Indices"))
-        sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="9", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
-        if sel.lower() == 'q': return False
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        target_indices = None
         
-        # [추가] 트래킹 기록
-        sel_clean = sel.replace('@', '')
-        menu_map_dict = dict((k, v) for k, v, _ in menu_items)
-        if sel_clean in menu_map_dict:
-            context.USER_ACTION_BREADCRUMB.append(f"[{sel_clean}] {menu_map_dict[sel_clean]}")
-        else:
-            context.USER_ACTION_BREADCRUMB.append(f"[선택] {sel_clean}")
-        
-        try:
-            if sel.endswith('@'):
-                interval = 60
-                sel = sel.rstrip('@')
-
-            raw_keys = [k.strip() for k in sel.split(',') if k.strip()]
-            keys = []
-            for k in raw_keys:
-                if k.isdigit() and len(k) > 1:
-                    keys.extend(list(k))
+        if interval == 0:
+            menu_items = []
+            for key, info in config.INDICES_GROUPS.items():
+                name = info['name']
+                if " (" in name:
+                    parts = name.split(" (", 1)
+                    menu_items.append((key, parts[0], parts[1].replace(")", "")))
                 else:
-                    keys.append(k)
+                    menu_items.append((key, name, ""))
+                    
+            menu_items.append(("9", "전체 지수", "All Indices"))
+            sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="9", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+            if sel.lower() == 'q': return False
             
-            if '9' in keys:
-                target_indices = None
+            # [추가] 트래킹 기록
+            sel_clean = sel.replace('@', '')
+            menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+            if sel_clean in menu_map_dict:
+                context.USER_ACTION_BREADCRUMB.append(f"[{sel_clean}] {menu_map_dict[sel_clean]}")
             else:
-                target_indices = []
-                for k in keys:
-                    if k in config.INDICES_GROUPS:
-                        target_indices.extend(config.INDICES_GROUPS[k]['indices'])
-                
-                if not target_indices:
-                    config.console.print("[red]선택된 그룹이 없습니다.[/red]")
-                    return
-        except:
-            config.console.print("[red]잘못된 입력입니다.[/red]")
-            return
-
-    try:
-        while True:
-            if interval > 0:
-                now_str = datetime.now().strftime("%H:%M:%S")
-                config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
-
-            failed_list = _show_market_indices_core(target_indices)
-
-            if interval <= 0:
-                if failed_list:
-                    if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
-                        config.console.print()
-                        target_indices = failed_list
-                        continue
-                break
+                context.USER_ACTION_BREADCRUMB.append(f"[선택] {sel_clean}")
             
-            config.console.print() 
             try:
-                for remaining in range(interval, -1, -1):
-                    config.console.print(f"[bold yellow]다음 조회까지 {remaining}초 대기 중입니다. (중단: Ctrl+C)[/]   ", end="\r")
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
-                break
-    except KeyboardInterrupt:
-        config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
-    except Exception as e:
-        logger.error(f"지수 분석 중 치명적 오류: {e}")
-        config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
+                if sel.endswith('@'):
+                    interval = 60
+                    sel = sel.rstrip('@')
+
+                raw_keys = [k.strip() for k in sel.split(',') if k.strip()]
+                keys = []
+                for k in raw_keys:
+                    if k.isdigit() and len(k) > 1:
+                        keys.extend(list(k))
+                    else:
+                        keys.append(k)
+                
+                if '9' in keys:
+                    target_indices = None
+                else:
+                    target_indices = []
+                    for k in keys:
+                        if k in config.INDICES_GROUPS:
+                            target_indices.extend(config.INDICES_GROUPS[k]['indices'])
+                    
+                    if not target_indices:
+                        config.console.print("[red]선택된 그룹이 없습니다.[/red]")
+                        time.sleep(1)
+                        continue
+            except:
+                config.console.print("[red]잘못된 입력입니다.[/red]")
+                time.sleep(1)
+                continue
+
+        try:
+            while True:
+                if interval > 0:
+                    now_str = datetime.now().strftime("%H:%M:%S")
+                    config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
+
+                failed_list = _show_market_indices_core(target_indices)
+
+                if interval <= 0:
+                    if failed_list:
+                        if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
+                            config.console.print()
+                            target_indices = failed_list
+                            continue
+                    break
+                
+                config.console.print() 
+                try:
+                    for remaining in range(interval, -1, -1):
+                        config.console.print(f"[bold yellow]다음 조회까지 {remaining}초 대기 중입니다. (중단: Ctrl+C)[/]   ", end="\r")
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
+                    break
+        except KeyboardInterrupt:
+            config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+        except Exception as e:
+            logger.error(f"지수 분석 중 치명적 오류: {e}")
+            config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
+            
+        if interval > 0:
+            return False
+        else:
+            utils.pause()

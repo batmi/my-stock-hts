@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener gnureadline"
 MISSING_LIBS=""
 
 # 2. 운영체제 확인 (macOS vs Linux)
@@ -39,15 +39,6 @@ if [[ "$PYTHON_PATH" != *"venv"* ]]; then
     fi
 fi
 
-# 5. macOS LibreSSL 충돌 해결 (Darwin - macOS일 때만 동작)
-if [ "$OS_NAME" = "Darwin" ]; then
-    $PYTHON_PATH -c "import urllib3; import sys; sys.exit(0) if int(urllib3.__version__.split('.')[0]) >= 2 else sys.exit(1)" > /dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        echo "[알림] macOS 환경 호환성을 위해 urllib3 패키지 버전을 조정합니다..."
-        $PIP_PATH install "urllib3<2" $PIP_FLAGS > /dev/null 2>&1
-    fi
-fi
-
 # 6. 미설치 라이브러리 스캔
 for lib in $REQUIRED_LIBS; do
     IMPORT_NAME=$lib
@@ -63,6 +54,9 @@ for lib in $REQUIRED_LIBS; do
             ;;
             "tradingview-screener")
                 IMPORT_NAME="tradingview_screener"
+                ;;
+            "gnureadline")
+                IMPORT_NAME="gnureadline"
                 ;;
     esac
 

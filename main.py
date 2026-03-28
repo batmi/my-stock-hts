@@ -603,7 +603,7 @@ def main():
             telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
-    last_choice = "1"
+    last_choice = "0"
     
     # [추가] 자동 시작 모드 처리
     if args.auto:
@@ -651,9 +651,9 @@ def main():
             grid.add_row("[1] 시장 지수 조회", "(Market Indices)")
             grid.add_row("[2] 종목 시세 분석", "(Stock Analysis)")
             grid.add_row("[3] 종목 차트 분석", "(Chart Analysis)")
-            grid.add_row("[4] 종목 트랜드 분석", "(Stock Trend Analysis)")
-            grid.add_row("[5] 전략 백테스팅", "(Backtesting)")
-            grid.add_row("[6] 시스템 트레이딩", f"(System Trading){trader_status}")
+            grid.add_row("[4] 전략 백테스팅", "(Backtesting)")
+            grid.add_row("[5] 시스템 트레이딩", f"(System Trading){trader_status}")
+            grid.add_row("[6] 종목 트랜드 분석", "(Stock Trend Analysis)")
             grid.add_row("[7] 관심 종목 관리", "(Watchlist Management)")
             grid.add_row("[8] 종목 주문 관리", "(Order Management)")
             grid.add_row("[9] 자산 관리", "(Asset Management)")
@@ -670,7 +670,7 @@ def main():
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
                     "0": "시스템 설정", "1": "시장 지수 조회", "2": "종목 시세 분석", "3": "종목 차트 분석",
-                    "4": "종목 트랜드 분석", "5": "전략 백테스팅", "6": "시스템 트레이딩",
+                    "4": "전략 백테스팅", "5": "시스템 트레이딩", "6": "종목 트랜드 분석",
                     "7": "관심 종목 관리", "8": "종목 주문 관리", "9": "자산 관리",
                     "q": "종료", "h": "도움말"
                 }
@@ -695,16 +695,20 @@ def main():
                 elif choice == "1": action_taken = market.show_market_indices()
                 elif choice == "2": action_taken = analysis.show_stock_analysis()
                 elif choice == "3": 
-                    menu_items = [
-                        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
-                        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
-                        ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
-                    ]
-                    sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice="6")
-                    
-                    if sub_choice.lower() == 'q': 
-                        action_taken = False
-                    else:
+                    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+                    while True:
+                        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+                        menu_items = [
+                            ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+                            ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+                            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
+                        ]
+                        sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice="6")
+                        
+                        if sub_choice.lower() == 'q': 
+                            action_taken = False
+                            break
+                            
                         sub_map = dict((k, v) for k, v, _ in menu_items)
                         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
                         
@@ -727,9 +731,6 @@ def main():
                                     
                                 if not utils.validate_and_confirm_stock(target_code, target_name, target_ovs, "이 종목으로 차트 분석을 진행하시겠습니까?"):
                                     target_code = None
-                                    action_taken = False
-                            else:
-                                action_taken = False
                         elif sub_choice == '5':
                             indices_list = market.ALL_INDICES
                             dict_list = [{'name': n, 'code': c} for n, c in indices_list]
@@ -738,8 +739,6 @@ def main():
                                 target_name, target_code = item['name'], item['code']
                                 target_ovs = True
                                 context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {target_name}")
-                            else:
-                                action_taken = False
                         elif sub_choice in ["1", "2", "3", "4"]:
                             key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
                             s_list = config.session.stock_data.get(key_map[sub_choice], [])
@@ -749,11 +748,8 @@ def main():
                                     target_code, target_name = item['code'], item['name']
                                     target_ovs = (sub_choice in ["3", "4"])
                                     context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target_name}")
-                                else:
-                                    action_taken = False
                             else:
                                 config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
-                                action_taken = False
 
                         if target_code: 
                             logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
@@ -769,20 +765,27 @@ def main():
                                 if c_type == '2': p_type = 'hourly'
                                 elif c_type == '3': p_type = 'intraday'
                                 chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
-                            else:
-                                action_taken = False
-                elif choice == "4": action_taken = theme_analysis.run_theme_analysis()
-                elif choice == "5": action_taken = backtest.run_backtest()
-                elif choice == "6": action_taken = auto_trade.system_trading_menu() 
+                                utils.pause()
+                elif choice == "4": action_taken = backtest.run_backtest()
+                elif choice == "5": action_taken = auto_trade.system_trading_menu() 
+                elif choice == "6": action_taken = theme_analysis.run_theme_analysis()
                 elif choice == "7": action_taken = manage.manage_stock_menu()
                 elif choice == "8": action_taken = trading.stock_order_menu()
                 elif choice == "9": 
-                    try:
-                        action_taken = account.asset_management_menu()
-                    except Exception as e:
-                        config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
-                        logging.error(f"자산 관리 메뉴 오류: {e}")
-                        action_taken = False
+                    base_breadcrumb_len_9 = len(context.USER_ACTION_BREADCRUMB)
+                    while True:
+                        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len_9]
+                        try:
+                            action_taken_9 = account.asset_management_menu()
+                            if action_taken_9 is False:
+                                action_taken = False
+                                break
+                            utils.pause()
+                        except Exception as e:
+                            config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
+                            logging.error(f"자산 관리 메뉴 오류: {e}")
+                            action_taken = False
+                            break
                 
                 if action_taken is not False:
                     utils.pause()

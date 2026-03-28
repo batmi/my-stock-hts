@@ -452,7 +452,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
         ]
         choice = utils.show_menu("개별 종목 분석 (Individual Analysis)", menu_items, default_choice="5")
-        if choice.lower() == 'q': return
+        if choice.lower() == 'q': return False
         
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
@@ -496,10 +496,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 
                 if not found:
                     config.console.print(f"[red]'{raw_input}'을(를) 찾을 수 없습니다. 코드로 입력해주세요.[/red]")
-                    return
+                    return False
                     
             if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목으로 분석을 진행하시겠습니까?"):
-                return
+                return False
         else:
             # 리스트 선택
             key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
@@ -508,15 +508,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             
             if not stock_list:
                 config.console.print("[yellow]등록된 종목이 없습니다.[/yellow]")
-                return
+                return False
                 
             idx, item = utils.search_stock_in_list(stock_list, title=f"{menu_map[choice]} 목록")
-            if not item: return
+            if not item: return False
             code, name = item['code'], item['name']
             is_overseas = (choice in ["3", "4"])
             context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
 
-    if not code: return
+    if not code: return False
 
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
@@ -2590,142 +2590,152 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
 def show_stock_analysis():
-    menu_items = [
-        ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
-        ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
-        ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
-        ("7", "전체 종목 분석", "Market Analysis")
-    ]
-    choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice="5", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
-    if choice_str.lower() == 'q': return False
-
-    interval = 0
-    if choice_str.endswith('@'):
-        interval = 60
-        choice_str = choice_str.rstrip('@')
-
-    raw_choices = [c.strip() for c in choice_str.split(',') if c.strip()]
-    choices = []
-    for c in raw_choices:
-        if c.isdigit() and len(c) > 1:
-            choices.extend(list(c))
-        else:
-            choices.append(c)
-
-    if not choices: return
-
-    if '6' in choices:
-        context.USER_ACTION_BREADCRUMB.append("[6] 개별분석")
-        diagnose_stock()
-        return
-
-    if '7' in choices:
-        context.USER_ACTION_BREADCRUMB.append("[7] 전체분석")
-        sub_menu = [("1", "코스피", "KOSPI"), ("2", "코스닥", "KOSDAQ"), ("3", "전체 종목 분석 결과 저장", "Save to Excel")]
-        sub_choice = utils.show_menu("분석할 시장을 선택하세요", sub_menu, default_choice="1")
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        if sub_choice.lower() == 'q': return
-        
-        if sub_choice == "3":
-            sub_map = dict((k, v) for k, v, _ in sub_menu)
-            context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
-            if save_all_market_analysis() is False: return False
-            return
+        menu_items = [
+            ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
+            ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
+            ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
+            ("7", "전체 종목 분석", "Market Analysis")
+        ]
+        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice="5", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+        if choice_str.lower() == 'q': return False
 
-        market_type = "KOSPI" if sub_choice == "1" else "KOSDAQ"
-        context.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
-        
-        if analyze_market_stocks(market_type) is False: return False
-        return
+        interval = 0
+        if choice_str.endswith('@'):
+            interval = 60
+            choice_str = choice_str.rstrip('@')
 
-    selected_groups = set()
-    group_names = []
-    
-    for c in choices:
-        if c == '1': 
-            selected_groups.add('stocks_kr')
-            group_names.append("국내주식")
-        elif c == '2': 
-            selected_groups.add('etfs_kr')
-            group_names.append("국내ETF")
-        elif c == '3': 
-            selected_groups.add('stocks_us')
-            group_names.append("미국주식")
-        elif c == '4': 
-            selected_groups.add('etfs_us')
-            group_names.append("미국ETF")
-        elif c == '5': 
-            selected_groups.update(['stocks_kr', 'etfs_kr', 'stocks_us', 'etfs_us'])
-            group_names.append("전체보기")
-    
-    if not selected_groups:
-        config.console.print("[red]잘못된 입력입니다.[/red]")
-        return
+        raw_choices = [c.strip() for c in choice_str.split(',') if c.strip()]
+        choices = []
+        for c in raw_choices:
+            if c.isdigit() and len(c) > 1:
+                choices.extend(list(c))
+            else:
+                choices.append(c)
 
-    context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
+        if not choices: continue
 
-    target_list = []
-    order_map = [
-        ('stocks_kr', "국내 주식 기술적 분석", False),
-        ('etfs_kr', "국내 ETF 기술적 분석", False),
-        ('stocks_us', "미국 주식 기술적 분석", True),
-        ('etfs_us', "미국 ETF 기술적 분석", True)
-    ]
+        if '6' in choices:
+            context.USER_ACTION_BREADCRUMB.append("[6] 개별분석")
+            if diagnose_stock() is not False: utils.pause()
+            continue
 
-    for key, title, is_ovs in order_map:
-        if key in selected_groups:
-            d_list = [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
-            target_list.append((title, d_list, is_ovs))
-
-    logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
-
-    try:
-        while True:
-            if interval > 0:
-                now_str = datetime.now().strftime("%H:%M:%S")
-                config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
+        if '7' in choices:
+            context.USER_ACTION_BREADCRUMB.append("[7] 전체분석")
+            sub_menu = [("1", "코스피", "KOSPI"), ("2", "코스닥", "KOSDAQ"), ("3", "전체 종목 분석 결과 저장", "Save to Excel")]
+            sub_choice = utils.show_menu("분석할 시장을 선택하세요", sub_menu, default_choice="1")
             
-            # [최적화] 조회 주기마다 한 번만 시장 국면 분석 수행 (중복 API 호출 방지)
-            shared_regime_adj = None
-            has_domestic = any(not is_ovs for _, _, is_ovs in target_list)
-            if has_domestic and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
-                shared_regime_adj = {}
+            if sub_choice.lower() == 'q': continue
+            
+            if sub_choice == "3":
+                sub_map = dict((k, v) for k, v, _ in sub_menu)
+                context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+                if save_all_market_analysis() is not False: utils.pause()
+                continue
+
+            market_type = "KOSPI" if sub_choice == "1" else "KOSDAQ"
+            context.USER_ACTION_BREADCRUMB.append(f"[시장선택] {market_type}")
+            
+            if analyze_market_stocks(market_type) is not False: utils.pause()
+            continue
+
+        selected_groups = set()
+        group_names = []
+        
+        for c in choices:
+            if c == '1': 
+                selected_groups.add('stocks_kr')
+                group_names.append("국내주식")
+            elif c == '2': 
+                selected_groups.add('etfs_kr')
+                group_names.append("국내ETF")
+            elif c == '3': 
+                selected_groups.add('stocks_us')
+                group_names.append("미국주식")
+            elif c == '4': 
+                selected_groups.add('etfs_us')
+                group_names.append("미국ETF")
+            elif c == '5': 
+                selected_groups.update(['stocks_kr', 'etfs_kr', 'stocks_us', 'etfs_us'])
+                group_names.append("전체보기")
+        
+        if not selected_groups:
+            config.console.print("[red]잘못된 입력입니다.[/red]")
+            time.sleep(1)
+            continue
+
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
+
+        target_list = []
+        order_map = [
+            ('stocks_kr', "국내 주식 기술적 분석", False),
+            ('etfs_kr', "국내 ETF 기술적 분석", False),
+            ('stocks_us', "미국 주식 기술적 분석", True),
+            ('etfs_us', "미국 ETF 기술적 분석", True)
+        ]
+
+        for key, title, is_ovs in order_map:
+            if key in selected_groups:
+                d_list = [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
+                target_list.append((title, d_list, is_ovs))
+
+        logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
+
+        try:
+            while True:
+                if interval > 0:
+                    now_str = datetime.now().strftime("%H:%M:%S")
+                    config.console.print(f"\n[dim]조회 시간: {now_str}[/dim]")
+                
+                # [최적화] 조회 주기마다 한 번만 시장 국면 분석 수행 (중복 API 호출 방지)
+                shared_regime_adj = None
+                has_domestic = any(not is_ovs for _, _, is_ovs in target_list)
+                if has_domestic and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                    shared_regime_adj = {}
+                    try:
+                        with Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            BarColumn(),
+                            console=config.console,
+                            transient=True
+                        ) as progress:
+                            progress.add_task("[cyan]시장 국면 분석 중 (KIS API)...[/cyan]", total=None)
+                            _, k_adj = get_market_regime("KOSPI")
+                            _, q_adj = get_market_regime("KOSDAQ")
+                            shared_regime_adj["KOSPI"] = k_adj
+                            shared_regime_adj["KOSDAQ"] = q_adj
+                    except:
+                        pass
+
                 try:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        BarColumn(),
-                        console=config.console,
-                        transient=True
-                    ) as progress:
-                        progress.add_task("[cyan]시장 국면 분석 중 (KIS API)...[/cyan]", total=None)
-                        _, k_adj = get_market_regime("KOSPI")
-                        _, q_adj = get_market_regime("KOSDAQ")
-                        shared_regime_adj["KOSPI"] = k_adj
-                        shared_regime_adj["KOSDAQ"] = q_adj
-                except:
-                    pass
-
-            try:
-                for title, d_list, is_ovs in target_list:
-                    if d_list: print_table(title, d_list, is_ovs, market_regime_adj=shared_regime_adj)
-            except Exception as e:
-                logger.error(f"분석 루프 실행 중 오류: {e}")
-                config.console.print(f"[red]분석 중 오류 발생: {e}[/red]")
+                    for title, d_list, is_ovs in target_list:
+                        if d_list: print_table(title, d_list, is_ovs, market_regime_adj=shared_regime_adj)
+                except Exception as e:
+                    logger.error(f"분석 루프 실행 중 오류: {e}")
+                    config.console.print(f"[red]분석 중 오류 발생: {e}[/red]")
+                
+                if interval == 0: break 
+                config.console.print() 
+                try:
+                    for remaining in range(interval, -1, -1):
+                        config.console.print(f"[bold yellow]다음 조회까지 {remaining}초 대기 중입니다. (중단: Ctrl+C)[/]   ", end="\r")
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
+                    break
+        except KeyboardInterrupt: config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
+        except Exception as e:
+            logger.error(f"분석 기능 실행 중 치명적 오류: {e}")
+            config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
             
-            if interval == 0: break 
-            config.console.print() 
-            try:
-                for remaining in range(interval, -1, -1):
-                    config.console.print(f"[bold yellow]다음 조회까지 {remaining}초 대기 중입니다. (중단: Ctrl+C)[/]   ", end="\r")
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                config.console.print("\n[yellow]반복 조회를 중단하고 메뉴로 돌아갑니다.[/yellow]")
-                break
-    except KeyboardInterrupt: config.console.print("\n[yellow]작업이 취소되었습니다.[/yellow]")
-    except Exception as e:
-        logger.error(f"분석 기능 실행 중 치명적 오류: {e}")
-        config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
+        if interval > 0:
+            return False
+        else:
+            utils.pause()
 
 def get_snapshot(code, is_overseas):
     """주문 시점의 종목 상태 스냅샷 생성 (DB 저장용)"""

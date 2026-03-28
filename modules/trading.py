@@ -1225,18 +1225,22 @@ def order_menu():
 
 def stock_order_menu():
     """종목 주문 관리 통합 메뉴"""
-    menu_items = [("1", "[red]매수[/red] 주문", "Buy"), ("2", "[blue]매도[/blue] 주문", "Sell"), ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel")]
-    choice = utils.show_menu("종목 주문 관리 (Stock Order Management)", menu_items, default_choice="3")
-    
-    menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문"}
-    if choice in menu_map:
-        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        
+        menu_items = [("1", "[red]매수[/red] 주문", "Buy"), ("2", "[blue]매도[/blue] 주문", "Sell"), ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel")]
+        choice = utils.show_menu("종목 주문 관리 (Stock Order Management)", menu_items, default_choice="3")
+        
+        if choice.lower() == 'q': return False
 
-    if choice.lower() == 'q': return False
+        menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문"}
+        if choice in menu_map:
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice == "1":
-        if send_order("buy") is False: return False
-    elif choice == "2":
-        if send_order("sell") is False: return False
-    elif choice == "3":
-        if modify_order() is False: return False
+        if choice == "1":
+            if send_order("buy") is not False: utils.pause()
+        elif choice == "2":
+            if send_order("sell") is not False: utils.pause()
+        elif choice == "3":
+            if modify_order() is not False: utils.pause()
