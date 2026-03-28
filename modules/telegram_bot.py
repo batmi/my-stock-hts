@@ -1561,7 +1561,7 @@ class TelegramCommander:
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
-        use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+        use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
@@ -1571,7 +1571,7 @@ class TelegramCommander:
         msg += f"\n[매도 조건]\n"
         msg += f"• 익절: +{tp}%\n"
         
-        half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else "OFF"
+        half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else "OFF"
         msg += f"• 반익절: {half_tp_str}\n"
         
         fixed_sl_status = "OFF" if use_atr else "ON"
@@ -1603,7 +1603,7 @@ class TelegramCommander:
             msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -1.0):+.1f}점\n"
             msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 1.0):+.1f}점\n"
             msg += f"• 횡보장 보정: {regime.get('SIDEWAYS_SCORE_ADJ', 0.0):+.1f}점\n"
-            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 60)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
+            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 20)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
             
             # [추가] 현재 시장 국면 정보
             try:
@@ -1633,9 +1633,9 @@ class TelegramCommander:
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 20)
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
         filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
-        slippage = getattr(config, 'SLIPPAGE_RATE', 0.001)
+        slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
 
         use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
         vol_target = getattr(config, 'TARGET_VOLATILITY', 0.2)

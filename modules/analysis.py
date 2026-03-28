@@ -1635,7 +1635,7 @@ def analyze_market_stocks(market_type):
             ) as progress:
                 task = progress.add_task(f"[cyan]{market_type} 분석 중...[/cyan]", total=len(stock_list))
                 
-                # [최적화] 실전: 4개 스레드 병렬 처리, 모의: 순차 처리(단일 스레드)
+                # [최적화] 실전: 4개 스레드 병렬 처리, 모의: 2개 스레드 병렬 처리
                 completed_count = 0
                 
                 def _process_result(stock_info, res_data):

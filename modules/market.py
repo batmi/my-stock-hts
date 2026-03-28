@@ -162,7 +162,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                             f_prev = fut_fi.get('regular_market_previous_close')
                             if f_curr and f_prev and not math.isnan(f_curr) and not math.isnan(f_prev) and f_prev > 0:
                                 utc_hour = datetime.now(timezone.utc).hour
-                                # 미국 정규장 외(아시아장) 시간대 (00:00~13:00 UTC = 09:00~22:00 KST)
+                                    # 미국 정규장 및 프리마켓 일부 제외 시간대 (utc_hour < 13 or >= 21)
                                 if utc_hour < 13 or utc_hour >= 21:
                                     f_rate = (f_curr - f_prev) / f_prev * 100
                                     est_yield = current - (f_rate / fut_info["duration"])

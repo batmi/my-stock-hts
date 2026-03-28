@@ -26,7 +26,7 @@ def _save_dynamic_config():
         "MARKET_FILTER_MA": getattr(config, 'MARKET_FILTER_MA', 20),
         "CONCLUSION_CHECK_INTERVAL": getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
-        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 100),
+        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60),
         "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
         "CHART_CACHE_TTL_MINUTES": getattr(config, 'CHART_CACHE_TTL_MINUTES', 180),
         "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
@@ -626,7 +626,7 @@ def modify_risk_portfolio_settings():
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
             {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.003), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
+             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.002), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
              
             {"desc": "변동성 타겟팅 사용", "help": "ATR 기반 비중 조절 사용 여부", "name": "USE_VOLATILITY_TARGETING", "type": "bool", "choices": ["y", "n"], "section": "Volatility",
              "get": lambda: getattr(config, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config, 'USE_VOLATILITY_TARGETING', v)}
