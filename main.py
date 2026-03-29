@@ -633,9 +633,9 @@ def main():
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
             env_color = "green" if config.session.is_simulation else "bold red"
-            print("\n" + "━"*50)
+            print("\n" + "─"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-            print("━"*50)
+            print("─"*50)
             
             trader_status = ""
             if trader.is_running:

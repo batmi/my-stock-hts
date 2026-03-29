@@ -212,16 +212,20 @@ def print_breadcrumb():
     if getattr(context, 'USER_ACTION_BREADCRUMB', None) and context.USER_ACTION_BREADCRUMB:
         path_str = " > ".join(context.USER_ACTION_BREADCRUMB)
         
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-        env_color = "green" if config.session.is_simulation else "bold red"
-        
-        print("\n" + "─"*50)
-        config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-        print("─"*50)
-        config.console.print(f"경로: {path_str}")
-        print("─"*50)
-        print()
+        # 1-Depth 메뉴일 때만 박스형 헤더 적용, 그 이상은 심플하게 표시
+        if len(context.USER_ACTION_BREADCRUMB) == 1:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+            env_color = "green" if config.session.is_simulation else "bold red"
+            
+            print("\n" + "─"*50)
+            config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
+            print("─"*50)
+            config.console.print(f"경로: {path_str}")
+            print("─"*50)
+        else:
+            config.console.print(f"\n[dim]경로: {path_str}[/dim]")
+            config.console.print()
 
 def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_before=None, custom_prompt=None):
     """
@@ -229,14 +233,18 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
     menu_items: [("1", "이름", "설명"), ...] 또는 [("1", "이름"), ...]
     """
     clear_screen()
-    config.console.print()
     print_breadcrumb()
     
     if text_before:
         config.console.print(text_before)
-        config.console.print()
         
-    config.console.print(f"[bold]{title}[/bold]")
+    # [수정] 메인/서브메뉴 타이틀은 경로(Breadcrumb)와 의미가 중복되므로 생략하여 깔끔하게 구성
+    # 단, "(English)" 형태가 없는 "주문 유형을 선택하세요" 등 질문형 타이틀은 출력 유지
+    is_depth_1 = getattr(context, 'USER_ACTION_BREADCRUMB', None) and len(context.USER_ACTION_BREADCRUMB) == 1
+    
+    if title and (not is_depth_1 or not ("(" in title and ")" in title)):
+        config.console.print(f"[bold]{title}[/bold]")
+
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="left")
     grid.add_column(justify="left", style="dim")
@@ -256,6 +264,10 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
         valid_choices.append(str(cancel_choice).upper())
         
     config.console.print(grid)
+    
+    # [추가] 1-Depth 메뉴 항목 출력 후에만 하단 실선 배치
+    if is_depth_1:
+        print("─"*50)
     config.console.print()
     
     if custom_prompt:
