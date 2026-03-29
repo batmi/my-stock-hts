@@ -773,10 +773,17 @@ def add_new_stock_memo():
     
     lines = []
     while True:
-        line = config.console.input("> ")
-        if line.strip() in [':q', '종료']:
-            break
-        lines.append(line)
+        try:
+            line = config.console.input("> ")
+            if line.strip() in [':q', '종료']:
+                break
+            lines.append(line)
+        except UnicodeDecodeError:
+            # 한글 바이트 깨짐 방어 (프로그램 강제 종료 방지)
+            config.console.print("[red]⚠️ 입력 인코딩 오류 발생 (한글 백스페이스 충돌 등). 방금 작성하던 줄을 다시 입력해주세요.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            config.console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
         
     if lines:
         memo_text = "\n".join(lines)
