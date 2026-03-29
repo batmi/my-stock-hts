@@ -877,7 +877,7 @@ def show_market_indices(interval=0):
                     
             menu_items.append(("9", "전체 지수", "All Indices"))
             sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
-            if sel.lower() == 'q': return False
+            if sel.lower() == 'b': return False
             if sel.lower() == 'h':
                 if getattr(utils, 'show_help', None):
                     utils.show_help()

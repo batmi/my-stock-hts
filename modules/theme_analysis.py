@@ -924,7 +924,7 @@ def _analyze_with_gemini_ui():
         
         menu_items = [("1", "기존 결과 보기", "View Cached"), ("2", "새로 분석 시작", "Analyze New")]
         choice = utils.show_menu("실시간 테마 분석", menu_items, default_choice="2")
-        if choice.lower() == 'q': return
+        if choice.lower() == 'b': return
         
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict[choice]}")
@@ -954,9 +954,9 @@ def _analyze_with_custom_prompt_ui():
     while True:
         config.console.print("[bold]Gemini에게 요청할 내용을 입력하세요:[/bold]")
         config.console.print()
-        user_prompt = Prompt.ask("입력 [dim](종료: q 또는 Enter)[/dim]")
+        user_prompt = Prompt.ask("입력 [dim](종료: b 또는 Enter)[/dim]")
         config.console.print()
-        if user_prompt.lower() == 'q' or not user_prompt.strip():
+        if user_prompt.lower() == 'b' or not user_prompt.strip():
             return
 
         config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]")
@@ -981,7 +981,7 @@ def _analyze_stock_ui():
         ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
     ]
     choice = utils.show_menu("AI 종목 심층 진단 (AI Stock Analysis)", menu_items, default_choice="5")
-    if choice.lower() == 'q': return
+    if choice.lower() == 'b': return
     
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -992,9 +992,9 @@ def _analyze_stock_ui():
     
     if choice == '5':
         utils.print_breadcrumb()
-        keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](이전: q)[/dim]")
+        keyword = Prompt.ask("종목코드(6자리/티커) 또는 종목명 입력 [dim](이전: b)[/dim]")
         config.console.print()
-        if not keyword or keyword.lower() == 'q': return
+        if not keyword or keyword.lower() == 'b': return
         context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {keyword}")
         
         # 1. 등록된 관심 종목에서 검색
@@ -1133,7 +1133,7 @@ def _run_tradingview_screener():
         ("2", "미국 주식", "US Stock")
     ]
     market_choice = utils.show_menu("검색할 시장을 선택하세요", menu_items, default_choice="1")
-    if market_choice.lower() == 'q': return False
+    if market_choice.lower() == 'b': return False
     
     market_map = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{market_choice}] {market_map.get(market_choice, '')}")
@@ -1150,7 +1150,7 @@ def _run_tradingview_screener():
         ("6", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="1")
-    if preset_choice.lower() == 'q': return False
+    if preset_choice.lower() == 'b': return False
     
     preset_map = dict((k, v) for k, v, _ in preset_items)
     preset_name = preset_map.get(preset_choice, '').split(' (')[0] # 괄호 안의 긴 설명은 제외하고 이름만 추출
@@ -1331,7 +1331,7 @@ def run_theme_analysis():
             ("4", "AI 종목 심층 진단", "AI Stock Analysis")
         ]
         choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice=last_choice)
-        if choice.lower() == 'q': return False
+        if choice.lower() == 'b': return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()

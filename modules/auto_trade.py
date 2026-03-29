@@ -4661,7 +4661,7 @@ def _select_stock_for_rules():
         ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
     ]
     choice = utils.show_menu("개별 설정할 대상을 선택하세요", menu_items, default_choice="5")
-    if choice.lower() == 'q': return None, None, False
+    if choice.lower() == 'b': return None, None, False
     
     menu_map = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
@@ -4670,8 +4670,8 @@ def _select_stock_for_rules():
     
     if choice == '5':
         utils.print_breadcrumb()
-        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
-        if raw_input and raw_input.lower() != 'q':
+        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b)[/dim]")
+        if raw_input and raw_input.lower() != 'b':
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
             if raw_input.isdigit() and len(raw_input) == 6:
                 code = raw_input
@@ -4804,7 +4804,7 @@ def _input_and_save_rule(code, name):
 
     def ask_val(key, desc, help_text, type_func):
         val = Prompt.ask(f"{desc} [dim](현재: {current[key]})\n[dim]{help_text}[/dim]", default=str(current[key]))
-        if val.lower() == 'q': raise QuitInput()
+        if val.lower() == 'b': raise QuitInput()
         return type_func(val)
 
     try:
@@ -4817,8 +4817,8 @@ def _input_and_save_rule(code, name):
         new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
         
         curr_half_tp = "y" if current.get('half_take_profit_use', defaults['half_take_profit_use']) else "n"
-        val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "q"], default=curr_half_tp)
-        if val.lower() == 'q': raise QuitInput()
+        val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "b"], default=curr_half_tp)
+        if val.lower() == 'b': raise QuitInput()
         new_strategy['half_take_profit_use'] = 1 if val.lower() == 'y' else 0
         
         new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준 (기본: 75)", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
@@ -4830,12 +4830,12 @@ def _input_and_save_rule(code, name):
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
         curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
         val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})\n[dim]전체 자산 대비 이 종목에 투자할 비중 한도[/dim]", default=str(int(curr_ratio_pct)))
-        if val.lower() == 'q': raise QuitInput()
+        if val.lower() == 'b': raise QuitInput()
         new_strategy['invest_ratio'] = float(val) / 100.0
         
         curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0) else "n"
-        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "q"], default=curr_use_atr)
-        if val.lower() == 'q': raise QuitInput()
+        val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "b"], default=curr_use_atr)
+        if val.lower() == 'b': raise QuitInput()
         use_atr = (val.lower() == 'y')
         new_strategy['use_atr_stop'] = 1 if use_atr else 0
         
@@ -4859,7 +4859,7 @@ def _input_and_save_rule(code, name):
             
             def ask_weight(key, desc, default_val):
                 v = Prompt.ask(f"{desc} [dim](현재: {default_val})[/dim]", default=str(default_val))
-                if v.lower() == 'q': raise QuitInput()
+                if v.lower() == 'b': raise QuitInput()
                 return float(v)
 
             try:
@@ -5324,8 +5324,8 @@ def _remove_restricted_stock():
     console.print()
     
     utils.print_breadcrumb()
-    choice = Prompt.ask("해제할 번호 선택 [dim](이전: q)[/dim]")
-    if choice.lower() == 'q': return False
+    choice = Prompt.ask("해제할 번호 선택 [dim](이전: b)[/dim]")
+    if choice.lower() == 'b': return False
     
     if choice.isdigit() and 1 <= int(choice) <= len(codes):
         target_code = codes[int(choice)-1]
@@ -5342,7 +5342,7 @@ def manage_stock_rules():
     """종목별 트레이딩 룰 관리 메뉴"""
     menu_items = [("1", "룰 조회", "View"), ("2", "룰 설정", "Set"), ("3", "룰 변경", "Modify"), ("4", "룰 삭제", "Delete")]
     choice = utils.show_menu("종목별 트레이딩 룰 관리 (Manage Stock Rules)", menu_items, default_choice="1")
-    if choice.lower() == 'q': return False
+    if choice.lower() == 'b': return False
     
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -5360,7 +5360,7 @@ def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
     menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"), ("3", "제한 종목 해제", "Remove")]
     choice = utils.show_menu("트레이딩 제한 종목 관리 (Restricted Stocks)", menu_items, default_choice="1")
-    if choice.lower() == 'q': return False
+    if choice.lower() == 'b': return False
     
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -5400,7 +5400,7 @@ def system_trading_menu():
         try:
             choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice=last_choice)
             
-            if choice.lower() == 'q': return False
+            if choice.lower() == 'b': return False
             if choice.lower() == 'h':
                 if getattr(utils, 'show_help', None):
                     utils.show_help()

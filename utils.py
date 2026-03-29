@@ -230,7 +230,7 @@ def print_breadcrumb():
             config.console.print(f"\n[dim]경로: {path_str}[/dim]")
             config.console.print()
 
-def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_before=None, custom_prompt=None):
+def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_before=None, custom_prompt=None):
     """
     통합 메뉴 출력 및 입력 헬퍼 함수
     menu_items: [("1", "이름", "설명"), ...] 또는 [("1", "이름"), ...]
@@ -270,7 +270,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
     
     # [추가] 1-Depth 메뉴일 경우 하단에 Q/H 안내 및 선택지 추가
     if is_depth_1:
-        config.console.print("[dim][Q] 이전 (Back)  |  [H] 도움말 (Help)[/dim]")
+        config.console.print(f"[dim][{cancel_choice.upper()}] 이전 (Back)  |  [H] 도움말 (Help)[/dim]")
         valid_choices.extend(['h', 'H'])
 
     # [추가] 1-Depth 메뉴 항목 출력 후에만 하단 실선 배치
@@ -378,7 +378,7 @@ def select_stock_for_chart():
         ("5", "직접 입력", "Direct Input"), ("6", "시장 지수", "Market Indices")
     ]
     group_choice = show_menu("분석할 종목 그룹을 선택하세요", menu_items, default_choice="5")
-    if group_choice.lower() == 'q': return None, None, None
+    if group_choice.lower() == 'b': return None, None, None
     
     group_map = {"1": "국내주식", "2": "국내ETF", "3": "미국주식", "4": "미국ETF", "5": "직접입력", "6": "시장지수"}
     context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
@@ -394,11 +394,11 @@ def select_stock_for_chart():
 
     if group_choice == "5":
         print_breadcrumb()
-        raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](이전: q)[/dim]")
+        raw_input = Prompt.ask("분석할 종목코드(6자리/티커) 또는 '종목명 코드' [dim](이전: b)[/dim]")
         config.console.print()
-        if raw_input.lower() != 'q' and raw_input.strip():
+        if raw_input.lower() != 'b' and raw_input.strip():
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
-        if raw_input.lower() == 'q' or not raw_input.strip(): return None, None, None
+        if raw_input.lower() == 'b' or not raw_input.strip(): return None, None, None
 
         parts = raw_input.split()
         code = parts[-1].upper()
@@ -435,7 +435,7 @@ def select_stock_for_chart():
 def select_target_stock():
     menu_items = [("1", "국내 (Domestic)", ""), ("2", "미국 (Overseas/US)", "")]
     nation_choice = show_menu("거래 국가를 선택하세요", menu_items, default_choice="1")
-    if nation_choice.lower() == 'q': return None, None, None
+    if nation_choice.lower() == 'b': return None, None, None
     
     nation_map = {"1": "국내", "2": "미국"}
     context.USER_ACTION_BREADCRUMB.append(f"[{nation_choice}] {nation_map.get(nation_choice, '')}")
@@ -456,9 +456,9 @@ def select_target_stock():
     if item:
         if item['code'] == 'DIRECT':
             print_breadcrumb()
-            code = Prompt.ask("종목코드(티커) 입력 [dim](이전: q)[/dim]").upper()
+            code = Prompt.ask("종목코드(티커) 입력 [dim](이전: b)[/dim]").upper()
             config.console.print()
-            if code.lower() == 'Q':
+            if code.lower() == 'b':
                 return None, None, None
                 
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")

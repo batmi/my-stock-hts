@@ -19,6 +19,49 @@ import utils
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 
+# =========================================================================
+# [추가] 글로벌 슬래시 명령어 (/052 등) 구현을 위한 Prompt.ask 몽키패칭
+# =========================================================================
+class GlobalCommandJump(BaseException):
+    """글로벌 메뉴 점프를 위한 사용자 정의 예외"""
+    def __init__(self, command_list):
+        self.command_list = command_list
+
+_global_command_queue = []
+_original_ask = Prompt.ask
+_original_check_choice = Prompt.check_choice
+_original_process_response = Prompt.process_response
+
+def _custom_check_choice(self, text: str) -> bool:
+    # 1. 내부 유효성 검사 우회: 슬래시로 시작하면 조건 없이 통과
+    if text.strip().startswith('/'):
+        return True
+    return _original_check_choice(self, text)
+
+def _custom_process_response(self, value: str):
+    # 2. 내부 루프 강제 탈출: 슬래시 입력을 감지하면 즉시 예외를 던져 루프를 파괴함
+    val = value.strip()
+    if val.startswith('/'):
+        cmd = val[1:].strip()
+        if cmd and cmd.isdigit():
+            raise GlobalCommandJump(list(cmd))
+    return _original_process_response(self, value)
+
+@classmethod
+def _custom_ask(cls, prompt="", *args, **kwargs):
+    global _global_command_queue
+    if _global_command_queue:
+        val = _global_command_queue.pop(0)
+        time.sleep(0.15) # 시각적인 딜레이 (타이핑 효과)
+        config.console.print(f"{prompt} [cyan]{val}[/cyan]")
+        return val
+    return _original_ask(prompt, *args, **kwargs)
+
+Prompt.check_choice = _custom_check_choice
+Prompt.process_response = _custom_process_response
+Prompt.ask = _custom_ask
+# =========================================================================
+
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -709,7 +752,7 @@ def main():
                         ]
                         sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice=last_sub_choice)
                         
-                        if sub_choice.lower() == 'q': 
+                        if sub_choice.lower() == 'b': 
                             action_taken = False
                             break
                         if sub_choice.lower() == 'h': 
@@ -725,9 +768,9 @@ def main():
                         
                         if sub_choice == '6':
                             utils.print_breadcrumb()
-                            raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: q)[/dim]")
+                            raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b)[/dim]")
                             config.console.print()
-                            if raw_input and raw_input.lower() != 'q':
+                            if raw_input and raw_input.lower() != 'b':
                                 context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
                                 if raw_input.isdigit() and len(raw_input) == 6:
                                     target_code = raw_input
@@ -766,7 +809,7 @@ def main():
                             menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
                             c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
                             
-                            if c_type != 'q':
+                            if c_type.lower() != 'b':
                                 type_map = dict((k, v) for k, v, _ in menu_items_type)
                                 context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
                                 
@@ -790,6 +833,10 @@ def main():
                 
                 if action_taken is not False:
                     utils.pause()
+            except GlobalCommandJump as e:
+                global _global_command_queue
+                _global_command_queue = e.command_list
+                continue
             except KeyboardInterrupt:
                 config.console.print()
                 config.console.print()
