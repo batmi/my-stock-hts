@@ -648,11 +648,11 @@ def _manage_specific_stock_memos(code, name, mode='view'):
         config.console.print()
         
         help_text = "다중: 1,3 / 전체: 0 / " if mode == 'view' else "다중: 1,3 / "
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim]({help_text}메인메뉴: q / 이전: Enter)[/dim]")
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim]({help_text}메뉴: q / 이전: Enter)[/dim]")
         
         if idx_str.lower() == 'q': 
             context.USER_ACTION_BREADCRUMB.pop()
-            return 'quit_to_main'
+            return 'quit_to_menu'
             
         if idx_str == "":
             context.USER_ACTION_BREADCRUMB.pop()
@@ -699,10 +699,10 @@ def _manage_specific_stock_memos(code, name, mode='view'):
                 config.console.print(m['memo'])
                 config.console.print("[dim]" + "─" * max_len + "[/dim]")
                 
-            ans = Prompt.ask("\n[dim](이전: Enter / 메인메뉴: q)[/dim]", default="", show_default=False)
+            ans = Prompt.ask("\n[dim](이전: Enter / 메뉴: q)[/dim]", default="", show_default=False)
             if ans.lower() == 'q':
                 context.USER_ACTION_BREADCRUMB.pop()
-                return 'quit_to_main'
+                return 'quit_to_menu'
                 
         elif mode == 'delete':
             idx_display = ", ".join(map(str, valid_indices))
@@ -843,14 +843,14 @@ def manage_stock_memos_by_mode(mode):
             return 'back'
 
         config.console.print()
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](메인메뉴: q / 이전: Enter)[/dim]")
-        if idx_str.lower() == 'q': return 'quit_to_main'
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](메뉴: q / 이전: Enter)[/dim]")
+        if idx_str.lower() == 'q': return 'back'
         if idx_str == "": return 'back'
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
             target = grouped_memos[int(idx_str)-1]
             res = _manage_specific_stock_memos(target['code'], target['name'], mode)
-            if res == 'quit_to_main':
-                return 'quit_to_main'
+            if res in ('quit_to_main', 'quit_to_menu'):
+                return 'back'
             elif res == 'deleted':
                 return 'deleted'
         else:
@@ -945,12 +945,11 @@ def manage_stock_menu():
         elif choice == "4":
             if reorder_stock() is not False: utils.pause()
         elif choice == "5":
-            if manage_stock_memos_by_mode('view') == 'quit_to_main':
-                return False
+            manage_stock_memos_by_mode('view')
         elif choice == "6":
             if add_new_stock_memo() is not False: utils.pause()
         elif choice == "7":
-            if manage_stock_memos_by_mode('delete') == 'quit_to_main': return False
+            manage_stock_memos_by_mode('delete')
         elif choice == "8":
             import api
             from modules import market

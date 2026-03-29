@@ -772,20 +772,12 @@ def main():
                 elif choice == "7": action_taken = manage.manage_stock_menu()
                 elif choice == "8": action_taken = trading.stock_order_menu()
                 elif choice == "9": 
-                    base_breadcrumb_len_9 = len(context.USER_ACTION_BREADCRUMB)
-                    while True:
-                        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len_9]
-                        try:
-                            action_taken_9 = account.asset_management_menu()
-                            if action_taken_9 is False:
-                                action_taken = False
-                                break
-                            utils.pause()
-                        except Exception as e:
-                            config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
-                            logging.error(f"자산 관리 메뉴 오류: {e}")
-                            action_taken = False
-                            break
+                    try:
+                        action_taken = account.asset_management_menu()
+                    except Exception as e:
+                        config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
+                        logging.error(f"자산 관리 메뉴 오류: {e}")
+                        action_taken = False
                 
                 if action_taken is not False:
                     utils.pause()

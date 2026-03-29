@@ -2227,6 +2227,9 @@ class AutoTrader:
         return header + "\n".join(final_logs)
 
     def print_status(self):
+        utils.clear_screen()
+        utils.print_breadcrumb()
+        
         if not self.is_running:
             status_text = "STOPPED"
             status_color = "red"
@@ -2656,32 +2659,35 @@ class AutoTrader:
         console.print()
 
     def print_report(self):
-        console.print("\n[bold]시스템 트레이딩 평가 리포트 (Trading Report)[/bold]")
+        menu_items = [
+            ("1", "일간 (오늘)", "Daily"),
+            ("2", "주간 (최근 7일)", "Weekly"),
+            ("3", "월간 (최근 30일)", "Monthly"),
+            ("4", "기간 직접 입력", "Custom Days")
+        ]
+        choice = utils.show_menu("시스템 트레이딩 평가 리포트 (Trading Report)", menu_items, default_choice="4")
+        if choice.lower() == 'q': return False
         
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(justify="left")
-        grid.add_column(justify="left", style="dim")
-        grid.add_row("[1] 일간 (오늘)", "(Daily)")
-        grid.add_row("[2] 주간 (최근 7일)", "(Weekly)")
-        grid.add_row("[3] 월간 (최근 30일)", "(Monthly)")
-        grid.add_row("[4] 기간 직접 입력", "(Custom Days)")
-        console.print(grid)
-        
-        console.print()
-        choice = Prompt.ask("조회할 기간을 선택하세요 [dim](Enter: 4)[/dim]", choices=["1", "2", "3", "4"], default="4")
-        console.print()
-        
+        menu_map = {"1": "일간", "2": "주간", "3": "월간", "4": "직접 입력"}
+        if choice in menu_map:
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+            
         days = None
         if choice == "1": days = 0
         elif choice == "2": days = 7
         elif choice == "3": days = 30
         elif choice == "4":
-            val = Prompt.ask("조회할 기간(일) 입력 [dim](Enter: 전체 내역)[/dim]", default="")
+            utils.print_breadcrumb()
+            val = Prompt.ask("조회할 기간(일) 입력 [dim](Enter: 전체 내역, 이전: q)[/dim]", default="")
             console.print()
+            if val.lower() == 'q': return False
+            
             if val.strip() and val.isdigit():
                 days = int(val)
+                context.USER_ACTION_BREADCRUMB.append(f"[{days}일]")
             else:
                 days = None # 전체 내역
+                context.USER_ACTION_BREADCRUMB.append("[전체]")
 
         self._load_trade_records(days=days)
         
@@ -3400,6 +3406,9 @@ class AutoTrader:
 
     def view_log_file(self):
         """현재 날짜의 시스템 트레이딩 로그 파일을 실시간으로 출력합니다."""
+        utils.clear_screen()
+        utils.print_breadcrumb()
+        
         log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
         filename = "autotrade.log" # [수정] 고정 파일명 사용
         filepath = os.path.join(log_dir, filename)
@@ -5414,8 +5423,7 @@ def system_trading_menu():
             trader.print_status()
             utils.pause()
         elif choice == "4":
-            trader.print_report()
-            utils.pause()
+            if trader.print_report() is not False: utils.pause()
         elif choice == "5":
             trader.view_log_file()
         elif choice == "6":

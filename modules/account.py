@@ -1177,20 +1177,26 @@ def view_trade_history():
 
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
-    menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
-    choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice="2")
-    
-    menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
-    if choice in menu_map:
-        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        
+        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
+        choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice="2")
+        
+        if choice.lower() == 'q': return False
+        
+        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
+        if choice in menu_map:
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'q': return False
-
-    if choice == "1":
-        logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        get_deposit_balance()
-    elif choice == "2":
-        logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
-        get_account_balance()
-    elif choice == "3":
-        if view_trade_history() is False: return False
+        if choice == "1":
+            logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+            get_deposit_balance()
+            utils.pause()
+        elif choice == "2":
+            logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+            get_account_balance()
+            utils.pause()
+        elif choice == "3":
+            if view_trade_history() is not False: utils.pause()

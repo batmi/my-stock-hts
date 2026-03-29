@@ -8,7 +8,7 @@ import api
 @patch('modules.account.get_deposit_balance')
 def test_asset_management_menu_deposit(mock_deposit, mock_ask):
     """자산 관리 메뉴 - 자산 조회 테스트"""
-    mock_ask.return_value = "1"
+    mock_ask.side_effect = ["1", "q"]
     account.asset_management_menu()
     mock_deposit.assert_called_once()
 
@@ -16,7 +16,7 @@ def test_asset_management_menu_deposit(mock_deposit, mock_ask):
 @patch('modules.account.get_account_balance')
 def test_asset_management_menu_balance(mock_balance, mock_ask):
     """자산 관리 메뉴 - 보유 잔고 테스트"""
-    mock_ask.return_value = "2"
+    mock_ask.side_effect = ["2", "q"]
     account.asset_management_menu()
     mock_balance.assert_called_once()
 
@@ -24,7 +24,7 @@ def test_asset_management_menu_balance(mock_balance, mock_ask):
 @patch('modules.account.view_trade_history')
 def test_asset_management_menu_history(mock_history, mock_ask):
     """자산 관리 메뉴 - 거래 내역 테스트"""
-    mock_ask.return_value = "3"
+    mock_ask.side_effect = ["3", "q"]
     account.asset_management_menu()
     mock_history.assert_called_once()
 
