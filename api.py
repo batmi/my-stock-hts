@@ -734,8 +734,15 @@ def get_access_token(force_refresh=False):
 def check_and_refresh_token_if_expired():
     """토큰 만료 플래그 확인 및 갱신 (메인 스레드/로그 뷰어 등에서 주기적 호출)"""
     if context.TOKEN_EXPIRED:
+        now = time.time()
+        # 60초 쿨타임 적용 (로그 뷰어 등에서 무한 루프 호출 시 API 및 텔레그램 도배 방지)
+        if getattr(context, 'LAST_TOKEN_REFRESH_ATTEMPT', 0) and now - context.LAST_TOKEN_REFRESH_ATTEMPT < 60:
+            return
+            
+        context.LAST_TOKEN_REFRESH_ATTEMPT = now
+
         if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-            config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰을 갱신합니다...[/bold yellow]")
+            config.console.print("\n[bold yellow]토큰 만료가 감지되었습니다. 토큰 갱신을 시도합니다...[/bold yellow]")
         
         success = True
         fail_reason = "Unknown Error"
@@ -744,32 +751,35 @@ def check_and_refresh_token_if_expired():
             if config.session.is_simulation:
                 if not get_access_token(force_refresh=True):
                     success = False
-                    fail_reason = "모의투자 토큰 발급 실패 (API 응답 오류)"
+                    fail_reason = "모의투자 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
             else:
                 if not get_real_access_token(force_refresh=True):
                     success = False
-                    fail_reason = "실전투자 토큰 발급 실패 (API 응답 오류)"
+                    fail_reason = "실전투자 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
                 
                 if success and config.session.auto_app_key:
                     if not get_auto_access_token(force_refresh=True):
                         success = False
-                        fail_reason = "자동매매 토큰 발급 실패 (API 응답 오류)"
+                        fail_reason = "자동매매 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
             
             if success:
                 context.TOKEN_EXPIRED = False
                 if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                    config.console.print("[bold green]토큰 갱신 완료. 시스템을 계속 사용합니다.[/bold green]\n")
+                    config.console.print("[bold green]토큰 갱신 완료. 시스템을 정상적으로 계속 사용합니다.[/bold green]\n")
             else:
                 raise Exception(fail_reason)
 
         except Exception as e:
             if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[bold red]토큰 갱신 실패: {e}[/bold red]")
+                config.console.print("[dim]서버 점검 등 일시적 오류일 수 있으므로 잠시 후 자동으로 다시 시도합니다.[/dim]")
             
-            # [추가] 텔레그램 알림 전송
-            try:
-                send_telegram_message(f"🚨 [시스템 경고] API 토큰 갱신 실패\n\n사유: {str(e)}\n\n시스템 재시작이나 수동 확인이 필요합니다.")
-            except: pass
+            # [수정] 텔레그램 알림 전송 쿨타임 적용 (1시간당 1회 제한으로 알림 폭탄 방지)
+            if now - getattr(context, 'LAST_TOKEN_REFRESH_ALERT', 0) > 3600:
+                try:
+                    send_telegram_message(f"🚨 [시스템 경고] API 토큰 갱신 지연\n\n사유: {str(e)}\n\n(한국투자증권 서버 정기 점검 시간일 수 있습니다. 시스템은 멈추지 않고 1분 간격으로 토큰 발급을 계속 재시도합니다.)")
+                    context.LAST_TOKEN_REFRESH_ALERT = now
+                except: pass
 
 def _get_access_token_internal(force_refresh=False):
     # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용

@@ -24,3 +24,7 @@ USER_ACTION_BREADCRUMB = [] # 사용자 입력 경로 추적 (로깅용)
 # [추가] API 호출 우선순위 제어 (시스템 트레이딩 우대)
 SYSTEM_API_WAIT_COUNT = 0   # API 호출 대기 중인 시스템 스레드 수
 API_PRIORITY_CONDITION = threading.Condition() # 우선순위 제어용 조건 변수
+
+# [추가] 토큰 갱신 및 에러 알림 쿨타임 제어
+LAST_TOKEN_REFRESH_ATTEMPT = 0
+LAST_TOKEN_REFRESH_ALERT = 0

@@ -913,11 +913,11 @@ def manage_stock_menu():
         
         menu_items = [
             ("1", "관심 종목 전체 조회", "View Watchlist"),
-            ("2", "새 관심 종목 추가", "Add Stock"), 
+            ("2", "관심 종목 추가", "Add Stock"), 
             ("3", "관심 종목 삭제", "Delete Stock"), 
             ("4", "관심 종목 순서 변경", "Reorder Stock"), 
             ("5", "종목 메모 전체 조회", "View Memo"), 
-            ("6", "새 종목 메모 추가", "Add Memo"), 
+            ("6", "종목 메모 추가", "Add Memo"), 
             ("7", "종목 메모 삭제", "Delete Memo"),
             ("8", "차트 및 데이터 캐시 초기화", "Clear Cache")
         ]

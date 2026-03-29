@@ -204,7 +204,7 @@ def pause():
     """화면 자동 지우기 설정이 켜져 있을 때, 사용자가 결과를 확인할 수 있도록 대기합니다."""
     if getattr(config, 'CLEAR_SCREEN_ON_MENU', False):
         config.console.print()
-        config.console.print("[dim]엔터를 누르면 메인 메뉴로 돌아갑니다...[/dim]")
+        config.console.print("[dim]엔터를 누르면 메뉴로 돌아갑니다...[/dim]")
         input()
 
 def print_breadcrumb():
