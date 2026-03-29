@@ -1321,6 +1321,7 @@ def _run_tradingview_screener():
 def run_theme_analysis():
     """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "1"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         menu_items = [
@@ -1329,9 +1330,10 @@ def run_theme_analysis():
             ("3", "AI 시장 테마 분석", "AI Market Theme Analysis"),
             ("4", "AI 종목 심층 진단", "AI Stock Analysis")
         ]
-        choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice="1")
+        choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice=last_choice)
         if choice.lower() == 'q': return False
         
+        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
         

@@ -1539,7 +1539,8 @@ def get_domestic_index_price(code):
         "FID_INPUT_ISCD": code
     }
     res = call_api(url, "domestic", "quotations", "index_price", params=params)
-    _set_micro_cache(cache_key, res)
+    if res.get('rt_cd') == '0':
+        _set_micro_cache(cache_key, res)
     return res
 
 def get_current_price_data(code, is_overseas):
@@ -1549,7 +1550,8 @@ def get_current_price_data(code, is_overseas):
 
     if not is_overseas:
         res = call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
-        _set_micro_cache(cache_key, res)
+        if res.get('rt_cd') == '0':
+            _set_micro_cache(cache_key, res)
         return res
     
     if is_overseas:
@@ -1568,7 +1570,6 @@ def get_current_price_data(code, is_overseas):
                     _set_micro_cache(cache_key, data)
                     return data
         res_err = {'rt_cd': '9999'}
-        _set_micro_cache(cache_key, res_err)
         return res_err
     return {'rt_cd': '9999'}
 

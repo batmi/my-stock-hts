@@ -765,6 +765,7 @@ def reset_to_default():
 
 def system_config_menu():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "9"
     while True:
         # 경로 누적 방지를 위해 루프 시작 시 진입 시점의 길이로 복원
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
@@ -778,9 +779,10 @@ def system_config_menu():
             ("9", "시스템 설정 전체 조회", "View Config"),
             ("0", "설정 초기화", "Reset to Default")
         ]
-        choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice="9")
+        choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice=last_choice)
         if choice.lower() == 'q': return False
         
+        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
         
@@ -820,5 +822,8 @@ def system_config_menu():
             elif sub_choice == "2": modify_telegram_settings()
             elif sub_choice == "3": modify_log_settings()
             
-        elif choice == "9": view_system_config()
-        elif choice == "0": reset_to_default()
+        elif choice == "9": 
+            view_system_config()
+            utils.pause()
+        elif choice == "0": 
+            if reset_to_default() is not False: utils.pause()

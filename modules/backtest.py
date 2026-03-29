@@ -836,6 +836,7 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             
 def run_backtest():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "6"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         menu_items = [
@@ -843,8 +844,10 @@ def run_backtest():
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
         ]
-        sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice="6")
+        sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice=last_choice)
         if sub_choice.lower() == 'q': return False
+        
+        last_choice = sub_choice
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {menu_map_dict[sub_choice]}")
 

@@ -603,7 +603,7 @@ def main():
             telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
-    last_choice = "0"
+    last_choice = "1"
     
     # [추가] 자동 시작 모드 처리
     if args.auto:
@@ -696,6 +696,7 @@ def main():
                 elif choice == "2": action_taken = analysis.show_stock_analysis()
                 elif choice == "3": 
                     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+                    last_sub_choice = "6"
                     while True:
                         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
                         menu_items = [
@@ -703,12 +704,13 @@ def main():
                             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
                             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
                         ]
-                        sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice="6")
+                        sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice=last_sub_choice)
                         
                         if sub_choice.lower() == 'q': 
                             action_taken = False
                             break
                             
+                        last_sub_choice = sub_choice
                         sub_map = dict((k, v) for k, v, _ in menu_items)
                         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
                         

@@ -859,6 +859,7 @@ def show_market_indices(interval=0):
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
     
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "9"
     
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
@@ -875,8 +876,10 @@ def show_market_indices(interval=0):
                     menu_items.append((key, name, ""))
                     
             menu_items.append(("9", "전체 지수", "All Indices"))
-            sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice="9", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+            sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
             if sel.lower() == 'q': return False
+            
+            last_choice = sel
             
             # [추가] 트래킹 기록
             sel_clean = sel.replace('@', '')

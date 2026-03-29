@@ -1178,14 +1178,16 @@ def view_trade_history():
 def asset_management_menu():
     """자산 관리 메인 메뉴"""
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "2"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
         menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
-        choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice="2")
+        choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() == 'q': return False
         
+        last_choice = choice
         menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")

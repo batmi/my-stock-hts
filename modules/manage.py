@@ -914,6 +914,7 @@ def manage_stock_menu():
         config.console.print(f"[dim cyan][TRACE] 관심 종목 관리 메뉴 진입[/dim cyan]")
 
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "1"
     
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
@@ -928,10 +929,11 @@ def manage_stock_menu():
             ("7", "종목 메모 삭제", "Delete Memo"),
             ("8", "차트 및 데이터 캐시 초기화", "Clear Cache")
         ]
-        choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice="1")
+        choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() == 'q': return False
         
+        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 

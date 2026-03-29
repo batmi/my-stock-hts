@@ -5380,6 +5380,7 @@ def system_trading_menu():
     trader = AutoTrader()
 
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "3"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
@@ -5399,9 +5400,11 @@ def system_trading_menu():
         ]
         
         try:
-            choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice="3")
+            choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice=last_choice)
             
             if choice.lower() == 'q': return False
+            
+            last_choice = choice
             
             menu_map = dict((k, v) for k, v, _ in menu_items)
             if choice in menu_map:

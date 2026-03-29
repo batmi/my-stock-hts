@@ -2469,6 +2469,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     elif market_regime_adj is None:
         market_regime_adj = {}
 
+    failed_list = []
     display_title = f"\n{title}"
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
@@ -2561,13 +2562,18 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                     progress.advance(task)
             
             # 결과 테이블 추가
-            for result_item in results:
-                if not result_item: continue
+            for idx, result_item in enumerate(results):
+                if not result_item:
+                    failed_list.append(data_list[idx])
+                    continue
                 
                 row_data, is_res, is_cust = result_item
                 
                 if is_res: any_restricted = True
                 if is_cust: any_custom_rule = True
+                
+                if len(row_data) > 3 and (row_data[3] == "실패" or "Error" in str(row_data[2])):
+                    failed_list.append(data_list[idx])
                 
                 table.add_row(*row_data)
                 if table.row_count % 5 == 0 and table.row_count < len(data_list):
@@ -2589,8 +2595,11 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
         config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
 
+    return failed_list
+
 def show_stock_analysis():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "5"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
@@ -2600,8 +2609,10 @@ def show_stock_analysis():
             ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
             ("7", "전체 종목 분석", "Market Analysis")
         ]
-        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice="5", custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
         if choice_str.lower() == 'q': return False
+        
+        last_choice = choice_str
 
         interval = 0
         if choice_str.endswith('@'):
@@ -2711,14 +2722,27 @@ def show_stock_analysis():
                     except:
                         pass
 
+                failed_targets = []
+
                 try:
                     for title, d_list, is_ovs in target_list:
-                        if d_list: print_table(title, d_list, is_ovs, market_regime_adj=shared_regime_adj)
+                        if d_list: 
+                            failed = print_table(title, d_list, is_ovs, market_regime_adj=shared_regime_adj)
+                            if failed:
+                                failed_targets.append((title, failed, is_ovs))
                 except Exception as e:
                     logger.error(f"분석 루프 실행 중 오류: {e}")
                     config.console.print(f"[red]분석 중 오류 발생: {e}[/red]")
                 
-                if interval == 0: break 
+                if interval <= 0:
+                    if failed_targets:
+                        total_failed = sum(len(f_list) for _, f_list, _ in failed_targets)
+                        if Prompt.ask(f"\n[yellow]⚠️ 조회 실패한 {total_failed}개 종목을 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
+                            config.console.print()
+                            target_list = failed_targets
+                            continue
+                    break 
+
                 config.console.print() 
                 try:
                     for remaining in range(interval, -1, -1):
