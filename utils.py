@@ -209,9 +209,19 @@ def pause():
 
 def print_breadcrumb():
     """현재 메뉴 경로를 출력합니다."""
-    if getattr(context, 'USER_ACTION_BREADCRUMB', None):
-        config.console.print(f"[dim]경로: {' > '.join(context.USER_ACTION_BREADCRUMB)}[/dim]")
-        config.console.print()
+    if getattr(context, 'USER_ACTION_BREADCRUMB', None) and context.USER_ACTION_BREADCRUMB:
+        path_str = " > ".join(context.USER_ACTION_BREADCRUMB)
+        
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+        env_color = "green" if config.session.is_simulation else "bold red"
+        
+        print("\n" + "─"*50)
+        config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
+        print("─"*50)
+        config.console.print(f"경로: {path_str}")
+        print("─"*50)
+        print()
 
 def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_before=None, custom_prompt=None):
     """
