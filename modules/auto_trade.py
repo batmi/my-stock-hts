@@ -966,6 +966,9 @@ class DefaultStrategy:
         time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
         
+        if time_stop_days <= 0:
+            use_time_stop = False
+        
         mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
         
         # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
@@ -998,12 +1001,12 @@ class DefaultStrategy:
             score, _ = analysis.calculate_score(current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
 
         # 2. 고정 익절/손절 및 시간 청산
-        if profit_rate >= tp_rate:
+        if tp_rate > 0 and profit_rate >= tp_rate:
             reason = f"익절({profit_rate}%)"
-        elif use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
+        elif tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
             reason = f"반익절({profit_rate:.1f}%)"
             sell_ratio = 0.5
-        elif profit_rate <= sl_rate:
+        elif sl_rate < 0 and profit_rate <= sl_rate:
             reason = f"손절({profit_rate}%)"
         # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
         elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
@@ -4811,7 +4814,7 @@ def _input_and_save_rule(code, name):
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
 
         console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
-        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현", float)
+        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
         
         curr_half_tp = "y" if current.get('half_take_profit_use', defaults['half_take_profit_use']) else "n"
         val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "q"], default=curr_half_tp)
@@ -4822,7 +4825,7 @@ def _input_and_save_rule(code, name):
         new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수 (기본: 5.0점)", "점수가 이 값 미만으로 떨어지면 매도", float)
         new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 10.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
         new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 3.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
-        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산", int)
+        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
             
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
         curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
@@ -4837,10 +4840,10 @@ def _input_and_save_rule(code, name):
         new_strategy['use_atr_stop'] = 1 if use_atr else 0
         
         if use_atr:
-            new_strategy['atr_stop_multiplier'] = ask_val('atr_stop_multiplier', "ATR 손절 배수 (기본: 2.0)", "ATR 값의 몇 배를 손절폭으로 할지 설정", float)
+            new_strategy['atr_stop_multiplier'] = ask_val('atr_stop_multiplier', "ATR 손절 배수 (기본: 2.0)", "ATR 값의 몇 배를 손절폭으로 할지 설정 (0: 미사용)", float)
             new_strategy['stop_loss'] = current.get('stop_loss', defaults['stop_loss']) # 고정 손절률은 숨김
         else:
-            new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%) (기본: -7.0%)", "손실이 이 비율에 도달하면 손절매", float)
+            new_strategy['stop_loss'] = ask_val('stop_loss', "손절 수익률(%) (기본: -7.0%)", "손실이 이 비율에 도달하면 손절매 (0: 미사용)", float)
             new_strategy['atr_stop_multiplier'] = current.get('atr_stop_multiplier', defaults['atr_stop_multiplier']) # 배수는 숨김
         
         # [추가] 가중치 설정 입력

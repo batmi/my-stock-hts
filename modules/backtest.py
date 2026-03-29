@@ -386,12 +386,15 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
             time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
             
+            if time_stop_days <= 0:
+                use_time_stop = False
+
             mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
 
-            if loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
-            elif use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
+            if take_profit_limit > 0 and loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
+            elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit:
                 sell_signal = True; reason = "반익절"; sell_ratio = 0.5
-            elif loss_rate <= current_sl_rate: # [수정] 동적 손절률 사용
+            elif current_sl_rate < 0 and loss_rate <= current_sl_rate: # [수정] 동적 손절률 사용
                 sell_signal = True
                 if use_atr_stop and current_sl_rate != stop_loss_limit:
                     reason = "ATR손절"
@@ -950,7 +953,7 @@ def run_backtest():
             
             config.console.print("\n[bold]3. 기본 청산 타점 설정[/bold]")
             def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-            val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현[/dim]", default=str(def_tp))
+            val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현 (0: 미사용)[/dim]", default=str(def_tp))
             if val.lower() == 'q': continue
             take_profit = float(val)
             
@@ -981,7 +984,7 @@ def run_backtest():
             ts_callback = float(val)
             
             def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-            val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산[/dim]", default=str(def_time_stop))
+            val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
             if val.lower() == 'q': continue
             time_stop_days = int(val)
             
@@ -992,12 +995,12 @@ def run_backtest():
             use_atr_stop = (val.lower() == 'y')
             
             if use_atr_stop:
-                val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정[/dim]", default=str(atr_mult))
+                val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정 (0: 미사용)[/dim]", default=str(atr_mult))
                 if val.lower() == 'q': continue
                 atr_mult = float(val)
             else:
                 def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-                val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]손실이 이 비율에 도달하면 손절매[/dim]", default=str(def_sl))
+                val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]손실이 이 비율에 도달하면 손절매 (0: 미사용)[/dim]", default=str(def_sl))
                 if val.lower() == 'q': continue
                 stop_loss = float(val)
             
@@ -1045,7 +1048,7 @@ def run_backtest():
             msg += f" - 시간청산: {time_stop_days}일"
             if weights:
                  msg += f"\n - 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
-            msg += "[/dim]"
+            msg += "[/dim]\n"
         else:
             msg = f"\n[dim]기본 설정으로 진행합니다.\n"
             msg += f" - 기간: {days}일\n"
@@ -1057,7 +1060,7 @@ def run_backtest():
             msg += f" - 시간청산: {time_stop_days}일"
             if weights:
                  msg += f"\n - 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
-            msg += "[/dim]"
+            msg += "[/dim]\n"
         
         # [수정] 초기 자본금 및 환율 설정
         initial_capital_krw = 10_000_000
