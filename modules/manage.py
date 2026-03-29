@@ -932,6 +932,11 @@ def manage_stock_menu():
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() == 'q': return False
+        if choice.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)

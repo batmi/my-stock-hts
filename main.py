@@ -605,6 +605,9 @@ def main():
     trader = auto_trade.AutoTrader()
     last_choice = "1"
     
+    # [추가] 전역 도움말 함수 맵핑 (서브메뉴 호출용)
+    utils.show_help = show_help
+    
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
@@ -661,7 +664,7 @@ def main():
             grid.add_row("[8] 종목 주문 관리", "(Order Management)")
             grid.add_row("[9] 자산 관리", "(Asset Management)")
             config.console.print(grid)
-            config.console.print("[Q] 종료 (Quit)  |  [H] 도움말 (Help)")
+            config.console.print("[dim][Q] 종료 (Quit)  |  [H] 도움말 (Help)[/dim]")
             print("─" * 50); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
@@ -709,6 +712,10 @@ def main():
                         if sub_choice.lower() == 'q': 
                             action_taken = False
                             break
+                        if sub_choice.lower() == 'h': 
+                            show_help()
+                            utils.pause()
+                            continue
                             
                         last_sub_choice = sub_choice
                         sub_map = dict((k, v) for k, v, _ in menu_items)

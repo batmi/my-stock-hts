@@ -1332,6 +1332,11 @@ def run_theme_analysis():
         ]
         choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice=last_choice)
         if choice.lower() == 'q': return False
+        if choice.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)

@@ -849,6 +849,11 @@ def run_backtest():
         ]
         sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice=last_choice)
         if sub_choice.lower() == 'q': return False
+        if sub_choice.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = sub_choice
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)

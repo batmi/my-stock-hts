@@ -268,6 +268,11 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
         
     config.console.print(grid)
     
+    # [추가] 1-Depth 메뉴일 경우 하단에 Q/H 안내 및 선택지 추가
+    if is_depth_1:
+        config.console.print("[dim][Q] 이전 (Back)  |  [H] 도움말 (Help)[/dim]")
+        valid_choices.extend(['h', 'H'])
+
     # [추가] 1-Depth 메뉴 항목 출력 후에만 하단 실선 배치
     if is_depth_1:
         print("─"*50)
@@ -276,7 +281,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="q", text_bef
     if custom_prompt:
         choice = Prompt.ask(custom_prompt, default=str(default_choice))
     else:
-        prompt_str = f"선택 [dim](이전: {cancel_choice})[/dim]" if cancel_choice else "선택"
+        prompt_str = f"선택 [dim](이전: {cancel_choice})[/dim]" if cancel_choice and not is_depth_1 else "선택"
         choice = Prompt.ask(prompt_str, choices=valid_choices, default=str(default_choice))
         
     config.console.print()

@@ -781,6 +781,11 @@ def system_config_menu():
         ]
         choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice=last_choice)
         if choice.lower() == 'q': return False
+        if choice.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)

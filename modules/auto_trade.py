@@ -5406,6 +5406,11 @@ def system_trading_menu():
             choice = utils.show_menu("시스템 트레이딩 (System Trading)", menu_items, default_choice=last_choice)
             
             if choice.lower() == 'q': return False
+            if choice.lower() == 'h':
+                if getattr(utils, 'show_help', None):
+                    utils.show_help()
+                    utils.pause()
+                continue
             
             last_choice = choice
             

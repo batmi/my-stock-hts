@@ -2609,8 +2609,13 @@ def show_stock_analysis():
             ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
             ("7", "전체 종목 분석", "Market Analysis")
         ]
-        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ / 이전: q)[/dim]")
+        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
         if choice_str.lower() == 'q': return False
+        if choice_str.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = choice_str
 

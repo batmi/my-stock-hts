@@ -1186,6 +1186,11 @@ def asset_management_menu():
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() == 'q': return False
+        if choice.lower() == 'h':
+            if getattr(utils, 'show_help', None):
+                utils.show_help()
+                utils.pause()
+            continue
         
         last_choice = choice
         menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
