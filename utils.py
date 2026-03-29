@@ -198,7 +198,10 @@ def get_memo_codes():
 def clear_screen():
     """config 설정에 따라 터미널 화면을 지웁니다."""
     if getattr(config, 'CLEAR_SCREEN_ON_MENU', False):
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # 1-depth 메뉴까지만 화면을 지우고, 그 이하 단계(세부 작업)에서는 이전 출력 내용을 유지합니다.
+        breadcrumb = getattr(context, 'USER_ACTION_BREADCRUMB', [])
+        if len(breadcrumb) <= 1:
+            os.system('cls' if os.name == 'nt' else 'clear')
 
 def pause():
     """화면 자동 지우기 설정이 켜져 있을 때, 사용자가 결과를 확인할 수 있도록 대기합니다."""

@@ -617,6 +617,9 @@ def main():
     
     try:
         while True:
+            # [추가] 루프 시작(메인 메뉴 복귀) 시 경로 초기화 (안전한 화면 클리어를 위함)
+            context.USER_ACTION_BREADCRUMB = []
+            
             # [추가] 메인 메뉴 진입 시 화면 정리
             utils.clear_screen()
             
@@ -663,9 +666,6 @@ def main():
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
                 config.console.print() # 입력 후 공백 라인 추가
-                
-                # [추가] 루프 시작 시 입력 경로 초기화
-                context.USER_ACTION_BREADCRUMB = []
                 
                 # [추가] 운영자 메뉴 선택 로깅
                 menu_map = {
