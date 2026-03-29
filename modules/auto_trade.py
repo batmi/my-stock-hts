@@ -4998,8 +4998,6 @@ def _view_restricted_stocks():
 
     console.print()
     title = "트레이딩 제한 종목"
-    if use_adaptive:
-        title += " [bold magenta](*)[/]"
     table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
     table.add_column("현재가", justify="right")
@@ -5148,9 +5146,6 @@ def _view_restricted_stocks():
             progress.advance(task)
 
     console.print(table)
-    
-    if use_adaptive:
-        console.print("[dim](*) 적응형 임계값(시장 국면 보정)이 적용된 결과입니다.[/dim]")
 
 def _add_restricted_stock():
     """트레이딩 제한 종목 추가"""
