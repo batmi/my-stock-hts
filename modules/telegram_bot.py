@@ -88,10 +88,11 @@ class TelegramCommander:
             self.thread.join(timeout=2)
 
     def _run_loop(self):
+        my_thread = threading.current_thread()
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
         timeout = config.TELEGRAM_POLLING_TIMEOUT
         
-        while self.is_running:
+        while self.is_running and self.thread is my_thread:
             try:
                 # [추가] 장전 브리핑 발송 확인 스케줄러
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
@@ -436,13 +437,13 @@ class TelegramCommander:
         if not self.trader.is_running:
             return "⚠️ 실행 중인 시스템 트레이딩이 없습니다."
         else:
-            self.trader.stop()
+            self.trader.stop(use_status=False)
             return "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
 
     def _cmd_restart(self, args):
         msg = []
         if self.trader.is_running:
-            self.trader.stop()
+            self.trader.stop(use_status=False)
             msg.append("🛑 시스템 트레이딩 중단 완료.")
             time.sleep(1)  # 상태 정리 대기
         

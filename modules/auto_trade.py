@@ -233,13 +233,14 @@ class ConclusionMonitor:
         return start_time <= current_time <= end_time
 
     def _run_loop(self):
+        my_thread = threading.current_thread()
         self.was_active_mode = False
         
         # [수정] 프로그램 시작 직후 API 요청 집중 방지를 위한 초기 지연 (설정값의 3배)
         initial_delay = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5) * 3
         time.sleep(initial_delay)
         
-        while self.is_running:
+        while self.is_running and self.thread is my_thread:
             # [추가] 대기 중인 미체결 주문이 있는지 확인 (해외주식 장외 시간 대응)
             has_pending_orders = False
             try:
@@ -1553,7 +1554,8 @@ class AutoTrader:
 
     def start(self, interactive=True):
         if self.is_running:
-            console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
+            if interactive:
+                console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
         
         # [추가] 로그 파일 생성을 보장하기 위해 시작 즉시 로그 기록
@@ -3516,7 +3518,8 @@ class AutoTrader:
         return msg
 
     def _run_loop(self):
-        while self.is_running:
+        my_thread = threading.current_thread()
+        while self.is_running and self.thread is my_thread:
             try:
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
