@@ -254,10 +254,10 @@ def _edit_config_table(title_source, items_source):
         console.print(table)
         
         console.print()
-        choice = Prompt.ask("\n수정할 항목 번호 선택 [dim](a: 전체, b: 이전)[/dim]", choices=[str(i+1) for i in range(len(items))] + ['a', 'b', 'A', 'B'], default='b')
+        choice = Prompt.ask("\n수정할 항목 번호 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=[str(i+1) for i in range(len(items))] + ['a', 'b', 'q', 'A', 'B', 'Q'], default='b')
         console.print()
         
-        if choice.lower() == 'b':
+        if choice.lower() in ['b', 'q']:
             break
             
         targets = []
@@ -283,7 +283,7 @@ def _edit_config_table(title_source, items_source):
                     console.print()
                     val_lower = val.lower()
                     
-                    if val_lower == 'b':
+                    if val_lower in ['b', 'q']:
                         canceled = True
                         break
                     
@@ -298,7 +298,7 @@ def _edit_config_table(title_source, items_source):
                     elif val_lower == 'false':
                         target_val = False
                     else:
-                        console.print("[red]잘못된 입력입니다. Y/N 또는 True/False를 입력해주세요. (이전: b)[/red]")
+                        console.print("[red]잘못된 입력입니다. Y/N 또는 True/False를 입력해주세요. (이전: b, 메인: q)[/red]")
                         continue
 
                     if target_val != curr_val:
@@ -317,15 +317,15 @@ def _edit_config_table(title_source, items_source):
             prompt_kwargs = {"default": str(curr_val)}
             if 'choices' in item:
                 choices = [c for c in list(item['choices']) if c.lower() != 'q']
-                if 'b' not in choices: choices.append('b')
-                if 'B' not in choices: choices.append('B')
+                for c in ['b', 'B', 'q', 'Q']:
+                    if c not in choices: choices.append(c)
                 prompt_kwargs["choices"] = choices
                 
             console.print()
-            val = Prompt.ask(f"새로운 값 입력 [dim](이전: b)[/dim]", **prompt_kwargs)
+            val = Prompt.ask(f"새로운 값 입력 [dim](이전: b, 메인: q)[/dim]", **prompt_kwargs)
             console.print()
             
-            if val.lower() == 'b':
+            if val.lower() in ['b', 'q']:
                 console.print("[yellow]입력이 취소되었습니다.[/yellow]")
                 break
             
@@ -549,15 +549,15 @@ def modify_scoring_weights():
         console.print(table)
         
         console.print()
-        choice = Prompt.ask("\n수정할 여부 선택 [dim](a: 전체, b: 이전)[/dim]", choices=['a', 'b', 'A', 'B'], default='b')
+        choice = Prompt.ask("\n수정할 여부 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=['a', 'b', 'q', 'A', 'B', 'Q'], default='b')
         console.print()
         
-        if choice.lower() == 'b':
+        if choice.lower() in ['b', 'q']:
             break
             
         if choice.lower() == 'a':
             console.print("\n[bold]각 항목의 가중치를 순서대로 입력하세요.[/bold]")
-            console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (이전: b)[/dim]")
+            console.print("[dim]입력하지 않고 Enter를 누르면 현재값을 유지합니다. (이전: b, 메인: q)[/dim]")
             console.print()
             
             new_weights = {}
@@ -567,7 +567,7 @@ def modify_scoring_weights():
                     current_val = weights[key]
                     prompt_msg = f"{label} [dim][{detail}][/dim] [dim](현재: {current_val})[/dim]"
                     val = Prompt.ask(prompt_msg, default=str(current_val))
-                    if val.lower() == 'b': 
+                    if val.lower() in ['b', 'q']: 
                         raise ValueError("canceled")
                     new_weights[key] = float(val)
                 
@@ -780,7 +780,7 @@ def system_config_menu():
             ("0", "설정 초기화", "Reset to Default")
         ]
         choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice=last_choice)
-        if choice.lower() == 'b': return False
+        if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()
@@ -794,7 +794,7 @@ def system_config_menu():
         if choice == "1":
             sub_items = [("1", "매수/분석 임계값", "Buy"), ("2", "매도/청산 전략", "Sell")]
             sub_choice = utils.show_menu("매수 및 매도 전략 설정", sub_items, default_choice="b")
-            if sub_choice.lower() == 'b': continue
+            if sub_choice.lower() in ['b', 'q']: continue
             
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
@@ -805,7 +805,7 @@ def system_config_menu():
         elif choice == "2":
             sub_items = [("1", "스코어링 가중치 설정", "Weights"), ("2", "적응형 임계값 (시장국면) 설정", "Regime")]
             sub_choice = utils.show_menu("스코어링 및 시장 국면 설정", sub_items, default_choice="b")
-            if sub_choice.lower() == 'b': continue
+            if sub_choice.lower() in ['b', 'q']: continue
             
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
@@ -818,7 +818,7 @@ def system_config_menu():
         elif choice == "5":
             sub_items = [("1", "트레이딩 시간 및 주기", "Time & Cycle"), ("2", "텔레그램 및 AI 브리핑", "Telegram"), ("3", "화면 및 로그", "Log")]
             sub_choice = utils.show_menu("환경 및 시스템 설정", sub_items, default_choice="b")
-            if sub_choice.lower() == 'b': continue
+            if sub_choice.lower() in ['b', 'q']: continue
             
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")

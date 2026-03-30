@@ -36,6 +36,11 @@ def _custom_check_choice(self, text: str) -> bool:
     # 1. 내부 유효성 검사 우회: 슬래시로 시작하면 조건 없이 통과
     if text.strip().startswith('/'):
         return True
+        
+    # [추가] 서브메뉴에서 q 입력 시 조건 없이 통과 (메인 메뉴 점프 예외 처리를 위함)
+    if text.strip().lower() == 'q' and getattr(context, 'USER_ACTION_BREADCRUMB', []) and len(context.USER_ACTION_BREADCRUMB) > 0:
+        return True
+        
     return _original_check_choice(self, text)
 
 def _custom_process_response(self, value: str):
@@ -45,6 +50,11 @@ def _custom_process_response(self, value: str):
         cmd = val[1:].strip()
         if cmd and cmd.isdigit():
             raise GlobalCommandJump(list(cmd))
+            
+    # [추가] 서브메뉴에서 q 입력 시 빈 점프 예외를 던져 메인 메뉴로 즉시 탈출
+    if val.lower() == 'q' and getattr(context, 'USER_ACTION_BREADCRUMB', []) and len(context.USER_ACTION_BREADCRUMB) > 0:
+        raise GlobalCommandJump([])
+        
     return _original_process_response(self, value)
 
 @classmethod
@@ -752,7 +762,7 @@ def main():
                         ]
                         sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice=last_sub_choice)
                         
-                        if sub_choice.lower() == 'b': 
+                        if sub_choice.lower() in ['b', 'q']: 
                             action_taken = False
                             break
                         if sub_choice.lower() == 'h': 
@@ -768,9 +778,9 @@ def main():
                         
                         if sub_choice == '6':
                             utils.print_breadcrumb()
-                            raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b)[/dim]")
+                            raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b, 메인: q)[/dim]")
                             config.console.print()
-                            if raw_input and raw_input.lower() != 'b':
+                            if raw_input and raw_input.lower() not in ['b', 'q']:
                                 context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
                                 if raw_input.isdigit() and len(raw_input) == 6:
                                     target_code = raw_input
@@ -809,7 +819,7 @@ def main():
                             menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
                             c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
                             
-                            if c_type.lower() != 'b':
+                            if c_type.lower() not in ['b', 'q']:
                                 type_map = dict((k, v) for k, v, _ in menu_items_type)
                                 context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
                                 

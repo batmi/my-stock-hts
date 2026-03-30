@@ -933,7 +933,7 @@ def view_trade_history():
     if choice in menu_map:
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
-    if choice.lower() == 'b':
+    if choice.lower() in ['b', 'q']:
         logger.debug("[HISTORY_DEBUG] 사용자 취소(q)로 종료")
         return False
 
@@ -969,9 +969,9 @@ def view_trade_history():
             return
     elif choice == "3":
         config.console.print()
-        keyword = Prompt.ask("검색할 종목코드(티커) 입력 [dim](이전: b)[/dim]")
+        keyword = Prompt.ask("검색할 종목코드(티커) 입력 [dim](이전: b, 메인: q)[/dim]")
         config.console.print()
-        if keyword.lower() == 'b': return False
+        if keyword.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[검색] {keyword}")
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
@@ -1185,7 +1185,7 @@ def asset_management_menu():
         menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
-        if choice.lower() == 'b': return False
+        if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()

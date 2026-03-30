@@ -33,8 +33,8 @@ def select_account():
             ("2", "자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
         ]
         choice = utils.show_menu("주문을 수행할 계좌를 선택하세요", menu_items, default_choice="1")
-        if choice.lower() == 'q':
-            return False, False, False
+    if choice.lower() in ['b', 'q']:
+        return False, False, False
             
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] 계좌: {menu_map_dict.get(choice, '')}")
@@ -54,7 +54,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     menu_items = [("1", "국내 주식", "Domestic"), ("2", "해외 주식", "Overseas")]
     market_choice = utils.show_menu("어떤 시장의 보유 주식을 매도하시겠습니까?", menu_items, default_choice="1")
     
-    if market_choice.lower() == 'b':
+    if market_choice.lower() in ['b', 'q']:
         return False, False, False, False, False
 
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
@@ -187,9 +187,9 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     config.console.print(table)
     
     config.console.print()
-    sel_idx = Prompt.ask("매도할 종목 번호를 입력하세요 [dim](취소: b)[/dim]")
+    sel_idx = Prompt.ask("매도할 종목 번호를 입력하세요 [dim](이전: b, 메인: q)[/dim]")
     config.console.print()
-    if sel_idx.lower() == 'b': return None, None, False, None, None
+    if sel_idx.lower() in ['b', 'q']: return None, None, False, None, None
 
     try:
         idx = int(sel_idx) - 1
@@ -677,7 +677,7 @@ def send_order(order_type):
                 ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
             ]
             choice = utils.show_menu("매수할 종목 분류", menu_items, default_choice="5")
-            if choice.lower() == 'b': return
+            if choice.lower() in ['b', 'q']: return
 
             menu_map_dict = dict((k, v) for k, v, _ in menu_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -686,9 +686,9 @@ def send_order(order_type):
 
             if choice == '5':
                 utils.print_breadcrumb()
-                raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: q)[/dim]")
+                raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: b, 메인: q)[/dim]")
                 config.console.print()
-                if not raw_input or raw_input.lower() == 'q': return
+                if not raw_input or raw_input.lower() in ['b', 'q']: return
                 
                 # 간단 검색 로직
                 if len(raw_input) == 6 and raw_input[0].isdigit() and raw_input.isalnum():
@@ -775,16 +775,16 @@ def send_order(order_type):
 
         # 5. 수량 및 단가 입력
         config.console.print()
-        qty = Prompt.ask(f"[{title_color}]{title_text} 수량(주)[/] [dim](취소: b)[/dim]", default=default_qty)
-        if qty.lower() == 'b': return False
+        qty = Prompt.ask(f"[{title_color}]{title_text} 수량(주)[/] [dim](이전: b, 메인: q)[/dim]", default=default_qty)
+        if qty.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         qty = qty.replace(',', '')
 
         unit = "달러" if is_overseas else "원"
-        price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 취소: b[/dim]"
+        price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 이전: b, 메인: q[/dim]"
         price = Prompt.ask(price_prompt, default="0")
         config.console.print()
-        if price.lower() == 'b': return False
+        if price.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
         price = price.replace(',', '')
@@ -1046,7 +1046,7 @@ def modify_order():
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
     menu_items = [("1", "정정", "Modify"), ("2", "취소", "Cancel")]
     action = utils.show_menu(f"작업 선택", menu_items, default_choice="1")
-    if action.lower() == 'b': return False
+    if action.lower() in ['b', 'q']: return False
     
     action_map = {"1": "정정", "2": "취소"}
     if action in action_map: context.USER_ACTION_BREADCRUMB.append(f"[{action}] {action_map[action]}")
@@ -1076,23 +1076,23 @@ def modify_order():
     if action == "1": # 정정
         rvse_cncl_dvsn_cd = "01"
         config.console.print()
-        qty = Prompt.ask(f"[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: b)[/dim]", default="0")
-        if qty.lower() == 'b': return False
+        qty = Prompt.ask(f"[magenta]정정 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](이전: b, 메인: q)[/dim]", default="0")
+        if qty.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         
         price_prompt = "[magenta]정정 단가($)[/]" if is_overseas else "[magenta]정정 단가[/] (0: 시장가)"
-        price = Prompt.ask(f"{price_prompt} [dim](취소: b)[/dim]", default="0")
+        price = Prompt.ask(f"{price_prompt} [dim](이전: b, 메인: q)[/dim]", default="0")
         config.console.print()
-        if price.lower() == 'b': return False
+        if price.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: 
             config.console.print("[red]가격 입력 필요[/]"); return
     else: # 취소
         rvse_cncl_dvsn_cd = "02"
         config.console.print()
-        qty = Prompt.ask(f"[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](취소: b)[/dim]", default="0")
+        qty = Prompt.ask(f"[magenta]취소 수량[/] (최대 {target_rmn}주, 0: 전량) [dim](이전: b, 메인: q)[/dim]", default="0")
         config.console.print()
-        if qty.lower() == 'b': return False
+        if qty.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         price = "0"
 
@@ -1213,7 +1213,7 @@ def order_menu():
     """매수/매도 주문 선택 메뉴"""
     menu_items = [("1", "매수 주문", "Buy Order"), ("2", "매도 주문", "Sell Order")]
     choice = utils.show_menu("주문 유형을 선택하세요", menu_items, default_choice="1")
-    if choice.lower() == 'b': return False
+    if choice.lower() in ['b', 'q']: return False
 
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -1233,7 +1233,7 @@ def stock_order_menu():
         menu_items = [("1", "[red]매수[/red] 주문", "Buy"), ("2", "[blue]매도[/blue] 주문", "Sell"), ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel")]
         choice = utils.show_menu("종목 주문 관리 (Stock Order Management)", menu_items, default_choice=last_choice)
         
-        if choice.lower() == 'b': return False
+        if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()

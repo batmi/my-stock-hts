@@ -452,7 +452,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
         ]
         choice = utils.show_menu("개별 종목 분석 (Individual Analysis)", menu_items, default_choice="5")
-        if choice.lower() == 'b': return False
+        if choice.lower() in ['b', 'q']: return False
         
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
@@ -462,9 +462,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             from modules import manage
             # manage.get_current_price는 출력을 포함하므로, 여기서는 간단히 입력만 받음
             utils.print_breadcrumb()
-            raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: b)[/dim]")
+            raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: b, 메인: q)[/dim]")
             config.console.print()
-            if not raw_input or raw_input.lower() == 'b': return
+            if not raw_input or raw_input.lower() in ['b', 'q']: return
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
             
             # manage 모듈의 _resolve_stock 로직과 유사하게 처리하거나 utils 활용
@@ -1254,27 +1254,27 @@ def get_analysis_params():
         "WEIGHTS": config.SCORING_WEIGHTS.copy() # [추가] 가중치 포함 (복사본 사용)
     }
     
-    config.console.print("\n[bold]분석 파라미터 설정 (Enter: 현재값 유지, b: 이전)[/bold]")
+    config.console.print("\n[bold]분석 파라미터 설정 (Enter: 현재값 유지, 이전: b, 메인: q)[/bold]")
     
     config.console.print("\n[bold]1. 기본 매수 타점 설정[/bold]")
     val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']}점)\n[dim]이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(params['BUY_SCORE']))
-    if val.lower() == 'b': return None
+    if val.lower() in ['b', 'q']: return None
     try: params['BUY_SCORE'] = float(val)
     except: pass
     
     val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {params['BUY_RSI_MAX']})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(params['BUY_RSI_MAX']))
-    if val.lower() == 'b': return None
+    if val.lower() in ['b', 'q']: return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
     current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
     val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", default=str(current_vol))
-    if val.lower() == 'b': return None
+    if val.lower() in ['b', 'q']: return None
     try: params['BUY_VOL_STRENGTH'] = float(val)
     except: params['BUY_VOL_STRENGTH'] = current_vol
 
     config.console.print("\n[bold]2. 스캐닝 필터 설정[/bold]")
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']}점)\n[dim]매수에는 미달하지만 관망/상승으로 판단할 점수 기준[/dim]", default=str(params['RISE_SCORE']))
-    if val.lower() == 'b': return None
+    if val.lower() in ['b', 'q']: return None
     try: params['RISE_SCORE'] = float(val)
     except: pass
 
@@ -1287,7 +1287,7 @@ def get_analysis_params():
         try:
             def ask_w(key, desc, default_v):
                 v = Prompt.ask(f"{desc} [dim](현재: {default_v})[/dim]", default=str(default_v))
-                if v.lower() == 'b': raise ValueError("quit")
+                if v.lower() in ['b', 'q']: raise ValueError("quit")
                 return float(v)
 
             w_trend = ask_w("TREND", "추세 (TREND)", curr_weights.get('TREND', 4.0))
@@ -1311,8 +1311,8 @@ def get_analysis_params():
             continue
 
     config.console.print("\n[bold]4. 최종 출력 대상 선택[/bold]")
-    filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승) [dim](이전: b)[/dim]", choices=["1", "2", "3", "b"], default="1")
-    if filter_choice.lower() == 'b': return None
+    filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "3", "b", "q"], default="1")
+    if filter_choice.lower() in ['b', 'q']: return None
     if filter_choice == '1': params['OUTPUT_FILTER'] = 'BUY'
     elif filter_choice == '2': params['OUTPUT_FILTER'] = 'RISE'
     else: params['OUTPUT_FILTER'] = 'ALL'
@@ -1569,8 +1569,8 @@ def analyze_market_stocks(market_type):
         config.console.print(f"• 분석 조건: 매수 {buy_score_str}, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {c_params.get('BUY_VOL_STRENGTH', 100)}%, 상승 {c_params.get('RISE_SCORE')}점, 가중치 {w_str}")
         
         config.console.print()
-        choice = Prompt.ask("기존 결과를 보시겠습니까? [dim](이전: b)[/dim]", choices=["y", "n", "b"], default="y")
-        if choice == 'b': return False
+        choice = Prompt.ask("기존 결과를 보시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="y")
+        if choice in ['b', 'q']: return False
         if choice == "y":
             buy_candidates = cached_data['data']
             params = c_params
@@ -1598,8 +1598,8 @@ def analyze_market_stocks(market_type):
 
         config.console.print()
         # 파라미터 설정
-        change_settings = Prompt.ask("분석 조건을 변경하시겠습니까? [dim](이전: b)[/dim]", choices=["y", "n", "b"], default="n")
-        if change_settings == 'b': return False
+        change_settings = Prompt.ask("분석 조건을 변경하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+        if change_settings in ['b', 'q']: return False
 
         if change_settings == 'y':
             params = get_analysis_params()
@@ -1874,17 +1874,17 @@ def analyze_market_stocks(market_type):
             config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
 
         if page < total_pages - 1:
-                if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (b: 이전)[/dim]", choices=["y", "n", "b"], default="y").lower() in ['b', 'n']:
+                if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="y").lower() in ['b', 'q', 'n']:
                     break
 
     # 상세 분석 이동 기능
     from modules import chart
     
     while True:
-        config.console.print("\n[dim]개별 분석 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (Enter: 메뉴복귀, b: 이전)[/dim]")
+        config.console.print("\n[dim]개별 분석 및 상세 차트 분석을 보려면 종목 번호를 입력하세요 (Enter: 메뉴복귀, 이전: b, 메인: q)[/dim]")
         choice = Prompt.ask("선택", default="b", show_default=False)
         
-        if choice.lower() == 'b':
+        if choice.lower() in ['b', 'q']:
             return False
             
         if choice.isdigit():
@@ -2610,7 +2610,7 @@ def show_stock_analysis():
             ("7", "전체 종목 분석", "Market Analysis")
         ]
         choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
-        if choice_str.lower() == 'b': return False
+        if choice_str.lower() in ['b', 'q']: return False
         if choice_str.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()
@@ -2644,7 +2644,7 @@ def show_stock_analysis():
             sub_menu = [("1", "코스피", "KOSPI"), ("2", "코스닥", "KOSDAQ"), ("3", "전체 종목 분석 결과 저장", "Save to Excel")]
             sub_choice = utils.show_menu("분석할 시장을 선택하세요", sub_menu, default_choice="1")
             
-            if sub_choice.lower() == 'b': continue
+            if sub_choice.lower() in ['b', 'q']: continue
             
             if sub_choice == "3":
                 sub_map = dict((k, v) for k, v, _ in sub_menu)

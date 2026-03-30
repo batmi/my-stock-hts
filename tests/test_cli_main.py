@@ -69,7 +69,7 @@ def test_main_chart_menu(mock_cp, mock_chart, mock_ask, mock_exit):
     """메인 메뉴 -> 차트 분석 메뉴 테스트"""
     # 3번(차트) -> 6번(직접입력) -> 코드입력 -> 유효성확인(y) -> 1번(일봉) -> b(이전) -> q(종료)
     # [수정] 입력값 부족으로 인한 StopIteration(무한루프) 방지
-    mock_ask.side_effect = ["3", "6", "005930", "y", "1", "b", "q"]
+    mock_ask.side_effect = ["3", "6", "005930", "y", "1", "q", "q"]
     mock_cp.return_value = {'rt_cd': '0', 'output': {'stck_prpr': '100'}}
     
     with patch('sys.argv', ['main.py']):

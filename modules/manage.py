@@ -399,13 +399,13 @@ def get_current_price(mode='add'):
         config.console.print(f"[dim cyan][TRACE] 종목 검색/추가 메뉴 진입[/dim cyan]")
 
     utils.print_breadcrumb()
-    raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](이전: b)[/dim]")
+    raw_input = Prompt.ask("조회할 주식 종목코드(6자리/티커) 또는 '종목명 코드' [dim](이전: b, 메인: q)[/dim]")
     config.console.print()
-    if raw_input.lower() != 'b' and raw_input.strip():
+    if raw_input.lower() not in ['b', 'q'] and raw_input.strip():
         context.USER_ACTION_BREADCRUMB.append(f"[종목조회] {raw_input}")
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
-    if raw_input.lower() == 'b': return False
+    if raw_input.lower() in ['b', 'q']: return False
     if not raw_input.strip(): 
         config.console.print("[yellow]종목코드가 입력되지 않았습니다.[/yellow]")
         return
@@ -469,14 +469,14 @@ def get_current_price(mode='add'):
             grid.add_row("[4] 미국 ETF", "(US ETF)")
             config.console.print(grid)
             config.console.print()
-            cat_choice = Prompt.ask("선택 [dim](취소: b)[/dim]", choices=["1", "2", "3", "4", "b"], default="1")
+            cat_choice = Prompt.ask("선택 [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "3", "4", "b", "q"], default="1")
             config.console.print()
             
-            if cat_choice.lower() != 'b':
+            if cat_choice.lower() not in ['b', 'q']:
                 context.USER_ACTION_BREADCRUMB.append(f"[그룹선택] {cat_choice}")
                 logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
             
-            if cat_choice.lower() == 'b': return False
+            if cat_choice.lower() in ['b', 'q']: return False
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
 
             new_item = {"name": input_name, "code": code}
@@ -494,10 +494,10 @@ def get_current_price(mode='add'):
                 
                 config.console.print(f"현재 '{group_name}' 그룹에 {len(target_list)}개의 종목이 있습니다.")
                 config.console.print()
-                pos_input = Prompt.ask("추가할 위치 번호를 입력하세요 [dim](그냥 Enter 입력 시 맨 끝에 추가, 취소: b)[/dim]", default="")
+                pos_input = Prompt.ask("추가할 위치 번호를 입력하세요 [dim](그냥 Enter 입력 시 맨 끝에 추가, 이전: b, 메인: q)[/dim]", default="")
                 config.console.print()
                 
-                if pos_input.lower() == 'b':
+                if pos_input.lower() in ['b', 'q']:
                     config.console.print("[yellow]종목 추가가 취소되었습니다.[/yellow]")
                     return False
                 
@@ -523,10 +523,10 @@ def delete_stock():
 
     menu_items = [("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"), ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF")]
     cat_choice = utils.show_menu("어떤 그룹에서 삭제하시겠습니까?", menu_items, default_choice="1")
-    if cat_choice.lower() != 'b':
+    if cat_choice.lower() not in ['b', 'q']:
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{cat_choice}] {menu_map_dict[cat_choice]}")
-    if cat_choice.lower() == 'b': return False
+    if cat_choice.lower() in ['b', 'q']: return False
 
     group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = group_map[cat_choice]
@@ -571,10 +571,10 @@ def reorder_stock():
 
     menu_items = [("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"), ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF")]
     cat_choice = utils.show_menu("어떤 그룹의 순서를 변경하시겠습니까?", menu_items, default_choice="1")
-    if cat_choice.lower() != 'b':
+    if cat_choice.lower() not in ['b', 'q']:
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{cat_choice}] {menu_map_dict[cat_choice]}")
-    if cat_choice.lower() == 'b': return False
+    if cat_choice.lower() in ['b', 'q']: return False
 
     group_map = {"1": ("stocks_kr", "국내 주식"), "2": ("etfs_kr", "국내 ETF"), "3": ("stocks_us", "미국 주식"), "4": ("etfs_us", "미국 ETF")}
     target_key, group_name = group_map[cat_choice]
@@ -591,11 +591,11 @@ def reorder_stock():
     context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {target_stock['name']}")
     
     config.console.print()
-    to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](취소: b)[/dim]")
+    to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](이전: b, 메인: q)[/dim]")
     config.console.print()
-    if to_idx_str.lower() != 'b':
+    if to_idx_str.lower() not in ['b', 'q']:
         context.USER_ACTION_BREADCRUMB.append(f"[목표위치] {to_idx_str}")
-    if to_idx_str.lower() == 'b' or not to_idx_str.isdigit(): return False
+    if to_idx_str.lower() in ['b', 'q'] or not to_idx_str.isdigit(): return False
     
     to_idx = int(to_idx_str) - 1
     if to_idx < 0 or to_idx >= len(target_list):
@@ -648,9 +648,9 @@ def _manage_specific_stock_memos(code, name, mode='view'):
         config.console.print()
         
         help_text = "다중: 1,3 / 전체: 0 / " if mode == 'view' else "다중: 1,3 / "
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim]({help_text}메뉴: b / 이전: Enter)[/dim]")
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 메모 번호 선택 [dim]({help_text}이전: b, 메인: q, 취소: Enter)[/dim]")
         
-        if idx_str.lower() == 'b': 
+        if idx_str.lower() in ['b', 'q']: 
             context.USER_ACTION_BREADCRUMB.pop()
             return 'quit_to_menu'
             
@@ -699,8 +699,8 @@ def _manage_specific_stock_memos(code, name, mode='view'):
                 config.console.print(m['memo'])
                 config.console.print("[dim]" + "─" * max_len + "[/dim]")
                 
-            ans = Prompt.ask("\n[dim](이전: Enter / 메뉴: b)[/dim]", default="", show_default=False)
-            if ans.lower() == 'b':
+            ans = Prompt.ask("\n[dim](취소: Enter / 이전: b, 메인: q)[/dim]", default="", show_default=False)
+            if ans.lower() in ['b', 'q']:
                 context.USER_ACTION_BREADCRUMB.pop()
                 return 'quit_to_menu'
                 
@@ -733,15 +733,15 @@ def add_new_stock_memo():
         ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
     ]
     cat_choice = utils.show_menu("메모를 추가할 종목 선택", menu_items, default_choice="5")
-    if cat_choice.lower() == 'b': return False
+    if cat_choice.lower() in ['b', 'q']: return False
 
     code, name, is_overseas = None, None, False
 
     if cat_choice == '5':
         utils.print_breadcrumb()
-        raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: b)[/dim]")
+        raw_input = Prompt.ask("종목코드(6자리/티커) 또는 종목명 [dim](이전: b, 메인: q)[/dim]")
         config.console.print()
-        if not raw_input or raw_input.lower() == 'b': return False
+        if not raw_input or raw_input.lower() in ['b', 'q']: return False
         
         parts = raw_input.split()
         code = parts[-1].upper()
@@ -843,8 +843,8 @@ def manage_stock_memos_by_mode(mode):
             return 'back'
 
         config.console.print()
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](메뉴: b / 이전: Enter)[/dim]")
-        if idx_str.lower() == 'b': return 'back'
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](이전: b, 메인: q, 취소: Enter)[/dim]")
+        if idx_str.lower() in ['b', 'q']: return 'back'
         if idx_str == "": return 'back'
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
             target = grouped_memos[int(idx_str)-1]
@@ -931,7 +931,7 @@ def manage_stock_menu():
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
-        if choice.lower() == 'b': return False
+        if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()
