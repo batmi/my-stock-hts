@@ -1323,6 +1323,7 @@ def run_theme_analysis():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "1"
     while True:
+        utils.clear_screen()
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         menu_items = [
             ("1", "네이버 금융 테마 순위", "Naver Theme Ranking"),

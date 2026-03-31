@@ -2589,7 +2589,7 @@ def show_stock_analysis():
     last_choice = "5"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
-        
+        utils.clear_screen()
         menu_items = [
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),

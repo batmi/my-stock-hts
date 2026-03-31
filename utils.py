@@ -279,7 +279,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
 
     # [추가] 1-Depth 메뉴 항목 출력 후에만 하단 실선 배치
     if is_depth_1:
-        print("─"*50)
+        config.console.print("[dim]" + "─"*50 + "[/dim]")
     config.console.print()
     
     if custom_prompt:

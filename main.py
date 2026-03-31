@@ -72,6 +72,30 @@ Prompt.process_response = _custom_process_response
 Prompt.ask = _custom_ask
 # =========================================================================
 
+# =========================================================================
+# [추가] 브레드크럼(경로) 출력 몽키패칭
+# =========================================================================
+_original_print_breadcrumb = utils.print_breadcrumb
+
+def _custom_print_breadcrumb():
+    """커스텀 브레드크럼 출력 함수"""
+    if context.USER_ACTION_BREADCRUMB:
+        path_str = " > ".join(context.USER_ACTION_BREADCRUMB)
+        if len(context.USER_ACTION_BREADCRUMB) == 1:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+            env_color = "green" if config.session.is_simulation else "bold red"
+            config.console.print("\n[dim]" + "─"*50 + "[/dim]")
+            config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
+            config.console.print("[dim]" + "─"*50 + "[/dim]")
+            config.console.print(f"[dim] 메인 메뉴 > {path_str}[/dim]")
+            config.console.print("[dim]" + "─"*50 + "[/dim]")
+        else:
+            config.console.print(f"\n[dim] 메인 메뉴 > {path_str}[/dim]\n")
+
+utils.print_breadcrumb = _custom_print_breadcrumb
+# =========================================================================
+
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -683,9 +707,11 @@ def main():
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
             env_color = "green" if config.session.is_simulation else "bold red"
-            print("\n" + "─"*50)
+            config.console.print("\n[dim]" + "─"*50 + "[/dim]")
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-            print("─"*50)
+            config.console.print("[dim]" + "─"*50 + "[/dim]")
+            config.console.print("[dim] 메인 메뉴[/dim]")
+            config.console.print("[dim]" + "─"*50 + "[/dim]")
             
             trader_status = ""
             if trader.is_running:
@@ -709,7 +735,7 @@ def main():
             grid.add_row("[9] 자산 관리", "(Asset Management)")
             config.console.print(grid)
             config.console.print("[dim][Q] 종료 (Quit)  |  [H] 도움말 (Help)[/dim]")
-            print("─" * 50); config.console.print()
+            config.console.print("[dim]" + "─"*50 + "[/dim]"); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)
                 config.console.print() # 입력 후 공백 라인 추가
@@ -745,6 +771,7 @@ def main():
                     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
                     last_sub_choice = "6"
                     while True:
+                        utils.clear_screen()
                         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
                         menu_items = [
                             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),

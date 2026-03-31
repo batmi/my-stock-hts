@@ -4,6 +4,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 import time
+from datetime import datetime
 import pandas as pd
 import config
 import context # [추가]
@@ -915,6 +916,7 @@ def manage_stock_menu():
     last_choice = "1"
     
     while True:
+        utils.clear_screen()
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
         menu_items = [

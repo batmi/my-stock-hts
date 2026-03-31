@@ -865,6 +865,7 @@ def show_market_indices(interval=0):
     last_choice = "9"
     
     while True:
+        utils.clear_screen()
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         target_indices = None
         
