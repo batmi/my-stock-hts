@@ -425,47 +425,28 @@ def prefetch_watchlists_async():
     """백그라운드에서 관심 종목의 차트 데이터를 캐싱(Warming)합니다."""
     def worker():
         try:
-            # [추가] 1. 글로벌 지수 데이터 백그라운드 예열 (시장 지수 메뉴 속도 극대화)
+            # [수정] 1. 글로벌 지수 데이터 백그라운드 예열 (로직 개선)
             logger.info("[Cache] 글로벌 지수 데이터 백그라운드 예열 시작")
-            from modules import market
-            indices_tickers = [ticker for name, ticker in market.ALL_INDICES]
+            from modules import market, analysis
             
-            chunk_size = 15
-            now = datetime.now()
-            for i in range(0, len(indices_tickers), chunk_size):
-                chunk = indices_tickers[i:i+chunk_size]
-                tickers_str = " ".join(chunk)
+            # 국내 지수 이름 집합
+            domestic_indices_names = { "코스피": "KOSPI", "코스피200": "KOSPI200", "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150" }
+            
+            def _prefetch_worker(name, ticker):
                 try:
-                    d_data = fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
-                    i_data = fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
-                    
-                    with market._MARKET_YF_CACHE_LOCK:
-                        for t_fetch in chunk:
-                            d_df = pd.DataFrame()
-                            i_df = pd.DataFrame()
-                            try:
-                                if not d_data.empty:
-                                    if isinstance(d_data.columns, pd.MultiIndex):
-                                        if t_fetch in d_data.columns.levels[0]: d_df = d_data[t_fetch].copy()
-                                    elif 'Close' in d_data.columns or 'close' in d_data.columns: d_df = d_data.copy()
-                            except: pass
-                            
-                            try:
-                                if not i_data.empty:
-                                    if isinstance(i_data.columns, pd.MultiIndex):
-                                        if t_fetch in i_data.columns.levels[0]: i_df = i_data[t_fetch].copy()
-                                    elif 'Close' in i_data.columns or 'close' in i_data.columns: i_df = i_data.copy()
-                            except: pass
-                            
-                            stored_data = {'daily': d_df, 'intra': i_df}
-                            if not d_df.empty:
-                                market._MARKET_YF_CACHE[t_fetch] = {
-                                    'data': stored_data,
-                                    'time': now,
-                                    'date': now.strftime("%Y-%m-%d")
-                                }
+                    if name in domestic_indices_names:
+                        # 국내 지수는 KIS API 우선 조회 로직을 태움
+                        analysis.get_domestic_index_data(domestic_indices_names[name])
+                    else:
+                        # 해외 지수는 yfinance 조회 로직을 태움 (내부 캐싱 활용)
+                        get_chart_data(ticker, is_overseas=True)
                 except Exception as e:
-                    logger.debug(f"[Cache] 지수 예열 오류: {e}")
+                    logger.debug(f"[Cache] Index pre-fetch failed for {name}: {e}")
+
+            # 병렬 실행
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(_prefetch_worker, name, ticker) for name, ticker in market.ALL_INDICES]
+                concurrent.futures.wait(futures)
 
             import config
             stocks = []

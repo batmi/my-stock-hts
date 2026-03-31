@@ -227,6 +227,11 @@ def get_domestic_index_data(market_type):
     
     if df is None or df.empty or len(df) < ma_period:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
+        # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정하므로 Fallback을 수행하지 않음
+        if market_type == "KOSDAQ150":
+            logger.warning(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 불안정).")
+            return df
+
         try:
             df = api.get_chart_data(yf_ticker, is_overseas=True)
             if df is not None:

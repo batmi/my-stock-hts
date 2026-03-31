@@ -1637,7 +1637,7 @@ class AutoTrader:
                                 cursor = conn.cursor()
                                 for h in holdings_list:
                                     code = h['pdno']
-                                    cursor.execute("SELECT type, reason FROM trade_history WHERE code = ? ORDER BY time DESC LIMIT 5", (code,))
+                                    cursor.execute("SELECT type, reason FROM trades WHERE code = ? ORDER BY time DESC LIMIT 5", (code,))
                                     for row in cursor.fetchall():
                                         t_type, reason = row[0], row[1]
                                         if 'buy' in t_type.lower() or '매수' in t_type: break # 최근 매수 기록 만나면 중단

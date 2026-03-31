@@ -55,25 +55,29 @@ INDICES_MAP = dict(ALL_INDICES)
 def _process_index_worker(name, ticker, df_daily, df_intraday):
     """(내부함수) 단일 지수 분석 워커"""
     try:
+        is_domestic_index = name in ["코스피", "코스닥", "코스피200", "코스닥150"]
+
+        # [수정] 국내 지수는 yfinance 데이터를 사용하지 않고 KIS API 데이터만 사용
+        if is_domestic_index:
+            df_daily = pd.DataFrame()
+            df_intraday = pd.DataFrame()
+
         # A. DataFrame 준비
         if not df_daily.empty:
             df_daily.columns = [c.lower() for c in df_daily.columns]
             if 'close' in df_daily.columns:
                 df_daily = df_daily.dropna(subset=['close'])
-
         if not df_intraday.empty:
             df_intraday.columns = [c.lower() for c in df_intraday.columns]
 
-        is_domestic_index = name in ["코스피", "코스닥", "코스피200", "코스닥150"]
-        kis_code = ""
         is_kis_source = False
         mismatch_msg = None
 
         if is_domestic_index:
-            if name == "코스피": kis_code = "0001"; m_type = "KOSPI"
-            elif name == "코스닥": kis_code = "1001"; m_type = "KOSDAQ"
-            elif name == "코스피200": kis_code = "2001"; m_type = "KOSPI200"
-            elif name == "코스닥150": kis_code = "2203"; m_type = "KOSDAQ150"
+            if name == "코스피": m_type = "KOSPI"
+            elif name == "코스닥": m_type = "KOSDAQ"
+            elif name == "코스피200": m_type = "KOSPI200"
+            elif name == "코스닥150": m_type = "KOSDAQ150"
             
             df_fallback = analysis.get_domestic_index_data(m_type)
             if df_fallback is not None and not df_fallback.empty:
@@ -98,6 +102,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 
                 if df_daily.attrs.get('source') == 'KIS':
                     is_kis_source = True
+                    # [Fix] KIS API 사용 시, yfinance 분봉 데이터는 무시하여 데이터 불일치 방지
+                    # yfinance 분봉의 최신 날짜와 KIS 일봉의 최신 날짜가 다를 경우, 불필요한 '데이터 누락' 경고가 발생함
+                    df_intraday = pd.DataFrame()
 
         # B. 가격 결정
         high_52_daily = 0.0
@@ -227,14 +234,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             gap_days = (target_date - prev_date_src).days
             weekday = target_date.weekday()
             is_gap = False
-            
-            if weekday == 0:
-                if gap_days > 3: is_gap = True
-            elif weekday < 5:
-                if gap_days > 1: is_gap = True
-            
-            if target_date < today and not is_kis_source:
-                is_gap = True
+
+            # [Fix] 해외 지수에 대해서만 데이터 갭(주말, 휴장일 등)을 체크하고, 국내 지수는 휴장일이 있으므로 체크하지 않습니다.
+            if not is_domestic_index:
+                if weekday == 0 and gap_days > 3: is_gap = True
+                elif weekday < 5 and gap_days > 1: is_gap = True
 
             patched = False
             if is_gap and not df_intraday.empty:
@@ -254,7 +258,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                                     patched = True
                                     is_gap = False
                                     break
-                except: pass
+                except Exception as e:
+                    logger.debug(f"[MARKET_GAP_DEBUG] [{name}] Patching failed: {e}")
             
             if patched: patched_name = name
             elif is_gap: 
@@ -618,14 +623,19 @@ def _show_market_indices_core(target_indices=None):
             # 그룹별 순차 요청
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
-                
+
+                # [추가] 코스닥150은 yfinance를 호출하지 않도록 필터링
+                yf_t_list = [t for t in t_list if t != "^KQ150"]
+                if not yf_t_list:
+                    continue
+
                 tickers_to_fetch = []
                 now = datetime.now()
                 ttl_seconds = getattr(config, 'CHART_CACHE_TTL_MINUTES', 180) * 60
-                
+
                 # [추가] 지수 캐시 적중(Hit) 검사
                 with _MARKET_YF_CACHE_LOCK:
-                    for t in t_list:
+                    for t in yf_t_list:
                         cached = _MARKET_YF_CACHE.get(t)
                         if cached and ttl_seconds > 0 and (now - cached['time']).total_seconds() < ttl_seconds:
                             # 날짜가 같을 때만 유효 (자정 무효화)
