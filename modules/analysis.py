@@ -2400,13 +2400,11 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 final_name_str += "+"
                 is_custom_rule = True
 
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
+            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
             if not is_overseas:
-                row_data.append(w52_pos_str)
                 if use_investor_data: row_data.append(inv_str)
                 else: row_data.append(obv_disp)
             else:
-                row_data.append(w52_pos_str)
                 if is_us_stock_context: row_data.extend([per_str, pbr_str])
                 elif is_us_etf_context: row_data.append(shar_str)
             return row_data, is_restricted, is_custom_rule
@@ -2469,6 +2467,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     col_header = "등락폭 (등락률)"
     if not is_overseas and not use_investor_data: col_header += " [강도]"
     table.add_column(col_header, justify="right")
+    table.add_column("52주", justify="right")
     table.add_column("EMA(5)", justify="right")
     table.add_column("EMA(20)", justify="right")
     table.add_column("EMA(60)", justify="right")
@@ -2494,11 +2493,9 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     any_restricted = False
     
     if not is_overseas:
-        table.add_column("52주", justify="right")
         if use_investor_data: table.add_column("수급(개/외/기)", justify="center")
         else: table.add_column("OBV", justify="right")
     else:
-        table.add_column("52주", justify="right")
         if is_us_stock:
             table.add_column("PER", justify="right", style="dim")
             table.add_column("PBR", justify="right", style="dim") 

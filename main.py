@@ -217,6 +217,13 @@ def show_help():
     table.add_row("", "80% 미만", "[blue]파란색[/]", "하락 압력: 공격적인 매도세, 추가 하락 경계 필요")
     table.add_section()
 
+    table.add_row("52주 위치", "90% 이상", "[red]빨간색[/]", "신고가 근접/초강세")
+    table.add_row("", "80% 이상", "[orange3]주황색[/]", "상승세 우위")
+    table.add_row("", "50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
+    table.add_row("", "30% 이하", "[blue]파란색[/]", "신저가 근접/침체")
+    table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
+    table.add_section()
+
     table.add_row("EMA 5일선 (초단기)", "5일선 > 20일선", "[red]빨간색[/]", "초단기 정배열 (단기 모멘텀)")
     table.add_row("", "5일선 < 20일선", "[blue]파란색[/]", "초단기 역배열")
     table.add_section()
@@ -291,13 +298,6 @@ def show_help():
     table.add_row("", "+100선 이상", "", "SAR 추세 연장")
     table.add_row("", "0선 하향 + SAR 반전", "", "SAR 추세 종료")
     table.add_row("", "-100선 근처", "", "하락 가속 가능")
-    table.add_section()
-
-    table.add_row("52주 위치", "90% 이상", "[red]빨간색[/]", "신고가 근접/초강세")
-    table.add_row("", "80% 이상", "[orange3]주황색[/]", "상승세 우위")
-    table.add_row("", "50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
-    table.add_row("", "30% 이하", "[blue]파란색[/]", "신저가 근접/침체")
-    table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
     table.add_section()
 
     table.add_row("OBV (거래량)", f"OBV > EMA {obv_period}일선", "[red]빨간색[/]", "수급 양호 (매집)")
