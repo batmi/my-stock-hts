@@ -462,11 +462,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     elif eval_price < ma_val:
                         regime_state = "Bear"
                 
-                suffix = "*" if is_kis_source else ""
-
-                if regime_state == "Bull": display_name = f"[red]{name}{suffix}[/]"
-                elif regime_state == "Bear": display_name = f"[blue]{name}{suffix}[/]"
-                else: display_name = f"[yellow]{name}{suffix}[/]"
+                if regime_state == "Bull": display_name = f"[red]{name}[/]"
+                elif regime_state == "Bear": display_name = f"[blue]{name}[/]"
+                else: display_name = f"[yellow]{name}[/]"
             except: pass
         elif name == "미국채 10년물 금리":
             if eval_price >= 5.20: display_name = f"[magenta]{name}[/]"
@@ -576,7 +574,6 @@ def _show_market_indices_core(target_indices=None):
 
     data_storage = {}
     yf_tickers = None
-    any_kis_used = False
     
     # [Fix] 예외 발생 시 참조 오류(UnboundLocalError) 방지를 위해 변수 초기화 상단 이동
     patched_tickers = []
@@ -815,7 +812,6 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('patched_name'): patched_tickers.append(res['patched_name'])
                         if res.get('missing_name'): missing_tickers.append(res['missing_name'])
                         if res.get('mismatch_msg'): mismatch_tickers.append(res['mismatch_msg'])
-                        if res.get('is_kis_source'): any_kis_used = True
                         if res.get('is_delayed'): delayed_tickers.append(name)
                     elif res['status'] == 'failed':
                         table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-")
@@ -830,8 +826,6 @@ def _show_market_indices_core(target_indices=None):
             config.console.print(table, crop=False)
             sys.stdout.flush()
 
-            if any_kis_used:
-                config.console.print("[dim] (*) KIS API 를 사용한 데이터가 적용된 결과입니다.[/dim]")
         except Exception as e:
             logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")
             config.console.print(f"[red]테이블 출력 실패: {e}[/red]")
