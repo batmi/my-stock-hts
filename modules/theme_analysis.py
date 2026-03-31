@@ -8,7 +8,7 @@ import math
 import yfinance as yf
 import pandas as pd
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timezone
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn

@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import math
 import random
+import time
 from rich.table import Table
 from rich.prompt import Prompt
 from rich import box

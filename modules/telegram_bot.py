@@ -3,9 +3,10 @@ import logging
 import time
 import requests
 import re
+import json
 import os
 import math # [추가] 장전 브리핑 시 yfinance 데이터 계산용
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import config
 import context # [추가]
