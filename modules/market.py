@@ -335,20 +335,19 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 curr_fmt = f"{current:,.2f}"
                 if name == "달러환율": curr_fmt += "원"
 
-            curr_price_color = "[white]"
-            if ema5 and ema20 and ema60:
-                if ema5 > ema20 and ema20 > ema60:
-                    if eval_price > ema5: curr_price_color = "[red]"
-                    elif eval_price < ema60: curr_price_color = "[blue]"
-                    else: curr_price_color = "[dim]"
-                elif ema5 < ema20 and ema5 < ema60:
-                    if eval_price < ema5: curr_price_color = "[blue]"
-                    elif eval_price > ema20: curr_price_color = "[orange3]"
-                    else: curr_price_color = "[white]"
-                else:
-                    if eval_price < ema5: curr_price_color = "[blue]"
-                    elif eval_price > ema20: curr_price_color = "[orange3]"
-                    else: curr_price_color = "[white]"
+            # [수정] 현재가 색상 규칙 단순화 (추세와 현재가 관계 중심)
+            curr_price_color = "[white]" # 기본값
+            if ema20 and ema60:
+                is_bullish_trend = ema20 > ema60
+                is_bearish_trend = ema20 < ema60
+                
+                if is_bullish_trend:
+                    # 강세장: 현재가가 20일선 위에 있으면 강세(red), 아래면 눌림목(white)
+                    curr_price_color = "[red]" if eval_price > ema20 else "[white]"
+                elif is_bearish_trend:
+                    # 약세장: 현재가가 20일선 아래에 있으면 약세(blue), 위면 반등 시도(orange3)
+                    curr_price_color = "[blue]" if eval_price < ema20 else "[orange3]"
+                # 혼조세(ema20 == ema60)는 기본값 white 유지
             
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
@@ -362,35 +361,35 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
         def fmt_val(val, color_tag):
-            if val is None: return "-"
+            if val is None or math.isnan(val): return "-"
             if "미국채" in name and "선물" not in name:
                 s = f"{val:,.2f}%"
             else:
                 s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
             return f"{color_tag}{s}[/]" if color_tag else s
 
+        # [수정] 이평선 색상 규칙 단순화 (계층적 분석)
         ema5_color = "[white]"
-        if ema5 and ema20 and ema60 and ema120:
-            if ema5 > ema20 and ema5 > ema60 and ema5 > ema120: ema5_color = "[red]"
-            elif ema5 < ema20 and ema5 < ema60 and ema5 < ema120: ema5_color = "[blue]"
-            elif (ema20 < ema5 < ema60) or (ema60 < ema5 < ema20): ema5_color = "[yellow]"
-            elif (ema60 < ema5 < ema120) or (ema120 < ema5 < ema60): ema5_color = "[orange3]"
-        
-        ema20_color = "[white]"
-        if ema20 and ema60 and ema120:
-            if ema20 > ema60 and ema20 > ema120: ema20_color = "[red]"
-            elif ema20 < ema60 and ema20 < ema120: ema20_color = "[blue]"
-            elif (ema60 < ema20 < ema120) or (ema120 < ema20 < ema60): ema20_color = "[yellow]"
+        if ema5 is not None and ema20 is not None:
+            ema5_color = "[red]" if ema5 > ema20 else "[blue]"
 
-        ema60_color = "[yellow]"
-        if ema60 and ema5 and ema20 and ema120:
-            if ema120 > ema60 and ema60 > ema5 and ema60 > ema20: ema60_color = "[blue]"
-            elif ema120 < ema60 and ema60 < ema5 and ema60 < ema20: ema60_color = "[red]"
+        ema20_color = "[white]"
+        if ema20 is not None and ema60 is not None:
+            ema20_color = "[red]" if ema20 > ema60 else "[blue]"
+
+        ema60_color = "[white]"
+        if ema60 is not None and ema120 is not None:
+            ema60_color = "[red]" if ema60 > ema120 else "[blue]"
 
         ema120_color = "[white]"
-        if ema120 and ema60:
-            if ema60 > ema120: ema120_color = "[red]" 
-            elif ema60 < ema120: ema120_color = "[blue]"
+        if not df_calc.empty and len(df_calc) > 121:
+            try:
+                ema120_series = df_calc['close'].ewm(span=120, adjust=False).mean()
+                if ema120_series.iloc[-1] > ema120_series.iloc[-2]:
+                    ema120_color = "[red]"
+                else:
+                    ema120_color = "[blue]"
+            except: pass
 
         sar_icon = "-"
         if val_psar is not None:

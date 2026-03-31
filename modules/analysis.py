@@ -672,19 +672,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 현재가
     curr_price_color = "[white]"
-    if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None:
-        if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
-            if current_price > ind['ema_5']: curr_price_color = "[red]"
-            elif current_price < ind['ema_60']: curr_price_color = "[blue]"
-            elif current_price < ind['ema_5'] or current_price < ind['ema_20']: curr_price_color = "[dim]"
-        elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60']:
-            if current_price < ind['ema_5']: curr_price_color = "[blue]"
-            elif current_price > ind['ema_20'] or current_price > ind['ema_60']: curr_price_color = "[orange3]"
-            elif current_price > ind['ema_5']: curr_price_color = "[white]"
-        else:
-            if current_price < ind['ema_5']: curr_price_color = "[blue]"
-            elif current_price > ind['ema_20']: curr_price_color = "[orange3]"
-            elif current_price < ind['ema_20']: curr_price_color = "[white]"
+    if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
+        if ind['ema_20'] > ind['ema_60']:
+            curr_price_color = "[red]" if current_price > ind['ema_20'] else "[white]"
+        elif ind['ema_20'] < ind['ema_60']:
+            curr_price_color = "[blue]" if current_price < ind['ema_20'] else "[orange3]"
 
     price_str = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
     table_tech.add_row("현재가", f"{curr_price_color}{price_str}[/]", "이평선 배열 및 위치 기반")
@@ -2291,47 +2283,40 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
 
             curr_price_color = "[white]"
-            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None:
-                if ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60']:
-                    if curr > ind['ema_5']: curr_price_color = "[red]"
-                    elif curr < ind['ema_60']: curr_price_color = "[blue]"
-                    elif curr < ind['ema_5'] or curr < ind['ema_20']: curr_price_color = "[dim]"
-                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60']:
-                    if curr < ind['ema_5']: curr_price_color = "[blue]"
-                    elif curr > ind['ema_20'] or curr > ind['ema_60']: curr_price_color = "[orange3]"
-                    elif curr > ind['ema_5']: curr_price_color = "[white]"
-                else:
-                    if curr < ind['ema_5']: curr_price_color = "[blue]"
-                    elif curr > ind['ema_20']: curr_price_color = "[orange3]"
-                    elif curr < ind['ema_20']: curr_price_color = "[white]"
+            if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
+                if ind['ema_20'] > ind['ema_60']:
+                    curr_price_color = "[red]" if curr > ind['ema_20'] else "[white]"
+                elif ind['ema_20'] < ind['ema_60']:
+                    curr_price_color = "[blue]" if curr < ind['ema_20'] else "[orange3]"
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
-            ema_5_color = "[white]"
-            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
-                if ind['ema_5'] > ind['ema_20'] and ind['ema_5'] > ind['ema_60'] and ind['ema_5'] > ind['ema_120']: ema_5_color = "[red]"
-                elif ind['ema_5'] < ind['ema_20'] and ind['ema_5'] < ind['ema_60'] and ind['ema_5'] < ind['ema_120']: ema_5_color = "[blue]"
-                elif (ind['ema_20'] < ind['ema_5'] < ind['ema_60']) or (ind['ema_60'] < ind['ema_5'] < ind['ema_20']): ema_5_color = "[yellow]"
-                elif (ind['ema_60'] < ind['ema_5'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_5'] < ind['ema_60']): ema_5_color = "[orange3]"
-            ema_5_str = f"{ema_5_color}{fmt_idx(ind['ema_5'])}[/]"
+            # [수정] 이평선 색상 규칙 단순화 (계층적 분석)
+            ema5_color = "[white]"
+            if ind.get('ema_5') is not None and ind.get('ema_20') is not None:
+                ema5_color = "[red]" if ind['ema_5'] > ind['ema_20'] else "[blue]"
 
-            ema_20_color = "[white]"
-            if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
-                if ind['ema_20'] > ind['ema_60'] and ind['ema_20'] > ind['ema_120']: ema_20_color = "[red]"
-                elif ind['ema_20'] < ind['ema_60'] and ind['ema_20'] < ind['ema_120']: ema_20_color = "[blue]"
-                elif (ind['ema_60'] < ind['ema_20'] < ind['ema_120']) or (ind['ema_120'] < ind['ema_20'] < ind['ema_60']): ema_20_color = "[yellow]"
-            ema_20_str = f"{ema_20_color}{fmt_idx(ind['ema_20'])}[/]"
+            ema20_color = "[white]"
+            if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
+                ema20_color = "[red]" if ind['ema_20'] > ind['ema_60'] else "[blue]"
 
-            ema_60_color = "[yellow]"
-            if ind['ema_60'] is not None and ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_120'] is not None:
-                if ind['ema_120'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5'] and ind['ema_60'] > ind['ema_20']: ema_60_color = "[blue]"
-                elif ind['ema_120'] < ind['ema_60'] and ind['ema_60'] < ind['ema_5'] and ind['ema_60'] < ind['ema_20']: ema_60_color = "[red]"
-            ema_60_str = f"{ema_60_color}{fmt_idx(ind['ema_60'])}[/]"
-            
-            ema_120_color = "[white]"
-            if ind['ema_120'] is not None and ind['ema_60'] is not None:
-                if ind['ema_60'] > ind['ema_120']: ema_120_color = "[red]" 
-                elif ind['ema_60'] < ind['ema_120']: ema_120_color = "[blue]"
-            ema_120_str = f"{ema_120_color}{fmt_idx(ind['ema_120'])}[/]"
+            ema60_color = "[white]"
+            if ind.get('ema_60') is not None and ind.get('ema_120') is not None:
+                ema60_color = "[red]" if ind['ema_60'] > ind['ema_120'] else "[blue]"
+
+            ema120_color = "[white]"
+            if chart_df is not None and not chart_df.empty and len(chart_df) > 121:
+                try:
+                    ema120_series = chart_df['close'].ewm(span=120, adjust=False).mean()
+                    if ema120_series.iloc[-1] > ema120_series.iloc[-2]:
+                        ema120_color = "[red]"
+                    else:
+                        ema120_color = "[blue]"
+                except: pass
+
+            ema_5_str = f"{ema5_color}{fmt_idx(ind.get('ema_5'))}[/]"
+            ema_20_str = f"{ema20_color}{fmt_idx(ind.get('ema_20'))}[/]"
+            ema_60_str = f"{ema60_color}{fmt_idx(ind.get('ema_60'))}[/]"
+            ema_120_str = f"{ema120_color}{fmt_idx(ind.get('ema_120'))}[/]"
 
             # SAR 상태
             sar_val = ind.get('psar')
@@ -2907,23 +2892,22 @@ def _print_period_price_common(code, is_overseas, limit=20):
 
         def get_ma_color(val, ma_type):
             if pd.isna(val): return "white"
-            if pd.isna(ma5_val) or pd.isna(ma20_val) or pd.isna(ma60_val) or pd.isna(ma120_val): return "white"
+            
             if ma_type == 5:
-                if ma5_val > ma20_val and ma5_val > ma60_val and ma5_val > ma120_val: return "red"
-                if ma5_val < ma20_val and ma5_val < ma60_val and ma5_val < ma120_val: return "blue"
-                if (ma20_val < ma5_val < ma60_val) or (ma60_val < ma5_val < ma20_val): return "yellow"
-                if (ma60_val < ma5_val < ma120_val) or (ma120_val < ma5_val < ma60_val): return "orange3"
+                if pd.isna(ma20_val): return "white"
+                return "red" if val > ma20_val else "blue"
             elif ma_type == 20:
-                if ma20_val > ma60_val and ma20_val > ma120_val: return "red"
-                if ma20_val < ma60_val and ma20_val < ma120_val: return "blue"
-                if (ma60_val < ma20_val < ma120_val) or (ma120_val < ma20_val < ma60_val): return "yellow"
+                if pd.isna(ma60_val): return "white"
+                return "red" if val > ma60_val else "blue"
             elif ma_type == 60:
-                if ma120_val > ma60_val and ma60_val > ma5_val and ma60_val > ma20_val: return "blue"
-                if ma120_val < ma60_val and ma60_val < ma5_val and ma60_val < ma20_val: return "red"
-                return "yellow"
+                if pd.isna(ma120_val): return "white"
+                return "red" if val > ma120_val else "blue"
             elif ma_type == 120:
-                if ma60_val > ma120_val: return "red"
-                if ma60_val < ma120_val: return "blue"
+                if i + 1 < len(recent_df):
+                    prev_ma120 = recent_df.iloc[i+1]['ma120']
+                    if not pd.isna(prev_ma120):
+                        return "red" if val > prev_ma120 else "blue"
+                return "white"
             return "white"
 
         def fmt_ma(val, color):

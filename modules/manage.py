@@ -179,23 +179,22 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
                 def get_ma_color(val, ma_type):
                     if pd.isna(val): return "white"
-                    if pd.isna(ma5_val) or pd.isna(ma20_val) or pd.isna(ma60_val) or pd.isna(ma120_val): return "white"
+                    
                     if ma_type == 5:
-                        if ma5_val > ma20_val and ma5_val > ma60_val and ma5_val > ma120_val: return "red"
-                        if ma5_val < ma20_val and ma5_val < ma60_val and ma5_val < ma120_val: return "blue"
-                        if (ma20_val < ma5_val < ma60_val) or (ma60_val < ma5_val < ma20_val): return "yellow"
-                        if (ma60_val < ma5_val < ma120_val) or (ma120_val < ma5_val < ma60_val): return "orange3"
+                        if pd.isna(ma20_val): return "white"
+                        return "red" if val > ma20_val else "blue"
                     elif ma_type == 20:
-                        if ma20_val > ma60_val and ma20_val > ma120_val: return "red"
-                        if ma20_val < ma60_val and ma20_val < ma120_val: return "blue"
-                        if (ma60_val < ma20_val < ma120_val) or (ma120_val < ma20_val < ma60_val): return "yellow"
+                        if pd.isna(ma60_val): return "white"
+                        return "red" if val > ma60_val else "blue"
                     elif ma_type == 60:
-                        if ma120_val > ma60_val and ma60_val > ma5_val and ma60_val > ma20_val: return "blue"
-                        if ma120_val < ma60_val and ma60_val < ma5_val and ma60_val < ma20_val: return "red"
-                        return "yellow"
+                        if pd.isna(ma120_val): return "white"
+                        return "red" if val > ma120_val else "blue"
                     elif ma_type == 120:
-                        if ma60_val > ma120_val: return "red"
-                        if ma60_val < ma120_val: return "blue"
+                        if i + 1 < len(recent_df):
+                            prev_ma120 = recent_df.iloc[i+1]['ma120']
+                            if not pd.isna(prev_ma120):
+                                return "red" if val > prev_ma120 else "blue"
+                        return "white"
                     return "white"
 
                 def fmt_ma(val, color):
@@ -359,23 +358,22 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
                 def get_ma_color(val, ma_type):
                     if pd.isna(val): return "white"
-                    if pd.isna(ma5_val) or pd.isna(ma20_val) or pd.isna(ma60_val) or pd.isna(ma120_val): return "white"
+                    
                     if ma_type == 5:
-                        if ma5_val > ma20_val and ma5_val > ma60_val and ma5_val > ma120_val: return "red"
-                        if ma5_val < ma20_val and ma5_val < ma60_val and ma5_val < ma120_val: return "blue"
-                        if (ma20_val < ma5_val < ma60_val) or (ma60_val < ma5_val < ma20_val): return "yellow"
-                        if (ma60_val < ma5_val < ma120_val) or (ma120_val < ma5_val < ma60_val): return "orange3"
+                        if pd.isna(ma20_val): return "white"
+                        return "red" if val > ma20_val else "blue"
                     elif ma_type == 20:
-                        if ma20_val > ma60_val and ma20_val > ma120_val: return "red"
-                        if ma20_val < ma60_val and ma20_val < ma120_val: return "blue"
-                        if (ma60_val < ma20_val < ma120_val) or (ma120_val < ma20_val < ma60_val): return "yellow"
+                        if pd.isna(ma60_val): return "white"
+                        return "red" if val > ma60_val else "blue"
                     elif ma_type == 60:
-                        if ma120_val > ma60_val and ma60_val > ma5_val and ma60_val > ma20_val: return "blue"
-                        if ma120_val < ma60_val and ma60_val < ma5_val and ma60_val < ma20_val: return "red"
-                        return "yellow"
+                        if pd.isna(ma120_val): return "white"
+                        return "red" if val > ma120_val else "blue"
                     elif ma_type == 120:
-                        if ma60_val > ma120_val: return "red"
-                        if ma60_val < ma120_val: return "blue"
+                        if i + 1 < len(recent_df):
+                            prev_ma120 = recent_df.iloc[i+1]['ma120']
+                            if not pd.isna(prev_ma120):
+                                return "red" if val > prev_ma120 else "blue"
+                        return "white"
                     return "white"
 
                 def fmt_ma(val, color):
