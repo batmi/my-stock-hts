@@ -196,6 +196,27 @@ class TelegramCommander:
                     fi = t.fast_info
                     last_price = fi.last_price
                     prev_close = fi.regular_market_previous_close
+
+                    # [추가] 24시간 거래 자산(원유, 비트코인)의 전일 종가 보정
+                    if name in ["WTI 원유", "비트코인"]:
+                        # [수정] df_daily 변수 정의 누락 수정
+                        df_daily = None
+                        try:
+                            # 일봉 데이터를 조회하여 df_daily 변수에 할당
+                            df_daily = api.get_chart_data(ticker, is_overseas=True, period_type='daily')
+                        except Exception as e:
+                            logger.debug(f"[{name}] 일봉 데이터 조회 실패: {e}")
+
+                        if df_daily is not None and not df_daily.empty and len(df_daily) >= 2:
+                            try:
+                                last_dt = df_daily.index[-1].date()
+                                utc_today = datetime.now(timezone.utc).date()
+                                target_idx = -2 if last_dt >= utc_today else -1
+                                check_prev = float(df_daily['close'].iloc[target_idx])
+                                if not math.isnan(check_prev):
+                                    prev_close = check_prev
+                            except Exception: pass
+
                     if last_price and prev_close and not math.isnan(last_price) and not math.isnan(prev_close):
                         rate = ((last_price - prev_close) / prev_close) * 100
                         
