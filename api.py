@@ -766,6 +766,14 @@ def check_and_refresh_token_if_expired():
                 context.TOKEN_EXPIRED = False
                 if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print("[bold green]토큰 갱신 완료. 시스템을 정상적으로 계속 사용합니다.[/bold green]\n")
+                
+                # [추가] 토큰 갱신 지연 알림이 발송된 적이 있다면, 복구 알림 전송
+                if getattr(context, 'LAST_TOKEN_REFRESH_ALERT', 0) > 0:
+                    try:
+                        send_telegram_message("✅ [시스템 복구] API 토큰이 정상적으로 갱신되었습니다.\n시스템을 계속 운영합니다.")
+                        # 복구 알림 후에는 다시 지연 알림을 보낼 수 있도록 초기화
+                        context.LAST_TOKEN_REFRESH_ALERT = 0
+                    except: pass
             else:
                 raise Exception(fail_reason)
 
@@ -1962,19 +1970,32 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
     url = "uapi/overseas-stock/v1/trading/inquire-ccnl"
     tr_id = "VTTS3035R" if config.session.is_simulation else "TTTS3035R"
     
-    params = {
-        "CANO": cano,
-        "ACNT_PRDT_CD": acnt_prdt_cd,
-        "PDNO": "%",
-        "ORD_STRT_DT": today,
-        "ORD_END_DT": today,
-        "SLL_BUY_DVSN": "00",
-        "CCLD_NCCS_DVSN": "01", # 01: 체결
-        "CTX_AREA_FK200": "",
-        "CTX_AREA_NK200": ""
-    }
-    
-    return call_api(url, "overseas", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
+    # [Fix] OVRS_EXCG_CD는 필수 입력값이므로, 거래소별로 순회하며 조회 후 병합
+    all_trades = []
+    final_res = {'rt_cd': '0', 'output': []} # 성공 시 반환할 기본 구조
+
+    for excg_cd in ["NASD", "NYSE", "AMEX"]:
+        params = {
+            "CANO": cano,
+            "ACNT_PRDT_CD": acnt_prdt_cd,
+            "OVRS_EXCG_CD": excg_cd, # [Fix] 거래소 코드 추가
+            "PDNO": "%",
+            "ORD_STRT_DT": today,
+            "ORD_END_DT": today,
+            "SLL_BUY_DVSN": "00",
+            "CCLD_NCCS_DVSN": "01", # 01: 체결
+            "CTX_AREA_FK200": "",
+            "CTX_AREA_NK200": ""
+        }
+        
+        res = call_api(url, "overseas", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
+        if res.get('rt_cd') == '0':
+            all_trades.extend(res.get('output', []))
+        elif res.get('rt_cd') != '1': # '1'은 데이터 없음이므로 에러가 아님
+            return res # 실제 에러 발생 시 즉시 반환
+
+    final_res['output'] = all_trades
+    return final_res
 
 def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     """미체결 내역 조회 (국내주식) - get_domestic_open_orders의 Alias"""
