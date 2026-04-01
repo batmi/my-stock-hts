@@ -842,16 +842,35 @@ def manage_stock_memos_by_mode(mode):
             return 'back'
 
         config.console.print()
-        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](이전: b, 메인: q, 취소: Enter)[/dim]")
+        if mode == 'view':
+            prompt_msg = f"{mode_name_map[mode]}할 종목 번호 선택 [dim](추가: a, 삭제: d, 이전: b, 메인: q, 취소: Enter)[/dim]"
+        else:
+            prompt_msg = f"{mode_name_map[mode]}할 종목 번호 선택 [dim](이전: b, 메인: q, 취소: Enter)[/dim]"
+            
+        idx_str = Prompt.ask(prompt_msg)
         if idx_str.lower() in ['b', 'q']: return 'back'
         if idx_str == "": return 'back'
+        
+        if mode == 'view':
+            if idx_str.lower() == 'a':
+                context.USER_ACTION_BREADCRUMB.append("[메모 추가]")
+                add_new_stock_memo()
+                context.USER_ACTION_BREADCRUMB.pop()
+                continue
+            elif idx_str.lower() == 'd':
+                context.USER_ACTION_BREADCRUMB.append("[메모 삭제]")
+                manage_stock_memos_by_mode('delete')
+                context.USER_ACTION_BREADCRUMB.pop()
+                continue
+
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
             target = grouped_memos[int(idx_str)-1]
             res = _manage_specific_stock_memos(target['code'], target['name'], mode)
             if res in ('quit_to_main', 'quit_to_menu'):
                 return 'back'
             elif res == 'deleted':
-                return 'deleted'
+                if mode == 'delete': return 'deleted'
+                continue
         else:
             config.console.print("\n[red]잘못된 번호입니다.[/red]")
             time.sleep(1)
@@ -924,10 +943,8 @@ def manage_stock_menu():
             ("2", "관심 종목 추가", "Add Stock"), 
             ("3", "관심 종목 삭제", "Delete Stock"), 
             ("4", "관심 종목 순서 변경", "Reorder Stock"), 
-            ("5", "종목 메모 전체 조회", "View Memo"), 
-            ("6", "종목 메모 추가", "Add Memo"), 
-            ("7", "종목 메모 삭제", "Delete Memo"),
-            ("8", "차트 및 데이터 캐시 초기화", "Clear Cache")
+            ("5", "관심 종목 메모 관리", "Manage Memo"), 
+            ("9", "차트 및 데이터 캐시 초기화", "Clear Cache")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -953,11 +970,7 @@ def manage_stock_menu():
             if reorder_stock() is not False: utils.pause()
         elif choice == "5":
             manage_stock_memos_by_mode('view')
-        elif choice == "6":
-            if add_new_stock_memo() is not False: utils.pause()
-        elif choice == "7":
-            manage_stock_memos_by_mode('delete')
-        elif choice == "8":
+        elif choice == "9":
             import api
             from modules import market
             from modules import analysis 
