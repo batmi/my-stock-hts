@@ -1005,6 +1005,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # [추가] 기간별 시세 30일치 출력
     _print_period_price_30(code, is_overseas)
     
+    # [추가] 상세 차트 분석 여부 확인
+    config.console.print()
+    if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+        from modules import chart
+        chart.generate_visual_chart(code, name, is_overseas=is_overseas)
+
     # [추가] 개별 종목 분석 완료 후 AI 종목 심층 진단 연동
     config.console.print()
     if Prompt.ask("🤖 AI 종목 심층 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
@@ -1893,10 +1899,8 @@ def analyze_market_stocks(market_type):
                 name = selected['name']
                 
                 # [수정] 차트 분석 전 개별 종목 분석 결과 출력
-                config.console.print(f"\n[bold green]>> {name}({code}) 개별 분석 및 차트 분석 실행[/bold green]")
+                config.console.print(f"\n[bold green]>> {name}({code}) 개별 종목 심층 분석 실행[/bold green]")
                 diagnose_stock(code, name, target_is_overseas=False)
-                
-                chart.generate_visual_chart(code, name, is_overseas=False)
             else:
                 config.console.print("[red]잘못된 번호입니다. 리스트에 있는 번호를 입력해주세요.[/red]")
         else:
