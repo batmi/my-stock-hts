@@ -89,10 +89,10 @@ def _custom_print_breadcrumb():
             config.console.print("\n[dim]" + "─"*50 + "[/dim]")
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
-            config.console.print(f"[dim] 메인 메뉴 > {path_str}[/dim]")
+            config.console.print(f"[dim] 메인 메뉴 > [/dim][green]{path_str}[/green]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
         else:
-            config.console.print(f"\n[dim] 메인 메뉴 > {path_str}[/dim]\n")
+            config.console.print(f"\n[dim] 메인 메뉴 > [/dim][green]{path_str}[/green]\n")
 
 utils.print_breadcrumb = _custom_print_breadcrumb
 # =========================================================================
