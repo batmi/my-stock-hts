@@ -21,9 +21,6 @@ import config
 import context # [추가] 상태 관리 모듈
 import constants
 
-ssl._create_default_https_context = ssl._create_unverified_context
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 logger = logging.getLogger(__name__)
 
 def _is_screen_output_allowed():
@@ -805,7 +802,7 @@ def _get_access_token_internal(force_refresh=False):
         res = None
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), verify=False, timeout=10)
+                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=10)
                 if res.status_code == 200: break # 정상 발급 시 탈출
                 if attempt < 2: time.sleep(1.5)  # 서버 오류 시 대기 후 재시도
             except Exception as req_e:
@@ -877,7 +874,7 @@ def _get_real_access_token_internal(force_refresh=False):
         res = None
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), verify=False, timeout=10)
+                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=10)
                 if res.status_code == 200: break
                 if attempt < 2: time.sleep(1.5)
             except Exception as req_e:
@@ -954,7 +951,7 @@ def _get_auto_access_token_internal(force_refresh=False):
         res = None
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), verify=False, timeout=10)
+                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=10)
                 if res.status_code == 200: break
                 if attempt < 2: time.sleep(1.5)
             except Exception as req_e:
@@ -1080,9 +1077,9 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 
                 # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
                 if method == "GET":
-                    res = session.get(full_url, headers=headers, params=params, verify=False, timeout=timeout, retries=retries)
+                    res = session.get(full_url, headers=headers, params=params, timeout=timeout, retries=retries)
                 else:
-                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, verify=False, timeout=timeout, retries=retries)
+                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, timeout=timeout, retries=retries)
                 
                 return res.json()
             except Exception as e:
@@ -1121,7 +1118,7 @@ def get_stock_name_by_code(code, is_overseas):
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
-            r = session.get(url, headers=headers, verify=False, timeout=3)
+            r = session.get(url, headers=headers, timeout=3)
             m_og = re.search(r'meta property="og:title" content="(.*?)"', r.text)
             if m_og:
                 raw_title = m_og.group(1).strip()
