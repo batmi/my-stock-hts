@@ -901,7 +901,7 @@ def view_watchlist():
             has_stock = True
             config.console.print(f"[bold]{label}[/bold]")
             
-            table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+            table = Table(box=box.HORIZONTALS, show_header=False, padding=(0, 2), border_style="dim")
             table.add_column("No.", justify="right", style="dim")
             table.add_column("종목명")
             table.add_column("코드", style="dim")
@@ -919,6 +919,9 @@ def view_watchlist():
                 tag_str = " ".join(status_tags)
                 
                 table.add_row(str(i+1), name, code, tag_str)
+                
+                if (i + 1) % 5 == 0 and (i + 1) < len(stocks):
+                    table.add_section()
                 
             config.console.print(table)
             config.console.print()
