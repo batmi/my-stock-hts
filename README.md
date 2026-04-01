@@ -46,18 +46,38 @@
 
 ## 3. 설치 및 설정
 
-### 1. 환경 설정
-*   Python 3.9 이상
-
-### 2. 라이브러리 설치
-**[권장]** `run.sh` (macOS/Linux) 또는 `run.bat` (Windows) 스크립트를 실행하면 필요한 라이브러리를 확인하고 **자동으로 설치를 안내**합니다.
-
-수동으로 설치하려면 아래 명령어를 사용하세요.
+### 1. 소스 코드 다운로드 (선택사항)
 ```bash
-pip install requests pandas yfinance rich matplotlib numpy openpyxl beautifulsoup4 google-generativeai python-dotenv
+git clone https://github.com/your-username/my-stock-hts.git
+cd my-stock-hts
 ```
 
-### 3. 설정 (Configuration)
+### 2. 가상 환경 생성 및 활성화
+**[권장]** 프로젝트별로 독립된 실행 환경을 만들기 위해 가상 환경 사용을 강력히 권장합니다.
+
+```bash
+# 가상 환경 생성 (최초 1회)
+python3 -m venv .venv
+
+# 가상 환경 활성화 (터미널을 새로 열 때마다 실행)
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+```
+
+### 3. 라이브러리 설치
+프로젝트 실행에 필요한 모든 라이브러리는 `requirements.txt`에 정의되어 있습니다.
+
+```bash
+# (가상 환경이 활성화된 상태에서)
+pip install -r requirements.txt
+```
+*참고: `run.sh` 또는 `run.bat` 스크립트를 실행하면 이 과정의 일부가 자동으로 처리될 수 있습니다.*
+
+
+### 4. 설정 (Configuration)
 보안을 위해 API Key 등 민감 정보는 **환경 변수**로 설정하는 것을 권장합니다.
 
 **주요 환경 변수:**
