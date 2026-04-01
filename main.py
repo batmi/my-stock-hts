@@ -95,7 +95,7 @@ def _custom_print_breadcrumb():
         if len(context.USER_ACTION_BREADCRUMB) == 1:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-            env_color = "green" if config.session.is_simulation else "bold red"
+            env_color = "bold yellow" if config.session.is_simulation else "bold red"
             config.console.print("\n[dim]" + "─"*50 + "[/dim]")
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
@@ -695,12 +695,21 @@ def main():
     config.session.initialize(mode=args.mode)
 
     # 2. 사전 점검
-    if not preflight_check():
-        config.console.print("\n[bold red]시스템 사전 점검에 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
+    preflight_success = False
+    for attempt in range(3):
+        if preflight_check():
+            preflight_success = True
+            break
+        
+        if attempt < 2:
+            config.console.print(f"\n[yellow]사전 점검에 실패했습니다. 5초 후 재시도합니다... ({attempt+1}/3)[/yellow]")
+            time.sleep(5)
+
+    if not preflight_success:
+        config.console.print("\n[bold red]시스템 사전 점검에 최종 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
         config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
         sys.exit(1)
-    else:
-        config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
+    config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
     with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
         # 3. DB 큐 프록시 설치
@@ -756,7 +765,7 @@ def main():
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-            env_color = "green" if config.session.is_simulation else "bold red"
+            env_color = "bold yellow" if config.session.is_simulation else "bold red"
             config.console.print("\n[dim]" + "─"*50 + "[/dim]")
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")

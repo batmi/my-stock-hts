@@ -696,6 +696,25 @@ retry_strategy = Retry(
 # 동시에 많은 네트워크 요청이 발생해도 커넥션 대기 없이 즉시 처리 가능
 session.mount('https://', TLSAdapter(max_retries=retry_strategy, pool_connections=30, pool_maxsize=30))
 
+# [추가] 토큰 발급 전용 세션 (강화된 재시도 로직)
+def _create_token_session():
+    """토큰 발급 전용 requests 세션을 생성합니다. (강화된 재시도 로직 포함)"""
+    session = requests.Session()
+    # KIS API 서버의 일시적 장애(5xx 에러) 및 네트워크 오류에 대응하기 위한 재시도 전략
+    retry_strategy = Retry(
+        total=5,  # 총 5회 재시도
+        backoff_factor=1, # 실패 시 대기 시간 (1s, 2s, 4s, 8s, 16s...)
+        status_forcelist=[429, 500, 502, 503, 504], # 재시도할 HTTP 상태 코드
+        allowed_methods=["POST"], # POST 요청에 대해서도 재시도
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    return session
+
+_token_session = _create_token_session()
+
+
 def get_current_token():
     # [추가] 시스템 트레이딩 컨텍스트 확인
     if getattr(context.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
@@ -800,18 +819,9 @@ def _get_access_token_internal(force_refresh=False):
     try:
         logger.info("모의투자 토큰 신규 발급 요청...")
         
-        # [수정] 공유 세션(Keep-Alive) 만료에 따른 소켓 오류를 방지하고, KIS 서버의 일시적 장애에 대응하기 위해 독립된 requests 및 재시도 로직 사용
-        res = None
-        for attempt in range(5):
-            try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=15)
-                if res.status_code == 200: break # 정상 발급 시 탈출
-                if attempt < 4: time.sleep(2.0)  # 서버 오류 시 대기 후 재시도
-            except Exception as req_e:
-                logger.warning(f"[Token] 모의투자 토큰 발급 예외 발생 (재시도 {attempt+1}/5): {req_e}")
-                if attempt < 4: time.sleep(2.0)
-                else: raise req_e
-        if not res: raise Exception("모의투자 토큰 발급 응답 없음 (최대 재시도 초과)")
+        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
+        res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
+        if res is None: raise Exception("토큰 발급 응답 없음 (최대 재시도 초과)")
         
         if res.status_code == 200:
             res_json = res.json()
@@ -838,8 +848,11 @@ def _get_access_token_internal(force_refresh=False):
             logger.error(f"토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             return None
             
+    except requests.exceptions.RequestException as e:
+        logger.error(f"모의투자 토큰 발급 중 네트워크 오류: {e}")
+        return None
     except Exception as e:
-        logger.error(f"접속 오류: {str(e)}")
+        logger.error(f"모의투자 토큰 발급 중 오류: {e}")
         return None
 
 def get_real_access_token(force_refresh=False):
@@ -873,18 +886,9 @@ def _get_real_access_token_internal(force_refresh=False):
     try:
         logger.info("실전투자 토큰 신규 발급 요청...")
         
-        # [수정] Stale Socket 방지 및 KIS 서버 일시적 장애 대응
-        res = None
-        for attempt in range(5):
-            try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=15)
-                if res.status_code == 200: break
-                if attempt < 4: time.sleep(2.0)
-            except Exception as req_e:
-                logger.warning(f"[Token] 실전투자 토큰 발급 예외 발생 (재시도 {attempt+1}/5): {req_e}")
-                if attempt < 4: time.sleep(2.0)
-                else: raise req_e
-        if not res: raise Exception("실전투자 토큰 발급 응답 없음 (최대 재시도 초과)")
+        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
+        res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
+        if res is None: raise Exception("실전투자 토큰 발급 응답 없음 (최대 재시도 초과)")
         
         if res.status_code == 200:
             res_json = res.json()
@@ -908,9 +912,10 @@ def _get_real_access_token_internal(force_refresh=False):
             
             logger.error(f"실전 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             
+    except requests.exceptions.RequestException as e:
+        logger.error(f"실전 토큰 발급 중 네트워크 오류: {e}")
     except Exception as e:
-        logger.error(f"실전 토큰 발급 중 오류: {e}")
-        pass
+        logger.error(f"실전 토큰 발급 중 기타 오류: {e}")
         
     return None
 
@@ -951,18 +956,9 @@ def _get_auto_access_token_internal(force_refresh=False):
     try:
         logger.info("자동매매용 토큰 신규 발급 요청...")
         
-        # [수정] Stale Socket 방지 및 KIS 서버 일시적 장애 대응
-        res = None
-        for attempt in range(5):
-            try:
-                res = requests.post(url, headers=headers, data=json.dumps(body), timeout=15)
-                if res.status_code == 200: break
-                if attempt < 4: time.sleep(2.0)
-            except Exception as req_e:
-                logger.warning(f"[Token] 자동매매 토큰 발급 예외 발생 (재시도 {attempt+1}/5): {req_e}")
-                if attempt < 4: time.sleep(2.0)
-                else: raise req_e
-        if not res: raise Exception("자동매매 토큰 발급 응답 없음 (최대 재시도 초과)")
+        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
+        res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
+        if res is None: raise Exception("자동매매 토큰 발급 응답 없음 (최대 재시도 초과)")
         
         if res.status_code == 200:
             res_json = res.json()
@@ -984,8 +980,10 @@ def _get_auto_access_token_internal(force_refresh=False):
             except: pass
             
             logger.error(f"자동매매 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"자동매매 토큰 발급 중 네트워크 오류: {e}")
     except Exception as e:
-        logger.error(f"자동매매 토큰 발급 중 오류: {e}")
+        logger.error(f"자동매매 토큰 발급 중 기타 오류: {e}")
         
     return None
 
