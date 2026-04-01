@@ -2049,8 +2049,8 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     
     for exc in target_exchanges:
         params = {
-            "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
-            "OVRS_EXCG_CD": exc, "SORT_SQN": "DS", 
+            "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
+            "OVRS_EXCG_CD": exc, "SORT_GB": "01", # [Fix] API 문서에 따라 SORT_SQN -> SORT_GB로 수정 (01: 주문번호순)
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
         }
         res = call_api("uapi/overseas-stock/v1/trading/inquire-nccs", "overseas", "inquiry", "open_orders", params=params)

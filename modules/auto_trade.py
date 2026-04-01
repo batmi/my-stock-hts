@@ -1509,6 +1509,7 @@ class AutoTrader:
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             
+            cls._instance.initialized = False # [추가] 초기화 상태 플래그
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
             if not os.path.exists(log_dir):
@@ -1570,16 +1571,92 @@ class AutoTrader:
         """체결 모니터에서 호출하여 주문 상태 업데이트"""
         self.order_manager.update_order_status(code, odno, status)
 
+    def initialize(self):
+        """
+        자동매매 시작에 필요한 모든 초기화 작업을 병렬로 수행합니다.
+        (자산 조회, DB 캐시 로드, 초기 자산 설정 등)
+        """
+        if self.initialized:
+            return True
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[cyan]자동매매 세션 초기화 중...[/cyan]", total=3)
+            
+            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            
+            with utils.AccountContext(target_cano):
+                # 병렬 실행을 위한 변수
+                results = {}
+
+                def _fetch_balance():
+                    progress.update(task, description="[cyan]잔고/평가금 조회...[/cyan]")
+                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                    progress.advance(task)
+                    return "balance", (holdings, summary)
+                
+                def _fetch_deposit():
+                    progress.update(task, description="[cyan]예수금 상세 조회...[/cyan]")
+                    deposit_res = api.get_deposit_balance(target_cano, acnt)
+                    progress.advance(task)
+                    return "deposit", deposit_res
+                
+                def _load_db_caches():
+                    progress.update(task, description="[cyan]DB 캐시 로드...[/cyan]")
+                    ts_cache = db_manager.db.get_all_trailing_stops()
+                    half_cache = db_manager.db.get_all_half_tp()
+                    progress.advance(task)
+                    return "caches", (ts_cache, half_cache)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = [executor.submit(_fetch_balance), executor.submit(_fetch_deposit), executor.submit(_load_db_caches)]
+                    for future in concurrent.futures.as_completed(futures):
+                        key, value = future.result()
+                        results[key] = value
+
+                # 결과 처리
+                holdings, summary = results.get("balance", (None, None))
+                deposit_res = results.get("deposit")
+                ts_cache, half_cache = results.get("caches", ({}, set()))
+
+                if holdings is None or deposit_res is None:
+                    raise Exception("자산/예수금 조회 실패 (API 응답 없음)")
+
+                self.trailing_stop_cache = ts_cache
+                self.half_tp_cache = half_cache
+                self.initial_holdings = holdings
+                self.initial_summary = summary
+                
+                deposit = deposit_res.get('d2_deposit', 0)
+                stock_eval = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0) if holdings else 0
+                
+                current_calculated_asset = deposit + stock_eval
+                if current_calculated_asset > 0:
+                    saved_initial = load_daily_initial_asset()
+                    self.initial_asset = saved_initial if saved_initial > 0 else current_calculated_asset
+                    if saved_initial <= 0:
+                        save_daily_initial_asset(self.initial_asset)
+                        db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), f"{target_cano}-{acnt}", self.initial_asset)
+                else:
+                    self.initial_asset = 0
+
+                self.initialized = True
+                return True
+        return False
+
     def start(self, interactive=True):
         if self.is_running:
             if interactive:
                 console.print("\n[yellow]이미 자동매매가 실행 중입니다.[/yellow]")
             return
         
-        # [추가] 로그 파일 생성을 보장하기 위해 시작 즉시 로그 기록
         self.log("━━━ 자동매매 시스템 시작 프로세스 진입 ━━━")
         
-        # [수정] 실전 모드일 경우 자동매매 전용 계좌 설정 확인
         if not config.session.is_simulation:
             if not config.session.auto_app_key or not config.session.auto_cano:
                 console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
@@ -1597,219 +1674,126 @@ class AutoTrader:
             else:
                 console.print("[bold cyan][텔레그램 명령] 실전 투자 자동매매를 시작합니다.[/bold cyan]")
 
-        # [추가] 텔레그램 메시지 구성을 위한 변수 미리 선언
-        holdings = []
-        summary = []
-        deposit = 0
-        asset_check_failed = False # [추가] 자산 조회 실패 여부 플래그
+        try:
+            # [수정] 초기화 로직 분리
+            if not self.initialized:
+                if not self.initialize():
+                    self.log("초기화 실패로 자동매매를 시작할 수 없습니다.")
+                    console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
+                    return
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            transient=True
-        ) as progress:
-            task = progress.add_task("[cyan]시스템 시작 준비 중...[/cyan]", total=None)
-            
             self.is_running = True
             self.start_time = datetime.now()
             self.consecutive_errors = 0
             self.was_market_open = self.is_market_open()
-            self.market_status_notified = {} # 시작 시 알림 상태 초기화
+            self.market_status_notified = {}
+            context.SYSTEM_LOGGER = self.log
             
-            # [추가] 시작 시점 총 자산 계산 (손실 제한 기준점)
-            # [수정] AccountContext 사용
+            self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
+            self.thread.start()
+
+            console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
+            self.log("시스템 시작")
+            
+            # [수정] 시작 메시지 생성 로직은 초기화 시 저장된 데이터 활용
+            holdings = self.initial_holdings
+            summary = self.initial_summary
+            deposit = 0
+            if self.initial_asset > 0:
+                if summary:
+                    deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                    if deposit == 0:
+                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+            
+            msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
+            msg += f"초기 자산: {self.initial_asset:,}원"
+            msg += f"\n현재 예수금: {deposit:,}원"
+            
+            # [복원] 상세 자산 현황 추가
+            stock_eval_amt = 0
+            if summary and len(summary) > 0:
+                s_data = summary[0]
+                stock_eval_amt = api.safe_int(s_data.get('scts_evlu_amt'))
+                total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+                
+                tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
+                if tot_pchs == 0 and holdings:
+                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                
+                rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
+                msg += f"\n증권 평가 자산: {stock_eval_amt:,}원"
+                msg += f"\n증권 평가 손익: {total_profit:+,}원 ({rate:+.2f}%)"
+
+            # [복원] 전략 설정 요약 정보 추가
+            buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+            buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
+            sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+            tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+            ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+            ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+            tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+            invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
+            
+            use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+            use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", False)
+            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+
+            msg += "\n\n⚙️ [적용 전략]"
+            msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
+            msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
+            
+            tp_str = f"+{tp}%"
+            if use_half_tp:
+                half_tp_rate = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", tp / 2.0)
+                tp_str += f" (반익절 +{half_tp_rate:.1f}%)"
+            
+            sl_str = f"{sl}%"
+            if use_atr_stop: sl_str += f" (ATR x{atr_mult})"
+            
+            msg += f"\n• 익절: {tp_str}"
+            msg += f"\n• 손절: {sl_str}"
+            msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
+            if use_time_stop:
+                msg += f"\n• 시간청산: {time_stop_days}일 경과"
+            msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
+                
+            # [복원] 보유 종목 현황 추가
+            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+
+            if valid_holdings:
+                msg += "\n\n📋 [보유 종목 현황]"
+                for item in valid_holdings:
+                    name = item['prdt_name']
+                    qty = int(item['hldg_qty'])
+                    cur_price = int(item['prpr'])
+                    eval_amt = int(item['evlu_amt'])
+                    rate = float(item['evlu_pfls_rt'])
+                    profit = int(item['evlu_pfls_amt'])
+                    msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
+            else:
+                msg += "\n\n📋 [보유 종목] 없음"
+                if stock_eval_amt > 0:
+                    msg += " (⚠️ 평가금액 존재 - API 데이터 불일치)"
+
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             with utils.AccountContext(target_cano):
-                # [최적화] 자산 조회 로직 통합 (중복 API 호출 제거)
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                
-                try:
-                    # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도(MAX_RETRIES) 활용
-                    progress.update(task, description="[cyan]자산 및 잔고 조회 중...[/cyan]")
-                    # 1. 잔고 및 평가금 조회
-                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                    
-                    # [추가] 스레드 첫 실행 시 재사용을 위해 저장
-                    self.initial_holdings = holdings
-                    self.initial_summary = summary
-                    
-                    # 2. 예수금 조회
-                    # [수정] 실전/모의 모두 summary 정보 우선 활용 (안정성 확보)
-                    if summary:
-                        # [수정] 자산 계산 시 D+2 예수금(가수도금)을 사용하여 매도 대금 미결제분 반영
-                        deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                        if deposit == 0: # Fallback
-                            deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                    
-                    if deposit == 0 and not config.session.is_simulation:
-                        res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                        if res:
-                            deposit = res['deposit'] + res['foreign_deposit']
-                    
-                    # [Fix: Point 2] DB에서 Trailing Stop 및 Half TP 캐시 명시적 로드
-                    def _load_caches_from_db():
-                        try:
-                            ts_cache = db_manager.db.get_all_trailing_stops()
-                            half_cache = db_manager.db.get_all_half_tp()
-                            return ts_cache, half_cache
-                        except Exception as e:
-                            logger.error(f"캐시 로드 실패: {e}")
-                            return {}, set()
-                    
-                    if hasattr(db_manager.db, 'execute_custom'):
-                        ts_cache, half_cache = db_manager.db.execute_custom(_load_caches_from_db)
-                    else:
-                        ts_cache, half_cache = _load_caches_from_db()
-                        
-                    self.trailing_stop_cache = ts_cache
-                    self.half_tp_cache = half_cache
+                api.send_telegram_message(msg)
 
-                    # 3. 총 자산 계산
-                    stock_eval = 0
-                    # [수정] API 요약 데이터 대신 보유 종목 실시간 합산
-                    if holdings:
-                        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
-                        stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
-                    elif summary:
-                        stock_eval = api.safe_int(summary[0].get('scts_evlu_amt'))
-                    
-                    current_calculated_asset = deposit + stock_eval
-                        
-                    if current_calculated_asset > 0:
-                        saved_initial = load_daily_initial_asset()
-                        if saved_initial > 0:
-                            self.initial_asset = saved_initial
-                        else:
-                            self.initial_asset = current_calculated_asset
-                            save_daily_initial_asset(self.initial_asset)
-                            
-                        # [추가] DB에 일일 초기 자산 기록 (스냅샷)
-                        try:
-                            today_str = datetime.now().strftime("%Y-%m-%d")
-                            acc_str = f"{target_cano}-{acnt}"
-                            db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
-                        except: pass
-                    else:
-                        self.initial_asset = 0
+            # 초기화에 사용된 데이터는 비워줌
+            self.initial_holdings = None
+            self.initial_summary = None
 
-                    asset_check_failed = False
-
-                except Exception as e:
-                    logger.error(f"시작 자산 조회 실패: {e}")
-                    asset_check_failed = True
-                
-                # [수정] 시작 시 불필요한 집중 감시 모드 진입 방지 (IDLE_INTERVAL=0 설정 존중)
-                # ConclusionMonitor().check_now()
-                
-                # [추가] 체결 감시 모니터 시작 (체결 확인 및 DB 상태 동기화를 위해 필수)
-                ConclusionMonitor().start()
-            
-            if asset_check_failed:
-                self.log("초기 자산 조회 실패 (API 응답 없음 또는 오류)")
-                console.print("[bold red]⚠️ 초기 자산 조회 실패: API 응답이 없거나 오류가 발생했습니다.[/bold red]")
+        except Exception as e:
+            logger.error(f"자동매매 시작 실패: {e}")
+            console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
 
             if self.initial_asset > 0:
                 saved_msg = " (당일 기준 복원)" if load_daily_initial_asset() > 0 else " (당일 기준 저장)"
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원{saved_msg}")
-            
-            # [추가] API 모듈에서 로그를 남길 수 있도록 연결
-            context.SYSTEM_LOGGER = self.log
-            
-            progress.update(task, description="[cyan]트레이딩 스레드 시작 중...[/cyan]")
-            self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
-            self.thread.start()
-
-        console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
-        self.log("시스템 시작")
-        
-        # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
-        # AccountContext는 블록 내에서만 유효하므로, 메시지 생성 시점에만 적용하거나
-        # send_telegram_message 내부에서 처리하도록 두는 것이 좋으나, 여기서는 명시적으로 설정
-        
-        # [수정] 시작 메시지에 보유 종목 및 자산 현황 추가
-        msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
-        
-        if asset_check_failed:
-            msg += "⚠️ [경고] 자산 정보를 불러오지 못했습니다. (API 오류)\n"
-            
-        msg += f"초기 자산: {self.initial_asset:,}원"
-        msg += f"\n현재 예수금: {deposit:,}원"
-        
-        # [추가] 현재 평가금액 정보 (전략 정보 위로 이동)
-        stock_eval_amt = 0
-        if summary and len(summary) > 0:
-            s_data = summary[0]
-            # [수정] 현재 평가 금액 = 주식 평가금 + 예수금 (총 자산)
-            stock_eval_amt = api.safe_int(s_data.get('scts_evlu_amt'))
-            current_total_asset = stock_eval_amt + deposit
-            total_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
-            
-            tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
-            if tot_pchs == 0 and holdings:
-                tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-            
-            rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
-            msg += f"\n증권 평가 자산: {stock_eval_amt:,}원"
-            msg += f"\n증권 평가 손익: {total_profit:+,}원 ({rate:+.2f}%)"
-
-        # [추가] 전략 설정 요약 정보 추가
-        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
-        sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
-        sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-        tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
-        
-        # [추가] 코드를 분석하여 실제 반영 중인 고급 전략 추가
-        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
-        use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
-        atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
-        use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", False)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-
-        msg += "\n\n⚙️ [적용 전략]"
-        msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
-        msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
-        
-        tp_str = f"+{tp}%"
-        if use_half_tp: tp_str += f" (반익절 +{tp/2:.1f}%)"
-        
-        sl_str = f"{sl}%"
-        if use_atr_stop: sl_str += f" (ATR x{atr_mult})"
-        
-        msg += f"\n• 익절: {tp_str}"
-        msg += f"\n• 손절: {sl_str}"
-        msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
-        if use_time_stop:
-            msg += f"\n• 시간청산: {time_stop_days}일 경과"
-        msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
-            
-        # [수정] 보유수량 0 초과인 종목만 필터링
-        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
-
-        if valid_holdings:
-            msg += "\n\n📋 [보유 종목 현황]"
-            for item in valid_holdings:
-                name = item['prdt_name']
-                qty = int(item['hldg_qty'])
-                cur_price = int(item['prpr'])
-                eval_amt = int(item['evlu_amt'])
-                rate = float(item['evlu_pfls_rt'])
-                profit = int(item['evlu_pfls_amt'])
-                msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
-        else:
-            msg += "\n\n📋 [보유 종목] 없음"
-            if stock_eval_amt > 0:
-                msg += " (⚠️ 평가금액 존재 - API 데이터 불일치)"
-
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        with utils.AccountContext(target_cano):
-            api.send_telegram_message(msg)
 
     def stop(self, use_status=True):
         if not self.is_running:

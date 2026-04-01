@@ -112,6 +112,47 @@ signal.signal(signal.SIGINT, handle_exit_signal)
 signal.signal(signal.SIGTERM, handle_exit_signal)
 # =========================================================================
 
+def preflight_check():
+    """프로그램 시작 전 필수 시스템 상태를 점검합니다."""
+    config.console.print("\n[bold cyan]시스템 사전 점검 (Pre-flight Check) 시작...[/bold cyan]")
+    checks_ok = True
+    
+    # 1. API 키 점검
+    if config.session.is_simulation:
+        if not config.session.app_key or not config.session.app_secret:
+            config.console.print("  - [bold red]실패[/]: 모의투자 API Key/Secret이 설정되지 않았습니다.")
+            checks_ok = False
+        else:
+            config.console.print("  - [green]성공[/]: 모의투자 API Key/Secret 확인 완료.")
+    else: # 실전
+        if not config.session.real_app_key or not config.session.real_app_secret:
+            config.console.print("  - [bold red]실패[/]: 실전투자 API Key/Secret이 설정되지 않았습니다.")
+            checks_ok = False
+        else:
+            config.console.print("  - [green]성공[/]: 실전투자 API Key/Secret 확인 완료.")
+        
+        if config.session.auto_app_key:
+             config.console.print("  - [green]성공[/]: 자동매매 전용 API Key 확인 완료.")
+
+    if not checks_ok: return False
+
+    # 2. API 토큰 발급 시도
+    token_ok = False
+    with config.console.status("[cyan]  - API 토큰 발급 테스트 중...[/cyan]"):
+        token = api.get_access_token(force_refresh=True) if config.session.is_simulation else api.get_real_access_token(force_refresh=True)
+        if token:
+            token_ok = True
+    
+    if token_ok:
+        config.console.print("  - [green]성공[/]: API 토큰 발급 테스트 완료.")
+    else:
+        config.console.print("  - [bold red]실패[/]: API 토큰 발급에 실패했습니다. (서버 점검 또는 Key 오류)")
+        checks_ok = False
+
+    if not checks_ok: return False
+        
+    return checks_ok
+
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -627,64 +668,36 @@ def main():
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
     context.MAIN_THREAD_ID = threading.get_ident()
 
-    # [추가] DB 큐 프록시 설치 (순차 처리 적용)
-    if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
-        db_queue.install_proxy(db_manager)
+    # [수정] 초기화 로직 통합 및 사전 점검 추가
+    # 1. 환경 설정 로드 (모드 선택)
+    config.session.initialize(mode=args.mode)
 
-    # [수정] 초기화 로직 분기: 모드 지정 시 즉시 status 표시
-    if args.mode:
-        with config.console.status("[cyan]시스템 초기화 및 환경 설정 로드 중...[/cyan]") as status:
-            # 1. 환경 설정 로드
-            config.session.initialize(mode=args.mode)
-            
-            if args.no_bot:
-                config.ENABLE_TELEGRAM = False
-                config.console.print()
-                config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
-
-            status.update("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]")
-            time.sleep(1) # 인지용 대기
-
-            # 2. 종목 데이터 로드
-            config.session.load_stock_config()
-            
-            # 3. 토큰 발급
-            if config.session.is_simulation:
-                api.get_access_token()
-            else:
-                api.get_real_access_token()
-                # [Fix] 실전투자 모드에서 자동매매 계좌가 별도로 설정된 경우 토큰 미리 발급
-                if config.session.auto_app_key:
-                    api.get_auto_access_token()
-
-            # 백그라운드 서비스 시작
-            api.prefetch_watchlists_async() # [추가] 차트 데이터 캐시 백그라운드 예열
-            auto_trade.ConclusionMonitor().start()
-            telegram_cmd = telegram_bot.TelegramCommander()
-            telegram_cmd.start()
+    # 2. 사전 점검
+    if not preflight_check():
+        config.console.print("\n[bold red]시스템 사전 점검에 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
+        config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
+        sys.exit(1)
     else:
-        # 대화형 모드 (사용자 입력 대기 필요하므로 status 나중에 시작)
-        config.session.initialize(mode=args.mode)
-        
+        config.console.print("[bold green]모든 점검 통과. 시스템을 시작합니다.[/bold green]")
+
+    with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
+        # 3. DB 큐 프록시 설치
+        if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+            db_queue.install_proxy(db_manager)
+
+        # 4. 텔레그램 봇 비활성화 옵션 처리
         if args.no_bot:
             config.ENABLE_TELEGRAM = False
-            config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다. (알림 전송만 가능)[/yellow]")
+            config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다.[/yellow]")
 
-        with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
-            time.sleep(1)
-            config.session.load_stock_config()
-            if config.session.is_simulation:
-                api.get_access_token()
-            else:
-                api.get_real_access_token()
-                # [Fix] 실전투자 모드에서 자동매매 계좌가 별도로 설정된 경우 토큰 미리 발급
-                if config.session.auto_app_key:
-                    api.get_auto_access_token()
-            
-            api.prefetch_watchlists_async() # [추가] 차트 데이터 캐시 백그라운드 예열
-            auto_trade.ConclusionMonitor().start()
-            telegram_cmd = telegram_bot.TelegramCommander()
-            telegram_cmd.start()
+        # 5. 종목 데이터 로드
+        config.session.load_stock_config()
+        
+        # 6. 백그라운드 서비스 시작
+        api.prefetch_watchlists_async()
+        auto_trade.ConclusionMonitor().start()
+        telegram_cmd = telegram_bot.TelegramCommander()
+        telegram_cmd.start()
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"
