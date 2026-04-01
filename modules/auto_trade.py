@@ -4508,6 +4508,12 @@ class AutoTrader:
                 # [수정] ATR 기반 동적 손절률 계산 (음수 값)
                 stop_distance = atr_val * atr_mult
                 sl_rate = -((stop_distance / price_val) * 100)
+
+                # [추가] ATR 손절률 최대 한도 설정 (데이터 오류 등으로 인한 과도한 리스크 방지)
+                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+                if max_atr_sl != 0 and sl_rate < max_atr_sl:
+                    self.log(f"[리스크 조정] ATR 손절률({sl_rate:.1f}%)이 최대 한도({max_atr_sl}%)를 초과하여 조정됩니다.")
+                    sl_rate = max_atr_sl
                 
             # [수정] 자산 배분 로직 개선: 마지막 슬롯인 경우 남은 예수금 전액 투자
             remaining_slots = max_holdings - current_holdings_count
