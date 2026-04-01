@@ -61,5 +61,6 @@ if not "!MISSING_LIBS!"=="" (
 )
 
 :: 5. 프로그램 실행 (모든 인자 %* 전달)
+echo.
 echo --- 프로그램 실행 ---
 %PYTHON_PATH% main.py %*

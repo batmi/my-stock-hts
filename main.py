@@ -3,6 +3,10 @@
 import sys
 import time
 import os
+
+# [추가] 프로그램 실행 직후 지연 체감을 줄이기 위한 초기 프로그래스 출력
+print("  - 필수 데이터 분석 라이브러리(pandas, yfinance 등) 로딩 중...", flush=True)
+
 from datetime import datetime
 import threading
 import signal
@@ -15,10 +19,16 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRe
 import argparse
 import config
 import context # [추가]
+
+# [추가] config(rich.console) 로드 후 추가 진행 상태 출력
+config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중...")
+
 import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
+
+config.console.print("  - 모듈 로딩 완료. 시스템 사전 점검을 준비합니다.\n")
 
 # =========================================================================
 # [추가] 글로벌 슬래시 명령어 (/052 등) 구현을 위한 Prompt.ask 몽키패칭
@@ -690,7 +700,7 @@ def main():
         config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
         sys.exit(1)
     else:
-        config.console.print("[green]모든 점검 통과. 시스템을 시작합니다.[/green]")
+        config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
     with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
         # 3. DB 큐 프록시 설치
@@ -700,7 +710,7 @@ def main():
         # 4. 텔레그램 봇 비활성화 옵션 처리
         if args.no_bot:
             config.ENABLE_TELEGRAM = False
-            config.console.print("[System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다.")
+            config.console.print("텔레그램 봇 명령어 수신 기능을 비활성화합니다.")
 
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         

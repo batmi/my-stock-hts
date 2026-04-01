@@ -29,6 +29,7 @@ fi
 
 echo "--- 환경 확인: $($PYTHON_PATH --version) ---"
 
+echo "  - 패키지 관리자 환경 점검 중..."
 # 4. 최신 리눅스 환경의 PEP 668 외부 관리 환경 에러 우회
 PIP_FLAGS=""
 if [[ "$PYTHON_PATH" != *"venv"* ]]; then
@@ -39,6 +40,7 @@ if [[ "$PYTHON_PATH" != *"venv"* ]]; then
     fi
 fi
 
+echo "  - 필수 라이브러리 설치 상태 스캔 중..."
 # 6. 미설치 라이브러리 스캔
 for lib in $REQUIRED_LIBS; do
     IMPORT_NAME=$lib
@@ -84,5 +86,6 @@ if [ -n "$MISSING_LIBS" ]; then
 fi
 
 # 8. 프로그램 실행
+echo ""
 echo "--- 프로그램 실행 ---"
 $PYTHON_PATH main.py "$@"
