@@ -35,7 +35,7 @@ ALL_INDICES = [
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     # 2. 글로벌 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-    ("Japan - 닛케이", "^N225"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), ("Taiwan - 대만가권", "^TWII"),
+    ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
     ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("VIX (변동성)", "^VIX"),
