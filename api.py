@@ -630,7 +630,9 @@ class ThrottledSession(requests.Session):
                                 rt_disp = rt_cd if rt_cd else "(Empty)"
                                 msg_disp = msg_cd if msg_cd else "(Empty)"
                                 msg1_disp = msg1 if msg1 else "(Empty)"
-                                logger.error(f"⚠️ [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp}")
+                                # [추가] 디버깅을 위해 요청 본문(Body)을 로그에 포함
+                                req_body = kwargs.get('data', '')
+                                logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
 
                         except Exception as e:
                             # JSON 파싱 실패 등

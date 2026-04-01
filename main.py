@@ -97,21 +97,6 @@ def _custom_print_breadcrumb():
 utils.print_breadcrumb = _custom_print_breadcrumb
 # =========================================================================
 
-# =========================================================================
-# [Fix: Point 5] 시스템 종료 시그널(Ctrl+C / Kill) 핸들링
-# =========================================================================
-def handle_exit_signal(sig, frame):
-    config.console.print(f"\n[bold red]시스템 종료 시그널({sig}) 수신! 안전 종료 절차를 시작합니다...[/bold red]")
-    try:
-        from modules import api
-        api.send_telegram_message("🛑 [시스템 비상 종료] 강제 종료 시그널(Ctrl+C 또는 kill)을 수신하여 시스템을 안전하게 종료합니다.")
-    except Exception: pass
-    sys.exit(0) # SysExit을 발생시켜 finally 블록 실행 유도
-
-signal.signal(signal.SIGINT, handle_exit_signal)
-signal.signal(signal.SIGTERM, handle_exit_signal)
-# =========================================================================
-
 def preflight_check():
     """프로그램 시작 전 필수 시스템 상태를 점검합니다."""
     config.console.print("\n[bold cyan]시스템 사전 점검 (Pre-flight Check) 시작...[/bold cyan]")
