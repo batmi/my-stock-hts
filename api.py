@@ -602,7 +602,7 @@ class ThrottledSession(requests.Session):
                     # [수정] OAuth 토큰 발급 요청 등은 rt_cd 구조가 다르므로 검사 제외
                     if "oauth2" in url:
                         pass
-                    else:
+                    elif is_sim_server or is_real_server:
                         try:
                             res_json = response.json()
                             rt_cd = res_json.get('rt_cd')

@@ -750,7 +750,7 @@ def main():
             config.console.print("\n[dim]" + "─"*50 + "[/dim]")
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
-            config.console.print("[dim] 메인 메뉴[/dim]")
+            config.console.print("[green] 메인 메뉴[/green]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
             
             trader_status = ""
