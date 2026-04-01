@@ -1111,6 +1111,13 @@ class OrderManager:
         price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
         self.trader.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
 
+        # [Fix: Point 3] API 지연 중 중복 주문 방지를 위한 임시 ID 선점 (Pre-registration)
+        temp_id = f"PRE_{time.time()}"
+        with self._lock:
+            if code not in self.pending_orders:
+                self.pending_orders[code] = {}
+            self.pending_orders[code][temp_id] = OrderStatus.ORDER_SENT
+
         try:
             res_json = api.place_order("domestic", type_str, code, qty, price, ord_dvsn)
             
@@ -1119,8 +1126,9 @@ class OrderManager:
                 success_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {type_str.upper()} 성공 | {code} | {qty}주 | No.{odno}"
                 
                 with self._lock:
-                    if code not in self.pending_orders:
-                        self.pending_orders[code] = {}
+                    # 임시 ID 삭제 및 실제 ODNO로 교체
+                    if temp_id in self.pending_orders[code]:
+                        del self.pending_orders[code][temp_id]
                     self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
 
                 self.trader.trade_history.append(success_msg)
@@ -1167,6 +1175,11 @@ class OrderManager:
                 
                 return odno
             else:
+                with self._lock:
+                    if temp_id in self.pending_orders.get(code, {}):
+                        del self.pending_orders[code][temp_id]
+                        if not self.pending_orders[code]: del self.pending_orders[code]
+
                 err_msg = res_json.get('msg1', 'Unknown Error')
                 msg_cd = res_json.get('msg_cd')
                 self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
@@ -1179,6 +1192,11 @@ class OrderManager:
                     raise Exception(f"주문 시스템 치명적 오류: {err_msg}")
 
         except Exception as e:
+            with self._lock:
+                if temp_id in self.pending_orders.get(code, {}):
+                    del self.pending_orders[code][temp_id]
+                    if not self.pending_orders[code]: del self.pending_orders[code]
+
             self.trader.log(f"결과: 에러 발생 ({str(e)})")
             stock_display = f"{name}({code})" if name else code
             fail_msg = f"🚫 [주문 에러] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
@@ -1629,29 +1647,23 @@ class AutoTrader:
                         if res:
                             deposit = res['deposit'] + res['foreign_deposit']
                     
-                    # 4. 반익절 상태 DB 복원 (시스템 재시작 대비)
-                    def _init_half_tp_cache(holdings_list):
-                        cache = set()
+                    # [Fix: Point 2] DB에서 Trailing Stop 및 Half TP 캐시 명시적 로드
+                    def _load_caches_from_db():
                         try:
-                            with sqlite3.connect(config.DB_FILE_PATH) as conn:
-                                cursor = conn.cursor()
-                                for h in holdings_list:
-                                    code = h['pdno']
-                                    cursor.execute("SELECT type, reason FROM trades WHERE code = ? ORDER BY time DESC LIMIT 5", (code,))
-                                    for row in cursor.fetchall():
-                                        t_type, reason = row[0], row[1]
-                                        if 'buy' in t_type.lower() or '매수' in t_type: break # 최근 매수 기록 만나면 중단
-                                        if ('sell' in t_type.lower() or '매도' in t_type) and reason and '반익절' in reason:
-                                            cache.add(code)
-                                            break
+                            ts_cache = db_manager.db.get_all_trailing_stops()
+                            half_cache = db_manager.db.get_all_half_tp()
+                            return ts_cache, half_cache
                         except Exception as e:
-                            logger.error(f"반익절 캐시 복원 실패: {e}")
-                        return cache
+                            logger.error(f"캐시 로드 실패: {e}")
+                            return {}, set()
                     
                     if hasattr(db_manager.db, 'execute_custom'):
-                        self.half_tp_cache = db_manager.db.execute_custom(_init_half_tp_cache, holdings)
+                        ts_cache, half_cache = db_manager.db.execute_custom(_load_caches_from_db)
                     else:
-                        self.half_tp_cache = _init_half_tp_cache(holdings)
+                        ts_cache, half_cache = _load_caches_from_db()
+                        
+                    self.trailing_stop_cache = ts_cache
+                    self.half_tp_cache = half_cache
 
                     # 3. 총 자산 계산
                     stock_eval = 0
@@ -3530,6 +3542,33 @@ class AutoTrader:
                     if not ConclusionMonitor().is_healthy():
                         raise Exception(f"체결 감시 시스템 불안정 (연속 에러 {ConclusionMonitor().consecutive_errors}회)")
                     
+                    # [Fix: Point 5] 매 사이클 시작 시점에 일일 손실 한도 강제 체크
+                    if self.initial_asset > 0:
+                        try:
+                            acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                            h_temp, s_temp = api.get_domestic_balance(target_cano, acnt_cd)
+                            dep_temp = 0
+                            if s_temp:
+                                dep_temp = api.safe_int(s_temp[0].get('prvs_rcdl_excc_amt', 0))
+                                if dep_temp == 0: dep_temp = api.safe_int(s_temp[0].get('dnca_tot_amt', 0))
+                            
+                            if dep_temp == 0 and not config.session.is_simulation:
+                                res_dep = api.get_deposit_balance(target_cano, acnt_cd, skip_balance_check=True)
+                                if res_dep: dep_temp = res_dep['deposit'] + res_dep['foreign_deposit']
+                            
+                            tot_eval_temp = 0
+                            if h_temp:
+                                valid_h = [x for x in h_temp if int(x.get('hldg_qty', 0)) > 0]
+                                tot_eval_temp = sum(int(x['evlu_amt']) for x in valid_h)
+                            elif s_temp:
+                                tot_eval_temp = api.safe_int(s_temp[0].get('scts_evlu_amt', 0))
+                                
+                            current_est_asset = dep_temp + tot_eval_temp
+                            if current_est_asset > 0:
+                                self.risk_manager.check_loss_limit(current_est_asset)
+                        except Exception as e:
+                            logger.debug(f"사이클 시작 시 자산 평가 실패: {e}")
+
                     # [추가] 현재 운용 계좌 정보 로깅
                     if target_cano:
                         acc_type = "모의투자" if config.session.is_simulation else "실전투자(자동)"
@@ -3978,39 +4017,30 @@ class AutoTrader:
                 regime, adj = analysis.get_market_regime(m_type)
                 market_regime_adj[m_type] = adj
 
-        for item in holdings:
-            if not self.is_running: break
+        # [Fix: Point 1] 매도 분석 루프 병렬화 (ThreadPoolExecutor 활용)
+        def _sell_worker(item):
+            if not self.is_running: return
             code = item['pdno']; name = item['prdt_name']
             
-            # [추가] 미체결/진행 중인 주문이 있으면 스킵 (중복 매도 방지)
             if self.order_manager.is_pending(code):
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
-                continue
+                if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
+                return
             
-            # [수정] 보유수량(hldg_qty) 대신 주문가능수량(ord_psbl_qty) 사용
-            # 미체결 매도 주문이 있을 경우 중복 매도를 방지하기 위함
             qty = api.safe_int(item.get('ord_psbl_qty'))
             profit_rate = float(item['evlu_pfls_rt'])
             current_price = float(item['prpr'])
             buy_price = float(item['pchs_avg_pric'])
             
-            # [추가] API 호출 전 대기 (Rate Limit 방지)
             time.sleep(safe_delay)
             
             if qty <= 0: 
-                if config.FILE_DEBUG_LEVEL == "DEBUG":
-                    self.log(f"[분석스킵] {name}: 주문 가능 수량 0 (미체결 매도 주문 존재 가능성)")
-                continue # 주문 가능 수량이 없으면 스킵
+                if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 주문 가능 수량 0")
+                return
             
-            # [추가] 종목별 룰 적용
             rule = rules_map.get(code)
-            
-            # [추가] 적응형 임계값 보정치 계산
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)
             
-            # 기본값 설정
             ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
             ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
             
@@ -4018,48 +4048,52 @@ class AutoTrader:
             if rule:
                 ts_activation = rule['ts_activation']
                 ts_callback = rule['ts_callback']
-                # Strategy에 전달할 임계값 딕셔너리 구성 (키 이름 매핑)
                 thresholds = {
                     "TAKE_PROFIT_RATE": rule['take_profit'],
                     "STOP_LOSS_RATE": rule['stop_loss'],
                     "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
                     "SELL_SCORE": rule['sell_score'],
-                    "WEIGHTS": rule.get('weights'), # [추가] 가중치 전달
-                    "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 매도 분석 시에도 시장 보정 무시 (절대값)
+                    "WEIGHTS": rule.get('weights'),
+                    "BUY_SCORE": rule['buy_score'],
                     "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)),
                     "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)))
                 }
             else:
-                # 전역 설정 사용 시에도 가중치와 보정된 매수 기준 전달
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
                     "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
                     "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
                 }
 
-            # [트레일링 스탑 로직] - 상태 관리가 필요하므로 AutoTrader에서 계산 후 Strategy에 전달
-            # [추가] ATR 손절 사용 여부 확인 및 적용
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
             if rule and rule.get('use_atr_stop') is not None:
                 use_atr_stop = bool(rule['use_atr_stop'])
 
             applied_sl_rate = None
-            
             if use_atr_stop:
-                last_buy = db_manager.db.get_latest_buy_trade(code)
-                if last_buy and last_buy.get('stop_loss_rate'):
-                    val = float(last_buy['stop_loss_rate'])
-                    if val != 0.0: applied_sl_rate = val
+                # [Fix: Point 4] 분할 매수를 고려하여, 현재 보유량에 해당하는 모든 매수 기록의
+                # ATR 손절률을 수량 가중 평균하여 적용합니다.
+                buy_trades = db_manager.db.get_buy_trades_for_current_holding(code)
+                if buy_trades:
+                    total_qty_trade = 0
+                    weighted_sl_sum = 0
+                    for trade in buy_trades:
+                        qty_trade = api.safe_int(trade.get('qty', 0))
+                        sl_rate_trade = float(trade.get('stop_loss_rate', 0.0))
+                        if qty_trade > 0 and sl_rate_trade != 0.0:
+                            total_qty_trade += qty_trade
+                            weighted_sl_sum += qty_trade * sl_rate_trade
+                    
+                    if total_qty_trade > 0:
+                        avg_sl_rate = weighted_sl_sum / total_qty_trade
+                        if avg_sl_rate != 0.0: applied_sl_rate = avg_sl_rate
             
-            # [추가] ATR 손절률이 있으면 thresholds에 반영 (개별 룰보다 우선 적용)
             if applied_sl_rate is not None:
-                if thresholds is None:
-                    thresholds = {}
+                if thresholds is None: thresholds = {}
                 thresholds["STOP_LOSS_RATE"] = applied_sl_rate
                 
-            # [추가] 보유 기간(일수) 계산을 위해 DB에서 최근 매수 기록 확인
             holding_days = 0
-            is_mr_holding = False # [추가] 역추세 진입 여부
+            is_mr_holding = False
             last_buy = db_manager.db.get_latest_buy_trade(code)
             if last_buy and last_buy.get('time'):
                 if '역매수' in str(last_buy.get('reason', '')) or '역추세' in str(last_buy.get('reason', '')):
@@ -4070,23 +4104,20 @@ class AutoTrader:
                 except: pass
 
             ts_msg = ""
-            # [최적화] 메모리 캐시 활용하여 DB 조회/쓰기 최소화
             with self._lock:
                 cached_highest = self.trailing_stop_cache.get(code)
                 if cached_highest is None:
-                    # 캐시에 없으면 DB 조회 (최초 1회)
                     val = db_manager.db.get_highest_price(code)
                     cached_highest = val if val is not None else 0.0
                     self.trailing_stop_cache[code] = cached_highest
             
             highest_price = cached_highest
             
-            # 현재가가 매수가보다 높고, 기록된 최고가보다 높을 때만 DB 업데이트
             if current_price > buy_price:
                 if highest_price == 0.0 or current_price > highest_price:
                     db_manager.db.update_highest_price(code, current_price)
                     with self._lock:
-                        self.trailing_stop_cache[code] = current_price # 캐시 갱신
+                        self.trailing_stop_cache[code] = current_price
                     highest_price = current_price
             
             if highest_price and highest_price > 0:
@@ -4096,26 +4127,20 @@ class AutoTrader:
                     if drop_rate >= ts_callback:
                         ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 최고가 대비 하락률:-{drop_rate:.1f}%)"
 
-            # [전략 실행] 매도 분석 위임
             df = api.get_chart_data(code, is_overseas=False)
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding)
             
-            # [로그] 분석 결과 기록
             ind = result['ind']
             rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
             adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
             cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
             action_str = "매도" if result['action'] == 'sell' else "보유"
-            
             rule_msg = " [개별 룰 적용]" if rule else ""
-            
-            # [추가] 가중치 및 보정된 매수 기준 점수 정보 로깅
             extra_info = ""
             if thresholds:
                 bs = thresholds.get('BUY_SCORE')
                 if bs is not None: extra_info += f", 기준={bs:.1f}"
-                
                 w = thresholds.get('WEIGHTS')
                 if w: extra_info += f", 가중치={w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
@@ -4125,63 +4150,55 @@ class AutoTrader:
                 reason = result['reason']
                 score = result['score']
                 sell_ratio = result.get('sell_ratio', 1.0)
-                
                 target_sell_qty = max(1, int(qty * sell_ratio)) if sell_ratio < 1.0 else qty
                 
-                # [추가] 개별 룰 적용 시 사유에 표시
-                if rule:
-                    reason += " [개별 룰 적용]"
+                if rule: reason += " [개별 룰 적용]"
+                if applied_sl_rate is not None and "손절" in reason: reason = reason.replace("손절", "ATR손절")
                 
-                # [추가] ATR 손절 적용 시 사유에 표시
-                if applied_sl_rate is not None and "손절" in reason:
-                    reason = reason.replace("손절", "ATR손절")
-                
-                # [수정] 슬리피지 비율 적용 (매도 체결 확률 증대)
                 raw_order_price = current_price * (1 - config.SLIPPAGE_RATE)
                 order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
                 if order_price <= 0: order_price = int(current_price)
 
                 if not is_market_open:
                     self.log(f"[장마감] 매도 신호 감지 (주문 미전송): {name} - {reason}")
-                    continue
+                    return
 
-                # [추가] 매도 주문 전 실제 매도 가능 수량 재조회 (미체결 등 변동 고려)
                 real_qty = api.fetch_sellable_quantity(code)
                 if real_qty < target_sell_qty:
                     if real_qty > 0:
-                        self.log(f"매도 수량 조정: {name} {target_sell_qty}주 -> {real_qty}주 (주문 가능 수량 변동)")
+                        self.log(f"매도 수량 조정: {name} {target_sell_qty}주 -> {real_qty}주")
                         target_sell_qty = real_qty
                     else:
                         self.log(f"매도 중단: {name} 주문 가능 수량 부족 (미체결 존재 가능성)")
-                        continue
+                        return
 
                 self.log(f"매도 실행: {name} - {reason}")
-                # [수정] 매도 시 수익 정보와 사유, 점수 등을 DB 저장을 위해 전달
                 odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
                 if odno:
-                    # 매도 성공 시 기록 (추정치)
                     record = {
-                        "type": "sell",
-                        "code": code,
-                        "name": name,
-                        "qty": target_sell_qty,
-                        "price": float(order_price),
-                        "profit_rate": profit_rate,
-                        "profit_amt": int(item['evlu_pfls_amt']),
-                        "reason": reason,
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "odno": odno
+                        "type": "sell", "code": code, "name": name, "qty": target_sell_qty,
+                        "price": float(order_price), "profit_rate": profit_rate,
+                        "profit_amt": int(item['evlu_pfls_amt']), "reason": reason,
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "odno": odno
                     }
                     self.trade_records.append(record)
                     
-                    if sell_ratio < 1.0:
-                        self.half_tp_cache.add(code) # 반익절 완료 상태 등록
+                    # [Fix: Point 2] 반익절 캐시 DB 동기화
+                    if sell_ratio < 1.0: 
+                        self.half_tp_cache.add(code)
+                        db_manager.db.insert_half_tp(code)
                     else:
-                        self.half_tp_cache.discard(code) # 전량 매도 시 캐시 클리어
+                        self.half_tp_cache.discard(code)
+                        db_manager.db.delete_half_tp(code)
                         db_manager.db.delete_trailing_stop(code)
                         with self._lock:
-                            if code in self.trailing_stop_cache: # 캐시 삭제
-                                del self.trailing_stop_cache[code]
+                            if code in self.trailing_stop_cache: del self.trailing_stop_cache[code]
+
+        # 병렬 처리 실행
+        max_workers = 5 if not config.session.is_simulation else 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_sell_worker, item) for item in holdings]
+            concurrent.futures.wait(futures)
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합

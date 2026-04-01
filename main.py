@@ -5,6 +5,7 @@ import time
 import os
 from datetime import datetime
 import threading
+import signal
 import logging
 from rich.prompt import Prompt
 from rich.table import Table
@@ -94,6 +95,21 @@ def _custom_print_breadcrumb():
             config.console.print(f"\n[dim] 메인 메뉴 > {path_str}[/dim]\n")
 
 utils.print_breadcrumb = _custom_print_breadcrumb
+# =========================================================================
+
+# =========================================================================
+# [Fix: Point 5] 시스템 종료 시그널(Ctrl+C / Kill) 핸들링
+# =========================================================================
+def handle_exit_signal(sig, frame):
+    config.console.print(f"\n[bold red]시스템 종료 시그널({sig}) 수신! 안전 종료 절차를 시작합니다...[/bold red]")
+    try:
+        from modules import api
+        api.send_telegram_message("🛑 [시스템 비상 종료] 강제 종료 시그널(Ctrl+C 또는 kill)을 수신하여 시스템을 안전하게 종료합니다.")
+    except Exception: pass
+    sys.exit(0) # SysExit을 발생시켜 finally 블록 실행 유도
+
+signal.signal(signal.SIGINT, handle_exit_signal)
+signal.signal(signal.SIGTERM, handle_exit_signal)
 # =========================================================================
 
 def show_help():
@@ -890,8 +906,10 @@ def main():
         with config.console.status("[cyan]시스템 종료 프로세스 진행 중...[/cyan]") as status:
             # 1. 자동매매 종료
             status.update("[cyan][1/4] 자동매매 스레드 안전 종료 중...[/cyan]")
-            if trader.is_running:
-                trader.stop(use_status=False)
+            try:
+                if trader.is_running:
+                    trader.stop(use_status=False)
+            except Exception: pass
             time.sleep(0.5)
             config.console.print("[1/4] 자동매매 스레드 안전 종료 [bold green][완료][/]")
             

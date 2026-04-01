@@ -102,6 +102,14 @@ class DBManager:
                     )
                 ''')
                 
+                # [Fix: Point 2] 반익절(Half TP) 상태 추적 테이블 생성
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS half_tp_status (
+                        code TEXT PRIMARY KEY,
+                        update_time TEXT
+                    )
+                ''')
+                
                 # [추가] 일별 자산 스냅샷 테이블 생성
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS daily_asset_history (
@@ -341,6 +349,33 @@ class DBManager:
             return dict(row) if row else None
         except: return None
 
+    def get_buy_trades_for_current_holding(self, code):
+        """
+        현재 보유 수량에 해당하는 매수 거래 내역들을 조회합니다.
+        (마지막 매도 이후의 모든 매수 내역)
+        """
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            
+            # 1. 해당 종목의 마지막 매도 시점 조회
+            cursor.execute("SELECT time FROM trades WHERE code = ? AND (type LIKE '%sell%' OR type LIKE '%매도%') ORDER BY id DESC LIMIT 1", (code,))
+            last_sell_time = cursor.fetchone()
+            
+            # 2. 마지막 매도 이후의 모든 매수 내역 조회
+            query = "SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%')"
+            params = [code]
+            
+            if last_sell_time:
+                query += " AND time > ?"
+                params.append(last_sell_time['time'])
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except:
+            return []
+
     def get_latest_buy_trade(self, code):
         """특정 종목의 가장 최근 매수 내역 조회 (ATR 손절률 확인용)"""
         try:
@@ -407,6 +442,15 @@ class DBManager:
             return row[0] if row else None
         except: return None
 
+    def get_all_trailing_stops(self):
+        """모든 종목의 트레일링 스탑 기준가 조회 (시스템 시작 시 캐시 로드용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, highest_price FROM trailing_stops")
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        except: return {}
+
     def delete_trailing_stop(self, code):
         """매도 후 트레일링 스탑 정보 삭제"""
         with self.lock:
@@ -423,6 +467,45 @@ class DBManager:
                         continue
                     break
                 except: break
+
+    def insert_half_tp(self, code):
+        """반익절 상태 저장"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO half_tp_status (code, update_time)
+                        VALUES (?, ?)
+                    ''', (code, now_str))
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError: time.sleep(0.5); continue
+                except: break
+
+    def delete_half_tp(self, code):
+        """반익절 상태 삭제"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM half_tp_status WHERE code = ?", (code,))
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError: time.sleep(0.5); continue
+                except: break
+
+    def get_all_half_tp(self):
+        """모든 반익절 상태 종목 조회 (시스템 시작 시 캐시 로드용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT code FROM half_tp_status")
+            return set(row[0] for row in cursor.fetchall())
+        except: return set()
 
     def save_stock_strategy(self, code, name, strategy):
         """종목별 매매 전략 저장"""

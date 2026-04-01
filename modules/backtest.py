@@ -160,7 +160,7 @@ def _append_smart_money_signal(df, code, is_overseas):
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
-                      ts_activation_rate=None, ts_callback_rate=None,
+                      ts_activation_rate=None, ts_callback_rate=None, 
                       time_stop_days_limit=None,
                       use_atr_stop_limit=None, atr_stop_multiplier_limit=None, half_tp_use_limit=None,
                       weights=None,
@@ -169,8 +169,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     
     # 시뮬레이션 변수
     balance = initial_capital
-    holdings = 0
-    avg_price = 0
+    # [Fix: Point 4] 분할 매수 지원을 위해 포지션 상태를 딕셔너리로 관리
+    position = {'qty': 0, 'avg_price': 0, 'buy_trades': []}
     trades = []
     buy_date = None
     
@@ -199,9 +199,6 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     use_atr_stop = use_atr_stop_limit if use_atr_stop_limit is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = atr_stop_multiplier_limit if atr_stop_multiplier_limit is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     use_vol_target = getattr(config, 'USE_VOLATILITY_TARGETING', True)
-
-    # [추가] 현재 적용 중인 손절률 (매수 시 결정됨)
-    current_sl_rate = stop_loss_limit
 
     peak_asset = initial_capital
     mdd = 0.0
@@ -244,7 +241,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         if pd.isna(price) or price <= 0:
             prev_row = row
             continue
-            
+
         last_valid_price = price # [추가] 정상적인 가격일 경우에만 업데이트
 
         # [추가] 체결 노이즈: 1% 확률로 매매 기회 놓침 (체결 누락/지연 시뮬레이션)
@@ -252,7 +249,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             prev_row = row
             continue
 
-        current_asset = balance + (holdings * price)
+        current_asset = balance + (position['qty'] * price)
         daily_assets.append(current_asset)
         if current_asset > peak_asset: peak_asset = current_asset
         if peak_asset > 0:
@@ -265,106 +262,26 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         if raw_score > max_score_observed: max_score_observed = raw_score
         if raw_score >= buy_score_limit: score_8_count += 1
         
-        # 매매 로직
-        # [매수]
-        if holdings == 0:
-            # [수정] 매수 조건 체크 (역추세 허용)
-            is_score_ok = raw_score >= buy_score_limit
-            is_mr_buy = (state == "역매수")
+        # 매매 로직 (매도 우선)
+        if position['qty'] > 0:
+            # [Fix: Point 4] 가중 평균 ATR 손절률 계산
+            sl_rate_to_use = stop_loss_limit
+            if use_atr_stop:
+                total_qty_trade = 0
+                weighted_sl_sum = 0
+                for trade in position['buy_trades']:
+                    qty_trade = trade.get('qty', 0)
+                    sl_rate_trade = trade.get('atr_sl_rate', 0.0)
+                    if qty_trade > 0 and sl_rate_trade != 0.0:
+                        total_qty_trade += qty_trade
+                        weighted_sl_sum += qty_trade * sl_rate_trade
+                
+                if total_qty_trade > 0:
+                    avg_sl_rate = weighted_sl_sum / total_qty_trade
+                    if avg_sl_rate != 0.0:
+                        sl_rate_to_use = avg_sl_rate
             
-            # 슈퍼 모멘텀 로직 (시뮬레이션 임계값 반영)
-            use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-            super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
-            super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-            is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
-            actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
-            is_rsi_ok = row['RSI'] < actual_buy_rsi
-            
-            if is_score_ok or is_mr_buy:
-                if is_rsi_ok and can_buy_state:
-                    # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
-                    slippage_mult = 1.0
-                    if execution_noise:
-                        # 슬리피지가 0.5배 ~ 1.5배 사이로 변동
-                        slippage_mult = random.uniform(0.5, 1.5)
-
-                    raw_buy_price = price * (1 + (config.SLIPPAGE_RATE * slippage_mult))
-                    buy_price = utils.adjust_to_tick(raw_buy_price, is_overseas)
-
-                    # [수정] ATR 기반 동적 손절률 계산 및 적용
-                    current_sl_rate = stop_loss_limit # 기본값으로 초기화
-                    atr_val = row.get('ATR', 0)
-                    
-                    if use_atr_stop and atr_val > 0:
-                        stop_distance = atr_val * atr_mult
-                        # 손절률(%) = -(손절폭 / 매수가 * 100)
-                        current_sl_rate = -((stop_distance / buy_price) * 100)
-                    
-                    # [추가] 리스크 기반 포지션 사이징 적용 (백테스팅)
-                    invest_amt = balance
-                    if risk_per_trade > 0 and current_sl_rate and abs(current_sl_rate) > 0:
-                        # 현재 자산(balance) 기준 리스크 계산
-                        max_loss_amt = balance * (risk_per_trade / 100.0)
-                        sl_ratio = abs(current_sl_rate) / 100.0
-                        risk_based_amt = int(max_loss_amt / sl_ratio)
-                        invest_amt = min(balance, risk_based_amt)
-                        
-                    # [추가] 변동성 타겟팅 스케일링 (간이 구현)
-                    if use_vol_target and atr_val > 0:
-                        daily_vol = atr_val / buy_price
-                        annual_vol = daily_vol * np.sqrt(252)
-                        
-                        target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
-                        scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-                        scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
-                        
-                        if annual_vol > 0:
-                            scale = target_vol / annual_vol
-                            scale = max(scale_min, min(scale_max, scale))
-                            invest_amt = int(invest_amt * scale)
-
-                    qty = int(invest_amt / buy_price)
-                    
-                    if qty > 0:
-                        cost = qty * buy_price
-                        balance -= cost
-                        holdings = qty
-                        avg_price = buy_price
-                        buy_date = date
-                        ts_highest_price = buy_price
-                        buy_reason_str = "역매수" if is_mr_buy else "일반"
-                        trades.append({
-                            "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": qty, "balance": balance, 
-                            "profit": 0, "profit_amt": 0, "days": 0, 
-                            "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
-                            "cum_profit": cum_profit
-                        })
-                else:
-                    # [추가] 매수 보류 카운팅
-                    if state == "주의": missed_caution_count += 1
-                    elif state == "매도": missed_danger_count += 1
-                    
-                    # [추가] 보류 사유 상세화
-                    missed_reason = state_reason
-                    if not can_buy_state:
-                        missed_reason = f"{state}: {state_reason}"
-                    elif not is_rsi_ok:
-                        missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {actual_buy_rsi})"
-
-                    # [추가] 보류 내역 저장
-                    missed_trades.append({
-                        "date": date,
-                        "score": raw_score,
-                        "state": state,
-                        "reason": missed_reason,
-                        "rsi": row['RSI'],
-                        "adx": row['ADX'],
-                        "cci": row['CCI'],
-                        "price": price
-                    })
-        # [매도]
-        elif holdings > 0:
-            loss_rate = (price - avg_price) / avg_price * 100
+            loss_rate = (price - position['avg_price']) / position['avg_price'] * 100
             if high_price > ts_highest_price: ts_highest_price = high_price
             
             # [추가] 현재 보유 기간(일수) 계산
@@ -393,12 +310,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
 
             if take_profit_limit > 0 and loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
-            elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit:
+            elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit: # [수정] half_tp_limit 사용
                 sell_signal = True; reason = "반익절"; sell_ratio = 0.5
-            elif current_sl_rate < 0 and loss_rate <= current_sl_rate: # [수정] 동적 손절률 사용
+            elif sl_rate_to_use < 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
                 sell_signal = True
-                if use_atr_stop and current_sl_rate != stop_loss_limit:
-                    reason = "ATR손절"
+                if use_atr_stop and sl_rate_to_use != stop_loss_limit:
+                    reason = "ATR손절" # [수정] ATR 손절 사유
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
@@ -407,7 +324,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
-                max_profit_rate = ((ts_highest_price - avg_price) / avg_price) * 100
+                max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100
                 if max_profit_rate >= ts_activation:
                     drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
                     if drop_rate >= ts_callback: sell_signal = True; reason = "트레일링스탑"
@@ -436,15 +353,15 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 sell_price = utils.adjust_to_tick(raw_sell_price, is_overseas)
                 if sell_price <= 0: sell_price = utils.adjust_to_tick(price, is_overseas)
 
-                # [수정] 분할 매도에 따른 수량 및 수익 계산
-                sell_qty = max(1, int(holdings * sell_ratio)) if sell_ratio < 1.0 else holdings
+                # [수정] 포지션 기반으로 수량 및 수익 계산
+                sell_qty = max(1, int(position['qty'] * sell_ratio)) if sell_ratio < 1.0 else position['qty']
                 sell_amt = sell_qty * sell_price
                 fee = sell_amt * 0.0023
                 if not is_overseas: fee = int(fee)
                 sell_amt -= fee
-                
-                profit = sell_amt - (sell_qty * avg_price)
-                profit_rate = (profit / (sell_qty * avg_price)) * 100
+
+                profit = sell_amt - (sell_qty * position['avg_price'])
+                profit_rate = (profit / (sell_qty * position['avg_price'])) * 100 if (sell_qty * position['avg_price']) != 0 else 0
                 
                 if profit > 0: 
                     win_trades += 1
@@ -465,13 +382,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 
                 balance += sell_amt
                 sold_qty = sell_qty
-                holdings -= sell_qty
+                position['qty'] -= sell_qty
                 
-                if holdings == 0:
-                    avg_price = 0
+                if position['qty'] == 0:
+                    position = {'qty': 0, 'avg_price': 0, 'buy_trades': []} # 포지션 초기화
                     buy_date = None
                     ts_highest_price = 0
                     half_tp_executed = False
+                    buy_reason_str = ""
                 else:
                     half_tp_executed = True
                 
@@ -483,11 +401,100 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                     "cum_profit": cum_profit
                 })
+
+        # [매수]
+        # [수정] 매수 조건 체크 (역추세 허용)
+        is_score_ok = raw_score >= buy_score_limit
+        is_mr_buy = (state == "역매수")
+        
+        # 슈퍼 모멘텀 로직 (시뮬레이션 임계값 반영)
+        use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+        super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+        is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
+        actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
+        is_rsi_ok = row['RSI'] < actual_buy_rsi
+        
+        if (is_score_ok or is_mr_buy) and is_rsi_ok and can_buy_state:
+            # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
+            slippage_mult = 1.0
+            if execution_noise:
+                slippage_mult = random.uniform(0.5, 1.5)
+
+            raw_buy_price = price * (1 + (config.SLIPPAGE_RATE * slippage_mult))
+            buy_price = utils.adjust_to_tick(raw_buy_price, is_overseas)
+
+            # [Fix: Point 4] ATR 기반 동적 손절률 계산
+            atr_sl_rate = 0.0
+            atr_val = row.get('ATR', 0)
+            if use_atr_stop and atr_val > 0:
+                stop_distance = atr_val * atr_mult
+                atr_sl_rate = -((stop_distance / buy_price) * 100)
+            
+            # [수정] 리스크 기반 포지션 사이징 적용 (백테스팅)
+            invest_amt = balance
+            sl_for_risk_calc = atr_sl_rate if use_atr_stop else stop_loss_limit
+            if risk_per_trade > 0 and sl_for_risk_calc and abs(sl_for_risk_calc) > 0:
+                max_loss_amt = balance * (risk_per_trade / 100.0)
+                sl_ratio = abs(sl_for_risk_calc) / 100.0
+                risk_based_amt = int(max_loss_amt / sl_ratio)
+                invest_amt = min(balance, risk_based_amt)
+                
+            # [추가] 변동성 타겟팅 스케일링 (간이 구현)
+            if use_vol_target and atr_val > 0:
+                daily_vol = atr_val / buy_price
+                annual_vol = daily_vol * np.sqrt(252)
+                
+                target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+                scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
+                scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
+                
+                if annual_vol > 0:
+                    scale = target_vol / annual_vol
+                    scale = max(scale_min, min(scale_max, scale))
+                    invest_amt = int(invest_amt * scale)
+
+            buy_qty = int(invest_amt / buy_price)
+            
+            if buy_qty > 0:
+                cost = buy_qty * buy_price
+                balance -= cost
+                
+                # [Fix: Point 4] 포지션 정보 업데이트
+                if position['qty'] == 0: # 신규 진입
+                    buy_date = date
+                    ts_highest_price = buy_price
+                    buy_reason_str = "역매수" if is_mr_buy else "일반"
+                
+                total_cost = (position['qty'] * position['avg_price']) + cost
+                position['qty'] += buy_qty
+                position['avg_price'] = total_cost / position['qty']
+                position['buy_trades'].append({'qty': buy_qty, 'price': buy_price, 'atr_sl_rate': atr_sl_rate})
+
+                trades.append({
+                    "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": buy_qty, "balance": balance, 
+                    "profit": 0, "profit_amt": 0, "days": 0, 
+                    "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "cum_profit": cum_profit
+                })
+        else: # 매수 조건 미충족 시
+            if raw_score >= buy_score_limit: # 점수는 충족했으나 다른 조건(RSI 등) 미충족
+                if state == "주의": missed_caution_count += 1
+                elif state == "매도": missed_danger_count += 1
+                
+                missed_reason = state_reason
+                if not can_buy_state: missed_reason = f"{state}: {state_reason}"
+                elif not is_rsi_ok: missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {actual_buy_rsi})"
+
+                missed_trades.append({
+                    "date": date, "score": raw_score, "state": state, "reason": missed_reason,
+                    "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "price": price
+                })
         
         prev_row = row
 
     # [수정] 마지막 행이 NaN일 수 있으므로 기록해둔 마지막 유효 가격(last_valid_price) 사용
-    final_asset = balance + (holdings * last_valid_price)
+    final_asset = balance + (position['qty'] * last_valid_price)
     total_return = (final_asset - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
     
     return {
