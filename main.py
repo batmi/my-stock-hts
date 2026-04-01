@@ -91,8 +91,8 @@ _original_print_breadcrumb = utils.print_breadcrumb
 def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
     if context.USER_ACTION_BREADCRUMB:
-        path_str = " > ".join(context.USER_ACTION_BREADCRUMB)
         if len(context.USER_ACTION_BREADCRUMB) == 1:
+            path_str = context.USER_ACTION_BREADCRUMB[0]
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
             env_color = "bold yellow" if config.session.is_simulation else "bold red"
@@ -102,7 +102,9 @@ def _custom_print_breadcrumb():
             config.console.print(f"[dim] 메인 메뉴 > [/dim][green]{path_str}[/green]")
             config.console.print("[dim]" + "─"*50 + "[/dim]")
         else:
-            config.console.print(f"\n[dim] 메인 메뉴 > [/dim][green]{path_str}[/green]\n")
+            prev_depths = " > ".join(context.USER_ACTION_BREADCRUMB[:-1])
+            current_depth = context.USER_ACTION_BREADCRUMB[-1]
+            config.console.print(f"\n[dim] 메인 메뉴 > {prev_depths} > [/dim][green]{current_depth}[/green]\n")
 
 utils.print_breadcrumb = _custom_print_breadcrumb
 # =========================================================================
