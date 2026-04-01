@@ -4642,21 +4642,30 @@ class AutoTrader:
 
     def _get_stock_market_type(self, code):
         """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (캐싱 적용)"""
-        if code in self.stock_market_map: return self.stock_market_map[code]
-        
+        if code in self.stock_market_map:
+            return self.stock_market_map[code]
+
+        # 1. stock.json에 사전 정의된 exchange 정보 우선 사용 (가장 빠르고 정확함)
+        market_type_from_config = config.session.exchange_cache.get(code)
+        if market_type_from_config in ["KOSPI", "KOSDAQ"]:
+            self.stock_market_map[code] = market_type_from_config
+            return market_type_from_config
+
+        # 2. API 조회를 통한 Fallback
         try:
             res = api.get_current_price_data(code, is_overseas=False)
             if res and res.get('rt_cd') == '0':
                 market_name = res['output'].get('rprs_mrkt_kor_name', '')
-                if "코스닥" in market_name:
+                if "KOSDAQ" in market_name:
                     self.stock_market_map[code] = "KOSDAQ"
                     return "KOSDAQ"
-                elif "유가증권" in market_name or "KOSPI" in market_name:
-                    self.stock_market_map[code] = "KOSPI"
-                    return "KOSPI"
-        except: pass
-        
-        return "KOSPI" # 기본값
+
+        except Exception:
+            pass
+
+        # 3. API 조회 실패 또는 정보 누락 시 기본값 'KOSPI'로 설정
+        self.stock_market_map[code] = "KOSPI"
+        return "KOSPI"
 
 def _select_stock_for_rules():
     """룰 설정을 위한 종목 선택 헬퍼"""

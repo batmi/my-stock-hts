@@ -135,6 +135,33 @@ def preflight_check():
         checks_ok = False
 
     if not checks_ok: return False
+
+    # 3. 종목 데이터 로드 및 누락된 exchange 정보 보완
+    config.session.load_stock_config()
+    missing_codes = []
+    for key in ["stocks_kr", "etfs_kr"]:
+        for item in config.session.stock_data.get(key, []):
+            if "exchange" not in item:
+                missing_codes.append((key, item))
+                
+    if missing_codes:
+        with config.console.status(f"[cyan]  - {len(missing_codes)}개 종목의 시장(exchange) 정보 업데이트 중...[/cyan]"):
+            updated = False
+            for key, item in missing_codes:
+                code = item['code']
+                try:
+                    res = api.get_current_price_data(code, is_overseas=False)
+                    if res and res.get('rt_cd') == '0':
+                        market_name = res['output'].get('rprs_mrkt_kor_name', '')
+                        item['exchange'] = "KOSDAQ" if "KOSDAQ" in market_name else "KOSPI"
+                        updated = True
+                        time.sleep(0.1) # Rate Limit 방어
+                except Exception:
+                    pass
+            if updated:
+                config.session.save_stock_config(config.session.stock_data)
+                config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
+                config.console.print("  - [green]성공[/]: 누락된 시장(exchange) 정보 업데이트 완료.")
         
     return checks_ok
 
@@ -675,8 +702,7 @@ def main():
             config.ENABLE_TELEGRAM = False
             config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다.[/yellow]")
 
-        # 5. 종목 데이터 로드
-        config.session.load_stock_config()
+        # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         
         # 6. 백그라운드 서비스 시작
         api.prefetch_watchlists_async()
