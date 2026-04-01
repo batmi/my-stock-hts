@@ -525,62 +525,63 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
-    # [추가] 개별 룰 로드 및 설정 준비
-    custom_rule = db_manager.db.get_stock_strategy(code)
-    rule_applied = False
-    
-    # 기본값 설정
-    buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-    buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-    rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-    buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    weights = config.SCORING_WEIGHTS
-    
-    if custom_rule:
-        rule_applied = True
-        buy_score = custom_rule['buy_score']
-        buy_rsi = custom_rule['buy_rsi']
-        if custom_rule.get('weights'):
-            try:
-                w_data = custom_rule['weights']
-                if isinstance(w_data, str): weights = json.loads(w_data)
-                elif isinstance(w_data, dict): weights = w_data
-            except: pass
-        if custom_rule.get('buy_vol_strength'):
-            buy_vol = custom_rule['buy_vol_strength']
-
-    foreign_rate_str = "-"
-    # [추가] 적응형 임계값 적용 (시장 국면 보정)
-    score_adj = 0.0
-    if not is_overseas:
-        try:
-            # API로 시장 구분 및 외인 소진율 확인
-            cp = api.get_current_price_data(code, False)
-            if cp.get('rt_cd') == '0':
-                foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
-                
-                if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
-                    market_type = "KOSDAQ" if "코스닥" in cp['output'].get('rprs_mrkt_kor_name', '') else "KOSPI"
-                    regime, score_adj = get_market_regime(market_type)
-                    if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
-                        buy_score += score_adj
-        except: pass
-
-    # [추가] 임계값 및 가중치 딕셔너리 구성
-    thresholds = {
-        "BUY_SCORE": buy_score,
-        "BUY_RSI_MAX": buy_rsi,
-        "RISE_SCORE": rise_score,
-        "WEIGHTS": weights
-    }
-
+    # [수정] 종목 선택 후 데이터 분석 시작 (UI 응답성 개선)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:
+        # [추가] 개별 룰 로드 및 설정 준비
+        custom_rule = db_manager.db.get_stock_strategy(code)
+        rule_applied = False
+        
+        # 기본값 설정
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        weights = config.SCORING_WEIGHTS
+        
+        if custom_rule:
+            rule_applied = True
+            buy_score = custom_rule['buy_score']
+            buy_rsi = custom_rule['buy_rsi']
+            if custom_rule.get('weights'):
+                try:
+                    w_data = custom_rule['weights']
+                    if isinstance(w_data, str): weights = json.loads(w_data)
+                    elif isinstance(w_data, dict): weights = w_data
+                except: pass
+            if custom_rule.get('buy_vol_strength'):
+                buy_vol = custom_rule['buy_vol_strength']
+
+        foreign_rate_str = "-"
+        # [추가] 적응형 임계값 적용 (시장 국면 보정)
+        score_adj = 0.0
+        if not is_overseas:
+            progress.add_task("[cyan]시장 국면 및 수급 정보 조회 중...[/cyan]", total=None)
+            try:
+                # API로 시장 구분 및 외인 소진율 확인
+                cp = api.get_current_price_data(code, False)
+                if cp.get('rt_cd') == '0':
+                    foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
+                    
+                    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                        market_type = "KOSDAQ" if "KOSDAQ" in cp['output'].get('rprs_mrkt_kor_name', '') else "KOSPI"
+                        regime, score_adj = get_market_regime(market_type)
+                        if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
+                            buy_score += score_adj
+            except: pass
+
+        # [추가] 임계값 및 가중치 딕셔너리 구성
+        thresholds = {
+            "BUY_SCORE": buy_score,
+            "BUY_RSI_MAX": buy_rsi,
+            "RISE_SCORE": rise_score,
+            "WEIGHTS": weights
+        }
+
         task = progress.add_task(f"[cyan]{name}({code}) 데이터 분석 중...[/cyan]", total=None)
 
         # 1. [최적화] 데이터 병렬 조회 (차트 캐시 확인 및 체결강도 동시 호출)

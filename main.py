@@ -99,7 +99,7 @@ utils.print_breadcrumb = _custom_print_breadcrumb
 
 def preflight_check():
     """프로그램 시작 전 필수 시스템 상태를 점검합니다."""
-    config.console.print("\n[bold cyan]시스템 사전 점검 (Pre-flight Check) 시작...[/bold cyan]")
+    config.console.print("\n[cyan]시스템 사전 점검 (Pre-flight Check) 시작...[/cyan]")
     checks_ok = True
     
     # 1. API 키 점검
@@ -108,16 +108,16 @@ def preflight_check():
             config.console.print("  - [bold red]실패[/]: 모의투자 API Key/Secret이 설정되지 않았습니다.")
             checks_ok = False
         else:
-            config.console.print("  - [green]성공[/]: 모의투자 API Key/Secret 확인 완료.")
+            config.console.print("  - 성공: 모의투자 API Key/Secret 확인 완료.")
     else: # 실전
         if not config.session.real_app_key or not config.session.real_app_secret:
             config.console.print("  - [bold red]실패[/]: 실전투자 API Key/Secret이 설정되지 않았습니다.")
             checks_ok = False
         else:
-            config.console.print("  - [green]성공[/]: 실전투자 API Key/Secret 확인 완료.")
+            config.console.print("  - 성공: 실전투자 API Key/Secret 확인 완료.")
         
         if config.session.auto_app_key:
-             config.console.print("  - [green]성공[/]: 자동매매 전용 API Key 확인 완료.")
+             config.console.print("  - 성공: 자동매매 전용 API Key 확인 완료.")
 
     if not checks_ok: return False
 
@@ -129,7 +129,7 @@ def preflight_check():
             token_ok = True
     
     if token_ok:
-        config.console.print("  - [green]성공[/]: API 토큰 발급 테스트 완료.")
+        config.console.print("  - 성공: API 토큰 발급 테스트 완료.")
     else:
         config.console.print("  - [bold red]실패[/]: API 토큰 발급에 실패했습니다. (서버 점검 또는 Key 오류)")
         checks_ok = False
@@ -161,7 +161,7 @@ def preflight_check():
             if updated:
                 config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
-                config.console.print("  - [green]성공[/]: 누락된 시장(exchange) 정보 업데이트 완료.")
+                config.console.print("  - 성공: 누락된 시장(exchange) 정보 업데이트 완료.")
         
     return checks_ok
 
@@ -690,7 +690,7 @@ def main():
         config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
         sys.exit(1)
     else:
-        config.console.print("[bold green]모든 점검 통과. 시스템을 시작합니다.[/bold green]")
+        config.console.print("[green]모든 점검 통과. 시스템을 시작합니다.[/green]")
 
     with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
         # 3. DB 큐 프록시 설치
@@ -700,7 +700,7 @@ def main():
         # 4. 텔레그램 봇 비활성화 옵션 처리
         if args.no_bot:
             config.ENABLE_TELEGRAM = False
-            config.console.print("[yellow][System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다.[/yellow]")
+            config.console.print("[System] 텔레그램 봇 명령어 수신 기능을 비활성화합니다.")
 
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         
