@@ -4395,7 +4395,15 @@ class AutoTrader:
                 regime, adj = analysis.get_market_regime(m_type)
                 market_regime_adj[m_type] = adj
                 if self.consecutive_errors == 0:
-                    self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점)")
+                    # [추가] 시장 필터링 상태 로그
+                    filter_status_str = ""
+                    if getattr(config, 'USE_MARKET_FILTER', True):
+                        market_stat = self.market_index_status.get(m_type)
+                        if market_stat and isinstance(market_stat, dict):
+                            is_healthy = market_stat.get('is_healthy', True)
+                            filter_status_str = "허용" if is_healthy else "보류"
+                            filter_status_str = f" | 필터링: {filter_status_str}"
+                    self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점){filter_status_str}")
 
         # [최적화] 분석 대상 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []
