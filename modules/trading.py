@@ -33,8 +33,8 @@ def select_account():
             ("2", "자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
         ]
         choice = utils.show_menu("주문을 수행할 계좌를 선택하세요", menu_items, default_choice="1")
-    if choice.lower() in ['b', 'q']:
-        return False, False, False
+        if choice.lower() in ['b', 'q']:
+            return False, False, False
             
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] 계좌: {menu_map_dict.get(choice, '')}")
@@ -43,7 +43,7 @@ def select_account():
             target_cano = config.session.auto_cano
             target_acnt = config.session.auto_acnt_prdt_cd
             acc_label = "자동투자"
-            
+
     return target_cano, target_acnt, acc_label
 
 def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
