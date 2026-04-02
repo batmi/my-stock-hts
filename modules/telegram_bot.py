@@ -62,6 +62,7 @@ class TelegramCommander:
             "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
             "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
             "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
+            "/news": self._cmd_news, # [추가] AI 최신 뉴스 검색
             "/memo": self._cmd_memo, # [추가] 종목 메모 관리
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
@@ -499,8 +500,8 @@ class TelegramCommander:
             "• /portfolio : AI 포트폴리오 리스크 진단\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
             "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)\n"
-            "• /memo [a/d/종목] : 종목 메모 조회/추가/삭제"
-
+            "• /memo [a/d/종목] : 종목 메모 조회/추가/삭제\n"
+            "• /news <종목> : AI 기반 최신 뉴스 5개 및 링크 검색"
         )
 
     def _cmd_report(self, args):
@@ -656,6 +657,27 @@ class TelegramCommander:
                 msg += f"ID: {m['id']} | {m['updated_at']}\n{m['memo']}\n\n"
             msg += "메모 삭제 : /memo d [ID]"
             return msg.strip()
+
+    def _cmd_news(self, args):
+        """/news <종목> : AI 기반 최신 뉴스 5개 및 링크 검색"""
+        if not args:
+            return "⚠️ 사용법: /news <종목명 또는 코드>\n(예: /news 삼성전자, /news TSLA)"
+            
+        keyword = " ".join(args)
+        code, name, is_overseas = self._resolve_stock(keyword)
+        
+        display_name = name if name else keyword
+        self._send_reply(f"🔍 '{display_name}'의 최신 뉴스를 수집 및 분석 중입니다... (약 10초 소요)")
+        
+        def _task():
+            from modules import theme_analysis
+            # 해외 주식은 네이버 국내 뉴스 크롤링이 안 되므로 코드를 넘기지 않음
+            target_code = code if not is_overseas else None
+            result = theme_analysis.get_latest_news_with_gemini(display_name, target_code)
+            self._send_reply(result)
+            
+        threading.Thread(target=_task, daemon=True).start()
+        return None
 
     def _cmd_ask(self, args):
         if not args:

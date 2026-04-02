@@ -32,6 +32,23 @@ def isolate_test_files(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STOCK_DATA_FILE", str(test_json))
     monkeypatch.setattr(config, "TOKEN_CACHE_FILE", str(test_token))
     monkeypatch.setattr(config, "DB_FILE_PATH", str(test_db))
+    monkeypatch.setattr(config, "JSON_DIR", str(tmp_path)) # 시스템 설정(dynamic_config.json) 덮어쓰기 방지
+
+    # [추가] 테스트 중 생성되는 파일(차트, 엑셀, 로그) 격리
+    test_chart_dir = tmp_path / "chart"
+    test_data_dir = tmp_path / "data"
+    test_log_dir = tmp_path / "logs"
+    test_chart_dir.mkdir(exist_ok=True)
+    test_data_dir.mkdir(exist_ok=True)
+    test_log_dir.mkdir(exist_ok=True)
+
+    monkeypatch.setattr(config, "CHART_DIR", str(test_chart_dir))
+    monkeypatch.setattr(config, "DATA_DIR", str(test_data_dir))
+    monkeypatch.setattr(config, "LOG_DIR", str(test_log_dir))
+    monkeypatch.setattr(config, "SYSTEM_TRADING_LOG_DIR", str(test_log_dir))
+
+    # [추가] 테스트 중 실제 텔레그램 메시지 발송 원천 차단
+    monkeypatch.setattr(config, "ENABLE_TELEGRAM", False)
 
 @pytest.fixture(autouse=True)
 def cleanup_global_db_connection():

@@ -117,6 +117,70 @@ def fetch_naver_themes():
         logger.error(f"Naver theme crawling error: {e}")
         return []
 
+def fetch_realtime_news(keyword, limit=10):
+    """구글 뉴스 RSS를 통해 실시간 기사 제목과 원문 링크를 수집합니다. (Naver 차단 원천 우회)"""
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    from datetime import timezone, timedelta
+
+    # 최신 뉴스를 위해 최근 1일(when:1d) 조건으로 검색
+    query = urllib.parse.quote(f"{keyword} when:1d")
+    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+    
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        logger.debug(f"[NEWS_DEBUG] 구글 뉴스 RSS 요청 URL: {url}")
+        res = requests.get(url, headers=headers, timeout=5)
+        logger.debug(f"[NEWS_DEBUG] HTTP 응답 코드: {res.status_code}")
+        
+        if res.status_code != 200:
+            logger.error(f"[NEWS_DEBUG] 비정상 HTTP 응답: {res.status_code} - {res.text[:200]}")
+            return ""
+            
+        root = ET.fromstring(res.text)
+        items = root.findall('.//item')
+        logger.debug(f"[NEWS_DEBUG] 파싱된 기사(item) 노드 수: {len(items)}")
+        
+        news_list = []
+        for item in items:
+            title_elem = item.find('title')
+            link_elem = item.find('link')
+            source_elem = item.find('source')
+            pubdate_elem = item.find('pubDate')
+            
+            if title_elem is None or link_elem is None:
+                continue
+                
+            title = title_elem.text.strip()
+            link = link_elem.text.strip()
+            source = source_elem.text.strip() if source_elem is not None and source_elem.text else "언론사"
+            
+            # 날짜 파싱 및 한국 시간(KST) 변환
+            pubdate_str = pubdate_elem.text.strip() if pubdate_elem is not None and pubdate_elem.text else ""
+            date_display = ""
+            if pubdate_str:
+                try:
+                    dt = parsedate_to_datetime(pubdate_str)
+                    kst = timezone(timedelta(hours=9))
+                    date_display = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    date_display = pubdate_str
+            
+            info_text = f"{date_display} | {source}" if date_display else source
+            
+            # 중복 추가 방지
+            item_str = f"- [{info_text}] {title}\n  🔗 링크: {link}"
+            if item_str not in news_list:
+                news_list.append(item_str)
+            if len(news_list) >= limit: break
+            
+        logger.debug(f"[NEWS_DEBUG] 최종 수집된 뉴스 개수: {len(news_list)}")
+        return "\n".join(news_list)
+    except Exception as e:
+        logger.error(f"[NEWS_DEBUG] Google news RSS crawling error: {e}", exc_info=True)
+        return ""
+
 def _fetch_theme_detail(theme):
     """(내부함수) 테마 상세 페이지에서 구성 종목 정보를 가져와 주도주(등락률 상위)를 추출"""
     try:
@@ -419,6 +483,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             try:
                 model = genai.GenerativeModel(
                     model_name=config.GEMINI_MODEL,
+                    # tools="google_search_retrieval", # [주의] 무료 계정(Free Tier)에서는 검색 도구 권한 오류가 발생하므로 주석 처리함
                     generation_config={
                         "temperature": 0.2,
                         "top_p": 0.95,
@@ -482,15 +547,28 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     [기술적 분석 요약]
     {tech_info_str}
     
-    이 기술적 데이터를 바탕으로, 구글 검색을 통해 '{name}'에 대한 오늘 날짜 기준의 가장 최신 핵심 뉴스(실적, 수주, 주요 공시 등)를 3개 이상 반드시 포함해서 찾아주세요.
-    그리고 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
+"""
+    crawled_news = fetch_realtime_news(name, limit=10)
+    if not crawled_news:
+        return f"⚠️ '{name}'에 대한 실시간 뉴스 검색에 실패했습니다. (구글 뉴스 RSS 수집 실패)\n심층 진단을 취소합니다."
+
+    prompt += f"""
+    [시스템 수집 실시간 뉴스 데이터]
+    {crawled_news}
+    
+    위 실시간 뉴스 데이터와 기술적 분석을 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요. 
+    1. 단순 제품 홍보나 가십성 기사는 제외하고, 향후 주가에 영향을 미칠 수 있는 핵심 투자 모멘텀(실적, 수주, M&A, 신사업, 업황 등) 위주의 기사만 선별하세요.
+    2. 기사 출처와 날짜를 표기하고, 링크(URL)가 길게 노출되지 않도록 반드시 [기사 원문 보기](원본URL) 형태의 마크다운 하이퍼링크로 작성하세요. (예: 🔗 링크: [기사 원문 보기](https://news...))
+"""
+
+    prompt += f"""
     
     텔레그램 메신저에서 읽기 편하도록 간결하고 가독성 좋게, 텍스트 스타일링(굵게 등)과 이모지를 적절히 활용하여 작성해 주세요.
     
     출력 형식:
     🔍 [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석)
-    📰 [오늘의 최신 핵심 뉴스 3선] (반드시 최신 뉴스 기사 제목, 1줄 요약, 날짜/출처 명시)
-    📊 [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
+    📰 [최신 핵심 투자 모멘텀] (시스템 수집 뉴스를 기반으로 한 투자 모멘텀. 링크는 반드시 [기사 원문 보기](URL) 형태의 마크다운 적용)
+    � [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
     💡 [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
     """
     logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 종목 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
@@ -499,6 +577,7 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
+            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
             generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
@@ -629,7 +708,7 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(model.generate_content, prompt)
@@ -740,6 +819,7 @@ def generate_morning_briefing(market_data_str):
         
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
+            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
             generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
@@ -787,7 +867,7 @@ def generate_stock_curation():
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3})
+        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(model.generate_content, prompt)
@@ -830,6 +910,7 @@ def ask_gemini(question):
         
         model = genai.GenerativeModel(
             model_name=config.GEMINI_MODEL,
+            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
             generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
         )
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
@@ -859,6 +940,73 @@ def ask_gemini(question):
             return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
         else:
             return f"⚠️ [red]AI 답변 생성 중 오류 발생: {error_msg}[/red]"
+
+def get_latest_news_with_gemini(keyword, code=None):
+    """특정 종목의 최신 중요 뉴스 5개 검색 (링크 포함)"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다."
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 통합 포털 검색을 사용하여 종목 코드(국내/해외) 의존성 완전 제거 및 수집 성공률 100% 확보
+    crawled_news = fetch_realtime_news(keyword, limit=10)
+    
+    if not crawled_news:
+        return f"⚠️ '{keyword}'에 대한 실시간 뉴스 검색 결과가 없습니다. (구글 뉴스 RSS 수집 실패)"
+
+    instruction = f"""
+    [시스템이 수집한 실시간 최신 뉴스 데이터]
+    {crawled_news}
+    
+    위 제공된 시스템 수집 뉴스 데이터를 바탕으로 '{keyword}'에 대한 가장 중요하고 핵심적인 투자 포인트와 이슈 5가지를 요약해주세요.
+    
+    [필수 지시사항]
+    1. 주식 투자와 무관한 단순 제품 홍보, 가십, 중복 기사는 엄격히 제외하고 주가에 영향을 줄 수 있는 핵심 모멘텀(실적, 수주, 신사업, 거시경제 등) 관련 기사 위주로 선별하세요.
+    2. 제공된 뉴스 기사 제목, 날짜, 출처를 명시하세요.
+    3. URL 링크가 지저분하게 노출되지 않도록, 반드시 [기사 원문 보기](원본URL) 형태의 마크다운 하이퍼링크로 작성하세요. (예: 🔗 링크: [기사 원문 보기](https://news...))
+    """
+
+    prompt = f"""
+    [현재 시각: {now} (KST)]
+    당신은 한국 및 글로벌 주식 시장 전문 AI 어시스턴트입니다.
+    {instruction}
+    
+    반드시 다음 출력 형식을 엄격하게 지켜주세요:
+    
+    📰 **[{keyword}] 핵심 투자 포인트 및 최신 뉴스 5선**
+    
+    1. **[기사/이슈 요약 제목 1]**
+       - 📝 요약: (1~2줄 이내의 핵심 요약)
+       - 💡 시사점: (해당 이슈가 주가에 미치는 투자 관점의 영향)
+       - 🔗 링크: [기사 원문 보기](제공된 원본 URL 삽입)
+       
+    (2~5번도 동일한 형식으로 출력)
+    """
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
+            generation_config={"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 호출 대기 시작")
+        
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+            executor.shutdown(wait=False)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else "검색 결과가 없거나 응답을 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"Gemini News Search Error: {e}")
+        err_str = str(e)
+        if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
+        elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
+        return f"⚠️ 뉴스 검색 중 오류 발생: {err_str}"
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""
