@@ -55,6 +55,57 @@ TR_ID_CONFIG = {
 }
 
 # ==========================================================
+# [설정] API URL 상수
+# ==========================================================
+API_URLS = {
+    "TOKEN": "/oauth2/tokenP",
+    "DOMESTIC": {
+        "QUOTATIONS": {
+            "PRICE": "/uapi/domestic-stock/v1/quotations/inquire-price",
+            "CHART": "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+            "TIME_CHART": "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
+            "INVESTOR": "/uapi/domestic-stock/v1/quotations/inquire-investor",
+            "VOL_STRENGTH": "/uapi/domestic-stock/v1/quotations/inquire-ccnl",
+            "INDEX_PRICE": "/uapi/domestic-stock/v1/quotations/inquire-index-price",
+            "INDEX_CHART": "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+            "INDEX_INVESTOR_CURRENT": "/uapi/domestic-stock/v1/quotations/inquire-index-investor",
+            "DAILY_PRICE": "/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+        },
+        "TRADING": {
+            "BUY": "/uapi/domestic-stock/v1/trading/order-cash",
+            "SELL": "/uapi/domestic-stock/v1/trading/order-cash",
+            "REVISE_CANCEL": "/uapi/domestic-stock/v1/trading/order-rvsecncl"
+        },
+        "INQUIRY": {
+            "BALANCE": "/uapi/domestic-stock/v1/trading/inquire-balance",
+            "PROFIT": "/uapi/domestic-stock/v1/trading/inquire-period-profit",
+            "BUYABLE": "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+            "SELLABLE": "/uapi/domestic-stock/v1/trading/inquire-psbl-sell",
+            "HISTORY": "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            "OPEN_ORDERS": "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl",
+            "DEPOSIT": "/uapi/domestic-stock/v1/trading/inquire-account-balance"
+        }
+    },
+    "OVERSEAS": {
+        "QUOTATIONS": {
+            "PRICE": "/uapi/overseas-price/v1/quotations/price",
+            "DETAIL": "/uapi/overseas-price/v1/quotations/price-detail",
+            "CHART": "/uapi/overseas-price/v1/quotations/dailyprice"
+        },
+        "TRADING": {
+            "ORDER": "/uapi/overseas-stock/v1/trading/order",
+            "REVISE_CANCEL": "/uapi/overseas-stock/v1/trading/order-rvsecncl"
+        },
+        "INQUIRY": {
+            "BALANCE": "/uapi/overseas-stock/v1/trading/inquire-balance",
+            "BUYABLE": "/uapi/overseas-stock/v1/trading/inquire-psamount",
+            "HISTORY": "/uapi/overseas-stock/v1/trading/inquire-ccnl",
+            "OPEN_ORDERS": "/uapi/overseas-stock/v1/trading/inquire-nccs"
+        }
+    }
+}
+
+# ==========================================================
 # [설정] 데이터 필드 매핑 (한글 명칭 변환용)
 # ==========================================================
 FIELD_MAP_DOMESTIC = {

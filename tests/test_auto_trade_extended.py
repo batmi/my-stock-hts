@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from modules.auto_trade import AutoTrader, ConclusionMonitor
 import config
 import time
+import threading
 
 @pytest.fixture
 def trader():
@@ -10,27 +11,30 @@ def trader():
     t.is_running = False
     return t
 
-@patch('modules.auto_trade.ConclusionMonitor')
-@patch('modules.auto_trade.api.send_telegram_message')
-@patch('modules.auto_trade.api.get_domestic_balance')
-@patch('modules.auto_trade.api.get_deposit_balance')
-@patch('threading.Thread')
-def test_autotrader_start_stop(mock_thread_cls, mock_deposit, mock_balance, mock_telegram, mock_monitor, trader):
+@pytest.fixture(autouse=True)
+def reset_singletons():
+    ConclusionMonitor._instance = None
+    AutoTrader._instance = None
+    yield
+
+
+@patch('modules.auto_trade.AutoTrader.initialize', return_value=True)
+@patch('modules.auto_trade.threading.Thread')
+def test_autotrader_start_stop(mock_thread_cls, mock_initialize, trader):
     """AutoTrader 시작 및 중지 로직 테스트"""
     # Mock 설정
-    mock_balance.return_value = ([], [{'scts_evlu_amt': '1000000'}])
-    mock_deposit.return_value = {'d2_deposit': 1000000, 'foreign_deposit': 0}
-    
+    trader.initial_asset = 1000000 # initialize가 모의되었으므로 수동 설정
+
     # Thread Mock (실제 스레드 생성 방지 및 join 호출 검증용)
     mock_thread_instance = MagicMock()
     mock_thread_cls.return_value = mock_thread_instance
-    
+
     # Start
     trader.start(interactive=False)
     assert trader.is_running is True
-    assert trader.initial_asset > 0
+    mock_initialize.assert_called_once()
     mock_thread_instance.start.assert_called_once()
-    
+
     # Stop
     trader.stop(use_status=False)
     assert trader.is_running is False
@@ -57,6 +61,7 @@ def test_conclusion_monitor_loop():
     """체결 감시자 루프 테스트"""
     monitor = ConclusionMonitor()
     monitor.is_running = True
+    monitor.thread = threading.current_thread() # 스레드 컨텍스트 설정
     
     # _check_conclusions를 Mocking하여 루프가 한 번 돌고 종료되도록 유도
     with patch.object(monitor, '_check_conclusions', return_value=(False, False)) as mock_check:

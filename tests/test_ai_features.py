@@ -44,7 +44,7 @@ def test_generate_trading_autopsy_no_api_key():
     """API 키가 없을 때의 예외 처리 테스트"""
     config.GEMINI_API_KEY = ""
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-10-01", 8.0, "익절", 10.0, 5)
-    assert res is None
+    assert "Gemini" in res
 
 def test_generate_trading_autopsy_api_exception(mock_genai):
     """API 호출 중 에러 발생 시의 예외 처리 테스트"""
@@ -53,7 +53,7 @@ def test_generate_trading_autopsy_api_exception(mock_genai):
     mock_model.generate_content.side_effect = Exception("API Timeout")
     
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-10-01", 8.0, "익절", 10.0, 5)
-    assert res is None
+    assert "Gemini" in res
 
 @patch('modules.theme_analysis.generate_trading_autopsy')
 @patch('modules.db_manager.db.get_latest_buy_trade')

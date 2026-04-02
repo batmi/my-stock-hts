@@ -30,7 +30,6 @@ def test_call_api_success(mock_session):
             ANY,
             headers=ANY,
             params=None,
-            verify=False,
             timeout=config.DEFAULT_TIMEOUT,
             retries=config.MAX_RETRIES
         )
@@ -59,7 +58,7 @@ def test_get_access_token_success(mock_session):
     config.session.app_key = "test_key"
     config.session.app_secret = "test_secret"
 
-    with patch("api.session", mock_session), \
+    with patch("api._token_session", mock_session), \
          patch("config.session.get_valid_token", return_value=None): # 캐시 무시
         result = api.get_access_token()
         assert result == "test_token"
@@ -73,7 +72,7 @@ def test_get_access_token_failure(mock_session):
     config.session.app_key = "test_key"
     config.session.app_secret = "test_secret"
 
-    with patch("api.session", mock_session), \
+    with patch("api._token_session", mock_session), \
          patch("config.session.get_valid_token", return_value=None): # 캐시 무시
         result = api.get_access_token()
         assert result is None
@@ -153,7 +152,6 @@ def test_call_api_args(mock_get):
             expected_url, 
             headers=expected_headers, 
             params={"param1": "value1"}, 
-            verify=False, 
             timeout=config.DEFAULT_TIMEOUT, 
             retries=config.MAX_RETRIES
         )

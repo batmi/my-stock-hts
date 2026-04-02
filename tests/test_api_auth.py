@@ -4,7 +4,7 @@ import api
 import config
 import context
 
-@patch('api.session.post')
+@patch('api._token_session.post')
 def test_get_access_token_success(mock_post):
     """모의투자 토큰 발급 성공 테스트"""
     mock_post.return_value.status_code = 200
@@ -19,7 +19,7 @@ def test_get_access_token_success(mock_post):
     token = api._get_access_token_internal(force_refresh=True)
     assert token == 'new_token'
 
-@patch('api.session.post')
+@patch('api._token_session.post')
 def test_get_access_token_failure(mock_post):
     """모의투자 토큰 발급 실패 테스트"""
     mock_post.return_value.status_code = 500
@@ -43,7 +43,7 @@ def test_check_and_refresh_token_expired(mock_tg, mock_real, mock_sim):
     assert context.TOKEN_EXPIRED is False
     mock_sim.assert_called_with(force_refresh=True)
 
-@patch('api.session.post')
+@patch('api._token_session.post')
 def test_get_real_access_token_success(mock_post):
     """실전투자 토큰 발급 성공 테스트"""
     mock_post.return_value.status_code = 200

@@ -788,48 +788,63 @@ def check_and_refresh_token_if_expired():
                     context.LAST_TOKEN_REFRESH_ALERT = now
                 except: pass
 
-def _get_access_token_internal(force_refresh=False):
-    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
-    # (자정 이후 세션 만료 등으로 인한 재발급 필요성 대응)
+def _fetch_and_set_token(token_type, force_refresh=False):
+    """
+    지정된 유형의 액세스 토큰을 발급받고 세션에 저장합니다.
+
+    Args:
+        token_type (str): "SIMULATION", "REAL", "AUTO" 중 하나
+        force_refresh (bool): True이면 강제로 토큰을 재발급합니다.
+
+    Returns:
+        str or None: 발급된 액세스 토큰 또는 실패 시 None
+    """
     if not force_refresh:
-        token = config.session.get_valid_token("SIMULATION")
+        token = config.session.get_valid_token(token_type)
         if token:
-            logger.debug("모의 캐시 토큰 사용")
+            logger.debug(f"{token_type} 캐시 토큰 사용")
             return token
-        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
-        logger.info("[Token] 유효한 모의 토큰이 없어 신규 발급을 진행합니다.")
+        logger.info(f"[Token] 유효한 {token_type} 토큰이 없어 신규 발급을 진행합니다.")
 
-    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
-    # (API 호출 시 EGW00123 토큰 만료 에러를 확인하고 요청하는 것이므로)
-    # if force_refresh:
-    #     if config.session.is_token_recently_issued("SIMULATION", seconds=60):
-    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-    #         return config.session.get_valid_token("SIMULATION", force_disk_reload=True)
+    if token_type == "SIMULATION":
+        app_key = config.session.app_key
+        app_secret = config.session.app_secret
+        url = f"{config.SIM_URL}/oauth2/tokenP"
+    elif token_type == "REAL":
+        app_key = config.session.real_app_key
+        app_secret = config.session.real_app_secret
+        url = f"{config.REAL_URL}/oauth2/tokenP"
+    elif token_type == "AUTO":
+        if config.session.auto_app_key and config.session.real_app_key and \
+           config.session.auto_app_key == config.session.real_app_key:
+            return _fetch_and_set_token("REAL", force_refresh)
+        app_key = config.session.auto_app_key
+        app_secret = config.session.auto_app_secret
+        url = f"{config.REAL_URL}/oauth2/tokenP"
+    else:
+        logger.error(f"잘못된 토큰 유형: {token_type}")
+        return None
 
-    # [추가] 키 누락 시 조기 리턴 (불필요한 서버 요청 방지)
-    if not config.session.app_key or not config.session.app_secret:
-        logger.error("모의투자 API Key 또는 Secret이 설정되지 않았습니다. (환경변수 SIM_APP_KEY, SIM_APP_SECRET 확인 필요)")
+    if not app_key or not app_secret:
+        logger.error(f"{token_type} API Key 또는 Secret이 설정되지 않았습니다.")
         return None
 
     headers = {"content-type": "application/json"}
-    # [수정] session에서 키 사용
-    body = {"grant_type": "client_credentials", "appkey": config.session.app_key, "appsecret": config.session.app_secret}
-    url = f"{config.session.url_base}/oauth2/tokenP"
-    
+    body = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
+
     try:
-        logger.info("모의투자 토큰 신규 발급 요청...")
-        
-        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
+        logger.info(f"{token_type} 토큰 신규 발급 요청...")
         res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
-        if res is None: raise Exception("토큰 발급 응답 없음 (최대 재시도 초과)")
-        
+        if res is None:
+            raise Exception(f"{token_type} 토큰 발급 응답 없음 (최대 재시도 초과)")
+
         if res.status_code == 200:
             res_json = res.json()
             if 'access_token' in res_json:
                 token = res_json['access_token']
                 expired = res_json.get('access_token_token_expired')
-                config.session.set_token("SIMULATION", token, expired)
-                logger.info("[green]모의투자 토큰 발급 완료[/green]")
+                config.session.set_token(token_type, token, expired)
+                logger.info(f"[green]{token_type} 토큰 발급 완료[/green]")
                 return token
             else:
                 logger.error(f"토큰 발급 응답 오류: {res.text}")
@@ -838,22 +853,27 @@ def _get_access_token_internal(force_refresh=False):
             try:
                 res_json = res.json()
                 if res_json.get('error_code') == 'EGW00133':
-                    logger.warning("빈도 제한(EGW00133). 캐시 재확인.")
-                    token = config.session.get_valid_token("SIMULATION", force_disk_reload=True)
+                    logger.warning(f"{token_type} 토큰 발급 빈도 제한(EGW00133). 캐시를 재확인합니다.")
+                    token = config.session.get_valid_token(token_type, force_disk_reload=True)
                     if token:
                         logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
                         return token
-            except: pass
-            
-            logger.error(f"토큰 발급 실패 (Status: {res.status_code}): {res.text}")
+            except Exception:
+                pass
+            logger.error(f"{token_type} 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             return None
-            
+
     except requests.exceptions.RequestException as e:
-        logger.error(f"모의투자 토큰 발급 중 네트워크 오류: {e}")
+        logger.error(f"{token_type} 토큰 발급 중 네트워크 오류: {e}")
         return None
     except Exception as e:
-        logger.error(f"모의투자 토큰 발급 중 오류: {e}")
+        logger.error(f"{token_type} 토큰 발급 중 오류: {e}")
         return None
+
+def _get_access_token_internal(force_refresh=False):
+    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
+    # (자정 이후 세션 만료 등으로 인한 재발급 필요성 대응)
+    return _fetch_and_set_token("SIMULATION", force_refresh)
 
 def get_real_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
@@ -862,62 +882,7 @@ def get_real_access_token(force_refresh=False):
 
 def _get_real_access_token_internal(force_refresh=False):
     # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
-    if not force_refresh:
-        token = config.session.get_valid_token("REAL")
-        if token:
-            logger.debug("실전 캐시 토큰 사용")
-            return token
-        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
-        logger.info("[Token] 유효한 실전 토큰이 없어 신규 발급을 진행합니다.")
-
-    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
-    # if force_refresh:
-    #     if config.session.is_token_recently_issued("REAL", seconds=60):
-    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-    #         return config.session.get_valid_token("REAL", force_disk_reload=True)
-
-    if not config.session.real_app_key: return None
-
-    headers = {"content-type": "application/json"}
-    # [수정] session에서 키 사용
-    body = {"grant_type": "client_credentials", "appkey": config.session.real_app_key, "appsecret": config.session.real_app_secret}
-    url = f"{config.REAL_URL}/oauth2/tokenP"
-    
-    try:
-        logger.info("실전투자 토큰 신규 발급 요청...")
-        
-        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
-        res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
-        if res is None: raise Exception("실전투자 토큰 발급 응답 없음 (최대 재시도 초과)")
-        
-        if res.status_code == 200:
-            res_json = res.json()
-            token = res_json['access_token']
-            expired = res_json.get('access_token_token_expired')
-            config.session.set_token("REAL", token, expired)
-            logger.info("[green]실전투자 토큰 발급 완료[/green]")
-            return token
-        
-        else:
-            try:
-                err_json = res.json()
-                if err_json.get('error_code') == 'EGW00133':
-                    logger.warning("실전 토큰 발급 빈도 제한(EGW00133). 캐시를 재확인합니다.")
-                    token = config.session.get_valid_token("REAL", force_disk_reload=True)
-                    if token:
-                        logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
-                        return token
-                    return None
-            except: pass
-            
-            logger.error(f"실전 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
-            
-    except requests.exceptions.RequestException as e:
-        logger.error(f"실전 토큰 발급 중 네트워크 오류: {e}")
-    except Exception as e:
-        logger.error(f"실전 토큰 발급 중 기타 오류: {e}")
-        
-    return None
+    return _fetch_and_set_token("REAL", force_refresh)
 
 def get_auto_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
@@ -927,65 +892,7 @@ def get_auto_access_token(force_refresh=False):
 def _get_auto_access_token_internal(force_refresh=False):
     # [추가] 실전투자 계좌와 자동매매 계좌의 AppKey가 동일한 경우, 실전투자 토큰을 공유 사용
     # (동일한 Key로 짧은 시간 내 중복 토큰 발급 요청 시 EGW00133 에러 발생 방지)
-    if config.session.auto_app_key and config.session.real_app_key and \
-       config.session.auto_app_key == config.session.real_app_key:
-        return get_real_access_token(force_refresh)
-
-    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
-    if not force_refresh:
-        token = config.session.get_valid_token("AUTO")
-        if token:
-            logger.debug("자동매매 캐시 토큰 사용")
-            return token
-        # 캐시된 토큰이 없으면 백그라운드 스레드라도 발급 진행
-        logger.info("[Token] 유효한 자동매매 토큰이 없어 신규 발급을 진행합니다.")
-
-    # [수정] force_refresh=True일 때는 빈도 제한 체크를 건너뛰고 무조건 재발급 시도
-    # if force_refresh:
-    #     if config.session.is_token_recently_issued("AUTO", seconds=60):
-    #         logger.warning("토큰이 최근(60초 내) 발급되었습니다. 빈도 제한(EGW00133) 방지를 위해 강제 갱신을 건너뜁니다.")
-    #         return config.session.get_valid_token("AUTO", force_disk_reload=True)
-
-    if not config.session.auto_app_key: return None
-
-    headers = {"content-type": "application/json"}
-    # [수정] session에서 키 사용
-    body = {"grant_type": "client_credentials", "appkey": config.session.auto_app_key, "appsecret": config.session.auto_app_secret}
-    url = f"{config.REAL_URL}/oauth2/tokenP"
-    
-    try:
-        logger.info("자동매매용 토큰 신규 발급 요청...")
-        
-        # [수정] 재시도 로직이 내장된 전용 세션(_token_session) 사용
-        res = _token_session.post(url, headers=headers, data=json.dumps(body), timeout=15)
-        if res is None: raise Exception("자동매매 토큰 발급 응답 없음 (최대 재시도 초과)")
-        
-        if res.status_code == 200:
-            res_json = res.json()
-            token = res_json['access_token']
-            expired = res_json.get('access_token_token_expired')
-            config.session.set_token("AUTO", token, expired)
-            logger.info("[green]자동매매용 토큰 발급 완료[/green]")
-            return token
-        else:
-            try:
-                err_json = res.json()
-                if err_json.get('error_code') == 'EGW00133':
-                    logger.warning("자동매매 토큰 발급 빈도 제한(EGW00133). 캐시를 재확인합니다.")
-                    token = config.session.get_valid_token("AUTO", force_disk_reload=True)
-                    if token:
-                        logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
-                        return token
-                    return None
-            except: pass
-            
-            logger.error(f"자동매매 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"자동매매 토큰 발급 중 네트워크 오류: {e}")
-    except Exception as e:
-        logger.error(f"자동매매 토큰 발급 중 기타 오류: {e}")
-        
-    return None
+    return _fetch_and_set_token("AUTO", force_refresh)
 
 def safe_int(value):
     try:
@@ -1240,7 +1147,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         except Exception: return pd.DataFrame()
 
     if not is_overseas:
-        url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"]
         all_items = []
         current_end_date = today
         current_start_date = start_date_origin
@@ -1281,7 +1188,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
             if e not in exchanges: exchanges.append(e)
             
-        url_path = "uapi/overseas-price/v1/quotations/dailyprice"
+        url_path = constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"]
         
         for excd in exchanges:
             all_items = []
@@ -1380,7 +1287,7 @@ def _get_intraday_chart_data(code, is_overseas):
     # 국내 주식 KIS API 1분봉 조회
     # URL: /uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice
     # TR_ID: FHKST03010200
-    url_path = "uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+    url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["TIME_CHART"]
     tr_id = "FHKST03010200"
     
     all_items = []
@@ -1464,7 +1371,7 @@ def get_domestic_index_chart(code):
     """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""
     def fetch_func():
         # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
-        url_path = "uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+        url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_CHART"]
         tr_id = "FHKUP03500100" 
         
         now = datetime.now()
@@ -1522,7 +1429,7 @@ def get_domestic_index_price(code):
     cached = _get_micro_cache(cache_key)
     if cached: return cached
 
-    url = "uapi/domestic-stock/v1/quotations/inquire-index-price"
+    url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_PRICE"]
     params = {
         "FID_COND_MRKT_DIV_CODE": "U",
         "FID_INPUT_ISCD": code
@@ -1538,7 +1445,7 @@ def get_current_price_data(code, is_overseas):
     if cached: return cached
 
     if not is_overseas:
-        res = call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
+        res = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"], "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
         if res.get('rt_cd') == '0':
             _set_micro_cache(cache_key, res)
         return res
@@ -1552,7 +1459,7 @@ def get_current_price_data(code, is_overseas):
         
         for excd in exchanges:
             params = {"AUTH": "", "EXCD": excd, "SYMB": code}
-            data = call_api("uapi/overseas-price/v1/quotations/price", "overseas", "quotations", "price", params=params, timeout=3)
+            data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["PRICE"], "overseas", "quotations", "price", params=params, timeout=3)
             if data.get('rt_cd') == '0':
                 if float(data.get('output', {}).get('last', 0) or 0) > 0:
                     if cached_ex != excd: config.session.update_cache_and_save(code, excd)
@@ -1581,7 +1488,7 @@ def get_investor_trend(code, market_div="J"):
 
     # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용
     action = "investor"
-    url = "uapi/domestic-stock/v1/quotations/inquire-investor"
+    url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INVESTOR"]
     params = {"FID_COND_MRKT_DIV_CODE": market_div, "FID_INPUT_ISCD": code}
 
     if market_div == "U":
@@ -1613,7 +1520,7 @@ def get_investor_trend(code, market_div="J"):
             logger.debug(f"[API] get_investor_trend(Daily) Empty/Fail. Trying Current Trend Fallback.")
             
         action = "index_investor_current"
-        url = "uapi/domestic-stock/v1/quotations/inquire-index-investor"
+        url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_INVESTOR_CURRENT"]
         params = {"FID_COND_MRKT_DIV_CODE": market_div, "FID_INPUT_ISCD": code}
 
     # 주식(J)이거나 업종(U) Fallback 실행
@@ -1636,7 +1543,7 @@ def get_investor_trend(code, market_div="J"):
 
 def get_daily_foreign_rate(code):
     """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
-    url = "uapi/domestic-stock/v1/quotations/inquire-daily-price"
+    url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["DAILY_PRICE"]
     params = {
         "FID_COND_MRKT_DIV_CODE": "J",
         "FID_INPUT_ISCD": code,
@@ -1656,7 +1563,7 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     if cached is not None: return cached
     
     for _ in range(3):
-        data = call_api("uapi/domestic-stock/v1/quotations/inquire-ccnl", "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
+        data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
         if data.get('rt_cd') == '0':
             items = data.get('output', [])
             if items and items[0].get('tday_rltv'):
@@ -1679,7 +1586,7 @@ def fetch_overseas_detail_price(code, excd):
 
     for target_excd in exchanges:
         params = {"AUTH": "", "EXCD": target_excd, "SYMB": code}
-        data = call_api("uapi/overseas-price/v1/quotations/price-detail", "overseas", "quotations", "detail", params=params, timeout=3)
+        data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["DETAIL"], "overseas", "quotations", "detail", params=params, timeout=3)
         if data.get('rt_cd') == '0':
             output = data.get('output', {})
             if output.get('h52p') and float(output.get('h52p')) > 0:
@@ -1694,7 +1601,7 @@ def fetch_domestic_period_price(code, days=100):
     past = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     
     params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": past, "FID_INPUT_DATE_2": today, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
-    data = call_api("uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "domestic", "quotations", "chart", params=params)
+    data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"], "domestic", "quotations", "chart", params=params)
     if data.get('rt_cd') == '0': return data.get('output2', [])
     return []
 
@@ -1708,7 +1615,7 @@ def fetch_overseas_period_price(code, excd):
     
     for target_excd in target_exchanges:
         params = {"AUTH": "", "EXCD": target_excd, "SYMB": code, "GUBN": "0", "BYMD": today, "MODP": "1", "KEYB": code}
-        data = call_api("uapi/overseas-price/v1/quotations/dailyprice", "overseas", "quotations", "chart", params=params, timeout=5)
+        data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"], "overseas", "quotations", "chart", params=params, timeout=5)
         if data.get('rt_cd') == '0':
             items = data.get('output2')
             if items:
@@ -1731,7 +1638,7 @@ def fetch_buyable_quantity(stock_code, price):
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "PDNO": stock_code, "ORD_UNPR": str(price), "ORD_DVSN": "00" if price > 0 else "01", "CMA_EVLU_AMT_ICLD_YN": "N", "OVRS_ICLD_YN": "N", "CRDT_TYPE": "00"}
-    data = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "buyable", params=params, timeout=5)
+    data = call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BUYABLE"], "domestic", "inquiry", "buyable", params=params, timeout=5)
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
         api_qty = safe_int(out.get('ord_psbl_qty')) or safe_int(out.get('nrcvb_buy_qty')) or safe_int(out.get('max_buy_qty'))
@@ -1750,7 +1657,7 @@ def fetch_sellable_quantity(stock_code):
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "01", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    data = call_api("uapi/domestic-stock/v1/trading/inquire-psbl-sell", "domestic", "inquiry", "sellable", params=params)
+    data = call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["SELLABLE"], "domestic", "inquiry", "sellable", params=params)
     if data.get('rt_cd') == '0':
         for item in data.get('output1', []):
             if item.get('pdno') == stock_code: return safe_int(item.get('ord_psbl_qty'))
@@ -1770,7 +1677,7 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
         
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": trade_excd, "OVRS_ORD_UNPR": str(price), "ITEM_CD": stock_code}
-    data = call_api("uapi/overseas-stock/v1/trading/inquire-psamount", "overseas", "inquiry", "buyable", params=params)
+    data = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["BUYABLE"], "overseas", "inquiry", "buyable", params=params)
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
         return safe_int(out.get('ovrs_ord_psbl_qty')) or safe_int(out.get('ord_psbl_qty'))
@@ -1798,7 +1705,7 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
 
     for target_excd in trade_excds:
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": target_excd, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "sellable", params=params)
+        data = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["BALANCE"], "overseas", "inquiry", "sellable", params=params)
         if data.get('rt_cd') == '0':
             for item in data.get('output1', []):
                 if item.get('ovrs_pdno') == stock_code:
@@ -1813,7 +1720,7 @@ def find_best_exchange_code(stock_code):
 
     for excd in ["NAS", "NYS", "AMS"]:
         params = {"AUTH": "", "EXCD": excd, "SYMB": stock_code}
-        data = call_api("uapi/overseas-price/v1/quotations/price", "overseas", "quotations", "price", params=params)
+        data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["PRICE"], "overseas", "quotations", "price", params=params)
         if data.get('rt_cd') == '0' and float(str(data.get('output', {}).get('last', '0')).strip() or 0) > 0:
             config.session.update_cache_and_save(stock_code, excd)
             return excd
@@ -1846,7 +1753,7 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     inqr_dvsn = "02" if config.session.is_simulation else "01"
     
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": inqr_dvsn, "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    data = call_api("uapi/domestic-stock/v1/trading/inquire-balance", "domestic", "inquiry", "balance", params=params, retries=retries)
+    data = call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BALANCE"], "domestic", "inquiry", "balance", params=params, retries=retries)
 
     if data.get('rt_cd') == '0':
         output1 = data.get('output1', [])
@@ -1880,12 +1787,12 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     for exc in target_exchanges:
         if config.session.is_simulation: time.sleep(0.2)
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params, retries=retries)
+        data = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["BALANCE"], "overseas", "inquiry", "balance", params=params, retries=retries)
         
         # Rate Limit 발생 시 잠시 대기 후 재시도 (call_api 내부 재시도와 별개로 루프 내 처리)
         if data.get('msg_cd') == 'EGW00201':
             time.sleep(0.5)
-            data = call_api("uapi/overseas-stock/v1/trading/inquire-balance", "overseas", "inquiry", "balance", params=params)
+            data = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["BALANCE"], "overseas", "inquiry", "balance", params=params)
 
         if data.get('rt_cd') == '0':
             for item in data.get('output1', []):
@@ -1912,7 +1819,7 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
         "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
         "COST_ICLD_YN": "Y" 
     }
-    return call_api("uapi/domestic-stock/v1/trading/inquire-period-profit", "domestic", "inquiry", "profit", params=params)
+    return call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["PROFIT"], "domestic", "inquiry", "profit", params=params)
 
 def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 체결 내역 조회"""
@@ -1921,7 +1828,7 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     
     # [수정] 주식일별주문체결조회 (inquire-daily-ccld) 사용
     # 실전: TTTC8001R, 모의: VTTC8001R
-    url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+    url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
     tr_id = "VTTC8001R" if config.session.is_simulation else "TTTC8001R"
     
     params = {
@@ -1948,7 +1855,7 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     
-    url = "uapi/overseas-stock/v1/trading/inquire-ccnl"
+    url = constants.API_URLS["OVERSEAS"]["INQUIRY"]["HISTORY"]
     tr_id = "VTTS3035R" if config.session.is_simulation else "TTTS3035R"
     
     # [Fix] OVRS_EXCG_CD는 필수 입력값이므로, 거래소별로 순회하며 조회 후 병합
@@ -1991,7 +1898,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
         # 모의투자 환경에서 주식정정취소가능주문조회(VTTC8036R) 미지원 이슈 대응
         # [주의] 모의투자 API 버그로 인해 실제 미체결이 있어도 데이터가 반환되지 않는 경우가 많음
         #       -> AutoTrader의 manage_unfilled_orders에서 로컬 상태 기반 강제 취소 로직으로 보완 중
-        url = "uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
         tr_id = "VTTC8001R"
         today = datetime.now().strftime("%Y%m%d")
         
@@ -2026,7 +1933,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
 
     else:
         # [수정] 실전투자: 주식정정취소가능주문조회(TTTC8036R) 사용
-        url = "uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["OPEN_ORDERS"]
         tr_id = "TTTC8036R"
         
         params = {
@@ -2056,7 +1963,7 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
             "OVRS_EXCG_CD": exc, "SORT_GB": "01", # [Fix] API 문서에 따라 SORT_SQN -> SORT_GB로 수정 (01: 주문번호순)
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
         }
-        res = call_api("uapi/overseas-stock/v1/trading/inquire-nccs", "overseas", "inquiry", "open_orders", params=params)
+        res = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["OPEN_ORDERS"], "overseas", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':
             orders = res.get('output', [])
             if orders:
@@ -2074,7 +1981,7 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     cano, acnt = _prepare_account_params(None, None)
     
     if market == "domestic":
-        url_path = "uapi/domestic-stock/v1/trading/order-cash"
+        url_path = constants.API_URLS["DOMESTIC"]["TRADING"][action.upper()]
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
             "PDNO": code, "ORD_DVSN": ord_dvsn, 
@@ -2087,7 +1994,7 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
         elif exchange_code == "NYS": trade_excd = "NYSE"
         elif exchange_code == "AMS": trade_excd = "AMEX"
 
-        url_path = "uapi/overseas-stock/v1/trading/order"
+        url_path = constants.API_URLS["OVERSEAS"]["TRADING"]["ORDER"]
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
             "OVRS_EXCG_CD": trade_excd, "PDNO": code, 
@@ -2106,7 +2013,7 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     cano, acnt = _prepare_account_params(None, None)
     
     if market == "domestic":
-        url_path = "uapi/domestic-stock/v1/trading/order-rvsecncl"
+        url_path = constants.API_URLS["DOMESTIC"]["TRADING"]["REVISE_CANCEL"]
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
     else: # overseas
@@ -2116,7 +2023,7 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         elif exchange_code == "NYS": trade_excd = "NYSE"
         elif exchange_code == "AMS": trade_excd = "AMEX"
 
-        url_path = "uapi/overseas-stock/v1/trading/order-rvsecncl"
+        url_path = constants.API_URLS["OVERSEAS"]["TRADING"]["REVISE_CANCEL"]
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "OVRS_EXCG_CD": trade_excd, "PDNO": code, "ORGN_ODNO": org_no, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price)}
     
     # action 파라미터는 TR_ID 조회를 위해 사용됨 (modify/cancel)
@@ -2132,7 +2039,7 @@ def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     }
     # [수정] TR_ID 명시적 지정 (로그상 CTRP6548R이 호출되고 있어 TTTC8908R로 교정)
     tr_id = "VTTC8908R" if config.session.is_simulation else "TTTC8908R"
-    return call_api("uapi/domestic-stock/v1/trading/inquire-psbl-order", "domestic", "inquiry", "deposit", params=params, retries=retries, tr_id=tr_id)
+    return call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BUYABLE"], "domestic", "inquiry", "deposit", params=params, retries=retries, tr_id=tr_id)
 
 def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """외화 예수금 등 실전투자 계좌 잔고 상세 조회"""
@@ -2145,7 +2052,7 @@ def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
         "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
         "BSPR_BF_DT_APLY_YN": "N"
     }
-    return call_api("uapi/domestic-stock/v1/trading/inquire-account-balance", "domestic", "inquiry", "deposit", params=params, retries=retries)
+    return call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["DEPOSIT"], "domestic", "inquiry", "deposit", params=params, retries=retries)
 
 def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, retries=None):
     """예수금 및 자산 현황 조회 (모의/실전 자동 분기)"""
@@ -2261,7 +2168,7 @@ def check_server_health():
     """서버 상태 점검 (삼성전자 현재가 조회)"""
     try:
         # 타임아웃 5초, 재시도 0회로 설정하여 빠르게 확인
-        res = call_api("uapi/domestic-stock/v1/quotations/inquire-price", "domestic", "quotations", "price", 
+        res = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"], "domestic", "quotations", "price", 
                        params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": "005930"}, 
                        timeout=5, retries=0)
         if res and res.get('rt_cd') == '0':

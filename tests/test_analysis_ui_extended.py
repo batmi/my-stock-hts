@@ -25,8 +25,8 @@ def test_show_stock_analysis_individual(mock_diagnose, mock_ask):
 @patch('modules.analysis.analyze_market_stocks')
 def test_show_stock_analysis_market(mock_analyze, mock_ask):
     """전체 종목 분석 메뉴 테스트"""
-    # 7(전체분석) -> 1(KOSPI)
-    mock_ask.side_effect = ["7", "1"]
+    # 7(전체분석) -> 1(KOSPI) -> b(이전) -> q(종료)
+    mock_ask.side_effect = ["7", "1", "b", "q"]
     analysis.show_stock_analysis()
     mock_analyze.assert_called_with("KOSPI")
 
@@ -34,8 +34,8 @@ def test_show_stock_analysis_market(mock_analyze, mock_ask):
 @patch('modules.analysis.save_all_market_analysis')
 def test_show_stock_analysis_save(mock_save, mock_ask):
     """전체 분석 저장 메뉴 테스트"""
-    # 7(전체분석) -> 3(저장)
-    mock_ask.side_effect = ["7", "3"]
+    # 7(전체분석) -> 3(저장) -> b(이전) -> q(종료)
+    mock_ask.side_effect = ["7", "3", "b", "q"]
     analysis.show_stock_analysis()
     mock_save.assert_called_once()
 
@@ -43,8 +43,8 @@ def test_show_stock_analysis_save(mock_save, mock_ask):
 @patch('modules.analysis.print_table')
 def test_show_stock_analysis_group(mock_print, mock_ask):
     """그룹별 분석 메뉴 테스트"""
-    # 1(국내주식) -> q
-    mock_ask.side_effect = ["1", "q"]
+    # 1(국내주식) -> q -> q
+    mock_ask.side_effect = ["1", "q", "q"]
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
     
     analysis.show_stock_analysis()

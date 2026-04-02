@@ -14,7 +14,6 @@ pymysql
 pyqt5
 pyshorteners
 python_dotenv
-pywin32
 requests
 scipy
 seaborn
