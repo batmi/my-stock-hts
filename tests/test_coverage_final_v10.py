@@ -80,8 +80,9 @@ def test_autotrader_stop_report(mock_tg, mock_dom_bal, mock_dep_bal):
     # Total = 500k + 600k = 1.1M. Profit +100k
     mock_tg.assert_called()
     msg = mock_tg.call_args[0][0]
-    assert "종료 자산: 1,100,000원" in msg
-    assert "금일 손익: +100,000원" in msg
+    assert "최종 예수금: 500,000원" in msg
+    assert "증권 평가 자산: 600,000원" in msg
+    assert "금일 최종 손익: +100,000원" in msg
 
 @patch('modules.analysis.api.get_chart_data')
 @patch('modules.analysis.indicators.calculate_indicators')
@@ -116,4 +117,3 @@ def test_diagnose_group_stocks(mock_restrict, mock_strategies, mock_vol, mock_sc
         # Check if table output contains Samsung
         # console.print is called multiple times (table, newlines, etc)
         assert mock_print.call_count > 0
-

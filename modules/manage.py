@@ -479,7 +479,15 @@ def get_current_price(mode='add'):
             target_list_key = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}.get(cat_choice)
 
             new_item = {"name": input_name, "code": code}
-            if code in config.session.exchange_cache: new_item["exchange"] = config.session.exchange_cache[code]
+            
+            if not is_overseas and res and res.get('rt_cd') == '0':
+                market_name = res['output'].get('rprs_mrkt_kor_name', '')
+                if "KOSDAQ" in market_name or "코스닥" in market_name:
+                    new_item["exchange"] = "KOSDAQ"
+                else:
+                    new_item["exchange"] = "KOSPI"
+            elif code in config.session.exchange_cache: 
+                new_item["exchange"] = config.session.exchange_cache[code]
             
             target_list = config.session.stock_data.get(target_list_key, [])
             if not any(item['code'] == code for item in target_list):

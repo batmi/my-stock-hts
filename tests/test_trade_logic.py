@@ -112,7 +112,7 @@ def test_rsi_overbought_sell(strategy, sample_uptrend_df):
     )
     
     assert result['action'] == 'sell'
-    assert "RSI 과열" in result['reason']
+    assert "RSI과열" in result['reason']
 
 def test_trend_broken_sell(strategy, sample_downtrend_df):
     """추세 이탈(점수 하락) 시 매도 신호 발생 테스트"""

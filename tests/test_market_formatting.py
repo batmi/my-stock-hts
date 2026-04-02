@@ -29,7 +29,7 @@ def test_show_market_indices_formatting(mock_tickers, mock_fetch):
     mock_ticker_obj.fast_info.regular_market_previous_close = 99.0
     mock_tickers.return_value.tickers = {t: mock_ticker_obj for t in tickers}
     
-    with patch('rich.prompt.Prompt.ask', return_value="2"):
+    with patch('rich.prompt.Prompt.ask', side_effect=["2", "q"]):
         with patch('config.console.print') as mock_print:
             market.show_market_indices()
             # 모든 지수가 출력되었는지 확인 (행 개수 등으로)

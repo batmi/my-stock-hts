@@ -14,8 +14,8 @@ def cleanup_db_connection():
 @patch('modules.manage.delete_stock')
 def test_manage_stock_menu(mock_delete, mock_add, mock_ask):
     """종목 관리 메뉴 테스트"""
-    # 1(추가) 선택
-    mock_ask.side_effect = ["1"]
+    # 2(추가) 선택 후 종료(q)
+    mock_ask.side_effect = ["2", "q"]
     
     manage.manage_stock_menu()
     

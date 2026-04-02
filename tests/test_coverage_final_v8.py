@@ -165,8 +165,8 @@ def test_system_trading_menu(mock_trader_cls, mock_ask):
     mock_trader = mock_trader_cls.return_value
     mock_trader.is_running = False
     
-    # 1(Start) -> 2(Stop) -> q
-    mock_ask.side_effect = ["1", "2", "q"]
+    # 1(Start) 후 종료(q) -> 2(Stop) 후 종료(q) -> 즉시 종료(q)
+    mock_ask.side_effect = ["1", "q", "2", "q", "q"]
     
     # 1. Start 실행
     auto_trade.system_trading_menu()

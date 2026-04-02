@@ -15,7 +15,7 @@ def test_analyze_candidates_restricted():
     
     with patch('modules.auto_trade.load_restricted_stocks', return_value={'005930': {}}), \
          patch('time.sleep'):
-        candidates = trader._analyze_candidates(targets, set(), {})
+        candidates = trader._analyze_candidates(targets, set(), {}, {})
         assert len(candidates) == 0
 
 def test_execute_buy_orders_low_cash():
@@ -53,8 +53,8 @@ def test_show_market_indices_no_data(mock_fetch):
     """데이터 없음 처리 테스트"""
     mock_fetch.return_value = pd.DataFrame()
     
-    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n')
-    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n"]):
+    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n', 메인화면 'q')
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n", "q"]):
         with patch('config.console.print') as mock_print:
             market.show_market_indices()
             assert mock_print.call_count > 0

@@ -25,7 +25,7 @@ def test_mr_state_classification():
         sar=9000, rsi=35.0, prev_rsi=30.0,
         adx=20, cci=-120, obv_trend=False, thresholds=thresholds
     )
-    assert state == "역추세매수"
+    assert state == "역매수"
 
 def test_mr_state_fail_rsi_rebound():
     """2. 역추세 매수 실패 테스트: RSI가 침체 구간이나 전일 대비 하락 중일 때"""
@@ -41,7 +41,7 @@ def test_mr_state_fail_rsi_rebound():
         sar=9000, rsi=30.0, prev_rsi=35.0,
         adx=20, cci=-120, obv_trend=False, thresholds=thresholds
     )
-    assert state != "역추세매수"
+    assert state != "역매수"
 
 def test_mr_state_fail_disparity():
     """3. 역추세 매수 실패 테스트: 이격도 조건(충분한 낙폭) 미달 시"""
@@ -57,7 +57,7 @@ def test_mr_state_fail_disparity():
         sar=9000, rsi=35.0, prev_rsi=30.0,
         adx=20, cci=-120, obv_trend=False, thresholds=thresholds
     )
-    assert state != "역추세매수"
+    assert state != "역매수"
 
 @patch('indicators.calculate_indicators')
 @patch('modules.analysis.classify_stock_state')
@@ -65,7 +65,7 @@ def test_mr_state_fail_disparity():
 def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
     """4. 매도 방어(Grace Period) 테스트: 역추세 진입 후 5일 이내 점수 하락 시 방어 여부"""
     strategy = DefaultStrategy()
-    df = pd.DataFrame({'close': [1000] * 20}) # Dummy
+    df = pd.DataFrame({'close': [1000] * 20, 'high': [1050] * 20, 'low': [950] * 20}) # Dummy
     
     mock_ind.return_value = {'ema_20': 1000, 'ema_60': 1000, 'ema_120': 1000, 'psar': 1000, 'rsi': 50, 'adx': 20, 'cci': 0}
     mock_classify.return_value = ("관망", "", "점수하락")
@@ -87,7 +87,7 @@ def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
 def test_mr_grace_period_time_over(mock_score, mock_classify, mock_ind):
     """5. 매도 방어(Grace Period) 만료 테스트: 5일 초과 시 정상 손절(추세이탈) 여부"""
     strategy = DefaultStrategy()
-    df = pd.DataFrame({'close': [1000] * 20})
+    df = pd.DataFrame({'close': [1000] * 20, 'high': [1050] * 20, 'low': [950] * 20})
     
     mock_ind.return_value = {'ema_20': 1000, 'ema_60': 1000, 'ema_120': 1000, 'psar': 1000, 'rsi': 50, 'adx': 20, 'cci': 0}
     mock_classify.return_value = ("관망", "", "점수하락")

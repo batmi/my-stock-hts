@@ -107,7 +107,7 @@ def test_simulate_strategy_mr_grace_loss(sample_df):
             "STOP_LOSS_RATE": -10.0     # 고정 손절선도 -6%보다 낮게 설정
         }):
             res = backtest.simulate_strategy(
-                sample_df.head(5), sample_df.iloc[0], 10000000, 
+                sample_df.head(5).copy(), sample_df.iloc[0], 10000000, 
                 buy_score_limit=8.0, buy_rsi_limit=70, is_overseas=False
             )
             
@@ -158,8 +158,8 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
     """백테스팅 전체 흐름 (단일 실행 + 최적화) 테스트"""
     mock_get_data.return_value = sample_df
     
-    # 6(Manual) -> Code -> n(No settings change) -> 1(Single Run) -> n(AI)
-    mock_ask.side_effect = ["6", "005930", "n", "1", "n"]
+    # 6(Manual) -> Code -> n(No settings change) -> 1(Single Run) -> n(AI) -> 메인화면(q)
+    mock_ask.side_effect = ["6", "005930", "n", "1", "n", "q"]
     
     mock_status.return_value.__enter__.return_value = MagicMock()
     
@@ -187,7 +187,7 @@ def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_g
     
     mock_ask.side_effect = [
         "6", "005930", "y", "100", "9.0", "60", "20.0", "n", "75", "5.0", 
-        "10.0", "3.0", "10", "n", "-5.0", "n", "1", "n"
+        "10.0", "3.0", "10", "n", "-5.0", "n", "1", "n", "q"
     ]
     
     mock_status.return_value.__enter__.return_value = MagicMock()

@@ -94,9 +94,10 @@ def test_check_smart_money_cache_hit(mock_api):
 
 def test_calculate_score_smart_money():
     """스마트머니 플래그에 따른 0.5점 가산점 정상 부여 확인"""
+    test_weights = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
     # 동일한 조건에서 smart_money 여부만 변경
-    score_no_sm, _ = analysis.calculate_score(1000, None, None, None, None, None, None, None, False, smart_money=False)
-    score_sm, details = analysis.calculate_score(1000, None, None, None, None, None, None, None, False, smart_money=True)
+    score_no_sm, _ = analysis.calculate_score(1000, None, None, None, None, None, None, None, False, weights=test_weights, smart_money=False)
+    score_sm, details = analysis.calculate_score(1000, None, None, None, None, None, None, None, False, weights=test_weights, smart_money=True)
     
     # 정확히 0.5점 차이 확인
     assert score_sm == round(score_no_sm + 0.5, 2)

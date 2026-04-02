@@ -77,20 +77,23 @@ def test_fetch_overseas_period_price_fail(mock_call):
     mock_call.return_value = {'rt_cd': '1'}
     assert api.fetch_overseas_period_price("AAPL", "NAS") is None
 
-@patch('api.session.post')
+@patch('api._token_session.post')
 def test_get_auto_access_token_shared_key(mock_post):
     """자동매매 키가 실전 키와 같을 때 토큰 공유 테스트"""
     config.session.auto_app_key = "SAME_KEY"
     config.session.real_app_key = "SAME_KEY"
     
-    # get_real_access_token이 호출되어야 함
-    with patch('api.get_real_access_token') as mock_real:
-        mock_real.return_value = "REAL_TOKEN"
+    with patch('config.session.get_valid_token') as mock_get_token:
+        def side_effect(token_type, **kwargs):
+            if token_type == "REAL":
+                return "REAL_TOKEN"
+            return None
+        mock_get_token.side_effect = side_effect
+        
         token = api.get_auto_access_token()
         assert token == "REAL_TOKEN"
-        mock_real.assert_called()
 
-@patch('api.session.post')
+@patch('api._token_session.post')
 def test_get_auto_access_token_separate_key(mock_post):
     """자동매매 키가 다를 때 별도 발급 테스트"""
     config.session.auto_app_key = "AUTO_KEY"
@@ -292,8 +295,8 @@ def test_show_market_indices_fast_info_fail(mock_tickers, mock_fetch):
     data = pd.DataFrame(100, index=dates, columns=cols)
     mock_fetch.return_value = data
     
-    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n')
-    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n"]):
+    # [수정] 사용자 입력을 모킹 (메뉴 선택 '8', 재시도 'n', 메인화면 'q')
+    with patch('rich.prompt.Prompt.ask', side_effect=["8", "n", "n", "q"]):
         with patch('config.console.print'):
             market.show_market_indices()
 
@@ -400,20 +403,21 @@ def test_check_sell_conditions_atr_stop(mock_get_rules, mock_del, mock_upd, mock
     
     # Mock DB latest buy trade to have stop_loss_rate
     with patch('modules.auto_trade.db_manager.db.get_latest_buy_trade', return_value={'stop_loss_rate': -4.0}):
-        # analyze_sell returns sell due to stop loss
-        mock_analyze.return_value = {
-            'action': 'sell', 'reason': '손절', 'score': 4.0, 'state': '매도', 'ind': {}
-        }
-        
-        with patch.object(trader.order_manager, 'is_pending', return_value=False):
-            with patch.object(trader.order_manager, 'send_order', return_value='12345') as mock_send:
-                trader._check_sell_conditions(holdings, is_market_open=True)
-                
-                mock_send.assert_called()
-                # Verify reason contains ATR손절
-                args, kwargs = mock_send.call_args
-                reason = kwargs.get('reason')
-                assert "ATR손절" in reason
+        with patch('modules.auto_trade.db_manager.db.get_buy_trades_for_current_holding', return_value=[{'qty': 10, 'stop_loss_rate': -4.0}]):
+            # analyze_sell returns sell due to stop loss
+            mock_analyze.return_value = {
+                'action': 'sell', 'reason': '손절', 'score': 4.0, 'state': '매도', 'ind': {}
+            }
+            
+            with patch.object(trader.order_manager, 'is_pending', return_value=False):
+                with patch.object(trader.order_manager, 'send_order', return_value='12345') as mock_send:
+                    trader._check_sell_conditions(holdings, is_market_open=True)
+                    
+                    mock_send.assert_called()
+                    # Verify reason contains ATR손절
+                    args, kwargs = mock_send.call_args
+                    reason = kwargs.get('reason')
+                    assert "ATR손절" in reason
 
 def test_check_buy_conditions_low_cash_limit():
     """최소 예수금 미달 테스트"""

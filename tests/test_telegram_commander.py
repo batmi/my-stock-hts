@@ -1,12 +1,16 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from modules.telegram_bot import TelegramCommander
+from modules.auto_trade import AutoTrader
 import config
 
 @pytest.fixture
 def commander():
     config.ENABLE_TELEGRAM = True
     config.TELEGRAM_BOT_TOKEN = "TEST_TOKEN"
+    # 테스트 간 상태 오염 방지를 위한 싱글톤 인스턴스 강제 초기화
+    TelegramCommander._instance = None
+    AutoTrader._instance = None
     return TelegramCommander()
 
 def test_cmd_help(commander):

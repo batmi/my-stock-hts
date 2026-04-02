@@ -26,7 +26,7 @@ def test_analyze_candidates_market_filter(mock_analyze, mock_vol, mock_chart):
     
     # Mocking _get_stock_market_type to return KOSPI
     with patch.object(trader, '_get_stock_market_type', return_value="KOSPI"):
-        candidates = trader._analyze_candidates([{"code": "005930", "name": "Samsung"}], set(), {})
+        candidates = trader._analyze_candidates([{"code": "005930", "name": "Samsung"}], set(), {}, {})
         
     assert len(candidates) == 0
     assert trader.skipped_by_market_filter_count == 1
@@ -42,7 +42,7 @@ def test_analyze_candidates_holding_skip(mock_analyze, mock_vol, mock_chart):
     targets = [{"code": "005930", "name": "Samsung"}]
     holding_codes = {"005930"}
     
-    candidates = trader._analyze_candidates(targets, holding_codes, {})
+    candidates = trader._analyze_candidates(targets, holding_codes, {}, {})
     assert len(candidates) == 0
 
 @patch('modules.auto_trade.api.fetch_buyable_quantity')
@@ -80,7 +80,7 @@ def test_calculate_score_full_trend():
     score, details = analysis.calculate_score(
         price=10000, ema20=9000, ema60=8000, ema120=7000,
         sar=9000, rsi=60, adx=30, cci=150, obv_trend=True,
-        macd=50, macd_signal=40
+        macd=50, macd_signal=40, smart_money=True
     )
     # 4.0(Trend) + 2.5(Mom) + 1.5(Str) + 2.0(Syn) = 10.0
     assert score >= 9.5 # Floating point margin

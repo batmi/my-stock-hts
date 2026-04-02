@@ -8,8 +8,8 @@ import config
 @patch('modules.trading.modify_order')
 def test_stock_order_menu(mock_modify, mock_send, mock_ask):
     """주문 관리 메뉴 테스트"""
-    # 1(매수) 선택
-    mock_ask.side_effect = ["1"]
+    # 1(매수) 선택 후 종료(q)
+    mock_ask.side_effect = ["1", "q"]
     
     trading.stock_order_menu()
     

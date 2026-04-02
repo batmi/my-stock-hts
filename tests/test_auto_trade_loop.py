@@ -1,4 +1,5 @@
 import pytest
+import threading
 from unittest.mock import patch, MagicMock
 from modules.auto_trade import AutoTrader, ConclusionMonitor
 import config
@@ -9,6 +10,7 @@ def trader():
     # 싱글톤 인스턴스의 상태를 매 테스트마다 초기화
     t = AutoTrader()
     t.is_running = True
+    t.thread = threading.current_thread()
     t.consecutive_errors = 0
     t.logs.clear()
     t.initial_holdings = None
@@ -55,6 +57,7 @@ def test_conclusion_monitor_error_handling():
     """체결 감시자 예외 처리 테스트"""
     monitor = ConclusionMonitor()
     monitor.is_running = True
+    monitor.thread = threading.current_thread()
     
     with patch.object(monitor, '_check_conclusions', side_effect=Exception("Monitor Error")):
         with patch.object(monitor, '_is_market_open', return_value=True):

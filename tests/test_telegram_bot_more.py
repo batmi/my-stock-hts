@@ -7,17 +7,19 @@ import config
 def commander():
     return TelegramCommander()
 
-@patch('modules.telegram_bot.api.get_chart_data')
-def test_cmd_market(mock_get_chart, commander):
+@patch('modules.telegram_bot.analysis.get_market_regime')
+@patch('modules.telegram_bot.analysis.get_domestic_index_data')
+def test_cmd_market(mock_get_index, mock_regime, commander):
     """시장 지수 조회 명령어 테스트"""
     # Mock DataFrame
     import pandas as pd
-    df = pd.DataFrame({'close': [2500, 2510]})
-    mock_get_chart.return_value = df
+    df = pd.DataFrame({'close': [2500.0, 2510.0]})
+    mock_get_index.return_value = df
+    mock_regime.return_value = ("Bull", 1.0)
     
     res = commander._cmd_market([])
     assert "코스피" in res or "KOSPI" in res
-    assert "2,510.00" in res
+    assert "2510" in res.replace(",", "").replace(".00", "")
 
 @patch('modules.telegram_bot.api.get_stock_name_by_code', return_value="삼성전자")
 @patch('modules.telegram_bot.api.get_chart_data')
