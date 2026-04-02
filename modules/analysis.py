@@ -1007,7 +1007,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     # [추가] 상세 차트 분석 여부 확인
     config.console.print()
-    if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="y") == 'y':
+    if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import chart
         chart.generate_visual_chart(code, name, is_overseas=is_overseas)
 

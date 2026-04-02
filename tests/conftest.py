@@ -17,6 +17,23 @@ def setup_config():
     config.session.initialize(mode="1")
 
 @pytest.fixture(autouse=True)
+def isolate_test_files(tmp_path, monkeypatch):
+    """
+    모든 테스트 실행 전 자동으로 임시 경로를 할당하여 
+    실제 운영 데이터(json, db)가 덮어써지는 것을 방지합니다.
+    """
+    test_json = tmp_path / "test_stock.json"
+    test_token = tmp_path / "test_token_cache.json"
+    test_db = tmp_path / "test_trade_history.db"
+
+    # 기본 더미 데이터 초기화
+    test_json.write_text('{"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}', encoding='utf-8')
+
+    monkeypatch.setattr(config, "STOCK_DATA_FILE", str(test_json))
+    monkeypatch.setattr(config, "TOKEN_CACHE_FILE", str(test_token))
+    monkeypatch.setattr(config, "DB_FILE_PATH", str(test_db))
+
+@pytest.fixture(autouse=True)
 def cleanup_global_db_connection():
     """
     각 테스트 실행 후 전역 DBManager의 스레드 로컬 연결을 닫습니다.
