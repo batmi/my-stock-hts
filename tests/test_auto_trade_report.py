@@ -25,10 +25,12 @@ def test_get_performance_report_with_data(mock_get_trades, trader):
     assert "총 실현 손익: +10,000원" in report
     assert "승률: 100.0%" in report
 
+@patch('modules.auto_trade.api.get_domestic_balance')
 @patch('modules.auto_trade.db_manager.db.get_trades')
 @patch('rich.prompt.Prompt.ask')
-def test_print_report_ui(mock_ask, mock_get_trades, trader):
+def test_print_report_ui(mock_ask, mock_get_trades, mock_balance, trader):
     """리포트 출력 UI 테스트"""
+    mock_balance.return_value = ([], [])
     # 1(일간) 선택
     mock_ask.return_value = "1"
     mock_get_trades.return_value = [

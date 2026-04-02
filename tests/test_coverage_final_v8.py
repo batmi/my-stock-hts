@@ -205,13 +205,15 @@ def test_check_conclusions_rate_limit(mock_api):
     is_limited, has_error = monitor._check_conclusions()
     assert is_limited is True
 
+@patch('modules.auto_trade.api.get_overseas_today_history')
 @patch('modules.auto_trade.api.get_today_history')
-def test_check_conclusions_api_error(mock_api):
+def test_check_conclusions_api_error(mock_api, mock_ovs_api):
     """체결 확인 API 에러 테스트"""
     monitor = auto_trade.ConclusionMonitor()
     
     # General Error
     mock_api.return_value = {'rt_cd': '1', 'msg_cd': 'E999'}
+    mock_ovs_api.return_value = {'rt_cd': '1', 'msg_cd': 'E999'}
     
     is_limited, has_error = monitor._check_conclusions()
     assert has_error is True
