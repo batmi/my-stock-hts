@@ -556,7 +556,7 @@ class TelegramCommander:
         if not code:
             return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
 
-        self._send_reply(f"⏳ '{name}({code})' 심층 진단 중...\n(차트 분석 + AI 뉴스 검색 중이므로 10~20초 소요됩니다)")
+        self._send_reply(f"⏳ '{name}({code})' 심층 진단 중...\n(차트 분석 + AI 모멘텀 분석 중이므로 10~20초 소요됩니다)")
         
         try:
             df = api.get_chart_data(code, is_overseas)

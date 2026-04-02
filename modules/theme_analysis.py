@@ -534,7 +534,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
         return None
 
 def analyze_stock_with_gemini(code, name, tech_info_str):
-    """특정 종목의 기술적 지표와 뉴스를 결합하여 심층 진단"""
+    """특정 종목의 기술적 지표와 모멘텀을 결합하여 심층 진단"""
     if genai is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
 
@@ -547,29 +547,17 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     [기술적 분석 요약]
     {tech_info_str}
     
-"""
-    crawled_news = fetch_realtime_news(name, limit=10)
-    if not crawled_news:
-        return f"⚠️ '{name}'에 대한 실시간 뉴스 검색에 실패했습니다. (구글 뉴스 RSS 수집 실패)\n심층 진단을 취소합니다."
-
-    prompt += f"""
-    [시스템 수집 실시간 뉴스 데이터]
-    {crawled_news}
-    
-    위 실시간 뉴스 데이터와 기술적 분석을 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요. 
-    1. 단순 제품 홍보나 가십성 기사는 제외하고, 향후 주가에 영향을 미칠 수 있는 핵심 투자 모멘텀(실적, 수주, M&A, 신사업, 업황 등) 위주의 기사만 선별하세요.
-    2. 기사 출처와 날짜를 표기하고, 링크(URL)가 길게 노출되지 않도록 반드시 [기사 원문 보기](원본URL) 형태의 마크다운 하이퍼링크로 작성하세요. (예: 🔗 링크: [기사 원문 보기](https://news...))
-"""
-
-    prompt += f"""
+    이 기술적 데이터를 바탕으로, '{name}' 종목과 관련된 주요 모멘텀, 기업 가치, 최근 시장에서 부각된 핵심 이슈들을 아는 대로 요약해 주세요.
+    (주의: 실시간 검색이 불가능하므로, 가짜 뉴스나 존재하지 않는 가짜 URL 링크를 절대 만들어내지 마세요. 확실한 정보만 제공하세요.)
+    그리고 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
     
     텔레그램 메신저에서 읽기 편하도록 간결하고 가독성 좋게, 텍스트 스타일링(굵게 등)과 이모지를 적절히 활용하여 작성해 주세요.
     
     출력 형식:
     🔍 [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석)
-    📰 [최신 핵심 투자 모멘텀] (시스템 수집 뉴스를 기반으로 한 투자 모멘텀. 링크는 반드시 [기사 원문 보기](URL) 형태의 마크다운 적용)
-    � [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
-    💡 [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
+    📰 [핵심 모멘텀 및 이슈 요약] (주요 재료 및 모멘텀 요약. 가짜 링크 금지)
+    📊 [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
+    � [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
     """
     logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 종목 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
     try:
@@ -1192,7 +1180,7 @@ def _analyze_stock_ui():
         is_overseas = (choice in ["3", "4"])
         context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
         
-    config.console.print(f"[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 뉴스 검색)[/dim]")
+    config.console.print(f"[dim]'{name}({code})' 심층 진단 중... (차트 분석 + AI 모멘텀 분석)[/dim]")
     
     table_title = ""
     if choice == '1': table_title = "국내 주식 분석 정보"
@@ -1251,7 +1239,7 @@ def _analyze_stock_ui():
                 f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
             )
             
-            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             answer = analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:

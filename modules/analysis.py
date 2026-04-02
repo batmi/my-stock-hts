@@ -1038,7 +1038,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]Google Gemini가 실시간 뉴스를 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            progress.add_task(f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
