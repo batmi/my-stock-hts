@@ -118,6 +118,13 @@ def send_telegram_message(message):
     # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
     clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    # [추가] AI가 무작위로 생성하는 마크다운 굵게(**) 기호 일괄 제거
+    clean_message = clean_message.replace("**", "")
+
+    # [추가] 마크다운 헤더(#) 및 수평선(---) 기호 일괄 제거
+    clean_message = re.sub(r'^#{1,6}\s*', '', clean_message, flags=re.MULTILINE)
+    clean_message = re.sub(r'^[-*_]{3,}\s*$', '', clean_message, flags=re.MULTILINE)
+
     # [추가] 마크다운 링크 복원 (HTML <a> 태그로 변환)
     for token, (text, url) in link_map.items():
         # 텍스트 부분도 이스케이프 처리

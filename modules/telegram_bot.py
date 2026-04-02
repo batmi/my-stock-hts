@@ -320,7 +320,7 @@ class TelegramCommander:
                 if result.startswith("⚠️"):
                     self._send_reply(result)
                 else:
-                    msg = f"{result}\n\n💡 마음에 드는 종목이 있다면 터미널 HTS 메뉴 [7] 관심 종목 관리 -> [1] 종목 추가 를 통해 수동으로 등록해주세요."
+                    msg = f"{result}\n\n마음에 드는 종목이 있다면 터미널 HTS 메뉴 [7] 관심 종목 관리 -> [1] 종목 추가 를 통해 수동으로 등록해주세요."
                     self._send_reply(msg)
             else:
                 self._send_reply("⚠️ AI 큐레이션 생성에 실패했습니다.")
@@ -438,7 +438,7 @@ class TelegramCommander:
                 
                 msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}\n\n"
                 
-            msg += "💡 상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
+            msg += "상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(msg.strip())
             
         except Exception as e:
