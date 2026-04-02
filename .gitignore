@@ -1,20 +1,23 @@
-# Python 관련
-__pycache__/
-./modules/__pycache__/
-*.py[cod]
-*$py.class
+# Environments
+.env
 .venv/
-
-# 시스템 및 설정 관련
+venv/
 .DS_Store
 .coverage
 .vscode
+
+# Data, Logs & Caches
 json/
-chart/
-data/
 db/
 logs/
+chart/
+data/
 htmlcov/
 
-# run.sh에 실제 키를 입력했다면 반드시 제외해야 합니다.
-#run.sh
+# Python
+__pycache__/
+./modules/__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
