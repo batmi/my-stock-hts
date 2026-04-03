@@ -219,6 +219,7 @@ def _fetch_theme_detail(theme):
         # 상위 2개 종목 선정
         leading = [f"{s['name']}({s['code']})" for s in stocks[:2]]
         theme['leading'] = ", ".join(leading)
+        theme['leading_stocks'] = stocks[:2]
         
     except Exception:
         theme['leading'] = "-"
@@ -548,13 +549,15 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     [기술적 분석 요약]
     {tech_info_str}
     
-    이 기술적 데이터를 바탕으로, '{name}' 종목과 관련된 주요 모멘텀, 기업 가치, 최근 시장에서 부각된 핵심 이슈들을 아는 대로 요약해 주세요.
+    먼저 '{name}' 기업이 속한 산업 분야와 대표 제품/서비스 등 기본적인 기업 개요를 브리핑해 주세요.
+    그런 다음, 이 기술적 데이터를 바탕으로 '{name}' 종목과 관련된 주요 모멘텀, 기업 가치, 최근 시장에서 부각된 핵심 이슈들을 아는 대로 요약해 주세요.
     (주의: 실시간 검색이 불가능하므로, 가짜 뉴스나 존재하지 않는 가짜 URL 링크를 절대 만들어내지 마세요. 확실한 정보만 제공하세요.)
-    그리고 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
+    마지막으로 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
     
     가독성을 위해 적절한 줄바꿈과 불릿 포인트(-)를 사용하되, 마크다운 기호(#, *, > 등)나 이모티콘은 절대 사용하지 말고 평문으로 깔끔하게 작성해 주세요.
     
     출력 형식:
+    [기업 개요] (산업 분야, 대표 제품/비즈니스 모델 등 기본 설명)
     [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석)
     [핵심 모멘텀 및 이슈 요약] (주요 재료 및 모멘텀 요약. 가짜 링크 금지)
     [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
@@ -1033,6 +1036,8 @@ def _show_naver_themes():
     table.add_column("3일 등락", justify="right")
     table.add_column("주도주", justify="left", style="dim")
     
+    stock_map = {}
+    
     for i, t in enumerate(display_themes):
         rate_color = "[red]" if t['rate'] > 0 else ("[blue]" if t['rate'] < 0 else "[white]")
         rate3_color = "[red]" if t['rate3'] > 0 else ("[blue]" if t['rate3'] < 0 else "[white]")
@@ -1045,11 +1050,35 @@ def _show_naver_themes():
             t.get('leading', '')
         )
         
+        for s in t.get('leading_stocks', []):
+            stock_map[s['code']] = s['name']
+            
         if (i + 1) % 5 == 0 and (i + 1) < len(display_themes):
             table.add_section()
     
     # 양쪽 마진 적용 (Padding)
     config.console.print(Padding(table, (1, 2)))
+
+    # 개별 종목 상세 분석 연동
+    config.console.print()
+    ans = Prompt.ask("개별 종목 상세 분석을 진행하시겠습니까?", choices=["y", "n"], default="n")
+    if ans.lower() == 'y':
+        target_code = Prompt.ask("분석할 종목의 티커/코드를 입력하세요").strip()
+        
+        found_code = None
+        found_name = None
+        for code, name in stock_map.items():
+            if code.upper() == target_code.upper():
+                found_code = code
+                found_name = name
+                break
+                
+        if found_code:
+            from modules import analysis
+            config.console.print(f"\n[bold green]>> {found_name}({found_code}) 개별 종목 심층 분석 실행[/bold green]")
+            analysis.diagnose_stock(target_code=found_code, target_name=found_name, target_is_overseas=False)
+        else:
+            config.console.print(f"[red]입력한 종목('{target_code}')을 검색 결과(주도주)에서 찾을 수 없습니다.[/red]")
 
 def _analyze_with_gemini_ui():
     """Gemini 분석 실행 및 UI 출력 (마진 적용)"""
@@ -1353,6 +1382,8 @@ def _run_tradingview_screener():
             table.add_column("거래량", justify="right")
             table.add_column("평균거래량", justify="right")
             
+            stock_map = {}
+            
             for idx, row in df.iterrows():
                 ticker = str(row.get('name', '')).strip()
                 name = str(row.get('description', ticker)).strip()
@@ -1372,6 +1403,8 @@ def _run_tradingview_screener():
                             pass
 
                     if kor_name: name = kor_name
+
+                stock_map[ticker] = name
 
                 # [수정] 모든 데이터 가져오기 (NaN 값 안전하게 처리)
                 close = row.get('close', 0)
@@ -1445,12 +1478,26 @@ def _run_tradingview_screener():
         config.console.print()
         config.console.print(table)
         
-        # 관심 종목 추가 연동
+        # 개별 종목 상세 분석 연동
         config.console.print()
-        ans = Prompt.ask("검색된 종목 중 하나를 관심 종목에 추가하시겠습니까?", choices=["y", "n"], default="n")
-        if ans == 'y':
-            from modules import manage
-            manage.get_current_price(mode='add')
+        ans = Prompt.ask("개별 종목 상세 분석을 진행하시겠습니까?", choices=["y", "n"], default="n")
+        if ans.lower() == 'y':
+            target_code = Prompt.ask("분석할 종목의 티커/코드를 입력하세요").strip()
+            
+            found_code = None
+            found_name = None
+            for code, name in stock_map.items():
+                if code.upper() == target_code.upper():
+                    found_code = code
+                    found_name = name
+                    break
+                    
+            if found_code:
+                from modules import analysis
+                config.console.print(f"\n[bold green]>> {found_name}({found_code}) 개별 종목 심층 분석 실행[/bold green]")
+                analysis.diagnose_stock(target_code=found_code, target_name=found_name, target_is_overseas=(market == "america"))
+            else:
+                config.console.print(f"[red]입력한 종목('{target_code}')을 검색 결과에서 찾을 수 없습니다.[/red]")
                     
     except Exception as e:
         config.console.print(f"\n[red]TradingView 스크리너 실행 중 오류 발생: {e}[/red]")
