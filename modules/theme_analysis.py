@@ -342,7 +342,7 @@ def _get_macro_context_str():
                     prev = float(df.iloc[-2]['close']) if len(df) > 1 else curr
                     rate = ((curr - prev) / prev * 100) if prev > 0 else 0.0
                     high_52 = float(df['close'].tail(250).max())
-                    return name, curr, rate, high_52
+                    return name, name, curr, rate, high_52
 
             # 2. 해외 지수, 원자재, 환율 등은 yfinance 단건 조회(마이크로 캐시) 활용
             fi = api.get_yf_fast_info(ticker)
@@ -357,6 +357,7 @@ def _get_macro_context_str():
                     "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
                     "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
                 }
+                display_name = name
                 if name in fut_mapping and price is not None and prev is not None:
                     try:
                         fut_info = fut_mapping[name]
@@ -371,28 +372,28 @@ def _get_macro_context_str():
                                     est_yield = price - (f_rate / fut_info["duration"])
                                     prev = price
                                     price = est_yield
-                                    name = f"{name}(선물적용)"
+                                    display_name = f"{name}(선물적용)"
                     except: pass
                 
                 if price is not None and not math.isnan(price):
                     rate = ((price - prev) / prev * 100) if (prev and prev > 0) else 0.0
-                    return name, price, rate, yh
+                    return name, display_name, price, rate, yh
         except Exception:
             pass
-        return name, None, None, None
+        return name, name, None, None, None
 
     # 병렬 처리로 속도 최적화 (API Rate Limit을 고려하여 max_workers=5)
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(fetch_ticker, name, ticker) for name, ticker in core_tickers]
         for future in concurrent.futures.as_completed(futures):
-            name, price, rate, yh = future.result()
+            orig_name, display_name, price, rate, yh = future.result()
             if price is not None:
-                results[name] = (price, rate, yh)
+                results[orig_name] = (display_name, price, rate, yh)
 
     # 원래 순서대로 출력
     for name, _ in core_tickers:
         if name in results:
-            price, rate, yh = results[name]
+            display_name, price, rate, yh = results[name]
             if "환율" in name: val_str = f"{price:,.2f}원"
             elif "국채" in name or "금리" in name: val_str = f"{price:,.3f}%"
             elif name in ["비트코인", "이더리움"]: val_str = f"${price:,.2f}"
@@ -407,7 +408,7 @@ def _get_macro_context_str():
             status_desc = evaluate_market_indicator(name, price, yh_rate)
             status_str = f" -> [현재 상태: {status_desc}]" if status_desc else ""
                 
-            context_lines.append(f" - {name}: {val_str} (전일대비 {rate:+.2f}%{yh_str}){status_str}")
+            context_lines.append(f" - {display_name}: {val_str} (전일대비 {rate:+.2f}%{yh_str}){status_str}")
 
     return "\n".join(context_lines) + "\n"
 

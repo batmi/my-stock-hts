@@ -5014,7 +5014,14 @@ def _view_restricted_stocks():
     use_adaptive = False
     if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
         try:
-            with console.status("[cyan]시장 국면 분석 중...[/cyan]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=console,
+                transient=True
+            ) as progress:
+                progress.add_task("[cyan]시장 국면 분석 중...[/cyan]", total=None)
                 _, kospi_adj = analysis.get_market_regime("KOSPI")
                 _, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
                 market_regime_adj["KOSPI"] = kospi_adj

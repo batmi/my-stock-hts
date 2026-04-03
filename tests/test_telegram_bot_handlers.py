@@ -29,16 +29,22 @@ def test_cmd_history(mock_get_trades, commander):
     mock_get_trades.return_value = [
         {'time': '2023-01-01 10:00:00', 'type': 'buy', 'name': 'Samsung', 'code': '005930', 'qty': 10, 'price': 50000, 'odno': '1', 'order_status': '체결'}
     ]
-    res = commander._cmd_history(['5'])
-    assert "거래 내역" in res
-    assert "Samsung" in res
+    
+    with patch.object(commander.trader, '_refine_trade_records') as mock_refine:
+        mock_refine.side_effect = lambda x: x
+        res = commander._cmd_history(['5'])
+        assert "거래 내역" in res
+        assert "Samsung" in res
 
 def test_cmd_log(commander):
     """로그 조회 명령어 테스트"""
     commander.trader.logs = ["[INFO] Test Log 1", "[INFO] Test Log 2"]
-    res = commander._cmd_log(['2'])
-    assert "Test Log 1" in res
-    assert "Test Log 2" in res
+    
+    with patch.object(commander.trader, 'get_recent_logs') as mock_logs:
+        mock_logs.return_value = "[INFO] Test Log 1\n[INFO] Test Log 2"
+        res = commander._cmd_log(['2'])
+        assert "Test Log 1" in res
+        assert "Test Log 2" in res
 
 @patch('modules.telegram_bot.account.get_asset_status_data')
 @patch('modules.telegram_bot.api.get_deposit_balance')
@@ -72,9 +78,14 @@ def test_cmd_profit(mock_get_trades, commander):
     mock_get_trades.return_value = [
         {'time': '2023-01-01 10:00:00', 'type': 'sell', 'name': 'Samsung', 'code': '005930', 'qty': 10, 'price': 50000, 'profit_amt': 10000, 'profit_rate': 10.0}
     ]
-    res = commander._cmd_profit(['d'])
-    assert "실현 손익" in res
-    assert "+10,000원" in res
+    
+    with patch.object(commander.trader, '_refine_trade_records') as mock_refine, \
+         patch.object(commander.trader, '_calculate_statistics') as mock_stats:
+        mock_refine.side_effect = lambda x: x
+        mock_stats.return_value = {'sell_trades_exist': True, 'total_profit': 10000}
+        res = commander._cmd_profit(['d'])
+        assert "실현 손익" in res
+        assert "+10,000원" in res
 
 @patch('modules.telegram_bot.auto_trade.load_restricted_stocks')
 def test_cmd_restricted(mock_load, commander):

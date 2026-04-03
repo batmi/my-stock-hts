@@ -19,6 +19,7 @@ def test_handle_message_valid(commander):
 
 def test_handle_message_invalid_chat_id(commander):
     """잘못된 Chat ID 무시 테스트"""
+    config.TELEGRAM_CHAT_ID = "99999"  # 다른 테스트로부터의 상태 오염 방지
     msg = {"text": "/status", "chat": {"id": "12345"}} # config와 다름
     
     with patch.object(commander, '_send_reply') as mock_reply:

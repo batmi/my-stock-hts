@@ -529,6 +529,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:
@@ -2518,12 +2519,11 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=config.console,
             transient=True
         ) as progress:
             # [수정] 통신과 연산 시간 편차로 인한 점프 현상을 해결하고 일괄 처리함을 안내
-            task = progress.add_task(f"[cyan]{title} (수집 및 분석 중)[/cyan]", total=len(data_list))
+            task = progress.add_task(f"[cyan]{title} (수집 및 분석 중)[/cyan]", total=None)
             results = [None] * len(data_list)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
