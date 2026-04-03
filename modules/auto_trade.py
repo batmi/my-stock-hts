@@ -1649,14 +1649,12 @@ class AutoTrader:
                 self.initial_holdings = holdings
                 self.initial_summary = summary
                 
-                deposit = deposit_res.get('d2_deposit', 0)
-                stock_eval = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0) if holdings else 0
-                
-                current_calculated_asset = deposit + stock_eval
-                if current_calculated_asset > 0:
+                # [수정] 해외 자산 누락 방지를 위해 account 모듈의 통합 자산 조회 활용
+                asset_data = account.get_asset_status_data(target_cano, acnt)
+                if asset_data and asset_data.get('tot_asset', 0) > 0:
                     account_key = f"{target_cano}-{acnt}"
                     saved_initial = load_daily_initial_asset(account_key)
-                    self.initial_asset = saved_initial if saved_initial > 0 else current_calculated_asset
+                    self.initial_asset = saved_initial if saved_initial > 0 else asset_data['tot_asset']
                     if saved_initial <= 0:
                         save_daily_initial_asset(account_key, self.initial_asset)
                         db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
@@ -3573,26 +3571,11 @@ class AutoTrader:
                     if self.initial_asset > 0:
                         try:
                             acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                            h_temp, s_temp = api.get_domestic_balance(target_cano, acnt_cd)
-                            dep_temp = 0
-                            if s_temp:
-                                dep_temp = api.safe_int(s_temp[0].get('prvs_rcdl_excc_amt', 0))
-                                if dep_temp == 0: dep_temp = api.safe_int(s_temp[0].get('dnca_tot_amt', 0))
                             
-                            if dep_temp == 0 and not config.session.is_simulation:
-                                res_dep = api.get_deposit_balance(target_cano, acnt_cd, skip_balance_check=True)
-                                if res_dep: dep_temp = res_dep['deposit'] + res_dep['foreign_deposit']
-                            
-                            tot_eval_temp = 0
-                            if h_temp:
-                                valid_h = [x for x in h_temp if int(x.get('hldg_qty', 0)) > 0]
-                                tot_eval_temp = sum(int(x['evlu_amt']) for x in valid_h)
-                            elif s_temp:
-                                tot_eval_temp = api.safe_int(s_temp[0].get('scts_evlu_amt', 0))
-                                
-                            current_est_asset = dep_temp + tot_eval_temp
-                            if current_est_asset > 0:
-                                self.risk_manager.check_loss_limit(current_est_asset)
+                            # [수정] 부분 자산 합산(해외 누락) 로직 제거하고, 완벽하게 검증된 account 모듈 함수 사용
+                            asset_data = account.get_asset_status_data(target_cano, acnt_cd)
+                            if asset_data and asset_data.get('tot_asset', 0) > 0:
+                                self.risk_manager.check_loss_limit(asset_data['tot_asset'])
                         except Exception as e:
                             logger.debug(f"사이클 시작 시 자산 평가 실패: {e}")
 
@@ -3614,25 +3597,11 @@ class AutoTrader:
                         
                         try:
                             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                            h_temp, s_temp = api.get_domestic_balance(target_cano, acnt)
-                            dep_temp = 0
-                            if s_temp:
-                                dep_temp = api.safe_int(s_temp[0].get('prvs_rcdl_excc_amt', 0))
-                                if dep_temp == 0: dep_temp = api.safe_int(s_temp[0].get('dnca_tot_amt', 0))
-                            if dep_temp == 0 and not config.session.is_simulation:
-                                res_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                                if res_dep: dep_temp = res_dep['deposit'] + res_dep['foreign_deposit']
                             
-                            tot_eval_temp = 0
-                            if h_temp:
-                                valid_h = [x for x in h_temp if int(x.get('hldg_qty', 0)) > 0]
-                                tot_eval_temp = sum(int(x['evlu_amt']) for x in valid_h)
-                            elif s_temp:
-                                tot_eval_temp = api.safe_int(s_temp[0].get('scts_evlu_amt', 0))
-                            
-                            new_initial = dep_temp + tot_eval_temp
-                            if new_initial > 0:
-                                self.initial_asset = new_initial
+                            # [수정] 해외 자산 누락 방지
+                            asset_data = account.get_asset_status_data(target_cano, acnt)
+                            if asset_data and asset_data.get('tot_asset', 0) > 0:
+                                self.initial_asset = asset_data['tot_asset']
                                 save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 acc_str = f"{target_cano}-{acnt}"
@@ -3888,10 +3857,20 @@ class AutoTrader:
                     deposit_d2 = 0
                     if deposit_res:
                         deposit_d2 = deposit_res['d2_deposit']
-                        # 총 자산 계산 시에는 원화+외화 예수금 합산
-                        # [수정] 자산 왜곡 방지를 위해 D+2 예수금 사용 (매도 대금 포함)
-                        cash = deposit_d2 + deposit_res['foreign_deposit']
+                    
+                    # [수정] account 모듈을 활용하여 해외 자산까지 완벽하게 포함된 총 자산 획득
+                    target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                    acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                    
+                    asset_data = account.get_asset_status_data(target_cano, acnt_cd)
+                    if asset_data:
+                        current_total = asset_data.get('tot_asset', 0)
+                        order_possible = asset_data.get('order_possible', deposit_d2)
+                    else:
+                        # Fallback (API 실패 시 기존 로직으로 대안 계산)
+                        cash = deposit_d2 + deposit_res.get('foreign_deposit', 0)
                         current_total = cash + total_eval
+                        order_possible = deposit_res.get('order_possible', deposit_d2)
                     
                     # [추가] 일일 손실 제한 체크
                     if current_total > 0:
@@ -3963,37 +3942,13 @@ class AutoTrader:
     def _get_total_estimated_asset(self):
         """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
         try:
-            # [수정] 상위 레벨 재시도 루프 제거 -> API 레벨 재시도 활용
             cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
             
-            # 1. 잔고 및 평가금 조회
-            holdings, summary = api.get_domestic_balance(cano, acnt)
-            
-            stock_eval = 0
-            deposit = 0
-            
-            if summary and len(summary) > 0: 
-                # [수정] 자산 계산 시 D+2 예수금(가수도금) 우선 사용
-                deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                if deposit == 0:
-                    deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-
-            # [수정] API 제공 총자산 대신 보유 종목 합산 (데이터 불일치 방지)
-            if holdings:
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
-                stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
-            elif summary and len(summary) > 0:
-                stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
-
-            # 2. 실전투자면 별도 API 시도 (잔고 API의 예수금 갱신 지연 대비)
-            # [수정] deposit이 0이 아니더라도 정확한 값을 위해 조회
-            if not config.session.is_simulation:
-                res = api.get_deposit_balance(cano, acnt, skip_balance_check=True)
-                if res:
-                    deposit = res['deposit'] + res['foreign_deposit']
-            
-            return deposit + stock_eval
+            # [수정] 해외 자산 누락 방지를 위해 완벽하게 계산된 통합 자산 데이터 사용
+            asset_data = account.get_asset_status_data(cano, acnt)
+            if asset_data:
+                return asset_data.get('tot_asset', 0)
         except Exception as e:
             logger.debug(f"자산 조회 중 예외 발생: {str(e)}")
         
