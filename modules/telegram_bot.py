@@ -85,7 +85,7 @@ class TelegramCommander:
 
         # [추가] 봇 재시작 알림 전송
         try:
-            api.send_telegram_message("🤖 [시스템 알림] 텔레그램 봇이 재연결되었습니다.")
+            api.send_telegram_message("🤖 [시스템 알림] 텔레그램 봇이 재연결되었습니다.", reply_markup=self._get_default_keyboard())
         except Exception as e:
             logger.error(f"[Telegram] 재시작 알림 전송 실패: {e}")
 
@@ -134,6 +134,20 @@ class TelegramCommander:
         # 설정된 Chat ID와 다르면 무시 (보안)
         if config.TELEGRAM_CHAT_ID and chat_id != str(config.TELEGRAM_CHAT_ID):
             return
+
+        # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
+        button_map = {
+            "📊 상태/잔고": "/status",
+            "💼 보유/미체결": "/holdings",
+            "📈 시장 지수": "/market",
+            "🤖 시황 브리핑": "/briefing",
+            "📝 관심 종목": "/stocks",
+            "🛑 비상정지": "/stop",   # 기존 버튼 호환성 유지
+            "🛑 거래정지": "/stop",
+            "▶️ 거래시작": "/start"
+        }
+        if text in button_map:
+            text = button_map[text]
 
         if not text.startswith('/'): return
 
@@ -457,10 +471,6 @@ class TelegramCommander:
             item_msg += f"  평균수익: {avg_rate:+.2f}% (Max/Min: {range_str})\n"
             item_msg += f"  주요사유: {reason_str} | 평균보유: {hold_str}\n"
 
-            if len(msg) + len(item_msg) > 4000:
-                msg += "\n...(메시지 길이 제한으로 이후 생략)"
-                break
-                
             msg += item_msg
 
         return msg.strip()
@@ -1389,8 +1399,22 @@ class TelegramCommander:
             return f"⚠️ 보유 종목 조회 중 오류 발생: {str(e)}"
 
     # --- 내부 로직 메서드 ---
-    def _send_reply(self, text):
-        api.send_telegram_message(text)
+    def _send_reply(self, text, reply_markup=None):
+        if reply_markup is None:
+            reply_markup = self._get_default_keyboard()
+        api.send_telegram_message(text, reply_markup=reply_markup)
+
+    def _get_default_keyboard(self):
+        """하단 고정 메뉴 버튼 (Reply Keyboard) 구성"""
+        toggle_btn = {"text": "🛑 거래정지"} if self.trader.is_running else {"text": "▶️ 거래시작"}
+        return {
+            "keyboard": [
+                [{"text": "📊 상태/잔고"}, {"text": "💼 보유/미체결"}],
+                [{"text": "📈 시장 지수"}, {"text": "🤖 시황 브리핑"}],
+                [{"text": "📝 관심 종목"}, toggle_btn]
+            ],
+            "resize_keyboard": True
+        }
 
     def _get_market_status(self, target_group_names=None):
         """시장 지수(KOSPI/KOSDAQ/원자재/환율) 현황 조회"""
@@ -2062,11 +2086,6 @@ class TelegramCommander:
                     reason_msg = f"\n   사유: {reason}"
             
             item_msg = f"\n\n• {date_str} | {type_str} | {status}\n   {name_display} {qty}주 @ {price_str}\n   평가: {total_str}원{profit_msg}{reason_msg}"
-            
-            # 메시지 길이 제한 체크 (텔레그램 4096자 제한 대비 여유 있게 4000자)
-            if len(msg) + len(item_msg) > 4000:
-                msg += "\n\n...(메시지 길이 제한으로 이후 내역 생략)"
-                break
             
             msg += item_msg
             

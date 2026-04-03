@@ -95,7 +95,7 @@ def _get_telegram_footer():
     instance_name = config.TELEGRAM_INSTANCE_NAME
     return f"[{instance_name} | {acc_label} {cano}]"
 
-def send_telegram_message(message):
+def send_telegram_message(message, reply_markup=None):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return
@@ -173,9 +173,28 @@ def send_telegram_message(message):
     log_content = final_msg.replace('\n', ' | ')
     logger.info(f"[Telegram] 메시지 발송: {log_content}")
 
+    # [추가] 4000자 분할 로직 (긴 메시지 자동 분할 전송)
+    MAX_LEN = 4000
+    msg_chunks = []
+    if len(final_msg) <= MAX_LEN:
+        msg_chunks.append(final_msg)
+    else:
+        lines = final_msg.split('\n')
+        current_chunk = ""
+        for line in lines:
+            if len(current_chunk) + len(line) + 1 > MAX_LEN:
+                if current_chunk:
+                    msg_chunks.append(current_chunk.strip())
+                    current_chunk = line + "\n"
+                else:
+                    msg_chunks.append(line[:MAX_LEN])
+                    current_chunk = line[MAX_LEN:] + "\n"
+            else:
+                current_chunk += line + "\n"
+        if current_chunk:
+            msg_chunks.append(current_chunk.strip())
+
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    # [수정] HTML 파싱 모드 활성화 및 링크 미리보기 비활성화
-    data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": final_msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     
     # [추가] 화면 디버그 로그 (요청)
     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -185,35 +204,39 @@ def send_telegram_message(message):
 
     # [수정] 재시도 로직 추가 (최대 3회)
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # 매매 로직 지연 방지를 위해 짧은 타임아웃 설정 (재시도 시 조금씩 증가)
-            current_timeout = 1 + (attempt * 0.5)
-            res = requests.post(url, data=data, timeout=current_timeout)
-            
-            # [추가] 화면 디버그 로그 (응답)
-            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} ({attempt+1}/{max_retries})[/dim magenta]")
-                if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
-                     config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
-            
-            if res.status_code == 200:
-                logger.info("[Telegram] 전송 성공")
-                return # 성공 시 함수 종료
-            else:
-                logger.error(f"[Telegram] 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
-        except Exception as e:
-            # [추가] 화면 디버그 로그 (예외)
-            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
-
-            logger.error(f"[Telegram] 전송 중 오류 발생({attempt+1}/{max_retries}): {str(e)}")
+    for i, chunk in enumerate(msg_chunks):
+        data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}
         
-        # 마지막 시도가 아니면 대기
-        if attempt < max_retries - 1:
-            time.sleep(1)
+        if reply_markup and i == len(msg_chunks) - 1:
+            data["reply_markup"] = json.dumps(reply_markup)
+
+        success_chunk = False
+        for attempt in range(max_retries):
+            try:
+                current_timeout = 1 + (attempt * 0.5)
+                res = requests.post(url, data=data, timeout=current_timeout)
+                
+                if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} Chunk {i+1}/{len(msg_chunks)} ({attempt+1}/{max_retries})[/dim magenta]")
+                    if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
+                         config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
+                
+                if res.status_code == 200:
+                    logger.info(f"[Telegram] 전송 성공 (Chunk {i+1}/{len(msg_chunks)})")
+                    success_chunk = True
+                    break
+                else:
+                    logger.error(f"[Telegram] 전송 실패 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
+            except Exception as e:
+                if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
+                logger.error(f"[Telegram] 전송 중 오류 발생 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}): {str(e)}")
             
-    logger.error("[Telegram] 최종 전송 실패")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                
+        if not success_chunk:
+            logger.error(f"[Telegram] 최종 전송 실패 (Chunk {i+1}/{len(msg_chunks)})")
 
 _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 
