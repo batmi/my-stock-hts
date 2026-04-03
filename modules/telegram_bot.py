@@ -69,7 +69,9 @@ class TelegramCommander:
             "/restrict": self._cmd_restricted,
             "/pending": self._cmd_pending,           # [추가] 미체결 조회
             "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
-            "/delrestrict": self._cmd_delrestrict    # [추가] 제한 종목 해제
+            "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
+            "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
+            "/stats": self._cmd_stats                # [추가] 종목별 성과 분석
         }
 
     def start(self):
@@ -185,11 +187,20 @@ class TelegramCommander:
         except Exception as e:
             logger.error(f"Morning briefing check error: {e}")
 
+    def _cmd_briefing(self, args):
+        self._send_reply("⏳ [AI 시황 브리핑] 실시간 글로벌 마켓 데이터를 수집하고 AI 시황 브리핑을 작성 중입니다. 잠시만 기다려주세요...")
+        threading.Thread(target=self._execute_briefing, daemon=True).start()
+        return None
+
     def _send_morning_briefing(self):
+        """장전 브리핑 스케줄러 전용 래퍼"""
+        self._send_reply("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 AI 장전 브리핑을 작성 중입니다...")
+        self._execute_briefing()
+
+    def _execute_briefing(self):
         """글로벌 마켓 데이터를 수집하고 Gemini에게 브리핑을 요청하여 전송"""
         try:
             import yfinance as yf
-            self._send_reply("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 AI 장전 브리핑을 작성 중입니다...")
             
             target_indices = {
                 "나스닥": "^IXIC", "S&P500": "^GSPC", 
@@ -315,6 +326,145 @@ class TelegramCommander:
             logger.error(f"Portfolio diagnosis error: {e}")
             self._send_reply("⚠️ 포트폴리오 진단 중 오류가 발생했습니다.")
             
+    def _cmd_stats(self, args):
+        keyword = " ".join(args).strip() if args else None
+        return self._get_stock_stats_message(keyword)
+
+    def _get_stock_stats_message(self, keyword=None):
+        """종목별 매매 성과 분석 조회"""
+        target_account = None
+        if config.session.is_simulation:
+            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+        elif config.session.auto_cano:
+            target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            
+        raw_trades = db_manager.db.get_trades(limit=None, is_sim=config.session.is_simulation, account=target_account)
+        
+        trades = []
+        for r in raw_trades:
+            type_str = r.get('type', '')
+            simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+            parsed_r = dict(r)
+            parsed_r['type'] = simple_type
+            trades.append(parsed_r)
+
+        if hasattr(self.trader, '_refine_trade_records'):
+            trades = self.trader._refine_trade_records(trades)
+
+        if not trades:
+            return "📭 매매 기록이 없습니다."
+
+        filter_code = None
+        if keyword:
+            code, name, _ = self._resolve_stock(keyword)
+            if not code:
+                return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
+            filter_code = code
+
+        from collections import Counter
+        stock_stats = {}
+        buy_times_per_stock = {}
+
+        trades.sort(key=lambda x: x.get('time', ''))
+
+        for r in trades:
+            code = r['code']
+            if filter_code and code != filter_code:
+                continue
+
+            if code not in stock_stats:
+                stock_stats[code] = {
+                    'name': r['name'], 'buy': 0, 'sell': 0,
+                    'profit': 0, 'rates': [], 'wins': 0,
+                    'reasons': [], 'holding_secs': [],
+                    'max_rate': -999.0, 'min_rate': 999.0
+                }
+            if code not in buy_times_per_stock:
+                buy_times_per_stock[code] = []
+
+            try:
+                dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
+            except: dt = datetime.now()
+
+            if r['type'] == 'buy':
+                stock_stats[code]['buy'] += 1
+                buy_times_per_stock[code].append(dt)
+            elif r['type'] == 'sell':
+                stock_stats[code]['sell'] += 1
+                p = int(float(r.get('profit_amt') or 0))
+                rate = float(r.get('profit_rate') or 0.0)
+
+                stock_stats[code]['profit'] += p
+                stock_stats[code]['rates'].append(rate)
+                if p > 0: stock_stats[code]['wins'] += 1
+
+                reason_raw = r.get('reason', '')
+                reason_simple = "기타"
+                if "반익절" in reason_raw: reason_simple = "반익절"
+                elif "과열" in reason_raw: reason_simple = "과열매도"
+                elif "익절" in reason_raw: reason_simple = "익절"
+                elif "ATR손절" in reason_raw: reason_simple = "ATR손절"
+                elif "손절" in reason_raw: reason_simple = "손절"
+                elif "트레일링" in reason_raw: reason_simple = "트레일링스탑"
+                elif "시간청산" in reason_raw: reason_simple = "시간청산"
+                elif "추세" in reason_raw or "점수하락" in reason_raw or "매도진입" in reason_raw: reason_simple = "추세이탈"
+                elif "수동" in reason_raw: reason_simple = "수동매도"
+                stock_stats[code]['reasons'].append(reason_simple)
+
+                if rate > stock_stats[code]['max_rate']: stock_stats[code]['max_rate'] = rate
+                if rate < stock_stats[code]['min_rate']: stock_stats[code]['min_rate'] = rate
+
+                if buy_times_per_stock[code]:
+                    buy_dt = buy_times_per_stock[code].pop(0)
+                    hold_sec = (dt - buy_dt).total_seconds()
+                    stock_stats[code]['holding_secs'].append(hold_sec)
+
+        if not stock_stats:
+            return f"📭 '{keyword}' 종목의 매매 기록이 없습니다."
+
+        msg = "📊 [종목별 성과 분석]\n"
+        
+        sorted_stats = sorted(stock_stats.items(), key=lambda x: x[1]['profit'], reverse=True)
+        
+        for code, stat in sorted_stats:
+            s_cnt = stat['sell']
+            win_rate = (stat['wins'] / s_cnt * 100) if s_cnt > 0 else 0.0
+            avg_rate = (sum(stat['rates']) / s_cnt) if s_cnt > 0 else 0.0
+
+            max_r = stat['max_rate'] if stat['max_rate'] != -999.0 else 0.0
+            min_r = stat['min_rate'] if stat['min_rate'] != 999.0 else 0.0
+            range_str = f"{max_r:+.1f}% / {min_r:+.1f}%" if s_cnt > 0 else "-"
+
+            reason_str = "-"
+            if stat['reasons']:
+                c = Counter(stat['reasons'])
+                most_common = c.most_common(1)[0]
+                reason_str = f"{most_common[0]}({most_common[1]}회)"
+
+            hold_str = "-"
+            if stat['holding_secs']:
+                avg_sec = sum(stat['holding_secs']) / len(stat['holding_secs'])
+                if avg_sec < 60: hold_str = f"{int(avg_sec)}초"
+                elif avg_sec < 3600: hold_str = f"{int(avg_sec//60)}분"
+                elif avg_sec < 86400: hold_str = f"{int(avg_sec//3600)}시간"
+                else: hold_str = f"{int(avg_sec//86400)}일"
+
+            p_icon = "🔴" if stat['profit'] > 0 else ("🔵" if stat['profit'] < 0 else "⚪")
+
+            item_msg = f"\n• {stat['name']} ({code})\n"
+            item_msg += f"  매매: {stat['buy']} / {stat['sell']} (매수/매도)\n"
+            item_msg += f"  승률: {win_rate:.1f}% | {p_icon} 총손익: {stat['profit']:+,}원\n"
+            item_msg += f"  평균수익: {avg_rate:+.2f}% (Max/Min: {range_str})\n"
+            item_msg += f"  주요사유: {reason_str} | 평균보유: {hold_str}\n"
+
+            if len(msg) + len(item_msg) > 4000:
+                msg += "\n...(메시지 길이 제한으로 이후 생략)"
+                break
+                
+            msg += item_msg
+
+        return msg.strip()
+
     def _cmd_curate(self, args):
         self._send_reply("⏳ [AI 종목 큐레이션] 실시간 시장 매크로 데이터 및 뉴스를 분석하여 주도주를 발굴 중입니다. 잠시만 기다려주세요...")
         threading.Thread(target=self._execute_curate, daemon=True).start()
@@ -498,12 +648,14 @@ class TelegramCommander:
             "• /profit [기간] : 실현 손익 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 (d/w/m/n)\n"
             "• /report [기간] : 성과 리포트 (d/w/m/n)\n"
+            "• /stats [종목] : 종목별 매매 성과 분석\n"
             "• /portfolio : AI 포트폴리오 리스크 진단\n\n"
             "📈 [시장 및 종목 분석]\n"
             "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
             "• /signal <종목> : 기술적 분석 및 진단\n"
             "• /analyze <종목> : AI 종목 심층 진단\n"
             "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
+            "• /briefing : 온디맨드 AI 시황 브리핑\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
             "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)\n"
             "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
