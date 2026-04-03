@@ -38,6 +38,7 @@ class TelegramCommander:
         self.last_update_id = 0
         self.last_briefing_date = None # [추가] 브리핑 중복 전송 방지용
         self.last_portfolio_date = None # [추가] 포트폴리오 진단 중복 방지용
+        self.last_heartbeat_time = time.time() # [추가] 하트비트(키보드 동기화) 주기 체크용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
         
         # [리팩토링] 명령어 핸들러 매핑
@@ -107,6 +108,9 @@ class TelegramCommander:
 
                 # [추가] 장 종료 후 AI 포트폴리오 진단 리포트 스케줄러
                 self._check_after_market_portfolio()
+
+                # [추가] 메뉴 버튼 동기화를 위한 하트비트 스케줄러
+                self._check_heartbeat()
 
                 params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
                 response = requests.get(url, params=params, timeout=timeout + 5)
@@ -200,6 +204,39 @@ class TelegramCommander:
                     threading.Thread(target=self._send_morning_briefing, daemon=True).start()
         except Exception as e:
             logger.error(f"Morning briefing check error: {e}")
+
+    def _check_heartbeat(self):
+        """1분 주기 하트비트: 정상일 때는 침묵하고 이상 감지 시에만 경고 알림을 발송합니다."""
+        now = time.time()
+        # 1분(60초)마다 상태 점검
+        if now - self.last_heartbeat_time > 60:
+            self.last_heartbeat_time = now
+            
+            is_problem = False
+            msg = ""
+            
+            # 1. 자동매매 스레드 비정상 종료(크래시) 감지
+            if self.trader.is_running and self.trader.thread and not self.trader.thread.is_alive():
+                is_problem = True
+                msg = "자동매매 스레드가 예기치 않게 종료되었습니다. (크래시 의심)"
+                
+            # 2. 시스템 연속 에러 임계치 도달 감지
+            max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
+            if self.trader.consecutive_errors >= max_err:
+                is_problem = True
+                msg = f"시스템 연속 에러가 한계치({max_err}회)에 도달했습니다."
+                
+            if not hasattr(self, '_last_problem_msg'):
+                self._last_problem_msg = ""
+                
+            if is_problem:
+                # 동일한 문제로 인한 1분 단위 스팸 알림 방지
+                if self._last_problem_msg != msg:
+                    self._send_reply(f"🚨 [시스템 하트비트 이상 감지]\n{msg}\n서버 접속 후 시스템 상태를 확인해주세요.")
+                    self._last_problem_msg = msg
+            else:
+                # 정상 작동 시 출력 생략 및 상태 플래그 초기화
+                self._last_problem_msg = ""
 
     def _cmd_briefing(self, args):
         self._send_reply("⏳ [AI 시황 브리핑] 실시간 글로벌 마켓 데이터를 수집하고 AI 시황 브리핑을 작성 중입니다. 잠시만 기다려주세요...")
@@ -701,6 +738,7 @@ class TelegramCommander:
         }
         
         if not args:
+            self._send_reply("⏳ [시장 지수 조회] 전체 지수 데이터를 수집 중입니다. 약간의 시간이 소요될 수 있습니다...")
             return self._get_market_status(None)
             
         keys = "".join(args).lower()
