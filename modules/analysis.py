@@ -2487,10 +2487,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     is_us_etf = is_overseas and ("ETF" in title)
     
     # [추가] 개별 룰 로드
-    rules_map = {}
-    if not is_overseas:
-        custom_rules = db_manager.db.get_all_stock_strategies()
-        rules_map = {r['code']: True for r in custom_rules}
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: True for r in custom_rules}
     any_custom_rule = False
     
     # [추가] 트레이딩 제한 종목 로드
