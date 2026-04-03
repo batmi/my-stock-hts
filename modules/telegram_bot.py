@@ -154,6 +154,8 @@ class TelegramCommander:
             response = self.command_handlers[command](args)
             if response:
                 self._send_reply(response)
+        else:
+            self._send_reply(f"⚠️ 지원하지 않는 명령어입니다: {command}\n전체 명령어 목록을 보려면 /help 를 입력해주세요.")
 
     def _check_morning_briefing(self):
         """장전 브리핑 발송 시간 확인 및 트리거"""

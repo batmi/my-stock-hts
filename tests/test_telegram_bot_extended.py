@@ -27,12 +27,13 @@ def test_handle_message_invalid_chat_id(commander):
         assert not mock_reply.called
 
 def test_handle_message_unknown_command(commander):
-    """알 수 없는 명령어 무시 테스트"""
+    """알 수 없는 명령어 안내 메시지 발송 테스트"""
     msg = {"text": "/unknown", "chat": {"id": config.TELEGRAM_CHAT_ID}}
     
     with patch.object(commander, '_send_reply') as mock_reply:
         commander._handle_message(msg)
-        assert not mock_reply.called
+        mock_reply.assert_called_once()
+        assert "지원하지 않는 명령어" in mock_reply.call_args[0][0]
 
 @patch('modules.telegram_bot.api.send_telegram_message')
 def test_send_reply(mock_send, commander):
