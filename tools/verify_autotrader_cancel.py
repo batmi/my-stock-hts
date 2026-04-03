@@ -1,7 +1,6 @@
 # tools/verify_autotrader_cancel.py
 import sys
 import os
-import time
 import sqlite3
 from datetime import datetime, timedelta
 from unittest.mock import patch

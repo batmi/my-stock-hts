@@ -3,10 +3,7 @@ import requests
 import sqlite3
 import concurrent.futures
 import warnings
-import time
 import math
-import yfinance as yf
-import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from rich.panel import Panel
@@ -28,7 +25,6 @@ try:
 except ImportError:
     genai = None
 import config
-from modules import db_manager
 
 logger = logging.getLogger(__name__)
 

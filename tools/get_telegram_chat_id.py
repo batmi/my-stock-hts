@@ -1,5 +1,5 @@
 import requests
-import sys
+
 
 def get_chat_id():
     """

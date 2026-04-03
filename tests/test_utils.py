@@ -1,8 +1,8 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import utils
 import config
 import context
+
 
 def test_get_tick_size_domestic():
     """국내 주식 호가 단위 테스트"""
@@ -14,9 +14,11 @@ def test_get_tick_size_domestic():
     assert utils.get_tick_size(300000, False) == 500
     assert utils.get_tick_size(1000000, False) == 1000
 
+
 def test_get_tick_size_overseas():
     """해외 주식 호가 단위 테스트"""
     assert utils.get_tick_size(150.50, True) == 0.01
+
 
 def test_adjust_to_tick():
     """호가 단위에 맞춘 가격 보정 테스트"""
@@ -27,6 +29,7 @@ def test_adjust_to_tick():
 
     # Overseas
     assert utils.adjust_to_tick(150.123, True) == 150.12
+
 
 def test_account_context():
     """계좌 컨텍스트 매니저 테스트"""
@@ -51,6 +54,7 @@ def test_account_context():
     # 5. 최종 확인: 컨텍스트 종료 후 use_auto_account가 원래대로 돌아오는지 확인
     assert context.trade_context.use_auto_account is True
 
+
 @patch("utils.yf.Ticker")
 def test_get_exchange_rate_failure(mock_ticker):
     """환율 조회 실패 시 기본 환율 반환 테스트"""
@@ -59,6 +63,7 @@ def test_get_exchange_rate_failure(mock_ticker):
     config.DEFAULT_EXCHANGE_RATE = 1450.0  # 테스트를 위해 임시로 설정
     assert utils.get_exchange_rate() == 1450.0
     config.DEFAULT_EXCHANGE_RATE = original_default_exchange_rate # 원래 값으로 복원
+
 
 def test_adjust_to_tick_invalid_input():
     """adjust_to_tick에 잘못된 입력이 들어왔을 때 0을 반환하는지 확인"""

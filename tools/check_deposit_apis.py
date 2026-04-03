@@ -6,8 +6,6 @@
 import sys
 import os
 import json
-import time
-import re
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 모듈 임포트 가능하게 설정
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,6 +22,7 @@ console = Console()
 TARGET_VALUES = [4984138, "4984138", "4,984,138", 4934988, "4934988", "4,934,988"]
 FOUND_LOGS = []
 
+
 def print_json(data, title="JSON"):
     try:
         json_str = json.dumps(data, indent=2, ensure_ascii=False)
@@ -37,6 +36,7 @@ def print_json(data, title="JSON"):
         console.print(Syntax(json_str, "json", theme="monokai", word_wrap=True))
     except:
         console.print(str(data))
+
 
 def intercept_request(method, url, *args, **kwargs):
     """API 요청을 가로채서 로그를 출력하고 실행하는 래퍼 함수"""
@@ -110,6 +110,7 @@ def intercept_request(method, url, *args, **kwargs):
 # api.session.request 메서드를 몽키패치하여 가로채기
 original_request = api.session.request
 api.session.request = intercept_request
+
 
 def main():
     console.print("[bold yellow]=== 예수금 관련 API 정밀 진단 도구 ===[/bold yellow]")

@@ -2,7 +2,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import config
-import context
 from modules import theme_analysis, manage, trading
 from modules.telegram_bot import TelegramCommander
 from modules import db_manager

@@ -73,7 +73,6 @@ def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
 
 def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
     """해외 주식 잔고 데이터를 조회하여 반환"""
-
     return api.get_overseas_balance(cano, acnt_prdt_cd)
 
 def sync_today_trades():

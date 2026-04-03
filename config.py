@@ -1,10 +1,9 @@
 # config.py
 import os
-import threading
 from rich.console import Console
 import logging
 from datetime import datetime, timedelta
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from session import SessionManager
 from dotenv import load_dotenv
 
@@ -440,7 +439,6 @@ def setup_logging():
 
     # 로깅 활성화
     logging.disable(logging.NOTSET)
-    
 
     if not os.path.exists(LOG_DIR):
         try: os.makedirs(LOG_DIR)
