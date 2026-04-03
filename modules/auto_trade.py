@@ -1806,7 +1806,9 @@ class AutoTrader:
 
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             with utils.AccountContext(target_cano):
-                api.send_telegram_message(msg)
+                from modules.telegram_bot import TelegramCommander
+                reply_markup = TelegramCommander()._get_default_keyboard()
+                api.send_telegram_message(msg, reply_markup=reply_markup)
 
             # 초기화에 사용된 데이터는 비워줌
             self.initial_holdings = None
@@ -1979,11 +1981,15 @@ class AutoTrader:
                 except Exception as e:
                     self.log(f"종료 시 자산/잔고 조회 실패: {e}")
                     msg += "\n(자산 조회 실패)"
-            
-                api.send_telegram_message(msg)
         else:
             msg += "\n(시스템 응답 지연으로 최종 자산 정보 생략)"
             self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
+            
+        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        with utils.AccountContext(target_cano):
+            from modules.telegram_bot import TelegramCommander
+            reply_markup = TelegramCommander()._get_default_keyboard()
+            api.send_telegram_message(msg, reply_markup=reply_markup)
         
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
         context.SYSTEM_LOGGER = None
