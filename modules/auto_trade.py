@@ -1751,8 +1751,10 @@ class AutoTrader:
                 half_tp_rate = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", tp / 2.0)
                 tp_str += f" (반익절 +{half_tp_rate:.1f}%)"
             
-            sl_str = f"{sl}%"
-            if use_atr_stop: sl_str += f" (ATR x{atr_mult})"
+            if use_atr_stop:
+                sl_str = f"ATR 동적손절 (x{atr_mult})"
+            else:
+                sl_str = f"고정 {sl}%"
             
             msg += f"\n• 익절: {tp_str}"
             msg += f"\n• 손절: {sl_str}"
