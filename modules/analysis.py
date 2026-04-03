@@ -2607,7 +2607,6 @@ def show_stock_analysis():
                 utils.pause()
             continue
         
-        last_choice = choice_str
 
         interval = 0
         if choice_str.endswith('@'):
@@ -2625,11 +2624,13 @@ def show_stock_analysis():
         if not choices: continue
 
         if '6' in choices:
+            last_choice = choice_str # [수정] 정상 처리된 유효한 입력만 기억
             context.USER_ACTION_BREADCRUMB.append("[6] 개별분석")
             if diagnose_stock() is not False: utils.pause()
             continue
 
         if '7' in choices:
+            last_choice = choice_str # [수정] 정상 처리된 유효한 입력만 기억
             context.USER_ACTION_BREADCRUMB.append("[7] 전체분석")
             sub_menu = [("1", "코스피", "KOSPI"), ("2", "코스닥", "KOSDAQ"), ("3", "전체 종목 분석 결과 저장", "Save to Excel")]
             sub_choice = utils.show_menu("분석할 시장을 선택하세요", sub_menu, default_choice="1")
@@ -2673,6 +2674,7 @@ def show_stock_analysis():
             time.sleep(1)
             continue
 
+        last_choice = choice_str # [수정] 정상 처리된 유효한 입력만 기억
         context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
 
         target_list = []

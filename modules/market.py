@@ -888,15 +888,6 @@ def show_market_indices(interval=0):
                     utils.pause()
                 continue
             
-            last_choice = sel
-            
-            # [추가] 트래킹 기록
-            sel_clean = sel.replace('@', '')
-            menu_map_dict = dict((k, v) for k, v, _ in menu_items)
-            if sel_clean in menu_map_dict:
-                context.USER_ACTION_BREADCRUMB.append(f"[{sel_clean}] {menu_map_dict[sel_clean]}")
-            else:
-                context.USER_ACTION_BREADCRUMB.append(f"[선택] {sel_clean}")
             
             try:
                 if sel.endswith('@'):
@@ -927,6 +918,16 @@ def show_market_indices(interval=0):
                 config.console.print("[red]잘못된 입력입니다.[/red]")
                 time.sleep(1)
                 continue
+
+            # [수정] 입력값 검증이 끝난 후 정상 처리 시에만 마지막 선택값 및 트래킹 갱신
+            last_choice = sel
+            
+            sel_clean = sel.replace('@', '')
+            menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+            if sel_clean in menu_map_dict:
+                context.USER_ACTION_BREADCRUMB.append(f"[{sel_clean}] {menu_map_dict[sel_clean]}")
+            else:
+                context.USER_ACTION_BREADCRUMB.append(f"[선택] {sel_clean}")
 
         try:
             while True:
