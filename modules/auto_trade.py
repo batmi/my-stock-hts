@@ -223,7 +223,7 @@ class ConclusionMonitor:
     def stop(self):
         self.is_running = False
         self.event.set() # 대기 해제
-        if self.thread:
+        if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=2)
 
     def check_now(self):
@@ -1492,7 +1492,7 @@ class RiskManager:
                 self.trader.last_emergency_alert_time = now
             
             api.send_telegram_message(msg)
-            self.trader.stop()
+            self.trader.stop(use_status=False)
 
 class AutoTrader:
     _instance = None
@@ -1704,6 +1704,7 @@ class AutoTrader:
             self.start_time = datetime.now()
             self.consecutive_errors = 0
             self.was_market_open = self.is_market_open()
+            self._first_loop_flag = True
             self.market_status_notified = {}
             context.SYSTEM_LOGGER = self.log
             
@@ -1712,6 +1713,12 @@ class AutoTrader:
 
             console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
             self.log("시스템 시작")
+            
+            # [추가] 장 마감 상태에서 시작했을 경우 명확한 안내 메시지 출력
+            if not self.was_market_open:
+                self.log("━" * 85)
+                self.log("💤 [장 마감 대기] 현재는 거래 시간이 아닙니다. 장 시작 시 자동으로 매매가 개시됩니다.")
+                self.log("━" * 85)
             
             # [수정] 시작 메시지 생성 로직은 초기화 시 저장된 데이터 활용
             holdings = self.initial_holdings
@@ -1820,13 +1827,14 @@ class AutoTrader:
 
     def stop(self, use_status=True):
         if not self.is_running:
-            console.print("\n[yellow]실행 중인 자동매매가 없습니다.[/yellow]")
+            if use_status:
+                console.print("\n[yellow]실행 중인 자동매매가 없습니다.[/yellow]")
             return
             
         def _stop_logic():
             self.is_running = False
             ConclusionMonitor().stop() # [추가] 체결 감시 모니터 종료
-            if self.thread:
+            if self.thread and self.thread is not threading.current_thread():
                 self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
 
         if use_status:
@@ -1841,11 +1849,14 @@ class AutoTrader:
         else:
             _stop_logic()
 
-        if self.thread and self.thread.is_alive():
-            console.print("\n[bold red]경고: 시스템 트레이딩 스레드가 응답하지 않습니다. (DB/API 작업 지연)[/bold red]")
-            console.print("[dim]강제로 중단 절차를 진행합니다. 일부 데이터가 누락될 수 있습니다.[/dim]")
+        if self.thread and self.thread.is_alive() and self.thread is not threading.current_thread():
+            if use_status:
+                console.print("\n[bold red]경고: 시스템 트레이딩 스레드가 응답하지 않습니다. (DB/API 작업 지연)[/bold red]")
+                console.print("[dim]강제로 중단 절차를 진행합니다. 일부 데이터가 누락될 수 있습니다.[/dim]")
 
-        console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
+        if use_status:
+            console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
+            
         self.log("시스템 중단")
         
         # [수정] 텔레그램 전송 시 AUTO 계좌 정보가 포함되도록 컨텍스트 설정
@@ -3546,7 +3557,12 @@ class AutoTrader:
             try:
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
-                    self.log("모니터링 주기 시작...")
+                    current_market_status = self.is_market_open()
+                    is_log_needed = current_market_status or getattr(self, '_first_loop_flag', True) or (self.was_market_open != current_market_status)
+                    self._first_loop_flag = False
+                    
+                    if is_log_needed:
+                        self.log("모니터링 주기 시작...")
                     
                     # [추가] Kill Switch: 체결 감시 시스템 상태 점검
                     # 체결 확인이 불가능한 상태에서는 신규 주문도 위험하므로 중단
@@ -3581,11 +3597,10 @@ class AutoTrader:
                             logger.debug(f"사이클 시작 시 자산 평가 실패: {e}")
 
                     # [추가] 현재 운용 계좌 정보 로깅
-                    if target_cano:
+                    if target_cano and is_log_needed:
                         acc_type = "모의투자" if config.session.is_simulation else "실전투자(자동)"
                         self.log(f"운용 계좌: {target_cano} [{acc_type}]")
                     
-                    current_market_status = self.is_market_open()
                     
                     # [추가] 날짜 변경 감지 및 당일 기준 자산 재설정 (무중단 24시간 운용 지원)
                     current_date = datetime.now().date()
@@ -3647,7 +3662,8 @@ class AutoTrader:
                     
                     # [변경] 장 마감 시 분석 중단 (트래픽 감소)
                     if not current_market_status:
-                        self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
+                        if is_log_needed:
+                            self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
                         self.was_market_open = current_market_status
                     else:
                         status_msg = "RUNNING"
@@ -3725,7 +3741,8 @@ class AutoTrader:
                     
                     self.was_market_open = current_market_status
                     
-                    self.log("모니터링 완료. 대기 중...")
+                    if is_log_needed:
+                        self.log("모니터링 완료. 대기 중...")
                 
                 # 설정된 주기만큼 대기 (중단 요청 시 즉시 반응)
                 # [확인] 설정된 간격(현재 180초)마다 위 로직을 반복합니다.
