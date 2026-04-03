@@ -142,8 +142,8 @@ class TelegramCommander:
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
         button_map = {
             "📊 상태/잔고": "/status",
-            "💼 보유/미체결": "/holdings",
-            "📈 시장 지수": "/market",
+            "💼 보유 종목": "/holdings",
+            "� 시장 지수": "/market",
             "🤖 시황 브리핑": "/briefing",
             "📝 관심 종목": "/stocks",
             "🛑 비상정지": "/stop",   # 기존 버튼 호환성 유지
@@ -1445,7 +1445,7 @@ class TelegramCommander:
         toggle_btn = {"text": "🛑 거래정지"} if self.trader.is_running else {"text": "▶️ 거래시작"}
         return {
             "keyboard": [
-                [{"text": "📊 상태/잔고"}, {"text": "💼 보유/미체결"}],
+                [{"text": "📊 상태/잔고"}, {"text": "💼 보유 종목"}],
                 [{"text": "📈 시장 지수"}, {"text": "🤖 시황 브리핑"}],
                 [{"text": "📝 관심 종목"}, toggle_btn]
             ],
