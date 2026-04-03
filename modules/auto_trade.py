@@ -64,22 +64,36 @@ def save_restricted_stocks(data):
 # [추가] 일일 자산 상태 파일 경로 및 관리 함수 (재시작 시 손실 제한 기준 유지용)
 DAILY_STATE_FILE = os.path.join(config.JSON_DIR, "daily_asset_state.json")
 
-def load_daily_initial_asset():
+def load_daily_initial_asset(account_key):
+    """계좌별 일일 시작 자산을 로드합니다."""
     today_str = datetime.now().strftime("%Y-%m-%d")
     if os.path.exists(DAILY_STATE_FILE):
         try:
             with open(DAILY_STATE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                if data.get("date") == today_str and data.get("initial_asset", 0) > 0:
-                    return data["initial_asset"]
+                if data.get("date") == today_str:
+                    accounts = data.get("accounts", {})
+                    if account_key in accounts and accounts[account_key] > 0:
+                        return accounts[account_key]
         except: pass
     return 0
 
-def save_daily_initial_asset(asset_value):
+def save_daily_initial_asset(account_key, asset_value):
+    """계좌별 일일 시작 자산을 저장합니다."""
     today_str = datetime.now().strftime("%Y-%m-%d")
+    data = {"date": today_str, "accounts": {}}
+    if os.path.exists(DAILY_STATE_FILE):
+        try:
+            with open(DAILY_STATE_FILE, 'r', encoding='utf-8') as f:
+                old_data = json.load(f)
+                if old_data.get("date") == today_str:
+                    data["accounts"] = old_data.get("accounts", {})
+        except: pass
+    
+    data["accounts"][account_key] = asset_value
     try:
         with open(DAILY_STATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump({"date": today_str, "initial_asset": asset_value}, f)
+            json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception as e:
         logger.error(f"일일 자산 상태 저장 실패: {e}")
 
@@ -1465,6 +1479,9 @@ class RiskManager:
             self.trader.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
             self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
             
+            # [추가] 화면에 붉은색 경고 출력
+            console.print(f"\n[bold red]🛑 [비상 정지] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n[dim]자산 보호를 위해 시스템을 정지했습니다.[/dim]\n")
+            
             msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
             
             # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
@@ -1637,11 +1654,12 @@ class AutoTrader:
                 
                 current_calculated_asset = deposit + stock_eval
                 if current_calculated_asset > 0:
-                    saved_initial = load_daily_initial_asset()
+                    account_key = f"{target_cano}-{acnt}"
+                    saved_initial = load_daily_initial_asset(account_key)
                     self.initial_asset = saved_initial if saved_initial > 0 else current_calculated_asset
                     if saved_initial <= 0:
-                        save_daily_initial_asset(self.initial_asset)
-                        db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), f"{target_cano}-{acnt}", self.initial_asset)
+                        save_daily_initial_asset(account_key, self.initial_asset)
+                        db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
                 else:
                     self.initial_asset = 0
 
@@ -1794,7 +1812,10 @@ class AutoTrader:
             console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
 
             if self.initial_asset > 0:
-                saved_msg = " (당일 기준 복원)" if load_daily_initial_asset() > 0 else " (당일 기준 저장)"
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                account_key = f"{target_cano}-{acnt}"
+                saved_msg = " (당일 기준 복원)" if load_daily_initial_asset(account_key) > 0 else " (당일 기준 저장)"
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원{saved_msg}")
 
     def stop(self, use_status=True):
@@ -2076,7 +2097,8 @@ class AutoTrader:
             
             # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
             if self.initial_asset <= 0:
-                saved_initial = load_daily_initial_asset()
+                account_key = f"{target_cano}-{acnt}"
+                saved_initial = load_daily_initial_asset(account_key)
                 if saved_initial > 0:
                     self.initial_asset = saved_initial
             
@@ -2466,7 +2488,10 @@ class AutoTrader:
         if current_asset is not None:
             # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
             if self.initial_asset <= 0:
-                saved_initial = load_daily_initial_asset()
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                account_key = f"{target_cano}-{acnt}"
+                saved_initial = load_daily_initial_asset(account_key)
                 if saved_initial > 0:
                     self.initial_asset = saved_initial
                     
@@ -3593,7 +3618,7 @@ class AutoTrader:
                             new_initial = dep_temp + tot_eval_temp
                             if new_initial > 0:
                                 self.initial_asset = new_initial
-                                save_daily_initial_asset(self.initial_asset)
+                                save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 acc_str = f"{target_cano}-{acnt}"
                                 db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
@@ -3855,21 +3880,21 @@ class AutoTrader:
                     if current_total > 0:
                         # [Fix] 초기 자산 로드 실패(0원) 시, 첫 유효 조회 값으로 보정
                         if self.initial_asset == 0:
-                            saved_initial = load_daily_initial_asset()
+                            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                            acc_str = f"{target_cano}-{acnt}"
+                            saved_initial = load_daily_initial_asset(acc_str)
                             if saved_initial > 0:
                                 self.initial_asset = saved_initial
                                 self.log(f"[시스템 보정] 기존 초기 자산 기록 로드: {self.initial_asset:,}원")
                             else:
                                 self.initial_asset = current_total
-                                save_daily_initial_asset(self.initial_asset)
+                                save_daily_initial_asset(acc_str, self.initial_asset)
                                 self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
 
                             # [추가] DB에 기록
                             try:
-                                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                                 today_str = datetime.now().strftime("%Y-%m-%d")
-                                acc_str = f"{target_cano}-{acnt}"
                                 db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
                             except: pass
 
