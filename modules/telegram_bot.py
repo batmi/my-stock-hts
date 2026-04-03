@@ -1409,17 +1409,15 @@ class TelegramCommander:
             if summary and len(summary) > 0:
                 s_data = summary[0]
                 
-                # 총 평가금액 (주식 + 예수금)
-                tot_evlu = api.safe_int(s_data.get('tot_evlu_amt'))
-                if tot_evlu == 0:
-                    # API가 0을 줄 경우 직접 계산 (모의투자 등)
-                    stock_evlu = api.safe_int(s_data.get('scts_evlu_amt'))
-                    deposit = api.safe_int(s_data.get('prvs_rcdl_excc_amt'))
-                    if deposit == 0: deposit = api.safe_int(s_data.get('dnca_tot_amt'))
-                    tot_evlu = stock_evlu + deposit
+                # 총 주식 평가금액
+                stock_evlu = api.safe_int(s_data.get('scts_evlu_amt'))
+                if stock_evlu == 0 and valid_holdings:
+                    stock_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
                 
                 # 총 평가손익
                 tot_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
+                if tot_profit == 0 and valid_holdings:
+                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
                 
                 # [추가] 수익률 계산
                 tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
@@ -1429,7 +1427,7 @@ class TelegramCommander:
                 if tot_pchs > 0:
                     total_rate = (tot_profit / tot_pchs) * 100
                 
-                msg += f"\n\n 총 평가금액: {tot_evlu:,}원"
+                msg += f"\n\n 총 평가금액: {stock_evlu:,}원"
                 msg += f"\n 총 평가손익: {tot_profit:+,}원 ({total_rate:+.2f}%)"
 
             return msg
