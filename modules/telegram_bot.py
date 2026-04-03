@@ -66,7 +66,10 @@ class TelegramCommander:
             "/memo": self._cmd_memo, # [추가] 종목 메모 관리
             "/rules": self._cmd_rules,
             "/profit": self._cmd_profit,
-            "/restrict": self._cmd_restricted
+            "/restrict": self._cmd_restricted,
+            "/pending": self._cmd_pending,           # [추가] 미체결 조회
+            "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
+            "/delrestrict": self._cmd_delrestrict    # [추가] 제한 종목 해제
         }
 
     def start(self):
@@ -481,31 +484,38 @@ class TelegramCommander:
     def _cmd_help(self, args):
         return (
             "🤖 [시스템 트레이딩 봇 도움말]\n\n"
-            "• /help : 명령어 목록 확인\n"
-            "• /start : 시스템 트레이딩 시작\n"
-            "• /stop : 시스템 트레이딩 중단\n"
-            "• /restart : 시스템 트레이딩 재시작\n"
-            "• /status : 시스템 트레이딩 상태 조회\n"
-            "• /config : 현재 트레이딩 전략 설정값 조회\n"
-            "• /rules [종목] : 종목별 트레이딩 룰 조회\n"
-            "• /restrict : 트레이딩 제한 종목 조회\n"
-            "• /log : 최근 시스템 트레이딩 로그 조회\n"
-            "• /report [기간] : 거래 성과 리포트 (d/w/m/n)\n"
-            "• /profit [기간] : 거래 실현 손익 조회 (d/w/m/n)\n"
-            "• /history [기간] : 거래 내역 조회 (d/w/m/n)\n"
-            "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
-            "• /stocks : 현재 감시 중인 관심 종목 리스트\n"
-            "• /signal <종목> : 종목 기술적 분석 및 진단\n"
-            "• /analyze <종목> : AI 종목 기술적 분석\n"
-            "• /ask <질문> : AI에게 주식/경제 관련 자유 질문\n"
-            "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
-            "• /balance : 계좌 자산 및 예수금 조회\n"
+            "⚙️ [시스템 제어]\n"
+            "• /start : 자동매매 시작\n"
+            "• /stop : 자동매매 중단\n"
+            "• /restart : 자동매매 재시작\n"
+            "• /status : 시스템 상태 조회\n"
+            "• /config : 트레이딩 전략 설정값 조회\n"
+            "• /rules [종목] : 개별 트레이딩 룰 조회\n\n"
+            "💰 [계좌 및 자산]\n"
+            "• /balance : 자산 및 예수금 조회\n"
             "• /holdings : 보유 종목 및 수익률 조회\n"
-            "• /portfolio : AI 포트폴리오 리스크 진단\n"
+            "• /pending : 미체결 주문 내역 조회\n"
+            "• /profit [기간] : 실현 손익 (d/w/m/n)\n"
+            "• /history [기간] : 거래 내역 (d/w/m/n)\n"
+            "• /report [기간] : 성과 리포트 (d/w/m/n)\n"
+            "• /portfolio : AI 포트폴리오 리스크 진단\n\n"
+            "📈 [시장 및 종목 분석]\n"
+            "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
+            "• /signal <종목> : 기술적 분석 및 진단\n"
+            "• /analyze <종목> : AI 종목 심층 진단\n"
+            "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
             "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)\n"
-            "• /memo [a/d/종목] : 종목 메모 조회/추가/삭제\n"
-            "• /news <종목> : AI 기반 최신 뉴스 5개 및 링크 검색"
+            "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
+            "• /ask <질문> : AI 주식/경제 자유 질문\n\n"
+            "📝 [관리 및 기타]\n"
+            "• /stocks : 감시 중인 관심 종목 리스트\n"
+            "• /memo [a/d/종목] : 메모 조회/추가/삭제\n"
+            "• /restrict : 트레이딩 제한 종목 조회\n"
+            "• /addrestrict <종목> [사유] : 제한 종목 추가\n"
+            "• /delrestrict <종목> : 제한 종목 해제\n"
+            "• /log : 최근 시스템 트레이딩 로그\n"
+            "• /help : 명령어 목록 확인"
         )
 
     def _cmd_report(self, args):
@@ -748,9 +758,6 @@ class TelegramCommander:
         for r in filtered_rules:
             code = r['code']
             name = r['name']
-            name_display = name
-            if code in restricted_stocks: name_display += "-"
-            name_display += "+" # 개별 룰 목록이므로 항상 +
             
             memo_part = f"   메모: {r.get('memo', '')}\n" if r.get('memo') else ""
             
@@ -766,7 +773,7 @@ class TelegramCommander:
                 
             sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
 
-            msg += (f"\n• {name_display}({code})\n"
+            msg += (f"\n• {name}({code})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', 100.0)}%\n"
                     f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
                     f"   리스크: 비중 {r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2))*100:.0f}% / 손절 {sl_str}\n"
@@ -786,13 +793,108 @@ class TelegramCommander:
         msg = f"🚫 [트레이딩 제한 종목 ({len(data)}개)]\n"
         for code, info in data.items():
             name = info.get('name', code)
-            name_display = name
-            name_display += "-" # 제한 종목 목록이므로 항상 -
-            if code in rules_map: name_display += "+"
             
             memo = info.get('memo', '-')
-            msg += f"\n• {name_display}({code})\n   메모: {memo}"
+            msg += f"\n• {name}({code})\n   메모: {memo}"
         return msg
+
+    def _cmd_addrestrict(self, args):
+        if not args:
+            return "⚠️ 사용법: /addrestrict <종목명/코드> [사유]\n(예: /addrestrict 삼성전자 어닝쇼크)"
+            
+        keyword = args[0]
+        code, name, is_overseas = self._resolve_stock(keyword)
+        if not code:
+            return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
+            
+        memo = " ".join(args[1:]) if len(args) > 1 else "텔레그램 원격 차단"
+        
+        data = auto_trade.load_restricted_stocks()
+        data[code] = {
+            "name": name,
+            "memo": memo,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "is_overseas": is_overseas
+        }
+        auto_trade.save_restricted_stocks(data)
+        
+        msg = f"🚫 [제한 종목 추가 완료]\n• 종목: {name}({code})\n• 사유: {memo}\n\n즉시 자동매매 및 매수 대상에서 차단되었습니다."
+        return msg
+
+    def _cmd_delrestrict(self, args):
+        if not args:
+            return "⚠️ 사용법: /delrestrict <종목명/코드>"
+            
+        keyword = " ".join(args)
+        code, name, _ = self._resolve_stock(keyword)
+        if not code:
+            return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
+            
+        data = auto_trade.load_restricted_stocks()
+        if code in data:
+            del data[code]
+            auto_trade.save_restricted_stocks(data)
+            return f"✅ [제한 종목 해제 완료]\n• 종목: {name}({code})\n\n자동매매 제한이 정상적으로 해제되었습니다."
+        else:
+            return f"⚠️ '{name}({code})' 종목은 현재 제한 목록에 없습니다."
+
+    def _cmd_pending(self, args):
+        accounts = []
+        if config.session.cano:
+            accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의" if config.session.is_simulation else "실전"))
+        
+        if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "자동"))
+
+        msg = "⏳ [미체결 주문 내역]\n"
+        has_any_orders = False
+        
+        for cano, acnt, label in accounts:
+            with utils.AccountContext(cano):
+                dom_orders = api.get_domestic_open_orders(cano, acnt)
+                us_orders = api.get_overseas_open_orders(cano, acnt)
+                
+                if dom_orders or us_orders:
+                    has_any_orders = True
+                    msg += f"\n[{label} 계좌: {cano}-{acnt}]\n"
+                    
+                    for o in dom_orders:
+                        name = o.get('prdt_name')
+                        pdno = o.get('pdno')
+                        odno = o.get('odno')
+                        rmn_qty = api.safe_int(o.get('rmn_qty', 0) or o.get('psbl_qty', 0))
+                        ord_unpr = api.safe_int(o.get('ord_unpr', 0))
+                        
+                        sll_buy = o.get('sll_buy_dvsn_cd_name', '').strip()
+                        if not sll_buy:
+                            cd = o.get('sll_buy_dvsn_cd', '')
+                            sll_buy = "매도" if cd == '01' else ("매수" if cd == '02' else cd)
+                            
+                        price_str = f"{ord_unpr:,}원" if ord_unpr > 0 else "시장가"
+                        msg += f"• [국내] {sll_buy} | {name}({pdno})\n  잔량: {rmn_qty}주 | 단가: {price_str} | No.{odno}\n"
+                        
+                    for o in us_orders:
+                        name = o.get('prdt_name')
+                        pdno = o.get('pdno')
+                        odno = o.get('odno')
+                        rmn_qty = api.safe_int(float(o.get('nccs_qty', 0)))
+                        
+                        ord_unpr = 0.0
+                        for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
+                            if o.get(key) and float(o.get(key)) > 0:
+                                ord_unpr = float(o.get(key))
+                                break
+                                
+                        sll_buy_code = o.get('sll_buy_dvsn_cd')
+                        sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
+                        
+                        price_str = f"${ord_unpr:,.2f}" if ord_unpr > 0 else "시장가"
+                        msg += f"• [해외] {sll_buy} | {name}({pdno})\n  잔량: {rmn_qty}주 | 단가: {price_str} | No.{odno}\n"
+        
+        if not has_any_orders:
+            msg += "\n미체결 주문이 없습니다."
+            
+        return msg.strip()
 
     def _cmd_profit(self, args):
         days = 0
