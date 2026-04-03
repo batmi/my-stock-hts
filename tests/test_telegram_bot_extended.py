@@ -15,7 +15,7 @@ def test_handle_message_valid(commander):
         # [수정] _cmd_status 대신 내부에서 호출하는 trader.get_status_message를 Mocking
         with patch.object(commander.trader, 'get_status_message', return_value="System OK"):
             commander._handle_message(msg)
-            mock_reply.assert_called_with("System OK")
+            mock_reply.assert_any_call("System OK")
 
 def test_handle_message_invalid_chat_id(commander):
     """잘못된 Chat ID 무시 테스트"""

@@ -151,6 +151,8 @@ class TelegramCommander:
 
         # 핸들러 호출
         if command in self.command_handlers:
+            # 명령어 접수 즉시 알림 (API/DB 통신 등 긴 작업 시 사용자 피드백용)
+            self._send_reply(f"⌨️ 명령어 접수: {command}")
             response = self.command_handlers[command](args)
             if response:
                 self._send_reply(response)
