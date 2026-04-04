@@ -39,4 +39,7 @@ def test_handle_message_unknown_command(commander):
 def test_send_reply(mock_send, commander):
     """답장 전송 테스트"""
     commander._send_reply("Test Reply")
-    mock_send.assert_called_with("Test Reply")
+    mock_send.assert_called_once()
+    args, kwargs = mock_send.call_args
+    assert args[0] == "Test Reply"
+    assert "reply_markup" in kwargs

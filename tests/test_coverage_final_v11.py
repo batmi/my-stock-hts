@@ -72,9 +72,10 @@ def test_fetch_naver_themes_and_detail(mock_get):
     theme_analysis._fetch_theme_detail(themes[0])
     assert "SK하이닉스(000660)" in themes[0]['leading'] # 등락률(5.0%)이 더 높은 하이닉스가 먼저 와야 함
 
+@patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('modules.theme_analysis.fetch_naver_themes')
 @patch('modules.theme_analysis._fetch_theme_detail')
-def test_show_naver_themes_ui(mock_detail, mock_fetch):
+def test_show_naver_themes_ui(mock_detail, mock_fetch, mock_ask):
     """네이버 테마 리스트 터미널 출력(UI) 분기 테스트"""
     mock_fetch.return_value = [
         {'name': '반도체', 'rate': 5.0, 'rate3': 10.0, 'link': '/link1', 'leading': '삼성전자'}

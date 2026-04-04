@@ -10,9 +10,10 @@ def mock_db_connection():
     with patch('modules.db_manager.DBManager._get_conn') as mock_conn:
         yield mock_conn
 
+@patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('modules.theme_analysis.fetch_naver_themes')
 @patch('modules.theme_analysis._fetch_theme_detail')
-def test_show_naver_themes(mock_detail, mock_fetch):
+def test_show_naver_themes(mock_detail, mock_fetch, mock_ask):
     """네이버 테마 순위 출력 테스트"""
     mock_fetch.return_value = [
         {'name': '2차전지', 'rate': 5.0, 'rate3': 10.0, 'link': '/link'}

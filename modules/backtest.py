@@ -415,7 +415,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
         is_rsi_ok = row['RSI'] < actual_buy_rsi
         
-        if (is_score_ok or is_mr_buy) and is_rsi_ok and can_buy_state:
+        # [수정] 실제 자동매매 시스템과 동일하게 이미 보유 중인 경우 추가 매수 금지
+        if position['qty'] == 0 and (is_score_ok or is_mr_buy) and is_rsi_ok and can_buy_state:
             # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
             slippage_mult = 1.0
             if execution_noise:
@@ -477,7 +478,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                     "cum_profit": cum_profit
                 })
-        else: # 매수 조건 미충족 시
+        elif position['qty'] == 0: # 매수 조건 미충족 시 (이미 보유 중인 상태는 누락으로 기록하지 않음)
             if raw_score >= buy_score_limit: # 점수는 충족했으나 다른 조건(RSI 등) 미충족
                 if state == "주의": missed_caution_count += 1
                 elif state == "매도": missed_danger_count += 1

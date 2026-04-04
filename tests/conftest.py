@@ -47,6 +47,19 @@ def isolate_test_files(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOG_DIR", str(test_log_dir))
     monkeypatch.setattr(config, "SYSTEM_TRADING_LOG_DIR", str(test_log_dir))
 
+    # [추가] 전역 DB 인스턴스의 경로를 임시 DB로 강제 변경하여 실제 DB 오염 방지
+    real_db = getattr(db_manager.db, '_real_db', db_manager.db)
+    monkeypatch.setattr(real_db, "db_path", str(test_db))
+    
+    if hasattr(real_db, 'local') and hasattr(real_db.local, 'conn'):
+        if real_db.local.conn:
+            try:
+                real_db.local.conn.close()
+            except Exception:
+                pass
+            real_db.local.conn = None
+    real_db._init_db()
+
     # [추가] 테스트 중 실제 텔레그램 메시지 발송 원천 차단
     monkeypatch.setattr(config, "ENABLE_TELEGRAM", False)
 
@@ -59,13 +72,14 @@ def cleanup_global_db_connection():
     yield
     
     # 테스트 종료 후 정리
-    if hasattr(db_manager.db, 'local') and hasattr(db_manager.db.local, 'conn'):
-        if db_manager.db.local.conn:
+    real_db = getattr(db_manager.db, '_real_db', db_manager.db)
+    if hasattr(real_db, 'local') and hasattr(real_db.local, 'conn'):
+        if real_db.local.conn:
             try:
-                db_manager.db.local.conn.close()
+                real_db.local.conn.close()
             except Exception:
                 pass
-            del db_manager.db.local.conn
+            real_db.local.conn = None
 
 def create_mock_df(trend='up', periods=100, start_price=10000):
     """가상의 주가 데이터프레임 생성 헬퍼 함수"""

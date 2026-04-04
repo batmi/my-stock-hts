@@ -19,26 +19,27 @@ def temp_db(tmp_path):
     original_db_path = config.DB_FILE_PATH
     config.DB_FILE_PATH = str(db_file)
     
+    real_db = getattr(db_manager.db, '_real_db', db_manager.db)
     # [추가] 전역 DBManager 인스턴스의 경로 업데이트 및 연결 재설정
-    original_manager_path = db_manager.db.db_path
-    db_manager.db.db_path = str(db_file)
+    original_manager_path = real_db.db_path
+    real_db.db_path = str(db_file)
     
     # 기존 연결 닫기 (현재 스레드)
-    if hasattr(db_manager.db.local, 'conn') and db_manager.db.local.conn:
-        db_manager.db.local.conn.close()
-        del db_manager.db.local.conn
+    if hasattr(real_db, 'local') and hasattr(real_db.local, 'conn') and real_db.local.conn:
+        real_db.local.conn.close()
+        real_db.local.conn = None
     
     # 새 DB 초기화
-    db_manager.db._init_db()
+    real_db._init_db()
     
     yield db_file
     
     # [추가] 복구
-    if hasattr(db_manager.db.local, 'conn') and db_manager.db.local.conn:
-        db_manager.db.local.conn.close()
-        del db_manager.db.local.conn
+    if hasattr(real_db, 'local') and hasattr(real_db.local, 'conn') and real_db.local.conn:
+        real_db.local.conn.close()
+        real_db.local.conn = None
     
-    db_manager.db.db_path = original_manager_path
+    real_db.db_path = original_manager_path
     config.DB_FILE_PATH = original_db_path
 
 def test_db_operations(temp_db):

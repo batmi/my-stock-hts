@@ -7,17 +7,14 @@ import config
 def trader():
     return AutoTrader()
 
-@patch('modules.auto_trade.api.get_domestic_balance')
-@patch('modules.auto_trade.api.get_deposit_balance')
-def test_get_total_estimated_asset(mock_deposit, mock_balance, trader):
+@patch('modules.auto_trade.account.get_asset_status_data')
+def test_get_total_estimated_asset(mock_get_asset, trader):
     """총 추정 자산 계산 테스트"""
-    mock_balance.return_value = ([], [{'scts_evlu_amt': '500000', 'dnca_tot_amt': '500000'}])
+    mock_get_asset.return_value = {'tot_asset': 1000000}
     # 모의투자 모드 가정
     config.session.is_simulation = True
     
     asset = trader._get_total_estimated_asset()
-    # 500000 (주식) + 500000 (예수금) = 1000000
-    # (모의투자는 dnca_tot_amt가 예수금으로 사용됨)
     assert asset == 1000000
 
 def test_monitor_account_status(trader):
