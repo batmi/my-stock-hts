@@ -45,7 +45,9 @@ def _save_dynamic_config():
         "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
         "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
         "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.5),
-        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.002)
+        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.002),
+        "USE_CORRELATION_FILTER": getattr(config, 'USE_CORRELATION_FILTER', True),
+        "CORRELATION_THRESHOLD": getattr(config, 'CORRELATION_THRESHOLD', 0.7)
     }
     
     try:
@@ -169,6 +171,8 @@ def view_system_config():
     table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
     table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
+    table.add_row("상관계수 필터링 사용\n[dim]유사 테마 종목 중복 매수 방지[/dim]", "USE_CORRELATION_FILTER", f"{getattr(config, 'USE_CORRELATION_FILTER', True)}")
+    table.add_row("  └ 상관계수 임계값\n    [dim]동조화 판단 기준치 (0.0~1.0)[/dim]", "CORRELATION_THRESHOLD", f"{getattr(config, 'CORRELATION_THRESHOLD', 0.7)}")
 
     table.add_section()
 
@@ -656,6 +660,10 @@ def modify_risk_portfolio_settings():
              "get": lambda: getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
             {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "Risk",
              "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
+            {"desc": "상관계수 필터링 사용", "help": "유사 테마 종목 중복 매수 방지", "name": "USE_CORRELATION_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
+             "get": lambda: getattr(config, 'USE_CORRELATION_FILTER', True), "set": lambda v: setattr(config, 'USE_CORRELATION_FILTER', v)},
+            {"desc": "상관계수 임계값", "help": "이 값 이상일 때 동조화로 판단 (0.0~1.0)", "name": "CORRELATION_THRESHOLD", "type": "float", "section": "Risk",
+             "get": lambda: getattr(config, 'CORRELATION_THRESHOLD', 0.7), "set": lambda v: setattr(config, 'CORRELATION_THRESHOLD', v)},
         ])
         return items
 

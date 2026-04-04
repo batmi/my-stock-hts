@@ -23,6 +23,7 @@ import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
 from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
+import pandas as pd
 
 console = config.console
 
@@ -4205,9 +4206,12 @@ class AutoTrader:
         
         # [추가] 보유 종목 조회 (중복 매수 방지)
         holding_codes = set()
+        holding_names_map = {}
         if holdings:
             for h in holdings:
-                holding_codes.add(h['pdno'])
+                code = h['pdno']
+                holding_codes.add(code)
+                holding_names_map[code] = h['prdt_name']
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
@@ -4268,7 +4272,7 @@ class AutoTrader:
                     reentry_hurdles[scode] = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
 
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map)
         
         # 2. 매수 집행
         if candidates:
@@ -4280,7 +4284,7 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles):
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs):
         """(내부함수) 매수 후보 분석용 단일 워커"""
         try:
             # [추가] 시스템 트레이딩 스레드임을 마킹 (API 우선순위 획득용)
@@ -4322,6 +4326,24 @@ class AutoTrader:
             if df is None or df.empty: return None
             current_price = float(df.iloc[-1]['close'])
             
+            # [추가] 상관계수 필터링
+            if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
+                corr_threshold = getattr(config, 'CORRELATION_THRESHOLD', 0.7)
+                cand_ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
+                
+                for hold_code, hold_info in holdings_dfs.items():
+                    hold_df = hold_info['df']
+                    hold_name = hold_info['name']
+                    if hold_df is None or hold_df.empty: continue
+                    hold_ret = hold_df.set_index('date')['close'].astype(float).pct_change().dropna()
+                    
+                    combined = pd.concat([cand_ret, hold_ret], axis=1, join='inner').dropna()
+                    if len(combined) > 30:
+                        corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
+                        if corr >= corr_threshold:
+                            log_msg = f"[상관관계 보류] {name}({code}): 보유 종목 '{hold_name}'과 높은 상관관계 (상관계수: {corr:.2f} >= {corr_threshold})"
+                            return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+
             # 룰 및 임계값 설정
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
@@ -4390,10 +4412,11 @@ class AutoTrader:
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map):
         candidates = []
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
+        correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
         
         # [추가] 트레이딩 제한 종목 로드
         restricted_stocks = load_restricted_stocks()
@@ -4414,6 +4437,17 @@ class AutoTrader:
                             filter_status_str = "허용" if is_healthy else "보류"
                             filter_status_str = f" | 필터링: {filter_status_str}"
                     self.log(f"[{m_type}] 시장 국면: {regime} (매수기준 {adj:+.1f}점){filter_status_str}")
+
+        # [추가] 보유 종목의 차트 데이터 수집 (상관계수 분석용)
+        holdings_dfs = {}
+        use_corr_filter = getattr(config, 'USE_CORRELATION_FILTER', True)
+        if use_corr_filter and holding_codes:
+            for code in holding_codes:
+                is_overseas = not (code.isdigit() and len(code) == 6)
+                df = api.get_chart_data(code, is_overseas)
+                if df is not None and not df.empty:
+                    name = holding_names_map.get(code, code)
+                    holdings_dfs[code] = {'name': name, 'df': df}
 
         # [최적화] 분석 대상 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []
@@ -4438,7 +4472,7 @@ class AutoTrader:
         max_workers = 5 if not config.session.is_simulation else 2
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles) for item in targets]
+            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs) for item in targets]
             
             for future in concurrent.futures.as_completed(futures):
                 if not self.is_running: break
@@ -4454,6 +4488,9 @@ class AutoTrader:
                     elif res['type'] == 'market_skip':
                         self.skipped_by_market_filter_count += 1
                         skipped_stocks.append(res['name'])
+                    elif res['type'] == 'correlation_skip':
+                        self.log(res['log'])
+                        correlation_skipped_stocks.append(res['name'])
 
         # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:
@@ -4462,6 +4499,10 @@ class AutoTrader:
         # [추가] 시장 필터링 보류 종목 로그 기록
         if skipped_stocks:
             self.log(f"[시장 필터링] 하락장 매수 보류 ({len(skipped_stocks)}종목): {', '.join(skipped_stocks)}")
+
+        # [추가] 상관관계 보류 종목 로그 기록
+        if correlation_skipped_stocks:
+            self.log(f"[상관관계 보류] 보유 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
 
         # [수정] 우선순위 정렬 (1. 점수 높은 순, 2. RSI 낮은 순)
         # 점수가 같다면 RSI가 낮을수록 상승 여력이 있다고 판단하여 우선순위를 둡니다.

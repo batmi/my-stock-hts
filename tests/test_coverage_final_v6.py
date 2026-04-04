@@ -442,7 +442,7 @@ def test_check_buy_conditions_max_holdings_limit():
     config.SYSTEM_MAX_HOLDINGS = 2
     
     # Holdings 2
-    holdings = [{'pdno': '1'}, {'pdno': '2'}]
+    holdings = [{'pdno': '1', 'prdt_name': 'Stock1'}, {'pdno': '2', 'prdt_name': 'Stock2'}]
     
     with patch.object(trader, 'log') as mock_log:
         trader._check_buy_conditions(holdings, {'d2_deposit': 1000000}, is_market_open=True)

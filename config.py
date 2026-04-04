@@ -201,6 +201,14 @@ UNFILLED_ORDER_CANCEL_SECONDS = 120
 CHART_CACHE_TTL_MINUTES = 180
 
 # ==========================================================
+# [설정] 상관계수 필터링 (Pearson Correlation Filter)
+# ==========================================================
+# 보유 중인 종목과 주가 수익률의 상관관계가 높은(비슷하게 움직이는) 종목을
+# 매수 대상에서 제외하여 포트폴리오 다각화를 유도합니다.
+USE_CORRELATION_FILTER = True
+CORRELATION_THRESHOLD = 0.7        # 상관계수 임계값 (0.7 이상이면 유사한 흐름으로 판단)
+
+# ==========================================================
 # [설정] 종목 분석 및 상태 분류 임계값
 # ==========================================================
 ANALYSIS_THRESHOLDS = {
@@ -557,6 +565,7 @@ def load_dynamic_config():
             global SLIPPAGE_RATE
             global CHART_CACHE_TTL_MINUTES
             global CLEAR_SCREEN_ON_MENU
+            global USE_CORRELATION_FILTER, CORRELATION_THRESHOLD
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
             if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
@@ -592,6 +601,8 @@ def load_dynamic_config():
             
             if "SLIPPAGE_RATE" in data: SLIPPAGE_RATE = data["SLIPPAGE_RATE"]
             if "CHART_CACHE_TTL_MINUTES" in data: CHART_CACHE_TTL_MINUTES = data["CHART_CACHE_TTL_MINUTES"]
+            if "USE_CORRELATION_FILTER" in data: USE_CORRELATION_FILTER = data["USE_CORRELATION_FILTER"]
+            if "CORRELATION_THRESHOLD" in data: CORRELATION_THRESHOLD = data["CORRELATION_THRESHOLD"]
 
         except Exception as e:
             print(f"[Config] 동적 설정 로드 실패: {e}")

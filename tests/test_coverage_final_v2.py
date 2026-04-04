@@ -15,7 +15,7 @@ def test_analyze_candidates_restricted():
     
     with patch('modules.auto_trade.load_restricted_stocks', return_value={'005930': {}}), \
          patch('time.sleep'):
-        candidates = trader._analyze_candidates(targets, set(), {}, {})
+        candidates = trader._analyze_candidates(targets, set(), {}, {}, {})
         assert len(candidates) == 0
 
 def test_execute_buy_orders_low_cash():

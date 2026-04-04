@@ -9,6 +9,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from modules import db_manager # [추가] DB 매니저 임포트
+from modules.auto_trade import AutoTrader, ConclusionMonitor
+from modules.telegram_bot import TelegramCommander
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_config():
@@ -80,6 +82,23 @@ def cleanup_global_db_connection():
             except Exception:
                 pass
             real_db.local.conn = None
+
+@pytest.fixture(autouse=True)
+def reset_all_singletons():
+    """
+    [전역 설정] 
+    모든 테스트 실행 전후로 싱글톤 객체의 상태를 강제 초기화하여 
+    테스트 파일 간의 상태 누수(State Leak) 및 간섭을 원천 차단합니다.
+    """
+    AutoTrader._instance = None
+    ConclusionMonitor._instance = None
+    TelegramCommander._instance = None
+    
+    yield
+    
+    AutoTrader._instance = None
+    ConclusionMonitor._instance = None
+    TelegramCommander._instance = None
 
 def create_mock_df(trend='up', periods=100, start_price=10000):
     """가상의 주가 데이터프레임 생성 헬퍼 함수"""

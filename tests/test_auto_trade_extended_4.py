@@ -67,7 +67,7 @@ def test_analyze_candidates(mock_analyze, mock_vol, mock_chart, mock_restricted,
     # 시장 필터링 비활성화 및 Pending 상태 False 설정
     config.USE_MARKET_FILTER = False
     with patch.object(trader.order_manager, 'is_pending', return_value=False):
-        candidates = trader._analyze_candidates(targets, holding_codes, rules_map, {})
+        candidates = trader._analyze_candidates(targets, holding_codes, rules_map, {}, {})
         
         assert len(candidates) == 1
         assert candidates[0]['code'] == '005930'
