@@ -1600,7 +1600,8 @@ class AutoTrader:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
-            transient=True
+            transient=True,
+            disable=not api._is_screen_output_allowed() # [추가] 텔레그램 스레드 등 백그라운드에서는 상태바 숨김
         ) as progress:
             task = progress.add_task("[cyan]자동매매 세션 초기화 중...[/cyan]", total=3)
             
@@ -1675,27 +1676,29 @@ class AutoTrader:
         
         if not config.session.is_simulation:
             if not config.session.auto_app_key or not config.session.auto_cano:
-                console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
-                console.print("[dim]환경 변수 AUTO_APP_KEY, AUTO_APP_SECRET, AUTO_ACC_NUM을 설정해주세요.[/dim]")
+                if api._is_screen_output_allowed():
+                    console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
+                    console.print("[dim]환경 변수 AUTO_APP_KEY, AUTO_APP_SECRET, AUTO_ACC_NUM을 설정해주세요.[/dim]")
                 return
             
-            console.print("\n[bold red]!!! 경고: 실전 투자 모드에서 시스템 트레이딩을 시작합니다 !!![/bold red]")
-            console.print(f"운용 계좌: [bold yellow]{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}[/bold yellow] (시스템 트레이딩 전용)")
-            
             if interactive:
+                console.print("\n[bold red]!!! 경고: 실전 투자 모드에서 시스템 트레이딩을 시작합니다 !!![/bold red]")
+                console.print(f"운용 계좌: [bold yellow]{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}[/bold yellow] (시스템 트레이딩 전용)")
                 utils.print_breadcrumb()
                 if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
                     console.print("[yellow]시작을 취소했습니다.[/yellow]")
                     return
             else:
-                console.print("[bold cyan][텔레그램 명령] 실전 투자 자동매매를 시작합니다.[/bold cyan]")
+                if api._is_screen_output_allowed():
+                    console.print("[bold cyan][시스템 명령] 실전 투자 자동매매를 시작합니다.[/bold cyan]")
 
         try:
             # [수정] 초기화 로직 분리
             if not self.initialized:
                 if not self.initialize():
                     self.log("초기화 실패로 자동매매를 시작할 수 없습니다.")
-                    console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
+                    if api._is_screen_output_allowed():
+                        console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
                     return
 
             self.is_running = True
@@ -1709,7 +1712,8 @@ class AutoTrader:
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
 
-            console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
+            if api._is_screen_output_allowed():
+                console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
             self.log("시스템 시작")
             
             # [추가] 장 마감 상태에서 시작했을 경우 명확한 안내 메시지 출력
@@ -1816,7 +1820,8 @@ class AutoTrader:
 
         except Exception as e:
             logger.error(f"자동매매 시작 실패: {e}")
-            console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
+            if api._is_screen_output_allowed():
+                console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
 
             if self.initial_asset > 0:
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano

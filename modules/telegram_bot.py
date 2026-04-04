@@ -141,14 +141,16 @@ class TelegramCommander:
 
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
         button_map = {
-            "📊 상태/잔고": "/status",
+            "📊 상태 요약": "/status",
+            "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
-            "� 시장 지수": "/market",
-            "🤖 시황 브리핑": "/briefing",
             "📝 관심 종목": "/stocks",
-            "🛑 비상정지": "/stop",   # 기존 버튼 호환성 유지
-            "🛑 거래정지": "/stop",
-            "▶️ 거래시작": "/start"
+            "📈 시장 지수": "/market",
+            "🤖 시황 브리핑": "/briefing",
+            "📜 주간 거래": "/history w",
+            "📊 월간 성과": "/report m",
+            "🛑 거래 정지": "/stop",
+            "▶️ 거래 시작": "/start"
         }
         if text in button_map:
             text = button_map[text]
@@ -1442,12 +1444,12 @@ class TelegramCommander:
 
     def _get_default_keyboard(self):
         """하단 고정 메뉴 버튼 (Reply Keyboard) 구성"""
-        toggle_btn = {"text": "🛑 거래정지"} if self.trader.is_running else {"text": "▶️ 거래시작"}
+        toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
-                [{"text": "📊 상태/잔고"}, {"text": "💼 보유 종목"}],
-                [{"text": "📈 시장 지수"}, {"text": "🤖 시황 브리핑"}],
-                [{"text": "📝 관심 종목"}, toggle_btn]
+                [{"text": "📊 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "🤖 시황 브리핑"}],
+                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
+                [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, toggle_btn]
             ],
             "resize_keyboard": True
         }
