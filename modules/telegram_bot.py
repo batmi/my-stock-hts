@@ -1810,6 +1810,22 @@ class TelegramCommander:
                     reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")
                 buy_result = f"🔵 매수 불가 ({', '.join(reasons)})"
 
+            # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회
+            tv_rating_str = "조회 불가"
+            try:
+                from tradingview_screener import Query, Column
+                market_str = 'america' if is_overseas else 'korea'
+                _, tv_df = Query().set_markets(market_str).select('Recommend.All').where(Column('name') == code).limit(1).get_scanner_data()
+                if tv_df is not None and not tv_df.empty:
+                    rating_val = tv_df.iloc[0].get('Recommend.All')
+                    if pd.notna(rating_val):
+                        if rating_val >= 0.5: tv_rating_str = f"🔴 Strong Buy ({rating_val:+.2f})"
+                        elif rating_val >= 0.1: tv_rating_str = f"🔴 Buy ({rating_val:+.2f})"
+                        elif rating_val > -0.1: tv_rating_str = f"⚪️ Neutral ({rating_val:+.2f})"
+                        elif rating_val > -0.5: tv_rating_str = f"🔵 Sell ({rating_val:+.2f})"
+                        else: tv_rating_str = f"🔵 Strong Sell ({rating_val:+.2f})"
+            except: pass
+
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
             is_sell_signal = (score < sell_score_limit) or (state == "매도")
             
@@ -1831,6 +1847,7 @@ class TelegramCommander:
             msg += f"상태 분류: {state_emoji} {state} ({reason})\n"
             msg += f"매수 판단: {buy_result}\n"
             msg += f"보유 판단: {sell_result}\n"
+            msg += f"TradingView 의견: {tv_rating_str}\n"
             msg += f"\n[주요 지표]\n"
             msg += f"• EMA: {ema_state}\n"
             msg += f"• SAR: {sar_state}\n"
