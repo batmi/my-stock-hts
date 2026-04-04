@@ -212,7 +212,6 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     
     ts_highest_price = 0
     half_tp_executed = False # [추가] 백테스트용 반익절 추적 변수
-    prev_row = prev_row_init
     last_valid_price = 0 # [추가] 마지막 유효 가격 추적용
     
     # [추가] 52주 고점/저점 및 위치 사전 계산 (벡터화 처리)
@@ -231,14 +230,24 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "WEIGHTS": weights # [추가] 가중치 전달
     }
 
-    for i in range(len(sim_df)):
-        row = sim_df.iloc[i]
+    # [최적화 1] 날짜 문자열 파싱 오버헤드 제거 (루프 전 벡터화 사전 변환)
+    parsed_dates = pd.to_datetime(sim_df['date'], format='%Y%m%d', errors='coerce').tolist()
+    buy_date_dt = None
+
+    # [최적화 2] Pandas DataFrame 순회(iloc)의 막대한 오버헤드를 제거하기 위해
+    # 데이터를 List of Dicts로 변환하여 순수 Python 딕셔너리로 초고속 순회합니다.
+    sim_records = sim_df.to_dict('records')
+    prev_row = prev_row_init.to_dict() if prev_row_init is not None and isinstance(prev_row_init, pd.Series) else prev_row_init
+
+    for i in range(len(sim_records)):
+        row = sim_records[i]
         date = row['date']
+        current_date_dt = parsed_dates[i]
         price = row['close']
         high_price = row['high']
         
         # [추가] 결측치(NaN) 또는 유효하지 않은 가격 데이터 방어 로직
-        if pd.isna(price) or price <= 0:
+        if price is None or math.isnan(price) or price <= 0:
             prev_row = row
             continue
 
@@ -285,13 +294,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if high_price > ts_highest_price: ts_highest_price = high_price
             
             # [추가] 현재 보유 기간(일수) 계산
-            current_holding_days = 0
-            if buy_date:
-                try:
-                    d1 = datetime.strptime(str(buy_date), "%Y%m%d")
-                    d2 = datetime.strptime(str(date), "%Y%m%d")
-                    current_holding_days = (d2 - d1).days
-                except: pass
+            current_holding_days = (current_date_dt - buy_date_dt).days if buy_date_dt and pd.notna(current_date_dt) else 0
 
             sell_signal = False
             reason = ""
@@ -372,13 +375,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 
                 cum_profit += profit
                 
-                holding_days = 0
-                if buy_date:
-                    try:
-                        d1 = datetime.strptime(str(buy_date), "%Y%m%d")
-                        d2 = datetime.strptime(str(date), "%Y%m%d")
-                        holding_days = (d2 - d1).days
-                    except: pass
+                holding_days = (current_date_dt - buy_date_dt).days if buy_date_dt and pd.notna(current_date_dt) else 0
                 
                 balance += sell_amt
                 sold_qty = sell_qty
@@ -387,6 +384,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 if position['qty'] == 0:
                     position = {'qty': 0, 'avg_price': 0, 'buy_trades': []} # 포지션 초기화
                     buy_date = None
+                    buy_date_dt = None
                     ts_highest_price = 0
                     half_tp_executed = False
                     buy_reason_str = ""
@@ -464,6 +462,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 # [Fix: Point 4] 포지션 정보 업데이트
                 if position['qty'] == 0: # 신규 진입
                     buy_date = date
+                    buy_date_dt = current_date_dt
                     ts_highest_price = buy_price
                     buy_reason_str = "역매수" if is_mr_buy else "일반"
                 
