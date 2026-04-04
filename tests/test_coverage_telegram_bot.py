@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from modules.telegram_bot import TelegramCommander
 import config
 from datetime import datetime
+import pandas as pd
 
 @pytest.fixture
 def commander():
@@ -79,3 +80,22 @@ def test_cmd_market_invalid_key(commander):
     """/market 명령어 오입력 테스트"""
     res = commander._cmd_market(["z"]) # 존재하지 않는 키
     assert "잘못된 그룹 키" in res
+
+@patch('api.get_current_price_data', return_value={'rt_cd': '0', 'output': {'stck_prpr': '60000', 'prdy_ctrt': '1.5'}})
+@patch('api.get_chart_data')
+@patch('indicators.calculate_indicators')
+@patch('modules.telegram_bot.analysis.check_smart_money_turnaround', return_value=(False, ""))
+def test_telegram_cmd_signal_tv_rating(mock_sm, mock_calc, mock_chart, mock_cp, commander):
+    """/signal 명령어 실행 시 TradingView 의견 항목이 예외 없이 정상적으로 렌더링되는지 테스트"""
+    # 차트 데이터 모킹
+    mock_chart.return_value = pd.DataFrame({
+        'close': [60000]*20, 'high': [60000]*20, 'low': [60000]*20, 'open': [60000]*20, 'volume': [100]*20
+    })
+    # 지표 데이터 모킹
+    mock_calc.return_value = {
+        'ema_20': 60000, 'ema_60': 60000, 'ema_120': 60000, 'psar': 50000,
+        'rsi': 50, 'adx': 20, 'cci': 0, 'obv_trend': True, 'macd': 10, 'macd_signal': 5
+    }
+    
+    res = commander._cmd_signal(["005930"])
+    assert "TradingView 의견:" in res

@@ -1813,6 +1813,7 @@ class TelegramCommander:
             # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회
             tv_rating_str = "조회 불가"
             try:
+                import pandas as pd # [추가] pd 참조 누락 수정
                 from tradingview_screener import Query, Column
                 market_str = 'america' if is_overseas else 'korea'
                 _, tv_df = Query().set_markets(market_str).select('Recommend.All').where(Column('name') == code).limit(1).get_scanner_data()
