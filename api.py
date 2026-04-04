@@ -258,11 +258,73 @@ def _set_micro_cache(key, data):
     with _MICRO_CACHE_LOCK:
         _MICRO_CACHE[key] = {'time': time.time(), 'data': data}
 
+# [추가] yfinance 특수 티커를 TradingView 티커로 완벽히 1:1 매핑
+YF_TO_TV_EXACT = {
+    "^IXIC": "NASDAQ:IXIC",        # 나스닥
+    "^GSPC": "SP:SPX",             # S&P 500
+    "^DJI": "DJ:DJI",              # 다우존스
+    "^RUT": "RUSSELL:RUT",         # 러셀 2000
+    "KRW=X": "FX_IDC:USDKRW",      # 원/달러 환율
+    "DX-Y.NYB": "TVC:DXY",         # 달러인덱스
+    "CL=F": "NYMEX:CL1!",          # WTI 원유
+    "BZ=F": "NYMEX:BRN1!",         # 브렌트유
+    "GC=F": "COMEX:GC1!",          # 금
+    "SI=F": "COMEX:SI1!",          # 은
+    "HG=F": "COMEX:HG1!",          # 구리
+    "NG=F": "NYMEX:NG1!",          # 천연가스
+    "ZW=F": "CBOT:ZW1!",           # 밀
+    "^VIX": "CBOE:VIX",            # 변동성 지수
+    "BTC-USD": "CRYPTO:BTCUSD",    # 비트코인
+    "ETH-USD": "CRYPTO:ETHUSD",    # 이더리움
+    "^TNX": "TVC:US10Y",           # 미국채 10년물
+    "^FVX": "TVC:US05Y",           # 미국채 5년물
+    "^TYX": "TVC:US30Y",           # 미국채 30년물
+    "ZT=F": "CBOT:ZT1!",           # 미국채 2년물 선물
+    "ZF=F": "CBOT:ZF1!",           # 미국채 5년물 선물
+    "ZN=F": "CBOT:ZN1!",           # 미국채 10년물 선물
+    "ZB=F": "CBOT:ZB1!",           # 미국채 30년물 선물
+    "SMSN.IL": "LSE:SMSN"          # 삼성전자 GDR
+}
+
 def get_yf_fast_info(code):
-    """yfinance 단건 조회(fast_info) 중복 호출 방지용 캐싱 래퍼"""
+    """TV 단건 조회 + yf_fast_info Fallback (캐싱 포함)"""
     cache_key = f"yf_fi_{code}"
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] TTL 상향
     if cached: return cached
+
+    tv_exact_symbol = YF_TO_TV_EXACT.get(code)
+    is_special_ticker = any(c in code for c in ['^', '=', '-', '.'])
+    
+    # 1. TradingView Screener 우선 조회 (일반 미국 주식 또는 TV 매핑이 존재하는 지수)
+    if not is_special_ticker or tv_exact_symbol:
+        try:
+            from tradingview_screener import Query, Column
+            if tv_exact_symbol:
+                _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week').get_tickers([tv_exact_symbol])
+            else:
+                _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week').where(Column('name') == code).limit(1).get_scanner_data()
+                
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                close_p = row.get('close')
+                change_abs = row.get('change_abs')
+                
+                prev_close = None
+                if pd.notna(close_p) and pd.notna(change_abs):
+                    prev_close = close_p - change_abs
+                    
+                data = {
+                    'last_price': close_p,
+                    'regular_market_previous_close': prev_close,
+                    'last_volume': row.get('volume', 0),
+                    'year_high': row.get('High.52Week')
+                }
+                _set_micro_cache(cache_key, data)
+                return data
+        except Exception:
+            pass
+
+    # 2. yfinance Fallback
     try:
         time.sleep(0.05) # 야후 API 동시 호출 차단 완화용 미세 지연
         fi = yf.Ticker(code).fast_info
@@ -420,18 +482,50 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
     if not codes: return
     
     if is_overseas:
-        def fetch_yf_worker(code):
-            try:
-                # get_yf_fast_info 내부에 마이크로 캐시 저장 로직 포함
-                get_yf_fast_info(code)
-            except Exception: pass
-            if progress_updater: progress_updater()
+        # 1. TradingView 일괄 조회 (가장 빠름, 단 1회의 HTTP 요청으로 모두 해결)
+        tv_success_codes = set()
+        try:
+            from tradingview_screener import Query
+            _, df = Query().set_markets('america').select('name', 'close', 'change_abs', 'volume', 'High.52Week').get_tickers(codes)
+            
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    ticker = row.get('ticker')
+                    if not ticker: continue
+                    
+                    close_p = row.get('close')
+                    change_abs = row.get('change_abs')
+                    if pd.isna(close_p): continue
+                    
+                    prev_close = None
+                    if pd.notna(change_abs):
+                        prev_close = close_p - change_abs
+                        
+                    data = {
+                        'last_price': close_p,
+                        'regular_market_previous_close': prev_close,
+                        'last_volume': row.get('volume', 0),
+                        'year_high': row.get('High.52Week')
+                    }
+                    _set_micro_cache(f"yf_fi_{ticker}", data)
+                    tv_success_codes.add(ticker)
+                    if progress_updater: progress_updater()
+        except Exception as e:
+            logger.debug(f"TV Screener prefetch error: {e}")
+            pass
+            
+        # 2. TV 조회에 실패한 종목들만 yfinance 병렬 워커로 Fallback
+        remaining_codes = [c for c in codes if c not in tv_success_codes]
+        if remaining_codes:
+            def fetch_yf_worker(code):
+                try: get_yf_fast_info(code)
+                except Exception: pass
+                if progress_updater: progress_updater()
 
-        # 야후 API Rate Limit 방지를 위해 스레드 수를 제한하여 병렬 수집
-        max_w = 4 if config.session.is_simulation else 5
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-            futures = [executor.submit(fetch_yf_worker, c) for c in codes]
-            concurrent.futures.wait(futures)
+            max_w = 4 if config.session.is_simulation else 5
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                futures = [executor.submit(fetch_yf_worker, c) for c in remaining_codes]
+                concurrent.futures.wait(futures)
     else:
         def fetch_worker(code):
             try: get_current_price_data(code, False)
@@ -1070,15 +1164,26 @@ def get_stock_name_by_code(code, is_overseas):
             else: final_name = code
         except Exception: final_name = code
     else:
+        # 1. TradingView Screener 우선 조회 (속도 개선)
         try:
-            with open(os.devnull, 'w') as fnull:
-                old_stderr = sys.stderr; sys.stderr = fnull
-                try:
-                    ticker = yf.Ticker(code); info = ticker.info
-                    if info: final_name = info.get('longName') or info.get('shortName')
-                except: pass
-                finally: sys.stderr = old_stderr
+            from tradingview_screener import Query, Column
+            count, df = Query().set_markets('america').select('description').where(Column('name') == code).limit(1).get_scanner_data()
+            if count > 0 and not df.empty:
+                final_name = df.iloc[0]['description']
         except Exception: pass
+        
+        if not final_name:
+            # 2. yfinance Fallback
+            try:
+                with open(os.devnull, 'w') as fnull:
+                    old_stderr = sys.stderr; sys.stderr = fnull
+                    try:
+                        ticker = yf.Ticker(code); info = ticker.info
+                        if info: final_name = info.get('longName') or info.get('shortName')
+                    except: pass
+                    finally: sys.stderr = old_stderr
+            except Exception: pass
+            
     if not final_name and code: return code
     return final_name
 

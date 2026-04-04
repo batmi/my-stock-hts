@@ -1309,10 +1309,14 @@ def _run_tradingview_screener():
         ("2", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
         ("3", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
         ("4", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
-        ("5", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
-        ("6", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
+        ("5", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40)", "Value Rebound"),
+        ("6", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)", "Breakout"),
+        ("7", "고배당 안정 가치주 (배당률 > 5%, PER < 15)", "High Dividend"),
+        ("8", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)", "MACD Cross"),
+        ("9", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
+        ("10", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
     ]
-    preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="1")
+    preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="5")
     if preset_choice.lower() in ['b', 'q']: return False
     
     preset_map = dict((k, v) for k, v, _ in preset_items)
@@ -1331,8 +1335,8 @@ def _run_tradingview_screener():
         ) as progress:
             progress.add_task(f"[cyan]TradingView 스크리너로 종목을 검색 중입니다... ({market_display})[/cyan]", total=None)
             
-            # [수정] 조회할 컬럼 추가 (52주 고점 제거)
-            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume']
+            # [수정] 올바른 트레이딩뷰 필드명 적용
+            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent']
             query = Query().set_markets(market).select(*select_cols)
 
             if preset_choice == "1":
@@ -1344,22 +1348,38 @@ def _run_tradingview_screener():
             elif preset_choice == "4":
                 query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
             elif preset_choice == "5":
+                query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+            elif preset_choice == "6":
+                # API 제약으로 인해 수학적 연산은 제외하고 기본 조건만 요청 (이후 Pandas에서 필터링)
+                query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+            elif preset_choice == "7":
+                query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
+            elif preset_choice == "8":
+                query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
+            elif preset_choice == "9":
                 if market == "america":
                     query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-            elif preset_choice == "6":
+            elif preset_choice == "10":
                 if market == "america":
                     query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                 
-            if preset_choice in ["5", "6"]:
+            if preset_choice in ["9", "10"]:
                 query = query.limit(15)
+            elif preset_choice == "6":
+                query = query.limit(200) # Pandas 필터링을 위해 데이터를 넉넉히 가져옴
             else:
                 query = query.limit(20)
             
             count, df = query.get_scanner_data()
+            
+            # [추가] 6번(Breakout) 프리셋의 수학적 연산(52주 고점의 95% 이상) 필터링
+            if preset_choice == "6" and df is not None and not df.empty:
+                df = df[df['close'] >= df['price_52_week_high'] * 0.95]
+                df = df.head(20) # 필터링 후 최대 20개만 유지
             
             if df is None or df.empty:
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
@@ -1375,6 +1395,9 @@ def _run_tradingview_screener():
             table.add_column("MACD (Sig)", justify="right")
             table.add_column("RSI", justify="right")
             table.add_column("ADX", justify="right")
+            table.add_column("PER", justify="right")
+            table.add_column("ROE(%)", justify="right")
+            table.add_column("배당(%)", justify="right", style="dim")
             table.add_column("거래량", justify="right")
             table.add_column("평균거래량", justify="right")
             
@@ -1415,6 +1438,9 @@ def _run_tradingview_screener():
                 macd = row.get('MACD.macd', None)
                 macd_signal = row.get('MACD.signal', None)
                 adx = row.get('ADX', None)
+                per = row.get('price_earnings_ttm', None)
+                roe = row.get('return_on_equity', None)
+                div = row.get('dividend_yield_recent', None)
                 average_volume = row.get('average_volume', 0)
                 average_volume = average_volume if pd.notna(average_volume) else 0
                 
@@ -1453,6 +1479,14 @@ def _run_tradingview_screener():
                     elif adx >= 30: adx_str = f"[red]{adx_str}[/]"
                     elif adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
 
+                # PER, ROE
+                per_str = f"{per:.1f}" if pd.notna(per) else "-"
+                roe_str = f"{roe:.1f}" if pd.notna(roe) else "-"
+
+                # 배당
+                div_str = f"{div:.2f}" if pd.notna(div) else "-"
+                if pd.notna(div) and div >= 5.0: div_str = f"[bold green]{div_str}[/bold green]"
+
                 # 거래량
                 vol_k = volume / 1000
                 vol_str = f"{vol_k:,.0f}K"
@@ -1468,7 +1502,7 @@ def _run_tradingview_screener():
                 # [수정] 단일 행으로 모든 데이터 추가
                 table.add_row(
                     ticker, name, close_str, change_str, sma20_str,
-                    macd_str, rsi_str, adx_str, vol_str, avg_vol_str
+                    macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                 )
             
         config.console.print()

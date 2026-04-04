@@ -264,10 +264,11 @@ class TelegramCommander:
             
             for name, ticker in target_indices.items():
                 try:
-                    t = yf.Ticker(ticker)
-                    fi = t.fast_info
-                    last_price = fi.last_price
-                    prev_close = fi.regular_market_previous_close
+                    # [수정] yf.Ticker 직접 호출 대신 TV 스크리너가 적용된 통합 API 사용
+                    fi = api.get_yf_fast_info(ticker)
+                    if fi:
+                        last_price = fi.get('last_price')
+                        prev_close = fi.get('regular_market_previous_close')
 
                     # [추가] 24시간 거래 자산(원유, 비트코인)의 전일 종가 보정
                     if name in ["WTI 원유", "비트코인"]:
@@ -563,8 +564,9 @@ class TelegramCommander:
 
             # Preset check
             preset_map = {
-                'p': "Pullback", 'm': "Momentum", 'r': "Rebound",
-                'v': "Volume", 'g': "TopGainers", 'l': "TopLosers"
+                'p': "Pullback", 'm': "Momentum", 'r': "Rebound", 'v': "Volume",
+                'c': "ValueRebound", 'b': "Breakout", 'd': "HighDividend", 'x': "MacdCross",
+                'g': "TopGainers", 'l': "TopLosers"
             }
             
             found_preset = False
@@ -575,7 +577,8 @@ class TelegramCommander:
                     break
 
         try:
-            query = Query().set_markets(market).select('name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20')
+            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal']
+            query = Query().set_markets(market).select(*select_cols)
             
             if preset == "Pullback":
                 query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
@@ -603,13 +606,33 @@ class TelegramCommander:
                 else:
                     query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                     desc = "당일 급하락 상위 15종목 (거래량 10만 이상)"
+            elif preset == "ValueRebound":
+                query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                desc = "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40, 현재가 > 20일선)"
+            elif preset == "Breakout":
+                # API 제약으로 인해 수학적 연산은 제외하고 기본 조건만 요청 (이후 Pandas에서 필터링)
+                query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+                desc = "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)"
+            elif preset == "HighDividend":
+                query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
+                desc = "고배당 안정 가치주 (배당수익률 > 5%, PER < 15)"
+            elif preset == "MacdCross":
+                query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
+                desc = "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)"
             
             if preset in ["TopGainers", "TopLosers"]:
                 query = query.limit(15)
+            elif preset == "Breakout":
+                query = query.limit(200) # Pandas 필터링을 위해 데이터를 넉넉히 가져옴
             else:
                 query = query.limit(20)
                 
             count, df = query.get_scanner_data()
+            
+            # [추가] Breakout 프리셋의 수학적 연산(52주 고점의 95% 이상) 필터링
+            if preset == "Breakout" and df is not None and not df.empty:
+                df = df[df['close'] >= df['price_52_week_high'] * 0.95]
+                df = df.head(20) # 필터링 후 상위 20개 유지
             
             if df is None or df.empty:
                 self._send_reply(f"📭 조건에 맞는 종목이 없습니다.\n조건: {desc}")
@@ -642,7 +665,21 @@ class TelegramCommander:
                 close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
                 rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
                 
-                msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}\n\n"
+                # [추가] 저평가 반등 스캐너일 경우 텔레그램 메시지에 PER, ROE 표시
+                extra_str = ""
+                if preset in ["ValueRebound", "HighDividend"]:
+                    per = row.get('price_earnings_ttm')
+                    roe = row.get('return_on_equity')
+                    div = row.get('dividend_yield_recent')
+                    
+                    per_str = f"PER:{per:.1f}" if pd.notna(per) else ""
+                    roe_str = f"ROE:{roe:.1f}%" if pd.notna(roe) else ""
+                    div_str = f"배당:{div:.2f}%" if pd.notna(div) else ""
+                    
+                    tags = [t for t in [per_str, roe_str, div_str] if t]
+                    if tags: extra_str = f" | {' '.join(tags)}"
+                
+                msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
                 
             msg += "상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(msg.strip())
@@ -706,7 +743,7 @@ class TelegramCommander:
             "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
             "• /briefing : 온디맨드 AI 시황 브리핑\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
-            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/g/l)\n"
+            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/c/b/d/x/g/l)\n"
             "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
             "• /ask <질문> : AI 주식/경제 자유 질문\n\n"
             "📝 [관리 및 기타]\n"

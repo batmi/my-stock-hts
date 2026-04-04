@@ -55,16 +55,22 @@ def get_exchange_rate():
     """
     rate = config.DEFAULT_EXCHANGE_RATE
     try:
-        if config.SCREEN_DEBUG_LEVEL == "TRACE":
-            config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: KRW=X[/dim cyan]")
-        elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
-            config.console.print(f"[dim cyan][DEBUG] REQ (yfinance) | Ticker: KRW=X | Method: fast_info.last_price[/dim cyan]")
-
-        ticker = yf.Ticker("KRW=X")
-        current_rate = ticker.fast_info.last_price
+        # 1. TradingView 기반 환율 조회 (가장 빠르고 Lock 없음)
+        from tradingview_screener import get_all_indicators
+        tv_data = get_all_indicators("FX_IDC:USDKRW")
+        if tv_data and 'close' in tv_data:
+            rate = float(tv_data['close'])
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim magenta][TRACE] RES (TradingView) | Rate: {rate:.2f}[/dim magenta]")
+            return rate
+    except Exception as e:
+        pass
         
-        if current_rate and current_rate > 0:
-            rate = float(current_rate)
+    try:
+        # 2. yfinance Fallback
+        ticker = yf.Ticker("KRW=X")
+        if getattr(ticker.fast_info, 'last_price', None):
+            rate = float(ticker.fast_info.last_price)
             if config.SCREEN_DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
             elif config.SCREEN_DEBUG_LEVEL == "DEBUG":

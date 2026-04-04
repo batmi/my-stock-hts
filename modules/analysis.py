@@ -999,6 +999,25 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
     table_logic.add_row("개별 룰", rule_res, rule_desc)
 
+    # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회
+    tv_rating_str = "조회 불가"
+    try:
+        from tradingview_screener import Query, Column
+        market_str = 'america' if is_overseas else 'korea'
+        _, tv_df = Query().set_markets(market_str).select('Recommend.All').where(Column('name') == code).limit(1).get_scanner_data()
+        if tv_df is not None and not tv_df.empty:
+            rating_val = tv_df.iloc[0].get('Recommend.All')
+            if pd.notna(rating_val):
+                if rating_val >= 0.5: tv_rating_str = f"[bold red]Strong Buy (강력 매수)[/bold red] ({rating_val:+.2f})"
+                elif rating_val >= 0.1: tv_rating_str = f"[red]Buy (매수)[/red] ({rating_val:+.2f})"
+                elif rating_val > -0.1: tv_rating_str = f"[white]Neutral (중립)[/white] ({rating_val:+.2f})"
+                elif rating_val > -0.5: tv_rating_str = f"[blue]Sell (매도)[/blue] ({rating_val:+.2f})"
+                else: tv_rating_str = f"[bold blue]Strong Sell (강력 매도)[/bold blue] ({rating_val:+.2f})"
+    except: pass
+
+    table_logic.add_section()
+    table_logic.add_row("TradingView 의견", tv_rating_str, "TradingView Technical Rating (-1~1)")
+
     config.console.print(table_logic)
     
     config.console.print()
