@@ -565,7 +565,8 @@ def _show_market_indices_core(target_indices=None):
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
     # [추가] 지수 조회 시에도 100% 실시간 최신 가격을 가져오도록 마이크로 캐시 강제 초기화
-    api.clear_micro_cache()
+    if hasattr(api, 'clear_micro_cache'):
+        api.clear_micro_cache()
 
     indices_map = INDICES_MAP.copy()
     if target_indices:
