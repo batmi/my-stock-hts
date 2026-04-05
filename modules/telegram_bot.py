@@ -690,6 +690,7 @@ class TelegramCommander:
 
     # --- 명령어 핸들러 메서드 ---
     def _cmd_status(self, args):
+        self._send_reply("⏳ [시스템 상태 조회] 현재 상태 및 자산 정보를 수집 중입니다. 잠시만 기다려주세요...")
         return self.trader.get_status_message()
 
     def _cmd_start(self, args):
@@ -1332,6 +1333,7 @@ class TelegramCommander:
         return self.trader.get_recent_logs()
 
     def _cmd_balance(self, args):
+        self._send_reply("⏳ [계좌 잔고 조회] 자산 및 잔고 정보를 수집 중입니다. 잠시만 기다려주세요...")
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
         
