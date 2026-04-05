@@ -292,7 +292,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     total_rate = (calculated_total_profit / calculated_total_pchs) * 100
                 
                 profit_color = "[red]" if calculated_total_profit > 0 else ("[blue]" if calculated_total_profit < 0 else "[white]")
-                config.console.print(f"[bold]  국내 총 평가금액:[/bold] {calculated_total_eval:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                config.console.print(f"[bold]  국내 총 매입금액:[/bold] {calculated_total_pchs:,}원  |  [bold]총 평가금액:[/bold] {calculated_total_eval:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
             config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
 
@@ -408,7 +408,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 total_ovrs_rate = (tot_ovrs_profit / tot_ovrs_pchs) * 100
                 
             profit_color = "[red]" if tot_ovrs_profit > 0 else ("[blue]" if tot_ovrs_profit < 0 else "[white]")
-            config.console.print(f"[bold]  해외 총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+            config.console.print(f"[bold]  해외 총 매입금액:[/bold] ${tot_ovrs_pchs:,.2f}  |  [bold]총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+
         else:
             config.console.print("\n[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
 
