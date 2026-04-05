@@ -75,7 +75,7 @@ def get_exchange_rate():
             if config.SCREEN_DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
             elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {current_rate}[/dim magenta]")
+                config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {ticker.fast_info.last_price}[/dim magenta]")
     except Exception as e:
         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
             config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")

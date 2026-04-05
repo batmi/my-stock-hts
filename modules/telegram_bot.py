@@ -146,7 +146,7 @@ class TelegramCommander:
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
             "📈 시장 지수": "/market",
-            "🤖 시황 브리핑": "/briefing",
+            "❓ 도움말": "/help",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
             "🛑 거래 정지": "/stop",
@@ -1486,7 +1486,7 @@ class TelegramCommander:
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
-                [{"text": "📊 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "🤖 시황 브리핑"}],
+                [{"text": "📊 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
                 [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
                 [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, toggle_btn]
             ],
