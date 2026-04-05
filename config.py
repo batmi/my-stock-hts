@@ -1,5 +1,6 @@
 # config.py
 import os
+import re
 from rich.console import Console
 import logging
 from datetime import datetime, timedelta
@@ -437,6 +438,32 @@ def _log_namer(name):
     except:
         return name
 
+# [추가] 커스텀 로그 핸들러 클래스 (커스텀 Namer 사용 시 자동 삭제 버그 수정)
+class CustomTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """커스텀 namer(_log_namer)를 사용할 때 내장 getFilesToDelete가 파일을 인식하지 못해 삭제되지 않는 문제를 해결한 클래스"""
+    def getFilesToDelete(self):
+        dirName, baseName = os.path.split(self.baseFilename)
+        fileNames = os.listdir(dirName)
+        result = []
+        
+        root, ext = os.path.splitext(baseName)
+        prefix = root + "_" # 예: mystock_
+        date_pattern = re.compile(r'^\d{8}$') # %Y%m%d
+        
+        for fileName in fileNames:
+            if fileName.startswith(prefix) and fileName.endswith(ext):
+                date_part = fileName[len(prefix):-len(ext)]
+                if date_pattern.match(date_part):
+                    result.append(os.path.join(dirName, fileName))
+        
+        if len(result) < self.backupCount:
+            result = []
+        else:
+            result.sort()
+            # 지정된 보존 개수를 초과하는 가장 오래된 파일들을 반환
+            result = result[:len(result) - self.backupCount]
+        return result
+
 # [추가] 로깅 설정 초기화 함수
 def setup_logging():
     # 기존 핸들러 제거
@@ -452,28 +479,37 @@ def setup_logging():
         try: os.makedirs(LOG_DIR)
         except: pass
 
-    # [수정] 오래된 로그 파일 정리 (핸들러가 관리하지 않는 과거 패턴 파일만 정리)
+    # [수정] 오래된 로그 파일 정리 (과거 패턴 및 핸들러 버그로 누적된 파일 강제 정리)
     try:
         if LOG_RETENTION_DAYS > 0:
             cutoff_date = datetime.now().date() - timedelta(days=LOG_RETENTION_DAYS)
             for filename in os.listdir(LOG_DIR):
                 file_path = os.path.join(LOG_DIR, filename)
                 
-                # 기존 system_trade_YYYY-MM-DD.log 정리 (새로운 autotrade.log는 핸들러가 관리)
-                if filename.startswith("system_trade_") and filename.endswith(".log"):
-                    try:
+                try:
+                    # 1. 기존 system_trade_YYYY-MM-DD.log 정리
+                    if filename.startswith("system_trade_") and filename.endswith(".log"):
                         date_part = filename.replace("system_trade_", "").replace(".log", "")
                         file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
                         if file_date < cutoff_date:
                             os.remove(file_path)
-                    except: pass
+                    
+                    # 2. 누적된 mystock_YYYYMMDD.log 및 autotrade_YYYYMMDD.log 강제 정리
+                    elif (filename.startswith("mystock_") or filename.startswith("autotrade_")) and filename.endswith(".log"):
+                        match = re.search(r'_(\d{8})\.log$', filename)
+                        if match:
+                            date_part = match.group(1)
+                            file_date = datetime.strptime(date_part, "%Y%m%d").date()
+                            if file_date < cutoff_date:
+                                os.remove(file_path)
+                except: pass
     except: pass
 
     log_filename = "mystock.log" # [수정] 고정 파일명 사용
     log_filepath = os.path.join(LOG_DIR, log_filename)
 
-    # [수정] TimedRotatingFileHandler 적용 (매일 자정 로테이션, mystock_YYYYMMDD.log 백업)
-    file_handler = TimedRotatingFileHandler(
+    # [수정] CustomTimedRotatingFileHandler 적용 (백업 파일 삭제 버그 수정)
+    file_handler = CustomTimedRotatingFileHandler(
         log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8'
     )
     file_handler.suffix = "%Y%m%d"
@@ -515,8 +551,8 @@ def get_autotrade_logger():
     log_filename = "autotrade.log"
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
-    # 매일 자정 로테이션, autotrade_YYYYMMDD.log 백업
-    handler = TimedRotatingFileHandler(
+    # [수정] CustomTimedRotatingFileHandler 적용 (백업 파일 삭제 버그 수정)
+    handler = CustomTimedRotatingFileHandler(
         log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8', delay=False
     )
     handler.suffix = "%Y%m%d"
