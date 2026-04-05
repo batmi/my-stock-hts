@@ -27,6 +27,7 @@ def test_get_stock_name_by_code_fail(mock_get):
     name = api.get_stock_name_by_code("123456", False)
     assert name == "123456"
 
+@patch.dict('sys.modules', {'tradingview_screener': None})
 @patch('api.yf.Ticker')
 def test_get_stock_name_by_code_overseas_fail(mock_ticker):
     """해외 종목명 조회 실패 테스트"""

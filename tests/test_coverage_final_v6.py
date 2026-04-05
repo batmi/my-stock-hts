@@ -54,6 +54,7 @@ def test_get_stock_name_domestic_parsing(mock_get):
     mock_resp.text = '<meta property="og:title" content="SK하이닉스(000660) : 네이버 금융">'
     assert api.get_stock_name_by_code("000660", False) == "SK하이닉스"
 
+@patch.dict('sys.modules', {'tradingview_screener': None})
 @patch('api.yf.Ticker')
 def test_get_stock_name_overseas_yf(mock_ticker):
     """해외 종목명 yfinance 조회 테스트"""

@@ -1,0 +1,155 @@
+import pytest
+from unittest.mock import patch, MagicMock
+from datetime import datetime, timedelta
+import pandas as pd
+
+import config
+import context
+import session
+import utils
+import api
+from modules import account, telegram_bot, theme_analysis, db_manager
+
+@pytest.fixture(autouse=True)
+def setup_env():
+    yield
+    try:
+        db_manager.db.close_connection()
+    except: pass
+
+# ==========================================================
+# 1. session.py 커버리지 (환경 변수 적용 및 토큰 로직)
+# ==========================================================
+def test_session_initialize_with_auto_account(monkeypatch):
+    monkeypatch.setenv("AUTO_ACC_NUM", "87654321-01")
+    monkeypatch.setenv("AUTO_APP_KEY", "auto_key")
+    monkeypatch.setenv("AUTO_APP_SECRET", "auto_secret")
+    
+    s = session.SessionManager()
+    with patch('rich.prompt.Prompt.ask', return_value='2'), \
+         patch('config.console.print'):
+        s.initialize()
+        
+    assert s.auto_cano == "87654321"
+    assert s.auto_acnt_prdt_cd == "01"
+
+def test_session_token_validity():
+    s = session.SessionManager()
+    # 1. 만료일시가 과거
+    info1 = {'access_token': 'tok1', 'token_expired': '2020-01-01 12:00:00'}
+    assert s._check_token_validity(info1) is False
+    
+    # 2. 만료일시가 미래
+    future_dt = (datetime.now() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    info2 = {'access_token': 'tok2', 'token_expired': future_dt}
+    assert s._check_token_validity(info2) is True
+
+def test_session_is_token_recently_issued():
+    s = session.SessionManager()
+    # 발행일시가 10초 전
+    recent_dt = (datetime.now() - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    with patch.object(s, '_load_token_cache', return_value={'TEST': {'issued_at': recent_dt}}):
+        assert s.is_token_recently_issued('TEST', 60) is True
+        assert s.is_token_recently_issued('TEST', 5) is False
+
+# ==========================================================
+# 2. utils.py 커버리지 (예외 및 분기 처리)
+# ==========================================================
+@patch('api.get_current_token', return_value="test_token")
+def test_get_common_headers(mock_token):
+    # 1. 실전 & Auto 계좌 사용
+    config.session.is_simulation = False
+    context.trade_context.use_auto_account = True
+    config.session.auto_app_key = "auto_k"
+    config.session.auto_app_secret = "auto_s"
+    
+    h1 = utils.get_common_headers("TR123")
+    assert h1['appKey'] == "auto_k"
+    
+    # 2. 실전 & Main 계좌 사용
+    context.trade_context.use_auto_account = False
+    config.session.real_app_key = "real_k"
+    config.session.real_app_secret = "real_s"
+    
+    h2 = utils.get_common_headers("TR123")
+    assert h2['appKey'] == "real_k"
+
+@patch.dict('sys.modules', {'tradingview_screener': None})
+@patch('utils.yf.Ticker')
+def test_get_exchange_rate_fallback(mock_ticker):
+    """TradingView 없을 때 yfinance fallback 및 에러 무시 테스트"""
+    # yfinance 정상
+    mock_ticker.return_value.fast_info.last_price = 1350.5
+    rate = utils.get_exchange_rate()
+    assert rate == 1350.5
+    
+    # yfinance 예외
+    mock_ticker.return_value.fast_info.last_price = None # AttributeError 유발
+    mock_ticker.side_effect = Exception("YF Error")
+    
+    with patch('config.SCREEN_DEBUG_LEVEL', 'DEBUG'), patch('config.console.print'):
+        rate2 = utils.get_exchange_rate()
+        assert rate2 == config.DEFAULT_EXCHANGE_RATE
+
+@patch('utils.sqlite3.connect', side_effect=Exception("DB Error"))
+def test_utils_memo_db_errors(mock_connect):
+    """메모 DB 함수 예외 처리 커버리지"""
+    assert utils.get_stock_memos("005930") == []
+    assert utils.get_all_stock_memos() == []
+    assert utils.add_stock_memo("005930", "삼성", "메모") is False
+    assert utils.update_stock_memo(1, "수정") is False
+
+# ==========================================================
+# 3. api.py 커버리지 (통신/파서 예외 분기)
+# ==========================================================
+def test_tls_adapter_init_poolmanager():
+    """urllib3 버전에 따른 TLSAdapter 분기 커버리지"""
+    from api import TLSAdapter
+    adapter = TLSAdapter()
+    
+    with patch('api.urllib3.__version__', '1.26.0'):
+        adapter.init_poolmanager(10, 10)
+        assert hasattr(adapter, 'poolmanager')
+        
+    with patch('api.urllib3.__version__', '2.0.0'):
+        adapter.init_poolmanager(10, 10)
+        assert hasattr(adapter, 'poolmanager')
+
+def test_get_telegram_footer_auto():
+    config.session.is_simulation = False
+    context.trade_context.use_auto_account = True
+    config.session.auto_cano = "9999"
+    config.TELEGRAM_INSTANCE_NAME = "TEST"
+    
+    footer = api._get_telegram_footer()
+    assert "자동 9999" in footer
+
+# ==========================================================
+# 4. telegram_bot.py 커버리지 (에러 모니터링 및 상태 조회 실패)
+# ==========================================================
+def test_check_heartbeat_error():
+    cmd = telegram_bot.TelegramCommander()
+    cmd.trader = MagicMock()
+    cmd.trader.consecutive_errors = 6
+    config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
+    cmd.last_heartbeat_time = 0 # 즉시 검사 유도
+    
+    with patch.object(cmd, '_send_reply') as mock_reply:
+        cmd._check_heartbeat()
+        mock_reply.assert_called_once()
+        assert "연속 에러가 한계치" in mock_reply.call_args[0][0]
+
+@patch('modules.telegram_bot.db_manager.db.get_trades', return_value=[])
+def test_cmd_stats_empty(mock_trades):
+    cmd = telegram_bot.TelegramCommander()
+    res = cmd._cmd_stats([])
+    assert "매매 기록이 없습니다" in res
+    
+    # 종목 검색 실패 분기
+    # 매매 기록이 비어있으면 검색 전에 종료되므로 가짜 데이터를 하나 넣어줌
+    mock_trades.return_value = [{'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 100, 'time': '2023-01-01', 'odno': '1'}]
+    
+    with patch.object(cmd, '_resolve_stock', return_value=(None, None, False)):
+        res2 = cmd._cmd_stats(["없는종목"])
+        assert "찾을 수 없습니다" in res2
