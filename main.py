@@ -135,7 +135,14 @@ def preflight_check():
 
     # 2. API 토큰 발급 시도
     token_ok = False
-    with config.console.status("[cyan]  - API 토큰 발급 테스트 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]  - API 토큰 발급 테스트 중...[/cyan]", total=None)
         token = api.get_access_token(force_refresh=True) if config.session.is_simulation else api.get_real_access_token(force_refresh=True)
         if token:
             token_ok = True
@@ -157,7 +164,15 @@ def preflight_check():
                 missing_codes.append((key, item))
                 
     if missing_codes:
-        with config.console.status(f"[cyan]  - {len(missing_codes)}개 종목의 시장(exchange) 정보 업데이트 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(f"[cyan]  - {len(missing_codes)}개 종목의 시장(exchange) 정보 업데이트 중...[/cyan]", total=len(missing_codes))
             updated = False
             for key, item in missing_codes:
                 code = item['code']
@@ -170,6 +185,7 @@ def preflight_check():
                         time.sleep(0.1) # Rate Limit 방어
                 except Exception:
                     pass
+                    progress.advance(task)
             if updated:
                 config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
@@ -713,7 +729,14 @@ def main():
         sys.exit(1)
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
-    with config.console.status("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]시스템 리소스 로딩 및 백그라운드 서비스 시작 중...[/cyan]", total=None)
         # 3. DB 큐 프록시 설치
         if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
             db_queue.install_proxy(db_manager)
@@ -947,10 +970,16 @@ def main():
                 except: pass
     finally:
         config.console.print()
-        # [수정] 종료 프로세스를 console.status로 변경하고 완료 메시지 출력
-        with config.console.status("[cyan]시스템 종료 프로세스 진행 중...[/cyan]") as status:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[cyan]시스템 종료 프로세스 진행 중...[/cyan]", total=None)
             # 1. 자동매매 종료
-            status.update("[cyan][1/4] 자동매매 스레드 안전 종료 중...[/cyan]")
+            progress.update(task, description="[cyan][1/4] 자동매매 스레드 안전 종료 중...[/cyan]")
             try:
                 if trader.is_running:
                     trader.stop(use_status=False)
@@ -959,20 +988,20 @@ def main():
             config.console.print("[1/4] 자동매매 스레드 안전 종료 [bold green][완료][/]")
             
             # 2. 백그라운드 서비스 종료
-            status.update("[cyan][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/cyan]")
+            progress.update(task, description="[cyan][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/cyan]")
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
             time.sleep(0.5)
             config.console.print("[2/4] 백그라운드 서비스(텔레그램/감시) 종료 [bold green][완료][/]")
             
             # 3. DB 큐 종료
-            status.update("[cyan][3/4] DB 작업 큐 처리 및 종료 중...[/cyan]")
+            progress.update(task, description="[cyan][3/4] DB 작업 큐 처리 및 종료 중...[/cyan]")
             db_queue.shutdown()
             time.sleep(0.5)
             config.console.print("[3/4] DB 작업 큐 처리 및 종료 [bold green][완료][/]")
             
             # 4. DB 최적화 (VACUUM)
-            status.update("[cyan][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/cyan]")
+            progress.update(task, description="[cyan][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/cyan]")
             try:
                 # [수정] DB Proxy가 종료되었으므로 원본 DB 객체에 직접 접근하여 실행 (타임아웃 방지)
                 real_db = db_manager.db

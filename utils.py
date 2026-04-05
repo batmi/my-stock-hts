@@ -10,6 +10,7 @@ from modules import market # [추가] 통합 지수 리스트 참조용
 import math
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import os
 import sqlite3
 from datetime import datetime
@@ -355,7 +356,14 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
 
 def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하시겠습니까?"):
     """API를 통해 종목 유효성을 검증하고 사용자에게 진행 여부를 확인합니다."""
-    with config.console.status("[cyan]종목 유효성 확인 중 (API)...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]종목 유효성 확인 중 (API)...[/cyan]", total=None)
         res = api.get_current_price_data(code, is_overseas)
         
         is_valid = False

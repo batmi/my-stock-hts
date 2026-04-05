@@ -191,6 +191,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:
@@ -303,6 +304,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:
@@ -635,6 +637,7 @@ def _display_asset_status(cano, acnt_prdt_cd):
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         console=config.console,
         transient=True
     ) as progress:

@@ -1096,7 +1096,14 @@ def run_backtest():
         context.USER_ACTION_BREADCRUMB.append(f"[{mode_choice}] {mode_map_dict.get(mode_choice, '')}")
 
         # 3. 데이터 준비
-        with config.console.status(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]", total=None)
             # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
             original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
             needed_days = days + 120 
@@ -1560,9 +1567,17 @@ def run_backtest():
         best_win_score = 0
         best_win_rate = -1.0
         
-        with config.console.status("[cyan]점수별 시뮬레이션 진행 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
             # [수정] 0.5점 단위로 시뮬레이션 (4.0 ~ 9.5)
             scores = [x * 0.5 for x in range(8, 20)]
+            task = progress.add_task("[cyan]점수별 시뮬레이션 진행 중...[/cyan]", total=len(scores))
             for score in scores:
                 res = simulate_strategy(sim_df, prev_row_init, initial_capital, score, buy_rsi, is_overseas,
                                         stop_loss_rate=stop_loss, take_profit_rate=take_profit,
@@ -1602,6 +1617,7 @@ def run_backtest():
                     f"{total_trades}건",
                     f"{pf:.2f}"
                 )
+                progress.advance(task)
         
         config.console.print(table)
         config.console.print(f"\n[green]추천 (수익률):[/] {best_return_score}점 (수익률 {best_return:+.2f}%)")
@@ -1622,7 +1638,15 @@ def run_backtest():
         
         rsi_candidates = [45, 50, 55, 60, 65, 70, 75, 80]
         
-        with config.console.status("[cyan]RSI 기준별 시뮬레이션 진행 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[cyan]RSI 기준별 시뮬레이션 진행 중...[/cyan]", total=len(rsi_candidates))
             for rsi_limit in rsi_candidates:
                 res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, rsi_limit, is_overseas,
                                         stop_loss_rate=stop_loss, take_profit_rate=take_profit,
@@ -1649,6 +1673,7 @@ def run_backtest():
                     f"{total_trades}건",
                     f"{pf:.2f}"
                 )
+                progress.advance(task)
         
         config.console.print(table)
         config.console.print(f"\n[green]추천 (수익률):[/] RSI < {best_return_rsi} (수익률 {best_return:+.2f}%)")
@@ -1675,7 +1700,14 @@ def run_backtest():
         row_count = 0
         total_combinations = len(tp_candidates) * len(sl_candidates)
 
-        with config.console.status("[cyan]다양한 익절/손절 조합 시뮬레이션 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]다양한 익절/손절 조합 시뮬레이션 중...[/cyan]", total=None)
             for tp in tp_candidates:
                 for sl in sl_candidates:
                     res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
@@ -1757,7 +1789,14 @@ def run_backtest():
         best_opt_return = -999.0
         best_opt_scenario = None
 
-        with config.console.status("[cyan]가중치 최적화 시뮬레이션 진행 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]가중치 최적화 시뮬레이션 진행 중...[/cyan]", total=None)
             for sc in scenarios:
                 weights_opt = {k: v for k, v in sc.items() if k != "DESC"}
                 res_opt = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 

@@ -70,6 +70,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             console=config.console,
             transient=True
         ) as progress:
@@ -103,6 +104,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             console=config.console,
             transient=True
         ) as progress:
@@ -308,7 +310,14 @@ def show_open_orders():
     selectable_orders = []
 
     # [수정] Progress -> status 변경
-    with config.console.status("[cyan]전체 계좌 미체결 내역 조회 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]전체 계좌 미체결 내역 조회 중...[/cyan]", total=None)
         table = Table(title="\n미체결 내역 (전체 계좌)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
         table.add_column("No", justify="right")
         table.add_column("계좌번호", justify="center")
@@ -922,7 +931,14 @@ def send_order(order_type):
         try:
             result = None
             # [수정] 단일 API 호출이므로 status 사용
-            with config.console.status("[cyan]주문 전송 중...[/cyan]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task("[cyan]주문 전송 중...[/cyan]", total=None)
                 result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
             
             if result['rt_cd'] == '0':
@@ -1165,7 +1181,14 @@ def modify_order():
         try:
             res_json = None
             # [수정] 단일 API 호출이므로 status 사용
-            with config.console.status(f"[cyan]주문 {action_name} 요청 전송 중...[/cyan]"):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task(f"[cyan]주문 {action_name} 요청 전송 중...[/cyan]", total=None)
                 res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
             
             if res_json['rt_cd'] == '0':

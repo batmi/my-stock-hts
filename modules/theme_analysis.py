@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich import box
 from rich.prompt import Prompt
@@ -1330,6 +1330,8 @@ def _run_tradingview_screener():
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
             console=config.console,
             transient=True
         ) as progress:

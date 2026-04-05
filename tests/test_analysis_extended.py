@@ -36,8 +36,7 @@ def test_diagnose_stock(mock_ask, mock_calc, mock_vol, mock_get_chart, mock_char
     }
     
     # 콘솔 출력 억제 및 실행 확인
-    with patch('config.console.print'), patch('config.console.status') as mock_status:
-        mock_status.return_value.__enter__.return_value = MagicMock()
+    with patch('config.console.print'), patch('modules.analysis.Progress'):
         analysis.diagnose_stock("005930", "Samsung", False)
         
     mock_get_chart.assert_called()
@@ -55,8 +54,7 @@ def test_analyze_market_stocks(mock_vol, mock_get_chart, mock_master, mock_chart
     
     # 사용자 입력(Prompt)을 'n'(설정 변경 안함)으로 Mocking
     with patch('rich.prompt.Prompt.ask', return_value='n'):
-        with patch('config.console.print'), patch('config.console.status') as mock_status:
-            mock_status.return_value.__enter__.return_value = MagicMock()
+        with patch('config.console.print'), patch('modules.analysis.Progress'):
             analysis.analyze_market_stocks("KOSPI")
             
     mock_master.assert_called_with("KOSPI")

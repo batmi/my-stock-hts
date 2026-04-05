@@ -1600,6 +1600,8 @@ class AutoTrader:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=console,
             transient=True,
             disable=not api._is_screen_output_allowed() # [추가] 텔레그램 스레드 등 백그라운드에서는 상태바 숨김
@@ -1847,6 +1849,7 @@ class AutoTrader:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
                 console=console,
                 transient=True
             ) as progress:
@@ -2665,10 +2668,11 @@ class AutoTrader:
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 console=console,
                 transient=True
             ) as progress:
-                task = progress.add_task("[cyan]보유 종목 세부 정보 조회 중...[/cyan]", total=None)
+                task = progress.add_task("[cyan]보유 종목 세부 정보 조회 중...[/cyan]", total=len(valid_holdings))
                 for item in valid_holdings:
                     name = item['prdt_name']
                     code = item['pdno']
@@ -2679,6 +2683,7 @@ class AutoTrader:
                     profit = int(item['evlu_pfls_amt'])
                     rate = float(item['evlu_pfls_rt'])
                     holding_rows.append((name, code, market_type, qty, buy_price, cur_price, profit, rate))
+                    progress.advance(task)
 
             console.print()
             h_table = Table(title="보유 종목 리스트", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -2849,6 +2854,7 @@ class AutoTrader:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
             console=console,
             transient=True
         ) as progress:
@@ -3477,6 +3483,7 @@ class AutoTrader:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
             console=console,
             transient=True
         ) as progress:
@@ -4832,7 +4839,14 @@ def _input_and_save_rule(code, name):
     is_overseas = not (code.isdigit() and len(code) == 6)
     current_price = 0
     # [수정] 단순 조회이므로 status 사용
-    with console.status("[cyan]현재가 조회 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]현재가 조회 중...[/cyan]", total=None)
         current_price = api.get_current_price(code, is_overseas)
 
     if current_price > 0:

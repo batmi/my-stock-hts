@@ -29,8 +29,7 @@ def test_diagnose_group_stocks(mock_cp, mock_vol, mock_get_chart, mock_master, m
     mock_cp.return_value = {'rt_cd': '0', 'output': {'rprs_mrkt_kor_name': 'KOSPI'}}
     
     # 콘솔 출력 억제
-    with patch('config.console.print'), patch('config.console.status') as mock_status:
-        mock_status.return_value.__enter__.return_value = MagicMock()
+    with patch('config.console.print'), patch('modules.analysis.Progress'):
         analysis.diagnose_group_stocks(market_filter="KOSPI")
         
     mock_get_chart.assert_called()
@@ -49,8 +48,7 @@ def test_save_all_market_analysis(mock_ask, mock_cp, mock_get_chart, mock_master
     
     # 엑셀 저장 모킹
     with patch('pandas.DataFrame.to_excel'), patch('pandas.ExcelWriter'):
-        with patch('config.console.print'), patch('config.console.status') as mock_status:
-            mock_status.return_value.__enter__.return_value = MagicMock()
+        with patch('config.console.print'), patch('modules.analysis.Progress'):
             analysis.save_all_market_analysis()
             
     mock_master.assert_called()

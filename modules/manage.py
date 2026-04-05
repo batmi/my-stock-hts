@@ -3,6 +3,7 @@ import logging
 from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import time
 from datetime import datetime
 import pandas as pd
@@ -96,7 +97,14 @@ def show_extended_info(code, is_overseas, basic_output=None):
         investor_map = {} # [추가]
 
         # [수정] 단순 조회이므로 status 사용
-        with config.console.status("[cyan]기간별 시세 데이터 조회 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]기간별 시세 데이터 조회 중...[/cyan]", total=None)
             df = api.get_chart_data(code, is_overseas=False)
             # [추가] 수급 데이터 조회
             try:
@@ -311,7 +319,14 @@ def show_extended_info(code, is_overseas, basic_output=None):
         # [수정] 해외 주식 기간별 시세 출력 (analysis.py와 동일한 형식 및 로직 적용)
         df = None
         # [수정] 단순 조회이므로 status 사용
-        with config.console.status("[cyan]기간별 시세 데이터 조회 중...[/cyan]"):
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]기간별 시세 데이터 조회 중...[/cyan]", total=None)
             df = api.get_chart_data(code, is_overseas=True)
         
         if df is not None and not df.empty:
@@ -422,7 +437,14 @@ def get_current_price(mode='add'):
     if not stock_name or stock_name in ["Npay 증권", "네이버 페이 증권", "증권"]: stock_name = code 
     
     # [수정] 단순 조회이므로 status 사용
-    with config.console.status("[cyan]현재가 시세 조회 중...[/cyan]"):
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("[cyan]현재가 시세 조회 중...[/cyan]", total=None)
         res = api.get_current_price_data(code, is_overseas)
     
     # [로그] 시세 조회 결과 확인
