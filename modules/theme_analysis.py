@@ -1330,12 +1330,10 @@ def _run_tradingview_screener():
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]TradingView 스크리너로 종목을 검색 중입니다... ({market_display})[/cyan]", total=None)
+            task = progress.add_task("[cyan]TradingView 스크리너로 종목을 검색 중입니다...[/cyan]", total=None)
             
             # [수정] 올바른 트레이딩뷰 필드명 적용
             select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent']
@@ -1382,10 +1380,21 @@ def _run_tradingview_screener():
             if preset_choice == "6" and df is not None and not df.empty:
                 df = df[df['close'] >= df['price_52_week_high'] * 0.95]
                 df = df.head(20) # 필터링 후 최대 20개만 유지
+
+        if df is None or df.empty:
+            config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
+            return
             
-            if df is None or df.empty:
-                config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
-                return
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(f"[cyan]검색된 {len(df)}개 종목의 정보를 정리 중...[/cyan]", total=len(df))
                 
             # [수정] 컬럼 순서 및 내용 재구성 (52주 고점 대비 제거, 이름 변경)
             table = Table(title="TradingView 스크리너 검색 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -1506,6 +1515,9 @@ def _run_tradingview_screener():
                     ticker, name, close_str, change_str, sma20_str,
                     macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                 )
+            
+                # [추가] 진행률 갱신
+                progress.advance(task)
             
         config.console.print()
         config.console.print(table)
