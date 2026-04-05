@@ -1483,6 +1483,11 @@ class TelegramCommander:
 
     def _get_default_keyboard(self):
         """하단 고정 메뉴 버튼 (Reply Keyboard) 구성"""
+        # [추가] 봇 명령어 수신이 비활성화(--no-bot)된 인스턴스인 경우,
+        # 다른 메인 인스턴스의 키보드 상태를 덮어씌우지 않도록 키보드 마크업을 반환하지 않습니다.
+        if not getattr(config, 'ENABLE_TELEGRAM', True):
+            return None
+            
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
