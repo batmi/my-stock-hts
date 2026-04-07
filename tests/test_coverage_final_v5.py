@@ -29,7 +29,7 @@ def test_analyze_candidates_market_filter(mock_analyze, mock_vol, mock_chart):
         candidates = trader._analyze_candidates([{"code": "005930", "name": "Samsung"}], set(), {}, {}, {})
         
     assert len(candidates) == 0
-    assert trader.skipped_by_market_filter_count == 1
+    assert trader.skipped_by_market_filter_count.get("KOSPI", 0) == 1
 
 @patch('modules.auto_trade.api.get_chart_data')
 @patch('modules.auto_trade.api.get_realtime_vol_strength')

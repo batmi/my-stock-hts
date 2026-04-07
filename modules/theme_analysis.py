@@ -1345,14 +1345,14 @@ def _run_tradingview_screener():
             if is_single:
                 task_main = progress.add_task("[cyan]TradingView 스크리너 검색 중...[/cyan]", total=None)
             else:
-                task_main = progress.add_task("[cyan]TradingView 전체 프리셋 스캔 중...[/cyan]", total=len(target_choices))
+                task_main = progress.add_task("[bold cyan]전체 프리셋 스캔 진행률 (All Presets)[/bold cyan]", total=len(target_choices))
             
             for p_choice in target_choices:
                 p_name = preset_map.get(p_choice, '').split(' (')[0]
                 if is_single:
                     progress.update(task_main, description=f"[cyan]{p_name} 검색 중...[/cyan]", total=None, completed=0)
                 else:
-                    progress.update(task_main, description=f"[cyan]▶ {p_name} 검색 중...[/cyan]")
+                    task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
                 
                 select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'relative_volume_10d_calc']
                 query = Query().set_markets(market).select(*select_cols)
@@ -1408,7 +1408,7 @@ def _run_tradingview_screener():
                         progress.update(task_main, description=f"[cyan]{p_name} 결과 정리 중...[/cyan]", total=len(df), completed=0)
                         active_task = task_main
                     else:
-                        task_sub = progress.add_task(f"[cyan]  └ {p_name} 결과 정리 중...[/cyan]", total=len(df))
+                        progress.update(task_sub, description=f"[cyan]  └ {p_name} 결과 정리 중...[/cyan]", total=len(df), completed=0)
                         active_task = task_sub
                 
                     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -1515,6 +1515,8 @@ def _run_tradingview_screener():
                         progress.remove_task(task_sub)
                     results.append((p_name, table))
                 else:
+                    if not is_single:
+                        progress.remove_task(task_sub)
                     results.append((p_name, None))
                 
                 if not is_single:

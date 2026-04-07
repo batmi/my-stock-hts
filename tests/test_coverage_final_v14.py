@@ -50,13 +50,13 @@ def test_autotrader_status_market_filter_skip(mock_dep, mock_bal):
     """상태 요약 메시지에서 하락장 필터링 보류 카운트 커버리지"""
     trader = auto_trade.AutoTrader()
     config.USE_MARKET_FILTER = True
-    trader.skipped_by_market_filter_count = 5
+    trader.skipped_by_market_filter_count = {"KOSPI": 5, "KOSDAQ": 0}
     
     mock_bal.return_value = ([], [{'scts_evlu_amt': '0'}])
     mock_dep.return_value = {'d2_deposit': 1000000}
     
     res = trader.get_status_message()
-    assert "5종목 신규 매수 보류" in res
+    assert "KOSPI 5종목" in res
 
 @patch('modules.telegram_bot.api.get_chart_data', return_value=pd.DataFrame())
 def test_telegram_cmd_chart_empty_data(mock_chart):
