@@ -136,7 +136,7 @@ chmod +x run.sh
 *   **제어**: `/start` (시작), `/stop` (중단), `/restart` (재시작)
 *   **분석**: `/market` (시장지수), `/signal <종목>` (종목진단), `/analyze <종목>` (AI 종목 심층 진단), `/curate` (관심종목 큐레이션), `/chart <종목>`, `/ask <질문>`
 *   **스캔**: `/scan [시장]` (TV 조건 순차 스캔. 예: `/scan k` 또는 `/scan u`)
-*   **설정**: `/config` (전략설정), `/rules [종목]` (개별룰), `/stocks` (감시종목)
+*   **설정**: `/config` (전략설정), `/preset [국면]` (프리셋 적용), `/rules [종목]` (개별룰), `/stocks` (감시종목)
 
 
 ## 📊 매매 전략 개요 (Trading Strategy)

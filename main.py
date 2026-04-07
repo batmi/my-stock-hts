@@ -88,23 +88,39 @@ Prompt.ask = _custom_ask
 # =========================================================================
 _original_print_breadcrumb = utils.print_breadcrumb
 
+def _get_preset_emoji():
+    bs = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE")
+    rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
+    tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
+    
+    if bs == 7.0 and tp == 20.0 and rsi == 70: return "🟢"
+    elif bs == 9.0 and tp == 5.0 and rsi == 65: return "🔵"
+    elif bs == 7.5 and tp == 10.0 and rsi == 50: return "🟡"
+    else: return "⚪"
+
 def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
+    env_color = "bold yellow" if config.session.is_simulation else "bold red"
+    emoji = _get_preset_emoji()
+    
+    config.console.print("\n[dim]" + "─"*50 + "[/dim]")
+    config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/] {emoji}")
+    config.console.print("[dim]" + "─"*50 + "[/dim]")
+    
     if context.USER_ACTION_BREADCRUMB:
         if len(context.USER_ACTION_BREADCRUMB) == 1:
             path_str = context.USER_ACTION_BREADCRUMB[0]
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-            env_color = "bold yellow" if config.session.is_simulation else "bold red"
-            config.console.print("\n[dim]" + "─"*50 + "[/dim]")
-            config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-            config.console.print("[dim]" + "─"*50 + "[/dim]")
             config.console.print(f"[dim] 메인 메뉴 > [/dim][green]{path_str}[/green]")
-            config.console.print("[dim]" + "─"*50 + "[/dim]")
         else:
             prev_depths = " > ".join(context.USER_ACTION_BREADCRUMB[:-1])
             current_depth = context.USER_ACTION_BREADCRUMB[-1]
-            config.console.print(f"\n[dim] 메인 메뉴 > {prev_depths} > [/dim][green]{current_depth}[/green]\n")
+            config.console.print(f"[dim] 메인 메뉴 > {prev_depths} > [/dim][green]{current_depth}[/green]")
+    else:
+        config.console.print("[green] 메인 메뉴[/green]")
+        
+    config.console.print("[dim]" + "─"*50 + "[/dim]")
 
 utils.print_breadcrumb = _custom_print_breadcrumb
 # =========================================================================
@@ -788,14 +804,7 @@ def main():
             # [추가] 루프 시작 시 토큰 만료 여부 확인 및 갱신
             api.check_and_refresh_token_if_expired()
 
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-            env_color = "bold yellow" if config.session.is_simulation else "bold red"
-            config.console.print("\n[dim]" + "─"*50 + "[/dim]")
-            config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
-            config.console.print("[dim]" + "─"*50 + "[/dim]")
-            config.console.print("[green] 메인 메뉴[/green]")
-            config.console.print("[dim]" + "─"*50 + "[/dim]")
+            utils.print_breadcrumb()
             
             trader_status = ""
             if trader.is_running:

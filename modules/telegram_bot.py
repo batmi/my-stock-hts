@@ -58,6 +58,7 @@ class TelegramCommander:
             "/config": self._cmd_config,
             "/history": self._cmd_history,
             "/log": self._cmd_log,
+            "/preset": self._cmd_preset, # [추가] 시장 국면별 프리셋
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
             "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
@@ -142,6 +143,10 @@ class TelegramCommander:
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
         button_map = {
             "📊 상태 요약": "/status",
+            "🟢 상태 요약": "/status",
+            "🔵 상태 요약": "/status",
+            "🟡 상태 요약": "/status",
+            "⚪ 상태 요약": "/status",
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
@@ -719,6 +724,7 @@ class TelegramCommander:
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
             "• /config : 트레이딩 전략 설정값 조회\n"
+            "• /preset [설정] : 시장 설정 프리셋 (b/r/s)\n"
             "• /rules [종목] : 개별 트레이딩 룰 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
@@ -1324,6 +1330,26 @@ class TelegramCommander:
     def _cmd_log(self, args):
         return self.trader.get_recent_logs()
 
+    def _cmd_preset(self, args):
+        if not args:
+            return "⚠️ 사용법: /preset [설정] (b:강세/r:약세/s:횡보)\n(예: /preset b)"
+            
+        target = args[0].lower()
+        preset_type = None
+        if target in ['bull', 'b']:
+            preset_type = 'bull'
+        elif target in ['bear', 'r']:
+            preset_type = 'bear'
+        elif target in ['sideways', 's']:
+            preset_type = 'sideways'
+            
+        if not preset_type:
+            return "⚠️ 알 수 없는 프리셋입니다. (b:강세, r:약세, s:횡보 중 선택)"
+            
+        from modules import settings
+        msg = settings.apply_strategy_preset(preset_type, interactive=False)
+        return msg
+
     def _cmd_balance(self, args):
         self._send_reply("⏳ [계좌 잔고 조회] 자산 및 잔고 정보를 수집 중입니다. 잠시만 기다려주세요...")
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
@@ -1480,10 +1506,19 @@ class TelegramCommander:
         if not getattr(config, 'ENABLE_TELEGRAM', True):
             return None
             
+        bs = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE")
+        rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
+        tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
+        
+        if bs == 7.0 and tp == 20.0 and rsi == 70: emoji = "🟢"
+        elif bs == 9.0 and tp == 5.0 and rsi == 65: emoji = "🔵"
+        elif bs == 7.5 and tp == 10.0 and rsi == 50: emoji = "🟡"
+        else: emoji = "⚪"
+            
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
-                [{"text": "📊 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
+                [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
                 [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
                 [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, toggle_btn]
             ],
