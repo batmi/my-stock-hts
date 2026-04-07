@@ -1515,7 +1515,7 @@ class AutoTrader:
             cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
             cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
-            cls._instance.skipped_by_market_filter_count = 0 # [추가] 시장 필터링 보류 종목 수
+            cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
             cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
@@ -2213,8 +2213,14 @@ class AutoTrader:
                     msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
         except: pass
         
-        if use_filter and self.skipped_by_market_filter_count > 0:
-            msg += f"⚠️ 하락장 방어 중 (최근 {self.skipped_by_market_filter_count}종목 신규 매수 보류)\n"
+        if use_filter:
+            skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
+            skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
+            if skip_k > 0 or skip_q > 0:
+                skip_msg = []
+                if skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
+                if skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
+                msg += f"⚠️ 하락장 방어 중 (최근 {', '.join(skip_msg)} 신규 매수 보류)\n"
 
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -2405,8 +2411,13 @@ class AutoTrader:
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
             
             # [추가] 필터링 보류 개수 표시
-            if self.skipped_by_market_filter_count > 0:
-                table.add_row("시장 필터링", f"[bold blue]{self.skipped_by_market_filter_count}종목 매수 보류[/] (하락장)")
+            skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
+            skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
+            if skip_k > 0 or skip_q > 0:
+                skip_msg = []
+                if skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
+                if skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
+                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] (하락장)")
 
         table.add_section()
         
@@ -4208,7 +4219,7 @@ class AutoTrader:
         if not targets: return
         
         # [추가] 필터링 카운트 초기화 (매 주기마다 갱신)
-        self.skipped_by_market_filter_count = 0
+        self.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0}
         skipped_stocks = [] # [추가] 시장 필터링으로 보류된 종목 리스트
         
         # [추가] 보유 종목 조회 (중복 매수 방지)
@@ -4319,7 +4330,7 @@ class AutoTrader:
                 market_stat = self.market_index_status.get(market_type)
                 if market_stat and isinstance(market_stat, dict):
                     if not market_stat.get('is_healthy', True):
-                        return {'type': 'market_skip', 'name': name}
+                        return {'type': 'market_skip', 'name': name, 'market_type': market_type}
             
             # 5. [최적화] 데이터 조회 및 분석 (병렬 Fan-out)
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
@@ -4493,7 +4504,9 @@ class AutoTrader:
                     elif res['type'] == 'restricted_skip':
                         restricted_skipped_stocks.append(res['name'])
                     elif res['type'] == 'market_skip':
-                        self.skipped_by_market_filter_count += 1
+                        m_type = res.get('market_type', 'KOSPI')
+                        if m_type in self.skipped_by_market_filter_count:
+                            self.skipped_by_market_filter_count[m_type] += 1
                         skipped_stocks.append(res['name'])
                     elif res['type'] == 'correlation_skip':
                         self.log(res['log'])
@@ -4676,7 +4689,7 @@ class AutoTrader:
         # [수정] analysis 모듈의 공통 함수 사용을 위해 리스트로 변경
         target_indices = ["KOSPI", "KOSDAQ"]
         
-        ma_period = getattr(config, 'MARKET_FILTER_MA', 20)
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
         
         for market_name in target_indices:
             try:
@@ -4717,21 +4730,23 @@ class AutoTrader:
         if code in self.stock_market_map:
             return self.stock_market_map[code]
 
-        # 1. stock.json에 사전 정의된 exchange 정보 우선 사용 (가장 빠르고 정확함)
-        market_type_from_config = config.session.exchange_cache.get(code)
-        if market_type_from_config in ["KOSPI", "KOSDAQ"]:
-            self.stock_market_map[code] = market_type_from_config
-            return market_type_from_config
+        # 1. stock.json에 사전 정의된 exchange 정보 직접 탐색 (가장 빠르고 정확함)
+        for key in ["stocks_kr", "etfs_kr"]:
+            for item in config.session.stock_data.get(key, []):
+                if item['code'] == code and "exchange" in item:
+                    m_type = item['exchange'].upper()
+                    if m_type in ["KOSPI", "KOSDAQ"]:
+                        self.stock_market_map[code] = m_type
+                        return m_type
 
-        # 2. API 조회를 통한 Fallback
+        # 2. API 조회를 통한 Fallback (한글 '코스닥' 포함)
         try:
             res = api.get_current_price_data(code, is_overseas=False)
             if res and res.get('rt_cd') == '0':
                 market_name = res['output'].get('rprs_mrkt_kor_name', '')
-                if "KOSDAQ" in market_name:
+                if "KOSDAQ" in market_name or "코스닥" in market_name:
                     self.stock_market_map[code] = "KOSDAQ"
                     return "KOSDAQ"
-
         except Exception:
             pass
 
