@@ -4617,15 +4617,15 @@ class AutoTrader:
             else:
                 invest_amt = calc_amt
 
-            # 최소 주문 금액 보정 (너무 적으면 1주라도 살 수 있게)
-            if invest_amt < cand['price']: invest_amt = avail_cash
-            
             # [수정] 지정가 주문을 위해 현재가(정수) 확보
             current_price = int(cand['price'])
 
             # [수정] 슬리피지 비율 적용 및 호가 정렬 (체결 확률 증대)
             raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
             order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+
+            # 최소 주문 금액 보정 (할당된 예산이 1주 가격보다 적을 때 가용 예수금 전체를 쓰는 버그 방지)
+            if invest_amt < order_price: invest_amt = order_price
             
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
             # 지정가 주문 시 해당 가격 기준으로 조회
