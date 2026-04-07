@@ -2191,6 +2191,9 @@ class AutoTrader:
         filter_str = "ON" if use_filter else "OFF"
         msg += f"\n[시장 지수 및 필터링 (필터: {filter_str})]\n"
         
+        is_healthy_k = True
+        is_healthy_q = True
+
         try:
             for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
                 df = analysis.get_domestic_index_data(m_type)
@@ -2206,6 +2209,10 @@ class AutoTrader:
                         if len(df) >= ma_period:
                             ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
                             is_healthy = curr >= ma_val
+                            if m_type == "KOSPI":
+                                is_healthy_k = is_healthy
+                            elif m_type == "KOSDAQ":
+                                is_healthy_q = is_healthy
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                         else:
                             filter_msg = " [데이터부족]"
@@ -2216,11 +2223,15 @@ class AutoTrader:
         if use_filter:
             skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
             skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
-            if skip_k > 0 or skip_q > 0:
-                skip_msg = []
-                if skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
-                if skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
-                msg += f"⚠️ 하락장 방어 중 (최근 {', '.join(skip_msg)} 신규 매수 보류)\n"
+            
+            skip_msg = []
+            if not is_healthy_k or skip_k > 0:
+                skip_msg.append(f"KOSPI {skip_k}종목")
+            if not is_healthy_q or skip_q > 0:
+                skip_msg.append(f"KOSDAQ {skip_q}종목")
+                
+            if skip_msg:
+                msg += f"⚠️ 하락장 방어 중 (현재 {', '.join(skip_msg)} 신규 매수 보류)\n"
 
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -2413,10 +2424,15 @@ class AutoTrader:
             # [추가] 필터링 보류 개수 표시
             skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
             skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
-            if skip_k > 0 or skip_q > 0:
-                skip_msg = []
-                if skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
-                if skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
+            
+            is_healthy_k = kospi_stat.get('is_healthy', True) if isinstance(kospi_stat, dict) else True
+            is_healthy_q = kosdaq_stat.get('is_healthy', True) if isinstance(kosdaq_stat, dict) else True
+            
+            skip_msg = []
+            if not is_healthy_k or skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
+            if not is_healthy_q or skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
+            
+            if skip_msg:
                 table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] (하락장)")
 
         table.add_section()
