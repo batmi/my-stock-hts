@@ -2204,18 +2204,27 @@ class AutoTrader:
                     
                     filter_msg = ""
                     if use_filter:
-                        # 대기 상태(WAITING) 시 메모리 캐시 누락 방지를 위해 실시간 데이터로 직접 계산
-                        ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
-                        if len(df) >= ma_period:
-                            ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
-                            is_healthy = curr >= ma_val
-                            if m_type == "KOSPI":
-                                is_healthy_k = is_healthy
-                            elif m_type == "KOSDAQ":
-                                is_healthy_q = is_healthy
+                        # 시스템 루프의 상태 캐시(market_index_status)를 우선 적용하여 보류 카운트와 상태 불일치 방지
+                        cached_stat = self.market_index_status.get(m_type)
+                        
+                        if cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
+                            is_healthy = cached_stat.get('is_healthy', True)
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                         else:
-                            filter_msg = " [데이터부족]"
+                            # 대기 상태(WAITING) 등 캐시가 없을 때만 실시간 계산
+                            ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
+                            if len(df) >= ma_period:
+                                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+                                is_healthy = curr >= ma_val
+                                filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
+                            else:
+                                is_healthy = True
+                                filter_msg = " [데이터부족]"
+                                
+                        if m_type == "KOSPI":
+                            is_healthy_k = is_healthy
+                        elif m_type == "KOSDAQ":
+                            is_healthy_q = is_healthy
                             
                     msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
         except: pass
