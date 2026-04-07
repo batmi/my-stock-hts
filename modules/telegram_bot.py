@@ -633,45 +633,45 @@ class TelegramCommander:
                     final_msg += "  📭 조건에 맞는 종목 없음\n"
                     continue
                     
-            for idx, row in df.iterrows():
-                ticker = str(row.get('name', '')).strip()
-                name = str(row.get('description', ticker)).strip()
-                
-                # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
-                if market == "korea":
-                    kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
-                    if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
-                        try:
-                            res = api.get_current_price_data(ticker, is_overseas=False)
-                            if res and res.get('rt_cd') == '0':
-                                out = res.get('output', {})
-                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
-                                if fetched_name: kor_name = fetched_name
-                        except Exception:
-                            pass
-                    if kor_name: name = kor_name
+                for idx, row in df.iterrows():
+                    ticker = str(row.get('name', '')).strip()
+                    name = str(row.get('description', ticker)).strip()
+                    
+                    # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
+                    if market == "korea":
+                        kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
+                        if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
+                            try:
+                                res = api.get_current_price_data(ticker, is_overseas=False)
+                                if res and res.get('rt_cd') == '0':
+                                    out = res.get('output', {})
+                                    fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
+                                    if fetched_name: kor_name = fetched_name
+                            except Exception:
+                                pass
+                        if kor_name: name = kor_name
 
-                close = row.get('close', 0)
-                change = row.get('change', 0)
-                rsi = row.get('RSI', 0)
-                
-                close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
-                rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
-                
-                extra_str = ""
-                if preset_key in ["ValueRebound", "HighDividend"]:
-                    per = row.get('price_earnings_ttm')
-                    roe = row.get('return_on_equity')
-                    div = row.get('dividend_yield_recent')
+                    close = row.get('close', 0)
+                    change = row.get('change', 0)
+                    rsi = row.get('RSI', 0)
                     
-                    per_str = f"PER:{per:.1f}" if pd.notna(per) else ""
-                    roe_str = f"ROE:{roe:.1f}%" if pd.notna(roe) else ""
-                    div_str = f"배당:{div:.2f}%" if pd.notna(div) else ""
+                    close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
+                    rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
                     
-                    tags = [t for t in [per_str, roe_str, div_str] if t]
-                    if tags: extra_str = f" | {' '.join(tags)}"
-                
-                final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
+                    extra_str = ""
+                    if preset_key in ["ValueRebound", "HighDividend"]:
+                        per = row.get('price_earnings_ttm')
+                        roe = row.get('return_on_equity')
+                        div = row.get('dividend_yield_recent')
+                        
+                        per_str = f"PER:{per:.1f}" if pd.notna(per) else ""
+                        roe_str = f"ROE:{roe:.1f}%" if pd.notna(roe) else ""
+                        div_str = f"배당:{div:.2f}%" if pd.notna(div) else ""
+                        
+                        tags = [t for t in [per_str, roe_str, div_str] if t]
+                        if tags: extra_str = f" | {' '.join(tags)}"
+                    
+                    final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
                 
             final_msg += "\n상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(final_msg.strip())
