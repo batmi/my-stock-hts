@@ -645,7 +645,7 @@ class TelegramCommander:
                                 res = api.get_current_price_data(ticker, is_overseas=False)
                                 if res and res.get('rt_cd') == '0':
                                     out = res.get('output', {})
-                                    fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name') or out.get('rprs_mrkt_kor_name')
+                                    fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name')
                                     if fetched_name: kor_name = fetched_name
                             except Exception:
                                 pass
