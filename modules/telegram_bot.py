@@ -549,97 +549,90 @@ class TelegramCommander:
             return
 
         market = "korea"
-        preset = "Pullback"
         
         if args:
-            # [수정] /scan km, /scan k m 형태 모두 지원
             arg_str = "".join(args).lower()
-            
-            # Market check: 'u' for US, 'k' for Korea (default)
-            # If 'k' is present, it forces Korea even if 'u' is also there.
             if 'k' in arg_str:
                 market = "korea"
             elif 'u' in arg_str:
                 market = "america"
 
-            # Preset check
-            preset_map = {
-                'p': "Pullback", 'm': "Momentum", 'r': "Rebound", 'v': "Volume",
-                'c': "ValueRebound", 'b': "Breakout", 'd': "HighDividend", 'x': "MacdCross",
-                'g': "TopGainers", 'l': "TopLosers"
-            }
-            
-            found_preset = False
-            for p_key, p_val in preset_map.items():
-                if p_key in arg_str:
-                    preset = p_val
-                    found_preset = True
-                    break
+        presets = [
+            ("Pullback", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)"),
+            ("Momentum", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)"),
+            ("Rebound", "바닥 반등 (RSI < 30 & 상승 반전)"),
+            ("Volume", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)"),
+            ("ValueRebound", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40, 현재가 > 20일선)"),
+            ("Breakout", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)"),
+            ("HighDividend", "고배당 안정 가치주 (배당수익률 > 5%, PER < 15)"),
+            ("MacdCross", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)"),
+            ("VolumeBottom", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)"),
+            ("GoldenCross", "중장기 정배열 (현재가 > 20일선 > 50일선)"),
+            ("GrowthValue", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)"),
+            ("TopGainers", "당일 급상승 상위 15종목"),
+            ("TopLosers", "당일 급하락 상위 15종목")
+        ]
 
         try:
-            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal']
-            query = Query().set_markets(market).select(*select_cols)
+            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal', 'relative_volume_10d_calc']
             
-            if preset == "Pullback":
-                query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
-                desc = "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)"
-            elif preset == "Momentum":
-                query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
-                desc = "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)"
-            elif preset == "Rebound":
-                query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
-                desc = "바닥 반등 (RSI < 30 & 상승 반전)"
-            elif preset == "Volume":
-                query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
-                desc = "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)"
-            elif preset == "TopGainers":
-                if market == "america":
-                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
-                    desc = "당일 급상승 상위 15종목 (거래량 10만, 1달러 이상)"
-                else:
-                    query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-                    desc = "당일 급상승 상위 15종목 (거래량 10만 이상)"
-            elif preset == "TopLosers":
-                if market == "america":
-                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
-                    desc = "당일 급하락 상위 15종목 (거래량 10만, 1달러 이상)"
-                else:
-                    query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
-                    desc = "당일 급하락 상위 15종목 (거래량 10만 이상)"
-            elif preset == "ValueRebound":
-                query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
-                desc = "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40, 현재가 > 20일선)"
-            elif preset == "Breakout":
-                # API 제약으로 인해 수학적 연산은 제외하고 기본 조건만 요청 (이후 Pandas에서 필터링)
-                query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
-                desc = "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)"
-            elif preset == "HighDividend":
-                query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
-                desc = "고배당 안정 가치주 (배당수익률 > 5%, PER < 15)"
-            elif preset == "MacdCross":
-                query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
-                desc = "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)"
+            market_str = "미국" if market == "america" else "국내"
+            final_msg = f"🔎 [TradingView 시장 스캔 결과]\n• 시장: {market_str}\n"
             
-            if preset in ["TopGainers", "TopLosers"]:
-                query = query.limit(15)
-            elif preset == "Breakout":
-                query = query.limit(200) # Pandas 필터링을 위해 데이터를 넉넉히 가져옴
-            else:
-                query = query.limit(20)
+            for preset_key, desc in presets:
+                query = Query().set_markets(market).select(*select_cols)
                 
-            count, df = query.get_scanner_data()
-            
-            # [추가] Breakout 프리셋의 수학적 연산(52주 고점의 95% 이상) 필터링
-            if preset == "Breakout" and df is not None and not df.empty:
-                df = df[df['close'] >= df['price_52_week_high'] * 0.95]
-                df = df.head(20) # 필터링 후 상위 20개 유지
-            
-            if df is None or df.empty:
-                self._send_reply(f"📭 조건에 맞는 종목이 없습니다.\n조건: {desc}")
-                return
+                if preset_key == "Pullback":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+                elif preset_key == "Momentum":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+                elif preset_key == "Rebound":
+                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
+                elif preset_key == "Volume":
+                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+                elif preset_key == "ValueRebound":
+                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                elif preset_key == "Breakout":
+                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+                elif preset_key == "HighDividend":
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
+                elif preset_key == "MacdCross":
+                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
+                elif preset_key == "VolumeBottom":
+                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
+                elif preset_key == "GoldenCross":
+                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
+                elif preset_key == "GrowthValue":
+                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                elif preset_key == "TopGainers":
+                    if market == "america":
+                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
+                    else:
+                        query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
+                elif preset_key == "TopLosers":
+                    if market == "america":
+                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
+                    else:
+                        query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                 
-            msg = f"🔎 [시장 스캔 결과]\n• 시장: {'미국' if market == 'america' else '국내'}\n• 조건: {desc}\n\n"
-            
+                if preset_key in ["TopGainers", "TopLosers"]:
+                    query = query.limit(15)
+                elif preset_key == "Breakout":
+                    query = query.limit(200)
+                else:
+                    query = query.limit(20)
+                    
+                count, df = query.get_scanner_data()
+                
+                if preset_key == "Breakout" and df is not None and not df.empty:
+                    df = df[df['close'] >= df['price_52_week_high'] * 0.95]
+                    df = df.head(20)
+                
+                final_msg += f"\n▶ {desc}\n"
+                if df is None or df.empty:
+                    final_msg += "  📭 조건에 맞는 종목 없음\n"
+                    continue
+                    
             for idx, row in df.iterrows():
                 ticker = str(row.get('name', '')).strip()
                 name = str(row.get('description', ticker)).strip()
@@ -665,9 +658,8 @@ class TelegramCommander:
                 close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
                 rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
                 
-                # [추가] 저평가 반등 스캐너일 경우 텔레그램 메시지에 PER, ROE 표시
                 extra_str = ""
-                if preset in ["ValueRebound", "HighDividend"]:
+                if preset_key in ["ValueRebound", "HighDividend"]:
                     per = row.get('price_earnings_ttm')
                     roe = row.get('return_on_equity')
                     div = row.get('dividend_yield_recent')
@@ -679,10 +671,10 @@ class TelegramCommander:
                     tags = [t for t in [per_str, roe_str, div_str] if t]
                     if tags: extra_str = f" | {' '.join(tags)}"
                 
-                msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
+                final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
                 
-            msg += "상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
-            self._send_reply(msg.strip())
+            final_msg += "\n상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
+            self._send_reply(final_msg.strip())
             
         except Exception as e:
             logger.error(f"Screener Scan Error: {e}")
@@ -744,7 +736,7 @@ class TelegramCommander:
             "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
             "• /briefing : 온디맨드 AI 시황 브리핑\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
-            "• /scan [조건] : TV 스캔 (k/u & p/m/r/v/c/b/d/x/g/l)\n"
+            "• /scan [시장] : 트레이딩뷰 종목 스캔 (k/u)\n"
             "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
             "• /ask <질문> : AI 주식/경제 자유 질문\n\n"
             "📝 [관리 및 기타]\n"

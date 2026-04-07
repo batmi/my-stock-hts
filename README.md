@@ -135,7 +135,7 @@ chmod +x run.sh
 *   **상태 및 자산**: `/status` (상태), `/balance` (잔고), `/holdings` (보유종목), `/portfolio` (포트폴리오 진단), `/profit [d/w/m]` (기간별 손익)
 *   **제어**: `/start` (시작), `/stop` (중단), `/restart` (재시작)
 *   **분석**: `/market` (시장지수), `/signal <종목>` (종목진단), `/analyze <종목>` (AI 종목 심층 진단), `/curate` (관심종목 큐레이션), `/chart <종목>`, `/ask <질문>`
-*   **정보**: `/report` (성과리포트), `/history [건수]` (체결내역), `/log [줄수]` (시스템로그)
+*   **스캔**: `/scan [시장]` (TV 조건 순차 스캔. 예: `/scan k` 또는 `/scan u`)
 *   **설정**: `/config` (전략설정), `/rules [종목]` (개별룰), `/stocks` (감시종목)
 
 

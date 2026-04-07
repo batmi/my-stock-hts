@@ -1305,6 +1305,7 @@ def _run_tradingview_screener():
     vol_cond_str = "거래량 10만, 1달러 이상" if market == "america" else "거래량 10만 이상"
     
     preset_items = [
+        ("0", "전체 프리셋 순차 스캔", "All Presets"),
         ("1", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)", "Pullback"),
         ("2", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
         ("3", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
@@ -1313,78 +1314,24 @@ def _run_tradingview_screener():
         ("6", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)", "Breakout"),
         ("7", "고배당 안정 가치주 (배당률 > 5%, PER < 15)", "High Dividend"),
         ("8", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)", "MACD Cross"),
-        ("9", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
-        ("10", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
+        ("9", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)", "Volume Bottom Rebound"),
+        ("10", "중장기 정배열 (현재가 > 20일선 > 50일선)", "Golden Cross / Perfect Trend"),
+        ("11", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)", "Growth & Value"),
+        ("12", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
+        ("13", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
     ]
-    preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="5")
+    preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="0")
     if preset_choice.lower() in ['b', 'q']: return False
     
     preset_map = dict((k, v) for k, v, _ in preset_items)
     preset_name = preset_map.get(preset_choice, '').split(' (')[0] # 괄호 안의 긴 설명은 제외하고 이름만 추출
     context.USER_ACTION_BREADCRUMB.append(f"[{preset_choice}] {preset_name}")
     
-    market_display = "Domestic Stock" if market == "korea" else "US Stock"
-    
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=config.console,
-            transient=True
-        ) as progress:
-            task = progress.add_task("[cyan]TradingView 스크리너로 종목을 검색 중입니다...[/cyan]", total=None)
-            
-            # [수정] 올바른 트레이딩뷰 필드명 적용
-            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent']
-            query = Query().set_markets(market).select(*select_cols)
-
-            if preset_choice == "1":
-                query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
-            elif preset_choice == "2":
-                query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
-            elif preset_choice == "3":
-                query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
-            elif preset_choice == "4":
-                query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
-            elif preset_choice == "5":
-                query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
-            elif preset_choice == "6":
-                # API 제약으로 인해 수학적 연산은 제외하고 기본 조건만 요청 (이후 Pandas에서 필터링)
-                query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
-            elif preset_choice == "7":
-                query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
-            elif preset_choice == "8":
-                query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
-            elif preset_choice == "9":
-                if market == "america":
-                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
-                else:
-                    query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-            elif preset_choice == "10":
-                if market == "america":
-                    query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
-                else:
-                    query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
-                
-            if preset_choice in ["9", "10"]:
-                query = query.limit(15)
-            elif preset_choice == "6":
-                query = query.limit(200) # Pandas 필터링을 위해 데이터를 넉넉히 가져옴
-            else:
-                query = query.limit(20)
-            
-            count, df = query.get_scanner_data()
-            
-            # [추가] 6번(Breakout) 프리셋의 수학적 연산(52주 고점의 95% 이상) 필터링
-            if preset_choice == "6" and df is not None and not df.empty:
-                df = df[df['close'] >= df['price_52_week_high'] * 0.95]
-                df = df.head(20) # 필터링 후 최대 20개만 유지
-
-        if df is None or df.empty:
-            config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
-            return
-            
+        target_choices = [str(i) for i in range(1, 14)] if preset_choice == "0" else [preset_choice]
+        results = []
+        stock_map = {}
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1394,133 +1341,191 @@ def _run_tradingview_screener():
             console=config.console,
             transient=True
         ) as progress:
-            task = progress.add_task(f"[cyan]검색된 {len(df)}개 종목의 정보를 정리 중...[/cyan]", total=len(df))
-                
-            # [수정] 컬럼 순서 및 내용 재구성 (52주 고점 대비 제거, 이름 변경)
-            table = Table(title="TradingView 스크리너 검색 결과", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-            table.add_column("티커/코드", justify="left", style="cyan")
-            table.add_column("종목명", justify="left")
-            table.add_column("현재가", justify="right")
-            table.add_column("등락률", justify="right")
-            table.add_column("SMA20", justify="right")
-            table.add_column("MACD (Sig)", justify="right")
-            table.add_column("RSI", justify="right")
-            table.add_column("ADX", justify="right")
-            table.add_column("PER", justify="right")
-            table.add_column("ROE(%)", justify="right")
-            table.add_column("배당(%)", justify="right", style="dim")
-            table.add_column("거래량", justify="right")
-            table.add_column("평균거래량", justify="right")
+            is_single = len(target_choices) == 1
+            if is_single:
+                task_main = progress.add_task("[cyan]TradingView 스크리너 검색 중...[/cyan]", total=None)
+            else:
+                task_main = progress.add_task("[cyan]TradingView 전체 프리셋 스캔 중...[/cyan]", total=len(target_choices))
             
-            stock_map = {}
-            
-            for idx, row in df.iterrows():
-                ticker = str(row.get('name', '')).strip()
-                name = str(row.get('description', ticker)).strip()
-                
-                # 국내 주식인 경우 한글 종목명 변환 (알파벳으로만 구성된 경우 API 직접 호출)
-                if market == "korea":
-                    kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
-                    if ticker is None: continue
-                    if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
-                        try:
-                            res = api.get_current_price_data(ticker, is_overseas=False)
-                            if res and res.get('rt_cd') == '0':
-                                out = res.get('output', {})
-                                fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name')
-                                if fetched_name: kor_name = fetched_name
-                        except Exception:
-                            pass
-
-                    if kor_name: name = kor_name
-
-                stock_map[ticker] = name
-
-                # [수정] 모든 데이터 가져오기 (NaN 값 안전하게 처리)
-                close = row.get('close', 0)
-                close = close if pd.notna(close) else 0
-                change = row.get('change', 0)
-                change = change if pd.notna(change) else 0
-                volume = row.get('volume', 0)
-                volume = volume if pd.notna(volume) else 0
-                rsi = row.get('RSI', None)
-                sma20 = row.get('SMA20', 0)
-                sma20 = sma20 if pd.notna(sma20) else 0
-                macd = row.get('MACD.macd', None)
-                macd_signal = row.get('MACD.signal', None)
-                adx = row.get('ADX', None)
-                per = row.get('price_earnings_ttm', None)
-                roe = row.get('return_on_equity', None)
-                div = row.get('dividend_yield_recent', None)
-                average_volume = row.get('average_volume', 0)
-                average_volume = average_volume if pd.notna(average_volume) else 0
-                
-                # --- Formatting and Color Rules ---
-                
-                # 현재가
-                close_str_raw = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
-                c_color = "[red]" if close > sma20 else "[blue]"
-                close_str = f"{c_color}{close_str_raw}[/]"
-
-                # 등락률
-                change_color = "[red]" if change > 0 else ("[blue]" if change < 0 else "[white]")
-                change_str = f"{change_color}{change:+.2f}%[/]"
-
-                # SMA20
-                sma20_str = f"{sma20:,.2f}" if market == "america" else f"{int(sma20):,}"
-
-                # MACD
-                macd_str = f"{macd:+.2f}" if pd.notna(macd) else "-"
-                if pd.notna(macd) and pd.notna(macd_signal):
-                    m_color = "red" if macd > macd_signal else "blue"
-                    macd_str = f"[{m_color}]{macd:+.2f}[/] [dim]({macd_signal:+.2f})[/dim]"
-
-                # RSI
-                rsi_str = f"{rsi:.1f}" if pd.notna(rsi) else "-"
-                if pd.notna(rsi):
-                    if rsi > 70: rsi_str = f"[magenta]{rsi_str}[/]"
-                    elif 50 <= rsi <= 70: rsi_str = f"[red]{rsi_str}[/]"
-                    elif 30 <= rsi < 50: rsi_str = f"[orange3]{rsi_str}[/]"
-                    elif rsi < 30: rsi_str = f"[blue]{rsi_str}[/]"
-
-                # ADX
-                adx_str = f"{adx:.1f}" if pd.notna(adx) else "-"
-                if pd.notna(adx):
-                    if adx > 40: adx_str = f"[magenta]{adx_str}[/]"
-                    elif adx >= 30: adx_str = f"[red]{adx_str}[/]"
-                    elif adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
-
-                # PER, ROE
-                per_str = f"{per:.1f}" if pd.notna(per) else "-"
-                roe_str = f"{roe:.1f}" if pd.notna(roe) else "-"
-
-                # 배당
-                div_str = f"{div:.2f}" if pd.notna(div) else "-"
-                if pd.notna(div) and div >= 5.0: div_str = f"[bold green]{div_str}[/bold green]"
-
-                # 거래량
-                vol_k = volume / 1000
-                vol_str = f"{vol_k:,.0f}K"
-                if volume > average_volume:
-                    vol_str = f"[red]{vol_str}[/]"
+            for p_choice in target_choices:
+                p_name = preset_map.get(p_choice, '').split(' (')[0]
+                if is_single:
+                    progress.update(task_main, description=f"[cyan]{p_name} 검색 중...[/cyan]", total=None, completed=0)
                 else:
-                    vol_str = f"[blue]{vol_str}[/]"
+                    progress.update(task_main, description=f"[cyan]▶ {p_name} 검색 중...[/cyan]")
                 
-                # 평균거래량
-                avg_vol_k = average_volume / 1000
-                avg_vol_str = f"{avg_vol_k:,.0f}K"
+                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'relative_volume_10d_calc']
+                query = Query().set_markets(market).select(*select_cols)
+                
+                if p_choice == "1":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+                elif p_choice == "2":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+                elif p_choice == "3":
+                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
+                elif p_choice == "4":
+                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+                elif p_choice == "5":
+                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                elif p_choice == "6":
+                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+                elif p_choice == "7":
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
+                elif p_choice == "8":
+                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
+                elif p_choice == "9":
+                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
+                elif p_choice == "10":
+                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
+                elif p_choice == "11":
+                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                elif p_choice == "12":
+                    if market == "america":
+                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
+                    else:
+                        query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
+                elif p_choice == "13":
+                    if market == "america":
+                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
+                    else:
+                        query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
+                    
+                if p_choice in ["12", "13"]:
+                    query = query.limit(15)
+                elif p_choice == "6":
+                    query = query.limit(200)
+                else:
+                    query = query.limit(20)
+            
+                count, df = query.get_scanner_data()
+                
+                if p_choice == "6" and df is not None and not df.empty:
+                    df = df[df['close'] >= df['price_52_week_high'] * 0.95]
+                    df = df.head(20)
 
-                # [수정] 단일 행으로 모든 데이터 추가
-                table.add_row(
-                    ticker, name, close_str, change_str, sma20_str,
-                    macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
-                )
-            
-                # [추가] 진행률 갱신
-                progress.advance(task)
-            
-        config.console.print()
-        config.console.print(table)
+                if df is not None and not df.empty:
+                    if is_single:
+                        progress.update(task_main, description=f"[cyan]{p_name} 결과 정리 중...[/cyan]", total=len(df), completed=0)
+                        active_task = task_main
+                    else:
+                        task_sub = progress.add_task(f"[cyan]  └ {p_name} 결과 정리 중...[/cyan]", total=len(df))
+                        active_task = task_sub
+                
+                    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+                    table.add_column("티커/코드", justify="left", style="cyan")
+                    table.add_column("종목명", justify="left")
+                    table.add_column("현재가", justify="right")
+                    table.add_column("등락률", justify="right")
+                    table.add_column("SMA20", justify="right")
+                    table.add_column("MACD (Sig)", justify="right")
+                    table.add_column("RSI", justify="right")
+                    table.add_column("ADX", justify="right")
+                    table.add_column("PER", justify="right")
+                    table.add_column("ROE(%)", justify="right")
+                    table.add_column("배당(%)", justify="right", style="dim")
+                    table.add_column("거래량", justify="right")
+                    table.add_column("평균거래량", justify="right")
+                    
+                    for idx, row in df.iterrows():
+                        ticker = str(row.get('name', '')).strip()
+                        name = str(row.get('description', ticker)).strip()
+                        
+                        if market == "korea":
+                            kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
+                            if ticker is None: continue
+                            if not kor_name or kor_name == ticker or all(ord(c) < 128 for c in kor_name.replace(' ', '')):
+                                try:
+                                    res = api.get_current_price_data(ticker, is_overseas=False)
+                                    if res and res.get('rt_cd') == '0':
+                                        out = res.get('output', {})
+                                        fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name')
+                                        if fetched_name: kor_name = fetched_name
+                                except Exception:
+                                    pass
+                            if kor_name: name = kor_name
+
+                        stock_map[ticker] = name
+
+                        close = row.get('close', 0)
+                        close = close if pd.notna(close) else 0
+                        change = row.get('change', 0)
+                        change = change if pd.notna(change) else 0
+                        volume = row.get('volume', 0)
+                        volume = volume if pd.notna(volume) else 0
+                        rsi = row.get('RSI', None)
+                        sma20 = row.get('SMA20', 0)
+                        sma20 = sma20 if pd.notna(sma20) else 0
+                        macd = row.get('MACD.macd', None)
+                        macd_signal = row.get('MACD.signal', None)
+                        adx = row.get('ADX', None)
+                        per = row.get('price_earnings_ttm', None)
+                        roe = row.get('return_on_equity', None)
+                        div = row.get('dividend_yield_recent', None)
+                        average_volume = row.get('average_volume', 0)
+                        average_volume = average_volume if pd.notna(average_volume) else 0
+                        
+                        close_str_raw = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
+                        c_color = "[red]" if close > sma20 else "[blue]"
+                        close_str = f"{c_color}{close_str_raw}[/]"
+
+                        change_color = "[red]" if change > 0 else ("[blue]" if change < 0 else "[white]")
+                        change_str = f"{change_color}{change:+.2f}%[/]"
+
+                        sma20_str = f"{sma20:,.2f}" if market == "america" else f"{int(sma20):,}"
+
+                        macd_str = f"{macd:+.2f}" if pd.notna(macd) else "-"
+                        if pd.notna(macd) and pd.notna(macd_signal):
+                            m_color = "red" if macd > macd_signal else "blue"
+                            macd_str = f"[{m_color}]{macd:+.2f}[/] [dim]({macd_signal:+.2f})[/dim]"
+
+                        rsi_str = f"{rsi:.1f}" if pd.notna(rsi) else "-"
+                        if pd.notna(rsi):
+                            if rsi > 70: rsi_str = f"[magenta]{rsi_str}[/]"
+                            elif 50 <= rsi <= 70: rsi_str = f"[red]{rsi_str}[/]"
+                            elif 30 <= rsi < 50: rsi_str = f"[orange3]{rsi_str}[/]"
+                            elif rsi < 30: rsi_str = f"[blue]{rsi_str}[/]"
+
+                        adx_str = f"{adx:.1f}" if pd.notna(adx) else "-"
+                        if pd.notna(adx):
+                            if adx > 40: adx_str = f"[magenta]{adx_str}[/]"
+                            elif adx >= 30: adx_str = f"[red]{adx_str}[/]"
+                            elif adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
+
+                        per_str = f"{per:.1f}" if pd.notna(per) else "-"
+                        roe_str = f"{roe:.1f}" if pd.notna(roe) else "-"
+
+                        div_str = f"{div:.2f}" if pd.notna(div) else "-"
+                        if pd.notna(div) and div >= 5.0: div_str = f"[bold green]{div_str}[/bold green]"
+
+                        vol_k = volume / 1000
+                        vol_str = f"{vol_k:,.0f}K"
+                        if volume > average_volume: vol_str = f"[red]{vol_str}[/]"
+                        else: vol_str = f"[blue]{vol_str}[/]"
+                        
+                        avg_vol_k = average_volume / 1000
+                        avg_vol_str = f"{avg_vol_k:,.0f}K"
+
+                        table.add_row(
+                            ticker, name, close_str, change_str, sma20_str,
+                            macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
+                        )
+                        progress.advance(active_task)
+                        
+                    if not is_single:
+                        progress.remove_task(task_sub)
+                    results.append((p_name, table))
+                else:
+                    results.append((p_name, None))
+                
+                if not is_single:
+                    progress.advance(task_main)
+                
+        for p_name, table in results:
+            config.console.print(f"\n[bold cyan]▶ {p_name}[/bold cyan]")
+            if table is None:
+                config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
+            else:
+                config.console.print(table)
         
         # 개별 종목 상세 분석 연동
         config.console.print()
