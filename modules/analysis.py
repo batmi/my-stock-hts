@@ -1451,7 +1451,8 @@ def _analyze_stock_worker(stock, params=None):
                 break
             time.sleep(0.5)
             
-        if df is None or df.empty: return None
+        if df is None: return {'error': 'API 응답 없음'}
+        if df.empty: return {'error': '차트 데이터 없음 (거래정지 등)'}
         
         current_price = float(df.iloc[-1]['close'])
         ind = indicators.calculate_indicators(df)
@@ -1483,7 +1484,7 @@ def _analyze_stock_worker(stock, params=None):
             thresholds=params, w52_pos=w52_pos, smart_money=sm_flag
         )
         
-        if state == "-": return None # 데이터 부족
+        if state == "-": return {'error': '지표 계산용 데이터 부족 (신규상장 등)'}
 
         # [추가] 초기 상태 보존 (로그 출력 시 체결강도 미달로 관망으로 변경되더라도 원본 상태 표시)
         initial_state = state
@@ -1556,7 +1557,8 @@ def _analyze_stock_worker(stock, params=None):
             'w52_pos': w52_pos,
             'is_custom_rule': is_custom_rule # [추가]
         }
-    except Exception: return None
+    except Exception as e:
+        return {'error': f'분석 중 예외 발생: {e}'}
 
 def analyze_market_stocks(market_type):
     """선택한 시장의 전체 종목을 분석하고 매수 가능 종목을 출력합니다."""
@@ -1664,7 +1666,7 @@ def analyze_market_stocks(market_type):
                 completed_count = 0
                 
                 def _process_result(stock_info, res_data):
-                    if res_data:
+                    if res_data and 'error' not in res_data:
                         rsi_val = res_data['rsi']
                         rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
                         adx_str = f"{res_data['adx']:.1f}" if res_data['adx'] is not None else "-"
@@ -1694,7 +1696,8 @@ def analyze_market_stocks(market_type):
                         else:
                             progress.console.print(f"[dim]{log_msg}[/dim]")
                     else:
-                        progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock_info['name']}({stock_info['code']}) - 데이터 부족 또는 API 응답 없음[/dim red]")
+                        err_msg = res_data.get('error', '알 수 없는 오류') if res_data else "데이터 부족 또는 API 응답 없음"
+                        progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock_info['name']}({stock_info['code']}) - {err_msg}[/dim red]")
 
                 # [최적화] 전체 종목 분석 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
                 max_w = 2 if config.session.is_simulation else 4
@@ -1972,7 +1975,7 @@ def save_all_market_analysis():
                     for future in concurrent.futures.as_completed(futures):
                         try:
                             result = future.result()
-                            if result: analyzed_data.append(result)
+                            if result and 'error' not in result: analyzed_data.append(result)
                         except Exception: pass
                         progress.advance(task)
                 
