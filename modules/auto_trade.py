@@ -2233,6 +2233,12 @@ class AutoTrader:
             skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
             skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
             
+            # [추가] 분석 루프가 돌지 않았을 경우(0건) stock.json 기준으로 실제 보류 대상 개수 산출
+            if (not is_healthy_k and skip_k == 0) or (not is_healthy_q and skip_q == 0):
+                calc_k, calc_q = self._get_skipped_stocks_count(holdings)
+                if not is_healthy_k and skip_k == 0: skip_k = calc_k
+                if not is_healthy_q and skip_q == 0: skip_q = calc_q
+            
             skip_msg = []
             if not is_healthy_k or skip_k > 0:
                 skip_msg.append(f"KOSPI {skip_k}종목")
@@ -2259,6 +2265,23 @@ class AutoTrader:
             msg += "\n📋 [보유 종목] 없음"
             
         return msg
+
+    def _get_skipped_stocks_count(self, holdings):
+        """현재 관심 종목 중 미보유 종목을 대상으로 시장별 대기 종목 수를 계산합니다."""
+        targets = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
+        holding_codes = {h['pdno'] for h in holdings if int(h.get('hldg_qty', 0)) > 0} if holdings else set()
+        
+        count_k = 0
+        count_q = 0
+        for item in targets:
+            code = item['code']
+            if code in holding_codes:
+                continue
+            m_type = self._get_stock_market_type(code)
+            if m_type == "KOSDAQ": count_q += 1
+            else: count_k += 1
+            
+        return count_k, count_q
 
     def log(self, msg):
         now = datetime.now()
@@ -2436,6 +2459,12 @@ class AutoTrader:
             
             is_healthy_k = kospi_stat.get('is_healthy', True) if isinstance(kospi_stat, dict) else True
             is_healthy_q = kosdaq_stat.get('is_healthy', True) if isinstance(kosdaq_stat, dict) else True
+            
+            # [추가] 분석 루프가 돌지 않았을 경우(0건) stock.json 기준으로 실제 보류 대상 개수 산출
+            if (not is_healthy_k and skip_k == 0) or (not is_healthy_q and skip_q == 0):
+                calc_k, calc_q = self._get_skipped_stocks_count(holdings)
+                if not is_healthy_k and skip_k == 0: skip_k = calc_k
+                if not is_healthy_q and skip_q == 0: skip_q = calc_q
             
             skip_msg = []
             if not is_healthy_k or skip_k > 0: skip_msg.append(f"KOSPI {skip_k}종목")
