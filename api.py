@@ -2095,7 +2095,7 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     for exc in target_exchanges:
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-            "OVRS_EXCG_CD": exc, "SORT_GB": "01", # [Fix] API 문서에 따라 SORT_SQN -> SORT_GB로 수정 (01: 주문번호순)
+            "OVRS_EXCG_CD": exc, "SORT_SQN": "01", # [Fix] KIS API 실제 요구 필드명인 SORT_SQN으로 원복
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
         }
         res = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["OPEN_ORDERS"], "overseas", "inquiry", "open_orders", params=params)

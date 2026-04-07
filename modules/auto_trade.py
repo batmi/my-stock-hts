@@ -3651,18 +3651,10 @@ class AutoTrader:
                     if not ConclusionMonitor().is_healthy():
                         raise Exception(f"체결 감시 시스템 불안정 (연속 에러 {ConclusionMonitor().consecutive_errors}회)")
                     
-                    # [Fix: Point 5] 매 사이클 시작 시점에 일일 손실 한도 강제 체크
-                    if self.initial_asset > 0:
-                        try:
-                            acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                            
-                            # [수정] 부분 자산 합산(해외 누락) 로직 제거하고, 완벽하게 검증된 account 모듈 함수 사용
-                            asset_data = account.get_asset_status_data(target_cano, acnt_cd)
-                            if asset_data and asset_data.get('tot_asset', 0) > 0:
-                                self.risk_manager.check_loss_limit(asset_data['tot_asset'])
-                        except Exception as e:
-                            logger.debug(f"사이클 시작 시 자산 평가 실패: {e}")
-
+                    # [수정] 매 사이클 시작 시점에 수행하던 일일 손실 한도 강제 체크 로직 제거
+                    # API Rate Limit 발생 시 잔고가 누락되어 가짜 비상 정지를 유발할 수 있으므로,
+                    # API 호출 성공이 보장된 루프 후반부(_monitor_account_status)에서만 안전하게 손실 한도를 체크함
+                    
                     # [추가] 현재 운용 계좌 정보 로깅
                     if target_cano and is_log_needed:
                         acc_type = "모의투자" if config.session.is_simulation else "실전투자(자동)"
