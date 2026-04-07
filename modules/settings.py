@@ -770,20 +770,21 @@ def select_strategy_preset():
     elif choice == "3": apply_strategy_preset("sideways")
     return True
 
-def reset_to_default():
-    console.print()
-    if Prompt.ask("모든 설정을 시스템 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n") != "y":
-        return False
-    console.print()
+def reset_to_default(interactive=True):
+    if interactive:
+        console.print()
+        if Prompt.ask("모든 설정을 시스템 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            return False
+        console.print()
 
     # 1. 파일 삭제
     config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
     if os.path.exists(config_path):
         try:
             os.remove(config_path)
-            console.print(f"[dim]설정 파일 삭제 완료: {config_path}[/dim]")
+            if interactive: console.print(f"[dim]설정 파일 삭제 완료: {config_path}[/dim]")
         except Exception as e:
-            console.print(f"[red]설정 파일 삭제 실패: {e}[/red]")
+            if interactive: console.print(f"[red]설정 파일 삭제 실패: {e}[/red]")
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
@@ -849,8 +850,11 @@ def reset_to_default():
     config.USE_CORRELATION_FILTER = True
     config.CORRELATION_THRESHOLD = 0.7
 
-    console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
-    return True
+    if interactive:
+        console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
+        return True
+    else:
+        return "⚪ [초기화(Default)] 시스템의 모든 설정이 최초 기본값으로 초기화되었습니다."
 
 def system_config_menu():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)

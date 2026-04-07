@@ -724,7 +724,7 @@ class TelegramCommander:
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
             "• /config : 트레이딩 전략 설정값 조회\n"
-            "• /preset [설정] : 시장 설정 프리셋 (b/r/s)\n"
+            "• /preset [설정] : 시장 설정 프리셋 (b/r/s/d)\n"
             "• /rules [종목] : 개별 트레이딩 룰 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
@@ -1332,7 +1332,7 @@ class TelegramCommander:
 
     def _cmd_preset(self, args):
         if not args:
-            return "⚠️ 사용법: /preset [설정] (b:강세/r:약세/s:횡보)\n(예: /preset b)"
+            return "⚠️ 사용법: /preset [설정] (b:강세/r:약세/s:횡보/d:초기화)\n(예: /preset d)"
             
         target = args[0].lower()
         preset_type = None
@@ -1342,12 +1342,17 @@ class TelegramCommander:
             preset_type = 'bear'
         elif target in ['sideways', 's']:
             preset_type = 'sideways'
+        elif target in ['default', 'd', 'reset']:
+            preset_type = 'default'
             
         if not preset_type:
-            return "⚠️ 알 수 없는 프리셋입니다. (b:강세, r:약세, s:횡보 중 선택)"
+            return "⚠️ 알 수 없는 프리셋입니다. (b:강세, r:약세, s:횡보, d:초기화 중 선택)"
             
         from modules import settings
-        msg = settings.apply_strategy_preset(preset_type, interactive=False)
+        if preset_type == 'default':
+            msg = settings.reset_to_default(interactive=False)
+        else:
+            msg = settings.apply_strategy_preset(preset_type, interactive=False)
         return msg
 
     def _cmd_balance(self, args):
