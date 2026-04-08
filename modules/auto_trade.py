@@ -267,7 +267,8 @@ class ConclusionMonitor:
             except: pass
 
             # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
-            if not self._is_market_open() and not has_pending_orders:
+            # 단, 시스템 초기 1회 실행(초기화)은 장 마감 상태여도 무조건 수행해야 하므로 조건 추가
+            if self.initialized and not self._is_market_open() and not has_pending_orders:
                 self.event.wait(60)
                 if not self.event.is_set():
                     continue
@@ -1223,6 +1224,13 @@ class OrderManager:
 
     def manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""
+        
+        # [추가] 장 마감 상태이며 로컬에 진행 중인 주문이 없을 경우 API 호출 생략 (트래픽 낭비 원천 차단)
+        if not self.trader.is_market_open():
+            with self._lock:
+                if not self.pending_orders:
+                    return
+                    
         try:
             # 1. API를 통한 미체결 내역 조회
             unfilled_list = api.get_unfilled_orders()
