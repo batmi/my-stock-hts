@@ -260,10 +260,11 @@ def _set_micro_cache(key, data):
 
 # [추가] yfinance 특수 티커를 TradingView 티커로 완벽히 1:1 매핑
 YF_TO_TV_EXACT = {
-    "^IXIC": "NASDAQ:IXIC",        # 나스닥
-    "^GSPC": "SP:SPX",             # S&P 500
-    "^DJI": "DJ:DJI",              # 다우존스
-    "^RUT": "RUSSELL:RUT",         # 러셀 2000
+    # [수정] 미국 3대 지수는 TradingView(15분 지연) 대신 yfinance(실시간)를 사용하도록 매핑 해제
+    # "^IXIC": "NASDAQ:IXIC",        # 나스닥
+    # "^GSPC": "SP:SPX",             # S&P 500
+    # "^DJI": "DJ:DJI",              # 다우존스
+    # "^RUT": "RUSSELL:RUT",         # 러셀 2000
     "KRW=X": "FX_IDC:USDKRW",      # 원/달러 환율
     "DX-Y.NYB": "TVC:DXY",         # 달러인덱스
     "CL=F": "NYMEX:CL1!",          # WTI 원유
@@ -1576,7 +1577,7 @@ def get_domestic_index_price(code):
 
 def get_current_price_data(code, is_overseas):
     cache_key = f"cp_{code}_{is_overseas}"
-    cached = _get_micro_cache(cache_key)
+    cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 실시간 시세 반영을 위해 캐시 유지 시간을 3초로 단축
     if cached: return cached
 
     if not is_overseas:
@@ -1694,17 +1695,30 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     if is_overseas: return None
 
     cache_key = f"vol_{code}"
-    cached = _get_micro_cache(cache_key)
+    cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 체결강도의 실시간성 확보를 위해 캐시 유지 시간을 3초로 단축
     if cached is not None: return cached
     
-    for _ in range(3):
-        data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
+    for attempt in range(3):
+        # [수정] Timeout을 2초에서 3초로 늘려 로그에 나타난 ReadTimeoutError 빈도 완화
+        data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=3, retries=0)
         if data.get('rt_cd') == '0':
             items = data.get('output', [])
-            if items and items[0].get('tday_rltv'):
-                val = float(str(items[0].get('tday_rltv')).replace(',', ''))
-                _set_micro_cache(cache_key, val)
-                return val
+            if items:
+                # [추가] 체결강도 HTS 괴리 분석을 위한 원본(Raw) 데이터 정밀 추적 로그
+                if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
+                    logger.debug(f"[VOL_STRENGTH_RAW_DATA] [{code}] Attempt {attempt+1} | Raw Output[0]: {json.dumps(items[0], ensure_ascii=False)}")
+                    
+                tday_rltv = items[0].get('tday_rltv')
+                if tday_rltv and str(tday_rltv).strip():
+                    try:
+                        valid_val = float(str(tday_rltv).replace(',', ''))
+                        if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
+                            logger.debug(f"[VOL_STRENGTH_PARSED] [{code}] Extracted Value: {valid_val}%")
+                        _set_micro_cache(cache_key, valid_val)
+                        return valid_val
+                    except Exception as e:
+                        if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]: logger.debug(f"[VOL_STRENGTH_ERROR] [{code}] Parse Error: {e}")
+                        pass
         elif data.get('msg_cd') == 'EGW00201': time.sleep(0.2)
         else: time.sleep(0.2)
     return None

@@ -1518,8 +1518,8 @@ def _analyze_stock_worker(stock, params=None):
                     if vol_strength is not None: break
                 except: time.sleep(0.1)
 
-        # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 체크 (필터링)
-        if state in ["매수", "강매수", "역매수", "상승"] and vol_strength is not None:
+        # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 엄격히 체크 (필터링)
+        if state in ["매수", "강매수", "역매수", "상승"]:
             try:
                 if state == "역매수":
                     min_vol = params.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if params else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
@@ -1528,10 +1528,15 @@ def _analyze_stock_worker(stock, params=None):
                 else:
                     min_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
                 
-                if min_vol > 0 and vol_strength < min_vol:
-                    state = "관망"
-                    state_color = "[white]"
-                    state_reason = f"체결강도 미달({vol_strength:.1f}% < {min_vol}%)"
+                if min_vol > 0:
+                    if vol_strength is None:
+                        state = "관망"
+                        state_color = "[white]"
+                        state_reason = "체결강도 확인 불가 (API 응답 지연)"
+                    elif vol_strength < min_vol:
+                        state = "관망"
+                        state_color = "[white]"
+                        state_reason = f"체결강도 미달({vol_strength:.1f}% < {min_vol}%)"
             except: pass
 
         # 필터링 조건 확인
@@ -1685,7 +1690,10 @@ def analyze_market_stocks(market_type):
                         macd_str = "골든" if macd_val is not None and sig_val is not None and macd_val > sig_val else "데드"
                         
                         vol_str = ""
-                        if res_data.get('vol_strength') is not None: vol_str = f", 체결={res_data['vol_strength']:.0f}%"
+                        if res_data.get('vol_strength') is not None:
+                            vol_str = f", 체결={res_data['vol_strength']:.0f}%"
+                        else:
+                            vol_str = ", 체결=확인불가"
                         
                         log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
