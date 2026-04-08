@@ -45,7 +45,8 @@ def test_analyze_stock_worker_exception(mock_get):
     """분석 워커 예외 처리 테스트"""
     mock_get.side_effect = Exception("Chart Error")
     res = analysis._analyze_stock_worker({'code': '005930', 'name': 'Samsung'})
-    assert res is None
+    assert res is not None
+    assert 'error' in res
 
 # --- Market ---
 @patch('modules.market.api.fetch_yfinance_data')

@@ -130,7 +130,7 @@ def test_unfilled_order_cancel(mock_datetime, mock_revise, mock_get_unfilled, re
     trader = auto_trade.AutoTrader()
     
     # 현재 시간 고정: 12시 00분 00초
-    now = datetime(2023, 1, 1, 12, 0, 0)
+    now = datetime(2023, 1, 2, 12, 0, 0)
     mock_datetime.now.return_value = now
     mock_datetime.strptime = datetime.strptime
     
@@ -142,8 +142,9 @@ def test_unfilled_order_cancel(mock_datetime, mock_revise, mock_get_unfilled, re
     mock_get_unfilled.return_value = orders
     mock_revise.return_value = {'rt_cd': '0', 'msg1': '정상'}
     
-    # 실행
-    trader.order_manager.manage_unfilled_orders()
+    with patch.object(trader, 'is_market_open', return_value=True):
+        # 실행
+        trader.order_manager.manage_unfilled_orders()
     
     # 검증: 주문번호 1001만 취소 요청되었는지 확인
     assert mock_revise.call_count == 1

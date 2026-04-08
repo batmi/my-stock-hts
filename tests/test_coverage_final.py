@@ -32,11 +32,12 @@ def test_manage_unfilled_orders(mock_revise, mock_get):
     class MockDatetime(datetime):
         @classmethod
         def now(cls):
-            return cls(2023, 1, 1, 12, 0, 0)
+            return cls(2023, 1, 2, 12, 0, 0)
 
     with patch('modules.auto_trade.datetime', MockDatetime):
-        trader.order_manager.manage_unfilled_orders()
-        mock_revise.assert_called()
+        with patch.object(trader, 'is_market_open', return_value=True):
+            trader.order_manager.manage_unfilled_orders()
+            mock_revise.assert_called()
 
 @patch('modules.analysis.api.get_domestic_index_chart')
 def test_get_market_regime_fallback(mock_get_index):

@@ -92,7 +92,8 @@ def test_analyze_stock_worker_insufficient_data(mock_classify, mock_calc, mock_c
     
     stock = {'code': '005930', 'name': 'Samsung'}
     result = analysis._analyze_stock_worker(stock)
-    assert result is None
+    assert result is not None
+    assert 'error' in result
 
 # --- modules/auto_trade.py ---
 def test_get_stock_market_type_cached():

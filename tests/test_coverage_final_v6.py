@@ -467,3 +467,86 @@ def test_get_deposit_balance_fail(mock_call):
     
     res = api.get_deposit_balance("12345678", "01")
     assert res is None
+
+# --- Additional Coverage ---
+
+@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.AutoTrader.stop')
+def test_risk_manager_emergency_stop(mock_stop, mock_tg):
+    """일일 손실 한도 초과 시 비상 정지(Kill Switch) 테스트"""
+    trader = auto_trade.AutoTrader()
+    trader.initial_asset = 10_000_000
+    config.SYSTEM_DAILY_LOSS_LIMIT = 5.0 # 5% 손실 제한
+    
+    rm = auto_trade.RiskManager(trader)
+    
+    with patch('config.console.print'):
+        # 현재 자산이 9,000,000원 (10% 손실) -> 제한(-5%) 초과
+        rm.check_loss_limit(9_000_000)
+        
+    mock_stop.assert_called_once()
+    mock_tg.assert_called_once()
+
+def test_autotrader_get_recent_logs():
+    """최근 로그 조회 기능 테스트"""
+    trader = auto_trade.AutoTrader()
+    trader.logs = []
+    assert "로그가 없습니다" in trader.get_recent_logs()
+    
+    trader.log("Test log 1")
+    trader.log("Test log 2")
+    res = trader.get_recent_logs()
+    assert "Test log 1" in res
+    assert "Test log 2" in res
+
+def test_clear_smart_money_cache():
+    """스마트머니 캐시 초기화 테스트"""
+    analysis._SMART_MONEY_CACHE['005930'] = {'time': datetime.now(), 'flag': True, 'reason': 'test'}
+    analysis.clear_smart_money_cache()
+    assert len(analysis._SMART_MONEY_CACHE) == 0
+
+@patch('os.path.exists', return_value=False)
+def test_get_mystock_log_tail_no_file(mock_exists):
+    """로그 파일이 없을 때 꼬리 읽기 예외 처리 테스트"""
+    res = auto_trade.get_mystock_log_tail()
+    assert "존재하지 않습니다" in res
+
+@patch('modules.auto_trade.utils.show_menu')
+@patch('modules.auto_trade.utils.pause')
+@patch('modules.auto_trade.AutoTrader.start')
+@patch('modules.auto_trade.AutoTrader.stop')
+@patch('modules.auto_trade.AutoTrader.print_status')
+def test_system_trading_menu_flow(mock_status, mock_stop, mock_start, mock_pause, mock_show_menu):
+    """자동매매 메인 메뉴 네비게이션 테스트"""
+    # 1: 실행, 2: 중단, 3: 상태, q: 종료
+    mock_show_menu.side_effect = ["1", "2", "3", "q"]
+    
+    auto_trade.system_trading_menu()
+    
+    assert mock_start.call_count == 1
+    assert mock_stop.call_count == 1
+    assert mock_status.call_count == 1
+    assert mock_pause.call_count == 3
+
+@patch('modules.auto_trade.utils.show_menu')
+@patch('modules.auto_trade._view_stock_rules')
+def test_manage_stock_rules_menu(mock_view, mock_show_menu):
+    """종목별 트레이딩 룰 관리 메뉴 이동 테스트"""
+    # 1: 룰 조회, q: 종료
+    mock_show_menu.side_effect = ["1", "q"]
+    
+    auto_trade.manage_stock_rules()
+    
+    mock_view.assert_called_once()
+
+@patch('modules.auto_trade.utils.show_menu')
+def test_system_trading_menu_keyboard_interrupt(mock_show_menu):
+    """메뉴 무한 루프 중 KeyboardInterrupt 발생 시 안전 종료 테스트"""
+    # show_menu 호출 시 즉시 KeyboardInterrupt 예외 발생 시뮬레이션 (Ctrl+C 입력)
+    mock_show_menu.side_effect = KeyboardInterrupt()
+    
+    # 예외를 안전하게 잡아서 무한루프를 탈출하고 False를 반환하는지 확인
+    result = auto_trade.system_trading_menu()
+    
+    assert result is False
+    mock_show_menu.assert_called_once()
