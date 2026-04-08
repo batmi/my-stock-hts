@@ -1385,12 +1385,15 @@ class TelegramCommander:
                 msg += f"총 예수금(D+0): {total_deposit:,}원\n"
                 msg += f"  • 원화: {data['dep_dom']:,}원\n"
                 
-                if not config.session.is_simulation:
-                    msg += f"    └ D+1: {data['d1_dep']:,}원\n"
-                    msg += f"    └ D+2: {data['d2_dep']:,}원\n"
-                else:
-                    msg += f"    └ D+1: {data['d1_dep']:,}원\n"
-                    msg += f"    └ D+2: {data['d2_dep']:,}원\n"
+                msg += f"    └ D+1 (익일): {data['d1_dep']:,}원\n"
+                msg += f"    └ D+2 (가수도): {data['d2_dep']:,}원\n"
+
+                next_plus = data.get('next_day_plus', 0)
+                next_minus = data.get('next_day_minus', 0)
+                if next_plus > 0:
+                    msg += f"    └ 익일결재(+): {next_plus:,}원\n"
+                if next_minus > 0:
+                    msg += f"    └ 익일결재(-): {next_minus:,}원\n"
 
                 msg += f"  • 외화: {data['dep_ovs']:,}원\n"
                 

@@ -1345,7 +1345,7 @@ def _run_tradingview_screener():
             if is_single:
                 task_main = progress.add_task("[cyan]TradingView 스크리너 검색 중...[/cyan]", total=None)
             else:
-                task_main = progress.add_task("[bold cyan]전체 프리셋 스캔 진행률 (All Presets)[/bold cyan]", total=len(target_choices))
+                task_main = progress.add_task("[cyan]전체 프리셋 스캔 진행률 (All Presets)[/cyan]", total=len(target_choices))
             
             for p_choice in target_choices:
                 p_name = preset_map.get(p_choice, '').split(' (')[0]
