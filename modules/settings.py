@@ -723,8 +723,17 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         config.SYSTEM_DAILY_LOSS_LIMIT = 7.0
         config.MARKET_FILTER_MA = 20
         msg = "🟡 [횡보장(Sideways)] 전략 프리셋이 적용되었습니다.\n(박스권 단기 스윙 및 타이트한 트레일링 스탑)"
+        
+    elif preset_type == "default":
+        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 20.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0})
+        config.SCORING_WEIGHTS.update({"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0})
+        config.SYSTEM_INVEST_PER_STOCK = 0.2
+        config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
+        config.MARKET_FILTER_MA = 50
+        msg = "⚪ [기본 설정(Default)] 전략 프리셋이 초기화되었습니다.\n(시스템 기본 설정으로 복귀)"
     else:
-        return "⚠️ 알 수 없는 프리셋입니다. (bull/bear/sideways 중 선택)"
+        return "⚠️ 알 수 없는 프리셋입니다. (bull/bear/sideways/default 중 선택)"
         
     _save_dynamic_config()
     
@@ -758,9 +767,10 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
 def select_strategy_preset():
     """시장 국면별 전략 프리셋 선택 메뉴"""
     menu_items = [
-        ("1", "강세장 (Bull) - 수익 극대화 & 추세 추종", "Bull"),
-        ("2", "약세장 (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
-        ("3", "횡보장 (Sideways) - 박스권 단기 스윙", "Sideways")
+        ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
+        ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
+        ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
+        ("0", "기본설정 (Default) - 프리셋 초기화", "Default")
     ]
     choice = utils.show_menu("시장 국면별 전략 프리셋 (Strategy Presets)", menu_items, default_choice="b")
     if choice.lower() in ['b', 'q']: return False
@@ -768,6 +778,7 @@ def select_strategy_preset():
     if choice == "1": apply_strategy_preset("bull")
     elif choice == "2": apply_strategy_preset("bear")
     elif choice == "3": apply_strategy_preset("sideways")
+    elif choice == "0": apply_strategy_preset("default")
     return True
 
 def reset_to_default(interactive=True):

@@ -1349,10 +1349,7 @@ class TelegramCommander:
             return "⚠️ 알 수 없는 프리셋입니다. (b:강세, r:약세, s:횡보, d:초기화 중 선택)"
             
         from modules import settings
-        if preset_type == 'default':
-            msg = settings.reset_to_default(interactive=False)
-        else:
-            msg = settings.apply_strategy_preset(preset_type, interactive=False)
+        msg = settings.apply_strategy_preset(preset_type, interactive=False)
         return msg
 
     def _cmd_balance(self, args):
