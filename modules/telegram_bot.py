@@ -150,7 +150,7 @@ class TelegramCommander:
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
-            "📈 시장 지수": "/market",
+            "📈 시장 지수": "/market kc",
             "❓ 도움말": "/help",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
@@ -777,8 +777,9 @@ class TelegramCommander:
             'b': "암호화폐 (Cryptocurrency)"
         }
         
+        self._send_reply("⏳ [시장 지수 조회] 지수 데이터를 수집 중입니다. 약간의 시간이 소요될 수 있습니다...")
+        
         if not args:
-            self._send_reply("⏳ [시장 지수 조회] 전체 지수 데이터를 수집 중입니다. 약간의 시간이 소요될 수 있습니다...")
             return self._get_market_status(None)
             
         keys = "".join(args).lower()
