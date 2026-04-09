@@ -57,10 +57,10 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 INDICES_GROUPS = {
     "1": {"name": "국내 지수 (Domestic Indices)", "indices": ["코스피", "코스피200", "코스닥", "코스닥150"]},
     "2": {"name": "글로벌 지수 (Global Indices)", "indices": ["나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000", "Japan - 닛케이", "Taiwan - 대만가권", "Hong Kong - 항셍", "China - 상해종합", "Germany - 닥스40", "Europe - 스톡스50"]},
-    "3": {"name": "섹터 및 주요 지표 (Sectors & Key Indicators)", "indices": ["London - Samsung GDR", "SOX (반도체)", "VIX (변동성)"]},
+    "3": {"name": "섹터 및 주요 지표 (Sectors & Key Indicators)", "indices": ["London - Samsung GDR", "SOX (반도체)", "VIX (변동성)", "MSCI 신흥국", "하이일드 채권"]},
     "4": {"name": "금리 및 환율 (Rates & FX)", "indices": ["달러인덱스", "달러환율", "미국채 2년물 선물", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리"]},
     "5": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
-    "6": {"name": "암호화폐 (Cryptocurrency)", "indices": ["비트코인", "이더리움"]}
+    "6": {"name": "암호화폐 (Cryptocurrency)", "indices": ["비트코인", "이더리움", "솔라나", "리플"]}
 }
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)

@@ -39,6 +39,7 @@ ALL_INDICES = [
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
     ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("VIX (변동성)", "^VIX"),
+    ("MSCI 신흥국", "EEM"), ("하이일드 채권", "HYG"),
     # 4. 금리 및 환율
     ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     # 5. 원자재
@@ -46,7 +47,7 @@ ALL_INDICES = [
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
     # 6. 암호화폐
-    ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD")
+    ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"), ("솔라나", "SOL-USD"), ("리플", "XRP-USD")
 ]
 
 # 이름 -> 티커 매핑 (기존 호환성 유지)
@@ -115,7 +116,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         prev = 0.0
         high_52 = high_52_daily
         
-        is_crypto = name in ["비트코인", "이더리움"]
+        is_crypto = name in ["비트코인", "이더리움", "솔라나", "리플"]
         is_futures = name in ["나스닥 선물", "미국채 2년물 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
@@ -435,7 +436,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "금", "은", "구리", "비트코인", "이더리움", "미국채 2년물 선물", "London - Samsung GDR"
+            "금", "은", "구리", "비트코인", "이더리움", "솔라나", "리플", "미국채 2년물 선물", "London - Samsung GDR",
+            "MSCI 신흥국", "하이일드 채권"
         ]
 
         if name in adaptive_targets:
