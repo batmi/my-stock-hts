@@ -1125,7 +1125,15 @@ class OrderManager:
         
         self.trader.log(f"━━━━━━━━ [주문 실행] {type_str.upper()} ━━━━━━━━")
         price_log = f"{price:,}원(지정가)" if price > 0 else "시장가(0)"
-        self.trader.log(f"대상: {code}, 수량: {qty}, 단가: {price_log}")
+        
+        target_display = f"{name}({code})" if name else code
+        amount_log = f"{int(price * qty):,}원" if price > 0 else "-"
+        log_detail = f"대상: {target_display}, 수량: {qty}, 단가: {price_log}, 금액: {amount_log}"
+        
+        if type_str.lower() == 'sell':
+            log_detail += f", 손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
+            
+        self.trader.log(log_detail)
 
         # [Fix: Point 3] API 지연 중 중복 주문 방지를 위한 임시 ID 선점 (Pre-registration)
         temp_id = f"PRE_{time.time()}"
@@ -1159,6 +1167,10 @@ class OrderManager:
                 msg = f"🚀 {title_tag} {t_type} {stock_display}\n수량: {qty}주\n단가: {price_log}"
                 if price > 0:
                     msg += f"\n금액: {int(price * qty):,}원"
+                    
+                if type_str.lower() == 'sell':
+                    msg += f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
+                    
                 msg += f"\n주문번호: {odno}"
                 if reason:
                     msg += f"\n사유: {reason}"

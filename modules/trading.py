@@ -951,6 +951,21 @@ def send_order(order_type):
                 if hasattr(trader, 'order_manager'):
                     trader.order_manager.register_manual_order(stock_code, odno)
                 
+                # [추가] 매도 시 예상 손익 계산 (텔레그램 및 DB용)
+                profit_amt = 0
+                profit_rate = 0.0
+                if order_type == 'sell' and stock_info:
+                    try:
+                        buy_price = float(stock_info.get('buy_price', 0))
+                        if buy_price > 0:
+                            # calc_price: 주문 단가 (시장가인 경우 현재가)
+                            est_sell_amt = float(qty) * calc_price
+                            est_buy_amt = float(qty) * buy_price
+                            # 단순 차익 계산 (수수료/세금 제외)
+                            profit_amt = int(est_sell_amt - est_buy_amt)
+                            profit_rate = ((calc_price - buy_price) / buy_price) * 100
+                    except: pass
+
                 # 텔레그램 알림
                 t_type = "매수" if order_type == 'buy' else "매도"
                 msg = f"🚀 [수동 주문] {t_type} {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}"
@@ -959,6 +974,10 @@ def send_order(order_type):
                         msg += f"\n금액: ${total_amt:,.2f}"
                     else:
                         msg += f"\n금액: {int(total_amt):,}원"
+                        
+                if order_type == 'sell':
+                    msg += f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
+                    
                 msg += f"\n주문번호: {odno}"
                 
                 if order_type == 'buy':
@@ -974,21 +993,6 @@ def send_order(order_type):
                 # DB 저장
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
                 
-                # [추가] 매도 시 예상 손익 계산 및 저장
-                profit_amt = 0
-                profit_rate = 0.0
-                if order_type == 'sell' and stock_info:
-                    try:
-                        buy_price = float(stock_info.get('buy_price', 0))
-                        if buy_price > 0:
-                            # calc_price: 주문 단가 (시장가인 경우 현재가)
-                            est_sell_amt = float(qty) * calc_price
-                            est_buy_amt = float(qty) * buy_price
-                            # 단순 차익 계산 (수수료/세금 제외)
-                            profit_amt = int(est_sell_amt - est_buy_amt)
-                            profit_rate = ((calc_price - buy_price) / buy_price) * 100
-                    except: pass
-
                 db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score)
                 
                 # 매도 시 트레일링 스탑 초기화
