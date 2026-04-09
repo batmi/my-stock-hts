@@ -912,9 +912,26 @@ def run_backtest():
         if not code: continue
 
         # 2. 설정 입력
-        change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+        apply_preset = Prompt.ask("시장 상황 프리셋을 적용하여 시뮬레이션을 진행하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
         config.console.print()
-        if change_settings in ['b', 'q']: continue
+        if apply_preset in ['b', 'q']: continue
+
+        change_settings = "n"
+        preset_choice = None
+        msg_preset = ""
+        if apply_preset == "y":
+            preset_items = [
+                ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
+                ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
+                ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
+                ("0", "기본설정 (Default) - 시스템 권장 설정", "Default")
+            ]
+            preset_choice = utils.show_menu("시장 상황 프리셋 선택", preset_items, default_choice="1")
+            if preset_choice.lower() in ['b', 'q']: continue
+        else:
+            change_settings = Prompt.ask("시뮬레이션 조건을 변경하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+            config.console.print()
+            if change_settings in ['b', 'q']: continue
         
         # [추가] 개별 룰 로드
         custom_rule = db_manager.db.get_stock_strategy(code)
@@ -941,6 +958,58 @@ def run_backtest():
                 if isinstance(w_data, str): weights = json.loads(w_data)
                 elif isinstance(w_data, dict): weights = w_data
             except: pass
+
+        # 프리셋 적용 시 기본값 덮어쓰기
+        if preset_choice == "1":
+            buy_score = 7.0
+            buy_rsi = 70
+            sell_score = 5.0
+            take_profit = 20.0
+            take_profit_rsi = 80.0
+            stop_loss = -7.0
+            ts_activation = 10.0
+            ts_callback = 3.0
+            time_stop_days = 10
+            atr_mult = 2.0
+            weights = {"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0}
+            msg_preset = "강세장 (수익 극대화 & 추세 추종)"
+        elif preset_choice == "2":
+            buy_score = 9.0
+            buy_rsi = 65
+            sell_score = 6.0
+            take_profit = 5.0
+            stop_loss = -3.0
+            ts_activation = 3.0
+            ts_callback = 1.5
+            time_stop_days = 3
+            atr_mult = 1.5
+            weights = {"TREND": 1.0, "MOMENTUM": 4.0, "STRENGTH": 3.0, "SYNERGY": 2.0}
+            msg_preset = "약세장 (생존 우선 & 낙폭과대 스윙)"
+        elif preset_choice == "3":
+            buy_score = 7.5
+            buy_rsi = 50
+            sell_score = 5.0
+            take_profit = 10.0
+            stop_loss = -5.0
+            ts_activation = 5.0
+            ts_callback = 2.0
+            time_stop_days = 5
+            atr_mult = 1.8
+            weights = {"TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0}
+            msg_preset = "횡보장 (박스권 단기 스윙)"
+        elif preset_choice == "0":
+            buy_score = 7.5
+            buy_rsi = 65
+            sell_score = 5.0
+            take_profit = 20.0
+            take_profit_rsi = 75.0
+            stop_loss = -7.0
+            ts_activation = 10.0
+            ts_callback = 3.0
+            time_stop_days = 10
+            atr_mult = 2.0
+            weights = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
+            msg_preset = "기본설정 (시스템 권장 설정)"
 
         if change_settings == "y":
             config.console.print()
@@ -1051,29 +1120,25 @@ def run_backtest():
                         config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
                         continue
 
-            msg = f"\n[dim]설정한 조건으로 진행합니다.\n"
-            msg += f" - 기간: {days}일\n"
-            msg += f" - 매수: {buy_score}점 / RSI {buy_rsi}\n"
-            msg += f" - 매도: {sell_score}점\n"
-            msg += f" - 익절: +{take_profit}% / RSI {take_profit_rsi} (반익절: {'ON' if half_tp_use else 'OFF'})\n"
-            msg += f" - 손절: ATR x{atr_mult}\n" if use_atr_stop else f" - 손절: {stop_loss}%\n"
-            msg += f" - 트레일링: +{ts_activation}% / -{ts_callback}%\n"
-            msg += f" - 시간청산: {time_stop_days}일"
-            if weights:
-                 msg += f"\n - 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
-            msg += "[/dim]\n"
+        if change_settings == "y":
+            header_msg = "⚪ [개별 설정] 사용자 지정 시뮬레이션 조건으로 진행합니다."
         else:
-            msg = f"\n[dim]기본 설정으로 진행합니다.\n"
-            msg += f" - 기간: {days}일\n"
-            msg += f" - 매수: {buy_score}점 / RSI {buy_rsi}\n"
-            msg += f" - 매도: {sell_score}점\n"
-            msg += f" - 익절: +{take_profit}% / RSI {take_profit_rsi} (반익절: {'ON' if half_tp_use else 'OFF'})\n"
-            msg += f" - 손절: ATR x{atr_mult}\n" if use_atr_stop else f" - 손절: {stop_loss}%\n"
-            msg += f" - 트레일링: +{ts_activation}% / -{ts_callback}%\n"
-            msg += f" - 시간청산: {time_stop_days}일"
-            if weights:
-                 msg += f"\n - 가중치: {weights.get('TREND', 4.0)}/{weights.get('MOMENTUM', 2.5)}/{weights.get('STRENGTH', 1.5)}/{weights.get('SYNERGY', 2.0)}"
-            msg += "[/dim]\n"
+            if preset_choice:
+                header_msg = f"⚪ [프리셋 적용] {msg_preset} 설정으로 진행합니다."
+            else:
+                header_msg = "⚪ [기본 설정] 시스템 권장 설정 (또는 개별 룰)으로 진행합니다."
+
+        msg = f"\n{header_msg}\n"
+        msg += "[dim]" + "─" * 75 + "[/dim]\n"
+        msg += f"   [cyan]시뮬레이션 기간[/cyan]          {days}일\n"
+        msg += f"   [cyan]매수 허들 (점수/RSI)[/cyan]     {buy_score}점 이상 / RSI {buy_rsi} 미만\n"
+        msg += f"   [cyan]매도 허들 (점수/RSI)[/cyan]     점수 {sell_score} 미만 / RSI {take_profit_rsi} 초과\n"
+        msg += f"   [cyan]익절 / 손절[/cyan]              +{take_profit}% (반익절: {'ON' if half_tp_use else 'OFF'}) / {f'{stop_loss}% (ATR x{atr_mult})' if use_atr_stop else f'{stop_loss}%'}\n"
+        msg += f"   [cyan]트레일링 스탑[/cyan]            +{ts_activation}% 발동 후 -{ts_callback}%\n"
+        msg += f"   [cyan]시간 청산[/cyan]                {time_stop_days}일 경과 시 강제 매도\n"
+        if weights:
+            msg += f"   [cyan]스코어링 가중치[/cyan]          추세 {weights.get('TREND', 4.0)} / 모멘텀 {weights.get('MOMENTUM', 2.5)} / 강도 {weights.get('STRENGTH', 1.5)} / 시너지 {weights.get('SYNERGY', 2.0)}\n"
+        msg += "[dim]" + "─" * 75 + "[/dim]\n"
         
         # [수정] 초기 자본금 및 환율 설정
         initial_capital_krw = 10_000_000

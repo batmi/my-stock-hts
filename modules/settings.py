@@ -54,7 +54,7 @@ def _save_dynamic_config():
         path = os.path.join(config.JSON_DIR, "dynamic_config.json")
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
-        console.print(f"\n[bold green]설정이 저장되었습니다. (재시작 시에도 유지됨)[/bold green]")
+        console.print(f"\n[green]설정이 저장되었습니다. (재시작 시에도 유지됨)[/green]")
         console.print(f"[dim]저장 경로: {path}[/dim]")
     except Exception as e:
         console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
@@ -699,7 +699,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     """지정된 시장 국면에 맞게 시스템 전역 설정을 일괄 변경합니다."""
     if preset_type == "bull":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 70, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 20.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 2.0})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 2.0})
         config.SCORING_WEIGHTS.update({"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.2
         config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
@@ -735,7 +735,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
         config.USE_MARKET_FILTER = True
         config.MARKET_FILTER_MA = 50
-        msg = "⚪ [기본 설정(Default)] 전략 프리셋이 초기화되었습니다.\n(시스템 기본 설정으로 복귀)"
+        msg = "⚪ [기본설정(Default)] 전략 프리셋이 적용되었습니다.\n(시스템 권장 설정으로 복귀)"
     else:
         return "⚠️ 알 수 없는 프리셋입니다. (bull/bear/sideways/default 중 선택)"
         
@@ -743,10 +743,11 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     
     # [추가] 변경된 주요 설정값 요약 데이터 구성
     summary_data = [
-        ("매수 허들 (점수/RSI)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 / {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만"),
+        ("매수 허들 (점수/RSI)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
         ("역추세 매수 (RSI)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하)"),
-        ("익절 / 손절", f"+{config.SELL_STRATEGY['TAKE_PROFIT_RATE']}% / {config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
+        ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 5.0)} 미만 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
+        ("익절 / 손절", f"+{config.SELL_STRATEGY['TAKE_PROFIT_RATE']}% (반익절: {'ON' if config.SELL_STRATEGY.get('HALF_TAKE_PROFIT_USE', True) else 'OFF'}) / {config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 3.0)}%"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 20))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
@@ -755,14 +756,16 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     ]
     
     if interactive:
-        console.print(f"\n[bold]{msg}[/bold]")
+        console.print(f"\n{msg}")
         
+        console.print("[dim]" + "─" * 75 + "[/dim]")
         table = Table(box=box.SIMPLE, show_header=False, border_style="dim", padding=(0, 2))
         table.add_column("항목", style="cyan", justify="left")
         table.add_column("설정값", justify="left")
         for k, v in summary_data:
             table.add_row(k, v)
         console.print(table)
+        console.print("[dim]" + "─" * 75 + "[/dim]")
         
         console.print("[dim]설정 메뉴에서 각 세부 항목을 다시 조정할 수 있습니다.[/dim]")
         
@@ -775,7 +778,7 @@ def select_strategy_preset():
         ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
         ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
         ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
-        ("0", "기본설정 (Default) - 프리셋 초기화", "Default")
+        ("0", "기본설정 (Default) - 시스템 권장 설정", "Default")
     ]
     choice = utils.show_menu("시장 국면별 전략 프리셋 (Strategy Presets)", menu_items, default_choice="b")
     if choice.lower() in ['b', 'q']: return False
