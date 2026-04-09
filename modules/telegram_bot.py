@@ -579,7 +579,7 @@ class TelegramCommander:
         ]
 
         try:
-            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal', 'relative_volume_10d_calc']
+            select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'ADX', 'SMA20', 'SMA50', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal', 'relative_volume_10d_calc']
             
             market_str = "미국" if market == "america" else "국내"
             final_msg = f"🔎 [TradingView 시장 스캔 결과]\n• 시장: {market_str}\n"
@@ -659,9 +659,11 @@ class TelegramCommander:
                     close = row.get('close', 0)
                     change = row.get('change', 0)
                     rsi = row.get('RSI', 0)
+                    adx = row.get('ADX', 0)
                     
                     close_str = f"${close:,.2f}" if market == "america" else f"{int(close):,}원"
                     rsi_str = f"RSI: {rsi:.1f}" if pd.notna(rsi) else ""
+                    adx_str = f" / ADX: {adx:.1f}" if pd.notna(adx) else ""
                     
                     extra_str = ""
                     if preset_key in ["ValueRebound", "HighDividend"]:
@@ -676,7 +678,7 @@ class TelegramCommander:
                         tags = [t for t in [per_str, roe_str, div_str] if t]
                         if tags: extra_str = f" | {' '.join(tags)}"
                     
-                    final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{extra_str}\n\n"
+                    final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{adx_str}{extra_str}\n\n"
                 
             final_msg += "\n상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(final_msg.strip())
@@ -946,8 +948,8 @@ class TelegramCommander:
             self._send_reply("⚠️ 종목명이나 코드를 입력해주세요.\n예: /chart [d/h/m] 삼성전자")
             return None
 
-        period_type = 'hourly'
-        period_label = "시봉"
+        period_type = 'daily'
+        period_label = "일봉"
         keyword_args = args
 
         if args[0].lower() in ['d', 'h', 'm']:

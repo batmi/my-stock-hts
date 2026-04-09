@@ -1354,7 +1354,7 @@ def _run_tradingview_screener():
                 else:
                     task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
                 
-                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'relative_volume_10d_calc']
+                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
                 query = Query().set_markets(market).select(*select_cols)
                 
                 if p_choice == "1":
@@ -1416,6 +1416,7 @@ def _run_tradingview_screener():
                     table.add_column("종목명", justify="left")
                     table.add_column("현재가", justify="right")
                     table.add_column("등락률", justify="right")
+                    table.add_column("52주(%)", justify="right")
                     table.add_column("SMA20", justify="right")
                     table.add_column("MACD (Sig)", justify="right")
                     table.add_column("RSI", justify="right")
@@ -1464,6 +1465,19 @@ def _run_tradingview_screener():
                         average_volume = row.get('average_volume', 0)
                         average_volume = average_volume if pd.notna(average_volume) else 0
                         
+                        h52 = row.get('price_52_week_high', 0)
+                        l52 = row.get('price_52_week_low', 0)
+                        
+                        w52_pos_str = "-"
+                        if pd.notna(h52) and pd.notna(l52) and h52 > l52:
+                            pos = (close - l52) / (h52 - l52) * 100
+                            w_color = "[white]"
+                            if pos >= 90: w_color = "[red]"
+                            elif pos >= 80: w_color = "[orange3]"
+                            elif pos <= 30: w_color = "[blue]"
+                            elif pos <= 50: w_color = "[yellow]"
+                            w52_pos_str = f"{w_color}{pos:.1f}%[/]"
+                        
                         close_str_raw = f"{close:,.2f}" if market == "america" else f"{int(close):,}"
                         c_color = "[red]" if close > sma20 else "[blue]"
                         close_str = f"{c_color}{close_str_raw}[/]"
@@ -1506,7 +1520,7 @@ def _run_tradingview_screener():
                         avg_vol_str = f"{avg_vol_k:,.0f}K"
 
                         table.add_row(
-                            ticker, name, close_str, change_str, sma20_str,
+                            ticker, name, close_str, change_str, w52_pos_str, sma20_str,
                             macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                         )
                         progress.advance(active_task)
