@@ -754,7 +754,7 @@ def send_order(order_type):
         curr_price = api.get_current_price(stock_code, is_overseas)
         
         if curr_price > 0:
-            price_fmt = f"${curr_price:,.2f}" if is_overseas else f"{curr_price:,}원"
+            price_fmt = f"${curr_price:,.2f}" if is_overseas else f"{int(curr_price):,}원"
             config.console.print(f"\n[bold green]현재가: {price_fmt}[/bold green]")
 
         default_qty = "1"
@@ -763,7 +763,19 @@ def send_order(order_type):
                 if is_overseas:
                     max_qty = api.fetch_overseas_buyable_quantity(stock_code, curr_price, excd)
                 else:
-                    max_qty = api.fetch_buyable_quantity(stock_code, curr_price)
+                    max_qty = api.fetch_buyable_quantity(stock_code, int(curr_price))
+                    
+                # [추가] API가 매수 가능 수량을 0으로 반환하거나 실패한 경우, 로컬 예수금 데이터로 Fallback 계산
+                if max_qty <= 0:
+                    dep_res = api.get_deposit_balance(target_cano, target_acnt, skip_balance_check=True)
+                    if dep_res:
+                        ord_psbl_amt = dep_res.get('order_possible', 0)
+                        if ord_psbl_amt == 0:
+                            ord_psbl_amt = dep_res.get('d2_deposit', 0)
+                            
+                        if ord_psbl_amt > 0 and curr_price > 0:
+                            # 보수적으로 수수료(약 0.015%)를 고려하여 99.8%만 매수 가능 금액으로 산정
+                            max_qty = int((ord_psbl_amt * 0.998) / curr_price)
                 
                 if max_qty > 0:
                     default_qty = str(max_qty)
@@ -775,6 +787,10 @@ def send_order(order_type):
                 max_qty = api.fetch_overseas_sellable_quantity(stock_code, excd)
             else:
                 max_qty = api.fetch_sellable_quantity(stock_code)
+                
+            # [추가] 잔고 API 실패 시 기존 선택된 잔고(stock_info) 수량으로 Fallback
+            if max_qty <= 0 and stock_info and stock_info.get('qty', 0) > 0:
+                max_qty = int(stock_info['qty'])
             
             if max_qty > 0:
                 default_qty = str(max_qty)

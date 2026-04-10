@@ -4681,6 +4681,10 @@ class AutoTrader:
             # 지정가 주문 시 해당 가격 기준으로 조회
             max_qty = api.fetch_buyable_quantity(cand['code'], order_price)
             
+            # [추가] API가 0을 반환할 경우 로컬 예수금 기반 Fallback 계산
+            if max_qty <= 0 and avail_cash > 0:
+                max_qty = int((avail_cash * 0.998) / order_price)
+            
             # 자산 배분 비중 적용 수량
             target_qty = int(invest_amt / order_price)
             
