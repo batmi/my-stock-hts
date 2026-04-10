@@ -158,8 +158,8 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
     """백테스팅 전체 흐름 (단일 실행 + 최적화) 테스트"""
     mock_get_data.return_value = sample_df
     
-    # 6(Manual) -> Code -> n(No settings change) -> 1(Single Run) -> n(AI) -> 메인화면(q)
-    mock_ask.side_effect = ["6", "005930", "n", "1", "n", "q"]
+    # 6(Manual) -> Code -> n(Preset) -> n(No settings change) -> 1(Single Run) -> n(AI) -> 메인화면(q)
+    mock_ask.side_effect = ["6", "005930", "n", "n", "1", "n", "q"]
     
     mock_status.return_value.__enter__.return_value = MagicMock()
     
@@ -186,7 +186,7 @@ def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_g
     mock_get_data.return_value = sample_df
     
     mock_ask.side_effect = [
-        "6", "005930", "y", "100", "9.0", "60", "20.0", "n", "75", "5.0", 
+            "6", "005930", "n", "y", "100", "9.0", "60", "20.0", "n", "75", "5.0", 
         "10.0", "3.0", "10", "n", "-5.0", "n", "1", "n", "q"
     ]
     

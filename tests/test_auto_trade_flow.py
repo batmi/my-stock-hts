@@ -42,6 +42,10 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     mock_qty.return_value = 10
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}
     
+    # 테스트 간섭 방지를 위해 명시적 임계값 고정
+    config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 7.0
+    config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = 65.0
+
     # 매수 신호가 나오도록 지표 설정
     mock_calc.return_value = {
         'ema_5': 10000, 'ema_20': 9000, 'ema_60': 8000, 'ema_120': 7000,
@@ -85,10 +89,14 @@ def test_check_sell_conditions(mock_get_rules, mock_sell_qty, mock_calc, mock_pl
     mock_get_chart.return_value = mock_chart_df
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}
     
+    # 테스트 간섭 방지를 위해 명시적 임계값 고정 (다른 테스트가 값을 바꿔도 영향받지 않도록 방어)
+    config.SELL_STRATEGY["TAKE_PROFIT_RSI"] = 75.0
+    config.SELL_STRATEGY["SUPER_TAKE_PROFIT_RSI"] = 85.0
+
     # 매도 신호(RSI 과열)가 나오도록 지표 설정
     mock_calc.return_value = {
         'ema_5': 10000, 'ema_20': 9000, 'ema_60': 8000, 'ema_120': 7000,
-        'rsi': 80, # Overbought
+        'rsi': 90, # Overbought (상향된 기준치를 무조건 초과하도록 90으로 설정)
         'adx': 30, 'cci': 100, 'obv': 1000, 'obv_trend': True,
         'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10,
         'atr': 100
