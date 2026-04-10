@@ -71,11 +71,11 @@ def test_correlation_skip_high_correlation(mock_chart, mock_vol, mock_market):
     
     mock_chart.return_value = df_cand
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_hold}}
-    item = {'code': '005930', 'name': '삼성전자'}
+    item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
     
     result = trader._analyze_candidate_worker(
         item, holding_codes={'000660'}, rules_map={}, restricted_stocks={}, 
-        market_regime_adj={'KOSPI': 0.0}, safe_delay=0, reentry_hurdles={}, holdings_dfs=holdings_dfs
+        market_regime_adj={'KOSPI': 0.0}, safe_delay=0, reentry_hurdles={}, holdings_dfs=holdings_dfs, holding_groups_map={'000660': 'stocks_kr'}
     )
     
     # 검증: 상관관계 스킵 타입으로 반환되어야 함
@@ -97,14 +97,14 @@ def test_correlation_pass_low_correlation(mock_chart, mock_vol, mock_market):
     
     mock_chart.return_value = df_cand
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_hold}}
-    item = {'code': '005930', 'name': '삼성전자'}
+    item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
     
     # 필터를 통과하여 실제 분석(strategy.analyze_buy)으로 넘어가는지 확인하기 위해 모킹
     with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
         mock_analyze.return_value = {'action': 'wait', 'state': '관망', 'score': 5.0, 'rsi': 50, 'adx': 20, 'cci': 0}
         
         result = trader._analyze_candidate_worker(
-            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs
+            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'000660': 'stocks_kr'}
         )
         
         # 검증: 필터링을 통과했으므로 correlation_skip이 아니어야 함
@@ -123,13 +123,13 @@ def test_correlation_pass_insufficient_data(mock_chart, mock_vol, mock_market):
     
     mock_chart.return_value = df_short
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_short}}
-    item = {'code': '005930', 'name': '삼성전자'}
+    item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
     
     with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
         mock_analyze.return_value = {'action': 'wait', 'state': '관망', 'score': 5.0, 'rsi': 50, 'adx': 20, 'cci': 0}
         
         result = trader._analyze_candidate_worker(
-            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs
+            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'000660': 'stocks_kr'}
         )
         
         assert result['type'] != 'correlation_skip'
@@ -146,12 +146,12 @@ def test_correlation_pass_when_disabled(mock_chart, mock_vol, mock_market):
     df_same = create_mock_df('same', 40)
     mock_chart.return_value = df_same
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_same}}
-    item = {'code': '005930', 'name': '삼성전자'}
+    item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
     
     with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
         mock_analyze.return_value = {'action': 'wait', 'state': '관망', 'score': 5.0, 'rsi': 50, 'adx': 20, 'cci': 0}
         result = trader._analyze_candidate_worker(
-            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs
+            item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'000660': 'stocks_kr'}
         )
         assert result['type'] != 'correlation_skip'
 
@@ -168,10 +168,10 @@ def test_analyze_candidates_logging(mock_prefetch, mock_worker):
         {'type': 'candidate', 'name': 'SK하이닉스', 'data': {'code':'000660', 'name':'SK하이닉스', 'score':8.0, 'rsi': 50}, 'log': '후보선정됨'}
     ]
     
-    targets = [{'code': '005930', 'name': '삼성전자'}, {'code': '000660', 'name': 'SK하이닉스'}]
+    targets = [{'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}, {'code': '000660', 'name': 'SK하이닉스', 'group': 'stocks_kr'}]
     
     with patch.object(trader, 'log') as mock_log:
-        candidates = trader._analyze_candidates(targets, {'005380'}, {}, {}, {'005380': '현대차'})
+        candidates = trader._analyze_candidates(targets, {'005380'}, {}, {}, {'005380': '현대차'}, {'005380': 'stocks_kr'})
         
         # 통과한 종목은 1개 뿐이어야 함
         assert len(candidates) == 1
@@ -180,3 +180,30 @@ def test_analyze_candidates_logging(mock_prefetch, mock_worker):
         # 종합 집계 로그가 정상적으로 남았는지 검증
         log_calls = [call.args[0] for call in mock_log.call_args_list]
         assert any("보유 종목과 유사 테마로 매수 보류 (1종목): 삼성전자" in log for log in log_calls)
+
+@patch('modules.auto_trade.AutoTrader._get_stock_market_type', return_value='KOSPI')
+@patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
+@patch('modules.auto_trade.api.get_chart_data')
+def test_correlation_pass_different_group(mock_chart, mock_vol, mock_market):
+    """6. 그룹이 다를 경우(예: 주식 vs ETF) 상관계수가 높아도 스킵하지 않는가?"""
+    trader = AutoTrader()
+    
+    # 동일한 패턴(상관계수 1.0)
+    df_cand = create_mock_df('same', 40)
+    df_hold = create_mock_df('same', 40)
+    
+    mock_chart.return_value = df_cand
+    holdings_dfs = {'069500': {'name': 'KODEX 200', 'df': df_hold}}
+    
+    # 후보: 삼성전자 (주식), 보유: KODEX 200 (ETF)
+    item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
+    
+    with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
+        mock_analyze.return_value = {'action': 'wait', 'state': '관망', 'score': 5.0, 'rsi': 50, 'adx': 20, 'cci': 0}
+        
+        result = trader._analyze_candidate_worker(
+            item, {'069500'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'069500': 'etfs_kr'}
+        )
+        
+        assert result['type'] != 'correlation_skip'
+        mock_analyze.assert_called_once()

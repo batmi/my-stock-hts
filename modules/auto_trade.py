@@ -4282,22 +4282,39 @@ class AutoTrader:
             concurrent.futures.wait(futures)
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
-        # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합
-        targets = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
+        # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합 (그룹 정보 추가)
+        targets = []
+        for item in config.session.stock_data.get("stocks_kr", []):
+            item_copy = dict(item)
+            item_copy['group'] = 'stocks_kr'
+            targets.append(item_copy)
+        for item in config.session.stock_data.get("etfs_kr", []):
+            item_copy = dict(item)
+            item_copy['group'] = 'etfs_kr'
+            targets.append(item_copy)
+            
         if not targets: return
         
         # [추가] 필터링 카운트 초기화 (매 주기마다 갱신)
         self.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0}
         skipped_stocks = [] # [추가] 시장 필터링으로 보류된 종목 리스트
         
-        # [추가] 보유 종목 조회 (중복 매수 방지)
+        # [추가] 보유 종목 조회 (중복 매수 방지 및 그룹 정보 매핑)
         holding_codes = set()
         holding_names_map = {}
+        holding_groups_map = {}
+        
+        code_to_group = {}
+        for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
+            for item in config.session.stock_data.get(key, []):
+                code_to_group[item['code']] = key
+                
         if holdings:
             for h in holdings:
                 code = h['pdno']
                 holding_codes.add(code)
                 holding_names_map[code] = h['prdt_name']
+                holding_groups_map[code] = code_to_group.get(code, 'stocks_kr')
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
@@ -4358,7 +4375,7 @@ class AutoTrader:
                     reentry_hurdles[scode] = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
 
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map)
         
         # 2. 매수 집행
         if candidates:
@@ -4370,7 +4387,7 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs):
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map):
         """(내부함수) 매수 후보 분석용 단일 워커"""
         try:
             # [추가] 시스템 트레이딩 스레드임을 마킹 (API 우선순위 획득용)
@@ -4416,8 +4433,15 @@ class AutoTrader:
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
                 corr_threshold = getattr(config, 'CORRELATION_THRESHOLD', 0.7)
                 cand_ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
+                cand_group = item.get('group', 'stocks_kr') # 후보 종목의 그룹
                 
                 for hold_code, hold_info in holdings_dfs.items():
+                    hold_group = holding_groups_map.get(hold_code, 'stocks_kr')
+                    
+                    # [추가] 같은 그룹(국내주식-국내주식, 국내ETF-국내ETF)끼리만 상관계수 비교
+                    if cand_group != hold_group:
+                        continue
+                        
                     hold_df = hold_info['df']
                     hold_name = hold_info['name']
                     if hold_df is None or hold_df.empty: continue
@@ -4498,7 +4522,7 @@ class AutoTrader:
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map):
         candidates = []
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
@@ -4558,7 +4582,7 @@ class AutoTrader:
         max_workers = 5 if not config.session.is_simulation else 2
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs) for item in targets]
+            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map) for item in targets]
             
             for future in concurrent.futures.as_completed(futures):
                 if not self.is_running: break
