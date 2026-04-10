@@ -1131,12 +1131,16 @@ def view_trade_history():
             
             # 손익 정보
             profit_display = "-"
-            if base_type == "매도":
+            # [수정] 정정/취소이더라도 원본이 매도라면 상속받은 손익을 화면에 정상 출력
+            if base_type == "매도" or "매도" in raw_type:
                 amt = t.get('profit_amt', 0)
                 rate = t.get('profit_rate', 0.0)
                 if amt is not None and rate is not None:
-                    color = "red" if amt > 0 else ("blue" if amt < 0 else "white")
-                    profit_display = f"[{color}]{amt:+,}원 ({rate:+.2f}%)[/]"
+                    try:
+                        if int(amt) != 0 or float(rate) != 0.0:
+                            color = "red" if int(amt) > 0 else ("blue" if int(amt) < 0 else "white")
+                            profit_display = f"[{color}]{int(amt):+,}원 ({float(rate):+.2f}%)[/]"
+                    except: pass
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"

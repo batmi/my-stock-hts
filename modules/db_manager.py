@@ -334,7 +334,8 @@ class DBManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT type FROM trades WHERE odno = ? AND order_status = '접수' ORDER BY id DESC LIMIT 1", (odno,))
+            # [수정] 원본 주문 조회 시 '접수'뿐만 아니라 '정정', '취소' 상태도 조회 허용
+            cursor.execute("SELECT type FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
             row = cursor.fetchone()
             return row[0] if row else None
         except: return None
@@ -344,7 +345,8 @@ class DBManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status = '접수' ORDER BY id DESC LIMIT 1", (odno,))
+            # [수정] 정정 주문에 의해 새로 생성된 odno도 찾을 수 있도록 상태 범위 확장
+            cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
             row = cursor.fetchone()
             return dict(row) if row else None
         except: return None

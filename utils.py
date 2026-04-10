@@ -298,22 +298,24 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
     config.console.print()
     return choice
 
-def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
+def search_stock_in_list(stock_list, title="종목 선택", display_func=None, hide_list=False):
     """리스트에서 종목을 번호, 이름, 코드로 검색하여 선택하는 통합 헬퍼 함수"""
     current_list = stock_list
     while True:
-        config.console.print(f"[bold]{title}[/bold]")
+        if title and not hide_list:
+            config.console.print(f"[bold]{title}[/bold]")
         
-        for i, s in enumerate(current_list):
-            if display_func:
-                config.console.print(display_func(i, s))
-            else:
-                name = s.get('name', 'Unknown')
-                code = s.get('code', 'Unknown')
-                config.console.print(f"[{i+1}] {name} ({code})")
+        if not hide_list:
+            for i, s in enumerate(current_list):
+                if display_func:
+                    config.console.print(display_func(i, s))
+                else:
+                    name = s.get('name', 'Unknown')
+                    code = s.get('code', 'Unknown')
+                    config.console.print(f"[{i+1}] {name} ({code})")
+            config.console.print()
             
-        config.console.print()
-        sel = Prompt.ask("번호, 종목명 또는 코드 검색 [dim](이전: b, 메인: q)[/dim]")
+        sel = Prompt.ask("번호, 주문번호, 종목명 또는 코드 검색 [dim](이전: b, 메인: q)[/dim]" if hide_list else "번호, 종목명 또는 코드 검색 [dim](이전: b, 메인: q)[/dim]")
         config.console.print()
         
         if sel.lower() in ['b', 'q']: return None, None
@@ -334,25 +336,33 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None):
         for s in stock_list:
             name = s.get('name', '')
             code = s.get('code', '')
-            if sel.lower() in name.lower() or sel.upper() in code.upper():
+            alt_name = s.get('prdt_name', '')
+            alt_code = s.get('pdno', '')
+            odno = str(s.get('odno', ''))
+            
+            if (sel.lower() in name.lower() or sel.upper() in code.upper() or 
+                sel.lower() in alt_name.lower() or sel.upper() in alt_code.upper() or
+                sel in odno):
                 filtered.append(s)
                 
         if not filtered:
             config.console.print(f"[yellow]'{sel}' 검색 결과가 없습니다.[/yellow]\n")
             current_list = stock_list
+            hide_list = False # 검색결과가 없으면 전체리스트를 다시 보여줌
             continue
             
         if len(filtered) == 1:
             selected_item = filtered[0]
             try: original_idx = stock_list.index(selected_item)
             except ValueError: original_idx = 0
-            name = selected_item.get('name', '')
-            code = selected_item.get('code', '')
+            name = selected_item.get('name', selected_item.get('prdt_name', ''))
+            code = selected_item.get('code', selected_item.get('pdno', ''))
             config.console.print(f"[green]검색됨: {name} ({code})[/green]\n")
             return original_idx, selected_item
             
         config.console.print(f"[yellow]{len(filtered)}개의 항목이 검색되었습니다. 번호를 선택해주세요.[/yellow]\n")
         current_list = filtered
+        hide_list = False # 여러개가 검색되면 목록을 보여줌
 
 def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하시겠습니까?"):
     """API를 통해 종목 유효성을 검증하고 사용자에게 진행 여부를 확인합니다."""

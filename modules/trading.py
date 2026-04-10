@@ -654,6 +654,7 @@ def show_open_orders():
         return []
 
     config.console.print(table)
+    config.console.print()
     return selectable_orders
 
 
@@ -959,31 +960,33 @@ def send_order(order_type):
             
             if result['rt_cd'] == '0':
                 odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
-                config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
                 
-                # [추가] AutoTrader에 주문 상태 등록 (중복 매매 방지)
-                trader = auto_trade.AutoTrader()
-                # [수정] OrderManager를 통해 등록 (리팩토링 대응)
-                if hasattr(trader, 'order_manager'):
-                    trader.order_manager.register_manual_order(stock_code, odno)
-                
-                # [추가] 매도 시 예상 손익 계산 (텔레그램 및 DB용)
+                # [수정] Race Condition 방지를 위해 DB 저장부터 최우선으로 실행
                 profit_amt = 0
                 profit_rate = 0.0
                 if order_type == 'sell' and stock_info:
                     try:
                         buy_price = float(stock_info.get('buy_price', 0))
                         if buy_price > 0:
-                            # calc_price: 주문 단가 (시장가인 경우 현재가)
                             est_sell_amt = float(qty) * calc_price
                             est_buy_amt = float(qty) * buy_price
-                            # 단순 차익 계산 (수수료/세금 제외)
                             profit_amt = int(est_sell_amt - est_buy_amt)
                             profit_rate = ((calc_price - buy_price) / buy_price) * 100
                     except: pass
-
-                # 텔레그램 알림
+                
                 t_type = "매수" if order_type == 'buy' else "매도"
+                snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
+                
+                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score)
+                
+                config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
+                # [추가] AutoTrader에 주문 상태 등록 (중복 매매 방지)
+                trader = auto_trade.AutoTrader()
+                # [수정] OrderManager를 통해 등록 (리팩토링 대응)
+                if hasattr(trader, 'order_manager'):
+                    trader.order_manager.register_manual_order(stock_code, odno)
+                
+                # 텔레그램 알림
                 msg = f"🚀 [수동 주문] {t_type} {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}"
                 if total_amt > 0:
                     if is_overseas:
@@ -1005,11 +1008,6 @@ def send_order(order_type):
                         msg += f"\n📉 [ATR 손절] {stop_loss_rate_to_save:.2f}% 설정 (ATR손절 적용)"
                 
                 api.send_telegram_message(msg)
-                
-                # DB 저장
-                snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
-                
-                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score)
                 
                 # 매도 시 트레일링 스탑 초기화
                 if order_type == 'sell':
@@ -1065,7 +1063,7 @@ def modify_order():
         odno = o.get('odno')
         return f"[{i+1}] {name}({code}) | 수량: {qty} | 주문번호: {odno}"
         
-    idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func)
+    idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func, hide_list=True)
     if not target_order: return False
     
     context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {target_order.get('odno')}") # [추가]
@@ -1095,9 +1093,18 @@ def modify_order():
     market = "overseas" if is_overseas else "domestic"
     action_name = "정정" if action == "1" else "취소"
     
-    # [추가] 매수/매도 구분 식별 (정정/취소 시 명확한 표기를 위함)
-    sb_cd = target_order.get('sll_buy_dvsn_cd')
-    sb_label = "매수" if sb_cd == '02' else ("매도" if sb_cd == '01' else "")
+    # [수정] 매수/매도 구분 식별: API에 의존하지 않고 DB의 원본 주문에서 우선 추출
+    org_trade_info = db_manager.db.get_trade_by_odno(org_odno)
+    sb_label = ""
+    if org_trade_info:
+        t_type = org_trade_info.get('type', '')
+        if "매도" in t_type or "sell" in t_type.lower(): sb_label = "매도"
+        elif "매수" in t_type or "buy" in t_type.lower(): sb_label = "매수"
+        
+    if not sb_label:
+        sb_cd = target_order.get('sll_buy_dvsn_cd')
+        sb_name = target_order.get('sll_buy_dvsn_cd_name', '')
+        sb_label = "매수" if sb_cd == '02' or "매수" in sb_name else ("매도" if sb_cd == '01' or "매도" in sb_name else "")
     full_action_name = f"{sb_label}{action_name}"
 
     # 시장별 변수 설정
@@ -1216,6 +1223,29 @@ def modify_order():
                 if not odno and 'output' in res_json and 'ODNO' in res_json['output']:
                     odno = res_json['output']['ODNO']
                 
+                # [수정] DB 저장을 가장 최우선으로 실행하여 Race Condition 원천 차단
+                org_trade = db_manager.db.get_trade_by_odno(org_odno)
+                profit_amt = 0
+                profit_rate = 0.0
+                inherited_score = 0
+                inherited_sl_rate = 0.0
+                inherited_snapshot = None
+                
+                if org_trade:
+                    inherited_score = org_trade.get('strategy_score', 0)
+                    inherited_sl_rate = org_trade.get('stop_loss_rate', 0.0)
+                    inherited_snapshot = org_trade.get('snapshot')
+                    # 기본적으로 기존 수익 정보 상속
+                    profit_amt = org_trade.get('profit_amt') or 0
+                    profit_rate = org_trade.get('profit_rate') or 0.0
+
+                db_manager.db.insert_trade(
+                    f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, 
+                    org_odno=org_odno, reason=f"사용자 {action_name}", order_status=action_name,
+                    profit_amt=profit_amt, profit_rate=profit_rate, score=inherited_score, 
+                    stop_loss_rate=inherited_sl_rate, snapshot=inherited_snapshot
+                )
+
                 config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
                 
                 msg = f"🚀 [수동 주문] {full_action_name} {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}"
@@ -1228,13 +1258,33 @@ def modify_order():
                             else: msg += f"\n금액: {int(t_amt):,}원"
                     except: pass
                 msg += f"\n주문번호: {odno}"
-                
+
+                # 매도 정정일 경우 새로운 가격으로 예상 손익 재계산 시도
+                if "매도" in full_action_name and action == "1":
+                    try:
+                        buy_price = 0
+                        h_list, _ = api.get_domestic_balance(target_cano, target_acnt)
+                        if h_list:
+                            for h in h_list:
+                                if h['pdno'] == pdno:
+                                    buy_price = float(h['pchs_avg_pric'])
+                                    break
+                        if buy_price > 0:
+                            c_price = float(price) if price != "0" else float(api.get_current_price(pdno, is_overseas) or 0)
+                            if c_price > 0:
+                                est_sell_amt = float(final_qty) * c_price
+                                est_buy_amt = float(final_qty) * buy_price
+                                profit_amt = int(est_sell_amt - est_buy_amt)
+                                profit_rate = ((c_price - buy_price) / buy_price) * 100
+                                # [추가] 재계산된 손익을 DB에 업데이트
+                                db_manager.db.update_trade(odno, profit_amt=profit_amt, profit_rate=profit_rate)
+                                msg += f"\n예상손익: {int(profit_amt):+,}원 ({profit_rate:+.2f}%)"
+                    except: pass
+
                 api.send_telegram_message(msg)
                 
-                db_manager.db.insert_trade(f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, org_odno=org_odno, reason=f"사용자 {action_name}", order_status=action_name)
-                
-                # 원본 접수 기록 보존을 위해 상태 업데이트 로직 제거
-                
+                # [추가] DB 비동기 저장 시간 확보를 위해 딜레이 추가 (Race Condition 원천 방지)
+                time.sleep(0.5)
                 auto_trade.ConclusionMonitor().check_now()
                 
                 config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
