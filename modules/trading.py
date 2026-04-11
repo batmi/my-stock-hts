@@ -20,8 +20,8 @@ from modules import auto_trade # [추가] 체결 감시자 호출용
 
 logger = logging.getLogger(__name__)
 
-def select_account():
-    """주문 수행할 계좌를 선택합니다."""
+def select_account(title="주문을 수행할 계좌를 선택하세요"):
+    """계좌를 선택합니다."""
     target_cano = config.session.cano
     target_acnt = config.session.acnt_prdt_cd
     acc_label = "실전투자" if not config.session.is_simulation else "모의투자"
@@ -32,7 +32,7 @@ def select_account():
             ("1", f"{acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}"),
             ("2", "자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
         ]
-        choice = utils.show_menu("주문을 수행할 계좌를 선택하세요", menu_items, default_choice="1")
+        choice = utils.show_menu(title, menu_items, default_choice="1")
         if choice.lower() in ['b', 'q']:
             return False, False, False
             

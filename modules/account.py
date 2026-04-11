@@ -1189,7 +1189,7 @@ def asset_management_menu():
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History")]
+        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report")]
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() in ['b', 'q']: return False
@@ -1200,7 +1200,7 @@ def asset_management_menu():
             continue
         
         last_choice = choice
-        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역"}
+        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -1214,3 +1214,13 @@ def asset_management_menu():
             utils.pause()
         elif choice == "3":
             if view_trade_history() is not False: utils.pause()
+        elif choice == "4":
+            logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+            from modules.trading import select_account
+            from modules.auto_trade import AutoTrader
+            target_cano, target_acnt, acc_label = select_account(title="평가할 계좌를 선택하세요")
+            if target_cano:
+                trader = AutoTrader()
+                target_acc = f"{target_cano}-{target_acnt}"
+                if trader.print_report(target_account=target_acc) is not False:
+                    utils.pause()

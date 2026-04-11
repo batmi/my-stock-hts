@@ -28,6 +28,16 @@ def test_asset_management_menu_history(mock_history, mock_ask):
     account.asset_management_menu()
     mock_history.assert_called_once()
 
+@patch('rich.prompt.Prompt.ask')
+@patch('modules.auto_trade.AutoTrader.print_report', return_value=False)
+@patch('modules.trading.select_account')
+def test_asset_management_menu_trading_report(mock_select, mock_report, mock_ask):
+    """자산 관리 메뉴 - 거래 평가 테스트"""
+    mock_ask.side_effect = ["4", "q"]
+    mock_select.return_value = ("12345678", "01", "실전투자")
+    account.asset_management_menu()
+    mock_report.assert_called_once_with(target_account="12345678-01")
+
 @patch('modules.account.api.get_domestic_balance')
 @patch('modules.account.api.get_overseas_balance')
 @patch('modules.account.api.get_deposit_balance')

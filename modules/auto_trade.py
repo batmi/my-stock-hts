@@ -2799,7 +2799,7 @@ class AutoTrader:
             
         console.print()
 
-    def print_report(self):
+    def print_report(self, target_account=None):
         menu_items = [
             ("1", "일간 (오늘)", "Daily"),
             ("2", "주간 (최근 7일)", "Weekly"),
@@ -2830,7 +2830,7 @@ class AutoTrader:
                 days = None # 전체 내역
                 context.USER_ACTION_BREADCRUMB.append("[전체]")
 
-        self._load_trade_records(days=days)
+        self._load_trade_records(days=days, target_account=target_account)
         
         if not self.trade_records:
             console.print("\n[yellow]선택한 기간에 해당하는 매매 기록이 없습니다.[/yellow]")
@@ -2856,13 +2856,16 @@ class AutoTrader:
             else:
                 start_dt = self.trade_records[0]['time'][:10] if self.trade_records else end_dt
                 
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-            if not config.session.is_simulation and not target_cano:
-                target_cano = config.session.cano
-                acnt = config.session.acnt_prdt_cd
-                
-            target_account = f"{target_cano}-{acnt}"
+            if target_account:
+                target_cano, acnt = target_account.split('-')
+            else:
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                if not config.session.is_simulation and not target_cano:
+                    target_cano = config.session.cano
+                    acnt = config.session.acnt_prdt_cd
+                    
+                target_account = f"{target_cano}-{acnt}"
             
             current_asset = 0
             try:
@@ -2909,9 +2912,7 @@ class AutoTrader:
             # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
             holdings_summary = None
             try:
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
-                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
                     
                     tot_pchs = 0
@@ -2934,10 +2935,10 @@ class AutoTrader:
             except Exception: pass
 
         self._print_summary_table(stats, holdings_summary)
-        self._print_current_holdings()
+        self._print_current_holdings(target_cano, acnt)
         self._print_stock_details()
 
-    def _load_trade_records(self, days=None):
+    def _load_trade_records(self, days=None, target_account=None):
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -2957,11 +2958,11 @@ class AutoTrader:
                 start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
             
             # [수정] 자동매매 계좌 번호로 필터링 (시스템 트레이딩 내역만 조회)
-            target_account = None
-            if config.session.is_simulation:
-                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-            elif config.session.auto_cano:
-                target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            if not target_account:
+                if config.session.is_simulation:
+                    target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+                elif config.session.auto_cano:
+                    target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
             # [Fix] DBManager.get_trades가 account 인자를 지원하지 않는 경우 대비 (메모리 필터링)
             try:
@@ -3265,7 +3266,7 @@ class AutoTrader:
         }
 
     def _print_summary_table(self, stats, holdings_summary=None):
-        summary_table = Table(title="시스템 트레이딩 성과 요약", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=False, border_style="dim")
+        summary_table = Table(title="트레이딩 성과 요약", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=False, border_style="dim")
         summary_table.add_column("항목", style="cyan", justify="left")
         summary_table.add_column("값", justify="left")
         
@@ -3341,13 +3342,14 @@ class AutoTrader:
             
         console.print(summary_table)
 
-    def _print_current_holdings(self):
+    def _print_current_holdings(self, target_cano=None, target_acnt=None):
         try:
             # 컨텍스트 설정 (시스템 트레이딩 계좌 조회)
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            if not target_cano:
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
             with utils.AccountContext(target_cano):
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                holdings, _ = api.get_domestic_balance(target_cano, acnt)
+                holdings, _ = api.get_domestic_balance(target_cano, target_acnt)
                 
                 if holdings:
                     console.print()
