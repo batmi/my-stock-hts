@@ -160,7 +160,15 @@ def test_save_all_market_analysis_permission_error(mock_writer):
     # 엑셀 파일이 열려있어서 PermissionError가 나는 상황 모킹
     mock_writer.side_effect = PermissionError("Permission denied")
     
+    mock_item = {
+        'code': '005930', 'name': 'Samsung', 'price': 100, 'score': 5.0, 'state': '매수',
+        'state_reason': '', 'state_color': '[red]', 'rsi': 50, 'adx': 50, 'cci': 50, 'psar': 50, 'macd': 1,
+        'macd_signal': 0, 'obv_trend': True, 'vol_strength': 100, 'w52_pos': 50, 'is_custom_rule': False,
+        'is_target': True
+    }
+
     with patch('modules.analysis._get_master_stock_list', return_value=[{'code': '005930', 'name': 'Samsung'}]), \
+         patch('modules.analysis._analyze_stock_worker', return_value=mock_item), \
          patch('rich.prompt.Prompt.ask', return_value='y'), \
          patch('config.console.print') as mock_print:
              

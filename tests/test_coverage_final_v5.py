@@ -26,7 +26,7 @@ def test_analyze_candidates_market_filter(mock_analyze, mock_vol, mock_chart):
     
     # Mocking _get_stock_market_type to return KOSPI
     with patch.object(trader, '_get_stock_market_type', return_value="KOSPI"):
-        candidates = trader._analyze_candidates([{"code": "005930", "name": "Samsung"}], set(), {}, {}, {})
+        candidates = trader._analyze_candidates([{"code": "005930", "name": "Samsung"}], set(), {}, {}, {}, {})
         
     assert len(candidates) == 0
     assert trader.skipped_by_market_filter_count.get("KOSPI", 0) == 1
@@ -42,7 +42,7 @@ def test_analyze_candidates_holding_skip(mock_analyze, mock_vol, mock_chart):
     targets = [{"code": "005930", "name": "Samsung"}]
     holding_codes = {"005930"}
     
-    candidates = trader._analyze_candidates(targets, holding_codes, {}, {}, {})
+    candidates = trader._analyze_candidates(targets, holding_codes, {}, {}, {}, {})
     assert len(candidates) == 0
 
 @patch('modules.auto_trade.api.fetch_buyable_quantity')

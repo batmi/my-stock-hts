@@ -5,6 +5,7 @@ venv/
 .DS_Store
 .coverage
 .vscode
+coverage.json
 
 # Data, Logs & Caches
 json/
