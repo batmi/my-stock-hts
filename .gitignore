@@ -4,6 +4,7 @@
 venv/
 .DS_Store
 .coverage
+.coveragerc
 .vscode
 coverage.json
 

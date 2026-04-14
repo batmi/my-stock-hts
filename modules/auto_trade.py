@@ -2199,19 +2199,21 @@ class AutoTrader:
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
         regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "🟡 횡보장"}
+        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
 
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
                 regime, _ = analysis.get_market_regime(m_type)
                 regime_str = regime_map.get(regime, regime)
-                msg += f"• {label}: {regime_str}\n"
+                msg += f"• {label}: {regime_str} (EMA {regime_ma}일 기준)\n"
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
 
         # [추가] 시장 지수 요약 정보 및 필터링 상태 (시장 상황 아래 배치)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_str = "ON" if use_filter else "OFF"
-        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str})]\n"
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
+        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str}, SMA {filter_ma}일 기준)]\n"
         
         is_healthy_k = True
         is_healthy_q = True
@@ -2455,7 +2457,8 @@ class AutoTrader:
         regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
         k_regime_str = regime_map.get(kospi_regime, kospi_regime)
         q_regime_str = regime_map.get(kosdaq_regime, kosdaq_regime)
-        table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점)")
+        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+        table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점) [dim](EMA {regime_ma}일 기준)[/]")
 
         # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
         if getattr(config, 'USE_MARKET_FILTER', True):
@@ -2493,7 +2496,8 @@ class AutoTrader:
             if not is_healthy_q or skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
             
             if skip_msg:
-                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] (하락장)")
+                filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
+                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일 이탈)[/]")
 
         table.add_section()
         
