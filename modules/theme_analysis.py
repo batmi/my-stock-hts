@@ -1306,19 +1306,19 @@ def _run_tradingview_screener():
     
     preset_items = [
         ("0", "전체 프리셋 순차 스캔", "All Presets"),
-        ("1", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)", "Pullback"),
-        ("2", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
-        ("3", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
-        ("4", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
-        ("5", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40)", "Value Rebound"),
-        ("6", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)", "Breakout"),
-        ("7", "고배당 안정 가치주 (배당률 > 5%, PER < 15)", "High Dividend"),
-        ("8", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)", "MACD Cross"),
-        ("9", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)", "Volume Bottom Rebound"),
-        ("10", "중장기 정배열 (현재가 > 20일선 > 50일선)", "Golden Cross / Perfect Trend"),
-        ("11", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)", "Growth & Value"),
-        ("12", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
-        ("13", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers")
+        ("1", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
+        ("2", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers"),
+        ("3", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)", "Pullback"),
+        ("4", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
+        ("5", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
+        ("6", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
+        ("7", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40)", "Value Rebound"),
+        ("8", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)", "Breakout"),
+        ("9", "고배당 안정 가치주 (배당률 > 5%, PER < 15)", "High Dividend"),
+        ("10", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)", "MACD Cross"),
+        ("11", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)", "Volume Bottom Rebound"),
+        ("12", "중장기 정배열 (현재가 > 20일선 > 50일선)", "Golden Cross / Perfect Trend"),
+        ("13", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)", "Growth & Value")
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="0")
     if preset_choice.lower() in ['b', 'q']: return False
@@ -1358,48 +1358,48 @@ def _run_tradingview_screener():
                 query = Query().set_markets(market).select(*select_cols)
                 
                 if p_choice == "1":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
-                elif p_choice == "2":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
-                elif p_choice == "3":
-                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
-                elif p_choice == "4":
-                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
-                elif p_choice == "5":
-                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
-                elif p_choice == "6":
-                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
-                elif p_choice == "7":
-                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
-                elif p_choice == "8":
-                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
-                elif p_choice == "9":
-                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
-                elif p_choice == "10":
-                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
-                elif p_choice == "11":
-                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
-                elif p_choice == "12":
                     if market == "america":
                         query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
                     else:
                         query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-                elif p_choice == "13":
+                elif p_choice == "2":
                     if market == "america":
                         query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
                     else:
                         query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
-                    
-                if p_choice in ["12", "13"]:
-                    query = query.limit(15)
+                elif p_choice == "3":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+                elif p_choice == "4":
+                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+                elif p_choice == "5":
+                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
                 elif p_choice == "6":
+                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+                elif p_choice == "7":
+                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                elif p_choice == "8":
+                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+                elif p_choice == "9":
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
+                elif p_choice == "10":
+                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
+                elif p_choice == "11":
+                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
+                elif p_choice == "12":
+                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
+                elif p_choice == "13":
+                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                    
+                if p_choice in ["1", "2"]:
+                    query = query.limit(15)
+                elif p_choice == "8":
                     query = query.limit(200)
                 else:
                     query = query.limit(20)
             
                 count, df = query.get_scanner_data()
                 
-                if p_choice == "6" and df is not None and not df.empty:
+                if p_choice == "8" and df is not None and not df.empty:
                     df = df[df['close'] >= df['price_52_week_high'] * 0.95]
                     df = df.head(20)
 

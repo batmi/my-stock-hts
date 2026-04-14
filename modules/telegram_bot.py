@@ -563,6 +563,8 @@ class TelegramCommander:
                 market = "america"
 
         presets = [
+            ("TopGainers", "당일 급상승 상위 15종목"),
+            ("TopLosers", "당일 급하락 상위 15종목"),
             ("Pullback", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)"),
             ("Momentum", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)"),
             ("Rebound", "바닥 반등 (RSI < 30 & 상승 반전)"),
@@ -573,9 +575,7 @@ class TelegramCommander:
             ("MacdCross", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)"),
             ("VolumeBottom", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)"),
             ("GoldenCross", "중장기 정배열 (현재가 > 20일선 > 50일선)"),
-            ("GrowthValue", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)"),
-            ("TopGainers", "당일 급상승 상위 15종목"),
-            ("TopLosers", "당일 급하락 상위 15종목")
+            ("GrowthValue", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)")
         ]
 
         try:

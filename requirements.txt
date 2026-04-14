@@ -120,6 +120,9 @@ pysqlcipher
 pysqlcipher3
 pysqlite
 pysqlite3
+pytest
+pytest-cov
+pytest-sugar
 python_bcrypt
 python_calamine
 python_socks
