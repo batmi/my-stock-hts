@@ -1290,7 +1290,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
         
         retry_count = 0
         while len(all_items) < 250 and retry_count < 10:
-            params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
+            params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
             data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
             if data.get('rt_cd') == '0':
                 items = data.get('output2')
@@ -1583,6 +1583,24 @@ def get_current_price_data(code, is_overseas):
     if not is_overseas:
         res = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"], "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "J", "fid_input_iscd": code}, timeout=3)
         if res.get('rt_cd') == '0':
+            # [추가] 액면분할 종목의 52주 고가/저가가 KIS API에서 원주가로 반환되는 스펙 한계 보정
+            try:
+                out = res['output']
+                curr = float(out.get('stck_prpr', 0))
+                w52h = float(out.get('w52_hgpr', 0))
+                # 52주 고점과 현재가가 2.5배 이상 차이나면(액면분할 의심), 
+                # 차트 데이터를 조회하여 52주 최고/최저가를 수정주가 기준으로 덮어씌움
+                if curr > 0 and w52h > 0 and (w52h / curr) > 2.5:
+                    df = get_chart_data(code, is_overseas=False)
+                    if df is not None and not df.empty:
+                        recent_df = df.tail(250)
+                        real_h52 = recent_df['high'].max()
+                        real_l52 = recent_df['low'].min()
+                        if real_h52 > 0 and real_l52 > 0:
+                            out['w52_hgpr'] = str(int(real_h52))
+                            out['w52_lwpr'] = str(int(real_l52))
+            except Exception as e:
+                logger.debug(f"[API] 52주 고가 보정 중 오류: {e}")
             _set_micro_cache(cache_key, res)
         return res
     
@@ -1684,7 +1702,7 @@ def get_daily_foreign_rate(code):
         "FID_COND_MRKT_DIV_CODE": "J",
         "FID_INPUT_ISCD": code,
         "FID_PERIOD_DIV_CODE": "D",
-        "FID_ORG_ADJ_PRC": "1"
+        "FID_ORG_ADJ_PRC": "0"
     }
     data = call_api(url, "domestic", "quotations", "daily_price", params=params, tr_id="FHKST01010400", timeout=3)
     if data.get('rt_cd') == '0':
@@ -1749,7 +1767,7 @@ def fetch_domestic_period_price(code, days=100):
     today = datetime.now().strftime("%Y%m%d")
     past = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     
-    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": past, "FID_INPUT_DATE_2": today, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
+    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": past, "FID_INPUT_DATE_2": today, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
     data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"], "domestic", "quotations", "chart", params=params)
     if data.get('rt_cd') == '0': return data.get('output2', [])
     return []
