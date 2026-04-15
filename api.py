@@ -3,6 +3,7 @@ import requests
 import logging
 import json
 import time
+import random
 import sys
 import ssl
 import urllib3
@@ -629,6 +630,10 @@ class ThrottledSession(requests.Session):
         max_retries = kwargs.pop('retries', config.MAX_RETRIES)
         if max_retries is None: max_retries = config.MAX_RETRIES
         
+        # [추가] 모의투자의 엄격한 TPS 제어로 인한 빈번한 차단을 방지하기 위해 기본 재시도 횟수 +1 추가
+        if is_sim_server and max_retries == config.MAX_RETRIES:
+            max_retries += 1
+        
         response = None
         
         for attempt in range(max_retries + 1):
@@ -653,7 +658,9 @@ class ThrottledSession(requests.Session):
                     server_type = "SIMULATION"
 
                 if target_limit > 0:
-                    min_interval = (1.0 / target_limit) * 1.05
+                    # [수정] TPS 안전계수 강화 (모의투자는 1.2배, 실전투자는 1.1배)하여 겹침 현상 방지
+                    safety_margin = 1.2 if is_sim_server else 1.1
+                    min_interval = (1.0 / target_limit) * safety_margin
                     
                     # 마지막 요청 시간이 너무 과거라면 현재 기준으로 리셋
                     if target_next_time < now:
@@ -787,7 +794,9 @@ class ThrottledSession(requests.Session):
                 # [수정] 모든 예외(연결 끊김, API 에러 등)에 대해 백오프 후 재시도
                 if attempt < max_retries:
                     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                    wait_time = base_delay * (2 ** attempt)
+                    # [수정] 동시에 여러 스레드가 깨어나는 것을 방지하기 위해 랜덤 지터(Jitter) 추가
+                    jitter = random.uniform(0.1, 0.5)
+                    wait_time = (base_delay * (2 ** attempt)) + jitter
                     
                     msg = f"⚠️ API 요청 실패. {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
                     logger.warning(msg)
