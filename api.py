@@ -625,59 +625,6 @@ class ThrottledSession(requests.Session):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
         is_sim_server = "openapivts.koreainvestment.com" in url
         
-        target_limit = 0
-        server_type = "EXTERNAL"
-        wait_time = 0
-        current_tps = 0
-        
-        # [수정] 선예약 후대기(Reserve-then-Wait) 방식으로 변경하여 락 경합 최소화
-        with self.lock:
-            now = time.time()
-            target_next_time = 0
-            
-            if is_real_server:
-                target_limit = config.REAL_TX_PER_SECOND
-                target_next_time = self.next_available_time_real
-                server_type = "REAL"
-            elif is_sim_server:
-                target_limit = config.SIM_TX_PER_SECOND
-                target_next_time = self.next_available_time_sim
-                server_type = "SIMULATION"
-
-            if target_limit > 0:
-                min_interval = (1.0 / target_limit) * 1.05
-                
-                # 마지막 요청 시간이 너무 과거라면 현재 기준으로 리셋
-                if target_next_time < now:
-                    target_next_time = now
-                
-                # 대기 시간 계산 (예약된 시간 - 현재 시간)
-                wait_time = target_next_time - now
-                if wait_time < 0: wait_time = 0
-                
-                # 다음 요청 가능 시간 예약 (현재 예약된 시간 + 간격)
-                new_next_time = target_next_time + min_interval
-                
-                if is_real_server:
-                    self.next_available_time_real = new_next_time
-                elif is_sim_server:
-                    self.next_available_time_sim = new_next_time
-            
-            # TPS 계산용 히스토리 기록 (실제 전송 예상 시점 기준)
-            self.request_history.append(now + wait_time)
-            current_tps = self._get_current_tps()
-
-        # [핵심] 락을 해제한 후 대기 (다른 스레드가 락을 획득하여 예약 가능하도록 함)
-        if wait_time > 0:
-            time.sleep(wait_time)
-
-        if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
-            config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
-            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                if kwargs.get('params'): config.console.print(f"[dim cyan]  > Params: {kwargs['params']}[/dim cyan]")
-                if kwargs.get('data'): config.console.print(f"[dim cyan]  > Body Data: {kwargs['data']}[/dim cyan]")
-                if kwargs.get('json'): config.console.print(f"[dim cyan]  > JSON Data: {kwargs['json']}[/dim cyan]")
-
         # [수정] 재시도 횟수 설정 (kwargs에서 전달받거나 config 기본값 사용)
         max_retries = kwargs.pop('retries', config.MAX_RETRIES)
         if max_retries is None: max_retries = config.MAX_RETRIES
@@ -685,6 +632,60 @@ class ThrottledSession(requests.Session):
         response = None
         
         for attempt in range(max_retries + 1):
+            target_limit = 0
+            server_type = "EXTERNAL"
+            wait_time = 0
+            current_tps = 0
+            
+            # [Fix] 선예약 후대기(Reserve-then-Wait) 로직을 for 루프 내부로 이동하여
+            # 재시도하는 요청들도 TPS 큐에 정상적으로 편입되도록 수정 (Thundering Herd 방지)
+            with self.lock:
+                now = time.time()
+                target_next_time = 0
+                
+                if is_real_server:
+                    target_limit = config.REAL_TX_PER_SECOND
+                    target_next_time = self.next_available_time_real
+                    server_type = "REAL"
+                elif is_sim_server:
+                    target_limit = config.SIM_TX_PER_SECOND
+                    target_next_time = self.next_available_time_sim
+                    server_type = "SIMULATION"
+
+                if target_limit > 0:
+                    min_interval = (1.0 / target_limit) * 1.05
+                    
+                    # 마지막 요청 시간이 너무 과거라면 현재 기준으로 리셋
+                    if target_next_time < now:
+                        target_next_time = now
+                    
+                    # 대기 시간 계산 (예약된 시간 - 현재 시간)
+                    wait_time = target_next_time - now
+                    if wait_time < 0: wait_time = 0
+                    
+                    # 다음 요청 가능 시간 예약 (현재 예약된 시간 + 간격)
+                    new_next_time = target_next_time + min_interval
+                    
+                    if is_real_server:
+                        self.next_available_time_real = new_next_time
+                    elif is_sim_server:
+                        self.next_available_time_sim = new_next_time
+            
+                # TPS 계산용 히스토리 기록 (실제 전송 예상 시점 기준)
+                self.request_history.append(now + wait_time)
+                current_tps = self._get_current_tps()
+
+            # [핵심] 락을 해제한 후 대기 (다른 스레드가 락을 획득하여 예약 가능하도록 함)
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+                config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
+                if config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    if kwargs.get('params'): config.console.print(f"[dim cyan]  > Params: {kwargs['params']}[/dim cyan]")
+                    if kwargs.get('data'): config.console.print(f"[dim cyan]  > Body Data: {kwargs['data']}[/dim cyan]")
+                    if kwargs.get('json'): config.console.print(f"[dim cyan]  > JSON Data: {kwargs['json']}[/dim cyan]")
+
             try:
                 if 'timeout' not in kwargs:
                     kwargs['timeout'] = config.DEFAULT_TIMEOUT
