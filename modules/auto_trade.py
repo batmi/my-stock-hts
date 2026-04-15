@@ -4109,6 +4109,11 @@ class AutoTrader:
             if not self.is_running: return
             code = item['pdno']; name = item['prdt_name']
             
+            # [추가] 트레이딩 제한 종목은 매도 분석에서 완전히 제외 (수동 매수/홀딩용)
+            if code in restricted_stocks:
+                if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 트레이딩 제한 종목 (수동 홀딩)")
+                return
+
             if self.order_manager.is_pending(code):
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 return
