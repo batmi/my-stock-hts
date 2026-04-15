@@ -4237,7 +4237,14 @@ class AutoTrader:
                 reason = result['reason']
                 score = result['score']
                 sell_ratio = result.get('sell_ratio', 1.0)
-                target_sell_qty = max(1, int(qty * sell_ratio)) if sell_ratio < 1.0 else qty
+                
+                if sell_ratio < 1.0:
+                    target_sell_qty = int(qty * sell_ratio)
+                    if target_sell_qty < 1:
+                        self.log(f"매도 보류: {name} - 보유 수량({qty}주) 부족으로 분할 매도({reason}) 스킵 (최종 목표 대기)")
+                        return
+                else:
+                    target_sell_qty = qty
                 
                 if rule: reason += " [개별 룰 적용]"
                 if applied_sl_rate is not None and "손절" in reason: reason = reason.replace("손절", "ATR손절")

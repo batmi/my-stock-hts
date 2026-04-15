@@ -748,16 +748,18 @@ class ThrottledSession(requests.Session):
                             
                             # 그 외 모든 API 에러 (성공이 아닌 경우)
                             elif rt_cd is not None and rt_cd != '0':
-                                # [수정] OPSQ2000 등 API 에러는 재시도하지 않음
-                                pass
-                                
-                                # [추가] API 에러 상세 로깅 (모든 에러에 대해 기록)
                                 rt_disp = rt_cd if rt_cd else "(Empty)"
                                 msg_disp = msg_cd if msg_cd else "(Empty)"
                                 msg1_disp = msg1 if msg1 else "(Empty)"
-                                # [추가] 디버깅을 위해 요청 본문(Body)을 로그에 포함
-                                req_body = kwargs.get('data', '')
-                                logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
+                                
+                                # EGW00201(초당 거래건수 초과)인 경우 API Gateway 차단이므로 안전하게 재시도 처리
+                                if msg_cd == 'EGW00201':
+                                    should_retry = True
+                                    retry_reason = f"Rate Limit Exceeded (EGW00201): {msg1_disp}"
+                                else:
+                                    # OPSQ2000 등 원장 거부 에러는 중복 주문 위험이 있으므로 재시도하지 않음
+                                    req_body = kwargs.get('data', '')
+                                    logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
 
                         except Exception as e:
                             # JSON 파싱 실패 등
