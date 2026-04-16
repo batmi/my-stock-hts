@@ -202,6 +202,7 @@ class ConclusionMonitor:
             cls._instance.is_running = False
             cls._instance.thread = None
             cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
+            cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
             
             # [수정] 적응형 폴링 설정 로드
             cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 2)
@@ -723,6 +724,12 @@ class ConclusionMonitor:
 
     def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason):
         """모의투자 체결 처리 핸들러"""
+        # [추가] Race Condition 방지용 메모리 락 검증
+        with self._lock:
+            if odno in self.processed_sim_fills:
+                return
+            self.processed_sim_fills.add(odno)
+            
         try:
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] _handle_simulation_fill 진입: {odno} / Code: {code} / Qty: {qty}")

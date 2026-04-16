@@ -519,6 +519,11 @@ def show_open_orders():
                                 code = db_o.get('code')
                                 cur_qty = holdings_map.get(code, 0)
                                 if cur_qty == 0:
+                                    cm = auto_trade.ConclusionMonitor()
+                                    with cm._lock:
+                                        if db_odno in cm.processed_sim_fills: continue
+                                        cm.processed_sim_fills.add(db_odno)
+                                        
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리 시작")
                                     # 원본 업데이트 제거 (접수 기록 보존)
@@ -545,6 +550,11 @@ def show_open_orders():
                                 current_qty = holdings_map.get(code, 0)
                                 
                                 if current_qty >= order_qty:
+                                    cm = auto_trade.ConclusionMonitor()
+                                    with cm._lock:
+                                        if db_odno in cm.processed_sim_fills: continue
+                                        cm.processed_sim_fills.add(db_odno)
+                                        
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매수 주문({db_odno}) 잔고 입고 확인({current_qty}>={order_qty}) -> 체결 처리")
                                     # 원본 업데이트 제거 (접수 기록 보존)
