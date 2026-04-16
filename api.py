@@ -793,9 +793,6 @@ class ThrottledSession(requests.Session):
                     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
                     
-                    # [추가] 시스템 트레이딩 로그 기록
-                    if hasattr(context, 'SYSTEM_LOGGER') and context.SYSTEM_LOGGER: context.SYSTEM_LOGGER(f"[API] {msg}")
-                    
                     time.sleep(wait_time)
                     continue
                 
