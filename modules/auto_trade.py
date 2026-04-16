@@ -4120,7 +4120,7 @@ class AutoTrader:
             if code in restricted_stocks:
                 self.log(f"[분석스킵] {name}: 트레이딩 제한 종목 (수동 홀딩)")
                 return
-
+            
             if self.order_manager.is_pending(code):
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 return
@@ -4301,7 +4301,7 @@ class AutoTrader:
                             if code in self.trailing_stop_cache: del self.trailing_stop_cache[code]
 
         # 병렬 처리 실행
-        max_workers = 5 if not config.session.is_simulation else 2
+        max_workers = 5 if not config.session.is_simulation else 1
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
@@ -4604,7 +4604,7 @@ class AutoTrader:
 
         # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
         # (실전: 5개, 모의: 2개 - ThrottledSession이 병목 없이 안전하게 제어함)
-        max_workers = 5 if not config.session.is_simulation else 2
+        max_workers = 5 if not config.session.is_simulation else 1
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map) for item in targets]
