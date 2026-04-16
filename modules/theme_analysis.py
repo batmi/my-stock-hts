@@ -1226,7 +1226,7 @@ def _analyze_stock_ui():
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task("[cyan]차트 데이터 및 기술적 지표 분석 중...[/cyan]", total=None)
+            task_id = progress.add_task("[cyan]차트 데이터 및 기술적 지표 분석 중...[/cyan]", total=None)
             
             df = api.get_chart_data(code, is_overseas)
             if df is None or df.empty:
@@ -1266,7 +1266,7 @@ def _analyze_stock_ui():
                 f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
             )
             
-            progress.add_task(f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            progress.update(task_id, description=f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]")
             answer = analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
