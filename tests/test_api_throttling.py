@@ -32,8 +32,19 @@ class TestThrottledSession(unittest.TestCase):
         mock_response.json.return_value = {'rt_cd': '0', 'msg_cd': 'MCA00000'}
         self.mock_request.return_value = mock_response
         
-        # time.sleep 모킹 (테스트 속도 향상 및 대기 시간 검증)
-        self.patcher_sleep = patch('time.sleep')
+        # time 제어용 변수 (time.time과 time.sleep 연동을 위해 Custom Mock 적용)
+        self.current_time = 1000.0
+        
+        def mock_time():
+            return self.current_time
+            
+        def mock_sleep(seconds):
+            self.current_time += seconds
+            
+        self.patcher_time = patch('time.time', side_effect=mock_time)
+        self.mock_time = self.patcher_time.start()
+        
+        self.patcher_sleep = patch('time.sleep', side_effect=mock_sleep)
         self.mock_sleep = self.patcher_sleep.start()
 
     def tearDown(self):
@@ -41,97 +52,74 @@ class TestThrottledSession(unittest.TestCase):
         config.SIM_TX_PER_SECOND = self.original_sim_tps
         config.REAL_TX_PER_SECOND = self.original_real_tps
         self.patcher_request.stop()
+        self.patcher_time.stop()
         self.patcher_sleep.stop()
 
     def test_simulation_throttling(self):
         """모의투자 URL 요청 시 스로틀링(속도 제한) 적용 확인"""
         url = "https://openapivts.koreainvestment.com/uapi/test" # 모의투자 도메인
         
-        # 1. 첫 번째 요청 (초기 상태)
-        # 현재 시간을 1000.0초로 고정
-        with patch('time.time', return_value=1000.0):
-            self.session.request('GET', url)
-            
-        # 첫 요청은 대기 없이 즉시 실행되어야 함 (wait_time <= 0)
-        # sleep이 호출되지 않았거나 0으로 호출되었을 수 있음
+        self.current_time = 1000.0
+        self.session.request('GET', url)
         
-        # 2. 두 번째 요청 (직후)
-        # 시간은 여전히 1000.0초라고 가정 (매우 빠른 연속 호출)
-        with patch('time.time', return_value=1000.0):
-            self.session.request('GET', url)
+        self.session.request('GET', url)
             
-        # 예상 대기 시간 계산: (1.0 / 2.0) * 1.05 = 0.525초
-        expected_wait = 0.525
+        # 모의투자 예상 대기 시간 계산: (1.0 / 2.0) * 1.2 = 0.6초
+        expected_wait = 0.6
         
         # sleep이 해당 시간만큼 호출되었는지 확인
         self.assertTrue(self.mock_sleep.called)
         args, _ = self.mock_sleep.call_args
         self.assertAlmostEqual(args[0], expected_wait, places=5)
         
-        # 다음 예약 시간이 갱신되었는지 확인
-        # 첫 요청 예약: 1000.0 (리셋됨) -> next: 1000.0 + 0.525 = 1000.525
-        # 두 번째 요청 예약: 1000.525 -> next: 1000.525 + 0.525 = 1001.05
-        self.assertAlmostEqual(self.session.next_available_time_sim, 1001.05, places=3)
+        # 마지막 요청 시간이 1000.6으로 갱신되었는지 확인
+        self.assertAlmostEqual(self.session.last_request_time_sim, 1000.6, places=3)
 
     def test_real_server_throttling(self):
         """실전투자 URL 요청 시 스로틀링 적용 확인"""
         url = "https://openapi.koreainvestment.com/uapi/test" # 실전투자 도메인
         
-        # 1. 첫 번째 요청
-        with patch('time.time', return_value=2000.0):
-            self.session.request('GET', url)
+        self.current_time = 2000.0
+        self.session.request('GET', url)
+        self.session.request('GET', url)
             
-        # 2. 두 번째 요청
-        with patch('time.time', return_value=2000.0):
-            self.session.request('GET', url)
-            
-        # 예상 대기 시간 계산: (1.0 / 10.0) * 1.05 = 0.105초
-        expected_wait = 0.105
+        # 실전투자 예상 대기 시간 계산: (1.0 / 10.0) * 1.1 = 0.11초
+        expected_wait = 0.11
         self.assertTrue(self.mock_sleep.called)
         args, _ = self.mock_sleep.call_args
         self.assertAlmostEqual(args[0], expected_wait, places=5)
         
         # 실전투자 상태 변수가 갱신되었는지 확인
-        self.assertAlmostEqual(self.session.next_available_time_real, 2000.0 + expected_wait * 2, places=3)
+        self.assertAlmostEqual(self.session.last_request_time_real, 2000.11, places=3)
 
     def test_reserve_then_wait_concurrency(self):
         """선예약 후대기(Reserve-then-Wait) 로직의 동시성 처리 확인"""
         url = "https://openapivts.koreainvestment.com/uapi/test"
         
-        # 3개의 스레드가 동시에 요청을 보낸다고 가정
-        # time.time()은 모두 동일한 시점(3000.0)을 반환
-        with patch('time.time', return_value=3000.0):
-            # Req 1
-            self.session.request('GET', url)
-            # next_sim -> 3000.525
+        # 모의 시간 환경을 멀티스레드용으로 재정의
+        def mock_time_multithread():
+            return self.current_time
             
-            # Req 2
-            self.session.request('GET', url)
-            # wait -> 0.525, next_sim -> 3001.05
+        def mock_sleep_multithread(seconds):
+            self.current_time += seconds
             
-            # Req 3
-            self.session.request('GET', url)
-            # wait -> 1.05, next_sim -> 3001.575
+        self.current_time = 3000.0
+        self.patcher_time.stop()
+        self.patcher_sleep.stop()
+        
+        with patch('time.time', side_effect=mock_time_multithread), \
+             patch('time.sleep', side_effect=mock_sleep_multithread):
+             
+             self.session.request('GET', url)
+             self.session.request('GET', url)
+             self.session.request('GET', url)
             
         # sleep 호출 기록 확인
         # args[0]이 대기 시간
-        call_args = [args[0] for args, _ in self.mock_sleep.call_args_list]
-        
-        # 0보다 큰 대기 시간만 필터링 (첫 요청은 0일 수 있음)
-        waits = [w for w in call_args if w > 0.0001]
-        
-        interval = 0.525
-        
-        # 최소 2번의 대기가 발생해야 함 (2번째, 3번째 요청)
-        self.assertTrue(len(waits) >= 2)
-        
-        # 각 요청이 겹치지 않게 순차적으로 대기 시간을 할당받았는지 확인
-        # (병렬로 대기하므로 각 스레드는 0.525초, 1.05초를 각각 기다리게 됨)
-        has_interval_1 = any(abs(w - interval) < 1e-5 for w in waits)
-        has_interval_2 = any(abs(w - (interval * 2)) < 1e-5 for w in waits)
-        
-        self.assertTrue(has_interval_1, f"{interval} not found (approx) in {waits}")
-        self.assertTrue(has_interval_2, f"{interval * 2} not found (approx) in {waits}")
+        # 이 테스트는 실제 멀티스레딩이 아니라 모킹된 순차적 흐름이므로
+        # 3000.0, 3000.6, 3001.2 에 전송되어야 함을 확인
+        self.assertEqual(self.mock_request.call_count, 3)
+        self.assertAlmostEqual(self.session.last_request_time_sim, 3001.2, places=3)
 
     def test_thread_safety_with_threads(self):
         """실제 스레드를 생성하여 락(Lock) 동작 검증"""
@@ -139,28 +127,32 @@ class TestThrottledSession(unittest.TestCase):
         num_threads = 10
         threads = []
         
-        # 모든 스레드가 4000.0초 시점에 동시에 진입한다고 가정
-        with patch('time.time', return_value=4000.0):
-            def worker():
-                self.session.request('GET', url)
+        # 실제 스레드 환경에서는 모킹된 시간(1000.0 고정)을 사용하면 무한루프에 빠지므로,
+        # 모킹을 일시 중단하고 실제 time.time과 time.sleep을 사용 (단축된 대기 시간 사용)
+        self.patcher_time.stop()
+        self.patcher_sleep.stop()
+        
+        config.SIM_TX_PER_SECOND = 100.0 # 빠른 테스트를 위해 한도 상향 (0.012초 간격)
+        
+        def worker():
+            self.session.request('GET', url)
+        
+        start = time.time()
+        for _ in range(num_threads):
+            t = threading.Thread(target=worker)
+            threads.append(t)
+            t.start()
             
-            for _ in range(num_threads):
-                t = threading.Thread(target=worker)
-                threads.append(t)
-                t.start()
-                
-            for t in threads:
-                t.join()
-                
-        # 10개의 요청이 처리되었으므로, next_available_time_sim은
-        # 4000.0 + (0.525 * 10) = 4005.25 가 되어야 함
-        interval = 0.525
-        expected_next_time = 4000.0 + (interval * num_threads)
+        for t in threads:
+            t.join()
+            
+        elapsed = time.time() - start
         
-        self.assertAlmostEqual(self.session.next_available_time_sim, expected_next_time, places=3)
-        
-        # mock_request(실제 API 호출 모킹)가 10번 호출되었는지 확인
         self.assertEqual(self.mock_request.call_count, num_threads)
+        
+        # 최소 0.012 * (num_threads - 1) 시간이 소요되어야 정상적으로 큐잉된 것
+        expected_min_elapsed = (1.0 / config.SIM_TX_PER_SECOND * 1.2) * (num_threads - 1)
+        self.assertTrue(elapsed >= expected_min_elapsed)
 
 if __name__ == '__main__':
     unittest.main()

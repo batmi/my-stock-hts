@@ -611,8 +611,9 @@ def prefetch_watchlists_async():
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
-        self.next_available_time_sim = 0
-        self.next_available_time_real = 0
+        # [수정] TPS 토큰 버킷/폴링 방식 적용을 위해 '마지막 전송 시점'을 기록
+        self.last_request_time_sim = 0.0
+        self.last_request_time_real = 0.0
         self.request_history = deque()
         self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
 
@@ -642,49 +643,37 @@ class ThrottledSession(requests.Session):
             wait_time = 0
             current_tps = 0
             
-            # [Fix] 선예약 후대기(Reserve-then-Wait) 로직을 for 루프 내부로 이동하여
-            # 재시도하는 요청들도 TPS 큐에 정상적으로 편입되도록 수정 (Thundering Herd 방지)
-            with self.lock:
-                now = time.time()
-                target_next_time = 0
-                
-                if is_real_server:
-                    target_limit = config.REAL_TX_PER_SECOND
-                    target_next_time = self.next_available_time_real
-                    server_type = "REAL"
-                elif is_sim_server:
-                    target_limit = config.SIM_TX_PER_SECOND
-                    target_next_time = self.next_available_time_sim
-                    server_type = "SIMULATION"
-
-                if target_limit > 0:
-                    # [수정] TPS 안전계수 강화 (모의투자는 1.2배, 실전투자는 1.1배)하여 겹침 현상 방지
-                    safety_margin = 1.2 if is_sim_server else 1.1
-                    min_interval = (1.0 / target_limit) * safety_margin
-                    
-                    # 마지막 요청 시간이 너무 과거라면 현재 기준으로 리셋
-                    if target_next_time < now:
-                        target_next_time = now
-                    
-                    # 대기 시간 계산 (예약된 시간 - 현재 시간)
-                    wait_time = target_next_time - now
-                    if wait_time < 0: wait_time = 0
-                    
-                    # 다음 요청 가능 시간 예약 (현재 예약된 시간 + 간격)
-                    new_next_time = target_next_time + min_interval
-                    
-                    if is_real_server:
-                        self.next_available_time_real = new_next_time
-                    elif is_sim_server:
-                        self.next_available_time_sim = new_next_time
-            
-                # TPS 계산용 히스토리 기록 (실제 전송 예상 시점 기준)
-                self.request_history.append(now + wait_time)
-                current_tps = self._get_current_tps()
-
-            # [핵심] 락을 해제한 후 대기 (다른 스레드가 락을 획득하여 예약 가능하도록 함)
-            if wait_time > 0:
-                time.sleep(wait_time)
+            # [Fix] 스케줄링 지연으로 인해 스레드들이 동시에 깨어나 융단 폭격을 하는 현상을 
+            # 원천 차단하기 위해, 예약 방식에서 폴링/토큰 획득 방식으로 TPS 제어 재설계
+            if is_real_server or is_sim_server:
+                while True:
+                    wait_time = 0
+                    with self.lock:
+                        now = time.time()
+                        target_limit = config.REAL_TX_PER_SECOND if is_real_server else config.SIM_TX_PER_SECOND
+                        last_time = self.last_request_time_real if is_real_server else self.last_request_time_sim
+                        server_type = "REAL" if is_real_server else "SIMULATION"
+                        
+                        if target_limit > 0:
+                            safety_margin = 1.2 if is_sim_server else 1.1
+                            min_interval = (1.0 / target_limit) * safety_margin
+                            
+                            time_since_last = now - last_time
+                            if time_since_last >= min_interval:
+                                # 전송 권한 획득 (토큰 획득)
+                                if is_real_server: self.last_request_time_real = now
+                                else: self.last_request_time_sim = now
+                                
+                                self.request_history.append(now)
+                                current_tps = self._get_current_tps()
+                                break # 락 해제 후 전송 진행
+                            else:
+                                wait_time = min_interval - time_since_last
+                        else:
+                            break # 한도 미설정 시 즉시 통과
+                            
+                    # 전송 권한을 얻지 못한 경우 락을 반환하고 대기한 후 다시 락을 잡아 권한 획득 시도
+                    time.sleep(wait_time)
 
             if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
                 config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
