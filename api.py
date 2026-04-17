@@ -1094,7 +1094,8 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                     "authorization": f"Bearer {token_to_use}",
                     "appKey": key,
                     "appSecret": secret,
-                    "tr_id": current_tr_id
+                    "tr_id": current_tr_id,
+                    "custtype": "P"  # [추가] 개인고객(P) / 법인고객(B) 명시 (API 엄격화 대비)
                 }
                 
                 # [추가] 디버그 모드일 때 헤더 정보 출력 (민감정보 마스킹)
