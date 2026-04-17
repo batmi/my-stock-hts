@@ -454,7 +454,7 @@ def show_open_orders():
                                             rsi_str = f"{ind.get('rsi', 0):.1f}"
                                             adx_str = f"{ind.get('adx', 0):.1f}"
                                             cci_str = f"{ind.get('cci', 0):.1f}"
-                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n점수: {score}점\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
                                     except: pass
                                     
                                 if strategy_info:
@@ -537,6 +537,11 @@ def show_open_orders():
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
                                     _send_sim_alert("매도", db_o, "잔고 0 확인", fill_price)
                                     
+                                    # [추가] AutoTrader 상태도 업데이트하여 중복 처리 방지
+                                    trader = auto_trade.AutoTrader()
+                                    if hasattr(trader, 'order_manager'):
+                                        trader.update_order_status(code, db_odno, auto_trade.OrderStatus.FILLED)
+                                        
                                     continue
                                 else:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
@@ -565,6 +570,11 @@ def show_open_orders():
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
                                     _send_sim_alert("매수", db_o, "잔고 입고 확인", fill_price)
                                     
+                                    # [추가] AutoTrader 상태도 업데이트하여 중복 처리 방지
+                                    trader = auto_trade.AutoTrader()
+                                    if hasattr(trader, 'order_manager'):
+                                        trader.update_order_status(code, db_odno, auto_trade.OrderStatus.FILLED)
+                                        
                                     continue
 
                             # [DEBUG] 최종 추가

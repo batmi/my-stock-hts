@@ -1419,7 +1419,16 @@ class OrderManager:
                                                             exec_amt = fill_price * qty
                                                             price_fmt = f"${fill_price:,.2f}" if is_overseas else f"{fill_price:,.0f}원"
                                                             amt_fmt = f"${exec_amt:,.2f}" if is_overseas else f"{int(exec_amt):,}원"
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주 / 단가: {price_fmt}(추정체결가) / 금액: {amt_fmt}\n사유: 잔고 확인{cur_info}{strategy_info}{rule_info}"
+                                                            
+                                                            profit_msg = ""
+                                                            if type_name == "매도":
+                                                                p_amt = trade.get('profit_amt')
+                                                                p_rate = trade.get('profit_rate')
+                                                                if p_amt is not None and p_rate is not None:
+                                                                    profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
+                                                                    
+                                                            original_reason = trade.get('reason', '잔고 확인')
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
                                                             
                                                             # [추가] 매도 체결(추정) 시 AI 매매 복기 실행 (모의투자용)
