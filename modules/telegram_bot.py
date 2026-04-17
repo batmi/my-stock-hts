@@ -1944,15 +1944,14 @@ class TelegramCommander:
             
             # api.send_telegram_photo 사용
             if api.send_telegram_photo(file_path, caption):
-                self.trader.log(f"[Telegram] 차트 전송 성공: {filename}")
+                logger.info(f"[Telegram] 차트 전송 성공: {filename}")
             else:
-                self.trader.log(f"[Telegram] 차트 전송 실패: {filename}")
+                logger.error(f"[Telegram] 차트 전송 실패: {filename}")
                 self._send_reply("⚠️ 차트 전송에 실패했습니다. (로그 확인)")
                 
         except Exception as e:
-            self.trader.log(f"[Telegram] 차트 전송 중 예외 발생: {e}")
             self._send_reply(f"⚠️ 차트 전송 중 오류 발생: {str(e)}")
-            logger.error(f"[Telegram] 차트 전송 예외: {e}")
+            logger.error(f"[Telegram] 차트 전송 중 예외 발생: {e}")
 
     def _get_monitoring_list(self):
         """현재 감시 중인 종목 리스트 반환"""
