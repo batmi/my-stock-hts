@@ -176,7 +176,16 @@ class TelegramCommander:
         # [추가] /chart_종목코드 단축 명령어 지원
         if command.startswith('/chart_'):
             target = command.replace('/chart_', '')
-            args = [target] + args
+            
+            # [수정] 차트 유형(일/시/분)이 포함된 단축 명령어 지원 (/chart_h_005930 등)
+            if target.startswith('h_'):
+                args = ['h', target[2:]] + args
+            elif target.startswith('m_'):
+                args = ['m', target[2:]] + args
+            elif target.startswith('d_'):
+                args = ['d', target[2:]] + args
+            else:
+                args = [target] + args
             command = '/chart'
 
         # 핸들러 호출
@@ -1977,7 +1986,8 @@ class TelegramCommander:
                     if code in rules_map:
                         name += "+"
                         
-                    msg += f"\n - {name} ({code})\n   /signal_{code} /chart_{code}"
+                    # [수정] 차트 링크를 일봉(/chart_code)에서 시봉(/chart_h_code)으로 변경
+                    msg += f"\n - {name} ({code})\n   /signal_{code} /chart_h_{code}"
                 msg += "\n"
         
         if not has_stock:
