@@ -1,0 +1,7 @@
+#!/bin/bash
+tmux new-session -d -s stock-hts -n "System Trading" \
+  "/usr/bin/bash -c 'source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && ./run.sh --mode 1 --auto; echo \"Process exited. Press Enter to close...\"; read'" \; \
+  new-window -d -t stock-hts -n "Log Monitoring" \
+  "/usr/bin/bash -c 'source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && tail -F logs/mystock.log'" \; \
+  tmux attach-session -t stock-hts
+
