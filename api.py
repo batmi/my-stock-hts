@@ -1193,9 +1193,24 @@ def _get_hourly_chart_data(code, is_overseas):
     if is_overseas:
         targets.append(code)
     else:
-        # 국내 주식의 경우 티커 추론 (.KS / .KQ)
-        targets.append(f"{code}.KS")
-        targets.append(f"{code}.KQ")
+        # config 데이터(stock.json)를 참조하여 정확한 거래소 티커 1개만 구성
+        market_suffix = None
+        for key in ["stocks_kr", "etfs_kr"]:
+            for item in config.session.stock_data.get(key, []):
+                if item.get('code') == code and "exchange" in item:
+                    if item['exchange'].upper() == "KOSDAQ":
+                        market_suffix = ".KQ"
+                    elif item['exchange'].upper() == "KOSPI":
+                        market_suffix = ".KS"
+                    break
+            if market_suffix: break
+            
+        if market_suffix:
+            targets.append(f"{code}{market_suffix}")
+        else:
+            # 시장 정보를 모를 경우 (직접 입력 등) 기존처럼 둘 다 시도
+            targets.append(f"{code}.KS")
+            targets.append(f"{code}.KQ")
     
     for t in targets:
         try:
@@ -1375,10 +1390,29 @@ def _get_intraday_chart_data(code, is_overseas):
     # Fallback 로직 (yfinance)
     if use_fallback:
         try:
-            logger.info(f"[API] '{code}' yfinance 분봉 조회 시도 (Fallback)...")
+            # [수정] 국내 종목이 Fallback을 탈 경우를 대비하여 stock.json을 참조해 정확한 티커(.KS / .KQ) 생성
+            target_ticker = code
+            if not is_overseas and not code.startswith('^'):
+                market_suffix = None
+                for key in ["stocks_kr", "etfs_kr"]:
+                    for item in config.session.stock_data.get(key, []):
+                        if item.get('code') == code and "exchange" in item:
+                            if item['exchange'].upper() == "KOSDAQ":
+                                market_suffix = ".KQ"
+                            elif item['exchange'].upper() == "KOSPI":
+                                market_suffix = ".KS"
+                            break
+                    if market_suffix: break
+                
+                if market_suffix:
+                    target_ticker = f"{code}{market_suffix}"
+                else:
+                    target_ticker = f"{code}.KS" # 기본값 코스피
+
+            logger.info(f"[API] '{target_ticker}' yfinance 분봉 조회 시도 (Fallback)...")
             # yfinance는 1분봉 최대 7일, 5분봉 최대 60일 지원
             # [수정] 5일치를 가져와서 최근 390개(약 1일 거래시간)만 추출하여 차트 여백 최소화
-            df = fetch_yfinance_data(code, period="5d", interval="1m")
+            df = fetch_yfinance_data(target_ticker, period="5d", interval="1m")
             if df is not None and not df.empty:
                 # 1. 컬럼 평탄화 및 튜플 방어
                 flat_cols = []
