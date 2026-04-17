@@ -1,7 +1,15 @@
 #!/bin/bash
-tmux new-session -d -s stock-hts -n "System Trading" \
-  "/usr/bin/bash -c 'source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && ./run.sh --mode 1 --auto; echo \"Process exited. Press Enter to close...\"; read'" \; \
-  new-window -d -t stock-hts -n "Log Monitoring" \
-  "/usr/bin/bash -c 'source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && tail -F logs/mystock.log'" \; \
-  tmux attach-session -t stock-hts
+cd /home/batmi/my-stock-hts
+
+# 1. 세션 생성 (System Trading - 첫 번째 윈도우)
+tmux new-session -d -s stock-hts -n "System Trading" '/usr/bin/bash -c "source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && ./run.sh --mode 1 --auto; echo \"Process exited. Press Enter to close...\"; read"'
+
+# 2. Log Monitoring 창 추가 (두 번째 윈도우)
+tmux new-window -t stock-hts -n "Log Monitoring" '/usr/bin/bash -c "source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && tail -F logs/mystock.log"'
+
+# 3. System Trading 윈도우로 이동 (첫 번째 선택)
+tmux select-window -t stock-hts:0
+
+# 4. 세션 연결
+tmux attach-session -t stock-hts
 
