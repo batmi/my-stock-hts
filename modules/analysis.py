@@ -560,8 +560,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         foreign_rate_str = "-"
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
+        
+        task = progress.add_task("[cyan]분석 준비 중...[/cyan]", total=None)
+
         if not is_overseas:
-            progress.add_task("[cyan]시장 국면 및 수급 정보 조회 중...[/cyan]", total=None)
+            progress.update(task, description="[cyan]시장 국면 및 수급 정보 조회 중...[/cyan]")
             try:
                 # API로 시장 구분 및 외인 소진율 확인
                 cp = api.get_current_price_data(code, False)
@@ -582,8 +585,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             "RISE_SCORE": rise_score,
             "WEIGHTS": weights
         }
-
-        task = progress.add_task(f"[cyan]{name}({code}) 데이터 분석 중...[/cyan]", total=None)
 
         # 1. [최적화] 데이터 병렬 조회 (차트 캐시 확인 및 체결강도 동시 호출)
         progress.update(task, description=f"[cyan]{name}({code}) 지표 및 수급 데이터 병렬 수집 중...[/cyan]")
