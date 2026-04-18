@@ -664,6 +664,27 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         config.console.print(Panel(Group(*renderables), title=f"{name} ({code})", border_style="cyan", expand=False))
         config.console.print()
 
+    # [추가] TradingView 종합 평가 및 배당 수익률 등 추가 데이터 조회
+    tv_rating_str = "조회 불가"
+    div_yield_str = "-"
+    try:
+        from tradingview_screener import Query, Column
+        market_str = 'america' if is_overseas else 'korea'
+        _, tv_df = Query().set_markets(market_str).select('Recommend.All', 'dividend_yield_recent').where(Column('name') == code).limit(1).get_scanner_data()
+        if tv_df is not None and not tv_df.empty:
+            rating_val = tv_df.iloc[0].get('Recommend.All')
+            if pd.notna(rating_val):
+                if rating_val >= 0.5: tv_rating_str = f"[bold red]Strong Buy (강력 매수)[/bold red] ({rating_val:+.2f})"
+                elif rating_val >= 0.1: tv_rating_str = f"[red]Buy (매수)[/red] ({rating_val:+.2f})"
+                elif rating_val > -0.1: tv_rating_str = f"[white]Neutral (중립)[/white] ({rating_val:+.2f})"
+                elif rating_val > -0.5: tv_rating_str = f"[blue]Sell (매도)[/blue] ({rating_val:+.2f})"
+                else: tv_rating_str = f"[bold blue]Strong Sell (강력 매도)[/bold blue] ({rating_val:+.2f})"
+            
+            div_val = tv_df.iloc[0].get('dividend_yield_recent')
+            if pd.notna(div_val) and div_val > 0:
+                div_yield_str = f"{div_val:.2f}%"
+    except: pass
+
     # [테이블 1] 기술적 지표 분석
     tech_title = f"기술적 지표 분석: {name} ({code})"
 
@@ -808,6 +829,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         cci_desc = "데이터 부족"
     table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
 
+    # [수정] 외인 소진율 및 배당 수익률 위치 변경 (이평 배열 위로 이동)
+    if not is_overseas:
+        table_tech.add_row("외인 소진율", foreign_rate_str, "외국인 보유 비중")
+
+    table_tech.add_row("배당 수익률", div_yield_str, "최근 연환산 배당수익률")
+
     # 이평 배열
     ema_align = "알 수 없음"
     ema_color = "[white]"
@@ -841,10 +868,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     table_tech.add_row("이격도", disp_msg, f"{disp_eval} [dim](현재가/이평선)[/dim]")
 
-    # [추가] 외인 소진율
+    # [수정] 스마트머니를 표의 가장 아래로 이동
     if not is_overseas:
-        table_tech.add_row("외인 소진율", foreign_rate_str, "외국인 보유 비중")
-        
         sm_str = f"[red]{sm_reason}[/]" if sm_flag else "[dim]특이사항 없음[/]"
         table_tech.add_row("스마트머니", sm_str, "외인/기관 쌍끌이 및 순매수 전환")
 
@@ -998,22 +1023,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
     rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
     table_logic.add_row("개별 룰", rule_res, rule_desc)
-
-    # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회
-    tv_rating_str = "조회 불가"
-    try:
-        from tradingview_screener import Query, Column
-        market_str = 'america' if is_overseas else 'korea'
-        _, tv_df = Query().set_markets(market_str).select('Recommend.All').where(Column('name') == code).limit(1).get_scanner_data()
-        if tv_df is not None and not tv_df.empty:
-            rating_val = tv_df.iloc[0].get('Recommend.All')
-            if pd.notna(rating_val):
-                if rating_val >= 0.5: tv_rating_str = f"[bold red]Strong Buy (강력 매수)[/bold red] ({rating_val:+.2f})"
-                elif rating_val >= 0.1: tv_rating_str = f"[red]Buy (매수)[/red] ({rating_val:+.2f})"
-                elif rating_val > -0.1: tv_rating_str = f"[white]Neutral (중립)[/white] ({rating_val:+.2f})"
-                elif rating_val > -0.5: tv_rating_str = f"[blue]Sell (매도)[/blue] ({rating_val:+.2f})"
-                else: tv_rating_str = f"[bold blue]Strong Sell (강력 매도)[/bold blue] ({rating_val:+.2f})"
-    except: pass
 
     table_logic.add_section()
     table_logic.add_row("TradingView 의견", tv_rating_str, "TradingView Technical Rating (-1~1)")
