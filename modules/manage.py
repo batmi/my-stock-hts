@@ -935,11 +935,13 @@ def view_watchlist():
             table.add_column("No.", justify="right", style="dim")
             table.add_column("종목명")
             table.add_column("코드", style="dim")
+            table.add_column("시장", style="cyan")
             table.add_column("상태")
             
             for i, s in enumerate(stocks):
                 code = s['code']
                 name = s['name']
+                exchange = s.get('exchange', '-')
                 
                 status_tags = []
                 if code in restricted_stocks: status_tags.append("[blue]제한(-)[/]")
@@ -948,7 +950,7 @@ def view_watchlist():
                 
                 tag_str = " ".join(status_tags)
                 
-                table.add_row(str(i+1), name, code, tag_str)
+                table.add_row(str(i+1), name, code, exchange, tag_str)
                 
                 if (i + 1) % 5 == 0 and (i + 1) < len(stocks):
                     table.add_section()

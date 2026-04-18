@@ -557,7 +557,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if custom_rule.get('buy_vol_strength'):
                 buy_vol = custom_rule['buy_vol_strength']
 
+        # [추가] stock.json에서 표준 시장(거래소) 이름 가져오기
+        std_market = None
+        for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
+            for item in config.session.stock_data.get(key, []):
+                if item.get('code') == code and "exchange" in item:
+                    std_market = item['exchange'].upper()
+                    break
+            if std_market: break
+
         foreign_rate_str = "-"
+        market_str = std_market if std_market else ("해외" if is_overseas else "KOSPI")
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
         
@@ -571,12 +581,29 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if cp.get('rt_cd') == '0':
                     foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
                     
+                    raw_market = cp['output'].get('rprs_mrkt_kor_name', 'KOSPI')
+                    # API 원시 데이터(KOSPI200 등)를 표준 시장 포맷으로 통일
+                    if "KOSDAQ" in raw_market.upper() or "코스닥" in raw_market:
+                        market_type = "KOSDAQ"
+                    else:
+                        market_type = "KOSPI"
+                        
+                    if not std_market:
+                        market_str = market_type
+                    
                     if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
-                        market_type = "KOSDAQ" if "KOSDAQ" in cp['output'].get('rprs_mrkt_kor_name', '') else "KOSPI"
                         regime, score_adj = get_market_regime(market_type)
                         if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                             buy_score += score_adj
             except: pass
+        else:
+            if not std_market:
+                cached_ex = config.session.exchange_cache.get(code)
+                if cached_ex:
+                    if cached_ex in ["NAS", "NASD"]: market_str = "NASDAQ"
+                    elif cached_ex in ["NYS", "NYSE"]: market_str = "NYSE"
+                    elif cached_ex in ["AMS", "AMEX"]: market_str = "AMEX"
+                    else: market_str = cached_ex
 
         # [추가] 임계값 및 가중치 딕셔너리 구성
         thresholds = {
@@ -670,8 +697,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     div_yield_str = "-"
     try:
         from tradingview_screener import Query, Column
-        market_str = 'america' if is_overseas else 'korea'
-        _, tv_df = Query().set_markets(market_str).select('Recommend.All', 'dividend_yield_recent').where(Column('name') == code).limit(1).get_scanner_data()
+        tv_market = 'america' if is_overseas else 'korea'
+        _, tv_df = Query().set_markets(tv_market).select('Recommend.All', 'dividend_yield_recent').where(Column('name') == code).limit(1).get_scanner_data()
         if tv_df is not None and not tv_df.empty:
             rating_val = tv_df.iloc[0].get('Recommend.All')
             if pd.notna(rating_val):
@@ -693,6 +720,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_column("지표", justify="left", style="cyan", width=15)
     table_tech.add_column("값 (상태)", justify="left")
     table_tech.add_column("해석/기준", justify="left", style="dim")
+
+    # 시장 정보
+    table_tech.add_row("시장", market_str, "소속 거래소")
 
     # 현재가
     curr_price_color = "[white]"

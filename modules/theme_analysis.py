@@ -1313,7 +1313,8 @@ def _run_tradingview_screener():
         ("5", "폭발적 수급 유입", "Volume Momentum"),
         ("6", "낙폭과대 바닥 탈출", "Oversold Rebound"),
         ("7", "저평가 우량주 턴어라운드", "Value Turnaround"),
-        ("8", "고배당 상승 추세", "High Dividend")
+        ("8", "고배당 상승 추세", "High Dividend"),
+        ("9", "상승 추세 전환", "Trend Reversal")
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="0")
     if preset_choice.lower() in ['b', 'q']: return False
@@ -1325,12 +1326,13 @@ def _run_tradingview_screener():
     preset_conditions = {
         "1": f"({vol_cond_str})",
         "2": f"({vol_cond_str})",
-        "3": "(52주 고점 95% 이상 근접 + 정배열 (20일선 > 50일선) + RSI > 60)",
-        "4": "(정배열 (20일선 > 50일선) + 종가가 50일선 위 지지 + RSI < 45)",
-        "5": "(10일 평균 거래량 대비 2배 이상 폭증 + 당일 3% 이상 급등)",
-        "6": "(RSI < 35 (과매도) + MACD > Signal (단기 골든크로스) + 당일 양봉)",
-        "7": "(PER < 15 + ROE > 15% + 종가가 20일선 돌파)",
-        "8": "(배당률 > 5% + PER < 15 + 종가가 50일선 위 지지)"
+        "3": "(52주 고점 95%↑ + 정배열 + RSI>65 + ADX>25 + MACD골든)",
+        "4": "(정배열 + 종가가 20일선 아래 & 50일선 위 지지 + RSI 35~50)",
+        "5": "(평균 거래량 3배 이상 폭증 + 당일 5% 이상 급등 + 종가>20일선)",
+        "6": "(RSI<40 + 주가<20일선 + MACD골든 + 당일 2%↑ 반등)",
+        "7": "(PER 1~12 + PBR<1.5 + ROE>15% + 20일선 돌파 + MACD골든)",
+        "8": "(배당률>5% + PER 1~15 + 정배열 + RSI>50)",
+        "9": "(20일<50일 역배열 상태에서 주가가 50일선 강하게 돌파 + MACD골든)"
     }
 
     preset_desc = {
@@ -1339,11 +1341,12 @@ def _run_tradingview_screener():
         "5": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다.",
         "6": "급락장이나 악재로 과도하게 떨어진 주식이 바닥을 다지고 기술적 반등을 시작하는 정확한 타점을 잡습니다.",
         "7": "실적과 가치는 우수하지만 소외되었던 주식이 20일선을 타며 추세가 호전되기 시작하는 중장기 스윙용입니다.",
-        "8": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다."
+        "8": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다.",
+        "9": "오랜 하락이나 횡보를 끝내고 본격적인 상승 추세로 진입하는 초기(무릎) 타점을 잡아내는 가장 신뢰도 높은 스윙 전략입니다."
     }
 
     try:
-        target_choices = [str(i) for i in range(1, 9)] if preset_choice == "0" else [preset_choice]
+        target_choices = [str(i) for i in range(1, 10)] if preset_choice == "0" else [preset_choice]
         results = []
         stock_map = {}
         
@@ -1369,7 +1372,7 @@ def _run_tradingview_screener():
                 else:
                     task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
                 
-                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
+                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
                 query = Query().set_markets(market).select(*select_cols)
                 
                 if p_choice == "1":
@@ -1383,30 +1386,36 @@ def _run_tradingview_screener():
                     else:
                         query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                 elif p_choice == "3":
-                    query = query.where(Column('SMA20') > Column('SMA50'), Column('RSI') > 60).order_by('volume', ascending=False)
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('RSI') > 65, Column('ADX') > 25, Column('MACD.macd') > Column('MACD.signal')).order_by('volume', ascending=False)
                 elif p_choice == "4":
-                    query = query.where(Column('SMA20') > Column('SMA50'), Column('close') > Column('SMA50'), Column('RSI') < 45).order_by('volume', ascending=False)
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('close') > Column('SMA50'), Column('close') < Column('SMA20'), Column('RSI').between(35, 50), Column('MACD.macd') > 0).order_by('volume', ascending=False)
                 elif p_choice == "5":
-                    query = query.where(Column('relative_volume_10d_calc') > 2.0, Column('change') > 3.0).order_by('relative_volume_10d_calc', ascending=False)
+                    query = query.where(Column('relative_volume_10d_calc') > 3.0, Column('change') > 5.0, Column('close') > Column('SMA20')).order_by('relative_volume_10d_calc', ascending=False)
                 elif p_choice == "6":
-                    query = query.where(Column('RSI') < 35, Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0).order_by('volume', ascending=False)
+                    query = query.where(Column('RSI') < 40, Column('close') < Column('SMA20'), Column('MACD.macd') > Column('MACD.signal'), Column('change') > 2.0).order_by('volume', ascending=False)
                 elif p_choice == "7":
-                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 15, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                    query = query.where(Column('price_earnings_ttm').between(1, 12), Column('price_book_ratio') < 1.5, Column('return_on_equity') > 15, Column('close') > Column('SMA20'), Column('MACD.macd') > Column('MACD.signal')).order_by('volume', ascending=False)
                 elif p_choice == "8":
-                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA50')).order_by('dividend_yield_recent', ascending=False)
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm').between(1, 15), Column('SMA20') > Column('SMA50'), Column('RSI') > 50).order_by('dividend_yield_recent', ascending=False)
+                elif p_choice == "9":
+                    query = query.where(Column('SMA20') < Column('SMA50'), Column('close') > Column('SMA50'), Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0).order_by('volume', ascending=False)
                     
                 if p_choice in ["1", "2"]:
                     query = query.limit(15)
-                elif p_choice == "3":
+                elif p_choice in ["3", "9"]:
                     query = query.limit(200)
                 else:
                     query = query.limit(20)
             
                 count, df = query.get_scanner_data()
                 
-                if p_choice == "3" and df is not None and not df.empty:
-                    df = df[df['close'] >= df['price_52_week_high'] * 0.95]
-                    df = df.head(20)
+                if df is not None and not df.empty:
+                    if p_choice == "3":
+                        df = df[df['close'] >= df['price_52_week_high'] * 0.95]
+                        df = df.head(20)
+                    elif p_choice == "9":
+                        df = df[df['close'] <= (df['price_52_week_high'] + df['price_52_week_low']) / 2]
+                        df = df.head(20)
 
                 if df is not None and not df.empty:
                     if is_single:
