@@ -150,7 +150,7 @@ class TelegramCommander:
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
-            "📈 시장 지수": "/market krc",
+            " 시장 지수": "/market krc",
             "❓ 도움말": "/help",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
@@ -574,18 +574,34 @@ class TelegramCommander:
         presets = [
             ("TopGainers", "당일 급상승 상위 15종목"),
             ("TopLosers", "당일 급하락 상위 15종목"),
-            ("Pullback", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)"),
-            ("Momentum", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)"),
-            ("Rebound", "바닥 반등 (RSI < 30 & 상승 반전)"),
-            ("Volume", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)"),
-            ("ValueRebound", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40, 현재가 > 20일선)"),
-            ("Breakout", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)"),
-            ("HighDividend", "고배당 안정 가치주 (배당수익률 > 5%, PER < 15)"),
-            ("MacdCross", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)"),
-            ("VolumeBottom", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)"),
-            ("GoldenCross", "중장기 정배열 (현재가 > 20일선 > 50일선)"),
-            ("GrowthValue", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)")
+            ("Breakout", "신고가 돌파 주도주"),
+            ("Pullback", "정배열 눌림목"),
+            ("VolumeMomentum", "폭발적 수급 유입"),
+            ("OversoldRebound", "낙폭과대 바닥 탈출"),
+            ("ValueTurnaround", "저평가 우량주 턴어라운드"),
+            ("HighDividend", "고배당 상승 추세")
         ]
+
+        vol_cond_str = "거래량 10만, 1달러 이상" if market == "america" else "거래량 10만 이상"
+        preset_conditions = {
+            "TopGainers": f"({vol_cond_str})",
+            "TopLosers": f"({vol_cond_str})",
+            "Breakout": "(52주 고점 95% 이상 근접 + 정배열 (20일선 > 50일선) + RSI > 60)",
+            "Pullback": "(정배열 (20일선 > 50일선) + 종가가 50일선 위 지지 + RSI < 45)",
+            "VolumeMomentum": "(10일 평균 거래량 대비 2배 이상 폭증 + 당일 3% 이상 급등)",
+            "OversoldRebound": "(RSI < 35 (과매도) + MACD > Signal (단기 골든크로스) + 당일 양봉)",
+            "ValueTurnaround": "(PER < 15 + ROE > 15% + 종가가 20일선 돌파)",
+            "HighDividend": "(배당률 > 5% + PER < 15 + 종가가 50일선 위 지지)"
+        }
+
+        preset_desc = {
+            "Breakout": "강세장에서 시장을 주도하며 전고점을 뚫고 날아가는 가장 강한 주식을 잡을 때 사용합니다.",
+            "Pullback": "완벽한 우상향 추세에 있는 주식이 일시적인 조정(과매도)을 받을 때 안전하게 진입하는 스윙 전략입니다.",
+            "VolumeMomentum": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다.",
+            "OversoldRebound": "급락장이나 악재로 과도하게 떨어진 주식이 바닥을 다지고 기술적 반등을 시작하는 정확한 타점을 잡습니다.",
+            "ValueTurnaround": "실적과 가치는 우수하지만 소외되었던 주식이 20일선을 타며 추세가 호전되기 시작하는 중장기 스윙용입니다.",
+            "HighDividend": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다."
+        }
 
         try:
             select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'ADX', 'SMA20', 'SMA50', 'price_earnings_ttm', 'return_on_equity', 'price_52_week_high', 'dividend_yield_recent', 'MACD.macd', 'MACD.signal', 'relative_volume_10d_calc']
@@ -596,28 +612,18 @@ class TelegramCommander:
             for preset_key, desc in presets:
                 query = Query().set_markets(market).select(*select_cols)
                 
-                if preset_key == "Pullback":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
-                elif preset_key == "Momentum":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
-                elif preset_key == "Rebound":
-                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
-                elif preset_key == "Volume":
-                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
-                elif preset_key == "ValueRebound":
-                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
-                elif preset_key == "Breakout":
-                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
+                if preset_key == "Breakout":
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('RSI') > 60).order_by('volume', ascending=False)
+                elif preset_key == "Pullback":
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('close') > Column('SMA50'), Column('RSI') < 45).order_by('volume', ascending=False)
+                elif preset_key == "VolumeMomentum":
+                    query = query.where(Column('relative_volume_10d_calc') > 2.0, Column('change') > 3.0).order_by('relative_volume_10d_calc', ascending=False)
+                elif preset_key == "OversoldRebound":
+                    query = query.where(Column('RSI') < 35, Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0).order_by('volume', ascending=False)
+                elif preset_key == "ValueTurnaround":
+                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 15, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
                 elif preset_key == "HighDividend":
-                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
-                elif preset_key == "MacdCross":
-                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
-                elif preset_key == "VolumeBottom":
-                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
-                elif preset_key == "GoldenCross":
-                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
-                elif preset_key == "GrowthValue":
-                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA50')).order_by('dividend_yield_recent', ascending=False)
                 elif preset_key == "TopGainers":
                     if market == "america":
                         query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
@@ -642,7 +648,10 @@ class TelegramCommander:
                     df = df[df['close'] >= df['price_52_week_high'] * 0.95]
                     df = df.head(20)
                 
-                final_msg += f"\n▶ {desc}\n"
+                cond_str = f" {preset_conditions[preset_key]}" if preset_key in preset_conditions else ""
+                final_msg += f"\n▶ {desc}{cond_str}\n"
+                if preset_key in preset_desc:
+                    final_msg += f"  : {preset_desc[preset_key]}\n"
                 if df is None or df.empty:
                     final_msg += "  📭 조건에 맞는 종목 없음\n"
                     continue

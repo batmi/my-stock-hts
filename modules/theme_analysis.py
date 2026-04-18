@@ -1306,29 +1306,44 @@ def _run_tradingview_screener():
     
     preset_items = [
         ("0", "전체 프리셋 순차 스캔", "All Presets"),
-        ("1", f"당일 급상승 상위 15종목 ({vol_cond_str})", "Top Gainers"),
-        ("2", f"당일 급하락 상위 15종목 ({vol_cond_str})", "Top Losers"),
-        ("3", "상승 추세 눌림목 (현재가 > 20일선 & RSI < 40)", "Pullback"),
-        ("4", "강한 모멘텀 (현재가 > 20일선 & RSI > 70 & 거래량 상위)", "Momentum"),
-        ("5", "바닥 반등 (RSI < 30 & 상승 반전)", "Rebound"),
-        ("6", "거래량 급증 (현재가 > 20일선 & 거래량 > 100만)", "Volume"),
-        ("7", "저평가 우량주 반등 (PER < 15, ROE > 10%, RSI < 40)", "Value Rebound"),
-        ("8", "신고가 주도주 랠리 (52주 고점 95% 이상 & RSI > 60)", "Breakout"),
-        ("9", "고배당 안정 가치주 (배당률 > 5%, PER < 15)", "High Dividend"),
-        ("10", "MACD 바닥권 골든크로스 (MACD > Sig & MACD < 0)", "MACD Cross"),
-        ("11", "거래량 동반 바닥 탈출 (RSI < 40 & 2%↑ & 거래량 급증)", "Volume Bottom Rebound"),
-        ("12", "중장기 정배열 (현재가 > 20일선 > 50일선)", "Golden Cross / Perfect Trend"),
-        ("13", "실적 우수 상승주 (ROE > 15%, 0 < PER < 20 & 상승추세)", "Growth & Value")
+        ("1", "당일 급상승 상위 15종목", "Top Gainers"),
+        ("2", "당일 급하락 상위 15종목", "Top Losers"),
+        ("3", "신고가 돌파 주도주", "Breakout"),
+        ("4", "정배열 눌림목", "Pullback"),
+        ("5", "폭발적 수급 유입", "Volume Momentum"),
+        ("6", "낙폭과대 바닥 탈출", "Oversold Rebound"),
+        ("7", "저평가 우량주 턴어라운드", "Value Turnaround"),
+        ("8", "고배당 상승 추세", "High Dividend")
     ]
     preset_choice = utils.show_menu("검색 조건을 선택하세요", preset_items, default_choice="0")
     if preset_choice.lower() in ['b', 'q']: return False
     
     preset_map = dict((k, v) for k, v, _ in preset_items)
-    preset_name = preset_map.get(preset_choice, '').split(' (')[0] # 괄호 안의 긴 설명은 제외하고 이름만 추출
+    preset_name = preset_map.get(preset_choice, '')
     context.USER_ACTION_BREADCRUMB.append(f"[{preset_choice}] {preset_name}")
     
+    preset_conditions = {
+        "1": f"({vol_cond_str})",
+        "2": f"({vol_cond_str})",
+        "3": "(52주 고점 95% 이상 근접 + 정배열 (20일선 > 50일선) + RSI > 60)",
+        "4": "(정배열 (20일선 > 50일선) + 종가가 50일선 위 지지 + RSI < 45)",
+        "5": "(10일 평균 거래량 대비 2배 이상 폭증 + 당일 3% 이상 급등)",
+        "6": "(RSI < 35 (과매도) + MACD > Signal (단기 골든크로스) + 당일 양봉)",
+        "7": "(PER < 15 + ROE > 15% + 종가가 20일선 돌파)",
+        "8": "(배당률 > 5% + PER < 15 + 종가가 50일선 위 지지)"
+    }
+
+    preset_desc = {
+        "3": "강세장에서 시장을 주도하며 전고점을 뚫고 날아가는 가장 강한 주식을 잡을 때 사용합니다.",
+        "4": "완벽한 우상향 추세에 있는 주식이 일시적인 조정(과매도)을 받을 때 안전하게 진입하는 스윙 전략입니다.",
+        "5": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다.",
+        "6": "급락장이나 악재로 과도하게 떨어진 주식이 바닥을 다지고 기술적 반등을 시작하는 정확한 타점을 잡습니다.",
+        "7": "실적과 가치는 우수하지만 소외되었던 주식이 20일선을 타며 추세가 호전되기 시작하는 중장기 스윙용입니다.",
+        "8": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다."
+    }
+
     try:
-        target_choices = [str(i) for i in range(1, 14)] if preset_choice == "0" else [preset_choice]
+        target_choices = [str(i) for i in range(1, 9)] if preset_choice == "0" else [preset_choice]
         results = []
         stock_map = {}
         
@@ -1368,38 +1383,28 @@ def _run_tradingview_screener():
                     else:
                         query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
                 elif p_choice == "3":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') < 40).order_by('volume', ascending=False)
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('RSI') > 60).order_by('volume', ascending=False)
                 elif p_choice == "4":
-                    query = query.where(Column('close') > Column('SMA20'), Column('RSI') > 70).order_by('volume', ascending=False)
+                    query = query.where(Column('SMA20') > Column('SMA50'), Column('close') > Column('SMA50'), Column('RSI') < 45).order_by('volume', ascending=False)
                 elif p_choice == "5":
-                    query = query.where(Column('RSI') < 30, Column('change') > 0).order_by('volume', ascending=False)
+                    query = query.where(Column('relative_volume_10d_calc') > 2.0, Column('change') > 3.0).order_by('relative_volume_10d_calc', ascending=False)
                 elif p_choice == "6":
-                    query = query.where(Column('close') > Column('SMA20'), Column('volume') > 1000000).order_by('change', ascending=False)
+                    query = query.where(Column('RSI') < 35, Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0).order_by('volume', ascending=False)
                 elif p_choice == "7":
-                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 10, Column('RSI') < 40, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                    query = query.where(Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('return_on_equity') > 15, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
                 elif p_choice == "8":
-                    query = query.where(Column('RSI') > 60).order_by('volume', ascending=False)
-                elif p_choice == "9":
-                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('dividend_yield_recent', ascending=False)
-                elif p_choice == "10":
-                    query = query.where(Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') < 0, Column('change') > 0).order_by('volume', ascending=False)
-                elif p_choice == "11":
-                    query = query.where(Column('RSI') < 40, Column('change') > 2.0, Column('relative_volume_10d_calc') > 1.5).order_by('relative_volume_10d_calc', ascending=False)
-                elif p_choice == "12":
-                    query = query.where(Column('close') > Column('SMA20'), Column('SMA20') > Column('SMA50')).order_by('volume', ascending=False)
-                elif p_choice == "13":
-                    query = query.where(Column('return_on_equity') > 15, Column('price_earnings_ttm') < 20, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA20')).order_by('volume', ascending=False)
+                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm') < 15, Column('price_earnings_ttm') > 0, Column('close') > Column('SMA50')).order_by('dividend_yield_recent', ascending=False)
                     
                 if p_choice in ["1", "2"]:
                     query = query.limit(15)
-                elif p_choice == "8":
+                elif p_choice == "3":
                     query = query.limit(200)
                 else:
                     query = query.limit(20)
             
                 count, df = query.get_scanner_data()
                 
-                if p_choice == "8" and df is not None and not df.empty:
+                if p_choice == "3" and df is not None and not df.empty:
                     df = df[df['close'] >= df['price_52_week_high'] * 0.95]
                     df = df.head(20)
 
@@ -1527,17 +1532,21 @@ def _run_tradingview_screener():
                         
                     if not is_single:
                         progress.remove_task(task_sub)
-                    results.append((p_name, table))
+                    results.append((p_choice, preset_map.get(p_choice, ''), table))
                 else:
                     if not is_single:
                         progress.remove_task(task_sub)
-                    results.append((p_name, None))
+                    results.append((p_choice, preset_map.get(p_choice, ''), None))
                 
                 if not is_single:
                     progress.advance(task_main)
                 
-        for p_name, table in results:
-            config.console.print(f"\n[bold cyan]▶ {p_name}[/bold cyan]")
+        for p_choice, p_full_name, table in results:
+            cond_str = f" {preset_conditions[p_choice]}" if p_choice in preset_conditions else ""
+            config.console.print(f"\n[bold cyan]▶ {p_full_name}{cond_str}[/bold cyan]")
+            if p_choice in preset_desc:
+                config.console.print(f"   [dim]: {preset_desc[p_choice]}[/dim]")
+
             if table is None:
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
             else:
