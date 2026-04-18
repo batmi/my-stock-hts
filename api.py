@@ -144,24 +144,24 @@ def send_telegram_message(message, reply_markup=None):
 
         # 1. 국내 주식 (6자리)
         if len(code) == 6:
-            # 국내 주식: 네이버 증권 모바일 (최신 URL 구조 적용)
-            url = f"https://m.stock.naver.com/domestic/stock/{code}"
+            # [수정] 국내 주식: 트레이딩뷰 심볼 오버뷰 페이지 (유료/앱 설치 팝업 우회)
+            url = f"https://kr.tradingview.com/symbols/KRX-{code}/"
         # 2. 해외 주식
         else:
             # 거래소 정보 확인 (config.session.exchange_cache 활용)
             exchange = config.session.exchange_cache.get(code, "")
-            suffix = ""
+            tv_exchange = ""
             
-            # 네이버 증권 해외주식 거래소 접미사 매핑
-            if exchange in ["NAS", "NASD"]: suffix = ".O"   # NASDAQ
-            elif exchange in ["NYS", "NYSE"]: suffix = ".N" # NYSE
-            elif exchange in ["AMS", "AMEX"]: suffix = ".A" # AMEX
+            # 트레이딩뷰 해외주식 거래소 접미사 매핑
+            if exchange in ["NAS", "NASD"]: tv_exchange = "NASDAQ"
+            elif exchange in ["NYS", "NYSE"]: tv_exchange = "NYSE"
+            elif exchange in ["AMS", "AMEX"]: tv_exchange = "AMEX"
             
-            if suffix:
-                url = f"https://m.stock.naver.com/worldstock/stock/{code}{suffix}"
+            if tv_exchange:
+                url = f"https://kr.tradingview.com/symbols/{tv_exchange}-{code}/"
             else:
-                # 거래소 정보가 없거나 매핑되지 않으면 검색 페이지로 연결
-                url = f"https://m.stock.naver.com/worldstock/search?query={code}"
+                # 거래소 정보가 없으면 티커만으로 접근 (트레이딩뷰가 자동 라우팅)
+                url = f"https://kr.tradingview.com/symbols/{code}/"
                 
         return f'(<a href="{url}">{code}</a>)'
     
