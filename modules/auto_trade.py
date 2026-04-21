@@ -1925,7 +1925,11 @@ class AutoTrader:
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
                         # [수정] 자산 계산 시 D+2 예수금(가수도금) 사용 (매도 대금 포함) - start()와 통일
-                        deposit = res['d2_deposit'] + res['foreign_deposit']
+                        # [Fix] 주문가능금액(d2_deposit)이 아닌 실제 D+2 가수도금(d2_real)을 사용하여 50원 오차 등 왜곡 방지
+                        d2_val = res.get('d2_real', 0)
+                        if d2_val == 0:
+                            d2_val = res.get('d2_deposit', 0)
+                        deposit = d2_val + res.get('foreign_deposit', 0)
                         is_data_valid = True
                     else:
                         deposit = 0
@@ -2130,7 +2134,9 @@ class AutoTrader:
                 else:
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
-                        deposit = res['d2_deposit']
+                        d2_val = res.get('d2_real', 0)
+                        if d2_val == 0: d2_val = res.get('d2_deposit', 0)
+                        deposit = d2_val
                 
                 # [수정] 보유 종목 개별 합산으로 평가금액 직접 계산 (데이터 정합성 보장)
                 tot_evlu = 0
@@ -2418,7 +2424,8 @@ class AutoTrader:
                     if deposit == 0 or not config.session.is_simulation:
                         res = api.get_deposit_balance(target_cano, acnt)
                         if res:
-                            deposit = res['d2_deposit']
+                            deposit = res.get('d2_real', 0)
+                            if deposit == 0: deposit = res.get('d2_deposit', 0)
                 except: pass
 
                 # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
@@ -3976,7 +3983,9 @@ class AutoTrader:
                     current_total = 0
                     deposit_d2 = 0
                     if deposit_res:
-                        deposit_d2 = deposit_res['d2_deposit']
+                        deposit_d2 = deposit_res.get('d2_real', 0)
+                        if deposit_d2 == 0:
+                            deposit_d2 = deposit_res.get('d2_deposit', 0)
                     
                     # [수정] account 모듈을 활용하여 해외 자산까지 완벽하게 포함된 총 자산 획득
                     target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
