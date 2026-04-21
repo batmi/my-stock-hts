@@ -422,9 +422,9 @@ def modify_sell_strategy():
         {"desc": "슈퍼 모멘텀 과열 매도 RSI", "help": "추세 유지 시 매도 지연 RSI (예: 85.0)", "name": "SUPER_TAKE_PROFIT_RSI", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})},
         {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TS_ACTIVATION", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TS_CALLBACK", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
         {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float",
@@ -699,7 +699,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     """지정된 시장 국면에 맞게 시스템 전역 설정을 일괄 변경합니다."""
     if preset_type == "bull":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 70, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 2.0})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 20.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "ATR_STOP_MULTIPLIER": 2.0})
         config.SCORING_WEIGHTS.update({"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.2
         config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
@@ -709,7 +709,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         
     elif preset_type == "bear":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 9.0, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 5.0, "STOP_LOSS_RATE": -3.0, "SELL_SCORE": 6.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 3.0, "TRAILING_STOP_CALLBACK_RATE": 1.5, "ATR_STOP_MULTIPLIER": 1.5})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 7.0, "STOP_LOSS_RATE": -3.0, "SELL_SCORE": 6.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5})
         config.SCORING_WEIGHTS.update({"TREND": 1.0, "MOMENTUM": 4.0, "STRENGTH": 3.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.1
         config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
@@ -719,7 +719,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         
     elif preset_type == "sideways":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 50, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 10.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 5.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.8})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 15.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8})
         config.SCORING_WEIGHTS.update({"TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.15
         config.SYSTEM_DAILY_LOSS_LIMIT = 7.0
@@ -729,7 +729,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         
     elif preset_type == "default":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 20.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 2.0})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0})
         config.SCORING_WEIGHTS.update({"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.2
         config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
@@ -815,8 +815,8 @@ def reset_to_default(interactive=True):
         "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
     })
     config.SELL_STRATEGY.update({
-        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
-        "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 3.0
+        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 75, "SELL_SCORE": 5.0,
+        "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
         "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,

@@ -189,8 +189,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     take_profit_rsi_limit = take_profit_rsi if take_profit_rsi is not None else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     sell_score_limit = sell_score if sell_score is not None else config.SELL_STRATEGY["SELL_SCORE"]
     
-    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
 
     # [추가] 리스크 관리 설정 로드
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
@@ -944,8 +944,8 @@ def run_backtest():
         stop_loss = custom_rule['stop_loss'] if custom_rule else config.SELL_STRATEGY["STOP_LOSS_RATE"]
         take_profit = custom_rule['take_profit'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
         time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
@@ -964,11 +964,11 @@ def run_backtest():
             buy_score = 7.0
             buy_rsi = 70
             sell_score = 5.0
-            take_profit = 20.0
+            take_profit = 40.0
             take_profit_rsi = 80.0
             stop_loss = -7.0
-            ts_activation = 10.0
-            ts_callback = 3.0
+            ts_activation = 20.0
+            ts_callback = 5.0
             time_stop_days = 10
             atr_mult = 2.0
             weights = {"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0}
@@ -977,10 +977,10 @@ def run_backtest():
             buy_score = 9.0
             buy_rsi = 65
             sell_score = 6.0
-            take_profit = 5.0
+            take_profit = 7.0
             stop_loss = -3.0
-            ts_activation = 3.0
-            ts_callback = 1.5
+            ts_activation = 4.0
+            ts_callback = 2.0
             time_stop_days = 3
             atr_mult = 1.5
             weights = {"TREND": 1.0, "MOMENTUM": 4.0, "STRENGTH": 3.0, "SYNERGY": 2.0}
@@ -989,10 +989,10 @@ def run_backtest():
             buy_score = 7.5
             buy_rsi = 50
             sell_score = 5.0
-            take_profit = 10.0
+            take_profit = 15.0
             stop_loss = -5.0
-            ts_activation = 5.0
-            ts_callback = 2.0
+            ts_activation = 7.0
+            ts_callback = 3.0
             time_stop_days = 5
             atr_mult = 1.8
             weights = {"TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0}
@@ -1001,11 +1001,11 @@ def run_backtest():
             buy_score = 7.5
             buy_rsi = 65
             sell_score = 5.0
-            take_profit = 20.0
+            take_profit = 30.0
             take_profit_rsi = 75.0
             stop_loss = -7.0
-            ts_activation = 10.0
-            ts_callback = 3.0
+            ts_activation = 15.0
+            ts_callback = 4.0
             time_stop_days = 10
             atr_mult = 2.0
             weights = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}

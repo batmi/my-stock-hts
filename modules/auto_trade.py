@@ -4158,8 +4158,8 @@ class AutoTrader:
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)
             
-            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
             
             thresholds = None
             if rule:
@@ -5020,8 +5020,8 @@ def _input_and_save_rule(code, name):
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
         "take_profit_rsi": config.SELL_STRATEGY["TAKE_PROFIT_RSI"],
-        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
-        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0),
+        "ts_activation": config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
+        "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0),
         "memo": "",
         "weights": None,
         "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
@@ -5060,7 +5060,7 @@ def _input_and_save_rule(code, name):
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
 
         console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
-        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 20.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
+        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 30.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
         
         curr_half_tp = "y" if current.get('half_take_profit_use', defaults['half_take_profit_use']) else "n"
         val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "b", "q"], default=curr_half_tp)
@@ -5069,8 +5069,8 @@ def _input_and_save_rule(code, name):
         
         new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준 (기본: 75)", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
         new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수 (기본: 5.0점)", "점수가 이 값 미만으로 떨어지면 매도", float)
-        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 10.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
-        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 3.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
+        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 15.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
+        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 4.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
         new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
             
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
