@@ -1,4 +1,5 @@
 import threading
+import concurrent.futures
 import logging
 import time
 import requests
@@ -40,6 +41,7 @@ class TelegramCommander:
         self.last_portfolio_date = None # [추가] 포트폴리오 진단 중복 방지용
         self.last_heartbeat_time = time.time() # [추가] 하트비트(키보드 동기화) 주기 체크용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="TgCmdWorker")
         
         # [리팩토링] 명령어 핸들러 매핑
         self.command_handlers = {
@@ -95,6 +97,8 @@ class TelegramCommander:
         self.is_running = False
         if self.thread:
             self.thread.join(timeout=2)
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
 
     def _run_loop(self):
         my_thread = threading.current_thread()
@@ -193,9 +197,17 @@ class TelegramCommander:
         if command in self.command_handlers:
             # 명령어 접수 즉시 알림 (API/DB 통신 등 긴 작업 시 사용자 피드백용)
             self._send_reply(f"⌨️ 명령어 접수: {command}")
-            response = self.command_handlers[command](args)
-            if response:
-                self._send_reply(response)
+            
+            def execute_cmd():
+                try:
+                    response = self.command_handlers[command](args)
+                    if response:
+                        self._send_reply(response)
+                except Exception as e:
+                    logger.error(f"[Telegram] 명령어({command}) 처리 중 에러: {e}")
+                    self._send_reply("⚠️ 명령어 처리 중 시스템 오류가 발생했습니다.")
+                    
+            self.executor.submit(execute_cmd)
         else:
             self._send_reply(f"⚠️ 지원하지 않는 명령어입니다: {command}\n전체 명령어 목록을 보려면 /help 를 입력해주세요.")
 
