@@ -233,12 +233,20 @@ def send_telegram_message(message, reply_markup=None):
                     else:
                         logger.error(f"[Telegram] 전송 실패 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
                 except Exception as e:
+                    # [추가] 네트워크 오류 등 긴 에러 메시지 축약
+                    error_msg = str(e)
+                    if "Network is unreachable" in error_msg:
+                        error_msg = "네트워크 통신 불가 (Network is unreachable)"
+                    elif "Max retries exceeded" in error_msg:
+                        error_msg = "서버 접속 지연 (Connection Timeout)"
+
                     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                        config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {str(e)} ({attempt+1}/{max_retries})[/dim red]")
-                    logger.error(f"[Telegram] 전송 중 오류 발생 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}): {str(e)}")
+                        config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {error_msg} ({attempt+1}/{max_retries})[/dim red]")
+                    logger.error(f"[Telegram] 전송 중 오류 발생 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}): {error_msg}")
                 
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    # [수정] 네트워크 단절 시 복구될 시간을 벌기 위해 점진적 대기 (1초 -> 2초 -> 4초)
+                    time.sleep(2 ** attempt)
                     
             if not success_chunk:
                 logger.error(f"[Telegram] 최종 전송 실패 (Chunk {i+1}/{len(msg_chunks)})")
@@ -2418,11 +2426,18 @@ def send_telegram_photo(file_path, caption=None):
                 logger.error(f"[Telegram] 사진 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
                 
         except Exception as e:
+            # [추가] 네트워크 오류 등 긴 에러 메시지 축약
+            error_msg = str(e)
+            if "Network is unreachable" in error_msg:
+                error_msg = "네트워크 통신 불가 (Network is unreachable)"
+            elif "Max retries exceeded" in error_msg:
+                error_msg = "서버 접속 지연 (Connection Timeout)"
+
             if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM PHOTO) {str(e)}[/dim red]")
-            logger.error(f"[Telegram] 사진 전송 중 오류({attempt+1}/{max_retries}): {str(e)}")
+                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM PHOTO) {error_msg}[/dim red]")
+            logger.error(f"[Telegram] 사진 전송 중 오류({attempt+1}/{max_retries}): {error_msg}")
         
         if attempt < max_retries - 1:
-            time.sleep(1)
+            time.sleep(2 ** attempt)
             
     return False
