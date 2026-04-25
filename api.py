@@ -25,7 +25,7 @@ import constants
 logger = logging.getLogger(__name__)
 
 # [추가] 텔레그램 메시지 전송용 비동기 스레드 풀
-_telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="TgSender")
+_telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="TgSender")
 
 def _is_screen_output_allowed():
     """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단)"""
