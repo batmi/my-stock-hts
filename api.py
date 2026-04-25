@@ -99,7 +99,7 @@ def _get_telegram_footer():
     instance_name = config.TELEGRAM_INSTANCE_NAME
     return f"[{instance_name} | {acc_label} {cano}]"
 
-def send_telegram_message(message, reply_markup=None):
+def send_telegram_message(message, reply_markup=None, is_urgent=False):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return
@@ -251,8 +251,12 @@ def send_telegram_message(message, reply_markup=None):
             if not success_chunk:
                 logger.error(f"[Telegram] 최종 전송 실패 (Chunk {i+1}/{len(msg_chunks)})")
 
-    # 핵심 매매 로직 블로킹 방지를 위해 스레드 풀로 위임 (비동기 전송)
-    _telegram_executor.submit(_send_task)
+    # [수정] 긴급 발송 여부에 따라 큐(Queue) 대기열 우회 처리
+    if is_urgent:
+        threading.Thread(target=_send_task, daemon=True, name="TgUrgentSender").start()
+    else:
+        # 핵심 매매 로직 블로킹 방지를 위해 스레드 풀로 위임 (비동기 전송)
+        _telegram_executor.submit(_send_task)
 
 _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 

@@ -196,9 +196,12 @@ class TelegramCommander:
         # 핸들러 호출
         if command in self.command_handlers:
             # 명령어 접수 즉시 알림 (API/DB 통신 등 긴 작업 시 사용자 피드백용)
-            self._send_reply(f"⌨️ 명령어 접수: {command}")
+            # [수정] 알림 큐(대기열)를 새치기하여 화면에 가장 먼저 즉시 띄움
+            self._send_reply(f"⌨️ 명령어 접수: {command}", is_urgent=True)
             
             def execute_cmd():
+                # [추가] 접수 메시지가 텔레그램 앱에 완전히 표시될 시간을 벌어줌 (순서 꼬임 방지)
+                time.sleep(0.5)
                 try:
                     response = self.command_handlers[command](args)
                     if response:
@@ -1542,10 +1545,10 @@ class TelegramCommander:
             return f"⚠️ 보유 종목 조회 중 오류 발생: {str(e)}"
 
     # --- 내부 로직 메서드 ---
-    def _send_reply(self, text, reply_markup=None):
+    def _send_reply(self, text, reply_markup=None, is_urgent=False):
         if reply_markup is None:
             reply_markup = self._get_default_keyboard()
-        api.send_telegram_message(text, reply_markup=reply_markup)
+        api.send_telegram_message(text, reply_markup=reply_markup, is_urgent=is_urgent)
 
     def _get_default_keyboard(self):
         """하단 고정 메뉴 버튼 (Reply Keyboard) 구성"""
