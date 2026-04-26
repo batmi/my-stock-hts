@@ -978,8 +978,7 @@ def manage_stock_menu():
             ("2", "관심 종목 추가", "Add Stock"), 
             ("3", "관심 종목 삭제", "Delete Stock"), 
             ("4", "관심 종목 순서 변경", "Reorder Stock"), 
-            ("5", "관심 종목 메모 관리", "Manage Memo"), 
-            ("9", "차트 및 데이터 캐시 초기화", "Clear Cache")
+            ("5", "관심 종목 메모 관리", "Manage Memo")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -1005,12 +1004,3 @@ def manage_stock_menu():
             if reorder_stock() is not False: utils.pause()
         elif choice == "5":
             manage_stock_memos_by_mode('view')
-        elif choice == "9":
-            import api
-            from modules import market
-            from modules import analysis 
-            api.clear_chart_cache()
-            market.clear_market_yf_cache()
-            analysis.clear_smart_money_cache() 
-            config.console.print("\n[bold green]차트 및 지수, 수급 데이터 캐시가 초기화되었습니다.[/bold green]")
-            utils.pause()

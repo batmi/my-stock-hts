@@ -888,7 +888,8 @@ def system_config_menu():
             ("3", "리스크 및 자산 배분 설정", "Risk & Portfolio"),
             ("4", "기술적 지표 파라미터", "Indicators"),
             ("5", "환경 및 시스템 설정", "Environment & System"),
-            ("8", "시장 국면별 전략 프리셋", "Strategy Presets"),
+            ("7", "시장 국면별 전략 프리셋", "Strategy Presets"),
+            ("8", "데이터 캐시 초기화", "Clear Cache"),
             ("9", "시스템 설정 전체 조회", "View Config"),
             ("0", "설정 초기화", "Reset to Default")
         ]
@@ -940,8 +941,17 @@ def system_config_menu():
             elif sub_choice == "2": modify_telegram_settings()
             elif sub_choice == "3": modify_log_settings()
         
-        elif choice == "8":
+        elif choice == "7":
             if select_strategy_preset() is not False: utils.pause()
+        elif choice == "8":
+            import api
+            from modules import market
+            from modules import analysis 
+            api.clear_chart_cache()
+            market.clear_market_yf_cache()
+            analysis.clear_smart_money_cache() 
+            config.console.print("\n[bold green]데이터 캐시가 초기화되었습니다.[/bold green]")
+            utils.pause()
         elif choice == "9": 
             view_system_config()
             utils.pause()
