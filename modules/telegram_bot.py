@@ -200,8 +200,8 @@ class TelegramCommander:
             self._send_reply(f"⌨️ 명령어 접수: {command}", is_urgent=True)
             
             def execute_cmd():
-                # [추가] 접수 메시지가 텔레그램 앱에 완전히 표시될 시간을 벌어줌 (순서 꼬임 방지)
-                time.sleep(0.5)
+                # 메시지 순서 꼬임 방지를 위한 최소한의 지연만 부여 (체감 속도 개선을 위해 0.5 -> 0.1 단축)
+                time.sleep(0.1)
                 try:
                     response = self.command_handlers[command](args)
                     if response:
