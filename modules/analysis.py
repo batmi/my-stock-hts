@@ -113,6 +113,13 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
         s = round(0.5 * r_trend, 2)
         score += s
         details.append(f"EMA: 60일선 > 120일선 (+{s:.2f})")
+        
+    # [추가] 초기 추세 전환 (Early Breakout) 가점
+    # 아직 20일선이 60일선 아래(역배열/조정)에 있지만, 주가가 60일선을 선제적으로 뚫고 올라왔을 때 가점 부여
+    if ema20 is not None and ema60 is not None and ema20 <= ema60 and price > ema60:
+        s = round(0.5 * r_trend, 2)
+        score += s
+        details.append(f"EMA: 60일선 돌파 (초기 추세 전환) (+{s:.2f})")
     
     if macd is not None and macd_signal is not None:
         if macd > macd_signal:
@@ -167,11 +174,11 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
         details.append(f"SM: 메이저 수급 턴어라운드 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
-    # Trend Confirmation
-    if (ema20 is not None and ema60 is not None and ema20 > ema60) and (macd is not None and macd > 0) and (adx is not None and adx >= 20):
+    # Trend Confirmation (완화됨: 정배열이 아니어도 주가가 60일선 위에 있고 MACD/ADX가 양호하면 시너지 부여)
+    if ema60 is not None and price > ema60 and (macd is not None and macd_signal is not None and macd > macd_signal) and (adx is not None and adx >= 15):
         s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"추세 확증: 정배열+MACD양수+ADX (+{s:.2f})")
+        details.append(f"추세 시작: 주가>60일선+MACD골든+ADX상승 (+{s:.2f})")
         
     # Momentum Thrust
     if (macd is not None and macd_signal is not None and macd > macd_signal) and (rsi is not None and rsi >= 50) and obv_trend:

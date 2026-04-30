@@ -93,9 +93,9 @@ def _get_preset_emoji():
     rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
     tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
     
-    if bs == 7.0 and tp == 20.0 and rsi == 70: return "🟢"
-    elif bs == 9.0 and tp == 5.0 and rsi == 65: return "🔵"
-    elif bs == 7.5 and tp == 10.0 and rsi == 50: return "🟡"
+    if bs == 7.0 and tp == 40.0 and rsi == 70: return "🟢"
+    elif bs == 9.0 and tp == 7.0 and rsi == 65: return "🔵"
+    elif bs == 7.5 and tp == 15.0 and rsi == 50: return "🟡"
     else: return "⚪"
 
 def _custom_print_breadcrumb():
@@ -528,6 +528,7 @@ def show_help():
     score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
     score_table.add_row("(추세 4.0)", "20일선 > 60일선", f"+{0.5 * r_trend:.1f}", "수급선 정배열")
     score_table.add_row("", "60일선 > 120일선", f"+{0.5 * r_trend:.1f}", "경기선 정배열")
+    score_table.add_row("", "주가 > 60일선 돌파 (초기)", f"+{0.5 * r_trend:.1f}", "초기 추세 전환 (20선≤60선 시)")
     score_table.add_row("", "MACD > Signal", f"+{1.0 * r_trend:.1f}", "골든크로스 (강력)")
     score_table.add_row("", "MACD > 0", f"+{0.5 * r_trend:.1f}", "상승 국면 진입")
     score_table.add_row("", "주가 > SAR", f"+{1.0 * r_trend:.1f}", "파라볼릭 매수")
@@ -547,7 +548,7 @@ def show_help():
     score_table.add_section()
 
     # 4. Synergy Bonus
-    score_table.add_row("Synergy Bonus", "정배열 + MACD양수 + ADX", f"+{1.0 * r_syn:.1f}", "추세 확증 (Trend)")
+    score_table.add_row("Synergy Bonus", "주가>60선 + MACD골든 + ADX≥15", f"+{1.0 * r_syn:.1f}", "추세 시작 시너지")
     score_table.add_row("(가산점 2.0)", "MACD골든 + RSI강세 + OBV", f"+{1.0 * r_syn:.1f}", "모멘텀 폭발 (Thrust)")
 
    # [병합] 점수대별 의미
