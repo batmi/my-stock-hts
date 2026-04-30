@@ -1881,7 +1881,7 @@ class AutoTrader:
             self.is_running = False
             ConclusionMonitor().stop() # [추가] 체결 감시 모니터 종료
             if self.thread and self.thread is not threading.current_thread():
-                self.thread.join(timeout=10) # [수정] 타임아웃 연장 (DB 락 대기 고려)
+                self.thread.join(timeout=15) # [수정] 타임아웃 연장 (종목 분석 등 백그라운드 스레드 정상 종료 대기)
 
         if use_status:
             with Progress(
@@ -4132,6 +4132,7 @@ class AutoTrader:
         # [Fix: Point 1] 매도 분석 루프 병렬화 (ThreadPoolExecutor 활용)
         def _sell_worker(item):
             if not self.is_running: return
+            
             code = item['pdno']; name = item['prdt_name']
             
             # [추가] 트레이딩 제한 종목은 매도 분석에서 완전히 제외 (수동 매수/홀딩용)
@@ -4149,6 +4150,8 @@ class AutoTrader:
             buy_price = float(item['pchs_avg_pric'])
             
             time.sleep(safe_delay)
+            
+            if not self.is_running: return # 대기 후 재확인
             
             if qty <= 0: 
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 주문 가능 수량 0")
@@ -4432,12 +4435,16 @@ class AutoTrader:
 
     def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map):
         """(내부함수) 매수 후보 분석용 단일 워커"""
+        if not self.is_running: return None # [추가] 중지 요청 시 즉시 종료
+        
         try:
             # [추가] 시스템 트레이딩 스레드임을 마킹 (API 우선순위 획득용)
             context.trade_context.is_system_trading = True
             
             # [추가] API 호출 전 대기 (Rate Limit 방지 - 스레드별 분산 효과)
             time.sleep(safe_delay)
+            
+            if not self.is_running: return None # 대기 후 재확인
             
             code = item['code']; name = item['name']
             
@@ -4459,6 +4466,8 @@ class AutoTrader:
                 if market_stat and isinstance(market_stat, dict):
                     if not market_stat.get('is_healthy', True):
                         return {'type': 'market_skip', 'name': name, 'market_type': market_type}
+            
+            if not self.is_running: return None # API 호출 전 최종 확인
             
             # 5. [최적화] 데이터 조회 및 분석 (병렬 Fan-out)
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
