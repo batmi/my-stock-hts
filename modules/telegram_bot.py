@@ -133,7 +133,12 @@ class TelegramCommander:
                     time.sleep(30)
                     
             except Exception as e:
-                if self.is_running: logger.error(f"[Telegram] Polling Error: {e}")
+                if self.is_running:
+                    err_msg = str(e)
+                    if "Max retries exceeded" in err_msg or "Network is unreachable" in err_msg or "Connection reset by peer" in err_msg:
+                        logger.warning(f"[Telegram] 일시적인 네트워크 연결 오류로 폴링 재시도 중...")
+                    else:
+                        logger.error(f"[Telegram] Polling Error: {err_msg}")
                 time.sleep(5) # 에러 시 대기
 
     def _handle_message(self, message):

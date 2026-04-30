@@ -632,17 +632,9 @@ def prefetch_watchlists_async():
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
-        # [수정] TPS 토큰 버킷/폴링 방식 적용을 위해 '마지막 전송 시점'을 기록
-        self.last_request_time_sim = 0.0
-        self.last_request_time_real = 0.0
-        self.request_history = deque()
+        self.request_history_sim = deque()
+        self.request_history_real = deque()
         self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
-
-    def _get_current_tps(self):
-        now = time.time()
-        while self.request_history and self.request_history[0] < now - 1.0:
-            self.request_history.popleft()
-        return len(self.request_history)
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
@@ -672,24 +664,32 @@ class ThrottledSession(requests.Session):
                     with self.lock:
                         now = time.time()
                         target_limit = config.REAL_TX_PER_SECOND if is_real_server else config.SIM_TX_PER_SECOND
-                        last_time = self.last_request_time_real if is_real_server else self.last_request_time_sim
+                        history = self.request_history_real if is_real_server else self.request_history_sim
                         server_type = "REAL" if is_real_server else "SIMULATION"
                         
                         if target_limit > 0:
-                            safety_margin = 1.2 if is_sim_server else 1.1
-                            min_interval = (1.0 / target_limit) * safety_margin
+                            # 1. 윈도우 기반 한도 체크 (Burst 방어)
+                            window_size = 1.5 if is_sim_server else 1.1
                             
-                            time_since_last = now - last_time
-                            if time_since_last >= min_interval:
-                                # 전송 권한 획득 (토큰 획득)
-                                if is_real_server: self.last_request_time_real = now
-                                else: self.last_request_time_sim = now
+                            while history and history[0] <= now - window_size:
+                                history.popleft()
                                 
-                                self.request_history.append(now)
-                                current_tps = self._get_current_tps()
+                            # 2. 최소 간격 체크 (고르게 분산)
+                            min_interval = (1.0 / target_limit)
+                            if is_sim_server: min_interval *= 1.2
+                            else: min_interval *= 1.05
+
+                            time_since_last = now - history[-1] if history else float('inf')
+
+                            if len(history) < target_limit and time_since_last >= min_interval:
+                                history.append(now)
+                                current_tps = len(history)
                                 break # 락 해제 후 전송 진행
                             else:
-                                wait_time = min_interval - time_since_last
+                                wait_from_window = (history[0] + window_size) - now if len(history) >= target_limit else 0
+                                wait_from_interval = min_interval - time_since_last
+                                wait_time = max(wait_from_window, wait_from_interval)
+                                if wait_time <= 0: wait_time = 0.05
                         else:
                             break # 한도 미설정 시 즉시 통과
                             
