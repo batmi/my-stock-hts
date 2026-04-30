@@ -1761,7 +1761,7 @@ def analyze_market_stocks(market_type):
                         if res_data.get('vol_strength') is not None:
                             vol_str = f", 체결={res_data['vol_strength']:.0f}%"
                         else:
-                            vol_str = ", 체결=확인불가"
+                            vol_str = ", 체결=확인생략"
                         
                         log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
