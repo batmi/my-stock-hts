@@ -156,6 +156,7 @@ def view_system_config():
     table.add_row("[bold]3. 리스크 및 자산 배분 설정[/]", "", "")
     table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
     table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
+    table.add_row("ETF 매수 포함 여부\n[dim]시스템 매수 대상에 국내 ETF 포함[/dim]", "SYSTEM_INCLUDE_ETF", f"{getattr(config, 'SYSTEM_INCLUDE_ETF', False)}")
     
     slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
@@ -632,6 +633,8 @@ def modify_risk_portfolio_settings():
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
              "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
+            {"desc": "ETF 매수 포함 여부", "help": "시스템 매수 대상에 국내 ETF 포함", "name": "SYSTEM_INCLUDE_ETF", "type": "bool", "choices": ["y", "n"], "section": "Portfolio",
+             "get": lambda: getattr(config, 'SYSTEM_INCLUDE_ETF', False), "set": lambda v: setattr(config, 'SYSTEM_INCLUDE_ETF', v)},
             {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
              "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.002), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
              

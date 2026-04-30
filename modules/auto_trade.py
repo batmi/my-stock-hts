@@ -2314,7 +2314,9 @@ class AutoTrader:
 
     def _get_skipped_stocks_count(self, holdings):
         """현재 관심 종목 중 미보유 종목을 대상으로 시장별 대기 종목 수를 계산합니다."""
-        targets = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
+        targets = config.session.stock_data.get("stocks_kr", [])
+        if getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+            targets += config.session.stock_data.get("etfs_kr", [])
         holding_codes = {h['pdno'] for h in holdings if int(h.get('hldg_qty', 0)) > 0} if holdings else set()
         
         count_k = 0
@@ -2732,7 +2734,9 @@ class AutoTrader:
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         if invest_ratio <= 0: invest_ratio = 0.2
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
-        table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목)")
+        include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
+        etf_str = "포함" if include_etf else "제외"
+        table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})")
 
         # 손실 제한
         loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
@@ -4334,10 +4338,13 @@ class AutoTrader:
             item_copy = dict(item)
             item_copy['group'] = 'stocks_kr'
             targets.append(item_copy)
-        for item in config.session.stock_data.get("etfs_kr", []):
-            item_copy = dict(item)
-            item_copy['group'] = 'etfs_kr'
-            targets.append(item_copy)
+            
+        # [수정] ETF 포함 여부 설정에 따라 대상에 추가
+        if getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+            for item in config.session.stock_data.get("etfs_kr", []):
+                item_copy = dict(item)
+                item_copy['group'] = 'etfs_kr'
+                targets.append(item_copy)
             
         if not targets: return
         

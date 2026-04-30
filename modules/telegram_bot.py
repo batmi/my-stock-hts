@@ -2137,6 +2137,8 @@ class TelegramCommander:
         # 기타
         invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
         max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
+        etf_str = "포함" if include_etf else "제외"
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
         filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
@@ -2147,7 +2149,7 @@ class TelegramCommander:
         vol_str = f"ON (목표 {vol_target*100:.0f}%)" if use_vol else "OFF"
 
         msg += f"\n[기타]\n"
-        msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}% (최대 {max_holdings}종목)\n"
+        msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})\n"
         msg += f"• 슬리피지 비율: {slippage:.4f} ({slippage*100:.2f}%)\n"
         msg += f"• 시장 필터링: {filter_str}\n"
         msg += f"• 변동성 타겟팅: {vol_str}\n"

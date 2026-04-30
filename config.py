@@ -149,6 +149,10 @@ SYSTEM_INVEST_PER_STOCK = 0.2
 # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 10)
 SYSTEM_MAX_HOLDINGS = 10
 
+# [추가] 시스템 트레이딩 매수 대상에 ETF 포함 여부
+# 기본값: False (국내 주식만 대상으로 함)
+SYSTEM_INCLUDE_ETF = False
+
 USE_MARKET_FILTER = True       # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
 MARKET_FILTER_MA = 50          # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
@@ -598,6 +602,7 @@ def load_dynamic_config():
             global USE_VOLATILITY_TARGETING, TARGET_VOLATILITY, VOLATILITY_SCALING_MAX, VOLATILITY_SCALING_MIN
             global UNFILLED_ORDER_CANCEL_SECONDS
             global SYSTEM_MAX_HOLDINGS
+            global SYSTEM_INCLUDE_ETF
             global SLIPPAGE_RATE
             global CHART_CACHE_TTL_MINUTES
             global CLEAR_SCREEN_ON_MENU
@@ -605,6 +610,7 @@ def load_dynamic_config():
             
             if "SYSTEM_INVEST_PER_STOCK" in data: SYSTEM_INVEST_PER_STOCK = data["SYSTEM_INVEST_PER_STOCK"]
             if "SYSTEM_MAX_HOLDINGS" in data: SYSTEM_MAX_HOLDINGS = data["SYSTEM_MAX_HOLDINGS"]
+            if "SYSTEM_INCLUDE_ETF" in data: SYSTEM_INCLUDE_ETF = data["SYSTEM_INCLUDE_ETF"]
             if "SYSTEM_TRADING_INTERVAL" in data: SYSTEM_TRADING_INTERVAL = data["SYSTEM_TRADING_INTERVAL"]
             if "SYSTEM_DAILY_LOSS_LIMIT" in data: SYSTEM_DAILY_LOSS_LIMIT = data["SYSTEM_DAILY_LOSS_LIMIT"]
             
