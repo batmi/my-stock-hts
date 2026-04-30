@@ -1047,9 +1047,6 @@ def send_order(order_type):
                 
                 # 체결 감시 및 미체결 조회
                 auto_trade.ConclusionMonitor().check_now()
-                
-                config.console.print("\n[dim]체결 확인을 위해 미체결 내역을 조회합니다...[/dim]")
-                show_open_orders()
             else:
                 msg1 = result.get('msg1', '알 수 없는 오류')
                 config.console.print(f"[bold red]주문 실패: {msg1} (Code: {result.get('msg_cd')})[/bold red]")
@@ -1306,9 +1303,6 @@ def modify_order():
                 # [추가] DB 비동기 저장 시간 확보를 위해 딜레이 추가 (Race Condition 원천 방지)
                 time.sleep(0.5)
                 auto_trade.ConclusionMonitor().check_now()
-                
-                config.console.print("\n[dim]변경 사항 확인을 위해 미체결 내역을 조회합니다...[/dim]")
-                show_open_orders()
             else:
                 msg_cd = res_json.get('msg_cd')
                 err_msg = res_json.get('msg1')
