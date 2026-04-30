@@ -1676,6 +1676,25 @@ def analyze_market_stocks(market_type):
         config.console.print(f"현재 설정: 매수 {c_buy}점 / RSI {c_rsi} / 체결 {c_vol}% / 상승 {c_rise}점 / 가중치 {w_str}")
 
         config.console.print()
+        
+        # [추가] ETF 종목 포함 여부 확인
+        include_etf_choice = Prompt.ask("ETF 종목을 포함하여 분석하시겠습니까? [dim](y: 포함, n: 제외, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+        if include_etf_choice in ['b', 'q']: return False
+        
+        if include_etf_choice == 'n':
+            etf_keywords = [
+                "KODEX ", "TIGER ", "KBSTAR ", "RISE ", "ACE ", "ARIRANG ", "PLUS ", 
+                "KOSEF ", "HANARO ", "SOL ", "TIMEFOLIO ", "히어로즈 ", "마이티 ", "TREX ", 
+                "TRUSTON ", "FOCUS ", "UNTACT ", "WOORI ", "WON ", "BNK ", "KINDEX ", 
+                "네비게이터 ", "TIME ", "KIWOOM ", "HK ", "1Q ", "KoAct ", "ITF ", 
+                "VITA ", "UNICORN ", "더제이 ", "파워 ", "MIDAS ", "에셋플러스 ", 
+                "KCGI ", "DAISHIN343 ", "아이엠에셋 ", "대신 ", "유진 ", 
+                "ETN ", "스팩 ", "SPAC ", "리츠 ", "REIT "
+            ]
+            original_len = len(stock_list)
+            stock_list = [s for s in stock_list if not any(kw in s['name'] for kw in etf_keywords)]
+            config.console.print(f"[dim]이름 기반 ETF/ETN 등 1차 제외 완료: {original_len}개 -> {len(stock_list)}개[/dim]\n")
+            
         # 파라미터 설정
         change_settings = Prompt.ask("분석 조건을 변경하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
         if change_settings in ['b', 'q']: return False
@@ -1683,6 +1702,7 @@ def analyze_market_stocks(market_type):
         if change_settings == 'y':
             params = get_analysis_params()
             if params is None: return False
+            params['INCLUDE_ETF'] = (include_etf_choice == 'y')
         else:
             params = {
                 "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
@@ -1690,7 +1710,8 @@ def analyze_market_stocks(market_type):
                 "BUY_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0),
                 "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
                 "OUTPUT_FILTER": "BUY",
-                "WEIGHTS": config.SCORING_WEIGHTS # [추가] 가중치 전달
+                "WEIGHTS": config.SCORING_WEIGHTS,
+                "INCLUDE_ETF": (include_etf_choice == 'y')
             }
             config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
@@ -1815,6 +1836,16 @@ def analyze_market_stocks(market_type):
                     buy_candidates[future_to_idx[future]]['sector'] = future.result()
                     progress.advance(task)
         
+        # [추가] 업종(Sector) 정보를 기반으로 확실하게 2차 제외
+        if not use_cache and not params.get('INCLUDE_ETF', True):
+            original_len = len(buy_candidates)
+            buy_candidates = [
+                item for item in buy_candidates 
+                if not any(kw in str(item.get('sector', '')).upper() for kw in ['ETF', 'ETN', '스팩', 'SPAC', '리츠', 'REIT', '인프라투용', '투자회사'])
+            ]
+            if len(buy_candidates) < original_len:
+                config.console.print(f"[dim]업종 기반 ETF/ETN 등 2차 제외 완료: {original_len}개 -> {len(buy_candidates)}개[/dim]")
+
         # 새로 분석했거나 sector 정보가 추가된 경우 DB 저장
         if not use_cache:
             _save_analysis_result(market_type, buy_candidates, params)
