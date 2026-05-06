@@ -305,8 +305,7 @@ YF_TO_TV_EXACT = {
     "ZT=F": "CBOT:ZT1!",           # 미국채 2년물 선물
     "ZF=F": "CBOT:ZF1!",           # 미국채 5년물 선물
     "ZN=F": "CBOT:ZN1!",           # 미국채 10년물 선물
-    "ZB=F": "CBOT:ZB1!",           # 미국채 30년물 선물
-    "SMSN.IL": "LSE:SMSN"          # 삼성전자 GDR
+    "ZB=F": "CBOT:ZB1!"            # 미국채 30년물 선물
 }
 
 def get_yf_fast_info(code):

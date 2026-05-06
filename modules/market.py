@@ -38,7 +38,7 @@ ALL_INDICES = [
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
-    ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("NBI (바이오)", "^NBI"), ("VIX (변동성)", "^VIX"),
+    ("SOX (반도체)", "^SOX"), ("QGRD (스마트그리드)", "^QGRD"), ("NBI (바이오)", "^NBI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 신흥국", "EEM"), ("하이일드 채권", "HYG"),
     # 4. 금리 및 환율
     ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
@@ -436,7 +436,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "금", "은", "구리", "비트코인", "이더리움", "솔라나", "리플", "미국채 2년물 선물", "London - Samsung GDR",
+            "금", "은", "구리", "비트코인", "이더리움", "솔라나", "리플", "미국채 2년물 선물",
             "MSCI 신흥국", "하이일드 채권"
         ]
 
@@ -485,10 +485,15 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 4.20 <= eval_price < 4.80: display_name = f"[green]{name}[/]"
             elif eval_price < 4.20: display_name = f"[blue]{name}[/]"
         elif name == "SOX (반도체)":
-            if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
-            elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 < high_52_rate <= -12.0: display_name = f"[yellow]{name}[/]"
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -12.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -25.0 <= high_52_rate < -12.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+        elif name == "QGRD (스마트그리드)":
+            if high_52_rate >= -4.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -4.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
         elif name == "NBI (바이오)":
             if high_52_rate >= -6.0: display_name = f"[red]{name}[/]"
             elif -15.0 <= high_52_rate < -6.0: display_name = f"[orange3]{name}[/]"
@@ -812,7 +817,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "Japan - 닛케이", "London - Samsung GDR", "달러인덱스", "미국채 2년물 선물", "금", "비트코인"]: 
+                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 선물", "금", "비트코인"]: 
                     table.add_section()
 
                 res = results_dict.get(name)

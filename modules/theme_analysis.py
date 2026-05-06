@@ -303,11 +303,16 @@ def evaluate_market_indicator(name, price, yh_rate=None):
             elif yh_rate >= -12.0: status_desc = "건전한 조정"
             elif yh_rate >= -20.0: status_desc = "기술적 조정기"
             elif yh_rate < -25.0: status_desc = "반도체 하락 사이클/침체"
-            elif name == "NBI (바이오)":
-                if yh_rate >= -6.0: status_desc = "신고가 랠리/초강세"
-                elif yh_rate >= -15.0: status_desc = "건전한 조정"
-                elif yh_rate >= -25.0: status_desc = "기술적 조정기"
-                elif yh_rate < -25.0: status_desc = "바이오 하락 사이클/침체"
+        elif name == "QGRD (스마트그리드)":
+            if yh_rate >= -4.0: status_desc = "신고가 랠리/초강세"
+            elif yh_rate >= -10.0: status_desc = "건전한 조정"
+            elif yh_rate >= -20.0: status_desc = "기술적 조정기"
+            elif yh_rate < -20.0: status_desc = "전력 하락 사이클/침체"
+        elif name == "NBI (바이오)":
+            if yh_rate >= -6.0: status_desc = "신고가 랠리/초강세"
+            elif yh_rate >= -15.0: status_desc = "건전한 조정"
+            elif yh_rate >= -25.0: status_desc = "기술적 조정기"
+            elif yh_rate < -25.0: status_desc = "바이오 하락 사이클/침체"
         elif not status_desc:
             if yh_rate >= -3.0: status_desc = "신고가 근접/초강세"
             elif yh_rate <= -20.0: status_desc = "침체/약세장 진입"

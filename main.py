@@ -201,7 +201,7 @@ def preflight_check():
                         time.sleep(0.1) # Rate Limit 방어
                 except Exception:
                     pass
-                    progress.advance(task)
+                progress.advance(task)
             if updated:
                 config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
@@ -310,8 +310,14 @@ def show_help():
 
     table.add_row("SOX 반도체 지수", "낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
     table.add_row("", "5% < 낙폭 ≤ 12%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "12% < 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입")
+    table.add_row("", "12% < 낙폭 ≤ 25%", "[yellow]노란색[/]", "기술적 조정기 진입")
     table.add_row("", "낙폭 > 25%", "[blue]파란색[/]", "반도체 하락 사이클/침체")
+    table.add_section()
+
+    table.add_row("QGRD 스마트그리드 지수", "낙폭 ≤ 4%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
+    table.add_row("", "4% < 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정")
+    table.add_row("", "10% < 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입")
+    table.add_row("", "낙폭 > 20%", "[blue]파란색[/]", "전력 하락 사이클/침체")
     table.add_section()
 
     table.add_row("NBI 바이오 지수", "낙폭 ≤ 6%", "[red]빨간색[/]", "신고가 랠리 및 초강세")

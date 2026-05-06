@@ -1441,7 +1441,7 @@ def _get_master_stock_list(market_type):
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
+                BarColumn(),
                 console=config.console,
                 transient=True
             ) as progress:
