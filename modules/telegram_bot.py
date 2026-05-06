@@ -159,7 +159,7 @@ class TelegramCommander:
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
-            "📈 시장 지수": "/market krc",
+            "📈 시장 지수": "/market",
             "🔎 종목 스캔": "/scan k",
             "❓ 도움말": "/help",
             "📜 주간 거래": "/history w",
@@ -1622,31 +1622,22 @@ class TelegramCommander:
                 msg += "\n"
             
             try:
-                df = None
-                # [수정] 국내 지수는 analysis 모듈을 통해 KIS API 우선 조회
+                current = None
+                prev = None
+                
                 if name in domestic_map:
+                    # 국내 지수는 기존 방식대로 데이터 조회
                     df = analysis.get_domestic_index_data(domestic_map[name])
+                    if df is not None and not df.empty:
+                        current = df.iloc[-1]['close']
+                        prev = df.iloc[-2]['close'] if len(df) > 1 else current
                 else:
-                    df = api.get_chart_data(code, is_overseas=True)
-                
-                if df is None or df.empty:
-                    msg += f"\n• {name}: 데이터 조회 실패"
-                    continue
-                
-                current = df.iloc[-1]['close']
-                prev = df.iloc[-2]['close'] if len(df) > 1 else current
-                
-                eval_price = current # 상태 판별용 원본 지수
-                
-                # [추가] 해외 지수는 fast_info 우선 적용 (실시간 국채 금리 추정 포함)
-                if name not in domestic_map:
+                    # 해외 지수는 무거운 차트 데이터 조회를 생략하고 즉시 fast_info 우선 사용
                     try:
                         fi = api.get_yf_fast_info(code)
                         if fi and fi.get('last_price'):
-                            fast_current = float(fi['last_price'])
-                            fast_prev = float(fi.get('regular_market_previous_close', fast_current))
-                            
-                            eval_price = fast_current
+                            current = float(fi['last_price'])
+                            prev = float(fi.get('regular_market_previous_close', current))
                             
                             # 금리 프록시 로직
                             fut_mapping = {
@@ -1664,17 +1655,25 @@ class TelegramCommander:
                                         utc_hour = datetime.now(timezone.utc).hour
                                         if utc_hour < 13 or utc_hour >= 21:
                                             f_rate = (f_curr - f_prev) / f_prev * 100
-                                            est_yield = fast_current - (f_rate / fut_info["duration"])
-                                            fast_prev = fast_current
-                                            fast_current = est_yield
+                                            est_yield = current - (f_rate / fut_info["duration"])
+                                            prev = current
+                                            current = est_yield
                                             name = f"{name}(선물적용)"
-                            
-                            current = fast_current
-                            prev = fast_prev
                     except: pass
+                    
+                    # fast_info 실패 시에만 fallback으로 차트 조회 수행
+                    if current is None:
+                        df = api.get_chart_data(code, is_overseas=True)
+                        if df is not None and not df.empty:
+                            current = df.iloc[-1]['close']
+                            prev = df.iloc[-2]['close'] if len(df) > 1 else current
+                
+                if current is None or prev is None:
+                    msg += f"\n• {name}: 데이터 조회 실패"
+                    continue
                 
                 diff = current - prev
-                rate = (diff / prev) * 100
+                rate = (diff / prev) * 100 if prev > 0 else 0
                 
                 if "미국채" in name and "선물" not in name:
                     val_fmt = f"{current:,.2f}%"
@@ -1684,28 +1683,6 @@ class TelegramCommander:
                     if code == "KRW=X": val_fmt += "원"
                     msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
                 
-                # 시장 국면 판단 로직 적용 (모든 지수)
-                ma_series = df['close'].ewm(span=regime_ma_period, adjust=False).mean()
-                ma_val = ma_series.iloc[-1]
-                
-                slope = 0
-                if len(ma_series) >= 5:
-                    slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-                
-                ind = indicators.calculate_indicators(df)
-                adx = ind['adx']
-                adx_val = adx if adx is not None else 0
-                adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-                
-                if eval_price > ma_val and slope > 0 and adx_val >= adx_threshold:
-                    trend = "📈" # 강세장
-                elif eval_price < ma_val:
-                    trend = "📉" # 약세장
-                else:
-                    trend = "📊" # 횡보장
-                    
-                msg += f" {trend}"
-                    
             except Exception as e:
                 msg += f"\n• {name}: 오류"
         
