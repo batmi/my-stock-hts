@@ -38,7 +38,7 @@ ALL_INDICES = [
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
-    ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("VIX (변동성)", "^VIX"),
+    ("London - Samsung GDR", "SMSN.IL"), ("SOX (반도체)", "^SOX"), ("NBI (바이오)", "^NBI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 신흥국", "EEM"), ("하이일드 채권", "HYG"),
     # 4. 금리 및 환율
     ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
@@ -488,6 +488,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if high_52_rate > -5.0: display_name = f"[red]{name}[/]"
             elif -12.0 < high_52_rate <= -5.0: display_name = f"[orange3]{name}[/]"
             elif -20.0 < high_52_rate <= -12.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+        elif name == "NBI (바이오)":
+            if high_52_rate >= -6.0: display_name = f"[red]{name}[/]"
+            elif -15.0 <= high_52_rate < -6.0: display_name = f"[orange3]{name}[/]"
+            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
         elif name == "VIX (변동성)":
             if current <= 20: display_name = f"[green]{name}[/]"

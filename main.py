@@ -314,6 +314,12 @@ def show_help():
     table.add_row("", "낙폭 > 25%", "[blue]파란색[/]", "반도체 하락 사이클/침체")
     table.add_section()
 
+    table.add_row("NBI 바이오 지수", "낙폭 ≤ 6%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
+    table.add_row("", "6% < 낙폭 ≤ 15%", "[orange3]주황색[/]", "건전한 조정")
+    table.add_row("", "15% < 낙폭 ≤ 25%", "[yellow]노란색[/]", "기술적 조정기 진입")
+    table.add_row("", "낙폭 > 25%", "[blue]파란색[/]", "바이오 하락 사이클/침체")
+    table.add_section()
+
     table.add_row("등락폭/등락률", "상승 (> 0)", "[red]빨간색[/]", "전일 대비 상승")
     table.add_row("", "하락 (< 0)", "[blue]파란색[/]", "전일 대비 하락")
     table.add_row("", "보합 (== 0)", "[white]흰색[/]", "전일 대비 보합")
