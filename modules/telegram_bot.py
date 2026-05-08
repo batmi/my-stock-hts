@@ -289,7 +289,8 @@ class TelegramCommander:
             
             target_indices = {
                 "나스닥": "^IXIC", "S&P500": "^GSPC", 
-                "달러환율": "KRW=X", "WTI 원유": "CL=F", 
+                "미국채 10년물 금리": "^TNX", "달러환율": "KRW=X", 
+                "WTI 원유": "CL=F", "천연가스": "NG=F", "금": "GC=F", "구리": "HG=F", "밀": "ZW=F",
                 "VIX (변동성)": "^VIX", "비트코인": "BTC-USD"
             }
             market_data_str = ""
@@ -303,7 +304,7 @@ class TelegramCommander:
                         prev_close = fi.get('regular_market_previous_close')
 
                     # [추가] 24시간 거래 자산(원유, 비트코인)의 전일 종가 보정
-                    if name in ["WTI 원유", "비트코인"]:
+                    if name in ["WTI 원유", "천연가스", "금", "구리", "밀", "비트코인"]:
                         # [수정] df_daily 변수 정의 누락 수정
                         df_daily = None
                         try:

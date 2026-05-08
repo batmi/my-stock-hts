@@ -38,7 +38,7 @@ ALL_INDICES = [
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
-    ("SOX (반도체)", "^SOX"), ("QGRD (스마트그리드)", "^QGRD"), ("NBI (바이오)", "^NBI"), ("VIX (변동성)", "^VIX"),
+    ("SOX (반도체)", "^SOX"), ("QGRD (스마트그리드)", "^QGRD"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("VIX (변동성)", "^VIX"),
     ("MSCI 신흥국", "EEM"), ("하이일드 채권", "HYG"),
     # 4. 금리 및 환율
     ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
@@ -436,7 +436,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "금", "은", "구리", "비트코인", "이더리움", "솔라나", "리플", "미국채 2년물 선물",
+            "미국채 2년물 선물",
             "MSCI 신흥국", "하이일드 채권"
         ]
 
@@ -468,72 +468,90 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 else: display_name = f"[yellow]{name}[/]"
             except: pass
         elif name == "미국채 10년물 금리":
-            if eval_price >= 5.20: display_name = f"[magenta]{name}[/]"
-            elif 4.70 <= eval_price < 5.20: display_name = f"[red]{name}[/]"
-            elif 4.20 <= eval_price < 4.70: display_name = f"[orange3]{name}[/]"
-            elif 3.50 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
-            elif 2.80 <= eval_price < 3.50: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 2.80: display_name = f"[blue]{name}[/]"
+            if eval_price >= 4.80: display_name = f"[magenta]{name}[/]"
+            elif 4.50 <= eval_price < 4.80: display_name = f"[red]{name}[/]"
+            elif 4.20 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
+            elif 3.80 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
+            elif 3.30 <= eval_price < 3.80: display_name = f"[yellow]{name}[/]"
+            elif eval_price < 3.30: display_name = f"[blue]{name}[/]"
         elif name == "미국채 5년물 금리":
-            if eval_price >= 4.80: display_name = f"[red]{name}[/]"
-            elif 3.80 <= eval_price < 4.80: display_name = f"[orange3]{name}[/]"
-            elif 3.20 <= eval_price < 3.80: display_name = f"[green]{name}[/]"
-            elif eval_price < 3.20: display_name = f"[blue]{name}[/]"
+            if eval_price >= 4.50: display_name = f"[red]{name}[/]"
+            elif 4.00 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
+            elif 3.50 <= eval_price < 4.00: display_name = f"[green]{name}[/]"
+            elif eval_price < 3.50: display_name = f"[blue]{name}[/]"
         elif name == "미국채 30년물 금리":
-            if eval_price >= 5.50: display_name = f"[magenta]{name}[/]"
-            elif 4.80 <= eval_price < 5.50: display_name = f"[red]{name}[/]"
-            elif 4.20 <= eval_price < 4.80: display_name = f"[green]{name}[/]"
-            elif eval_price < 4.20: display_name = f"[blue]{name}[/]"
+            if eval_price >= 5.00: display_name = f"[magenta]{name}[/]"
+            elif 4.60 <= eval_price < 5.00: display_name = f"[red]{name}[/]"
+            elif 4.00 <= eval_price < 4.60: display_name = f"[green]{name}[/]"
+            elif eval_price < 4.00: display_name = f"[blue]{name}[/]"
         elif name == "SOX (반도체)":
             if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -12.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -25.0 <= high_52_rate < -12.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
         elif name == "QGRD (스마트그리드)":
-            if high_52_rate >= -4.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -4.0: display_name = f"[orange3]{name}[/]"
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
             elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
         elif name == "NBI (바이오)":
-            if high_52_rate >= -6.0: display_name = f"[red]{name}[/]"
-            elif -15.0 <= high_52_rate < -6.0: display_name = f"[orange3]{name}[/]"
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+        elif name == "BKX (은행)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
+        elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
+            if high_52_rate >= -10.0: display_name = f"[red]{name}[/]"
+            elif -25.0 <= high_52_rate < -10.0: display_name = f"[orange3]{name}[/]"
+            elif -40.0 <= high_52_rate < -25.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -40.0: display_name = f"[blue]{name}[/]"
+        elif name == "금":
+            if high_52_rate >= -3.0: display_name = f"[red]{name}[/]"
+            elif -8.0 <= high_52_rate < -3.0: display_name = f"[orange3]{name}[/]"
+            elif -15.0 <= high_52_rate < -8.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
+        elif name in ["은", "구리"]:
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
             elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
         elif name == "VIX (변동성)":
-            if current <= 20: display_name = f"[green]{name}[/]"
-            elif 20 < current < 30: display_name = f"[cyan]{name}[/]"
-            elif 30 <= current < 40: display_name = f"[yellow]{name}[/]"
-            elif 40 <= current < 50: display_name = f"[orange3]{name}[/]"
-            elif current >= 50: display_name = f"[red]{name}[/]"
+            if current < 15: display_name = f"[green]{name}[/]"
+            elif 15 <= current < 20: display_name = f"[yellow]{name}[/]"
+            elif 20 <= current < 30: display_name = f"[orange3]{name}[/]"
+            elif 30 <= current < 40: display_name = f"[red]{name}[/]"
+            elif current >= 40: display_name = f"[magenta]{name}[/]"
         elif name == "달러인덱스":
-            if current >= 120: display_name = f"[magenta]{name}[/]"
-            elif 110 <= current < 120: display_name = f"[red]{name}[/]"
-            elif 103 <= current < 110: display_name = f"[orange3]{name}[/]"
-            elif 90 <= current < 103: display_name = f"[green]{name}[/]"
-            elif 80 <= current < 90: display_name = f"[yellow]{name}[/]"
-            elif current < 80: display_name = f"[blue]{name}[/]"
+            if current >= 115: display_name = f"[magenta]{name}[/]"
+            elif 110 <= current < 115: display_name = f"[red]{name}[/]"
+            elif 105 <= current < 110: display_name = f"[orange3]{name}[/]"
+            elif 95 <= current < 105: display_name = f"[green]{name}[/]"
+            elif current < 95: display_name = f"[blue]{name}[/]"
         elif name == "달러환율":
-            if current >= 1600: display_name = f"[magenta]{name}[/]"
-            elif 1500 <= current < 1600: display_name = f"[red]{name}[/]"
-            elif 1400 <= current < 1500: display_name = f"[orange3]{name}[/]"
-            elif 1300 <= current < 1400: display_name = f"[yellow]{name}[/]"
-            elif 1200 <= current < 1300: display_name = f"[green]{name}[/]"
-            elif 1100 <= current < 1200: display_name = f"[cyan]{name}[/]"
-            elif current < 1100: display_name = f"[blue]{name}[/]"
+            if current >= 1500: display_name = f"[magenta]{name}[/]"
+            elif 1450 <= current < 1500: display_name = f"[red]{name}[/]"
+            elif 1400 <= current < 1450: display_name = f"[orange3]{name}[/]"
+            elif 1300 <= current < 1400: display_name = f"[green]{name}[/]"
+            elif 1200 <= current < 1300: display_name = f"[cyan]{name}[/]"
+            elif current < 1200: display_name = f"[blue]{name}[/]"
         elif name == "WTI 원유":
-            if current >= 120: display_name = f"[magenta]{name}[/]"
-            elif 100 <= current < 120: display_name = f"[red]{name}[/]"
-            elif 80 <= current < 100: display_name = f"[orange3]{name}[/]"
-            elif 60 <= current < 80: display_name = f"[green]{name}[/]"
-            elif 40 <= current < 60: display_name = f"[yellow]{name}[/]"
-            elif current < 40: display_name = f"[blue]{name}[/]"
+            if current >= 100: display_name = f"[magenta]{name}[/]"
+            elif 90 <= current < 100: display_name = f"[red]{name}[/]"
+            elif 80 <= current < 90: display_name = f"[orange3]{name}[/]"
+            elif 65 <= current < 80: display_name = f"[green]{name}[/]"
+            elif 55 <= current < 65: display_name = f"[yellow]{name}[/]"
+            elif current < 55: display_name = f"[blue]{name}[/]"
         elif name == "브랜트유":
-            if current >= 125: display_name = f"[magenta]{name}[/]"
-            elif 105 <= current < 125: display_name = f"[red]{name}[/]"
-            elif 85 <= current < 105: display_name = f"[orange3]{name}[/]"
-            elif 65 <= current < 85: display_name = f"[green]{name}[/]"
-            elif 45 <= current < 65: display_name = f"[yellow]{name}[/]"
-            elif current < 45: display_name = f"[blue]{name}[/]"
+            if current >= 105: display_name = f"[magenta]{name}[/]"
+            elif 95 <= current < 105: display_name = f"[red]{name}[/]"
+            elif 85 <= current < 95: display_name = f"[orange3]{name}[/]"
+            elif 70 <= current < 85: display_name = f"[green]{name}[/]"
+            elif 60 <= current < 70: display_name = f"[yellow]{name}[/]"
+            elif current < 60: display_name = f"[blue]{name}[/]"
         elif name == "가솔린 RBOB":
             if current >= 4.00: display_name = f"[magenta]{name}[/]"
             elif 3.20 <= current < 4.00: display_name = f"[red]{name}[/]"
@@ -542,17 +560,17 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 1.60 <= current < 2.10: display_name = f"[yellow]{name}[/]"
             elif current < 1.60: display_name = f"[blue]{name}[/]"
         elif name == "천연가스":
-            if current >= 10: display_name = f"[magenta]{name}[/]"
-            elif 6 <= current < 10: display_name = f"[red]{name}[/]"
-            elif 4 <= current < 6: display_name = f"[orange3]{name}[/]"
-            elif 2.5 <= current < 4: display_name = f"[green]{name}[/]"
-            elif 1.5 <= current < 2.5: display_name = f"[yellow]{name}[/]"
+            if current >= 6.0: display_name = f"[magenta]{name}[/]"
+            elif 4.0 <= current < 6.0: display_name = f"[red]{name}[/]"
+            elif 3.0 <= current < 4.0: display_name = f"[orange3]{name}[/]"
+            elif 2.0 <= current < 3.0: display_name = f"[green]{name}[/]"
+            elif 1.5 <= current < 2.0: display_name = f"[yellow]{name}[/]"
             elif current < 1.5: display_name = f"[blue]{name}[/]"
         elif name == "밀":
-            if current >= 900: display_name = f"[magenta]{name}[/]"
-            elif 750 <= current < 900: display_name = f"[red]{name}[/]"
-            elif 650 <= current < 750: display_name = f"[orange3]{name}[/]"
-            elif 500 <= current < 650: display_name = f"[green]{name}[/]"
+            if current >= 800: display_name = f"[magenta]{name}[/]"
+            elif 700 <= current < 800: display_name = f"[red]{name}[/]"
+            elif 600 <= current < 700: display_name = f"[orange3]{name}[/]"
+            elif 500 <= current < 600: display_name = f"[green]{name}[/]"
             elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
             elif current < 400: display_name = f"[blue]{name}[/]"
 
@@ -880,6 +898,15 @@ def show_market_indices(interval=0):
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "9"
     
+    # [추가] 런타임에 3번 그룹(섹터 및 주요 지표)에 BKX (은행) 지수를 동적으로 편입
+    if hasattr(config, 'INDICES_GROUPS') and "3" in config.INDICES_GROUPS:
+        grp3_idx = config.INDICES_GROUPS["3"].get('indices', [])
+        if "BKX (은행)" not in grp3_idx:
+            if "NBI (바이오)" in grp3_idx:
+                grp3_idx.insert(grp3_idx.index("NBI (바이오)") + 1, "BKX (은행)")
+            else:
+                grp3_idx.append("BKX (은행)")
+
     while True:
         utils.clear_screen()
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
