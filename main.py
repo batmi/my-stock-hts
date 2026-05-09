@@ -773,6 +773,8 @@ def main():
         if attempt < 2:
             config.console.print(f"\n[yellow]사전 점검에 실패했습니다. 5초 후 재시도합니다... ({attempt+1}/3)[/yellow]")
             time.sleep(5)
+        else:
+            config.console.print(f"\n[yellow]사전 점검에 실패했습니다. ({attempt+1}/3)[/yellow]")
 
     if not preflight_success:
         config.console.print("\n[bold red]시스템 사전 점검에 최종 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
