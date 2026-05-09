@@ -241,8 +241,9 @@ class ConclusionMonitor:
 
     def _is_market_open(self):
         """국내 정규장 운영 시간 확인"""
+        if api.is_holiday_today(): return False # 주말 및 공휴일(휴장일) 처리
+
         now = datetime.now()
-        if now.weekday() > 4: return False # 주말
         current_time = now.strftime("%H%M")
         start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
         end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
@@ -3652,8 +3653,9 @@ class AutoTrader:
 
     def is_market_open(self):
         """국내 정규장 운영 시간 확인 (config 설정 시간 따름)"""
+        if api.is_holiday_today(): return False # 주말 및 공휴일(휴장일) 처리
+
         now = datetime.now()
-        if now.weekday() > 4: return False # 주말
         current_time = now.strftime("%H%M")
         
         start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")

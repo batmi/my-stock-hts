@@ -24,6 +24,93 @@ import constants
 
 logger = logging.getLogger(__name__)
 
+# [추가] 휴장일 캐시
+_HOLIDAY_CACHE = {}
+
+def check_holiday(date_str):
+    """한국투자증권 휴장일 조회 API 호출"""
+    url_path = "uapi/domestic-stock/v1/quotations/chk-holiday"
+    tr_id = "CTCA0903R"
+    params = {"BASS_DT": date_str, "CTX_AREA_NK": "", "CTX_AREA_FK": ""}
+    
+    res = call_api(url_path, "domestic", "quotations", "chk_holiday", params=params, tr_id=tr_id, retries=1)
+    
+    if res and res.get('rt_cd') == '0':
+        output = res.get('output', [])
+        if output:
+            for day_info in output:
+                if day_info.get('bass_dt') == date_str:
+                    opnd_yn = day_info.get('opnd_yn', 'Y')
+                    bzdy_yn = day_info.get('bzdy_yn', 'Y')
+                    if opnd_yn == 'N' or bzdy_yn == 'N': return True
+                    return False
+    return None
+
+def is_holiday_today():
+    """오늘이 주말 또는 공휴일(휴장일)인지 확인합니다."""
+    today_str = datetime.now().strftime("%Y%m%d")
+    if today_str in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[today_str]
+    if datetime.now().weekday() > 4:
+        _HOLIDAY_CACHE[today_str] = True
+        return True
+    res = check_holiday(today_str)
+    if res is not None:
+        _HOLIDAY_CACHE[today_str] = res
+        return res
+    return False
+
+def check_us_holiday(date_str):
+    """한국투자증권 해외주식(미국) 휴장일 조회 API 호출"""
+    url_path = "uapi/overseas-stock/v1/quotations/chk-holiday"
+    tr_id = "CTCA0904R"
+    params = {"BASS_DT": date_str, "CTX_AREA_NK": "", "CTX_AREA_FK": "", "NATN_CD": "840"}
+    
+    res = call_api(url_path, "overseas", "quotations", "chk_holiday", params=params, tr_id=tr_id, retries=1)
+    
+    if res and res.get('rt_cd') == '0':
+        output = res.get('output', [])
+        if output:
+            for day_info in output:
+                if day_info.get('bass_dt') == date_str:
+                    opnd_yn = day_info.get('opnd_yn', 'Y')
+                    bzdy_yn = day_info.get('bzdy_yn', 'Y')
+                    if opnd_yn == 'N' or bzdy_yn == 'N': return True
+                    return False
+    return None
+
+def is_us_holiday_today():
+    """오늘이 주말 또는 미국 공휴일(휴장일)인지 확인합니다."""
+    today_str = datetime.now().strftime("%Y%m%d")
+    cache_key = f"US_{today_str}"
+    if cache_key in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[cache_key]
+    if datetime.now().weekday() > 4:
+        _HOLIDAY_CACHE[cache_key] = True
+        return True
+    res = check_us_holiday(today_str)
+    if res is not None:
+        _HOLIDAY_CACHE[cache_key] = res
+        return res
+    return False
+
+def get_holiday_name(date_str, country='KR'):
+    """holidays 라이브러리를 이용하여 공휴일 이름을 반환합니다."""
+    try:
+        import holidays
+        dt = datetime.strptime(date_str, "%Y%m%d").date()
+        
+        if country == 'KR':
+            h_cal = holidays.KR()
+            h_cal[dt.replace(month=5, day=1)] = "근로자의 날" # 법정공휴일이 아닌 근로자의 날 강제 추가
+            name = h_cal.get(dt)
+            return name
+        elif country == 'US':
+            h_cal = holidays.US(observed=True)
+            name = h_cal.get(dt)
+            return name
+    except Exception:
+        return None
+    return None
+
 # [추가] 텔레그램 메시지 전송용 비동기 스레드 풀
 _telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="TgSender")
 

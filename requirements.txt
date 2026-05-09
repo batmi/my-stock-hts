@@ -64,6 +64,7 @@ grpc_tools
 gspread
 gunicorn
 h2
+holidays
 html5lib
 HTMLParser
 httpx_aiohttp

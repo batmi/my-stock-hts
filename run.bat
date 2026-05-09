@@ -7,7 +7,7 @@ cd /d "%~dp0"
 :: ---------------------------------------------------------
 :: 필수 라이브러리 목록
 :: ---------------------------------------------------------
-set REQUIRED_LIBS=rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener
+set REQUIRED_LIBS=rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener holidays
 set MISSING_LIBS=
 
 :: 2. 실행할 파이썬 및 핍(PIP) 경로 찾기 (윈도우는 Scripts 폴더 사용)

@@ -40,6 +40,7 @@ class TelegramCommander:
         self.last_briefing_date = None # [추가] 브리핑 중복 전송 방지용
         self.last_portfolio_date = None # [추가] 포트폴리오 진단 중복 방지용
         self.last_heartbeat_time = time.time() # [추가] 하트비트(키보드 동기화) 주기 체크용
+        self.last_holiday_notified_date = None # [추가] 휴장일 알림 중복 방지용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="TgCmdWorker")
         
@@ -107,6 +108,9 @@ class TelegramCommander:
         
         while self.is_running and self.thread is my_thread:
             try:
+                # [추가] 평일 공휴일(휴장일) 아침 안내 메시지 스케줄러
+                self._check_holiday_notification()
+
                 # [추가] 장전 브리핑 발송 확인 스케줄러
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
                     self._check_morning_briefing()
@@ -215,6 +219,42 @@ class TelegramCommander:
             self.executor.submit(execute_cmd)
         else:
             self._send_reply(f"⚠️ 지원하지 않는 명령어입니다: {command}\n전체 명령어 목록을 보려면 /help 를 입력해주세요.")
+
+    def _check_holiday_notification(self):
+        """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러"""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
+        if getattr(self, 'last_holiday_notified_date', None) == today_str:
+            return
+            
+        try:
+            target_dt = datetime.strptime("0830", "%H%M").time() # 아침 8시 30분
+            now_time = now.time()
+            end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
+            
+            if target_dt <= now_time <= end_dt:
+                self.last_holiday_notified_date = today_str # 중복 방지 즉시 마킹
+                
+                # 주말(토, 일)을 제외한 평일인 경우에만 알림
+                if now.weekday() < 5:
+                    is_kr_holiday = api.is_holiday_today()
+                    is_us_holiday = api.is_us_holiday_today()
+                    
+                    kr_name = api.get_holiday_name(today_str.replace("-", ""), 'KR')
+                    us_name = api.get_holiday_name(today_str.replace("-", ""), 'US')
+                    
+                    kr_str = f" '{kr_name}'" if kr_name else " 공휴일"
+                    us_str = f" '{us_name}'" if us_name else " 공휴일"
+                    
+                    if is_kr_holiday and is_us_holiday:
+                        self._send_reply(f"🏖️ [시스템 알림] 오늘은{kr_str}로 인해 국내 및 미국 주식 시장이 모두 휴장합니다.\n자동매매 시스템은 매매 없이 대기 모드를 유지합니다.")
+                    elif is_kr_holiday:
+                        self._send_reply(f"🏖️ [시스템 알림] 오늘은 한국{kr_str}로 '국내 주식 시장'이 휴장합니다.\n(단, 미국 주식 시장은 정상적으로 개장합니다.)\n자동매매 시스템은 국내장 시간 동안 대기 모드를 유지합니다.")
+                    elif is_us_holiday:
+                        self._send_reply(f"🏖️ [시스템 알림] 오늘은 미국{us_str}로 '미국 주식 시장'이 휴장합니다.\n(국내 주식 시장은 정상 개장합니다.)")
+        except Exception as e:
+            logger.error(f"Holiday notification check error: {e}")
 
     def _check_morning_briefing(self):
         """장전 브리핑 발송 시간 확인 및 트리거"""
