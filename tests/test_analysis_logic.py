@@ -39,7 +39,8 @@ def test_diagnose_stock_indicators(mock_ask, mock_calc, mock_get_chart, mock_df)
     mock_get_chart.return_value = mock_df
     mock_calc.return_value = {
         'ema_5': 10000, 'ema_20': 9000, 'ema_60': 8000, 'ema_120': 7000,
-        'rsi': 60, 'adx': 30, 'cci': 100, 'obv': 1000, 'obv_trend': True,
+        'rsi': 60, 'adx': 30, 'plus_di': 35, 'minus_di': 15,
+        'cci': 100, 'obv': 1000, 'obv_trend': True,
         'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10,
         'atr': 100
     }

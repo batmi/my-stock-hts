@@ -79,7 +79,8 @@ def get_adx_full_series(df, n=None):
     di_m = 100 * (dm_m_s / tr_s)
     
     dx = 100 * (di_p - di_m).abs() / (di_p + di_m)
-    return dx.ewm(com=n-1, adjust=False).mean()
+    adx = dx.ewm(com=n-1, adjust=False).mean()
+    return adx, di_p, di_m
 
 def get_atr_full_series(df, period=None):
     """ATR (Average True Range) 계산"""
@@ -117,7 +118,7 @@ def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     return psar[-1] if psar else None
 
 def calculate_indicators(df):
-    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
+    indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'plus_di': None, 'minus_di': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
     
     # SettingWithCopyWarning 방지를 위해 명시적 복사
@@ -158,7 +159,10 @@ def calculate_indicators(df):
         indicators['cci'] = df['cci'].iloc[-1]
 
     if len(df) >= 28:
-        indicators['adx'] = get_adx_full_series(df).iloc[-1]
+        adx_series, di_p_series, di_m_series = get_adx_full_series(df)
+        indicators['adx'] = adx_series.iloc[-1]
+        indicators['plus_di'] = di_p_series.iloc[-1]
+        indicators['minus_di'] = di_m_series.iloc[-1]
         
     if len(df) >= 15:
         indicators['atr'] = get_atr_full_series(df).iloc[-1]

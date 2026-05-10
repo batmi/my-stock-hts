@@ -820,6 +820,28 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         rsi_desc = "데이터 부족"
     table_tech.add_row("RSI (14)", f"{rsi_str} [dim]({rsi_desc})[/dim]", "과매수(70)/과매도(30)")
 
+    # CCI
+    cci_val = ind.get('cci')
+    if cci_val is not None:
+        cci_str = f"{cci_val:.2f}"
+        cci_desc = ""
+        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[red]{cci_str}[/]"
+            cci_desc = "과열 (추격 금물)"
+        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
+            cci_str = f"[orange3]{cci_str}[/]"
+            cci_desc = "상승 추세"
+        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
+            cci_str = f"[yellow]{cci_str}[/]"
+            cci_desc = "반등 시도"
+        else: 
+            cci_str = f"[blue]{cci_str}[/]"
+            cci_desc = "과매도 (저점 탐색)"
+    else:
+        cci_str = "-"
+        cci_desc = "데이터 부족"
+    table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
+
     # ADX
     adx_val = ind.get('adx')
     if adx_val is not None:
@@ -845,27 +867,23 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         adx_desc = "데이터 부족"
     table_tech.add_row("ADX (14)", f"{adx_str} [dim]({adx_desc})[/dim]", "추세 강도 (25 이상 강세)")
 
-    # CCI
-    cci_val = ind.get('cci')
-    if cci_val is not None:
-        cci_str = f"{cci_val:.2f}"
-        cci_desc = ""
-        if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: 
-            cci_str = f"[red]{cci_str}[/]"
-            cci_desc = "과열 (추격 금물)"
-        elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: 
-            cci_str = f"[orange3]{cci_str}[/]"
-            cci_desc = "상승 추세"
-        elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: 
-            cci_str = f"[yellow]{cci_str}[/]"
-            cci_desc = "반등 시도"
+    # DMI
+    plus_di = ind.get('plus_di')
+    minus_di = ind.get('minus_di')
+    if plus_di is not None and minus_di is not None:
+        if plus_di > minus_di:
+            dmi_str = f"[red]{plus_di:.1f}[/] / [dim]{minus_di:.1f}[/]"
+            dmi_desc = "+DI 우위"
+        elif minus_di > plus_di:
+            dmi_str = f"[dim]{plus_di:.1f}[/] / [blue]{minus_di:.1f}[/]"
+            dmi_desc = "-DI 우위"
         else: 
-            cci_str = f"[blue]{cci_str}[/]"
-            cci_desc = "과매도 (저점 탐색)"
+            dmi_str = f"{plus_di:.1f} / {minus_di:.1f}"
+            dmi_desc = "중립"
     else:
-        cci_str = "-"
-        cci_desc = "데이터 부족"
-    table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
+        dmi_str = "- / -"
+        dmi_desc = "데이터 부족"
+    table_tech.add_row("DMI (+DI/-DI)", f"{dmi_str} [dim]({dmi_desc})[/dim]", "매수/매도 세력 강도 (+DI 상승)")
 
     # [수정] 외인 소진율 및 배당 수익률 위치 변경 (이평 배열 위로 이동)
     if not is_overseas:
@@ -1270,8 +1288,8 @@ def diagnose_group_stocks(market_filter=None):
     table.add_column("점수", justify="center")
     table.add_column("상태", justify="center")
     table.add_column("RSI", justify="right")
-    table.add_column("ADX", justify="right")
     table.add_column("CCI", justify="right")
+    table.add_column("ADX", justify="right")
     table.add_column("체결강도", justify="right")
     
     for r in results:
@@ -1305,8 +1323,8 @@ def diagnose_group_stocks(market_filter=None):
             score_str,
             state_str,
             rsi_str,
-            adx_str,
-            cci_str
+            cci_str,
+            adx_str
         )
         
     config.console.print(table, crop=False)
@@ -1763,7 +1781,7 @@ def analyze_market_stocks(market_type):
                         else:
                             vol_str = ", 체결=확인생략"
                         
-                        log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, ADX={adx_str}, CCI={cci_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
+                        log_msg = f"[{completed_count}/{len(stock_list)}] [분석] {res_data['name']}({res_data['code']}): 현재가={int(res_data['price']):,}, 점수={res_data['score']:.2f}, 상태={res_data['state']}, RSI={rsi_str}, CCI={cci_str}, ADX={adx_str}, OBV={obv_str}, SAR={sar_str}, MACD={macd_str}{vol_str}"
                         
                         if res_data['is_target']:
                             log_style = "bold green" if res_data['state'] in ["매수", "강매수", "역매수"] else "bold orange3"
@@ -1888,8 +1906,8 @@ def analyze_market_stocks(market_type):
         table.add_column("상태", justify="center")
         table.add_column("추세SMO", justify="center")
         table.add_column("RSI", justify="right")
-        table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
+        table.add_column("ADX", justify="right")
         table.add_column("체결강도", justify="right")
         
         for i, item in enumerate(page_items):
@@ -1972,8 +1990,8 @@ def analyze_market_stocks(market_type):
                 f"[{s_color}]{display_state}[/]",
                 trend_str,
                 rsi_str,
-                adx_str,
                 cci_str,
+                adx_str,
                 vol_str
             )
             
@@ -2133,8 +2151,8 @@ def save_all_market_analysis():
                             "상태": item['state'],
                             "상태사유": item['state_reason'],
                             "RSI": rsi,
-                            "ADX": adx,
                             "CCI": cci,
+                            "ADX": adx,
                             "SAR": sar_state,
                             "MACD": macd_state,
                             "OBV": "상승" if item['obv_trend'] else "하락",
@@ -2515,7 +2533,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 final_name_str += "+"
                 is_custom_rule = True
 
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, adx_str, cci_str]
+            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, cci_str, adx_str]
             if not is_overseas:
                 if use_investor_data: row_data.append(inv_str)
                 else: row_data.append(obv_disp)
@@ -2589,8 +2607,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     table.add_column("EMA(120)", justify="right")
     table.add_column("추세SMO", justify="center")
     table.add_column("RSI", justify="right")
-    table.add_column("ADX", justify="right")
     table.add_column("CCI", justify="right")
+    table.add_column("ADX", justify="right")
     
     is_us_stock = is_overseas and ("주식" in title)
     is_us_etf = is_overseas and ("ETF" in title)

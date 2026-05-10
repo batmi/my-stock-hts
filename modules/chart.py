@@ -79,7 +79,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         df['BB_up'] = df['BB_mid'] + (df['BB_std'] * 2)
         df['BB_low'] = df['BB_mid'] - (df['BB_std'] * 2)
         df['SAR'] = indicators.get_psar_full_series(df)
-        df['ADX'] = indicators.get_adx_full_series(df)
+        df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = indicators.get_adx_full_series(df)
         df['RSI'] = indicators.get_rsi_full_series(df)
         df['CCI'] = indicators.get_cci_full_series(df)
         df['OBV'] = indicators.get_obv_full_series(df)
@@ -145,32 +145,35 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax2.grid(True, alpha=0.2); ax2.yaxis.tick_right(); ax2.yaxis.set_label_position("right")
         ax2.legend(loc='upper left', fontsize=8)
 
-        # [3] RSI
-        ax3.plot(df.index, df['RSI'], label='RSI(14)', color='gray', linewidth=1.2)
+        # [3] ADX & DMI (RSI 위로 이동)
+        ax3.plot(df.index, df['PLUS_DI'], label='+DI', color='red', linewidth=1.35, alpha=0.7)
+        ax3.plot(df.index, df['MINUS_DI'], label='-DI', color='blue', linewidth=1.35, alpha=0.7)
+        ax3.plot(df.index, df['ADX'], label='ADX', color='black', linewidth=1.5, alpha=0.8)
+        for level in [15, 20, 30, 40]: ax3.axhline(level, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+        ax3.fill_between(df.index, 40, df['ADX'], where=(df['ADX'] >= 40), color='purple', alpha=0.3)
+        ax3.fill_between(df.index, 30, df['ADX'], where=((df['ADX'] >= 30) & (df['ADX'] < 40)), color='red', alpha=0.1)
+        ax3.fill_between(df.index, 20, df['ADX'], where=((df['ADX'] >= 20) & (df['ADX'] < 30)), color='orange', alpha=0.1)
+        ax3.fill_between(df.index, 15, df['ADX'], where=((df['ADX'] >= 15) & (df['ADX'] < 20)), color='yellow', alpha=0.1)
+        ax3.set_ylabel("ADX & DMI")
+        ax3.set_title("ADX & DMI", fontsize=10, loc='right')
+        ax3.set_ylim(0, 100); ax3.grid(True, alpha=0.2); ax3.yaxis.tick_right(); ax3.yaxis.set_label_position("right")
+        ax3.legend(loc='upper left', fontsize=8)
+
+        # [4] RSI
+        ax4.plot(df.index, df['RSI'], label='RSI(14)', color='gray', linewidth=1.2)
         rsi_up = config.INDICATOR_PARAMS["RSI_UPPER"]
         rsi_low = config.INDICATOR_PARAMS["RSI_LOWER"]
-        for level in [rsi_low, 45, 55, rsi_up]: ax3.axhline(level, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
-        ax3.fill_between(df.index, rsi_up, df['RSI'], where=(df['RSI']>=rsi_up), color='purple', alpha=0.4)
-        ax3.fill_between(df.index, 55, df['RSI'], where=((df['RSI'] >= 55) & (df['RSI'] < rsi_up)), color='red', alpha=0.1)
-        ax3.fill_between(df.index, 45, df['RSI'], where=((df['RSI'] >= 45) & (df['RSI'] < 55)), color='orange', alpha=0.1)
-        ax3.fill_between(df.index, rsi_low, df['RSI'], where=((df['RSI'] >= rsi_low) & (df['RSI'] < 45)), color='yellow', alpha=0.1)
-        ax3.fill_between(df.index, rsi_low, df['RSI'], where=(df['RSI'] <= rsi_low), color='blue', alpha=0.4)
+        for level in [rsi_low, 45, 55, rsi_up]: ax4.axhline(level, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+        ax4.fill_between(df.index, rsi_up, df['RSI'], where=(df['RSI']>=rsi_up), color='purple', alpha=0.4)
+        ax4.fill_between(df.index, 55, df['RSI'], where=((df['RSI'] >= 55) & (df['RSI'] < rsi_up)), color='red', alpha=0.1)
+        ax4.fill_between(df.index, 45, df['RSI'], where=((df['RSI'] >= 45) & (df['RSI'] < 55)), color='orange', alpha=0.1)
+        ax4.fill_between(df.index, rsi_low, df['RSI'], where=((df['RSI'] >= rsi_low) & (df['RSI'] < 45)), color='yellow', alpha=0.1)
+        ax4.fill_between(df.index, rsi_low, df['RSI'], where=(df['RSI'] <= rsi_low), color='blue', alpha=0.4)
         
-        ax3.set_ylabel("RSI")
-        ax3.set_title("RSI (Relative Strength Index)", fontsize=10, loc='right')
-        ax3.set_yticks([0, 10, 30, 50, 70, 90]); ax3.set_ylim(0, 100); ax3.grid(True, alpha=0.2)
-        ax3.yaxis.tick_right(); ax3.yaxis.set_label_position("right")
-
-        # [4] ADX
-        ax4.plot(df.index, df['ADX'], label='ADX(14)', color='gray', linewidth=1.2)
-        for level in [15, 20, 30, 40]: ax4.axhline(level, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
-        ax4.fill_between(df.index, 40, df['ADX'], where=(df['ADX'] >= 40), color='purple', alpha=0.4)
-        ax4.fill_between(df.index, 30, df['ADX'], where=((df['ADX'] >= 30) & (df['ADX'] < 40)), color='red', alpha=0.1)
-        ax4.fill_between(df.index, 20, df['ADX'], where=((df['ADX'] >= 20) & (df['ADX'] < 30)), color='orange', alpha=0.1)
-        ax4.fill_between(df.index, 15, df['ADX'], where=((df['ADX'] >= 15) & (df['ADX'] < 20)), color='yellow', alpha=0.1)
-        ax4.set_ylabel("ADX")
-        ax4.set_title("ADX (Average Directional Index)", fontsize=10, loc='right')
-        ax4.set_ylim(0, 100); ax4.grid(True, alpha=0.2); ax4.yaxis.tick_right(); ax4.yaxis.set_label_position("right")
+        ax4.set_ylabel("RSI")
+        ax4.set_title("RSI (Relative Strength Index)", fontsize=10, loc='right')
+        ax4.set_yticks([0, 10, 30, 50, 70, 90]); ax4.set_ylim(0, 100); ax4.grid(True, alpha=0.2)
+        ax4.yaxis.tick_right(); ax4.yaxis.set_label_position("right")
 
         # [5] CCI
         ax5.plot(df.index, df['CCI'], label='CCI(20)', color='gray', linewidth=1.2)

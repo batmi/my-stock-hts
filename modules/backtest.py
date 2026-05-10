@@ -396,7 +396,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 trades.append({
                     "date": date, "type": f"매도({reason})", "price": sell_price, "qty": sold_qty, "balance": balance, 
                     "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
-                    "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                     "cum_profit": cum_profit
                 })
 
@@ -474,7 +474,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 trades.append({
                     "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": buy_qty, "balance": balance, 
                     "profit": 0, "profit_amt": 0, "days": 0, 
-                    "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
                     "cum_profit": cum_profit
                 })
         elif position['qty'] == 0: # 매수 조건 미충족 시 (이미 보유 중인 상태는 누락으로 기록하지 않음)
@@ -488,7 +488,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
                 missed_trades.append({
                     "date": date, "score": raw_score, "state": state, "reason": missed_reason,
-                    "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "price": price
+                    "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "price": price
                 })
         
         prev_row = row
@@ -1194,7 +1194,7 @@ def run_backtest():
             df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
             df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
             df['SAR'] = indicators.get_psar_full_series(df)
-            df['ADX'] = indicators.get_adx_full_series(df)
+            df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = indicators.get_adx_full_series(df)
             df['RSI'] = indicators.get_rsi_full_series(df)
             df['CCI'] = indicators.get_cci_full_series(df)
             df['OBV'] = indicators.get_obv_full_series(df)
@@ -1392,8 +1392,9 @@ def run_backtest():
             t_table.add_column("구분", justify="center")
             t_table.add_column("점수", justify="center")
             t_table.add_column("RSI", justify="right")
-            t_table.add_column("ADX", justify="right")
             t_table.add_column("CCI", justify="right")
+            t_table.add_column("ADX", justify="right")
+            t_table.add_column("DMI", justify="right")
             t_table.add_column("OBV", justify="right")
             t_table.add_column("수량", justify="right")
             t_table.add_column("단가", justify="right")
@@ -1449,6 +1450,19 @@ def run_backtest():
                     elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_c = "orange3"
                     elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_c = "yellow"
                 
+                # DMI
+                plus_di = t.get('plus_di')
+                minus_di = t.get('minus_di')
+                if plus_di is None or minus_di is None or np.isnan(plus_di) or np.isnan(minus_di):
+                    dmi_str = "-"
+                else:
+                    if plus_di > minus_di:
+                        dmi_str = f"[red]{plus_di:.1f}[/]/[dim]{minus_di:.1f}[/]"
+                    elif minus_di > plus_di:
+                        dmi_str = f"[dim]{plus_di:.1f}[/]/[blue]{minus_di:.1f}[/]"
+                    else:
+                        dmi_str = f"{plus_di:.1f}/{minus_di:.1f}"
+                
                 # OBV
                 obv_val = t.get('obv') or 0
                 obv_c = "red" if t.get('obv_trend') else "blue"
@@ -1485,8 +1499,9 @@ def run_backtest():
                     f"{type_color}{t['type']}[/]", 
                     f"{t.get('score', 0):.1f}",
                     f"[{rsi_c}]{rsi_str}[/]",
-                    f"[{adx_c}]{adx_str}[/]",
                     f"[{cci_c}]{cci_str}[/]",
+                    f"[{adx_c}]{adx_str}[/]",
+                    dmi_str,
                     f"[{obv_c}]{int(obv_val/1000):,}K[/]",
                     qty_str, 
                     price_str, 
@@ -1592,8 +1607,9 @@ def run_backtest():
             m_table.add_column("상태", justify="center")
             m_table.add_column("당시 주가", justify="right")
             m_table.add_column("RSI", justify="right")
-            m_table.add_column("ADX", justify="right")
             m_table.add_column("CCI", justify="right")
+            m_table.add_column("ADX", justify="right")
+            m_table.add_column("DMI", justify="right")
             m_table.add_column("사유", justify="left")
             
             for m in missed_trades:
@@ -1609,8 +1625,21 @@ def run_backtest():
                 elif state == "매도": state_color = "blue"
                 adx_str = f"{m.get('adx', 0):.1f}"
                 cci_str = f"{m.get('cci', 0):.1f}"
+                
+                plus_di = m.get('plus_di')
+                minus_di = m.get('minus_di')
+                if plus_di is None or minus_di is None or np.isnan(plus_di) or np.isnan(minus_di):
+                    dmi_str = "-"
+                else:
+                    if plus_di > minus_di:
+                        dmi_str = f"[red]{plus_di:.1f}[/]/[dim]{minus_di:.1f}[/]"
+                    elif minus_di > plus_di:
+                        dmi_str = f"[dim]{plus_di:.1f}[/]/[blue]{minus_di:.1f}[/]"
+                    else:
+                        dmi_str = f"{plus_di:.1f}/{minus_di:.1f}"
+                
                 price_str = fmt_money(m.get('price', 0))
-                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, f"{m['rsi']:.1f}", adx_str, cci_str, m['reason'])
+                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, f"{m['rsi']:.1f}", cci_str, adx_str, dmi_str, m['reason'])
                 
             config.console.print(m_table)
 
