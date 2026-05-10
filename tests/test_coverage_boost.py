@@ -35,11 +35,14 @@ def test_get_stock_name_by_code_overseas_fail(mock_ticker):
     name = api.get_stock_name_by_code("AAPL", True)
     assert name == "AAPL"
 
+@patch('time.sleep')
 @patch('requests.post')
-def test_send_telegram_message_fail(mock_post):
+def test_send_telegram_message_fail(mock_post, mock_sleep):
     """텔레그램 전송 최종 실패 테스트"""
+    config.TELEGRAM_BOT_TOKEN = "TEST"
+    config.TELEGRAM_CHAT_ID = "TEST"
     mock_post.side_effect = Exception("Connection Error")
-    api.send_telegram_message("test")
+    api.send_telegram_message("test", sync=True)
     assert mock_post.call_count == 3
 
 # --- modules/analysis.py coverage ---

@@ -25,7 +25,7 @@ def test_macd_calculation(sample_uptrend_df):
 
 def test_adx_calculation(sample_uptrend_df):
     """ADX 계산 및 추세 강도 확인"""
-    adx = indicators.get_adx_full_series(sample_uptrend_df)
+    adx, plus_di, minus_di = indicators.get_adx_full_series(sample_uptrend_df)
     
     assert len(adx) == len(sample_uptrend_df)
     assert adx.min() >= 0

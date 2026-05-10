@@ -104,7 +104,7 @@ def test_process_index_worker_futures_proxy(mock_dom, mock_fi):
         return {'last_price': 4.0, 'regular_market_previous_close': 3.9}
         
     mock_fi.side_effect = fast_info_side_effect
-    df_empty = pd.DataFrame()
+    df_empty = pd.DataFrame({'close': [100.0]*60, 'open': [100.0]*60, 'high': [100.0]*60, 'low': [100.0]*60, 'volume': [1000]*60}, index=pd.date_range('2023-01-01', periods=60))
     
     with patch('modules.market.datetime') as mock_dt:
         mock_dt.now.return_value = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)

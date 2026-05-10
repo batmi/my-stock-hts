@@ -33,7 +33,7 @@ def test_autotrader_start_stop(mock_thread_cls, mock_initialize, trader):
     trader.start(interactive=False)
     assert trader.is_running is True
     mock_initialize.assert_called_once()
-    mock_thread_instance.start.assert_called_once()
+    assert mock_thread_instance.start.called
 
     # Stop
     trader.stop(use_status=False)

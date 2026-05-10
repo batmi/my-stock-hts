@@ -38,22 +38,36 @@ class TestThrottledSession(unittest.TestCase):
         def mock_time():
             return self.current_time
             
-        def mock_sleep(seconds):
-            self.current_time += seconds
+        class SleepTracker:
+            def __init__(self, ctx):
+                self.ctx = ctx
+                self.called = False
+                self.call_args = None
             
-        self.patcher_time = patch('time.time', side_effect=mock_time)
-        self.mock_time = self.patcher_time.start()
+            def __call__(self, seconds):
+                self.called = True
+                self.call_args = ((seconds,), {})
+                # 무한 루프 방지: sleep 시간이 0이어도 최소 0.001초는 흐르도록 강제 전진
+                self.ctx.current_time += max(seconds, 0.001)
+            
+        # side_effect 대신 new를 사용하여 MagicMock 호출 기록 누적에 의한 메모리 누수 방지
+        self.patcher_time = patch('time.time', new=mock_time)
+        self.patcher_time.start()
         
-        self.patcher_sleep = patch('time.sleep', side_effect=mock_sleep)
-        self.mock_sleep = self.patcher_sleep.start()
+        self.mock_sleep = SleepTracker(self)
+        self.patcher_sleep = patch('time.sleep', new=self.mock_sleep)
+        self.patcher_sleep.start()
 
     def tearDown(self):
         """테스트 환경 복구"""
         config.SIM_TX_PER_SECOND = self.original_sim_tps
         config.REAL_TX_PER_SECOND = self.original_real_tps
-        self.patcher_request.stop()
-        self.patcher_time.stop()
-        self.patcher_sleep.stop()
+        
+        for patcher in [self.patcher_request, self.patcher_time, self.patcher_sleep]:
+            try:
+                patcher.stop()
+            except RuntimeError:
+                pass # 테스트 내에서 명시적으로 이미 stop()된 경우 무시
 
     def test_simulation_throttling(self):
         """모의투자 URL 요청 시 스로틀링(속도 제한) 적용 확인"""
@@ -73,7 +87,7 @@ class TestThrottledSession(unittest.TestCase):
         self.assertAlmostEqual(args[0], expected_wait, places=5)
         
         # 마지막 요청 시간이 1000.6으로 갱신되었는지 확인
-        self.assertAlmostEqual(self.session.last_request_time_sim, 1000.6, places=3)
+        self.assertAlmostEqual(self.session.request_history_sim[-1], 1000.6, places=3)
 
     def test_real_server_throttling(self):
         """실전투자 URL 요청 시 스로틀링 적용 확인"""
@@ -83,14 +97,14 @@ class TestThrottledSession(unittest.TestCase):
         self.session.request('GET', url)
         self.session.request('GET', url)
             
-        # 실전투자 예상 대기 시간 계산: (1.0 / 10.0) * 1.1 = 0.11초
-        expected_wait = 0.11
+        # 실전투자 예상 대기 시간 계산: (1.0 / 10.0) * 1.05 = 0.105초
+        expected_wait = 0.105
         self.assertTrue(self.mock_sleep.called)
         args, _ = self.mock_sleep.call_args
         self.assertAlmostEqual(args[0], expected_wait, places=5)
         
         # 실전투자 상태 변수가 갱신되었는지 확인
-        self.assertAlmostEqual(self.session.last_request_time_real, 2000.11, places=3)
+        self.assertAlmostEqual(self.session.request_history_real[-1], 2000.105, places=3)
 
     def test_reserve_then_wait_concurrency(self):
         """선예약 후대기(Reserve-then-Wait) 로직의 동시성 처리 확인"""
@@ -100,15 +114,19 @@ class TestThrottledSession(unittest.TestCase):
         def mock_time_multithread():
             return self.current_time
             
-        def mock_sleep_multithread(seconds):
-            self.current_time += seconds
+        class SleepTrackerMT:
+            def __init__(self, ctx):
+                self.ctx = ctx
+            
+            def __call__(self, seconds):
+                self.ctx.current_time += max(seconds, 0.001)
             
         self.current_time = 3000.0
         self.patcher_time.stop()
         self.patcher_sleep.stop()
         
-        with patch('time.time', side_effect=mock_time_multithread), \
-             patch('time.sleep', side_effect=mock_sleep_multithread):
+        with patch('time.time', new=mock_time_multithread), \
+             patch('time.sleep', new=SleepTrackerMT(self)):
              
              self.session.request('GET', url)
              self.session.request('GET', url)
@@ -117,9 +135,11 @@ class TestThrottledSession(unittest.TestCase):
         # sleep 호출 기록 확인
         # args[0]이 대기 시간
         # 이 테스트는 실제 멀티스레딩이 아니라 모킹된 순차적 흐름이므로
-        # 3000.0, 3000.6, 3001.2 에 전송되어야 함을 확인
+        # 1. 3000.0 (즉시 전송)
+        # 2. 3000.6 (최소 간격 0.6초 대기)
+        # 3. 3001.5 (윈도우 1.5초 대기: 3000.0 + 1.5초)
         self.assertEqual(self.mock_request.call_count, 3)
-        self.assertAlmostEqual(self.session.last_request_time_sim, 3001.2, places=3)
+        self.assertAlmostEqual(self.session.request_history_sim[-1], 3001.5, places=3)
 
     def test_thread_safety_with_threads(self):
         """실제 스레드를 생성하여 락(Lock) 동작 검증"""

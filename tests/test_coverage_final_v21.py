@@ -46,9 +46,9 @@ def test_evaluate_market_indicator():
     """거시 경제 지표 평가 텍스트 반환 검증"""
     assert theme_analysis.evaluate_market_indicator("미국채 10년물 금리", 5.5) == "시스템 위기/Valuation 붕괴"
     assert theme_analysis.evaluate_market_indicator("미국채 10년물 금리", 4.0) == "골디락스/적정 성장"
-    assert theme_analysis.evaluate_market_indicator("WTI 원유", 130) == "에너지 쇼크"
-    assert theme_analysis.evaluate_market_indicator("VIX (변동성)", 15) == "안정"
-    assert theme_analysis.evaluate_market_indicator("달러인덱스", 95) == "가장 안정적인 중립"
+    assert theme_analysis.evaluate_market_indicator("WTI 원유", 130) == "에너지 쇼크/스태그플레이션"
+    assert theme_analysis.evaluate_market_indicator("VIX (변동성)", 14) == "안정/골디락스장"
+    assert theme_analysis.evaluate_market_indicator("달러인덱스", 95) == "안정/중립(골디락스)"
 
 @patch('modules.theme_analysis.requests.get')
 def test_fetch_naver_themes(mock_get):

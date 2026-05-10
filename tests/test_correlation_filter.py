@@ -32,7 +32,7 @@ def setup_teardown():
     AutoTrader._instance = None
 
 
-def create_mock_df(pattern_type='same', length=40):
+def create_mock_df(pattern_type='same', length=150):
     """수학적으로 통제된 변화율(상관계수)을 가진 가상 일봉 차트 데이터를 생성합니다."""
     dates = pd.date_range(start='2023-01-01', periods=length).strftime('%Y%m%d')
     
@@ -64,10 +64,11 @@ def create_mock_df(pattern_type='same', length=40):
 def test_correlation_skip_high_correlation(mock_chart, mock_vol, mock_market):
     """1. 상관계수가 임계값(0.7) 이상일 때 매수가 정상적으로 보류(Skip)되는가?"""
     trader = AutoTrader()
+    trader.is_running = True
     
     # 후보 종목과 보유 종목이 완벽히 동일한 패턴으로 움직임 (상관계수 1.0)
-    df_cand = create_mock_df('same', 40)
-    df_hold = create_mock_df('same', 40)
+    df_cand = create_mock_df('same', 150)
+    df_hold = create_mock_df('same', 150)
     
     mock_chart.return_value = df_cand
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_hold}}
@@ -90,6 +91,7 @@ def test_correlation_skip_high_correlation(mock_chart, mock_vol, mock_market):
 def test_correlation_pass_low_correlation(mock_chart, mock_vol, mock_market):
     """2. 상관계수가 임계값 미만(정반대 또는 랜덤)일 때 필터링을 통과하는가?"""
     trader = AutoTrader()
+    trader.is_running = True
     
     # 후보 종목은 오르고, 보유 종목은 내리는 정반대 패턴 (상관계수 -1.0)
     df_cand = create_mock_df('same', 40)
@@ -117,6 +119,7 @@ def test_correlation_pass_low_correlation(mock_chart, mock_vol, mock_market):
 def test_correlation_pass_insufficient_data(mock_chart, mock_vol, mock_market):
     """3. 비교할 수 있는 거래일이 30일 이하일 경우 (신규 상장 등) 스킵하지 않고 통과하는가?"""
     trader = AutoTrader()
+    trader.is_running = True
     
     # 동일한 패턴이지만 데이터 길이가 20일밖에 안 됨 (len <= 30)
     df_short = create_mock_df('same', 20)
@@ -142,14 +145,15 @@ def test_correlation_pass_when_disabled(mock_chart, mock_vol, mock_market):
     """4. config 설정에서 기능을 껐을 때(False), 상관계수가 높아도 필터를 통과하는가?"""
     config.USE_CORRELATION_FILTER = False # 기능 강제 종료
     trader = AutoTrader()
+    trader.is_running = True
     
-    df_same = create_mock_df('same', 40)
+    df_same = create_mock_df('same', 150)
     mock_chart.return_value = df_same
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_same}}
     item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
     
     with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
-        mock_analyze.return_value = {'action': 'wait', 'state': '관망', 'score': 5.0, 'rsi': 50, 'adx': 20, 'cci': 0}
+        mock_analyze.return_value = {'action': 'buy', 'state': '매수', 'score': 8.5, 'rsi': 50, 'adx': 20, 'cci': 0, 'reason': 'test'}
         result = trader._analyze_candidate_worker(
             item, {'000660'}, {}, {}, {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'000660': 'stocks_kr'}
         )
@@ -187,6 +191,7 @@ def test_analyze_candidates_logging(mock_prefetch, mock_worker):
 def test_correlation_pass_different_group(mock_chart, mock_vol, mock_market):
     """6. 그룹이 다를 경우(예: 주식 vs ETF) 상관계수가 높아도 스킵하지 않는가?"""
     trader = AutoTrader()
+    trader.is_running = True
     
     # 동일한 패턴(상관계수 1.0)
     df_cand = create_mock_df('same', 40)

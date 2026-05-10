@@ -22,11 +22,13 @@ def setup_test_env():
 @patch('api.requests.post')
 def test_send_telegram_message_chunking(mock_post):
     """4000자가 넘는 긴 텔레그램 메시지가 청크 단위로 나뉘어 전송되는지 테스트"""
+    config.TELEGRAM_BOT_TOKEN = "TEST"
+    config.TELEGRAM_CHAT_ID = "TEST"
     mock_post.return_value.status_code = 200
     
     # 4000자가 넘는 긴 메시지 생성
     long_msg = "A" * 4005
-    api.send_telegram_message(long_msg)
+    api.send_telegram_message(long_msg, sync=True)
     
     # 청크 분할로 인해 최소 2번 이상 post 요청이 발생해야 함
     assert mock_post.call_count >= 2

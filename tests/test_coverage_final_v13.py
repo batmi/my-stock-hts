@@ -69,8 +69,8 @@ def test_evaluate_market_indicator_all_cases():
     """매크로 지표 평가 함수 모든 분기 테스트"""
     assert "시스템 위기" in theme_analysis.evaluate_market_indicator("미국채 10년물 금리", 5.5)
     assert "골디락스" in theme_analysis.evaluate_market_indicator("WTI 원유", 70)
-    assert "패닉 구간" in theme_analysis.evaluate_market_indicator("달러환율", 1550)
-    assert "안정" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 15)
+    assert "외환 패닉" in theme_analysis.evaluate_market_indicator("달러환율", 1550)
+    assert "안정" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 14)
     assert "신고가 랠리" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-3.0)
     assert "침체/약세장" in theme_analysis.evaluate_market_indicator("기타지수", 100, yh_rate=-25.0)
 

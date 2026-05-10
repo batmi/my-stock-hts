@@ -28,7 +28,7 @@ def test_send_telegram_message_success(mock_env):
         mock_post.return_value = mock_response
         
         msg = "테스트 메시지입니다."
-        api.send_telegram_message(msg)
+        api.send_telegram_message(msg, sync=True)
         
         # requests.post가 호출되었는지 확인
         assert mock_post.called
@@ -55,7 +55,7 @@ def test_send_telegram_message_retry_logic(mock_env):
         
         # time.sleep을 모킹하여 테스트 대기 시간 제거
         with patch('time.sleep'):
-            api.send_telegram_message("재시도 테스트")
+            api.send_telegram_message("재시도 테스트", sync=True)
             
         # 총 3번 호출되었는지 확인 (2번 실패 후 3번째 성공)
         assert mock_post.call_count == 3
@@ -67,7 +67,7 @@ def test_send_telegram_message_no_token():
     config.TELEGRAM_BOT_TOKEN = ""
     
     with patch('requests.post') as mock_post:
-        api.send_telegram_message("토큰 없음")
+        api.send_telegram_message("토큰 없음", sync=True)
         # 호출되지 않아야 함
         assert not mock_post.called
         

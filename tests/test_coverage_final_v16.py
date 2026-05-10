@@ -21,24 +21,24 @@ def setup_env():
 def test_evaluate_market_indicator_branches():
     """수십 줄의 매크로 지표 임계값 텍스트 분기 커버리지 타격"""
     # 각 지표의 모든 분기를 최소 한 번씩 타격
-    assert "하이퍼 인플레" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 6.0)
+    assert "재정 적자 우려" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 6.0)
     assert "기간 프리미엄" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 5.0)
     assert "디플레이션 우려" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 3.0)
     
     assert "에너지 쇼크" in theme_analysis.evaluate_market_indicator("가솔린 RBOB", 5.0)
     assert "시스템 위기" in theme_analysis.evaluate_market_indicator("가솔린 RBOB", 1.0)
     
-    assert "물가 비상" in theme_analysis.evaluate_market_indicator("천연가스", 8.0)
-    assert "수급 타이트" in theme_analysis.evaluate_market_indicator("천연가스", 5.0)
+    assert "물가 비상" in theme_analysis.evaluate_market_indicator("천연가스", 5.0)
+    assert "수급 타이트" in theme_analysis.evaluate_market_indicator("천연가스", 3.5)
     
     assert "식량 안보 위기" in theme_analysis.evaluate_market_indicator("밀", 1000)
-    assert "물가 부담" in theme_analysis.evaluate_market_indicator("밀", 700)
+    assert "식량 인플레" in theme_analysis.evaluate_market_indicator("밀", 700)
     
-    assert "가장 안정적인 중립" in theme_analysis.evaluate_market_indicator("달러인덱스", 95)
+    assert "안정/중립" in theme_analysis.evaluate_market_indicator("달러인덱스", 95)
     assert "초강세 원화" in theme_analysis.evaluate_market_indicator("달러환율", 1000)
     
-    assert "위험" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 60)
-    assert "경계" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 45)
+    assert "위험" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 25)
+    assert "경계" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 18)
     
     assert "반도체 하락 사이클" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-30.0)
     assert "침체/약세장 진입" in theme_analysis.evaluate_market_indicator("일반지수", 100, yh_rate=-25.0)

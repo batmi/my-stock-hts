@@ -4,14 +4,17 @@ from modules.telegram_bot import TelegramCommander
 import config
 from datetime import datetime
 import pandas as pd
+import time
 
 @pytest.fixture
 def commander():
+    TelegramCommander._instance = None
     cmd = TelegramCommander()
     cmd.trader = MagicMock()
     return cmd
 
-def test_handle_message_branches(commander):
+@patch('api.send_telegram_message')
+def test_handle_message_branches(mock_send, commander):
     """명령어 파싱 및 단축어 처리 커버리지"""
     config.TELEGRAM_CHAT_ID = "12345"
     
@@ -23,10 +26,12 @@ def test_handle_message_branches(commander):
         # 단축 명령어 테스트
         msg1 = {'chat': {'id': 12345}, 'text': '/signal_005930'}
         commander._handle_message(msg1)
+        time.sleep(0.1)
         mock_signal.assert_called_with(['005930'])
         
         msg2 = {'chat': {'id': 12345}, 'text': '/chart_AAPL'}
         commander._handle_message(msg2)
+        time.sleep(0.1)
         mock_chart.assert_called_with(['aapl'])
         
         # 권한 없는 채팅 ID (수행되지 않아야 함)

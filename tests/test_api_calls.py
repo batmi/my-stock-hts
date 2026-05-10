@@ -112,8 +112,8 @@ def test_api_rate_limit():
         mock_request.return_value = MagicMock(status_code=200, json=lambda: {'rt_cd': '0', 'output': {}})
         
         # 세션 상태 초기화 (다른 테스트 영향 제거)
-        api.session.request_history.clear()
-        api.session.last_request_time_sim = 0
+        api.session.request_history_sim.clear()
+        api.session.request_history_real.clear()
 
         # call_api를 연속으로 호출하여 Rate Limiting이 동작하는지 확인
         api.call_api("test/url", "domestic", "test", "test", method="GET", tr_id="TEST_TR_ID")
@@ -132,7 +132,8 @@ def test_call_api_args(mock_get):
         "authorization": "Bearer test_token",
         "appKey": "test_app_key",
         "appSecret": "test_app_secret",
-        "tr_id": "test_tr_id"
+        "tr_id": "test_tr_id",
+        "custtype": "P"
     }
     
     config.session.url_base = "https://openapi.koreainvestment.com:9443"

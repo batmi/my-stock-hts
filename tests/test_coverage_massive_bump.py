@@ -32,9 +32,9 @@ def test_market_process_index_worker_gap_patching(mock_fast_info):
     recent_date = datetime.now()
     
     df_daily = pd.DataFrame({
-        'close': [100.0, 100.0],
-        'open': [100.0, 100.0], 'high': [100.0, 100.0], 'low': [100.0, 100.0], 'volume': [1000]*2
-    }, index=pd.DatetimeIndex([past_date - timedelta(days=1), past_date]))
+        'close': [100.0]*60,
+        'open': [100.0]*60, 'high': [100.0]*60, 'low': [100.0]*60, 'volume': [1000]*60
+    }, index=pd.date_range(end=past_date, periods=60))
     
     # 분봉에는 어제/오늘 데이터가 있음
     df_intra = pd.DataFrame({
@@ -142,11 +142,14 @@ def test_conclusion_monitor_error_handling(mock_ovs, mock_dom):
     monitor.is_running = True
     monitor.thread = threading.current_thread()
     
-    with patch.object(monitor.event, 'wait', side_effect=InterruptedError):
-        try:
-            monitor._run_loop()
-        except InterruptedError:
-            pass
+    with patch.object(monitor, '_is_market_open', return_value=True):
+        with patch('time.sleep'):
+            with patch.object(monitor, '_check_conclusions', side_effect=Exception("Simulated Crash")):
+                with patch.object(monitor.event, 'wait', side_effect=InterruptedError):
+                    try:
+                        monitor._run_loop()
+                    except InterruptedError:
+                        pass
     
     assert monitor.consecutive_errors == 1
 

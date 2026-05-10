@@ -24,6 +24,8 @@ def cleanup_db_connection():
 @patch('api.requests.post')
 def test_api_send_telegram_chunking_and_markdown(mock_post):
     """4000자 초과 메시지 자동 분할 및 마크다운 링크 변환 커버리지"""
+    config.TELEGRAM_BOT_TOKEN = "TEST"
+    config.TELEGRAM_CHAT_ID = "TEST"
     # HTTP 200 성공 응답 모킹
     mock_post.return_value = MagicMock(status_code=200)
     
@@ -31,7 +33,7 @@ def test_api_send_telegram_chunking_and_markdown(mock_post):
     long_msg = "이것은 긴 메시지입니다. [구글링크](https://google.com)\n" * 150
     
     # 실제 전송 함수 호출
-    api.send_telegram_message(long_msg, reply_markup={"keyboard": []})
+    api.send_telegram_message(long_msg, reply_markup={"keyboard": []}, sync=True)
     
     # 4000자 제한으로 인해 최소 2번 이상 post가 호출되어야 함
     assert mock_post.call_count >= 2
@@ -149,11 +151,11 @@ def test_market_index_specific_rendering(mock_fast_info):
     # 1. VIX (변동성) - 45.0이면 주황색 경계 상태
     res1 = market._process_index_worker("VIX (변동성)", "^VIX", df, pd.DataFrame())
     assert res1['status'] == 'success'
-    assert "orange3" in res1['row_data'][0]
+    assert "magenta" in res1['row_data'][0]
     
-    # 2. WTI 원유 - 45.0이면 노란색 수요 둔화 상태
+    # 2. WTI 원유 - 45.0이면 파란색 심각한 수요 파괴 상태
     res2 = market._process_index_worker("WTI 원유", "CL=F", df, pd.DataFrame())
-    assert "yellow" in res2['row_data'][0]
+    assert "blue" in res2['row_data'][0]
 
 # ==========================================================
 # 6. modules/analysis.py 커버리지
