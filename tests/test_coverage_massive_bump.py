@@ -162,7 +162,7 @@ def test_save_all_market_analysis_permission_error(mock_writer):
     
     mock_item = {
         'code': '005930', 'name': 'Samsung', 'price': 100, 'score': 5.0, 'state': '매수',
-        'state_reason': '', 'state_color': '[red]', 'rsi': 50, 'adx': 50, 'cci': 50, 'psar': 50, 'macd': 1,
+        'state_reason': '', 'state_color': '[red]', 'rsi': 50, 'adx': 50, 'plus_di': 35, 'minus_di': 15, 'cci': 50, 'psar': 50, 'macd': 1,
         'macd_signal': 0, 'obv_trend': True, 'vol_strength': 100, 'w52_pos': 50, 'is_custom_rule': False,
         'is_target': True
     }
@@ -224,7 +224,7 @@ def test_simulate_strategy_nan_price_handling():
         'close': [10000, np.nan, 0, -1000, 10500], # 불량 데이터 주입
         'high': [10000]*5, 'low': [10000]*5, 'open': [10000]*5, 'volume': [100]*5,
         'EMA20': [10000]*5, 'EMA60': [10000]*5, 'EMA120': [10000]*5,
-        'SAR': [9000]*5, 'RSI': [50]*5, 'ADX': [20]*5, 'CCI': [0]*5,
+        'SAR': [9000]*5, 'RSI': [50]*5, 'ADX': [20]*5, 'PLUS_DI': [25]*5, 'MINUS_DI': [15]*5, 'CCI': [0]*5,
         'OBV': [1000]*5, 'OBV_MA': [1000]*5, 'ATR': [100]*5, 'MACD': [0]*5, 'MACD_Signal': [0]*5
     })
     

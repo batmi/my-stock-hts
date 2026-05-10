@@ -298,6 +298,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             val_cci = ind.get('cci')
             val_macd = ind.get('macd')
             val_macd_sig = ind.get('macd_signal')
+            val_plus_di = ind.get('plus_di')
+            val_minus_di = ind.get('minus_di')
 
         # D. 결과 포맷팅
         if math.isnan(current): current = 0.0
@@ -428,6 +430,16 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 0 < val_cci < 100: cci_str = f"[orange3]{cci_str}[/]"
             elif -100 < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
             else: cci_str = f"[blue]{cci_str}[/]"
+
+        if val_plus_di is None or val_minus_di is None or math.isnan(val_plus_di) or math.isnan(val_minus_di):
+            dmi_str = "-"
+        else:
+            if val_plus_di > val_minus_di:
+                dmi_str = f"[red]{val_plus_di:.1f}[/]/[dim]{val_minus_di:.1f}[/]"
+            elif val_minus_di > val_plus_di:
+                dmi_str = f"[dim]{val_plus_di:.1f}[/]/[blue]{val_minus_di:.1f}[/]"
+            else:
+                dmi_str = f"{val_plus_di:.1f}/{val_minus_di:.1f}"
 
         display_name = name
         
@@ -579,7 +591,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         return {
             'status': 'success',
-            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, adx_str, cci_str],
+            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, dmi_str],
             'patched_name': patched_name,
             'missing_name': missing_name,
             'mismatch_msg': mismatch_msg,
@@ -796,8 +808,9 @@ def _show_market_indices_core(target_indices=None):
         table.add_column("EMA(120)", justify="right")
         table.add_column("추세SMO", justify="center")
         table.add_column("RSI", justify="right")
-        table.add_column("ADX", justify="right")
         table.add_column("CCI", justify="right")
+        table.add_column("ADX", justify="right")
+        table.add_column("DMI", justify="right")
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
@@ -847,7 +860,7 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('mismatch_msg'): mismatch_tickers.append(res['mismatch_msg'])
                         if res.get('is_delayed'): delayed_tickers.append(name)
                     elif res['status'] == 'failed':
-                        table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                        table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
                         failed_tickers.append(name)
                     else:
                         if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
