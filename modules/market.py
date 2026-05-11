@@ -66,10 +66,16 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         # A. DataFrame 준비
         if not df_daily.empty:
             df_daily.columns = [c.lower() for c in df_daily.columns]
+            # [Fix] yfinance 특정 지수(QGRD 등) 조회 시 Volume 컬럼 누락으로 인한 KeyError 방어
+            for c in ['open', 'high', 'low', 'close', 'volume']:
+                if c not in df_daily.columns: df_daily[c] = 0.0
+                
             if 'close' in df_daily.columns:
                 df_daily = df_daily.dropna(subset=['close'])
         if not df_intraday.empty:
             df_intraday.columns = [c.lower() for c in df_intraday.columns]
+            for c in ['open', 'high', 'low', 'close', 'volume']:
+                if c not in df_intraday.columns: df_intraday[c] = 0.0
 
         is_kis_source = False
         mismatch_msg = None
@@ -186,6 +192,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         missing_name = None
         is_delayed = False
         
+        if name == "QGRD (스마트그리드)":
+            logger.debug(f"[QGRD_DEBUG] fast_info 사용여부: {use_fast_info}, df_daily.empty: {df_daily.empty}, current_calc_price: {chart_calc_price}")
+
         if not use_fast_info:
             if not is_domestic_index:
                 is_delayed = True
@@ -276,6 +285,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         # C. 실시간 가격 패치
         ema5, ema20, ema60, ema120 = None, None, None, None
         val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
+        val_plus_di, val_minus_di = None, None
         df_calc = pd.DataFrame()
 
         if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
@@ -599,6 +609,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             'is_delayed': is_delayed
         }
     except Exception as e:
+        if name == "QGRD (스마트그리드)":
+            logger.error(f"[QGRD_DEBUG] 분석 중 예외 발생: {e}", exc_info=True)
         return {'status': 'error', 'name': name, 'error': e}
 
 def _show_market_indices_core(target_indices=None):
@@ -727,6 +739,14 @@ def _show_market_indices_core(target_indices=None):
 
                         d_data = result_container.get('daily', pd.DataFrame())
                         i_data = result_container.get('intra', pd.DataFrame())
+                        
+                        if "^QGRD" in tickers_str:
+                            logger.debug(f"[QGRD_DEBUG] yfinance 다운로드 완료 (attempt {attempt+1}) - Daily Shape: {d_data.shape if not d_data.empty else 'Empty'}")
+                            if not d_data.empty and isinstance(d_data.columns, pd.MultiIndex):
+                                if "^QGRD" in d_data.columns.get_level_values(0):
+                                    logger.debug("[QGRD_DEBUG] 다중 컬럼(MultiIndex)에서 ^QGRD 데이터 발견됨")
+                                else:
+                                    logger.debug(f"[QGRD_DEBUG] 다중 컬럼에 ^QGRD 누락됨. 존재하는 티커: {list(set(d_data.columns.get_level_values(0)))}")
 
                         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                             d_shape = d_data.shape if not d_data.empty else "Empty"
