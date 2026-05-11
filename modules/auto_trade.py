@@ -5236,6 +5236,9 @@ def _delete_stock_rules():
         if Prompt.ask(f"정말 '{target['name']}'의 룰을 삭제하시겠습니까?", choices=["y", "n"], default="n") == "y":
             db_manager.db.delete_stock_strategy(target['code'])
             console.print(f"\n[bold green]삭제되었습니다.[/bold green]")
+            
+            console.print("\n[bold cyan]>> 현재 설정된 트레이딩 룰 리스트입니다.[/bold cyan]")
+            _view_stock_rules()
         else: return False
     else: return False
 
@@ -5246,39 +5249,15 @@ def _view_restricted_stocks():
         console.print("\n[yellow]트레이딩 제한 종목이 없습니다.[/yellow]")
         return
 
-    # [추가] 적응형 임계값 준비
-    market_regime_adj = {}
-    use_adaptive = False
-    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=console,
-                transient=True
-            ) as progress:
-                progress.add_task("[cyan]시장 국면 분석 중...[/cyan]", total=None)
-                _, kospi_adj = analysis.get_market_regime("KOSPI")
-                _, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
-                market_regime_adj["KOSPI"] = kospi_adj
-                market_regime_adj["KOSDAQ"] = kosdaq_adj
-                use_adaptive = True
-        except:
-            use_adaptive = False
-
     console.print()
     title = "트레이딩 제한 종목"
     table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table.add_column("종목명(코드)", justify="left")
+    table.add_column("종목명", justify="left")
+    table.add_column("코드", justify="center", style="dim")
     table.add_column("현재가", justify="right")
+    table.add_column("등락률(등락폭)", justify="right")
+    table.add_column("52주", justify="right")
     table.add_column("메모", justify="left")
-    table.add_column("점수", justify="center")
-    table.add_column("상태", justify="center")
-    table.add_column("추세SMO", justify="center")
-    table.add_column("RSI", justify="right")
-    table.add_column("ADX", justify="right")
-    table.add_column("CCI", justify="right")
     table.add_column("등록일", justify="center", style="dim")
 
     with Progress(
@@ -5304,116 +5283,37 @@ def _view_restricted_stocks():
             df = api.get_chart_data(code, is_overseas)
             
             price_str = "-"
-            score_str = "-"
-            state_str = "-"
-            trend_str = "-"
-            rsi_str = "-"
-            adx_str = "-"
-            cci_str = "-"
+            diff_str = "-"
+            w52_str = "-"
             
             if df is not None and not df.empty:
                 current_price = float(df.iloc[-1]['close'])
+                prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+                diff = current_price - prev_price
+                rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
+                
                 price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
                 
-                ind = indicators.calculate_indicators(df)
-                
-                # 전일 RSI 계산 (상태 분류용)
-                prev_rsi = None
-                if len(df) >= 16:
-                    delta = df['close'].diff()
-                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                    try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                    except: pass
-
-                # 52주 위치 계산 (슈퍼 모멘텀 판정용)
-                w52_pos_val = 0.0
-                if df is not None and not df.empty:
-                    recent_df = df.tail(250)
-                    h52 = recent_df['high'].max()
-                    l52 = recent_df['low'].min()
-                    if h52 > l52:
-                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
-
-                # [추가] 적응형 임계값 적용
-                thresholds = None
-                if use_adaptive and not is_overseas:
-                    market_type = AutoTrader()._get_stock_market_type(code)
-                    score_adj = market_regime_adj.get(market_type, 0.0)
-                    
-                    if score_adj != 0:
-                        thresholds = {
-                            "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-                            "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-                            "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-                        }
-
-                # 상태 및 점수 계산
-                state, state_color, _ = analysis.classify_stock_state(
-                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos_val
-                )
-                
-                score, _ = analysis.calculate_score(
-                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-                )
-                
-                s_color = state_color.replace('[', '').replace(']', '')
-                score_str = f"[{s_color}]{score}점[/]"
-                state_str = f"[{s_color}]{state}[/]"
-                
-                # 추세SMO (SAR/MACD/OBV)
-                sar_val = ind.get('psar')
-                if sar_val is not None:
-                    sar_icon = "[red]⬆[/]" if current_price > sar_val else "[blue]⬇[/]"
+                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                if is_overseas:
+                    diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
                 else:
-                    sar_icon = "-"
-                
-                macd_val = ind.get('macd')
-                sig_val = ind.get('macd_signal')
-                macd_icon = "-"
-                if macd_val is not None and sig_val is not None:
-                    zero_sign = "+" if macd_val > 0 else "-"
-                    cross_char = "G" if macd_val > sig_val else "D"
-                    m_color = "red" if macd_val > sig_val else "blue"
-                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
-                
-                obv_trend = ind.get('obv_trend')
-                obv_icon = "-"
-                if obv_trend is True: obv_icon = "[red]▲[/]"
-                elif obv_trend is False: obv_icon = "[blue]▼[/]"
-                
-                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+                    diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
 
-                # 지표 포맷팅
-                rsi_val = ind['rsi']
-                rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
-                if rsi_val is not None:
-                    if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
-                    elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
-                    elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                    elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
-                    else: rsi_str = f"[blue]{rsi_str}[/]"
-
-                adx_val = ind['adx']
-                adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
-                if adx_val is not None:
-                    if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                    elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
-                    elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                    elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                    else: adx_str = f"[white]{adx_str}[/]"
-
-                cci_val = ind['cci']
-                cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
-                if cci_val is not None:
-                    if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
-                    elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
-                    elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
-                    else: cci_str = f"[blue]{cci_str}[/]"
+                w52_pos_val = 0.0
+                recent_df = df.tail(250)
+                h52 = recent_df['high'].max()
+                l52 = recent_df['low'].min()
+                if h52 > l52:
+                    w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+                
+                w_color = "[white]"
+                if w52_pos_val >= 90: w_color = "[red]"
+                elif w52_pos_val >= 80: w_color = "[orange3]"
+                elif w52_pos_val <= 20: w_color = "[blue]"
+                w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
             
-            table.add_row(f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+            table.add_row(name, code, price_str, diff_str, w52_str, memo, reg_date)
             progress.advance(task)
 
     console.print(table)
@@ -5455,15 +5355,12 @@ def _remove_restricted_stock():
     console.print()
     table = Table(title="트레이딩 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No.", justify="right", style="cyan", width=4)
-    table.add_column("종목명(코드)", justify="left")
+    table.add_column("종목명", justify="left")
+    table.add_column("코드", justify="center", style="dim")
     table.add_column("현재가", justify="right")
+    table.add_column("등락률(등락폭)", justify="right")
+    table.add_column("52주", justify="right")
     table.add_column("메모", justify="left")
-    table.add_column("점수", justify="center")
-    table.add_column("상태", justify="center")
-    table.add_column("추세SMO", justify="center")
-    table.add_column("RSI", justify="right")
-    table.add_column("ADX", justify="right")
-    table.add_column("CCI", justify="right")
     table.add_column("등록일", justify="center", style="dim")
 
     codes = list(data.keys())
@@ -5492,103 +5389,37 @@ def _remove_restricted_stock():
             df = api.get_chart_data(code, is_overseas)
             
             price_str = "-"
-            score_str = "-"
-            state_str = "-"
-            trend_str = "-"
-            rsi_str = "-"
-            adx_str = "-"
-            cci_str = "-"
+            diff_str = "-"
+            w52_str = "-"
             
             if df is not None and not df.empty:
                 current_price = float(df.iloc[-1]['close'])
+                prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+                diff = current_price - prev_price
+                rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
+                
                 price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
                 
-                ind = indicators.calculate_indicators(df)
-                
-                # 전일 RSI 계산 (상태 분류용)
-                prev_rsi = None
-                if len(df) >= 16:
-                    delta = df['close'].diff()
-                    gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                    loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                    try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                    except: pass
-
-                # 52주 위치 계산 (슈퍼 모멘텀 판정용)
-                w52_pos_val = 0.0
-                if df is not None and not df.empty:
-                    recent_df = df.tail(250)
-                    h52 = recent_df['high'].max()
-                    l52 = recent_df['low'].min()
-                    if h52 > l52:
-                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
-
-                # 상태 및 점수 계산
-                state, state_color, _ = analysis.classify_stock_state(
-                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos_val
-                )
-                
-                score, _ = analysis.calculate_score(
-                    current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-                )
-                
-                s_color = state_color.replace('[', '').replace(']', '')
-                score_str = f"[{s_color}]{score}점[/]"
-                state_str = f"[{s_color}]{state}[/]"
-                
-                # 추세SMO (SAR/MACD/OBV)
-                sar_val = ind.get('psar')
-                if sar_val is not None:
-                    sar_icon = "[red]⬆[/]" if current_price > sar_val else "[blue]⬇[/]"
+                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                if is_overseas:
+                    diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
                 else:
-                    sar_icon = "-"
-                
-                macd_val = ind.get('macd')
-                sig_val = ind.get('macd_signal')
-                macd_icon = "-"
-                if macd_val is not None and sig_val is not None:
-                    zero_sign = "+" if macd_val > 0 else "-"
-                    cross_char = "G" if macd_val > sig_val else "D"
-                    m_color = "red" if macd_val > sig_val else "blue"
-                    macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
-                
-                obv_trend = ind.get('obv_trend')
-                obv_icon = "-"
-                if obv_trend is True: obv_icon = "[red]▲[/]"
-                elif obv_trend is False: obv_icon = "[blue]▼[/]"
-                
-                trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+                    diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
 
-                # 지표 포맷팅
-                rsi_val = ind['rsi']
-                rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
-                if rsi_val is not None:
-                    if rsi_val >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
-                    elif 55 <= rsi_val < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
-                    elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                    elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
-                    else: rsi_str = f"[blue]{rsi_str}[/]"
-
-                adx_val = ind['adx']
-                adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
-                if adx_val is not None:
-                    if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                    elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
-                    elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                    elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                    else: adx_str = f"[white]{adx_str}[/]"
-
-                cci_val = ind['cci']
-                cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
-                if cci_val is not None:
-                    if cci_val >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
-                    elif 0 < cci_val < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
-                    elif config.INDICATOR_PARAMS["CCI_LOWER"] < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
-                    else: cci_str = f"[blue]{cci_str}[/]"
+                w52_pos_val = 0.0
+                recent_df = df.tail(250)
+                h52 = recent_df['high'].max()
+                l52 = recent_df['low'].min()
+                if h52 > l52:
+                    w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+                
+                w_color = "[white]"
+                if w52_pos_val >= 90: w_color = "[red]"
+                elif w52_pos_val >= 80: w_color = "[orange3]"
+                elif w52_pos_val <= 20: w_color = "[blue]"
+                w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
             
-            table.add_row(str(i+1), f"{name}({code})", price_str, memo, score_str, state_str, trend_str, rsi_str, adx_str, cci_str, reg_date)
+            table.add_row(str(i+1), name, code, price_str, diff_str, w52_str, memo, reg_date)
             progress.advance(task)
         
     console.print(table)

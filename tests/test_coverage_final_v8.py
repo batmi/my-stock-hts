@@ -73,7 +73,8 @@ def test_modify_stock_rules(mock_input, mock_ask, mock_get_rules):
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies')
 @patch('rich.prompt.Prompt.ask')
 @patch('modules.auto_trade.db_manager.db.delete_stock_strategy')
-def test_delete_stock_rules(mock_delete, mock_ask, mock_get_rules):
+@patch('modules.auto_trade._view_stock_rules')
+def test_delete_stock_rules(mock_view, mock_delete, mock_ask, mock_get_rules):
     """룰 삭제 흐름"""
     mock_get_rules.return_value = [{'code': '005930', 'name': 'Samsung', 'buy_score': 8.0, 'buy_rsi': 60, 'sell_score': 5.0, 'take_profit_rsi': 75, 'take_profit': 10, 'stop_loss': -5, 'ts_activation': 5, 'ts_callback': 2, 'updated_at': '2023-01-01'}]
     # 번호선택(1) -> 확인(y)
@@ -81,6 +82,7 @@ def test_delete_stock_rules(mock_delete, mock_ask, mock_get_rules):
     
     auto_trade._delete_stock_rules()
     mock_delete.assert_called_with("005930")
+    mock_view.assert_called_once()
 
 @patch('modules.auto_trade.api.get_current_price', return_value=60000)
 @patch('modules.auto_trade.db_manager.db.get_stock_strategy', return_value=None)
@@ -104,16 +106,10 @@ def test_input_and_save_rule_new(mock_save_weights, mock_save, mock_ask, mock_ge
 
 @patch('modules.auto_trade.load_restricted_stocks')
 @patch('modules.auto_trade.api.get_chart_data')
-@patch('modules.auto_trade.indicators.calculate_indicators')
-@patch('modules.auto_trade.analysis.classify_stock_state')
-@patch('modules.auto_trade.analysis.calculate_score')
-def test_view_restricted_stocks(mock_score, mock_classify, mock_calc, mock_chart, mock_load):
+def test_view_restricted_stocks(mock_chart, mock_load):
     """제한 종목 조회 테스트"""
     mock_load.return_value = {'005930': {'name': 'Samsung', 'memo': 'Test', 'date': '2023-01-01'}}
     mock_chart.return_value = pd.DataFrame({'close': [60000]*20, 'high': [60000]*20, 'low': [60000]*20, 'open': [60000]*20, 'volume': [1000]*20})
-    mock_calc.return_value = {'ema_20': 60000, 'ema_60': 60000, 'ema_120': 60000, 'psar': 50000, 'rsi': 50, 'adx': 20, 'cci': 0}
-    mock_classify.return_value = ("관망", "[white]", "이유")
-    mock_score.return_value = (5.0, [])
     
     with patch('config.console.print') as mock_print:
         auto_trade._view_restricted_stocks()
