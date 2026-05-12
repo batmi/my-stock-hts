@@ -918,13 +918,26 @@ class TelegramCommander:
 
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
             )
 
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
             )
+
+            plus_di = ind.get('plus_di')
+            minus_di = ind.get('minus_di')
+            dmi_str = "-"
+            if plus_di is not None and minus_di is not None:
+                if plus_di > minus_di:
+                    dmi_str = f"+DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                elif minus_di > plus_di:
+                    dmi_str = f"-DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                else:
+                    dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
 
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
@@ -934,7 +947,7 @@ class TelegramCommander:
                 f"• 현재가: {price_str}\n"
                 f"• 시스템 상태: {state} (사유: {state_reason})\n"
                 f"• 퀀트 점수: {score}점 / 10점 만점\n"
-                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
+                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
             )
 
             answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
@@ -1890,6 +1903,18 @@ class TelegramCommander:
             if macd_val is not None and sig_val is not None:
                 macd_state = "골든" if macd_val > sig_val else "데드"
 
+            # DMI 상태
+            plus_di = ind.get('plus_di')
+            minus_di = ind.get('minus_di')
+            dmi_str = "-"
+            if plus_di is not None and minus_di is not None:
+                if plus_di > minus_di:
+                    dmi_str = f"+DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                elif minus_di > plus_di:
+                    dmi_str = f"-DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                else:
+                    dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
+
             # 이평선 상태
             ema_state = "혼조/역배열"
             if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
@@ -1960,8 +1985,9 @@ class TelegramCommander:
             msg += f"• MACD: {macd_state}\n"
             msg += f"• OBV: {obv_state}\n"
             msg += f"• RSI: {rsi_str}\n"
+            msg += f"• CCI: {cci_str}\n"
             msg += f"• ADX: {adx_str}\n"
-            msg += f"• CCI: {cci_str}"
+            msg += f"• DMI: {dmi_str}"
             
             return msg
         except Exception as e:

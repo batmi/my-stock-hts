@@ -583,7 +583,7 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     
     출력 형식:
     [기업 개요] (산업 분야, 대표 제품/비즈니스 모델 등 기본 설명)
-    [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석)
+    [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석. 특히 ADX의 추세 강도와 DMI의 방향성(+DI, -DI 우위)을 결합하여 현재 추세를 명확히 진단해 주세요.)
     [핵심 모멘텀 및 이슈 요약] (주요 재료 및 모멘텀 요약. 가짜 링크 금지)
     [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
     [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
@@ -1287,12 +1287,23 @@ def _analyze_stock_ui():
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             
+            plus_di = ind.get('plus_di')
+            minus_di = ind.get('minus_di')
+            dmi_str = "-"
+            if plus_di is not None and minus_di is not None:
+                if plus_di > minus_di:
+                    dmi_str = f"+DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                elif minus_di > plus_di:
+                    dmi_str = f"-DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+                else:
+                    dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
+            
             price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
             tech_info = (
                 f"• 현재가: {price_str}\n"
                 f"• 시스템 상태: {state} (사유: {state_reason})\n"
                 f"• 퀀트 점수: {score}점 / 10점 만점\n"
-                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val}"
+                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
             )
             
             progress.update(task_id, description=f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]")

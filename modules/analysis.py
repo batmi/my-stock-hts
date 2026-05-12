@@ -86,7 +86,7 @@ def check_smart_money_turnaround(code, is_overseas=False):
         logger.debug(f"Smart Money Check Error for {code}: {e}")
         return False, ""
 
-def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None, smart_money=False):
+def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
     
@@ -159,9 +159,16 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
 
     # 3. Strength & Volume Factor (1.5점)
     if adx is not None and adx >= 20: 
-        s = round(0.5 * r_str, 2)
+        s = round(0.25 * r_str, 2) # 기존 0.5에서 비중 분할
         score += s
         details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.2f})")
+
+    # [추가] DMI 우위 반영 (+DI > -DI)
+    if plus_di is not None and minus_di is not None and adx is not None:
+        if plus_di > minus_di and adx >= 20:
+            s = round(0.25 * r_str, 2)
+            score += s
+            details.append(f"DMI: +DI 우위 (상승 추세) (+{s:.2f})")
 
     if obv_trend: 
         s = round(0.5 * r_str, 2) # [수정] 1.0 -> 0.5 변경
@@ -292,7 +299,7 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False):
+def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None):
     if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
@@ -346,11 +353,17 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
         is_caution = True
         reasons.append("MACD 데드크로스")
         
+    # [추가] DMI 매도 시그널 (-DI가 +DI를 추월하고 ADX가 25 이상일 때)
+    if plus_di is not None and minus_di is not None and minus_di > plus_di:
+        if adx is not None and adx >= 25:
+            is_caution = True
+            reasons.append("DMI 매도 (-DI 우위 및 ADX 강세)")
+
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
     
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money)
+    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money, plus_di=plus_di, minus_di=minus_di)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -1109,11 +1122,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         adx_val_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
         cci_val_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
         
+        plus_di = ind.get('plus_di')
+        minus_di = ind.get('minus_di')
+        dmi_str = "-"
+        if plus_di is not None and minus_di is not None:
+            if plus_di > minus_di:
+                dmi_str = f"+DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+            elif minus_di > plus_di:
+                dmi_str = f"-DI 우위 ({plus_di:.1f} / {minus_di:.1f})"
+            else:
+                dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
+
         tech_info = (
             f"• 현재가: {price_str}\n"
             f"• 시스템 상태: {state} (사유: {state_reason})\n"
             f"• 퀀트 점수: {score}점 / 10점 만점\n"
-            f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str}"
+            f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str} | DMI {dmi_str}"
         )
         
         with Progress(
