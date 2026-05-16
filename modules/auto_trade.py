@@ -600,7 +600,7 @@ class ConclusionMonitor:
                                         cur_info = ""
 
                                     # 알림 발송
-                                    title_tag = "[체결 알림]"
+                                    title_tag = f"[{type_name} 체결]" if type_name else "[체결 알림]"
                                     rule_info = ""
                                     if rule:
                                         title_tag += " [개별]"
@@ -616,7 +616,7 @@ class ConclusionMonitor:
                                         price_str = f"{avg_price:,.0f}원"
                                         amt_str = f"{int(exec_amt):,}원"
 
-                                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {odno}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                    msg = f"✅ {title_tag} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {odno}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
@@ -809,7 +809,7 @@ class ConclusionMonitor:
                     rules_map = {r['code']: r for r in custom_rules}
                     rule = rules_map.get(code)
                     
-                    title_tag = "[체결 알림(추정)]"
+                    title_tag = f"[{type_name} 체결(추정)]" if type_name else "[체결 알림(추정)]"
                     rule_info = ""
                     if rule:
                         title_tag += " [개별]"
@@ -861,7 +861,7 @@ class ConclusionMonitor:
                         if p_amt is not None and p_rate is not None:
                             profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                             
-                    msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                    msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
                 except Exception as e:
@@ -1167,12 +1167,12 @@ class OrderManager:
                 self.trader.log(f"결과: 성공 (주문번호: {odno})")
                 stock_display = f"{name}({code})" if name else code
                 
-                title_tag = "[주문 접수]"
+                t_type = "매수" if type_str == 'buy' else "매도"
+                title_tag = f"[{t_type} 접수]"
                 if rule:
                     title_tag += " [개별]"
                 
-                t_type = "매수" if type_str == 'buy' else "매도"
-                msg = f"🚀 {title_tag} {t_type} {stock_display}\n수량: {qty}주\n단가: {price_log}"
+                msg = f"🚀 {title_tag} {stock_display}\n수량: {qty}주\n단가: {price_log}"
                 if price > 0:
                     msg += f"\n금액: {int(price * qty):,}원"
                     
@@ -1223,7 +1223,8 @@ class OrderManager:
                 self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
                 
                 stock_display = f"{name}({code})" if name else code
-                fail_msg = f"🚫 [주문 실패] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
+                t_type = "매수" if type_str == 'buy' else "매도"
+                fail_msg = f"🚫 [{t_type} 실패] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
                 api.send_telegram_message(fail_msg)
                 
                 if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
@@ -1237,7 +1238,8 @@ class OrderManager:
 
             self.trader.log(f"결과: 에러 발생 ({str(e)})")
             stock_display = f"{name}({code})" if name else code
-            fail_msg = f"🚫 [주문 에러] {type_str.upper()} {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
+            t_type = "매수" if type_str == 'buy' else "매도"
+            fail_msg = f"🚫 [{t_type} 에러] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n에러: {str(e)}"
             api.send_telegram_message(fail_msg)
             raise e
         finally:
@@ -1283,7 +1285,13 @@ class OrderManager:
                             res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
                             
                             if res.get('rt_cd') == '0':
-                                api.send_telegram_message(f"🗑 [주문 취소] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
+                                trade = db_manager.db.get_trade_by_odno(odno)
+                                t_type = ""
+                                if trade:
+                                    t_str = trade.get('type', '')
+                                    t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "")
+                                type_label = f"{t_type}취소" if t_type else "주문 취소"
+                                api.send_telegram_message(f"🗑 [{type_label}] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
                             else:
                                 self.trader.log(f"취소 실패: {res.get('msg1')}")
                     except Exception: pass
@@ -1317,8 +1325,11 @@ class OrderManager:
                                             
                                             if res.get('rt_cd') == '0':
                                                 self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
-                                                api.send_telegram_message(f"🗑 [주문 취소] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
                                                 
+                                                t_str = trade.get('type', '')
+                                                t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "")
+                                                type_label = f"{t_type}취소" if t_type else "주문 취소"
+                                                api.send_telegram_message(f"🗑 [{type_label}] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
                                                 # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
                                                 
                                                 # 취소 주문 번호는 API 응답(res)에서 파싱해야 하나, revise_cancel_order는 현재 json을 반환함

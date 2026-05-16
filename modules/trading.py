@@ -420,7 +420,7 @@ def show_open_orders():
                                 rules_map = {r['code']: r for r in custom_rules}
                                 rule = rules_map.get(code)
                                 
-                                title_tag = "[체결 알림(추정)]"
+                                title_tag = f"[{type_name} 체결(추정)]" if type_name else "[체결 알림(추정)]"
                                 rule_info = ""
                                 if rule:
                                     title_tag += " [개별]"
@@ -477,7 +477,7 @@ def show_open_orders():
                                         profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                                         
                                 db_odno = db_order.get('odno', '')
-                                msg = f"✅ {title_tag} {type_name} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {db_odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                                msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {db_odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
@@ -1265,7 +1265,7 @@ def modify_order():
 
                 config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
                 
-                msg = f"🚀 [수동 주문] {full_action_name} {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}"
+                msg = f"🚀 [수동 {full_action_name}] {prdt_name} ({pdno})\n수량: {final_qty}주\n단가: {display_price}"
                 if action == "1":
                     try:
                         c_price = float(price) if price != "0" else float(api.get_current_price(pdno, is_overseas) or 0)

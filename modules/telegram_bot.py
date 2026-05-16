@@ -2253,7 +2253,28 @@ class TelegramCommander:
         rules_map = {r['code']: True for r in custom_rules}
         
         for t in trades:
-            type_str = t['type'].replace("buy", "매수").replace("sell", "매도").replace("AUTO", "자동").replace("(수동)", "").replace("수동", "")
+            raw_type = str(t['type'])
+            clean_type = raw_type.replace("buy", "매수").replace("BUY", "매수").replace("sell", "매도").replace("SELL", "매도").replace("AUTO", "자동")
+            
+            base_type = "기타"
+            is_buy = "매수" in clean_type
+            is_sell = "매도" in clean_type
+            is_mod = "정정" in clean_type
+            is_cancel = "취소" in clean_type
+            
+            if is_mod:
+                if is_buy: base_type = "매수정정"
+                elif is_sell: base_type = "매도정정"
+                else: base_type = "정정"
+            elif is_cancel:
+                if is_buy: base_type = "매수취소"
+                elif is_sell: base_type = "매도취소"
+                else: base_type = "취소"
+            elif is_buy: base_type = "매수"
+            elif is_sell: base_type = "매도"
+            
+            tag_disp = "(자동)" if "자동" in clean_type else ("(수동)" if "수동" in clean_type else "(외부)")
+            type_str = f"{base_type}{tag_disp}"
             name = t['name']
             code = t['code']
             qty = t['qty']

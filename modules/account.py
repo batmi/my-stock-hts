@@ -142,8 +142,13 @@ def sync_today_trades():
                                         trade_time = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
                                     
                                     type_cd = item.get('sll_buy_dvsn_cd')
-                                    type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
+                                    type_name = item.get('sll_buy_dvsn_cd_name')
                                     
+                                    if type_name:
+                                        type_str = type_name
+                                    else:
+                                        type_str = "매수" if type_cd == '02' else ("매도" if type_cd == '01' else "기타")
+                                        
                                     # 원 주문 유형 조회 (수동/자동 태그 반영)
                                     origin_trade = db_manager.db.get_trade_by_odno(odno)
                                     profit_amt = 0
@@ -1053,7 +1058,7 @@ def view_trade_history():
         table.add_column("시간", justify="center", style="dim", width=15, overflow="fold")
         table.add_column("주문번호", justify="center", style="dim", width=10, overflow="fold")
         # 계좌 컬럼 제거됨
-        table.add_column("유형", justify="center", width=10, no_wrap=True)
+        table.add_column("유형", justify="center", width=14, no_wrap=True)
         table.add_column("상태", justify="center", width=6, overflow="fold")
         table.add_column("종목명(코드)", justify="left", overflow="fold")
         table.add_column("수량", justify="right", width=6, overflow="fold")
@@ -1068,15 +1073,31 @@ def view_trade_history():
             clean_type = raw_type.replace("buy", "매수").replace("BUY", "매수").replace("sell", "매도").replace("SELL", "매도").replace("AUTO", "자동")
             
             base_type = "기타"
-            # [수정] 정정/취소 우선 확인
-            if "정정" in clean_type: base_type = "정정"
-            elif "취소" in clean_type: base_type = "취소"
-            elif "매수" in clean_type: base_type = "매수"
-            elif "매도" in clean_type: base_type = "매도"
+            is_buy = "매수" in clean_type
+            is_sell = "매도" in clean_type
+            is_mod = "정정" in clean_type
+            is_cancel = "취소" in clean_type
+            
+            if is_mod:
+                if is_buy: base_type = "매수정정"
+                elif is_sell: base_type = "매도정정"
+                else: base_type = "정정"
+            elif is_cancel:
+                if is_buy: base_type = "매수취소"
+                elif is_sell: base_type = "매도취소"
+                else: base_type = "취소"
+            elif is_buy:
+                base_type = "매수"
+            elif is_sell:
+                base_type = "매도"
             
             type_disp = base_type
             if base_type == "매수": type_disp = "[red]매수[/]"
             elif base_type == "매도": type_disp = "[blue]매도[/]"
+            elif base_type == "매수정정": type_disp = "[red]매수[/][magenta]정정[/]"
+            elif base_type == "매도정정": type_disp = "[blue]매도[/][magenta]정정[/]"
+            elif base_type == "매수취소": type_disp = "[red]매수[/][yellow]취소[/]"
+            elif base_type == "매도취소": type_disp = "[blue]매도[/][yellow]취소[/]"
             elif base_type == "정정": type_disp = "[magenta]정정[/]"
             elif base_type == "취소": type_disp = "[yellow]취소[/]"
             
