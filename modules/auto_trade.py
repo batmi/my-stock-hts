@@ -4337,6 +4337,11 @@ class AutoTrader:
                         db_manager.db.delete_trailing_stop(code)
                         with self._lock:
                             if code in self.trailing_stop_cache: del self.trailing_stop_cache[code]
+                            
+                    # [추가] 매수 로직(상관관계 분석 등)에서 이미 매도한 종목을 보유 중인 것으로 오인하지 않도록 메모리 잔고 즉시 차감
+                    try:
+                        item['hldg_qty'] = str(max(0, int(item.get('hldg_qty', 0)) - target_sell_qty))
+                    except: pass
 
         # 병렬 처리 실행
         max_workers = 5 if not config.session.is_simulation else 1
@@ -4377,6 +4382,9 @@ class AutoTrader:
                 
         if holdings:
             for h in holdings:
+                # [추가] 이번 루프의 매도 로직에서 수량이 0이 된 종목은 제외
+                if int(h.get('hldg_qty', 0)) <= 0:
+                    continue
                 code = h['pdno']
                 holding_codes.add(code)
                 holding_names_map[code] = h['prdt_name']
