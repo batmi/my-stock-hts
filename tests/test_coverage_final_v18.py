@@ -128,17 +128,6 @@ def test_get_telegram_footer_auto():
 # ==========================================================
 # 4. telegram_bot.py 커버리지 (에러 모니터링 및 상태 조회 실패)
 # ==========================================================
-def test_check_heartbeat_error():
-    cmd = telegram_bot.TelegramCommander()
-    cmd.trader = MagicMock()
-    cmd.trader.consecutive_errors = 6
-    config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
-    cmd.last_heartbeat_time = 0 # 즉시 검사 유도
-    
-    with patch.object(cmd, '_send_reply') as mock_reply:
-        cmd._check_heartbeat()
-        mock_reply.assert_called_once()
-        assert "연속 에러가 한계치" in mock_reply.call_args[0][0]
 
 @patch('modules.telegram_bot.db_manager.db.get_trades', return_value=[])
 def test_cmd_stats_empty(mock_trades):

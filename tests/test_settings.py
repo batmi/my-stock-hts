@@ -26,8 +26,8 @@ def test_load_dynamic_config_updates_values(temp_config_dir):
         json.dump(new_settings, f)
     
     # 2. 초기값 백업
-    original_max_holdings = config.SYSTEM_MAX_HOLDINGS
-    original_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+    original_max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
+    original_buy_score = config.settings.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     
     # config.JSON_DIR을 임시 경로로 모킹하여 테스트
     with patch("config.JSON_DIR", str(temp_config_dir)):
@@ -36,8 +36,8 @@ def test_load_dynamic_config_updates_values(temp_config_dir):
             config.load_dynamic_config()
             
             # 4. 검증
-            assert config.SYSTEM_MAX_HOLDINGS == 99
-            assert config.ANALYSIS_THRESHOLDS["BUY_SCORE"] == 9.9
+            assert config.settings.SYSTEM_MAX_HOLDINGS == 99
+            assert config.settings.ANALYSIS_THRESHOLDS["BUY_SCORE"] == 9.9
             
         finally:
             # 5. 복구 (다른 테스트에 영향 주지 않도록)
@@ -57,20 +57,20 @@ def test_load_dynamic_config_partial_update(temp_config_dir):
     with open(config_file, 'w', encoding='utf-8') as f:
         json.dump(new_settings, f)
         
-    original_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-    original_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+    original_sl = config.settings.SELL_STRATEGY["STOP_LOSS_RATE"]
+    original_tp = config.settings.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     
     with patch("config.JSON_DIR", str(temp_config_dir)):
         try:
             config.load_dynamic_config()
             
             # 변경된 값 확인
-            assert config.SELL_STRATEGY["STOP_LOSS_RATE"] == -50.0
+            assert config.settings.SELL_STRATEGY["STOP_LOSS_RATE"] == -50.0
             # 변경하지 않은 값은 그대로 유지되어야 함
-            assert config.SELL_STRATEGY["TAKE_PROFIT_RATE"] == original_tp
+            assert config.settings.SELL_STRATEGY["TAKE_PROFIT_RATE"] == original_tp
             
         finally:
-            config.SELL_STRATEGY["STOP_LOSS_RATE"] = original_sl
+            config.settings.SELL_STRATEGY["STOP_LOSS_RATE"] = original_sl
 
 def test_load_dynamic_config_file_not_found():
     """설정 파일이 없을 때 에러 없이 넘어가는지 테스트"""

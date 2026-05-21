@@ -39,7 +39,7 @@ def test_check_conclusions_filled(mock_tg, mock_db, mock_get_history, monitor):
     # Verify
     mock_db.insert_trade.assert_called()
     mock_tg.assert_called()
-    assert "체결 알림" in mock_tg.call_args[0][0]
+    assert "[매수 체결]" in mock_tg.call_args[0][0]
 
 @patch('modules.auto_trade.api.get_unfilled_orders')
 @patch('modules.auto_trade.api.revise_cancel_order')

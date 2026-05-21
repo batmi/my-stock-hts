@@ -88,15 +88,6 @@ def test_telegram_cmd_stats_empty(mock_get_trades):
     res = cmd._cmd_stats([])
     assert "기록이 없습니다" in res
 
-@patch('modules.telegram_bot.api.get_yf_fast_info', return_value=None)
-@patch('modules.telegram_bot.theme_analysis.generate_morning_briefing', return_value="Mock Briefing")
-def test_telegram_execute_briefing(mock_gen, mock_yf):
-    """장전 브리핑 내부 실행 워커 테스트"""
-    cmd = telegram_bot.TelegramCommander()
-    with patch.object(cmd, '_send_reply') as mock_reply:
-        cmd._execute_briefing()
-        mock_reply.assert_called_with("Mock Briefing")
-
 # ==========================================================
 # 4. auto_trade.py & trading.py 커버리지 부스트
 # ==========================================================

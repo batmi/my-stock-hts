@@ -182,7 +182,7 @@ def test_save_rule_weights(mock_connect):
     """가중치 DB 저장 테스트"""
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
-    mock_connect.return_value.__enter__.return_value = mock_conn
+    mock_connect.return_value = mock_conn
     mock_conn.cursor.return_value = mock_cursor
     
     auto_trade._save_rule_weights("005930", {"TREND": 5.0})

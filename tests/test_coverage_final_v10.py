@@ -52,7 +52,7 @@ def test_simulation_fill_buy(mock_insert, mock_tg, mock_get_trade, mock_balance)
     
     # Telegram alert sent
     mock_tg.assert_called()
-    assert "체결 알림(추정)" in mock_tg.call_args[0][0]
+    assert "[매수 체결(추정)]" in mock_tg.call_args[0][0]
 
 @patch('modules.auto_trade.api.get_deposit_balance')
 @patch('modules.auto_trade.api.get_domestic_balance')

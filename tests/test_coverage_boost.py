@@ -79,7 +79,7 @@ def test_ensure_db_weights_column(mock_connect):
     """DB 컬럼 추가 로직 테스트"""
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
-    mock_connect.return_value.__enter__.return_value = mock_conn
+    mock_connect.return_value = mock_conn
     mock_conn.cursor.return_value = mock_cursor
     
     mock_cursor.fetchone.return_value = ('stock_strategies',) # Table exists

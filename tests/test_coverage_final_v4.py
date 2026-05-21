@@ -68,11 +68,12 @@ def test_check_buy_conditions_max_holdings():
     
     config.SYSTEM_MAX_HOLDINGS = 5
     # 보유 종목 5개 (최대치)
-    holdings = [{'pdno': str(i), 'prdt_name': f'Stock{i}'} for i in range(5)]
+    holdings = [{'pdno': str(i), 'prdt_name': f'Stock{i}', 'hldg_qty': '10'} for i in range(5)]
     
-    with patch.object(trader, 'log') as mock_log:
-        trader._check_buy_conditions(holdings, {'d2_deposit': 1000000})
-        assert any("최대 보유 종목 수" in str(c) for c in mock_log.call_args_list)
+    with patch.object(trader, '_analyze_candidates', return_value=[{'code': '005930', 'name': 'Samsung', 'price': 50000, 'score': 9.0, 'rsi': 50.0, 'adx': 25.0, 'cci': 100.0, 'vol_strength': 150.0, 'atr': 500}]):
+        with patch.object(trader, 'log') as mock_log:
+            trader._check_buy_conditions(holdings, {'d2_deposit': 1000000})
+            assert any("최대 보유 종목 수" in str(c) for c in mock_log.call_args_list)
 
 # --- Analysis ---
 @patch('urllib.request.urlretrieve')

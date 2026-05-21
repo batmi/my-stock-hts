@@ -11,11 +11,17 @@ def test_handle_message_valid(commander):
     """유효한 명령어 처리 테스트"""
     msg = {"text": "/status", "chat": {"id": config.TELEGRAM_CHAT_ID}}
     
-    with patch.object(commander, '_send_reply') as mock_reply:
-        # [수정] _cmd_status 대신 내부에서 호출하는 trader.get_status_message를 Mocking
-        with patch.object(commander.trader, 'get_status_message', return_value="System OK"):
+    mock_handler = MagicMock()
+    
+    # 백그라운드 스레드 풀 실행을 가로채어 동기적으로 즉시 실행하도록 변경
+    def fake_submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+        return MagicMock()
+        
+    with patch.dict(commander.command_handlers, {'/status': mock_handler}):
+        with patch('concurrent.futures.ThreadPoolExecutor.submit', new=fake_submit):
             commander._handle_message(msg)
-            mock_reply.assert_any_call("System OK")
+            mock_handler.assert_called_once()
 
 def test_handle_message_invalid_chat_id(commander):
     """잘못된 Chat ID 무시 테스트"""

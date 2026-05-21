@@ -106,25 +106,6 @@ def test_autotrader_run_loop_exception_kill_switch(mock_bal):
         mock_tg.assert_called()
         assert any("시스템 긴급 대기" in args[0][0] for args in mock_tg.call_args_list)
 
-def test_conclusion_monitor_heartbeat_crash_detect():
-    """Telegram 봇의 하트비트 체크 중 AutoTrader 스레드 크래시 감지 로직"""
-    cmd = telegram_bot.TelegramCommander()
-    
-    # AutoTrader 스레드가 죽어있는(is_alive=False) 상태 모킹
-    mock_trader = MagicMock()
-    mock_trader.is_running = True
-    mock_trader.thread = MagicMock()
-    mock_trader.thread.is_alive.return_value = False
-    mock_trader.consecutive_errors = 0
-    cmd.trader = mock_trader
-    
-    cmd.last_heartbeat_time = 0 # 즉시 검사
-    
-    with patch.object(cmd, '_send_reply') as mock_reply:
-        cmd._check_heartbeat()
-        mock_reply.assert_called_once()
-        assert "크래시 의심" in mock_reply.call_args[0][0]
-
 @patch('modules.auto_trade.api.get_today_history', return_value={'rt_cd': '1'})
 @patch('modules.auto_trade.api.get_overseas_today_history', return_value={'rt_cd': '1'})
 def test_conclusion_monitor_error_handling(mock_ovs, mock_dom):

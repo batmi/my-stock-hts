@@ -191,7 +191,7 @@ def test_enrich_rules_with_weights(mock_connect):
     """룰 가중치 병합 테스트"""
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
-    mock_connect.return_value.__enter__.return_value = mock_conn
+    mock_connect.return_value = mock_conn
     mock_conn.cursor.return_value = mock_cursor
     
     # Mock DB response
@@ -443,11 +443,12 @@ def test_check_buy_conditions_max_holdings_limit():
     config.SYSTEM_MAX_HOLDINGS = 2
     
     # Holdings 2
-    holdings = [{'pdno': '1', 'prdt_name': 'Stock1'}, {'pdno': '2', 'prdt_name': 'Stock2'}]
+    holdings = [{'pdno': '1', 'prdt_name': 'Stock1', 'hldg_qty': '10'}, {'pdno': '2', 'prdt_name': 'Stock2', 'hldg_qty': '10'}]
     
-    with patch.object(trader, 'log') as mock_log:
-        trader._check_buy_conditions(holdings, {'d2_deposit': 1000000}, is_market_open=True)
-        assert any("최대 보유 종목 수" in str(c) for c in mock_log.call_args_list)
+    with patch.object(trader, '_analyze_candidates', return_value=[{'code': '005930', 'name': 'Samsung', 'price': 50000, 'score': 9.0, 'rsi': 50.0, 'adx': 25.0, 'cci': 100.0, 'vol_strength': 150.0, 'atr': 500}]):
+        with patch.object(trader, 'log') as mock_log:
+            trader._check_buy_conditions(holdings, {'d2_deposit': 1000000}, is_market_open=True)
+            assert any("최대 보유 종목 수" in str(c) for c in mock_log.call_args_list)
 
 # --- api.py additional ---
 

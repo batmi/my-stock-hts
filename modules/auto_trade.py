@@ -111,67 +111,79 @@ class OrderStatus:
 # [추가] DB 스키마 보정 및 가중치 관리 헬퍼 함수
 def _ensure_db_weights_column_logic():
     """stock_strategies 테이블에 weights 컬럼이 없으면 추가"""
+    conn = None
     try:
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
-            if not cursor.fetchone(): return
+        conn = sqlite3.connect(config.DB_FILE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
+        if not cursor.fetchone(): return
 
-            cursor.execute("PRAGMA table_info(stock_strategies)")
-            columns = [info[1] for info in cursor.fetchall()]
-            if 'weights' not in columns:
-                cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
-                conn.commit()
+        cursor.execute("PRAGMA table_info(stock_strategies)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'weights' not in columns:
+            cursor.execute("ALTER TABLE stock_strategies ADD COLUMN weights TEXT")
+            conn.commit()
     except Exception as e:
         logger.error(f"DB 스키마 업데이트 실패: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def _save_rule_weights_logic(code, weights):
     """가중치 정보를 DB에 직접 저장 (JSON 직렬화)"""
+    conn = None
     try:
         _ensure_db_weights_column()
         weights_json = json.dumps(weights) if weights else None
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE stock_strategies SET weights = ? WHERE code = ?", (weights_json, code))
-            conn.commit()
+        conn = sqlite3.connect(config.DB_FILE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE stock_strategies SET weights = ? WHERE code = ?", (weights_json, code))
+        conn.commit()
     except Exception as e:
         logger.error(f"가중치 저장 실패: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def _enrich_rules_with_weights_logic(rules):
     """DB에서 weights 컬럼을 조회하여 룰 리스트에 병합"""
     if not rules: return rules
+    conn = None
     try:
         _ensure_db_weights_column()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT code, weights FROM stock_strategies")
-            rows = cursor.fetchall()
+        conn = sqlite3.connect(config.DB_FILE_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, weights FROM stock_strategies")
+        rows = cursor.fetchall()
+        
+        weights_map = {}
+        for row in rows:
+            if row['weights']:
+                try:
+                    weights_map[row['code']] = json.loads(row['weights'])
+                except: pass
+        
+        # Row 객체일 수 있으므로 dict로 변환하며 병합
+        new_rules = []
+        for r in rules:
+            r_dict = dict(r)
+            if r_dict['code'] in weights_map:
+                r_dict['weights'] = weights_map[r_dict['code']]
+            elif 'weights' not in r_dict:
+                r_dict['weights'] = None
             
-            weights_map = {}
-            for row in rows:
-                if row['weights']:
-                    try:
-                        weights_map[row['code']] = json.loads(row['weights'])
-                    except: pass
-            
-            # Row 객체일 수 있으므로 dict로 변환하며 병합
-            new_rules = []
-            for r in rules:
-                r_dict = dict(r)
-                if r_dict['code'] in weights_map:
-                    r_dict['weights'] = weights_map[r_dict['code']]
-                elif 'weights' not in r_dict:
-                    r_dict['weights'] = None
-                
-                # None 값 초기화
-                if r_dict.get('use_atr_stop') is None:
-                    r_dict['use_atr_stop'] = 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0
-                new_rules.append(r_dict)
-            return new_rules
+            # None 값 초기화
+            if r_dict.get('use_atr_stop') is None:
+                r_dict['use_atr_stop'] = 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0
+            new_rules.append(r_dict)
+        return new_rules
     except Exception as e:
         logger.error(f"가중치 로드 실패: {e}")
         return rules
+    finally:
+        if conn:
+            conn.close()
 
 # [수정] 큐 시스템을 통한 실행 래퍼 함수들
 def _ensure_db_weights_column():

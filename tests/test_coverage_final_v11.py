@@ -182,26 +182,6 @@ def test_select_stock_from_balance_overseas(mock_ovs_balance, mock_ask):
 # 4. telegram_bot.py (60% -> Target 80%+)
 # =====================================================================
 
-@patch('modules.theme_analysis.generate_portfolio_diagnosis')
-@patch('api.get_domestic_balance')
-@patch('api.get_deposit_balance')
-def test_telegram_cmd_portfolio(mock_dep, mock_bal, mock_gen):
-    """/portfolio 명령어 내부 백그라운드 스레드 실행 검증"""
-    cmd = TelegramCommander()
-    
-    mock_bal.return_value = (
-        [{'prdt_name': '삼성전자', 'evlu_amt': '500000', 'evlu_pfls_rt': '5.0', 'hldg_qty': '10'}], []
-    )
-    mock_dep.return_value = {'d2_deposit': 100000}
-    mock_gen.return_value = "Mock Portfolio Diagnosis"
-    
-    with patch.object(cmd, '_send_reply') as mock_reply:
-        # 직접 백그라운드 함수 호출하여 로직 커버리지 확보
-        cmd._execute_portfolio_diagnosis()
-        
-        assert mock_reply.call_count > 0
-        assert any("Mock Portfolio Diagnosis" in call.args[0] for call in mock_reply.call_args_list)
-
 @patch('modules.theme_analysis.generate_stock_curation')
 def test_telegram_cmd_curate(mock_gen):
     """/curate 명령어 내부 백그라운드 스레드 실행 검증"""

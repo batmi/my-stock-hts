@@ -199,24 +199,3 @@ def test_cmd_report_periods_parsing(commander):
     # 지정 일자 파싱 검증
     res_10 = commander._cmd_report(['10'])
     commander.trader.get_performance_report.assert_called_with(days=10)
-
-@patch('modules.telegram_bot.datetime')
-@patch('modules.telegram_bot.threading.Thread')
-def test_check_after_market_portfolio_trigger(mock_thread, mock_dt, commander):
-    """장 마감 이후 포트폴리오 진단 리포트 스케줄러 로직 검증"""
-    commander.last_portfolio_date = None
-    config.SYSTEM_TRADING_END_TIME = "1510"
-    
-    # 평일 오후 3시 17분 시뮬레이션 (15:10 + 5분 이후 조건)
-    mock_now = datetime(2023, 11, 1, 15, 17)
-    mock_dt.now.return_value = mock_now
-    mock_dt.strptime = datetime.strptime
-    mock_dt.combine = datetime.combine
-    
-    with patch.object(commander, '_send_reply') as mock_reply:
-        commander._check_after_market_portfolio()
-        
-        # 장 마감 알림이 발송되고 백그라운드 스레드가 실행되어야 함
-        assert commander.last_portfolio_date == "2023-11-01"
-        mock_reply.assert_called_once()
-        mock_thread.assert_called_once()

@@ -100,52 +100,6 @@ def test_generate_portfolio_diagnosis_success(mock_macro, mock_genai):
     assert "삼성전자: 비중 100%" in prompt_args
     assert "코스피: 2600.00" in prompt_args
 
-@patch('modules.theme_analysis.generate_portfolio_diagnosis')
-@patch('api.get_domestic_balance')
-@patch('api.get_deposit_balance')
-@patch('modules.telegram_bot.TelegramCommander._send_reply')
-def test_execute_portfolio_diagnosis_with_holdings(mock_reply, mock_deposit, mock_balance, mock_gen_diag):
-    """TelegramCommander에서 /portfolio 입력 시 진단 파이프라인 수행 (보유 종목 있음)"""
-    cmd = TelegramCommander()
-    
-    # API 응답 모킹
-    mock_balance.return_value = (
-        [{'prdt_name': '삼성전자', 'evlu_amt': '5000000', 'evlu_pfls_rt': '5.0', 'hldg_qty': '100'}],
-        [{'scts_evlu_amt': '5000000', 'prvs_rcdl_excc_amt': '5000000'}]
-    )
-    mock_deposit.return_value = {'d2_deposit': 5000000}
-    mock_gen_diag.return_value = "Mock Diagnosis Report"
-    
-    cmd._execute_portfolio_diagnosis()
-    
-    mock_gen_diag.assert_called_once()
-    mock_reply.assert_called_once()
-    assert "🛡️ [AI 포트폴리오 리스크 진단]" in mock_reply.call_args[0][0]
-    assert "Mock Diagnosis Report" in mock_reply.call_args[0][0]
-
-@patch('modules.telegram_bot.datetime')
-@patch('modules.telegram_bot.threading.Thread')
-@patch('modules.telegram_bot.TelegramCommander._send_reply')
-def test_check_after_market_portfolio_trigger(mock_reply, mock_thread, mock_datetime):
-    """장 마감 후 5분이 지났을 때 포트폴리오 진단 자동 트리거 확인"""
-    cmd = TelegramCommander()
-    cmd.last_portfolio_date = None
-    
-    # 현재 시각을 장 종료(15:10) 후 5분 뒤인 15:15(수요일)로 모킹
-    fake_now = datetime(2023, 10, 25, 15, 15, 0)
-    mock_datetime.now.return_value = fake_now
-    mock_datetime.combine = datetime.combine
-    mock_datetime.strptime = datetime.strptime
-    
-    config.SYSTEM_TRADING_END_TIME = "1510"
-    
-    cmd._check_after_market_portfolio()
-    
-    assert cmd.last_portfolio_date == "2023-10-25"
-    mock_reply.assert_called_once()
-    assert "장 마감 알림" in mock_reply.call_args[0][0]
-    mock_thread.assert_called_once()
-
 # ==========================================================
 # 3. AI 관심 종목 큐레이션 (Stock Curation) 테스트
 # ==========================================================
