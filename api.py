@@ -54,11 +54,19 @@ def is_holiday_today():
     if datetime.now().weekday() > 4:
         _HOLIDAY_CACHE[today_str] = True
         return True
-    res = check_holiday(today_str)
-    if res is not None:
-        _HOLIDAY_CACHE[today_str] = res
-        return res
-    return False
+        
+        # 실전투자 모드일 경우에만 API 우선 조회 시도
+        if not config.session.is_simulation:
+            res = check_holiday(today_str)
+            if res is not None:
+                _HOLIDAY_CACHE[today_str] = res
+                return res
+                
+        # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
+        is_holiday = get_holiday_name(today_str, country='KR') is not None
+        _HOLIDAY_CACHE[today_str] = is_holiday
+        
+        return is_holiday
 
 def check_us_holiday(date_str):
     """한국투자증권 해외주식(미국) 휴장일 조회 API 호출"""
@@ -87,11 +95,19 @@ def is_us_holiday_today():
     if datetime.now().weekday() > 4:
         _HOLIDAY_CACHE[cache_key] = True
         return True
-    res = check_us_holiday(today_str)
-    if res is not None:
-        _HOLIDAY_CACHE[cache_key] = res
-        return res
-    return False
+            
+        # 실전투자 모드일 경우에만 API 우선 조회 시도
+        if not config.session.is_simulation:
+            res = check_us_holiday(today_str)
+            if res is not None:
+                _HOLIDAY_CACHE[cache_key] = res
+                return res
+                
+        # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
+        is_holiday = get_holiday_name(today_str, country='US') is not None
+        _HOLIDAY_CACHE[cache_key] = is_holiday
+        
+        return is_holiday
 
 def get_holiday_name(date_str, country='KR'):
     """holidays 라이브러리를 이용하여 공휴일 이름을 반환합니다."""
@@ -102,6 +118,7 @@ def get_holiday_name(date_str, country='KR'):
         if country == 'KR':
             h_cal = holidays.KR()
             h_cal[dt.replace(month=5, day=1)] = "근로자의 날" # 법정공휴일이 아닌 근로자의 날 강제 추가
+            h_cal[dt.replace(month=12, day=31)] = "연말 폐장일" # 한국거래소(KRX) 연말 휴장일 강제 추가
             name = h_cal.get(dt)
             return name
         elif country == 'US':
@@ -862,6 +879,9 @@ class ThrottledSession(requests.Session):
                                 if msg_cd == 'EGW00201':
                                     should_retry = True
                                     retry_reason = f"Rate Limit Exceeded (EGW00201): {msg1_disp}"
+                                elif msg_cd == 'MCA00124' and 'chk-holiday' in url and is_sim_server:
+                                    # 모의투자 서버에서 휴장일 조회 미지원 에러 로그 무시 (모의투자 모드에서만 동작하도록 명확화)
+                                    pass
                                 else:
                                     # OPSQ2000 등 원장 거부 에러는 중복 주문 위험이 있으므로 재시도하지 않음
                                     req_body = kwargs.get('data', '')
@@ -2198,6 +2218,9 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
             "CTX_AREA_NK200": ""
         }
         
+        # [Fix] 모의투자 환경에서 SORT_SQN 누락 시 에러(OPSQ2001) 발생 대응
+        params["SORT_SQN"] = "01" if not config.session.is_simulation else ""
+        
         res = call_api(url, "overseas", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
         if res.get('rt_cd') == '0':
             all_trades.extend(res.get('output', []))
@@ -2282,9 +2305,12 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     for exc in target_exchanges:
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-            "OVRS_EXCG_CD": exc, "SORT_SQN": "01", # [Fix] KIS API 실제 요구 필드명인 SORT_SQN으로 원복
+            "OVRS_EXCG_CD": exc, 
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
         }
+        # [Fix] 모의투자 서버는 SORT_SQN 파라미터가 없으면 에러가 발생할 수 있으므로 빈 값으로 전송
+        params["SORT_SQN"] = "01" if not config.session.is_simulation else ""
+            
         res = call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["OPEN_ORDERS"], "overseas", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':
             orders = res.get('output', [])

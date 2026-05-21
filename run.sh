@@ -85,7 +85,16 @@ if [ -n "$MISSING_LIBS" ]; then
     fi
 fi
 
-# 8. 프로그램 실행
+# 8. holidays 패키지 자동 업데이트 (임시공휴일 최신화)
+echo "  - holidays 패키지 최신 버전 동기화 중..."
+$PIP_PATH install --upgrade holidays $PIP_FLAGS > /dev/null 2>&1
+
+# 9. yfinance 캐시 자동 정리 (DB Lock 에러 사전 방지)
+echo "  - yfinance 캐시 데이터 정리 중..."
+rm -rf ~/.cache/py-yfinance/* > /dev/null 2>&1
+rm -rf ~/Library/Caches/py-yfinance/* > /dev/null 2>&1
+
+# 10. 프로그램 실행
 echo ""
 echo "--- 프로그램 실행 ---"
 $PYTHON_PATH main.py "$@"
