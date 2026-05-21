@@ -1311,6 +1311,12 @@ def _run_tradingview_screener():
                                         if fetched_name: kor_name = fetched_name
                                 except Exception as e:
                                     logger.debug(f"Screener domestic name fallback error: {e}")
+                                    
+                            # [추가] 네이버와 한국투자증권 API 양쪽 모두에서 정상적인 한글명을 가져오지 못해 
+                            # 여전히 코드가 이름으로 남아있다면, 상장폐지/만기된 종목이므로 결과에서 제외합니다.
+                            if kor_name == ticker:
+                                continue
+                                
                             if kor_name: name = kor_name
 
                         stock_map[ticker] = name
