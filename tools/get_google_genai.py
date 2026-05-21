@@ -19,7 +19,7 @@ else:
         print(f"모델 목록 조회 실패: {e}")
 
     # 3. 모델 설정 (가장 최신인 3.1 Flash-Lite 사용)
-    model_name = "gemini-3.1-flash-lite-preview"
+    model_name = "gemini-3.1-flash-lite"
     
     print(f"\n--- 모델 테스트 ({model_name}) ---")
     try:

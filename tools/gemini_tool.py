@@ -16,7 +16,7 @@ def run_gemini_tool():
 
     # 3. 모델 설정 (가장 최신인 3.1 Flash-Lite 사용)
     # 분석 위주의 작업을 위해 최적화된 모델입니다.
-    model_name = "gemini-3.1-flash-lite-preview"
+    model_name = "gemini-3.1-flash-lite"
     
     try:
         model = genai.GenerativeModel(

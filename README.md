@@ -92,7 +92,7 @@ pip install -r requirements.txt
 *   `AUTO_ACC_NUM`: (선택) 자동매매 전용 계좌번호
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: 텔레그램 알림 설정
 *   `GEMINI_API_KEY`: (선택) 테마 분석용 Google Gemini API Key (발급받기)
-*   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-3.1-flash-lite-preview`)
+*   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-3.1-flash-lite`)
 
 *또는 `config.py` 파일을 직접 수정하여 기본 설정을 변경할 수 있습니다.*
 
@@ -312,7 +312,7 @@ chmod +x run.sh
     8.  **🎯 AI 관심 종목 큐레이션 (`/curate`)**: 실시간 매크로 지표와 시장 상황을 종합하여 현재 자금이 몰리는 주도 테마와 대장주를 발굴, 사용자에게 관심 종목 편입 후보로 추천합니다.
 *   **기타 트렌드 분석**:
     *   **네이버 테마 순위**: 국내 실시간 등락률 상위 테마 및 주도주 상세 정보를 크롤링하여 제공합니다.
-*   **설정 방법**: 이 기능들을 사용하려면 구글 AI Studio에서 무료로 발급받을 수 있는 `GEMINI_API_KEY`를 `config.py` 또는 환경 변수(`.env`)에 설정해야 합니다. (최신 `gemini-3.1-flash-lite-preview` 등의 모델 완벽 지원)
+*   **설정 방법**: 이 기능들을 사용하려면 구글 AI Studio에서 무료로 발급받을 수 있는 `GEMINI_API_KEY`를 `config.py` 또는 환경 변수(`.env`)에 설정해야 합니다. (최신 `gemini-3.1-flash-lite` 등의 모델 완벽 지원)
 
 ### 8. 모의투자 환경 유의사항 (Known Issues)
 *   **미체결 내역 조회 오류**: 한국투자증권 모의투자 시스템의 API 버그로 인해, 주문이 정상적으로 접수되었음에도 `미체결 내역 조회` API가 빈 리스트를 반환하는 현상이 있습니다.
