@@ -15,6 +15,8 @@ from rich.prompt import Prompt
 from rich.padding import Padding
 import utils
 import context # [추가]
+from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
+from modules.executors import ai_executor, io_executor
 
 # [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
 # (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)
@@ -41,7 +43,8 @@ def _init_theme_db():
                     )
                 """)
             conn.commit()
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"_init_theme_db error: {e}")
 
 def _save_theme_analysis(result):
     try:
@@ -106,7 +109,9 @@ def fetch_naver_themes():
                 rate3 = float(rate3_txt) if rate3_txt else 0.0
                 
                 themes.append({'name': name, 'rate': rate, 'rate3': rate3, 'link': link})
-            except: continue
+            except Exception as e:
+                logger.debug(f"Theme parsing row error: {e}")
+                continue
             
         return themes
     except Exception as e:
@@ -217,7 +222,8 @@ def _fetch_theme_detail(theme):
         theme['leading'] = ", ".join(leading)
         theme['leading_stocks'] = stocks[:2]
         
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Theme detail fetch error: {e}")
         theme['leading'] = "-"
 
 def evaluate_market_indicator(name, price, yh_rate=None):
@@ -399,22 +405,22 @@ def _get_macro_context_str():
                                     prev = price
                                     price = est_yield
                                     display_name = f"{name}(선물적용)"
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"Macro context treasury future fallback error: {e}")
                 
                 if price is not None and not math.isnan(price):
                     rate = ((price - prev) / prev * 100) if (prev and prev > 0) else 0.0
                     return name, display_name, price, rate, yh
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Macro context fetch_ticker error for {name}: {e}")
         return name, name, None, None, None
 
     # 병렬 처리로 속도 최적화 (API Rate Limit을 고려하여 max_workers=5)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(fetch_ticker, name, ticker) for name, ticker in core_tickers]
-        for future in concurrent.futures.as_completed(futures):
-            orig_name, display_name, price, rate, yh = future.result()
-            if price is not None:
-                results[orig_name] = (display_name, price, rate, yh)
+    futures = [io_executor.submit(fetch_ticker, name, ticker) for name, ticker in core_tickers]
+    for future in concurrent.futures.as_completed(futures):
+        orig_name, display_name, price, rate, yh = future.result()
+        if price is not None:
+            results[orig_name] = (display_name, price, rate, yh)
 
     # 원래 순서대로 출력
     for name, _ in core_tickers:
@@ -469,38 +475,9 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             if custom_prompt:
-                prompt = f"""
-                [현재 시각: {now} (KST)]
-                {custom_prompt}
-                """
+                prompt = prompts.MARKET_TRENDS_CUSTOM_PROMPT.format(now=now, custom_prompt=custom_prompt)
             else:
-                prompt = f"""
-                [현재 시각: {now} (KST)]
-                {macro_context}
-                당신은 여의도 최고의 퀀트 전략가이자 수석 주식 분석가입니다. 
-                위 제공된 [시스템 제공 실시간 핵심 매크로 지표]의 수치와 [현재 상태]를 절대적인 팩트로 삼고, 오늘 시장을 지배하는 '핵심 주도 테마 TOP 5' 리포트를 작성해 주세요.
-                (※ 제공된 지표의 현재 상태 평가를 바탕으로 시장의 거시적 추세를 분석하세요.)
-
-                반드시 다음의 상세 가이드라인을 엄격히 준수하여 분량을 충분히 확보하고 깊이 있게 작성해야 합니다:
-
-                1. 글로벌 정세 및 매크로 브리핑: 글로벌 지정학적 이슈, 핵심 매크로 지표가 투심에 미치는 영향을 분석할 것.
-
-                2. 핵심 주도 테마 요약 표 (Markdown Table 필수):
-                  - 표의 컬럼: [순위 | 테마명 | 상승 강도 | 핵심 트리거(한 줄 요약) | 대장주 및 관련주]
-
-                3. 테마별 딥다이브 심층 분석 및 대응 전략:
-                  각 테마별로 다음 내용을 서술: 상승 배경, 밸류체인 연동성, 주도주 기술적 위치, 리스크 대응.
-
-                4. 향후 체크포인트 (Upcoming Events):
-                  - 이번 주 또는 단기적으로 방향성을 바꿀 수 있는 주요 일정 2~3가지 제시.
-
-                5. 보고서 출력 형식:
-                  - 도입부: [🌟 마켓 브리핑, 매크로 및 글로벌 정세 요약]
-                  - 요약부: [📊 오늘의 핵심 테마 TOP 5 요약 표] (반드시 표 형태로 출력)
-                  - 본문: [🔍 테마별 심층 분석 (Deep Dive)] (각 테마별로 소제목을 달아 상세히 서술)
-                  - 일정: [📅 단기 핵심 체크포인트]
-                  - 결론: [💡 수석 전략가의 최종 투자 총평]
-                """
+                prompt = prompts.MARKET_TRENDS_PROMPT.format(now=now, macro_context=macro_context)
 
             task_ai = progress.add_task(f"[cyan]Google Gemini가 시장 데이터를 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
@@ -520,13 +497,11 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                 
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 호출 대기 시작")
                 
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(model.generate_content, prompt)
+                future = ai_executor.submit(model.generate_content, prompt)
                 try:
                     response = future.result(timeout=90.0)
-                    executor.shutdown(wait=False)
                 except concurrent.futures.TimeoutError:
-                    executor.shutdown(wait=False)
+                    future.cancel()
                     raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
                         
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
@@ -566,28 +541,8 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prompt = f"""
-    [현재 시각: {now} (KST)]
-    당신은 여의도 최고의 퀀트 전략가이자 주식 분석가입니다.
-    다음은 '{name}({code})' 종목의 현재 기술적 분석 상태입니다.
+    prompt = prompts.STOCK_ANALYSIS_PROMPT.format(now=now, name=name, code=code, tech_info_str=tech_info_str)
     
-    [기술적 분석 요약]
-    {tech_info_str}
-    
-    먼저 '{name}' 기업이 속한 산업 분야와 대표 제품/서비스 등 기본적인 기업 개요를 브리핑해 주세요.
-    그런 다음, 이 기술적 데이터를 바탕으로 '{name}' 종목과 관련된 주요 모멘텀, 기업 가치, 최근 시장에서 부각된 핵심 이슈들을 아는 대로 요약해 주세요.
-    (주의: 실시간 검색이 불가능하므로, 가짜 뉴스나 존재하지 않는 가짜 URL 링크를 절대 만들어내지 마세요. 확실한 정보만 제공하세요.)
-    마지막으로 이 두 가지(차트 상태 + 뉴스/모멘텀)를 결합하여 향후 주가 방향성에 대한 '심층 진단 리포트'를 작성해 주세요.
-    
-    가독성을 위해 적절한 줄바꿈과 불릿 포인트(-)를 사용하되, 마크다운 기호(#, *, > 등)나 이모티콘은 절대 사용하지 말고 평문으로 깔끔하게 작성해 주세요.
-    
-    출력 형식:
-    [기업 개요] (산업 분야, 대표 제품/비즈니스 모델 등 기본 설명)
-    [기술적 분석 해석] (시스템이 제공한 퀀트 점수와 지표 상태에 대한 전문가의 해석. 특히 ADX의 추세 강도와 DMI의 방향성(+DI, -DI 우위)을 결합하여 현재 추세를 명확히 진단해 주세요.)
-    [핵심 모멘텀 및 이슈 요약] (주요 재료 및 모멘텀 요약. 가짜 링크 금지)
-    [차트와 재료의 조화] (기술적 위치와 재료의 시너지 분석)
-    [최종 투자 전략] (매수/보유/관망/매도 의견 및 리스크, 주요 지지/저항 라인이나 목표가 등 러프한 가이드 제시)
-    """
     logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 종목 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
@@ -599,13 +554,11 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         )
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
         
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 응답 수신 성공")
@@ -632,37 +585,9 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     if mode == 'monte_carlo':
-        prompt = f"""
-        [현재 시각: {now} (KST)]
-        당신은 여의도 최고의 퀀트 전략가이자 시스템 트레이딩 전문가입니다.
-        다음은 '{name}({code})' 종목에 대해 가격 노이즈와 체결 오차를 반영하여 1,000회 반복 수행한 몬테카를로 백테스팅 시뮬레이션 결과입니다.
-        
-        {backtest_info}
-        
-        이 백테스팅 결과를 바탕으로 다음 항목들을 심층 분석해 주세요:
-        
-        1. 🎲 [전략 견고성 평가]: 노이즈가 주입된 1,000번의 시뮬레이션에서 수익 발생 확률, 평균 수익률, 그리고 하위 5% 최악의 경우(VaR, CVaR)를 종합하여 이 전략이 시장의 불확실성을 얼마나 잘 견뎌내는지(Robustness) 평가해 주세요. 전략이 운에 좌우되는지 통계적 우위가 있는지 진단해 주세요.
-        2. ⚠️ [테일 리스크 분석]: 평균 최대 낙폭(MDD)과 최악의 낙폭을 고려했을 때, 이 전략을 실제 운용할 경우 발생할 수 있는 극단적 위험(Tail Risk)에 대해 경고하고 자금 관리 측면에서 어떻게 대비해야 하는지 조언해 주세요.
-        3. 💡 [실전 운용 조언]: 현재 적용된 파라미터로 실전에 투입해도 될지 최종 의견을 제시하고, 만약 개선이 필요하다면 어떤 방향(예: 보수적 비중 조절, 손절폭 수정 등)으로 수정해야 할지 제안해 주세요.
-        
-        터미널 화면에서 읽기 편하도록 간결하고 명확하게, 불릿 포인트(•)와 이모지를 적극적으로 활용하여 작성해 주세요.
-        """
+        prompt = prompts.BACKTEST_MONTE_CARLO_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
     else:
-        prompt = f"""
-        [현재 시각: {now} (KST)]
-        당신은 여의도 최고의 퀀트 전략가이자 시스템 트레이딩 전문가입니다.
-        다음은 '{name}({code})' 종목에 대해 단일 과거 데이터를 바탕으로 현재 트레이딩 전략을 적용한 백테스팅 결과입니다.
-        
-        {backtest_info}
-        
-        이 백테스팅 결과를 바탕으로 다음 항목들을 심층 분석해 주세요:
-        
-        1. 📊 [전략 성과 평가]: 수익률, 승률, 평균 수익/손실률, 손익비(Profit Factor), 샤프지수 등을 종합하여 현재 전략이 이 종목의 특성(변동성, 추세성 등)과 얼마나 잘 맞는지 평가해 주세요.
-        2. ⚠️ [리스크 분석]: 최대 낙폭(MDD) 및 손익 구조를 분석하여 전략의 단점이나 취약한 시장 상황(예: 횡보장, 급락장 등)을 진단하고, 심리적/자금 관리 측면에서 주의할 점을 짚어 주세요.
-        3. 💡 [최적 파라미터 설정 조언]: 현재 적용된 파라미터와 시스템이 산출한 최적화 추천값(매수 점수, RSI, 익절/손절률, 가중치 등)을 비교 분석하여, 이 종목에 가장 적합한 매수/매도 조건을 구체적으로 제안해 주세요.
-        
-        터미널 화면에서 읽기 편하도록 간결하고 명확하게, 불릿 포인트(•)와 이모지를 적극적으로 활용하여 작성해 주세요.
-        """
+        prompt = prompts.BACKTEST_SINGLE_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
@@ -673,13 +598,11 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
         )
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 호출 대기 시작")
         
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 응답 수신 성공")
@@ -701,39 +624,17 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
     if genai is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
-    prompt = f"""
-    당신은 여의도 최고의 퀀트 전략가입니다.
-    방금 시스템 트레이딩에 의해 다음 종목의 매도가 완료되었습니다.
+    prompt = prompts.TRADING_AUTOPSY_PROMPT.format(name=name, code=code, buy_time=buy_time, buy_score=buy_score, holding_days=holding_days, profit_rate=profit_rate, sell_reason=sell_reason)
     
-    [매매 정보]
-    • 종목명: {name}({code})
-    • 진입 일시: {buy_time}
-    • 진입 당시 퀀트 점수: {buy_score}점 (10점 만점)
-    • 보유 기간: {holding_days}일
-    • 최종 수익률: {profit_rate:+.2f}%
-    • 청산 사유: {sell_reason}
-    
-    이 거래가 통계적으로 옳은 결정이었는지, 아니면 시장 이슈 때문이었는지 구글 검색을 통해 해당 기간의 뉴스를 파악하여 객관적으로 리뷰해주세요.
-    수익이 났다면 성공 요인을, 손실이 났다면 실패 요인(함정, 휩쏘, 돌발 악재 등)을 분석하고, 향후 파라미터(손절폭, 익절 등) 조정을 위한 조언을 1줄로 남겨주세요.
-    
-    출력 형식:
-    🤖 수석 전략가 분석:
-    (분석 내용)
-    
-    💡 조언:
-    (1~2줄의 핵심 조언)
-    """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
@@ -750,39 +651,17 @@ def generate_portfolio_diagnosis(portfolio_str):
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
     macro_context = _get_macro_context_str()
-    prompt = f"""
-    당신은 포트폴리오 리스크 관리 및 자산 배분 전문가입니다.
-    현재 운용 중인 시스템 트레이딩 계좌의 포트폴리오 현황과 핵심 매크로 지표 상황입니다.
+    prompt = prompts.PORTFOLIO_DIAGNOSIS_PROMPT.format(portfolio_str=portfolio_str, macro_context=macro_context)
     
-    [현재 포트폴리오]
-    {portfolio_str}
-    
-    {macro_context}
-    
-    위 데이터를 바탕으로 단순 증권사 업종 분류를 넘어서, 실제 이 기업들의 비즈니스 모델이 특정 테마(AI, 금리, 수출 등)에 얼마나 편중되어 있는지 분석해 주세요.
-    그리고 현재 매크로 상황을 고려할 때 이 포트폴리오의 가장 큰 취약점(Risk)은 무엇인지 파악하고, 포트폴리오 안정성을 높이기 위한 리밸런싱 및 방어주(헷지) 편입 조언을 제공해 주세요.
-    
-    출력 형식:
-    📊 섹터/테마 편중도 요약
-    (요약 내용)
-    
-    🔍 숨겨진 리스크 분석 (Correlation Risk)
-    (분석 내용)
-    
-    💡 리밸런싱 및 대응 제안 (Action Plan)
-    (대체/추가할 섹터 등 구체적 대응 전략)
-    """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
         logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 호출 대기 시작")
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
         logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
@@ -799,38 +678,8 @@ def generate_morning_briefing(market_data_str):
         return None
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prompt = f"""
-    [현재 시각: {now} (KST)]
-    당신은 글로벌 매크로 경제 전문가이자 한국 증시 투자 전략가입니다.
-    아래는 지난밤 마감된 글로벌 주요 지수 및 지표 데이터입니다.
+    prompt = prompts.MORNING_BRIEFING_PROMPT.format(now=now, market_data_str=market_data_str)
     
-    [글로벌 마감 데이터]
-    {market_data_str}
-    
-    [시장 지표 해석 가이드]
-    * 각 지표 옆에 표시된 "[현재 상태: ...]"는 시스템이 사용자 설정 룰에 따라 절대적 수치를 기준으로 미리 평가한 결과입니다.
-    * 단순 1일 등락률에 매몰되어 "급락/하락세"로 오판하지 말고, 이 [현재 상태]를 최우선 기준으로 삼아 거시 경제와 추세를 해석하세요.
-    
-    위 데이터를 분석하고 구글 검색을 통해 간밤의 미국 증시 주요 이슈(주도주 실적, 연준(Fed) 발언, 매크로 지표 발표 등)를 파악한 뒤,
-    오늘 아침 개장할 한국 증시(코스피/코스닥)에 미칠 영향과 오늘 가장 주목해야 할 섹터 3가지를 정리해 주세요.
-    
-    출력 형식:
-    🌅 [굿모닝 글로벌 마켓 브리핑]
-    
-    📌 간밤의 뉴욕 증시 요약 (핵심 이슈 3줄)
-    - 
-    - 
-    - 
-    
-    🇰🇷 오늘 한국 증시 관전 포인트 & 시황 예측
-    (내용 서술)
-    
-    🎯 오늘의 주목 섹터 TOP 3 및 추천 주도주 (관심 종목 편입 후보)
-    (각 섹터별 상승 명분 1줄 및 해당 테마의 수혜가 예상되는 대장주 1~2개를 반드시 '종목명(종목코드)' 형태로 추천해 주세요.)
-    1. 
-    2. 
-    3. 
-    """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
@@ -841,13 +690,11 @@ def generate_morning_briefing(market_data_str):
         )
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
         
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 응답 수신 성공")
@@ -863,37 +710,17 @@ def generate_stock_curation():
 
     macro_context = _get_macro_context_str()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    prompt = f"""
-    [현재 시각: {now} (KST)]
-    당신은 여의도 최고의 퀀트 전략가입니다.
-    아래 실시간 핵심 매크로 지표와 현재 시장 상황을 종합하여, 지금 당장 시스템 트레이딩 관심 종목(Watchlist)에 편입할 만한 주도주를 큐레이션해 주세요.
+    prompt = prompts.STOCK_CURATION_PROMPT.format(now=now, macro_context=macro_context)
     
-    {macro_context}
-    
-    [가이드라인]
-    1. 현재 장세(또는 간밤의 미국장)를 분석하여 오늘 자금이 몰릴 확률이 가장 높은 핵심 테마 2~3가지를 선정하세요.
-    2. 각 테마별로 실질적인 수혜를 받는 대장주(시총 1천억 이상 우량주 위주)를 1~2개씩 선별하세요.
-    3. 추천 종목은 반드시 '종목명(종목코드 6자리)' 형태로 정확히 표기하세요. (예: 삼성전자(005930))
-    4. 마크다운 헤더(# 기호)나 수평선(---), 그리고 이모티콘을 사용하지 말고 평문으로 깔끔하게 작성하세요.
-    
-    출력 형식:
-    [AI 관심 종목 큐레이션]
-    
-    1. [테마명] (간략한 추천 사유)
-    • 종목명(종목코드) - 선정 이유 한 줄
-    """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
@@ -913,15 +740,7 @@ def ask_gemini(question):
         return "⚠️ Gemini API 키가 설정되지 않았습니다."
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    prompt = f"""
-    [현재 시각: {now} (KST)]
-    당신은 친절하고 전문적인 여의도 수석 주식/경제 AI 비서입니다.
-    사용자의 다음 질문에 대해 최신 정보를 바탕으로 핵심만 명확하고 이해하기 쉽게 답변해 주세요.
-    가독성을 위해 적절한 줄바꿈과 불릿 포인트(-)를 사용하되, 마크다운 기호(#, *, > 등)나 이모티콘은 절대 사용하지 말고 평문으로 깔끔하게 작성해 주세요.
-
-    질문: {question}
-    """
+    prompt = prompts.ASK_GEMINI_PROMPT.format(now=now, question=question)
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
@@ -933,13 +752,11 @@ def ask_gemini(question):
         )
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
         
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             response = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
                 
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 응답 수신 성공")
@@ -1009,13 +826,11 @@ def get_latest_news_with_gemini(keyword, code=None):
         )
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 호출 대기 시작")
         
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(model.generate_content, prompt)
+        future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
-            executor.shutdown(wait=False)
         except concurrent.futures.TimeoutError:
-            executor.shutdown(wait=False)
+            future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 응답 수신 성공")
         return res.text if res and res.text else "검색 결과가 없거나 응답을 생성하지 못했습니다."
@@ -1051,8 +866,7 @@ def _show_naver_themes():
         
         # 상위 테마에 대해 상세 페이지 병렬 크롤링으로 주도주 정보 수집
         progress.update(task, description="[cyan]상위 테마의 주도주 정보를 수집 중... (상세 페이지 분석)[/cyan]")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            executor.map(_fetch_theme_detail, display_themes)
+        list(io_executor.map(_fetch_theme_detail, display_themes))
 
     table = Table(title=f"실시간 테마 등락률 순위 (TOP {top_n})", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("순위", justify="center", width=4)
@@ -1495,8 +1309,8 @@ def _run_tradingview_screener():
                                         out = res.get('output', {})
                                         fetched_name = out.get('prdt_abrv_name') or out.get('prdt_name')
                                         if fetched_name: kor_name = fetched_name
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"Screener domestic name fallback error: {e}")
                             if kor_name: name = kor_name
 
                         stock_map[ticker] = name

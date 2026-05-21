@@ -21,6 +21,7 @@ from collections import deque
 import config
 import context # [추가] 상태 관리 모듈
 import constants
+from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +108,10 @@ def get_holiday_name(date_str, country='KR'):
             h_cal = holidays.US(observed=True)
             name = h_cal.get(dt)
             return name
-    except Exception:
+    except Exception as e:
+        logger.debug(f"get_holiday_name error: {e}")
         return None
     return None
-
-# [추가] 텔레그램 메시지 전송용 비동기 스레드 풀
-_telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="TgSender")
 
 def _is_screen_output_allowed():
     """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단)"""
@@ -138,8 +137,10 @@ def clear_yfinance_cache():
                         try:
                             os.remove(os.path.join(c_path, f))
                             deleted_count += 1
-                        except Exception: pass
-            except Exception: pass
+                        except Exception as e:
+                            logger.debug(f"clear_yfinance_cache file remove error: {e}")
+            except Exception as e:
+                logger.debug(f"clear_yfinance_cache directory access error: {e}")
     
     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
         config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
@@ -345,7 +346,7 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
         threading.Thread(target=_send_task, daemon=True, name="TgUrgentSender").start()
     else:
         # 핵심 매매 로직 블로킹 방지를 위해 스레드 풀로 위임 (비동기 전송)
-        _telegram_executor.submit(_send_task)
+        tg_sender_executor.submit(_send_task)
 
 _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 
@@ -807,7 +808,8 @@ class ThrottledSession(requests.Session):
                         if msg_cd == 'OPSQ2000': desc = "서버 지연"
                         elif msg_cd in ['EGW00123', 'EGW00121']: desc = "토큰 만료"
                         elif rt_cd != '0' and rt_cd != '-': desc = "오류 발생"
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"API response logging json parse error: {e}")
                     
                     url_tail = url.split('/')[-1].split('?')[0]
                     config.console.print(f"[dim magenta][TRACE] RES ({server_type}) Status:{response.status_code} RT_CD:{rt_cd} MSG_CD:{msg_cd} ({desc}) | {url_tail}[/dim magenta]")
@@ -1002,7 +1004,8 @@ def check_and_refresh_token_if_expired():
                         send_telegram_message("✅ [시스템 복구] API 토큰이 정상적으로 갱신되었습니다.\n시스템을 계속 운영합니다.")
                         # 복구 알림 후에는 다시 지연 알림을 보낼 수 있도록 초기화
                         context.LAST_TOKEN_REFRESH_ALERT = 0
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"Token refresh recovery telegram send error: {e}")
             else:
                 raise Exception(fail_reason)
 
@@ -1088,8 +1091,8 @@ def _fetch_and_set_token(token_type, force_refresh=False):
                     if token:
                         logger.info("[green]캐시된 유효 토큰을 복구했습니다.[/green]")
                         return token
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Token fetch EGW00133 fallback error: {e}")
             logger.error(f"{token_type} 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
             return None
 
@@ -1130,7 +1133,9 @@ def safe_int(value):
         s_val = str(value).strip().replace(',', '')
         if not s_val: return 0
         return int(float(s_val))
-    except Exception: return 0
+    except Exception as e:
+        logger.debug(f"safe_int parse error: {e}")
+        return 0
 
 def call_api(url_path, market, category, action, params=None, data=None, method="GET", timeout=None, retries=None, tr_id=None):
     """
@@ -1269,7 +1274,9 @@ def get_stock_name_by_code(code, is_overseas):
                     final_name = clean_name.strip()
                 if final_name in ["Npay 증권", "네이버 페이 증권", "증권", "금융", "네이버 금융"]: final_name = None
             else: final_name = code
-        except Exception: final_name = code
+        except Exception as e:
+            logger.debug(f"Naver stock name parsing error: {e}")
+            final_name = code
     else:
         # 1. TradingView Screener 우선 조회 (속도 개선)
         try:
@@ -1277,7 +1284,8 @@ def get_stock_name_by_code(code, is_overseas):
             count, df = Query().set_markets('america').select('description').where(Column('name') == code).limit(1).get_scanner_data()
             if count > 0 and not df.empty:
                 final_name = df.iloc[0]['description']
-        except Exception: pass
+        except Exception as e:
+            logger.debug(f"TV screener stock name fetch error: {e}")
         
         if not final_name:
             # 2. yfinance Fallback
@@ -1287,9 +1295,11 @@ def get_stock_name_by_code(code, is_overseas):
                     try:
                         ticker = yf.Ticker(code); info = ticker.info
                         if info: final_name = info.get('longName') or info.get('shortName')
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"yf.Ticker info fetch error: {e}")
                     finally: sys.stderr = old_stderr
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"yf.Ticker outer block error: {e}")
             
     if not final_name and code: return code
     return final_name
@@ -1401,7 +1411,9 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
             df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
             df = df[df['date'] >= start_date_origin]
             return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
-        except Exception: return pd.DataFrame()
+        except Exception as e:
+            logger.debug(f"yfinance 2y index fetch error: {e}")
+            return pd.DataFrame()
 
     if not is_overseas:
         url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"]
@@ -1769,8 +1781,11 @@ def get_current_price(code, is_overseas):
     if data.get('rt_cd') == '0':
         output = data.get('output', {})
         if is_overseas:
-            try: return float(output.get('last', 0))
-            except: return 0.0
+            try:
+                return float(output.get('last', 0))
+            except Exception as e:
+                logger.debug(f"get_current_price float cast error: {e}")
+                return 0.0
         else:
             return safe_int(output.get('stck_prpr'))
     return 0
@@ -2480,8 +2495,8 @@ def check_server_health():
                        timeout=5, retries=0)
         if res and res.get('rt_cd') == '0':
             return True
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"check_server_health error: {e}")
     return False
 
 def send_telegram_photo(file_path, caption=None):

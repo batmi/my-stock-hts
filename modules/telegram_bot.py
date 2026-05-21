@@ -6,7 +6,6 @@ import requests
 import re
 import json
 import os
-import math # [추가] 장전 브리핑 시 yfinance 데이터 계산용
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -16,6 +15,7 @@ import utils
 import indicators
 from modules import analysis, account, chart, db_manager, auto_trade, market, theme_analysis
 from modules.auto_trade import AutoTrader
+from modules.executors import bot_executor
 
 logger = logging.getLogger(__name__)
 console = config.console
@@ -37,12 +37,7 @@ class TelegramCommander:
         self.is_running = False
         self.thread = None
         self.last_update_id = 0
-        self.last_briefing_date = None # [추가] 브리핑 중복 전송 방지용
-        self.last_portfolio_date = None # [추가] 포트폴리오 진단 중복 방지용
-        self.last_heartbeat_time = time.time() # [추가] 하트비트(키보드 동기화) 주기 체크용
-        self.last_holiday_notified_date = None # [추가] 휴장일 알림 중복 방지용
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="TgCmdWorker")
         
         # [리팩토링] 명령어 핸들러 매핑
         self.command_handlers = {
@@ -88,6 +83,9 @@ class TelegramCommander:
         self.thread.start()
         logger.debug("[Telegram] 명령어 수신 대기 시작...")
 
+        from modules.scheduler import SystemScheduler
+        SystemScheduler().start()
+
         # [추가] 봇 재시작 알림 전송
         try:
             api.send_telegram_message("🤖 [시스템 알림] 텔레그램 봇이 재연결되었습니다.", reply_markup=self._get_default_keyboard())
@@ -98,8 +96,9 @@ class TelegramCommander:
         self.is_running = False
         if self.thread:
             self.thread.join(timeout=2)
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=False)
+
+        from modules.scheduler import SystemScheduler
+        SystemScheduler().stop()
 
     def _run_loop(self):
         my_thread = threading.current_thread()
@@ -108,19 +107,6 @@ class TelegramCommander:
         
         while self.is_running and self.thread is my_thread:
             try:
-                # [추가] 평일 공휴일(휴장일) 아침 안내 메시지 스케줄러
-                self._check_holiday_notification()
-
-                # [추가] 장전 브리핑 발송 확인 스케줄러
-                if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
-                    self._check_morning_briefing()
-
-                # [추가] 장 종료 후 AI 포트폴리오 진단 리포트 스케줄러
-                self._check_after_market_portfolio()
-
-                # [추가] 메뉴 버튼 동기화를 위한 하트비트 스케줄러
-                self._check_heartbeat()
-
                 params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
                 response = requests.get(url, params=params, timeout=timeout + 5)
                 
@@ -216,242 +202,21 @@ class TelegramCommander:
                     logger.error(f"[Telegram] 명령어({command}) 처리 중 에러: {e}")
                     self._send_reply("⚠️ 명령어 처리 중 시스템 오류가 발생했습니다.")
                     
-            self.executor.submit(execute_cmd)
+            bot_executor.submit(execute_cmd)
         else:
             self._send_reply(f"⚠️ 지원하지 않는 명령어입니다: {command}\n전체 명령어 목록을 보려면 /help 를 입력해주세요.")
 
-    def _check_holiday_notification(self):
-        """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러"""
-        now = datetime.now()
-        today_str = now.strftime("%Y-%m-%d")
-        
-        if getattr(self, 'last_holiday_notified_date', None) == today_str:
-            return
-            
-        try:
-            target_dt = datetime.strptime("0830", "%H%M").time() # 아침 8시 30분
-            now_time = now.time()
-            end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
-            
-            if target_dt <= now_time <= end_dt:
-                self.last_holiday_notified_date = today_str # 중복 방지 즉시 마킹
-                
-                # 주말(토, 일)을 제외한 평일인 경우에만 알림
-                if now.weekday() < 5:
-                    is_kr_holiday = api.is_holiday_today()
-                    is_us_holiday = api.is_us_holiday_today()
-                    
-                    kr_name = api.get_holiday_name(today_str.replace("-", ""), 'KR')
-                    us_name = api.get_holiday_name(today_str.replace("-", ""), 'US')
-                    
-                    kr_str = f" '{kr_name}'" if kr_name else " 공휴일"
-                    us_str = f" '{us_name}'" if us_name else " 공휴일"
-                    
-                    if is_kr_holiday and is_us_holiday:
-                        self._send_reply(f"🏖️ [시스템 알림] 오늘은{kr_str}로 인해 국내 및 미국 주식 시장이 모두 휴장합니다.\n자동매매 시스템은 매매 없이 대기 모드를 유지합니다.")
-                    elif is_kr_holiday:
-                        self._send_reply(f"🏖️ [시스템 알림] 오늘은 한국{kr_str}로 '국내 주식 시장'이 휴장합니다.\n(단, 미국 주식 시장은 정상적으로 개장합니다.)\n자동매매 시스템은 국내장 시간 동안 대기 모드를 유지합니다.")
-                    elif is_us_holiday:
-                        self._send_reply(f"🏖️ [시스템 알림] 오늘은 미국{us_str}로 '미국 주식 시장'이 휴장합니다.\n(국내 주식 시장은 정상 개장합니다.)")
-        except Exception as e:
-            logger.error(f"Holiday notification check error: {e}")
-
-    def _check_morning_briefing(self):
-        """장전 브리핑 발송 시간 확인 및 트리거"""
-        now = datetime.now()
-        target_time_str = getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830")
-        today_str = now.strftime("%Y-%m-%d")
-        
-        if self.last_briefing_date == today_str:
-            return
-            
-        try:
-            # 문자열 시간을 datetime 객체로 파싱하여 비교 (1시간 이내에 봇이 켜졌을 때 발송 보장)
-            target_dt = datetime.strptime(target_time_str, "%H%M").time()
-            now_time = now.time()
-            end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
-            
-            if target_dt <= now_time <= end_dt:
-                self.last_briefing_date = today_str # 중복 방지 즉시 마킹
-                # 주말(토, 일)에는 발송하지 않음
-                if now.weekday() < 5:
-                    threading.Thread(target=self._send_morning_briefing, daemon=True).start()
-        except Exception as e:
-            logger.error(f"Morning briefing check error: {e}")
-
-    def _check_heartbeat(self):
-        """1분 주기 하트비트: 정상일 때는 침묵하고 이상 감지 시에만 경고 알림을 발송합니다."""
-        now = time.time()
-        # 1분(60초)마다 상태 점검
-        if now - self.last_heartbeat_time > 60:
-            self.last_heartbeat_time = now
-            
-            is_problem = False
-            msg = ""
-            
-            # 1. 자동매매 스레드 비정상 종료(크래시) 감지
-            if self.trader.is_running and self.trader.thread and not self.trader.thread.is_alive():
-                is_problem = True
-                msg = "자동매매 스레드가 예기치 않게 종료되었습니다. (크래시 의심)"
-                
-            # 2. 시스템 연속 에러 임계치 도달 감지
-            max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
-            if self.trader.consecutive_errors >= max_err:
-                is_problem = True
-                msg = f"시스템 연속 에러가 한계치({max_err}회)에 도달했습니다."
-                
-            if not hasattr(self, '_last_problem_msg'):
-                self._last_problem_msg = ""
-                
-            if is_problem:
-                # 동일한 문제로 인한 1분 단위 스팸 알림 방지
-                if self._last_problem_msg != msg:
-                    self._send_reply(f"🚨 [시스템 하트비트 이상 감지]\n{msg}\n서버 접속 후 시스템 상태를 확인해주세요.")
-                    self._last_problem_msg = msg
-            else:
-                # 정상 작동 시 출력 생략 및 상태 플래그 초기화
-                self._last_problem_msg = ""
-
     def _cmd_briefing(self, args):
         self._send_reply("⏳ [AI 시황 브리핑] 실시간 글로벌 마켓 데이터를 수집하고 AI 시황 브리핑을 작성 중입니다. 잠시만 기다려주세요...")
-        threading.Thread(target=self._execute_briefing, daemon=True).start()
+        from modules.scheduler import SystemScheduler
+        bot_executor.submit(SystemScheduler().execute_briefing)
         return None
 
-    def _send_morning_briefing(self):
-        """장전 브리핑 스케줄러 전용 래퍼"""
-        self._send_reply("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 AI 장전 브리핑을 작성 중입니다...")
-        self._execute_briefing()
-
-    def _execute_briefing(self):
-        """글로벌 마켓 데이터를 수집하고 Gemini에게 브리핑을 요청하여 전송"""
-        try:
-            import yfinance as yf
-            
-            target_indices = {
-                "나스닥": "^IXIC", "S&P500": "^GSPC", 
-                "미국채 10년물 금리": "^TNX", "달러환율": "KRW=X", 
-                "WTI 원유": "CL=F", "천연가스": "NG=F", "금": "GC=F", "구리": "HG=F", "밀": "ZW=F",
-                "VIX (변동성)": "^VIX", "비트코인": "BTC-USD"
-            }
-            market_data_str = ""
-            
-            for name, ticker in target_indices.items():
-                try:
-                    # [수정] yf.Ticker 직접 호출 대신 TV 스크리너가 적용된 통합 API 사용
-                    fi = api.get_yf_fast_info(ticker)
-                    if fi:
-                        last_price = fi.get('last_price')
-                        prev_close = fi.get('regular_market_previous_close')
-
-                    # [추가] 24시간 거래 자산(원유, 비트코인)의 전일 종가 보정
-                    if name in ["WTI 원유", "천연가스", "금", "구리", "밀", "비트코인"]:
-                        # [수정] df_daily 변수 정의 누락 수정
-                        df_daily = None
-                        try:
-                            # 일봉 데이터를 조회하여 df_daily 변수에 할당
-                            df_daily = api.get_chart_data(ticker, is_overseas=True, period_type='daily')
-                        except Exception as e:
-                            logger.debug(f"[{name}] 일봉 데이터 조회 실패: {e}")
-
-                        if df_daily is not None and not df_daily.empty and len(df_daily) >= 2:
-                            try:
-                                last_dt = df_daily.index[-1].date()
-                                utc_today = datetime.now(timezone.utc).date()
-                                target_idx = -2 if last_dt >= utc_today else -1
-                                check_prev = float(df_daily['close'].iloc[target_idx])
-                                if not math.isnan(check_prev):
-                                    prev_close = check_prev
-                            except Exception: pass
-
-                    if last_price and prev_close and not math.isnan(last_price) and not math.isnan(prev_close):
-                        rate = ((last_price - prev_close) / prev_close) * 100
-                        
-                        yh = getattr(fi, 'year_high', None)
-                        yh_str = ""
-                        if yh and not math.isnan(yh) and yh > 0:
-                            yh_rate = ((last_price - yh) / yh) * 100
-                            yh_str = f" (52주 고점대비 {yh_rate:+.1f}%)"
-                            
-                        status_desc = theme_analysis.evaluate_market_indicator(name, last_price, yh_rate)
-                        status_str = f" -> [현재 상태: {status_desc}]" if status_desc else ""
-                        
-                        market_data_str += f"{name}: {last_price:,.2f} (전일대비 {rate:+.2f}%){yh_str}{status_str}\n"
-                except Exception: pass
-            
-            if not market_data_str:
-                market_data_str = "글로벌 마감 데이터 수집에 실패했습니다. (yfinance 응답 지연)"
-                
-            briefing = theme_analysis.generate_morning_briefing(market_data_str)
-            if briefing:
-                self._send_reply(briefing)
-            else:
-                self._send_reply("⚠️ AI 장전 브리핑 생성에 실패했습니다.")
-        except Exception as e:
-            logger.error(f"Morning briefing send error: {e}")
-
-    def _check_after_market_portfolio(self):
-        """장 종료 시간 5분 후 포트폴리오 진단 리포트 발송"""
-        now = datetime.now()
-        today_str = now.strftime("%Y-%m-%d")
-        
-        if self.last_portfolio_date == today_str:
-            return
-            
-        end_time_str = getattr(config, 'SYSTEM_TRADING_END_TIME', "1510") # 기본값 1510 (15:10)
-        try:
-            end_time = datetime.strptime(end_time_str, "%H%M").time()
-            target_dt = datetime.combine(now.date(), end_time) + timedelta(minutes=5)
-            
-            if target_dt <= now <= target_dt + timedelta(hours=1):
-                if now.weekday() < 5: # 주말 제외
-                    self.last_portfolio_date = today_str
-                    self._send_reply("🌅 [장 마감 알림] 정규장이 종료되었습니다.\n오늘의 AI 포트폴리오 리스크 진단을 시작합니다...")
-                    threading.Thread(target=self._execute_portfolio_diagnosis, daemon=True).start()
-        except Exception as e:
-            logger.error(f"After market portfolio check error: {e}")
-            
     def _cmd_portfolio(self, args):
         self._send_reply("⏳ [AI 포트폴리오 진단] 현재 자산 및 종목 데이터를 수집하여 AI 분석을 요청합니다. 잠시만 기다려주세요...")
-        threading.Thread(target=self._execute_portfolio_diagnosis, daemon=True).start()
+        from modules.scheduler import SystemScheduler
+        bot_executor.submit(SystemScheduler().execute_portfolio_diagnosis)
         return None
-        
-    def _execute_portfolio_diagnosis(self):
-        try:
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-            
-            with utils.AccountContext(target_cano):
-                holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                deposit = res['d2_deposit'] if res else 0
-                
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
-                if not valid_holdings:
-                    self._send_reply("📭 보유 종목이 없어 포트폴리오 진단을 수행할 수 없습니다.")
-                    return
-                    
-                tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
-                total_asset = deposit + tot_evlu
-                
-                portfolio_str = f"총 자산: {total_asset:,}원 (보유 {len(valid_holdings)}종목)\n\n[보유 종목 비중]\n"
-                for item in valid_holdings:
-                    name = item['prdt_name']
-                    eval_amt = int(item['evlu_amt'])
-                    weight = (eval_amt / total_asset) * 100
-                    profit_rate = float(item['evlu_pfls_rt'])
-                    portfolio_str += f"- {name}: 비중 {weight:.1f}% (수익률 {profit_rate:+.2f}%)\n"
-                    
-                diagnosis = theme_analysis.generate_portfolio_diagnosis(portfolio_str)
-                if diagnosis:
-                    if diagnosis.startswith("⚠️"):
-                        self._send_reply(diagnosis)
-                    else:
-                        self._send_reply(f"🛡️ [AI 포트폴리오 리스크 진단]\n\n{diagnosis}")
-                else:
-                    self._send_reply("⚠️ AI 포트폴리오 진단에 실패했습니다.")
-        except Exception as e:
-            logger.error(f"Portfolio diagnosis error: {e}")
-            self._send_reply("⚠️ 포트폴리오 진단 중 오류가 발생했습니다.")
             
     def _cmd_stats(self, args):
         keyword = " ".join(args).strip() if args else None
@@ -511,7 +276,9 @@ class TelegramCommander:
 
             try:
                 dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
-            except: dt = datetime.now()
+            except Exception as e:
+                logger.debug(f"Date parse error in stats: {e}")
+                dt = datetime.now()
 
             if r['type'] == 'buy':
                 stock_stats[code]['buy'] += 1
@@ -590,7 +357,7 @@ class TelegramCommander:
 
     def _cmd_curate(self, args):
         self._send_reply("⏳ [AI 종목 큐레이션] 실시간 시장 매크로 데이터 및 뉴스를 분석하여 주도주를 발굴 중입니다. 잠시만 기다려주세요...")
-        threading.Thread(target=self._execute_curate, daemon=True).start()
+        bot_executor.submit(self._execute_curate)
         return None
         
     def _execute_curate(self):
@@ -610,7 +377,7 @@ class TelegramCommander:
 
     def _cmd_scan(self, args):
         self._send_reply("⏳ [TradingView Screener] 시장을 스캔 중입니다. 잠시만 기다려주세요...")
-        threading.Thread(target=self._execute_scan, args=(args,), daemon=True).start()
+        bot_executor.submit(self._execute_scan, args)
         return None
         
     def _execute_scan(self, args):
@@ -1030,7 +797,7 @@ class TelegramCommander:
             result = theme_analysis.get_latest_news_with_gemini(display_name, target_code)
             self._send_reply(result)
             
-        threading.Thread(target=_task, daemon=True).start()
+        bot_executor.submit(_task)
         return None
 
     def _cmd_ask(self, args):
@@ -1109,7 +876,8 @@ class TelegramCommander:
                     if isinstance(w, str): w = json.loads(w)
                     if isinstance(w, dict):
                         w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Weight parse error in _cmd_rules: {e}")
                 
             sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
 
@@ -1502,7 +1270,8 @@ class TelegramCommander:
                     try:
                         bal = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         if bal: ord_psbl = bal.get('order_possible', 0)
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"ord_psbl fallback balance fetch error: {e}")
                 
                 if ord_psbl is None: ord_psbl = 0
                 msg += f"주문가능금액: {ord_psbl:,}원\n"
@@ -1804,7 +1573,8 @@ class TelegramCommander:
                     w_data = custom_rule['weights']
                     if isinstance(w_data, str): weights = json.loads(w_data)
                     elif isinstance(w_data, dict): weights = w_data
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Weights parsing error: {e}")
 
         try:
             # 3. 데이터 조회 및 분석
@@ -1829,8 +1599,10 @@ class TelegramCommander:
                 delta = df['close'].diff()
                 gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
+                try:
+                    prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
+                except Exception as e:
+                    logger.debug(f"Prev RSI calculation error: {e}")
                 
             # 52주 위치 계산 (슈퍼 모멘텀 판정용)
             w52_pos = 0.0
@@ -1851,7 +1623,8 @@ class TelegramCommander:
                     cp = api.get_current_price_data(code, False)
                     if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
                         market_type = "KOSDAQ"
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Market type fetch error: {e}")
                 
                 regime, score_adj = analysis.get_market_regime(market_type)
                 if score_adj != 0:
@@ -1955,7 +1728,8 @@ class TelegramCommander:
                         elif rating_val > -0.1: tv_rating_str = f"⚪️ Neutral ({rating_val:+.2f})"
                         elif rating_val > -0.5: tv_rating_str = f"🔵 Sell ({rating_val:+.2f})"
                         else: tv_rating_str = f"🔵 Strong Sell ({rating_val:+.2f})"
-            except: pass
+            except Exception as e:
+                logger.debug(f"TV rating fetch error: {e}")
 
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
             is_sell_signal = (score < sell_score_limit) or (state == "매도")
@@ -2168,7 +1942,8 @@ class TelegramCommander:
                 msg += f"\n[현재 시장 국면]\n"
                 msg += f"• KOSPI: {k_str} (보정 {k_adj:+.1f}점)\n"
                 msg += f"• KOSDAQ: {q_str} (보정 {q_adj:+.1f}점)\n"
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"Market regime fetch error: {e}")
 
         # [추가] 기술적 지표 설정
         ind = config.INDICATOR_PARAMS

@@ -52,21 +52,23 @@ def test_cmd_ask_branch(mock_ask, commander):
 def test_cmd_news_branch(commander):
     """/news 명령어 백그라운드 호출 테스트"""
     with patch.object(commander, '_send_reply') as mock_reply, \
-         patch('modules.telegram_bot.threading.Thread') as mock_thread:
+         patch('modules.telegram_bot.bot_executor.submit') as mock_submit:
         
         res = commander._cmd_news(['삼성전자'])
         assert res is None
         mock_reply.assert_called_once()
-        mock_thread.assert_called_once()
+        mock_submit.assert_called_once()
         
         # 인자 누락
         assert "사용법" in commander._cmd_news([])
 
-@patch('modules.telegram_bot.datetime')
-@patch('modules.telegram_bot.threading.Thread')
-def test_check_morning_briefing_scheduler(mock_thread, mock_dt, commander):
+@patch('modules.scheduler.datetime')
+@patch('modules.scheduler.threading.Thread')
+def test_check_morning_briefing_scheduler(mock_thread, mock_dt):
     """장전 브리핑 스케줄러 시간 조건 테스트"""
-    commander.last_briefing_date = None
+    from modules.scheduler import SystemScheduler
+    scheduler = SystemScheduler()
+    scheduler.last_briefing_date = None
     config.AUTO_MORNING_BRIEFING_USE = True
     config.AUTO_MORNING_BRIEFING_TIME = "0830"
     
@@ -77,8 +79,8 @@ def test_check_morning_briefing_scheduler(mock_thread, mock_dt, commander):
     mock_dt.combine = datetime.combine
     mock_dt.today.return_value = mock_now.date()
     
-    commander._check_morning_briefing()
-    assert commander.last_briefing_date == "2023-11-01"
+    scheduler._check_morning_briefing()
+    assert scheduler.last_briefing_date == "2023-11-01"
     mock_thread.assert_called_once()
 
 def test_cmd_market_invalid_key(commander):

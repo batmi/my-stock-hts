@@ -15,7 +15,7 @@ import config
 def setup_teardown():
     """매 테스트마다 캐시를 강제 초기화하고 TTL을 설정합니다."""
     api.clear_chart_cache()
-    config.CHART_CACHE_TTL_MINUTES = 180
+    config.settings.CHART_CACHE_TTL_MINUTES = 180
     yield
     api.clear_chart_cache()
 

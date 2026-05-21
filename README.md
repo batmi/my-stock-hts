@@ -31,8 +31,10 @@
 *   **국내/해외 통합 관리:** 한국투자증권(KIS) API를 활용하여 국내 주식과 미국 주식을 하나의 인터페이스에서 통합 관리
 *   **실전/모의 투자 지원:** 설정 변경만으로 모의 투자와 실전 투자를 손쉽게 전환
 *   **전략 백테스팅:** 과거 데이터를 기반으로 현재의 매매 전략을 검증하고 수익률을 시뮬레이션
-*   **API 통신 최적화:** KIS API 초당 호출 한도(실전 20 TPS, 모의 2 TPS)에 맞춰 멀티스레드와 순차 처리를 자동 전환하여 통신 병목 최소화
-*   **스레드 안전(Thread-Safe) DB:** 작업 큐(Queue) 기반의 DB 프록시 아키텍처를 도입하여 다중 스레드 환경에서 발생하는 SQLite Lock 문제 원천 차단
+*   **엔터프라이즈급 안정성 및 성능 최적화:** 
+    *   **Pydantic** 기반의 엄격한 동적 설정값(Configuration) 검증 및 Thread-safe 아키텍처
+    *   API 병목 및 OS 자원 낭비를 막는 **전역 스레드 풀(Thread Pool) 재사용 메커니즘** 및 독립된 백그라운드 스케줄러 구동
+    *   작업 큐(Queue) 기반의 DB 프록시 아키텍처를 도입하여 다중 스레드 환경의 **SQLite Lock 문제 원천 차단**
 
 ## 2. 필수 준비 사항 (Prerequisites)
 이 프로그램은 **한국투자증권(Korea Investment & Securities)**의 Open API를 기반으로 동작합니다.
@@ -346,6 +348,9 @@ my-stock-hts/
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
     ├── telegram_bot.py   # 텔레그램 봇 연동 및 알림
+    ├── scheduler.py      # 백그라운드 스케줄링 및 타이머 전담 워커
+    ├── executors.py      # 시스템 전역 스레드 풀(Thread Pool) 중앙 관리
+    ├── prompts.py        # AI 어시스턴트용 프롬프트 템플릿 외부 관리
     ├── settings.py       # [0] 시스템 설정 관리
     ├── market.py         # [1] 시장 지수 조회
     ├── analysis.py       # [2] 종목 시세 및 기술적 분석
