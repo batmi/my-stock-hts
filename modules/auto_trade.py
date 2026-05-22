@@ -3784,6 +3784,14 @@ class AutoTrader:
                             msg = "🌙 [장 마감] 거래 시간이 종료되었습니다."
                             msg += self._get_holdings_message(target_cano)
                             api.send_telegram_message(msg)
+                            
+                            # [추가] 장 마감 후 AI 마감 브리핑 자동 실행 (기존 포트폴리오 진단 대체)
+                            try:
+                                from modules.scheduler import SystemScheduler
+                                threading.Thread(target=SystemScheduler().execute_daily_closing_report, daemon=True, name="DailyClosingReport").start()
+                                self.log("장 마감 종합 브리핑(AI) 작성을 백그라운드에서 시작합니다.")
+                            except Exception as e:
+                                self.log(f"장 마감 브리핑 스케줄러 호출 실패: {e}")
                     
                     # [변경] 장 마감 시 분석 중단 (트래픽 감소)
                     if not current_market_status:

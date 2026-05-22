@@ -645,32 +645,54 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
         elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
         return f"⚠️ 매매 복기 분석 중 오류 발생: {err_str}"
 
-def generate_portfolio_diagnosis(portfolio_str):
-    """현재 포트폴리오 비중과 매크로 지표를 종합하여 리스크 진단"""
+def _get_today_trades_str():
+    """DB에서 당일 매매 내역을 조회하여 문자열로 반환"""
+    try:
+        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+            cursor = conn.cursor()
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("SELECT time, type, code, name, qty, price, profit_rate, reason FROM trades WHERE time LIKE ?", (f"{today_str}%",))
+            rows = cursor.fetchall()
+            if not rows:
+                return "당일 매매 내역 없음"
+            
+            res = []
+            for r in rows:
+                t_time, t_type, code, name, qty, price, profit_rate, reason = r
+                p_rate_str = f" ({profit_rate}%)" if profit_rate else ""
+                res.append(f"[{t_time[11:16]}] {t_type} - {name}({code}) {qty}주 @ {price}원{p_rate_str} | 사유: {reason}")
+            return "\n".join(res)
+    except Exception as e:
+        logger.error(f"Failed to get today trades: {e}")
+        return "당일 매매 내역 조회 실패"
+
+def generate_daily_closing_report(portfolio_str):
+    """하루 장 마감 후 시장, 포트폴리오, 당일 매매를 종합 진단하는 마감 브리핑 생성"""
     if genai is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
     macro_context = _get_macro_context_str()
-    prompt = prompts.PORTFOLIO_DIAGNOSIS_PROMPT.format(portfolio_str=portfolio_str, macro_context=macro_context)
+    today_trades_str = _get_today_trades_str()
+    prompt = prompts.DAILY_CLOSING_PROMPT.format(portfolio_str=portfolio_str, macro_context=macro_context, today_trades_str=today_trades_str)
     
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
-        logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 호출 대기 시작")
+        logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 호출 대기 시작")
         future = ai_executor.submit(model.generate_content, prompt)
         try:
             res = future.result(timeout=60.0)
         except concurrent.futures.TimeoutError:
             future.cancel()
             raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-        logger.debug(f"[GEMINI_AI_DEBUG] 포트폴리오 진단 요청 - API 응답 수신 성공")
+        logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
     except Exception as e:
-        logger.error(f"Portfolio diagnosis AI error: {e}")
+        logger.error(f"Daily closing report AI error: {e}")
         err_str = str(e)
         if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
         elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
-        return f"⚠️ 포트폴리오 진단 중 오류 발생: {err_str}"
+        return f"⚠️ 장 마감 브리핑 생성 중 오류 발생: {err_str}"
 
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""

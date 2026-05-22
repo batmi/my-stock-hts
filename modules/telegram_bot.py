@@ -59,7 +59,7 @@ class TelegramCommander:
             "/preset": self._cmd_preset, # [추가] 시장 국면별 프리셋
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
-            "/portfolio": self._cmd_portfolio, # [추가] 포트폴리오 AI 진단
+            "/closing": self._cmd_closing, # [추가] AI 장 마감 종합 브리핑
             "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
             "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
             "/news": self._cmd_news, # [추가] AI 최신 뉴스 검색
@@ -212,10 +212,10 @@ class TelegramCommander:
         bot_executor.submit(SystemScheduler().execute_briefing)
         return None
 
-    def _cmd_portfolio(self, args):
-        self._send_reply("⏳ [AI 포트폴리오 진단] 현재 자산 및 종목 데이터를 수집하여 AI 분석을 요청합니다. 잠시만 기다려주세요...")
+    def _cmd_closing(self, args):
+        self._send_reply("⏳ [AI 장 마감 종합 브리핑] 오늘 시장 흐름, 보유 종목 특이사항 및 당일 매매 내역을 종합 분석 중입니다. 잠시만 기다려주세요...")
         from modules.scheduler import SystemScheduler
-        bot_executor.submit(SystemScheduler().execute_portfolio_diagnosis)
+        bot_executor.submit(SystemScheduler().execute_daily_closing_report)
         return None
             
     def _cmd_stats(self, args):
@@ -589,7 +589,7 @@ class TelegramCommander:
             "• /history [기간] : 거래 내역 (d/w/m/n)\n"
             "• /report [기간] : 성과 리포트 (d/w/m/n)\n"
             "• /stats [종목] : 종목별 매매 성과 분석\n"
-            "• /portfolio : AI 포트폴리오 리스크 진단\n\n"
+            "• /closing : AI 장 마감 종합 브리핑\n\n"
             "📈 [시장 및 종목 분석]\n"
             "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
             "• /signal <종목> : 기술적 분석 및 진단\n"

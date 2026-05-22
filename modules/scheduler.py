@@ -29,7 +29,6 @@ class SystemScheduler:
         self.thread = None
         self.last_holiday_notified_date = None
         self.last_briefing_date = None
-        self.last_portfolio_date = None
         self.last_heartbeat_time = time.time()
         self.trader = AutoTrader()
 
@@ -53,7 +52,6 @@ class SystemScheduler:
                 self._check_holiday_notification()
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
                     self._check_morning_briefing()
-                self._check_after_market_portfolio()
                 self._check_heartbeat()
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
@@ -115,26 +113,6 @@ class SystemScheduler:
         except Exception as e:
             logger.error(f"Morning briefing check error: {e}")
 
-    def _check_after_market_portfolio(self):
-        """장 종료 시간 5분 후 포트폴리오 진단 리포트 발송"""
-        now = datetime.now()
-        today_str = now.strftime("%Y-%m-%d")
-        
-        if getattr(self, 'last_portfolio_date', None) == today_str: return
-            
-        end_time_str = getattr(config, 'SYSTEM_TRADING_END_TIME', "1510") 
-        try:
-            end_time = datetime.strptime(end_time_str, "%H%M").time()
-            target_dt = datetime.combine(now.date(), end_time) + timedelta(minutes=5)
-            
-            if target_dt <= now <= target_dt + timedelta(hours=1):
-                if now.weekday() < 5: 
-                    self.last_portfolio_date = today_str
-                    api.send_telegram_message("🌅 [장 마감 알림] 정규장이 종료되었습니다.\n오늘의 AI 포트폴리오 리스크 진단을 시작합니다...")
-                    threading.Thread(target=self.execute_portfolio_diagnosis, daemon=True).start()
-        except Exception as e:
-            logger.error(f"After market portfolio check error: {e}")
-
     def _check_heartbeat(self):
         """1분 주기 하트비트 점검"""
         now = time.time()
@@ -172,8 +150,8 @@ class SystemScheduler:
         except Exception as e:
             logger.error(f"Morning briefing send error: {e}")
             
-    def execute_portfolio_diagnosis(self):
-        """현재 계좌 정보를 바탕으로 포트폴리오 리스크 진단"""
+    def execute_daily_closing_report(self):
+        """현재 계좌 정보 및 당일 매매 내역을 바탕으로 AI 장 마감 종합 브리핑 생성 및 전송"""
         try:
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -185,7 +163,7 @@ class SystemScheduler:
                 
                 valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
                 if not valid_holdings:
-                    api.send_telegram_message("📭 보유 종목이 없어 포트폴리오 진단을 수행할 수 없습니다.")
+                    api.send_telegram_message("📭 보유 종목이 없어 장 마감 브리핑을 수행할 수 없습니다.")
                     return
                     
                 tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
@@ -199,12 +177,12 @@ class SystemScheduler:
                     profit_rate = float(item['evlu_pfls_rt'])
                     portfolio_str += f"- {name}: 비중 {weight:.1f}% (수익률 {profit_rate:+.2f}%)\n"
                     
-                diagnosis = theme_analysis.generate_portfolio_diagnosis(portfolio_str)
-                if diagnosis:
-                    if diagnosis.startswith("⚠️"): api.send_telegram_message(diagnosis)
-                    else: api.send_telegram_message(f"🛡️ [AI 포트폴리오 리스크 진단]\n\n{diagnosis}")
+                report = theme_analysis.generate_daily_closing_report(portfolio_str)
+                if report:
+                    if report.startswith("⚠️"): api.send_telegram_message(report)
+                    else: api.send_telegram_message(f"🛡️ [AI 장 마감 종합 브리핑]\n\n{report}")
                 else:
-                    api.send_telegram_message("⚠️ AI 포트폴리오 진단에 실패했습니다.")
+                    api.send_telegram_message("⚠️ AI 장 마감 브리핑 생성에 실패했습니다.")
         except Exception as e:
-            logger.error(f"Portfolio diagnosis error: {e}")
-            api.send_telegram_message("⚠️ 포트폴리오 진단 중 오류가 발생했습니다.")
+            logger.error(f"Daily closing report error: {e}")
+            api.send_telegram_message("⚠️ 장 마감 브리핑 생성 중 오류가 발생했습니다.")
