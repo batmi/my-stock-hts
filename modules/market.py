@@ -38,10 +38,10 @@ ALL_INDICES = [
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
     # 3. 섹터 및 주요 지표
-    ("SOX (반도체)", "^SOX"), ("QGRD (스마트그리드)", "^QGRD"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("VIX (변동성)", "^VIX"),
-    ("MSCI 신흥국", "EEM"), ("하이일드 채권", "HYG"),
+    ("SOX (반도체)", "^SOX"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("VIX (변동성)", "^VIX"),
+    ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
-    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 선물", "ZT=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     # 5. 원자재
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
@@ -123,7 +123,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움", "솔라나", "리플"]
-        is_futures = name in ["나스닥 선물", "미국채 2년물 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
+        is_futures = name in ["나스닥 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
@@ -191,9 +191,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         patched_name = None
         missing_name = None
         is_delayed = False
-        
-        if name == "QGRD (스마트그리드)":
-            logger.debug(f"[QGRD_DEBUG] fast_info 사용여부: {use_fast_info}, df_daily.empty: {df_daily.empty}, current_calc_price: {chart_calc_price}")
 
         if not use_fast_info:
             if not is_domestic_index:
@@ -458,8 +455,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
-            "미국채 2년물 선물",
-            "MSCI 신흥국", "하이일드 채권"
+            "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
         ]
 
         if name in adaptive_targets:
@@ -490,28 +486,27 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 else: display_name = f"[yellow]{name}[/]"
             except: pass
         elif name == "미국채 10년물 금리":
-            if eval_price >= 4.80: display_name = f"[magenta]{name}[/]"
-            elif 4.50 <= eval_price < 4.80: display_name = f"[red]{name}[/]"
-            elif 4.20 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
-            elif 3.80 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
-            elif 3.30 <= eval_price < 3.80: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 3.30: display_name = f"[blue]{name}[/]"
-        elif name == "미국채 5년물 금리":
-            if eval_price >= 4.50: display_name = f"[red]{name}[/]"
-            elif 4.00 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
-            elif 3.50 <= eval_price < 4.00: display_name = f"[green]{name}[/]"
+            if eval_price >= 5.10: display_name = f"[magenta]{name}[/]"
+            elif 4.80 <= eval_price < 5.10: display_name = f"[red]{name}[/]"
+            elif 4.40 <= eval_price < 4.80: display_name = f"[orange3]{name}[/]"
+            elif 4.00 <= eval_price < 4.40: display_name = f"[green]{name}[/]"
+            elif 3.50 <= eval_price < 4.00: display_name = f"[yellow]{name}[/]"
             elif eval_price < 3.50: display_name = f"[blue]{name}[/]"
-        elif name == "미국채 30년물 금리":
+        elif name == "미국채 5년물 금리":
             if eval_price >= 5.00: display_name = f"[magenta]{name}[/]"
-            elif 4.60 <= eval_price < 5.00: display_name = f"[red]{name}[/]"
-            elif 4.00 <= eval_price < 4.60: display_name = f"[green]{name}[/]"
-            elif eval_price < 4.00: display_name = f"[blue]{name}[/]"
+            elif 4.70 <= eval_price < 5.00: display_name = f"[red]{name}[/]"
+            elif 4.20 <= eval_price < 4.70: display_name = f"[orange3]{name}[/]"
+            elif 3.70 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
+            elif 3.20 <= eval_price < 3.70: display_name = f"[yellow]{name}[/]"
+            elif eval_price < 3.20: display_name = f"[blue]{name}[/]"
+        elif name == "미국채 30년물 금리":
+            if eval_price >= 5.50: display_name = f"[magenta]{name}[/]"
+            elif 5.10 <= eval_price < 5.50: display_name = f"[red]{name}[/]"
+            elif 4.60 <= eval_price < 5.10: display_name = f"[orange3]{name}[/]"
+            elif 4.10 <= eval_price < 4.60: display_name = f"[green]{name}[/]"
+            elif 3.70 <= eval_price < 4.10: display_name = f"[yellow]{name}[/]"
+            elif eval_price < 3.70: display_name = f"[blue]{name}[/]"
         elif name == "SOX (반도체)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name == "QGRD (스마트그리드)":
             if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
             elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
             elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
@@ -597,7 +592,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif current < 400: display_name = f"[blue]{name}[/]"
 
         if is_proxy_yield:
-            display_name += " [dim](선물적용)[/dim]"
+            display_name += " [dim](F)[/dim]"
 
         return {
             'status': 'success',
@@ -609,8 +604,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             'is_delayed': is_delayed
         }
     except Exception as e:
-        if name == "QGRD (스마트그리드)":
-            logger.error(f"[QGRD_DEBUG] 분석 중 예외 발생: {e}", exc_info=True)
         return {'status': 'error', 'name': name, 'error': e}
 
 def _show_market_indices_core(target_indices=None):
@@ -740,14 +733,6 @@ def _show_market_indices_core(target_indices=None):
                         d_data = result_container.get('daily', pd.DataFrame())
                         i_data = result_container.get('intra', pd.DataFrame())
                         
-                        if "^QGRD" in tickers_str:
-                            logger.debug(f"[QGRD_DEBUG] yfinance 다운로드 완료 (attempt {attempt+1}) - Daily Shape: {d_data.shape if not d_data.empty else 'Empty'}")
-                            if not d_data.empty and isinstance(d_data.columns, pd.MultiIndex):
-                                if "^QGRD" in d_data.columns.get_level_values(0):
-                                    logger.debug("[QGRD_DEBUG] 다중 컬럼(MultiIndex)에서 ^QGRD 데이터 발견됨")
-                                else:
-                                    logger.debug(f"[QGRD_DEBUG] 다중 컬럼에 ^QGRD 누락됨. 존재하는 티커: {list(set(d_data.columns.get_level_values(0)))}")
-
                         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                             d_shape = d_data.shape if not d_data.empty else "Empty"
                             i_shape = i_data.shape if not i_data.empty else "Empty"
@@ -868,7 +853,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 선물", "금", "비트코인"]: 
+                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]: 
                     table.add_section()
 
                 res = results_dict.get(name)

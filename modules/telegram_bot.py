@@ -1409,7 +1409,7 @@ class TelegramCommander:
         targets = market.ALL_INDICES
         
         # 구분선(공백라인)을 넣을 지수명 리스트
-        section_keys = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 선물", "금", "비트코인"]
+        section_keys = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]
         
         # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
         domestic_map = {
