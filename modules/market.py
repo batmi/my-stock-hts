@@ -115,8 +115,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         # B. 가격 결정
         high_52_daily = 0.0
-        if not df_daily.empty and 'close' in df_daily.columns:
-            high_52_daily = float(df_daily['close'].tail(250).max())
+        if not df_daily.empty:
+            if 'high' in df_daily.columns and pd.notna(df_daily['high'].max()) and float(df_daily['high'].max()) > 0:
+                high_52_daily = float(df_daily['high'].tail(250).max())
+            elif 'close' in df_daily.columns:
+                high_52_daily = float(df_daily['close'].tail(250).max())
             
         current = 0.0
         prev = 0.0
@@ -368,10 +371,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if "미국채" in name and "선물" not in name:
                 high_52_str = f"[dim]{high_52:,.2f}%[/] ({h_color}{high_52_rate:.1f}%[/])"
             else:
-                high_52_str = f"[dim]{high_52:,.2f}[/] ({h_color}{high_52_rate:.1f}%[/])"
+                h52_fmt = f"{high_52:,.0f}" if high_52 >= 1000 else f"{high_52:,.2f}"
+                high_52_str = f"[dim]{h52_fmt}[/] ({h_color}{high_52_rate:.1f}%[/])"
 
         def fmt_val(val, color_tag):
-            if val is None or math.isnan(val): return "-"
+            if val is None or math.isnan(val): return "[dim]-[/dim]"
             if "미국채" in name and "선물" not in name:
                 s = f"{val:,.2f}%"
             else:
@@ -401,21 +405,43 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     ema120_color = "[blue]"
             except: pass
 
-        sar_icon = "-"
+        sar_icon = "[dim]-[/dim]"
         if val_psar is not None:
             sar_icon = "[red]⬆[/]" if eval_price > val_psar else "[blue]⬇[/]"
         
-        macd_icon = "-"
+        macd_icon = "[dim]-[/dim]"
         if val_macd is not None and val_macd_sig is not None:
             zero_sign = "+" if val_macd > 0 else "-"
             cross_char = "G" if val_macd > val_macd_sig else "D"
             m_color = "red" if val_macd > val_macd_sig else "blue"
             macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
         
-        obv_icon = "-" 
+        obv_trend = ind.get('obv_trend')
+        vol_sum = df_calc['volume'].tail(5).sum() if not df_calc.empty and 'volume' in df_calc.columns else 0
+        
+        vol_val = 0
+        if not df_calc.empty and 'volume' in df_calc.columns:
+            vol_val = float(df_calc.iloc[-1]['volume'])
+        elif not df_daily.empty and 'volume' in df_daily.columns:
+            vol_val = float(df_daily.iloc[-1]['volume'])
+        if math.isnan(vol_val):
+            vol_val = 0
+            
+        if vol_sum == 0 or obv_trend is None:
+            obv_icon = "[dim]-[/dim]"
+            vol_str_display = "[dim]-[/dim]"
+        else:
+            obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
+            vol_color = "[red]" if obv_trend else "[blue]"
+            if vol_val == 0: vol_str_display = "[dim]-[/dim]"
+            elif vol_val >= 1_000_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000_000:,.1f}B[/]"
+            elif vol_val >= 1_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000:,.1f}M[/]"
+            elif vol_val >= 1_000: vol_str_display = f"{vol_color}{vol_val/1_000:,.0f}K[/]"
+            else: vol_str_display = f"{vol_color}{vol_val:,.0f}[/]"
+            
         trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
-        rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "-"
+        rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "[dim]-[/dim]"
         if val_rsi is not None:
             if val_rsi >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
             elif 55 <= val_rsi < 70: rsi_str = f"[red]{rsi_str}[/]"
@@ -423,7 +449,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 30 < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
             else: rsi_str = f"[blue]{rsi_str}[/]"
 
-        adx_str = f"{val_adx:.1f}" if val_adx is not None else "-"
+        adx_str = f"{val_adx:.1f}" if val_adx is not None else "[dim]-[/dim]"
         if val_adx is not None:
             if val_adx >= 40: adx_str = f"[magenta]{adx_str}[/]" 
             elif val_adx >= 30: adx_str = f"[red]{adx_str}[/]"     
@@ -431,22 +457,12 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif val_adx >= 15: adx_str = f"[yellow]{adx_str}[/]"
             else: adx_str = f"[white]{adx_str}[/]"
 
-        cci_str = f"{val_cci:.1f}" if val_cci is not None else "-"
+        cci_str = f"{val_cci:.1f}" if val_cci is not None else "[dim]-[/dim]"
         if val_cci is not None:
             if val_cci >= 100: cci_str = f"[red]{cci_str}[/]"
             elif 0 < val_cci < 100: cci_str = f"[orange3]{cci_str}[/]"
             elif -100 < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
             else: cci_str = f"[blue]{cci_str}[/]"
-
-        if val_plus_di is None or val_minus_di is None or math.isnan(val_plus_di) or math.isnan(val_minus_di):
-            dmi_str = "-"
-        else:
-            if val_plus_di > val_minus_di:
-                dmi_str = f"[red]{val_plus_di:.1f}[/]/[dim]{val_minus_di:.1f}[/]"
-            elif val_minus_di > val_plus_di:
-                dmi_str = f"[dim]{val_plus_di:.1f}[/]/[blue]{val_minus_di:.1f}[/]"
-            else:
-                dmi_str = f"{val_plus_di:.1f}/{val_minus_di:.1f}"
 
         display_name = name
         
@@ -596,7 +612,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         return {
             'status': 'success',
-            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, dmi_str],
+            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, vol_str_display],
             'patched_name': patched_name,
             'missing_name': missing_name,
             'mismatch_msg': mismatch_msg,
@@ -815,7 +831,7 @@ def _show_market_indices_core(target_indices=None):
         table.add_column("RSI", justify="right")
         table.add_column("CCI", justify="right")
         table.add_column("ADX", justify="right")
-        table.add_column("DMI", justify="right")
+        table.add_column("거래량", justify="right")
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
@@ -865,12 +881,12 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('mismatch_msg'): mismatch_tickers.append(res['mismatch_msg'])
                         if res.get('is_delayed'): delayed_tickers.append(name)
                     elif res['status'] == 'failed':
-                        table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                        table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                         failed_tickers.append(name)
                     else:
                         if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                             config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {res.get('error')}[/bold red]")
-                        table.add_row(name, "Error", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+                        table.add_row(name, "Error", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
         
         # 테이블 출력 (Progress Context 밖에서 실행)
         try:
@@ -940,6 +956,7 @@ def show_market_indices(interval=0):
                 else:
                     menu_items.append((key, name, ""))
                     
+            menu_items.append(("8", "개별 지수 분석", "Individual Index Analysis"))
             menu_items.append(("9", "전체 지수", "All Indices"))
             sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
             if sel.lower() in ['b', 'q']: return False
@@ -963,6 +980,30 @@ def show_market_indices(interval=0):
                     else:
                         keys.append(k)
                 
+                if '8' in keys:
+                    indices_list = ALL_INDICES
+                    dict_list = [{'name': n, 'code': c} for n, c in indices_list]
+                    idx, item = utils.search_stock_in_list(dict_list, title="개별 지수 분석 대상 선택")
+                    if item:
+                        target_name, target_code = item['name'], item['code']
+                        
+                        is_overseas = True
+                        domestic_map = {
+                            "코스피": "KOSPI", "코스피200": "KOSPI200",
+                            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
+                        }
+                        if target_name in domestic_map:
+                            target_code = domestic_map[target_name]
+                            is_overseas = False
+                            
+                        context.USER_ACTION_BREADCRUMB.append(f"[개별분석] {target_name}")
+                        config.console.print(f"\n[bold green]>> {target_name}({target_code}) 개별 지수 심층 분석 실행[/bold green]")
+                        analysis.diagnose_stock(target_code=target_code, target_name=target_name, target_is_overseas=is_overseas)
+                    
+                    last_choice = sel
+                    utils.pause()
+                    continue
+
                 if '9' in keys:
                     target_indices = None
                 else:

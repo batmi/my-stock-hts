@@ -592,9 +592,9 @@ class TelegramCommander:
             "• /closing : AI 장 마감 종합 브리핑\n\n"
             "📈 [시장 및 종목 분석]\n"
             "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
-            "• /signal <종목> : 기술적 분석 및 진단\n"
-            "• /analyze <종목> : AI 종목 심층 진단\n"
-            "• /chart [기간] <종목> : 차트 전송 (d/h/m)\n"
+            "• /signal <종목/지수> : 기술적 분석 및 진단\n"
+            "• /analyze <종목/지수> : AI 종목/지수 심층 진단\n"
+            "• /chart [기간] <종목/지수> : 차트 전송 (d/h/m)\n"
             "• /briefing : 온디맨드 AI 시황 브리핑\n"
             "• /curate : 실시간 시장 주도주 AI 추천\n"
             "• /scan [시장] : 트레이딩뷰 종목 스캔 (k/u)\n"
@@ -706,19 +706,37 @@ class TelegramCommander:
                 else:
                     dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
 
+            is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150"]
+            from modules import market
+            all_idx_codes = [c for n, c in market.ALL_INDICES]
+            is_index = is_domestic_index or (is_overseas and code in all_idx_codes)
+
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
-            price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
-            tech_info = (
-                f"• 현재가: {price_str}\n"
-                f"• 시스템 상태: {state} (사유: {state_reason})\n"
-                f"• 퀀트 점수: {score}점 / 10점 만점\n"
-                f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
-            )
+            
+            if is_index:
+                price_str = f"{current_price:,.0f}" if current_price >= 1000 else f"{current_price:,.2f}"
+                tech_info = (
+                    f"• 현재가: {price_str}\n"
+                    f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                    f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
+                )
+            else:
+                price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+                tech_info = (
+                    f"• 현재가: {price_str}\n"
+                    f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                    f"• 퀀트 점수: {score}점 / 10점 만점\n"
+                    f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
+                )
 
-            answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
-            return f"🤖 [AI 종목 심층 진단] {name}({code})\n\n{answer}"
+            if is_index:
+                answer = theme_analysis.analyze_index_with_gemini(code, name, tech_info)
+                return f"🤖 [AI 지수 심층 진단] {name}({code})\n\n{answer}"
+            else:
+                answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
+                return f"🤖 [AI 종목 심층 진단] {name}({code})\n\n{answer}"
         except Exception as e:
             return f"⚠️ 진단 중 오류 발생: {e}"
 
@@ -1517,6 +1535,22 @@ class TelegramCommander:
         name = None
         is_overseas = False
         
+        # 0. 시장 지수 검색 (종목보다 우선)
+        from modules import market
+        domestic_map = {
+            "코스피": "KOSPI", "코스피200": "KOSPI200",
+            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
+        }
+        if keyword.upper() in domestic_map.values():
+            name = next((k for k, v in domestic_map.items() if v == keyword.upper()), keyword)
+            return keyword.upper(), name, False
+            
+        for n, c in market.ALL_INDICES:
+            if keyword.lower() == n.lower() or keyword.upper() == c.upper():
+                if n in domestic_map:
+                    return domestic_map[n], n, False
+                return c, n, True
+
         # 1. config에 등록된 종목에서 검색
         all_stocks = config.session.stock_data.get("stocks_kr", []) + config.session.stock_data.get("etfs_kr", [])
         for item in all_stocks:
@@ -1667,7 +1701,11 @@ class TelegramCommander:
 
             # OBV 상태
             obv_trend = ind.get('obv_trend')
-            obv_state = "상승" if obv_trend else "하락"
+            vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
+            if vol_sum == 0 or obv_trend is None:
+                obv_state = "-"
+            else:
+                obv_state = "상승" if obv_trend else "하락"
 
             # MACD 상태
             macd_val = ind.get('macd')

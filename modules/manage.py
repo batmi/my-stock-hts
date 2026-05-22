@@ -23,7 +23,8 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
     def _fmt_vol(v):
         val = float(v)
-        if val == 0: return "0"
+        if val == 0: return "[dim]-[/dim]"
+        if val >= 1_000_000_000: return f"{val/1_000_000_000:,.1f}B"
         if val >= 1_000_000: return f"{val/1_000_000:,.1f}M"
         if val >= 1_000: return f"{val/1_000:,.0f}K"
         return f"{val:,.0f}"
@@ -187,10 +188,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 ma60_val, ma120_val = row['ma60'], row['ma120']
 
                 def get_ma_color(val, ma_type):
-                    if pd.isna(val): return "white"
+                    if pd.isna(val): return "dim"
                     
                     if ma_type == 5:
-                        if pd.isna(ma20_val): return "white"
+                        if pd.isna(ma20_val): return "dim"
                         return "red" if val > ma20_val else "blue"
                     elif ma_type == 20:
                         if pd.isna(ma60_val): return "white"
@@ -204,15 +205,15 @@ def show_extended_info(code, is_overseas, basic_output=None):
                             if not pd.isna(prev_ma120):
                                 return "red" if val > prev_ma120 else "blue"
                         return "white"
-                    return "white"
+                    return "dim"
 
                 def fmt_ma(val, color):
-                    if pd.isna(val): return "-"
+                    if pd.isna(val): return "[dim]-[/dim]"
                     return f"[{color}]{fmt_p(val)}[/]"
 
                 # [추가] 수급 데이터 포맷팅
-                inv_str = "-"
-                foreign_rate_str = "-"
+                inv_str = "[dim]-[/dim]"
+                foreign_rate_str = "[dim]-[/dim]"
                 d_key = str(row['date']).replace('-', '')[:8]
                 if d_key in investor_map:
                     item = investor_map[d_key]

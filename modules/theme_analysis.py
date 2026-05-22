@@ -576,6 +576,43 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         else:
             return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
 
+def analyze_index_with_gemini(code, name, tech_info_str):
+    """시장 지수의 기술적 지표와 매크로 모멘텀을 결합하여 심층 진단"""
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = prompts.INDEX_ANALYSIS_PROMPT.format(now=now, name=name, code=code, tech_info_str=tech_info_str)
+    
+    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 지수 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+        
+        future = ai_executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+                
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"[GEMINI_AI_DEBUG] Gemini Index Analyze Error: {e}", exc_info=True)
+        error_msg = str(e)
+        if "429" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]"
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 - 모델: {config.GEMINI_MODEL}[/red]"
+        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
+            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout)[/yellow]"
+        else:
+            return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
+
 def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     """백테스팅 결과를 바탕으로 Gemini에게 평가 및 조언을 요청"""
     if genai is None or not config.GEMINI_API_KEY:

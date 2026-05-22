@@ -586,14 +586,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     break
             if std_market: break
 
-        foreign_rate_str = "-"
+        foreign_rate_str = "[dim]-[/dim]"
         market_str = std_market if std_market else ("해외" if is_overseas else "KOSPI")
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
+        is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150"]
+        
+        from modules import market
+        all_idx_codes = [c for n, c in market.ALL_INDICES]
+        is_index = is_domestic_index or (is_overseas and code in all_idx_codes)
         
         task = progress.add_task("[cyan]분석 준비 중...[/cyan]", total=None)
 
-        if not is_overseas:
+        if not is_overseas and not is_domestic_index:
             progress.update(task, description="[cyan]시장 국면 및 수급 정보 조회 중...[/cyan]")
             try:
                 # API로 시장 구분 및 외인 소진율 확인
@@ -616,6 +621,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                             buy_score += score_adj
             except: pass
+        elif is_domestic_index:
+            market_type = "KOSDAQ" if "KOSDAQ" in code else "KOSPI"
+            market_str = code
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                try:
+                    regime, score_adj = get_market_regime(market_type)
+                    if score_adj != 0 and not rule_applied:
+                        buy_score += score_adj
+                except: pass
         else:
             if not std_market:
                 cached_ex = config.session.exchange_cache.get(code)
@@ -624,6 +638,30 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     elif cached_ex in ["NYS", "NYSE"]: market_str = "NYSE"
                     elif cached_ex in ["AMS", "AMEX"]: market_str = "AMEX"
                     else: market_str = cached_ex
+                elif is_index:
+                    try:
+                        import yfinance as yf
+                        tk = yf.Ticker(code)
+                        ex = getattr(tk.fast_info, 'exchange', None)
+                        if not ex:
+                            ex = tk.info.get('exchange')
+                        if ex:
+                            ex_str = str(ex).upper()
+                            ex_map = {
+                                "NMS": "NASDAQ", "NYQ": "NYSE", "ASE": "AMEX",
+                                "PNK": "OTC", "CMX": "COMEX", "NYM": "NYMEX",
+                            "CBT": "CBOT", "CCY": "Currency (통화/환율)",
+                            "CCC": "Crypto (암호화폐)",
+                                "PHX": "PHLX (필라델피아)", "SNP": "S&P Index",
+                            "CBOE": "CBOE (시카고옵션)", "DJI": "Dow Jones",
+                            "CME": "CME (시카고상품거래소)", "NYB": "NYBOT (뉴욕상품거래소)",
+                            "OSA": "Osaka (오사카)", "TAI": "Taiwan (대만)",
+                            "HKG": "Hong Kong (홍콩)", "SHH": "Shanghai (상해)",
+                            "FRA": "Frankfurt (프랑크푸르트)", "STO": "STOXX (유럽)"
+                            }
+                            market_str = ex_map.get(ex_str, ex_str)
+                    except Exception:
+                        pass
 
         # [추가] 임계값 및 가중치 딕셔너리 구성
         thresholds = {
@@ -640,8 +678,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         vol_strength = None
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
-            fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
+            if is_domestic_index:
+                fut_chart = ex.submit(get_domestic_index_data, code)
+                fut_vol = None
+            else:
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
             
             df = fut_chart.result()
             vol_strength = fut_vol.result() if fut_vol else None
@@ -664,19 +706,25 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             except: pass
             
         current_price = float(df.iloc[-1]['close'])
+        prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+        diff = current_price - prev_price
+        rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
         
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         h52 = 0.0
         l52 = 0.0
+        high_52_rate = 0.0
         if len(df) > 0:
             recent_df = df.tail(250)
             h52 = recent_df['high'].max()
             l52 = recent_df['low'].min()
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
+            if h52 > 0:
+                high_52_rate = ((current_price - h52) / h52) * 100
         
-        sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
+        sm_flag, sm_reason = (False, "") if is_domestic_index else check_smart_money_turnaround(code, is_overseas)
         
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
@@ -714,7 +762,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # [추가] TradingView 종합 평가 및 배당 수익률 등 추가 데이터 조회
     tv_rating_str = "조회 불가"
-    div_yield_str = "-"
+    div_yield_str = "[dim]-[/dim]"
     try:
         from tradingview_screener import Query, Column
         tv_market = 'america' if is_overseas else 'korea'
@@ -752,8 +800,16 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         elif ind['ema_20'] < ind['ema_60']:
             curr_price_color = "[blue]" if current_price < ind['ema_20'] else "[orange3]"
 
-    price_str = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
-    table_tech.add_row("현재가", f"{curr_price_color}{price_str}[/]", "이평선 배열 및 위치 기반")
+    if is_index:
+        price_str_tech = f"{current_price:,.0f}" if current_price >= 1000 else f"{current_price:,.2f}"
+        h52_str = f"{h52:,.0f}" if h52 >= 1000 else f"{h52:,.2f}"
+        l52_str = f"{l52:,.0f}" if l52 >= 1000 else f"{l52:,.2f}"
+    else:
+        price_str_tech = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
+        h52_str = f"${h52:,.2f}" if is_overseas else f"{int(h52):,}원"
+        l52_str = f"${l52:,.2f}" if is_overseas else f"{int(l52):,}원"
+        
+    table_tech.add_row("현재가", f"{curr_price_color}{price_str_tech}[/]", "이평선 배열 및 위치 기반")
 
     # ATR (변동성)
     atr_val = ind.get('atr', 0)
@@ -771,8 +827,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     elif w52_pos <= 30: w_color = "[blue]"
     elif w52_pos <= 50: w_color = "[yellow]"
     
-    h52_str = f"${h52:,.2f}" if is_overseas else f"{int(h52):,}원"
-    l52_str = f"${l52:,.2f}" if is_overseas else f"{int(l52):,}원"
     table_tech.add_row("52주 위치", f"{w_color}{w52_pos:.1f}%[/] [dim]({l52_str} ~ {h52_str})[/dim]", "최고가/최저가 밴드 내 현 위치")
 
     # SAR
@@ -781,14 +835,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
     else:
         sar_pos = "-"
-        sar_color = "[white]"
+        sar_color = "[dim]"
     table_tech.add_row("SAR 위치", f"{sar_color}{sar_pos}[/]", "파라볼릭 추세 전환")
 
     # MACD
     macd_val = ind.get('macd')
     sig_val = ind.get('macd_signal')
     
-    macd_str = "-"
+    macd_str = "[dim]-[/dim]"
     macd_desc = "추세 확인"
     if macd_val is not None and sig_val is not None:
         m_color = "[red]" if macd_val >= sig_val else "[blue]"
@@ -804,9 +858,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("MACD (12/26/9)", macd_str, macd_desc)
 
     # OBV
-    obv_trend_str = '상승' if ind.get('obv_trend') else '하락'
-    obv_color = "[red]" if ind.get('obv_trend') else "[blue]"
-    table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", "이동평균 상회 여부")
+    obv_trend = ind.get('obv_trend')
+    vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
+    if vol_sum == 0 or obv_trend is None:
+        obv_trend_str = '-'
+        obv_color = "[dim]"
+        obv_desc = "거래량 데이터 없음"
+    else:
+        obv_trend_str = '상승' if obv_trend else '하락'
+        obv_color = "[red]" if obv_trend else "[blue]"
+        obv_desc = "이동평균 상회 여부"
+    table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", obv_desc)
     
     # RSI
     rsi_val = ind.get('rsi')
@@ -829,7 +891,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             rsi_str = f"[blue]{rsi_str}[/]"
             rsi_desc = "침체 (과매도)"
     else:
-        rsi_str = "-"
+        rsi_str = "[dim]-[/dim]"
         rsi_desc = "데이터 부족"
     table_tech.add_row("RSI (14)", f"{rsi_str} [dim]({rsi_desc})[/dim]", "과매수(70)/과매도(30)")
 
@@ -851,7 +913,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             cci_str = f"[blue]{cci_str}[/]"
             cci_desc = "과매도 (저점 탐색)"
     else:
-        cci_str = "-"
+        cci_str = "[dim]-[/dim]"
         cci_desc = "데이터 부족"
     table_tech.add_row("CCI (20)", f"{cci_str} [dim]({cci_desc})[/dim]", "추세 및 과매수/매도")
 
@@ -876,7 +938,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             adx_str = f"[white]{adx_str}[/]"
             adx_desc = "추세 없음 (횡보)"
     else:
-        adx_str = "-"
+        adx_str = "[dim]-[/dim]"
         adx_desc = "데이터 부족"
     table_tech.add_row("ADX (14)", f"{adx_str} [dim]({adx_desc})[/dim]", "추세 강도 (25 이상 강세)")
 
@@ -894,15 +956,16 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             dmi_str = f"{plus_di:.1f} / {minus_di:.1f}"
             dmi_desc = "중립"
     else:
-        dmi_str = "- / -"
+        dmi_str = "[dim]- / -[/dim]"
         dmi_desc = "데이터 부족"
     table_tech.add_row("DMI (+DI/-DI)", f"{dmi_str} [dim]({dmi_desc})[/dim]", "매수/매도 세력 강도 (+DI 상승)")
 
     # [수정] 외인 소진율 및 배당 수익률 위치 변경 (이평 배열 위로 이동)
-    if not is_overseas:
+    if not is_overseas and not is_domestic_index:
         table_tech.add_row("외인 소진율", foreign_rate_str, "외국인 보유 비중")
 
-    table_tech.add_row("배당 수익률", div_yield_str, "최근 연환산 배당수익률")
+    if not is_domestic_index:
+        table_tech.add_row("배당 수익률", div_yield_str, "최근 연환산 배당수익률")
 
     # 이평 배열
     ema_align = "알 수 없음"
@@ -938,7 +1001,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("이격도", disp_msg, f"{disp_eval} [dim](현재가/이평선)[/dim]")
 
     # [수정] 스마트머니를 표의 가장 아래로 이동
-    if not is_overseas:
+    if not is_overseas and not is_domestic_index:
         sm_str = f"[red]{sm_reason}[/]" if sm_flag else "[dim]특이사항 없음[/]"
         table_tech.add_row("스마트머니", sm_str, "외인/기관 쌍끌이 및 순매수 전환")
 
@@ -946,157 +1009,148 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
     
     # [테이블 2] 시스템 트레이딩 판단 결과
-    logic_title = "시스템 트레이딩 판단 결과"
-    changes_summary = None
-        
-    if rule_applied:
-        # [추가] 변경된 룰 요약
-        changes = []
-        
-        # 전역 설정값 가져오기
-        def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        def_buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-        def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-        def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-        def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        
-        # 비교 및 요약
-        if custom_rule.get('buy_score') != def_buy_score:
-            changes.append(f"매수점수({def_buy_score}->{custom_rule['buy_score']})")
-        if custom_rule.get('buy_rsi') != def_buy_rsi:
-            changes.append(f"매수RSI({def_buy_rsi}->{custom_rule['buy_rsi']})")
-        if custom_rule.get('buy_vol_strength') and custom_rule['buy_vol_strength'] != def_buy_vol:
-            changes.append(f"체결강도({def_buy_vol}%->{custom_rule['buy_vol_strength']}%)")
-        
-        if custom_rule.get('sell_score') != def_sell_score:
-            changes.append(f"매도점수({def_sell_score}->{custom_rule['sell_score']})")
-        if custom_rule.get('take_profit') != def_tp:
-            changes.append(f"익절({def_tp}%->{custom_rule['take_profit']}%)")
-        if custom_rule.get('stop_loss') != def_sl:
-            changes.append(f"손절({def_sl}%->{custom_rule['stop_loss']}%)")
+    if not is_index:
+        logic_title = "시스템 트레이딩 판단 결과"
+        changes_summary = None
             
-        if custom_rule.get('weights'):
-            changes.append("가중치")
-
-        if changes:
-            changes_summary = ", ".join(changes)
-
-    table_logic = Table(title=logic_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table_logic.add_column("항목", justify="center", style="cyan", width=15)
-    table_logic.add_column("결과", justify="center", width=30)
-    table_logic.add_column("상세 내용 / 사유", justify="left", style="dim")
-
-    # 종합 점수
-    s_color = state_color.replace('[', '').replace(']', '')
-    score_str = f"[bold {s_color}]{score:.2f}점[/]"
-    
-    details_str = ""
-    if details:
-        details_str = "\n".join([f"[green]* {d}[/green]" for d in details])
-    else:
-        details_str = "[dim]획득한 점수가 없습니다.[/dim]"
-    
-    table_logic.add_row("종합 점수", score_str, details_str)
-    
-    # [추가] 적용 가중치 정보 출력
-    w_val = f"{weights.get('TREND', 4.0):.1f} / {weights.get('MOMENTUM', 2.5):.1f} / {weights.get('STRENGTH', 1.5):.1f} / {weights.get('SYNERGY', 2.0):.1f}"
-    w_desc = "추세 / 모멘텀 / 강도 / 시너지"
-    if rule_applied and custom_rule.get('weights'):
-        w_desc += " [magenta](개별 설정)[/]"
-    else:
-        w_desc += " [dim](시스템 설정)[/dim]"
-    table_logic.add_row("적용 가중치", w_val, w_desc)
-    
-    # 상태 분류
-    table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
-    
-    # 매수 조건 체크
-    buy_score_limit = buy_score
-    
-    is_mr_state = (state == "역매수")
-    if is_mr_state:
-        buy_vol_limit = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0))
-    else:
-        buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-        if rule_applied and custom_rule.get('buy_vol_strength'):
-            buy_vol_limit = custom_rule['buy_vol_strength']
+        if rule_applied:
+            changes = []
             
-    use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-    super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
-    super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-    super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
-    
-    is_super = use_super and score >= super_score and w52_pos >= super_w52
-    buy_rsi_limit = super_rsi if is_super else thresholds["BUY_RSI_MAX"]
+            def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+            def_buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+            def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+            def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+            def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+            
+            if custom_rule.get('buy_score') != def_buy_score:
+                changes.append(f"매수점수({def_buy_score}->{custom_rule['buy_score']})")
+            if custom_rule.get('buy_rsi') != def_buy_rsi:
+                changes.append(f"매수RSI({def_buy_rsi}->{custom_rule['buy_rsi']})")
+            if custom_rule.get('buy_vol_strength') and custom_rule['buy_vol_strength'] != def_buy_vol:
+                changes.append(f"체결강도({def_buy_vol}%->{custom_rule['buy_vol_strength']}%)")
+            
+            if custom_rule.get('sell_score') != def_sell_score:
+                changes.append(f"매도점수({def_sell_score}->{custom_rule['sell_score']})")
+            if custom_rule.get('take_profit') != def_tp:
+                changes.append(f"익절({def_tp}%->{custom_rule['take_profit']}%)")
+            if custom_rule.get('stop_loss') != def_sl:
+                changes.append(f"손절({def_sl}%->{custom_rule['stop_loss']}%)")
+                
+            if custom_rule.get('weights'):
+                changes.append("가중치")
 
-    is_buy_score = score >= buy_score_limit
-    is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
-    is_safe_state = state not in ["매도", "주의", "-"]
-    is_buy_vol = True
-    if vol_strength is not None:
-        is_buy_vol = vol_strength >= buy_vol_limit
-    
-    if is_mr_state:
-        buy_result = "[bold magenta]매수 가능 (역추세)[/]" if is_buy_vol else "[bold blue]매수 불가 (체결강도 미달)[/]"
-    else:
-        if state == "강매수":
-            buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+            if changes:
+                changes_summary = ", ".join(changes)
+
+        table_logic = Table(title=logic_title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        table_logic.add_column("항목", justify="center", style="cyan", width=15)
+        table_logic.add_column("결과", justify="center", width=30)
+        table_logic.add_column("상세 내용 / 사유", justify="left", style="dim")
+
+        s_color = state_color.replace('[', '').replace(']', '')
+        score_str = f"[bold {s_color}]{score:.2f}점[/]"
+        
+        details_str = ""
+        if details:
+            details_str = "\n".join([f"[green]* {d}[/green]" for d in details])
         else:
-            buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
-    
-    buy_reason_list = []
-    if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
-    if not is_buy_score and not is_mr_state: # 역추세매수는 점수 무관
-        if score_adj != 0 and not rule_applied:
-            origin_score = round(buy_score_limit - score_adj, 2)
-            buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
+            details_str = "[dim]획득한 점수가 없습니다.[/dim]"
+        
+        table_logic.add_row("종합 점수", score_str, details_str)
+        
+        w_val = f"{weights.get('TREND', 4.0):.1f} / {weights.get('MOMENTUM', 2.5):.1f} / {weights.get('STRENGTH', 1.5):.1f} / {weights.get('SYNERGY', 2.0):.1f}"
+        w_desc = "추세 / 모멘텀 / 강도 / 시너지"
+        if rule_applied and custom_rule.get('weights'):
+            w_desc += " [magenta](개별 설정)[/]"
         else:
-            buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
-    if not is_buy_rsi and not is_mr_state:
-        if ind['rsi'] is None: buy_reason_list.append("RSI 데이터 부족")
+            w_desc += " [dim](시스템 설정)[/dim]"
+        table_logic.add_row("적용 가중치", w_val, w_desc)
+        
+        table_logic.add_row("상태 분류", f"[bold {s_color}]{state}[/]", state_reason)
+        
+        buy_score_limit = buy_score
+        
+        is_mr_state = (state == "역매수")
+        if is_mr_state:
+            buy_vol_limit = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0))
         else:
-            rsi_reason = f"RSI 과열 (기준: {buy_rsi_limit} 미만)"
-            if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
-            buy_reason_list.append(rsi_reason)
-    if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
-    buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
-    
-    table_logic.add_row("매수 판단", buy_result, buy_reason)
-    
-    # 매도(추세 이탈) 조건 체크
-    sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-    is_sell_signal = (score < sell_score_limit) or (state == "매도")
-    
-    sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
-    
-    if state == "매도":
-        sell_reason = "매도 상태 진입 (필터링 조건)"
-    elif score < sell_score_limit:
-        sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)"
-    else:
-        sell_reason = "추세 유지 중 (주의/관망 상태라도 점수 유지 시 보유)"
-    
-    table_logic.add_row("보유 판단", sell_result, sell_reason)
-    
-    # [추가] 체결강도 행 추가
-    vol_str = "-"
-    vol_eval = ""
-    if vol_strength is not None:
-        v_color = "[red]" if is_buy_vol else "[blue]"
-        vol_str = f"{v_color}{vol_strength:.1f}%[/]"
-        vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
-    table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
+            buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+            if rule_applied and custom_rule.get('buy_vol_strength'):
+                buy_vol_limit = custom_rule['buy_vol_strength']
+                
+        use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
+        
+        is_super = use_super and score >= super_score and w52_pos >= super_w52
+        buy_rsi_limit = super_rsi if is_super else thresholds["BUY_RSI_MAX"]
 
-    # [수정] 개별 룰 적용 여부 및 상세 내용 출력
-    rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
-    rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
-    table_logic.add_row("개별 룰", rule_res, rule_desc)
+        is_buy_score = score >= buy_score_limit
+        is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
+        is_safe_state = state not in ["매도", "주의", "-"]
+        is_buy_vol = True
+        if vol_strength is not None:
+            is_buy_vol = vol_strength >= buy_vol_limit
+        
+        if is_mr_state:
+            buy_result = "[bold magenta]매수 가능 (역추세)[/]" if is_buy_vol else "[bold blue]매수 불가 (체결강도 미달)[/]"
+        else:
+            if state == "강매수":
+                buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+            else:
+                buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+        
+        buy_reason_list = []
+        if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
+        if not is_buy_score and not is_mr_state:
+            if score_adj != 0 and not rule_applied:
+                origin_score = round(buy_score_limit - score_adj, 2)
+                buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit} 이상 [설정: {origin_score}, 시장보정 {score_adj:+.1f}점])")
+            else:
+                buy_reason_list.append(f"점수 미달 (기준: {buy_score_limit}점 이상)")
+        if not is_buy_rsi and not is_mr_state:
+            if ind['rsi'] is None: buy_reason_list.append("RSI 데이터 부족")
+            else:
+                rsi_reason = f"RSI 과열 (기준: {buy_rsi_limit} 미만)"
+                if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
+                buy_reason_list.append(rsi_reason)
+        if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
+        buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
+        
+        table_logic.add_row("매수 판단", buy_result, buy_reason)
+        
+        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
+        is_sell_signal = (score < sell_score_limit) or (state == "매도")
+        
+        sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
+        
+        if state == "매도":
+            sell_reason = "매도 상태 진입 (필터링 조건)"
+        elif score < sell_score_limit:
+            sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)"
+        else:
+            sell_reason = "추세 유지 중 (주의/관망 상태라도 점수 유지 시 보유)"
+        
+        table_logic.add_row("보유 판단", sell_result, sell_reason)
+        
+        vol_str = "-"
+        vol_eval = ""
+        if vol_strength is not None:
+            v_color = "[red]" if is_buy_vol else "[blue]"
+            vol_str = f"{v_color}{vol_strength:.1f}%[/]"
+            vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
+        table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
 
-    table_logic.add_section()
-    table_logic.add_row("TradingView 의견", tv_rating_str, "TradingView Technical Rating (-1~1)")
+        rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
+        rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
+        table_logic.add_row("개별 룰", rule_res, rule_desc)
 
-    config.console.print(table_logic)
+        table_logic.add_section()
+        table_logic.add_row("TradingView 의견", tv_rating_str, "TradingView Technical Rating (-1~1)")
+
+        config.console.print(table_logic)
     
     config.console.print()
 
@@ -1107,12 +1161,18 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
     if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import chart
-        chart.generate_visual_chart(code, name, is_overseas=is_overseas)
+        if is_domestic_index:
+            yf_ticker = "^KS11"
+            if code == "KOSDAQ": yf_ticker = "^KQ11"
+            elif code == "KOSPI200": yf_ticker = "^KS200"
+            elif code == "KOSDAQ150": yf_ticker = "^KQ150"
+            chart.generate_visual_chart(yf_ticker, name, is_overseas=True)
+        else:
+            chart.generate_visual_chart(code, name, is_overseas=is_overseas)
 
-    # [추가] 개별 종목 분석 완료 후 AI 종목 심층 진단 연동
     config.console.print()
-    if Prompt.ask("🤖 AI 종목 심층 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
-        # 순환 참조(Circular Import) 방지를 위해 함수 내부에서 import
+    ai_prompt_msg = "🤖 AI 지수 심층 진단을 수행하시겠습니까?" if is_index else "🤖 AI 종목 심층 진단을 수행하시겠습니까?"
+    if Prompt.ask(ai_prompt_msg, choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
         from rich.markdown import Markdown
         from rich.panel import Panel
@@ -1133,13 +1193,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             else:
                 dmi_str = f"중립 ({plus_di:.1f} / {minus_di:.1f})"
 
-        tech_info = (
-            f"• 현재가: {price_str}\n"
-            f"• 시스템 상태: {state} (사유: {state_reason})\n"
-            f"• 퀀트 점수: {score}점 / 10점 만점\n"
-            f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str} | DMI {dmi_str}"
-        )
+        if is_index:
+            tech_info = (
+                f"• 현재가: {price_str_tech}\n"
+                f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str} | DMI {dmi_str}"
+            )
+        else:
+            tech_info = (
+                f"• 현재가: {price_str_tech}\n"
+                f"• 시스템 상태: {state} (사유: {state_reason})\n"
+                f"• 퀀트 점수: {score}점 / 10점 만점\n"
+                f"• 핵심 지표: RSI {rsi_val_str} | ADX {adx_val_str} | CCI {cci_val_str} | DMI {dmi_str}"
+            )
         
+        title_str = f"🤖 AI 지수 심층 진단: {name}({code})" if is_index else f"🤖 AI 종목 심층 진단: {name}({code})"
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1147,8 +1216,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
-            answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
+            if is_index:
+                progress.add_task(f"[cyan]Google Gemini가 매크로 모멘텀을 결합하여 지수 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+                answer = theme_analysis.analyze_index_with_gemini(code, name, tech_info)
+            else:
+                progress.add_task(f"[cyan]Google Gemini가 기업 모멘텀을 결합하여 종목 심층 진단 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+                answer = theme_analysis.analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
             if answer.startswith("⚠️"):
@@ -1156,10 +1229,138 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             else:
                 md = Markdown(answer)
                 
-                table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
-                print_table(table_title, [(name, code)], is_overseas=is_overseas)
+                if is_index:
+                    idx_table = Table(title="지수 분석 정보", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+                    idx_table.add_column("지수명", justify="left", style="white", no_wrap=True)
+                    idx_table.add_column("지수", justify="right")
+                    idx_table.add_column("등락폭 (등락률)", justify="right")
+                    idx_table.add_column("52주 고점", justify="right")
+                    idx_table.add_column("EMA(5)", justify="right")
+                    idx_table.add_column("EMA(20)", justify="right")
+                    idx_table.add_column("EMA(60)", justify="right")
+                    idx_table.add_column("EMA(120)", justify="right")
+                    idx_table.add_column("추세SMO", justify="center")
+                    idx_table.add_column("RSI", justify="right")
+                    idx_table.add_column("CCI", justify="right")
+                    idx_table.add_column("ADX", justify="right")
+                    idx_table.add_column("거래량", justify="right")
+                    
+                    curr_fmt = f"{current_price:,.2f}"
+                    curr_str = f"{curr_price_color}{curr_fmt}[/]"
+                    
+                    diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                    diff_str_fmt = f"{diff:+.2f}"
+                    change_str = f"{diff_color}{diff_str_fmt} ({rate:+.2f}%)[/]"
+
+                    h_color = "[white]"
+                    if high_52_rate > -3.0: h_color = "[red]"
+                    elif high_52_rate < -20.0: h_color = "[blue]"
+                    h52_fmt = f"{h52:,.0f}" if h52 >= 1000 else f"{h52:,.2f}"
+                    high_52_str = f"[dim]{h52_fmt}[/] ({h_color}{high_52_rate:.1f}%[/])"
+
+                    def fmt_val(val, color_tag):
+                        if val is None or math.isnan(val): return "[dim]-[/dim]"
+                        s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
+                        return f"{color_tag}{s}[/]" if color_tag else s
+                        
+                    ema5_color = "[white]"
+                    if ind.get('ema_5') is not None and ind.get('ema_20') is not None:
+                        ema5_color = "[red]" if ind['ema_5'] > ind['ema_20'] else "[blue]"
+
+                    ema20_color = "[white]"
+                    if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
+                        ema20_color = "[red]" if ind['ema_20'] > ind['ema_60'] else "[blue]"
+
+                    ema60_color = "[white]"
+                    if ind.get('ema_60') is not None and ind.get('ema_120') is not None:
+                        ema60_color = "[red]" if ind['ema_60'] > ind['ema_120'] else "[blue]"
+
+                    ema120_color = "[white]"
+                    if df is not None and not df.empty and len(df) > 121:
+                        try:
+                            ema120_series = df['close'].ewm(span=120, adjust=False).mean()
+                            if ema120_series.iloc[-1] > ema120_series.iloc[-2]:
+                                ema120_color = "[red]"
+                            else:
+                                ema120_color = "[blue]"
+                        except: pass
+                    
+                    t_sar = "[dim]-[/dim]"
+                    if ind.get('psar') is not None:
+                        t_sar = "[red]⬆[/]" if current_price > ind['psar'] else "[blue]⬇[/]"
+                    m_val = ind.get('macd')
+                    s_val = ind.get('macd_signal')
+                    t_macd = "[dim]-[/dim]"
+                    if m_val is not None and s_val is not None:
+                        zs = "+" if m_val > 0 else "-"
+                        cc = "G" if m_val > s_val else "D"
+                        mc = "red" if m_val > s_val else "blue"
+                        t_macd = f"[{mc}]{zs}{cc}[/]"
+                        
+                    obv_trend = ind.get('obv_trend')
+                    vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
+                    
+                    vol_val = 0
+                    if df is not None and not df.empty and 'volume' in df.columns:
+                        vol_val = float(df.iloc[-1]['volume'])
+                    if math.isnan(vol_val):
+                        vol_val = 0
+                        
+                    if vol_sum == 0 or obv_trend is None:
+                        obv_icon = "[dim]-[/dim]"
+                        vol_str_display = "[dim]-[/dim]"
+                    else:
+                        obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
+                        vol_color = "[red]" if obv_trend else "[blue]"
+                        if vol_val == 0: vol_str_display = "[dim]-[/dim]"
+                        elif vol_val >= 1_000_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000_000:,.1f}B[/]"
+                        elif vol_val >= 1_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000:,.1f}M[/]"
+                        elif vol_val >= 1_000: vol_str_display = f"{vol_color}{vol_val/1_000:,.0f}K[/]"
+                        else: vol_str_display = f"{vol_color}{vol_val:,.0f}[/]"
+                        
+                    trend_str = f"{t_sar} {t_macd} {obv_icon}"
+                    
+                    val_rsi = ind.get('rsi')
+                    t_rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "[dim]-[/dim]"
+                    if val_rsi is not None:
+                        if val_rsi >= config.INDICATOR_PARAMS["RSI_UPPER"]: t_rsi_str = f"[magenta]{t_rsi_str}[/]"
+                        elif 55 <= val_rsi < config.INDICATOR_PARAMS["RSI_UPPER"]: t_rsi_str = f"[red]{t_rsi_str}[/]"
+                        elif 45 <= val_rsi < 55: t_rsi_str = f"[orange3]{t_rsi_str}[/]"
+                        elif config.INDICATOR_PARAMS["RSI_LOWER"] < val_rsi < 45: t_rsi_str = f"[yellow]{t_rsi_str}[/]"
+                        else: t_rsi_str = f"[blue]{t_rsi_str}[/]"
+
+                    val_cci = ind.get('cci')
+                    t_cci_str = f"{val_cci:.1f}" if val_cci is not None else "[dim]-[/dim]"
+                    if val_cci is not None:
+                        if val_cci >= config.INDICATOR_PARAMS["CCI_UPPER"]: t_cci_str = f"[red]{t_cci_str}[/]"
+                        elif 0 < val_cci < config.INDICATOR_PARAMS["CCI_UPPER"]: t_cci_str = f"[orange3]{t_cci_str}[/]"
+                        elif config.INDICATOR_PARAMS["CCI_LOWER"] < val_cci <= 0: t_cci_str = f"[yellow]{t_cci_str}[/]"
+                        else: t_cci_str = f"[blue]{t_cci_str}[/]"
+
+                    val_adx = ind.get('adx')
+                    t_adx_str = f"{val_adx:.1f}" if val_adx is not None else "[dim]-[/dim]"
+                    if val_adx is not None:
+                        if val_adx >= 40: t_adx_str = f"[magenta]{t_adx_str}[/]" 
+                        elif val_adx >= 30: t_adx_str = f"[red]{t_adx_str}[/]"     
+                        elif val_adx >= 20: t_adx_str = f"[orange3]{t_adx_str}[/]"
+                        elif val_adx >= 15: t_adx_str = f"[yellow]{t_adx_str}[/]"
+                        else: t_adx_str = f"[white]{t_adx_str}[/]"
+
+                    idx_table.add_row(
+                        name, curr_str, change_str, high_52_str, 
+                        fmt_val(ind.get('ema_5'), ema5_color), 
+                        fmt_val(ind.get('ema_20'), ema20_color), 
+                        fmt_val(ind.get('ema_60'), ema60_color), 
+                        fmt_val(ind.get('ema_120'), ema120_color), 
+                        trend_str, t_rsi_str, t_cci_str, t_adx_str, vol_str_display
+                    )
+                    config.console.print()
+                    config.console.print(idx_table)
+                else:
+                    table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
+                    print_table(table_title, [(name, code)], is_overseas=is_overseas)
                 
-                panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+                panel = Panel(md, title=title_str, border_style="cyan", padding=(1, 2), width=120)
                 config.console.print()
                 config.console.print(Padding(panel, (0, 4)))
         else:
@@ -2322,6 +2523,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 def fmt_inv(val):
                     if val == 0: return "[dim]-[/dim]"
                     abs_val = abs(val)
+                    if abs_val >= 1_000_000_000: s = f"{val/1_000_000_000:,.1f}B"
                     if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
                     elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
                     else: s = f"{val:,}"
@@ -2506,10 +2708,15 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             obv_disp = "-"
             if obv_val:
                 obv_c = "red" if ind.get('obv_trend') else "blue"
-                if abs(obv_val) >= 100_000_000:
-                    obv_str = f"{int(obv_val/1_000_000):,}M"
+                abs_val = abs(obv_val)
+                if abs_val >= 1_000_000_000:
+                    obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+                elif abs_val >= 1_000_000:
+                    obv_str = f"{obv_val/1_000_000:,.1f}M"
+                elif abs_val >= 1_000:
+                    obv_str = f"{obv_val/1_000:,.0f}K"
                 else:
-                    obv_str = f"{int(obv_val/1000):,}K"
+                    obv_str = f"{obv_val:,.0f}"
                 obv_disp = f"[{obv_c}]{obv_str}[/]"
 
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
@@ -2938,7 +3145,8 @@ def _print_period_price_common(code, is_overseas, limit=20):
     """기간별 시세 출력 공통 함수"""
     def _fmt_vol(v):
         val = float(v)
-        if val == 0: return "0"
+        if val == 0: return "[dim]-[/dim]"
+        if val >= 1_000_000_000: return f"{val/1_000_000_000:,.1f}B"
         if val >= 1_000_000: return f"{val/1_000_000:,.1f}M"
         if val >= 1_000: return f"{val/1_000:,.0f}K"
         return f"{val:,.0f}"
@@ -2946,6 +3154,13 @@ def _print_period_price_common(code, is_overseas, limit=20):
     # [수정] 단순 조회이므로 status 사용
     df = None
     investor_map = {} # [추가]
+    
+    is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150"]
+    
+    from modules import market
+    all_idx_codes = [c for n, c in market.ALL_INDICES]
+    is_global_index = is_overseas and code in all_idx_codes
+    is_index = is_domestic_index or is_global_index
 
     with Progress(
         SpinnerColumn(),
@@ -2955,10 +3170,14 @@ def _print_period_price_common(code, is_overseas, limit=20):
         transient=True
     ) as progress:
         progress.add_task("[cyan]기간별 시세 데이터 조회 중...[/cyan]", total=None)
-        df = api.get_chart_data(code, is_overseas)
+        if is_domestic_index:
+            df = get_domestic_index_data(code)
+        else:
+            df = api.get_chart_data(code, is_overseas)
+            
         # [추가] 수급 데이터 조회
         frgn_rates_map = {} # [추가] 실제 지분율 맵
-        if not is_overseas:
+        if not is_overseas and not is_domestic_index:
             try:
                 inv_data = api.get_investor_trend(code)
                 if inv_data:
@@ -3009,6 +3228,15 @@ def _print_period_price_common(code, is_overseas, limit=20):
         recent_df = df_sorted
 
     title_prefix = "[해외주식]" if is_overseas else "[국내주식]"
+    if is_index:
+        idx_name = code
+        if is_domestic_index:
+            d_map = {"KOSPI": "코스피", "KOSDAQ": "코스닥", "KOSPI200": "코스피200", "KOSDAQ150": "코스닥150"}
+            idx_name = d_map.get(code, code)
+        else:
+            idx_name = next((n for n, c in market.ALL_INDICES if c == code), code)
+        title_prefix = f"[{idx_name}]"
+        
     period_str = f"(최근 {limit}일)" if limit else "(전체)"
     table = Table(title=f"{title_prefix} 기간별 시세 {period_str}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("일자", justify="center")
@@ -3022,7 +3250,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     table.add_column("60일선", justify="right")
     table.add_column("120일선", justify="right")
     table.add_column("거래량", justify="right") # [이동]
-    if not is_overseas:
+    if not is_overseas and not is_domestic_index:
         table.add_column("외인률", justify="right") # [추가]
         table.add_column("수급(개/외/기)", justify="center") # [수정]
 
@@ -3034,9 +3262,15 @@ def _print_period_price_common(code, is_overseas, limit=20):
         diff = row['diff'] if not pd.isna(row['diff']) else 0
         rate = row['rate'] if not pd.isna(row['rate']) else 0
         
-        # 포맷팅 헬퍼
-        def fmt_p(val): return f"{val:,.2f}" if is_overseas else f"{int(val):,}"
-        def fmt_diff(val): return f"{val:+.2f}" if is_overseas else f"{int(val):+}"
+        def fmt_p(val): 
+            if is_index:
+                return f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
+            return f"{val:,.2f}" if is_overseas else f"{int(val):,}"
+            
+        def fmt_diff(val): 
+            if is_index:
+                return f"{val:+.0f}" if abs(val) >= 1000 else f"{val:+.2f}"
+            return f"{val:+.2f}" if is_overseas else f"{int(val):+}"
         
         c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
         diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
@@ -3046,10 +3280,10 @@ def _print_period_price_common(code, is_overseas, limit=20):
         ma60_val, ma120_val = row['ma60'], row['ma120']
 
         def get_ma_color(val, ma_type):
-            if pd.isna(val): return "white"
+            if pd.isna(val): return "dim"
             
             if ma_type == 5:
-                if pd.isna(ma20_val): return "white"
+                if pd.isna(ma20_val): return "dim"
                 return "red" if val > ma20_val else "blue"
             elif ma_type == 20:
                 if pd.isna(ma60_val): return "white"
@@ -3063,16 +3297,16 @@ def _print_period_price_common(code, is_overseas, limit=20):
                     if not pd.isna(prev_ma120):
                         return "red" if val > prev_ma120 else "blue"
                 return "white"
-            return "white"
+            return "dim"
 
         def fmt_ma(val, color):
-            if pd.isna(val): return "-"
+            if pd.isna(val): return "[dim]-[/dim]"
             return f"[{color}]{fmt_p(val)}[/]"
 
         # [추가] 수급 데이터 포맷팅
-        inv_str = "-"
-        foreign_rate_str = "-"
-        if not is_overseas:
+        inv_str = "[dim]-[/dim]"
+        foreign_rate_str = "[dim]-[/dim]"
+        if not is_overseas and not is_domestic_index:
             d_key = str(row['date']).replace('-', '')[:8]
             if d_key in investor_map:
                 item = investor_map[d_key]
@@ -3092,6 +3326,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
                 def _fmt_i(val):
                     if val == 0: return "[dim]-[/dim]"
                     abs_val = abs(val)
+                    if abs_val >= 1_000_000_000: s = f"{val/1_000_000_000:,.1f}B"
                     if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
                     elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
                     else: s = f"{val:,}"
@@ -3112,7 +3347,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
             fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
             _fmt_vol(row['volume'])
         ]
-        if not is_overseas:
+        if not is_overseas and not is_domestic_index:
             row_data.append(foreign_rate_str)
             row_data.append(inv_str)
 
