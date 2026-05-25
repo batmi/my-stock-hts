@@ -13,6 +13,7 @@ import api
 import utils
 import constants
 import re
+import indicators
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,11 @@ def show_extended_info(code, is_overseas, basic_output=None):
     def _fmt_vol(v):
         val = float(v)
         if val == 0: return "[dim]-[/dim]"
-        if val >= 1_000_000_000: return f"{val/1_000_000_000:,.1f}B"
-        if val >= 1_000_000: return f"{val/1_000_000:,.1f}M"
-        if val >= 1_000: return f"{val/1_000:,.0f}K"
+        abs_val = abs(val)
+        if abs_val >= 999_950_000_000: return f"{val/1_000_000_000_000:,.1f}T"
+        elif abs_val >= 999_950_000: return f"{val/1_000_000_000:,.1f}B"
+        elif abs_val >= 999_500: return f"{val/1_000_000:,.1f}M"
+        elif abs_val >= 999.5: return f"{val/1_000:,.0f}K"
         return f"{val:,.0f}"
 
     if not is_overseas:
@@ -151,6 +154,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
             df['diff'] = df['close'].diff()
             df['rate'] = df['close'].pct_change() * 100
 
+            # OBV 및 OBV_MA 계산
+            df['OBV'] = indicators.get_obv_full_series(df)
+            df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
+
             # 최신순 정렬 및 20개 추출
             recent_df = df.sort_values('date', ascending=False).head(20)
 
@@ -166,7 +173,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("20일선", justify="right")
             table_d.add_column("60일선", justify="right")
             table_d.add_column("120일선", justify="right")
-            table_d.add_column("거래량", justify="right") # [이동]
+            table_d.add_column("OBV", justify="right") # [이동]
             table_d.add_column("외인률", justify="right") # [추가]
             table_d.add_column("수급(개/외/기)", justify="center") # [수정]
             
@@ -211,6 +218,21 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     if pd.isna(val): return "[dim]-[/dim]"
                     return f"[{color}]{fmt_p(val)}[/]"
 
+                # OBV 포맷팅
+                obv_val = row['OBV']
+                obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
+                obv_c = "red" if obv_trend else "blue"
+                if pd.isna(obv_val):
+                    obv_disp = "[dim]-[/dim]"
+                else:
+                    abs_val = abs(obv_val)
+                    if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+                    elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+                    elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+                    elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+                    else: obv_str = f"{obv_val:,.0f}"
+                    obv_disp = f"[{obv_c}]{obv_str}[/]"
+
                 # [추가] 수급 데이터 포맷팅
                 inv_str = "[dim]-[/dim]"
                 foreign_rate_str = "[dim]-[/dim]"
@@ -244,7 +266,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']),
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
                     fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
-                    _fmt_vol(row['volume']), foreign_rate_str, inv_str
+                    obv_disp, foreign_rate_str, inv_str
                 )
                 
                 if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
@@ -339,6 +361,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
             df['diff'] = df['close'].diff()
             df['rate'] = df['close'].pct_change() * 100
 
+            # OBV 및 OBV_MA 계산
+            df['OBV'] = indicators.get_obv_full_series(df)
+            df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
+
             # 최신순 정렬 및 20개 추출
             recent_df = df.sort_values('date', ascending=False).head(20)
 
@@ -350,7 +376,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("시가", justify="right")
             table_d.add_column("고가", justify="right")
             table_d.add_column("저가", justify="right")
-            table_d.add_column("거래량", justify="right")
+            table_d.add_column("OBV", justify="right")
             table_d.add_column("5일선", justify="right")
             table_d.add_column("20일선", justify="right")
             table_d.add_column("60일선", justify="right")
@@ -397,8 +423,23 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     if pd.isna(val): return "-"
                     return f"[{color}]{fmt_p(val)}[/]"
 
+                # OBV 포맷팅
+                obv_val = row['OBV']
+                obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
+                obv_c = "red" if obv_trend else "blue"
+                if pd.isna(obv_val):
+                    obv_disp = "-"
+                else:
+                    abs_val = abs(obv_val)
+                    if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+                    elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+                    elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+                    elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+                    else: obv_str = f"{obv_val:,.0f}"
+                    obv_disp = f"[{obv_c}]{obv_str}[/]"
+
                 table_d.add_row(
-                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), _fmt_vol(row['volume']),
+                    date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), obv_disp,
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
                     fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
                 )

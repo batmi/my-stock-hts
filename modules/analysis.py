@@ -859,16 +859,27 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # OBV
     obv_trend = ind.get('obv_trend')
+    obv_val = ind.get('obv')
     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
-    if vol_sum == 0 or obv_trend is None:
+    
+    if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
         obv_trend_str = '-'
         obv_color = "[dim]"
         obv_desc = "거래량 데이터 없음"
+        obv_formatted = f"{obv_color}{obv_trend_str}[/]"
     else:
         obv_trend_str = '상승' if obv_trend else '하락'
         obv_color = "[red]" if obv_trend else "[blue]"
         obv_desc = "이동평균 상회 여부"
-    table_tech.add_row("OBV 추세", f"{obv_color}{obv_trend_str}[/]", obv_desc)
+        abs_val = abs(obv_val)
+        if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+        elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+        elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+        elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+        else: obv_str = f"{obv_val:,.0f}"
+        obv_formatted = f"{obv_color}{obv_trend_str}[/] [dim]({obv_str})[/dim]"
+        
+    table_tech.add_row("OBV 추세", obv_formatted, obv_desc)
     
     # RSI
     rsi_val = ind.get('rsi')
@@ -1243,7 +1254,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     idx_table.add_column("RSI", justify="right")
                     idx_table.add_column("CCI", justify="right")
                     idx_table.add_column("ADX", justify="right")
-                    idx_table.add_column("거래량", justify="right")
+                    idx_table.add_column("OBV", justify="right")
                     
                     curr_fmt = f"{current_price:,.2f}"
                     curr_str = f"{curr_price_color}{curr_fmt}[/]"
@@ -1298,25 +1309,22 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         t_macd = f"[{mc}]{zs}{cc}[/]"
                         
                     obv_trend = ind.get('obv_trend')
+                    obv_val = ind.get('obv')
                     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
                     
-                    vol_val = 0
-                    if df is not None and not df.empty and 'volume' in df.columns:
-                        vol_val = float(df.iloc[-1]['volume'])
-                    if math.isnan(vol_val):
-                        vol_val = 0
-                        
-                    if vol_sum == 0 or obv_trend is None:
+                    if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
                         obv_icon = "[dim]-[/dim]"
-                        vol_str_display = "[dim]-[/dim]"
+                        obv_disp = "[dim]-[/dim]"
                     else:
                         obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
-                        vol_color = "[red]" if obv_trend else "[blue]"
-                        if vol_val == 0: vol_str_display = "[dim]-[/dim]"
-                        elif vol_val >= 1_000_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000_000:,.1f}B[/]"
-                        elif vol_val >= 1_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000:,.1f}M[/]"
-                        elif vol_val >= 1_000: vol_str_display = f"{vol_color}{vol_val/1_000:,.0f}K[/]"
-                        else: vol_str_display = f"{vol_color}{vol_val:,.0f}[/]"
+                        obv_c = "red" if obv_trend else "blue"
+                        abs_val = abs(obv_val)
+                        if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+                        elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+                        elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+                        elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+                        else: obv_str = f"{obv_val:,.0f}"
+                        obv_disp = f"[{obv_c}]{obv_str}[/]"
                         
                     trend_str = f"{t_sar} {t_macd} {obv_icon}"
                     
@@ -1352,7 +1360,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         fmt_val(ind.get('ema_20'), ema20_color), 
                         fmt_val(ind.get('ema_60'), ema60_color), 
                         fmt_val(ind.get('ema_120'), ema120_color), 
-                        trend_str, t_rsi_str, t_cci_str, t_adx_str, vol_str_display
+                        trend_str, t_rsi_str, t_cci_str, t_adx_str, obv_disp
                     )
                     config.console.print()
                     config.console.print(idx_table)
@@ -2709,11 +2717,13 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             if obv_val:
                 obv_c = "red" if ind.get('obv_trend') else "blue"
                 abs_val = abs(obv_val)
-                if abs_val >= 1_000_000_000:
+                if abs_val >= 999_950_000_000:
+                    obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+                elif abs_val >= 999_950_000:
                     obv_str = f"{obv_val/1_000_000_000:,.1f}B"
-                elif abs_val >= 1_000_000:
+                elif abs_val >= 999_500:
                     obv_str = f"{obv_val/1_000_000:,.1f}M"
-                elif abs_val >= 1_000:
+                elif abs_val >= 999.5:
                     obv_str = f"{obv_val/1_000:,.0f}K"
                 else:
                     obv_str = f"{obv_val:,.0f}"
@@ -3146,9 +3156,11 @@ def _print_period_price_common(code, is_overseas, limit=20):
     def _fmt_vol(v):
         val = float(v)
         if val == 0: return "[dim]-[/dim]"
-        if val >= 1_000_000_000: return f"{val/1_000_000_000:,.1f}B"
-        if val >= 1_000_000: return f"{val/1_000_000:,.1f}M"
-        if val >= 1_000: return f"{val/1_000:,.0f}K"
+        abs_val = abs(val)
+        if abs_val >= 999_950_000_000: return f"{val/1_000_000_000_000:,.1f}T"
+        elif abs_val >= 999_950_000: return f"{val/1_000_000_000:,.1f}B"
+        elif abs_val >= 999_500: return f"{val/1_000_000:,.1f}M"
+        elif abs_val >= 999.5: return f"{val/1_000:,.0f}K"
         return f"{val:,.0f}"
 
     # [수정] 단순 조회이므로 status 사용
@@ -3220,6 +3232,10 @@ def _print_period_price_common(code, is_overseas, limit=20):
     df['diff'] = df['close'].diff()
     df['rate'] = df['close'].pct_change() * 100
 
+    # OBV 및 OBV_MA 계산
+    df['OBV'] = indicators.get_obv_full_series(df)
+    df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
+
     # 최신순 정렬 및 limit 적용
     df_sorted = df.sort_values('date', ascending=False)
     if limit:
@@ -3249,7 +3265,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     table.add_column("20일선", justify="right")
     table.add_column("60일선", justify="right")
     table.add_column("120일선", justify="right")
-    table.add_column("거래량", justify="right") # [이동]
+    table.add_column("OBV", justify="right") # [이동]
     if not is_overseas and not is_domestic_index:
         table.add_column("외인률", justify="right") # [추가]
         table.add_column("수급(개/외/기)", justify="center") # [수정]
@@ -3303,6 +3319,21 @@ def _print_period_price_common(code, is_overseas, limit=20):
             if pd.isna(val): return "[dim]-[/dim]"
             return f"[{color}]{fmt_p(val)}[/]"
 
+        # OBV 포맷팅
+        obv_val = row['OBV']
+        obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
+        obv_c = "red" if obv_trend else "blue"
+        if pd.isna(obv_val):
+            obv_disp = "[dim]-[/dim]"
+        else:
+            abs_val = abs(obv_val)
+            if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+            elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+            elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+            elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+            else: obv_str = f"{obv_val:,.0f}"
+            obv_disp = f"[{obv_c}]{obv_str}[/]"
+
         # [추가] 수급 데이터 포맷팅
         inv_str = "[dim]-[/dim]"
         foreign_rate_str = "[dim]-[/dim]"
@@ -3345,7 +3376,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
             fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
             fmt_ma(ma60_val, get_ma_color(ma60_val, 60)),
             fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
-            _fmt_vol(row['volume'])
+            obv_disp
         ]
         if not is_overseas and not is_domestic_index:
             row_data.append(foreign_rate_str)

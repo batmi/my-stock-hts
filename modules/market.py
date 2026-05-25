@@ -417,27 +417,22 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
         
         obv_trend = ind.get('obv_trend')
+        obv_val = ind.get('obv')
         vol_sum = df_calc['volume'].tail(5).sum() if not df_calc.empty and 'volume' in df_calc.columns else 0
         
-        vol_val = 0
-        if not df_calc.empty and 'volume' in df_calc.columns:
-            vol_val = float(df_calc.iloc[-1]['volume'])
-        elif not df_daily.empty and 'volume' in df_daily.columns:
-            vol_val = float(df_daily.iloc[-1]['volume'])
-        if math.isnan(vol_val):
-            vol_val = 0
-            
-        if vol_sum == 0 or obv_trend is None:
+        if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
             obv_icon = "[dim]-[/dim]"
-            vol_str_display = "[dim]-[/dim]"
+            obv_disp = "[dim]-[/dim]"
         else:
             obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
-            vol_color = "[red]" if obv_trend else "[blue]"
-            if vol_val == 0: vol_str_display = "[dim]-[/dim]"
-            elif vol_val >= 1_000_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000_000:,.1f}B[/]"
-            elif vol_val >= 1_000_000: vol_str_display = f"{vol_color}{vol_val/1_000_000:,.1f}M[/]"
-            elif vol_val >= 1_000: vol_str_display = f"{vol_color}{vol_val/1_000:,.0f}K[/]"
-            else: vol_str_display = f"{vol_color}{vol_val:,.0f}[/]"
+            obv_c = "red" if obv_trend else "blue"
+            abs_val = abs(obv_val)
+            if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+            elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+            elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+            elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+            else: obv_str = f"{obv_val:,.0f}"
+            obv_disp = f"[{obv_c}]{obv_str}[/]"
             
         trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
@@ -612,7 +607,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         return {
             'status': 'success',
-            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, vol_str_display],
+            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, obv_disp],
             'patched_name': patched_name,
             'missing_name': missing_name,
             'mismatch_msg': mismatch_msg,
@@ -831,7 +826,7 @@ def _show_market_indices_core(target_indices=None):
         table.add_column("RSI", justify="right")
         table.add_column("CCI", justify="right")
         table.add_column("ADX", justify="right")
-        table.add_column("거래량", justify="right")
+        table.add_column("OBV", justify="right")
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)
         with Progress(
