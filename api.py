@@ -51,22 +51,23 @@ def is_holiday_today():
     """오늘이 주말 또는 공휴일(휴장일)인지 확인합니다."""
     today_str = datetime.now().strftime("%Y%m%d")
     if today_str in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[today_str]
+    
     if datetime.now().weekday() > 4:
         _HOLIDAY_CACHE[today_str] = True
         return True
         
-        # 실전투자 모드일 경우에만 API 우선 조회 시도
-        if not config.session.is_simulation:
-            res = check_holiday(today_str)
-            if res is not None:
-                _HOLIDAY_CACHE[today_str] = res
-                return res
-                
-        # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
-        is_holiday = get_holiday_name(today_str, country='KR') is not None
-        _HOLIDAY_CACHE[today_str] = is_holiday
-        
-        return is_holiday
+    # 실전투자 모드일 경우에만 API 우선 조회 시도
+    if not config.session.is_simulation:
+        res = check_holiday(today_str)
+        if res is not None:
+            _HOLIDAY_CACHE[today_str] = res
+            return res
+            
+    # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
+    is_holiday = get_holiday_name(today_str, country='KR') is not None
+    _HOLIDAY_CACHE[today_str] = is_holiday
+    
+    return is_holiday
 
 def check_us_holiday(date_str):
     """한국투자증권 해외주식(미국) 휴장일 조회 API 호출"""
@@ -92,22 +93,23 @@ def is_us_holiday_today():
     today_str = datetime.now().strftime("%Y%m%d")
     cache_key = f"US_{today_str}"
     if cache_key in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[cache_key]
+    
     if datetime.now().weekday() > 4:
         _HOLIDAY_CACHE[cache_key] = True
         return True
             
-        # 실전투자 모드일 경우에만 API 우선 조회 시도
-        if not config.session.is_simulation:
-            res = check_us_holiday(today_str)
-            if res is not None:
-                _HOLIDAY_CACHE[cache_key] = res
-                return res
-                
-        # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
-        is_holiday = get_holiday_name(today_str, country='US') is not None
-        _HOLIDAY_CACHE[cache_key] = is_holiday
-        
-        return is_holiday
+    # 실전투자 모드일 경우에만 API 우선 조회 시도
+    if not config.session.is_simulation:
+        res = check_us_holiday(today_str)
+        if res is not None:
+            _HOLIDAY_CACHE[cache_key] = res
+            return res
+            
+    # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
+    is_holiday = get_holiday_name(today_str, country='US') is not None
+    _HOLIDAY_CACHE[cache_key] = is_holiday
+    
+    return is_holiday
 
 def get_holiday_name(date_str, country='KR'):
     """holidays 라이브러리를 이용하여 공휴일 이름을 반환합니다."""
