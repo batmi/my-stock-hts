@@ -830,9 +830,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("52주 위치", f"{w_color}{w52_pos:.1f}%[/] [dim]({l52_str} ~ {h52_str})[/dim]", "최고가/최저가 밴드 내 현 위치")
 
     # SAR
-    if ind.get('psar') is not None:
-        sar_pos = "주가 아래 (상승)" if ind['psar'] < current_price else "주가 위 (하락)"
-        sar_color = "[red]" if ind['psar'] < current_price else "[blue]"
+    sar_val = ind.get('psar')
+    if sar_val is not None and not math.isnan(sar_val):
+        sar_pos = "주가 아래 (상승)" if sar_val < current_price else "주가 위 (하락)"
+        sar_color = "[red]" if sar_val < current_price else "[blue]"
     else:
         sar_pos = "-"
         sar_color = "[dim]"
@@ -844,7 +845,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     macd_str = "[dim]-[/dim]"
     macd_desc = "추세 확인"
-    if macd_val is not None and sig_val is not None:
+    if macd_val is not None and sig_val is not None and not math.isnan(macd_val) and not math.isnan(sig_val):
         m_color = "[red]" if macd_val >= sig_val else "[blue]"
         macd_str = f"{m_color}{macd_val:+.2f}[/]"
         
@@ -862,6 +863,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     obv_val = ind.get('obv')
     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
     
+    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+        obv_trend = None
+        obv_val = None
+        
     if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
         obv_trend_str = '-'
         obv_color = "[dim]"
@@ -1312,6 +1317,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     obv_val = ind.get('obv')
                     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
                     
+                    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+                        obv_trend = None
+                        obv_val = None
+                        
                     if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
                         obv_icon = "[dim]-[/dim]"
                         obv_disp = "[dim]-[/dim]"
@@ -1850,10 +1859,22 @@ def _analyze_stock_worker(stock, params=None):
         else:
             is_target = True # params가 없으면(엑셀 저장 등) 모두 유효
 
+        obv_val = ind.get('obv')
+        obv_trend = ind.get('obv_trend')
+        vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
+        
+        if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+            obv_trend = None
+            obv_val = None
+            
+        if vol_sum == 0 or obv_val is None or math.isnan(obv_val):
+            obv_trend = None
+            obv_val = None
+
         return {
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': initial_state, 'state_color': initial_state_color, 'state_reason': state_reason,
-            'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': ind.get('obv_trend'),
+            'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': obv_trend,
             'psar': ind['psar'], 'macd': ind.get('macd'), 'macd_signal': ind.get('macd_signal'),
             'is_target': is_target, 
             'vol_strength': vol_strength,
@@ -2336,11 +2357,17 @@ def save_all_market_analysis():
                         vol = round(item['vol_strength'], 1) if item.get('vol_strength') else None
                         
                         # SAR/MACD 상태
-                        sar_state = "상승" if item['psar'] and item['price'] > item['psar'] else "하락"
+                        sar_val = item.get('psar')
+                        if sar_val is not None and not math.isnan(sar_val):
+                            sar_state = "상승" if item['price'] > sar_val else "하락"
+                        else:
+                            sar_state = "-"
                         
                         macd_state = "-"
-                        if item.get('macd') is not None and item.get('macd_signal') is not None:
-                            macd_state = "골든" if item['macd'] > item['macd_signal'] else "데드"
+                        macd_val = item.get('macd')
+                        sig_val = item.get('macd_signal')
+                        if macd_val is not None and sig_val is not None and not math.isnan(macd_val) and not math.isnan(sig_val):
+                            macd_state = "골든" if macd_val > sig_val else "데드"
 
                         name_display = item['name']
                         if item.get('is_custom_rule'):
@@ -2388,7 +2415,7 @@ def save_all_market_analysis():
                             "ADX": adx,
                             "SAR": sar_state,
                             "MACD": macd_state,
-                            "OBV": "상승" if item['obv_trend'] else "하락",
+                            "OBV": "상승" if item['obv_trend'] is True else ("하락" if item['obv_trend'] is False else "-"),
                             "체결강도": vol,
                             "비고": note # [추가]
                         }
@@ -2687,7 +2714,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             # SAR 상태
             sar_val = ind.get('psar')
-            if sar_val is not None:
+            if sar_val is not None and not math.isnan(sar_val):
                 sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
             else:
                 sar_icon = "-"
@@ -2696,38 +2723,36 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             macd_val = ind.get('macd')
             sig_val = ind.get('macd_signal')
             macd_icon = "-"
-            if macd_val is not None and sig_val is not None:
+            if macd_val is not None and sig_val is not None and not math.isnan(macd_val) and not math.isnan(sig_val):
                 zero_sign = "+" if macd_val > 0 else "-"
                 cross_char = "G" if macd_val > sig_val else "D"
                 m_color = "red" if macd_val > sig_val else "blue"
                 macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
 
-            # OBV 상태
+            # OBV 상태 및 Value
             obv_trend = ind.get('obv_trend')
-            if obv_trend is not None:
-                obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
-            else:
-                obv_icon = "-"
-            
-            trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
-
-            # OBV Value
             obv_val = ind.get('obv')
-            obv_disp = "-"
-            if obv_val:
-                obv_c = "red" if ind.get('obv_trend') else "blue"
+            vol_sum = chart_df['volume'].tail(5).sum() if chart_df is not None and 'volume' in chart_df.columns else 0
+            
+            if chart_df is None or len(chart_df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+                obv_trend = None
+                obv_val = None
+                
+            if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
+                obv_icon = "-"
+                obv_disp = "-"
+            else:
+                obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
+                obv_c = "red" if obv_trend else "blue"
                 abs_val = abs(obv_val)
-                if abs_val >= 999_950_000_000:
-                    obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
-                elif abs_val >= 999_950_000:
-                    obv_str = f"{obv_val/1_000_000_000:,.1f}B"
-                elif abs_val >= 999_500:
-                    obv_str = f"{obv_val/1_000_000:,.1f}M"
-                elif abs_val >= 999.5:
-                    obv_str = f"{obv_val/1_000:,.0f}K"
-                else:
-                    obv_str = f"{obv_val:,.0f}"
+                if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
+                elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
+                elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
+                elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
+                else: obv_str = f"{obv_val:,.0f}"
                 obv_disp = f"[{obv_c}]{obv_str}[/]"
+
+            trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
             rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             if ind['rsi'] is not None:
@@ -3321,11 +3346,16 @@ def _print_period_price_common(code, is_overseas, limit=20):
 
         # OBV 포맷팅
         obv_val = row['OBV']
-        obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
-        obv_c = "red" if obv_trend else "blue"
+        obv_ma_val = row['OBV_MA']
         if pd.isna(obv_val):
             obv_disp = "[dim]-[/dim]"
         else:
+            obv_trend = obv_val > obv_ma_val if not pd.isna(obv_ma_val) else None
+            if obv_trend is None:
+                obv_c = "white"
+            else:
+                obv_c = "red" if obv_trend else "blue"
+            
             abs_val = abs(obv_val)
             if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
             elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
