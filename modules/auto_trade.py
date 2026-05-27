@@ -4720,10 +4720,8 @@ class AutoTrader:
         
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
-            log_cnt = min(len(candidates), 3)
-            self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 중 우선순위 상위 {log_cnt}개:")
-            for i in range(log_cnt):
-                c = candidates[i]
+            self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순):")
+            for i, c in enumerate(candidates):
                 rsi_disp = f"{c['rsi']:.1f}" if c['rsi'] is not None else "-"
                 vol_disp = f"{c['vol_strength']:.1f}%" if c.get('vol_strength') else "-"
                 self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, RSI:{rsi_disp}, 체결:{vol_disp})")
