@@ -170,7 +170,7 @@ def calculate_score(df, ind, weights=None, smart_money=False):
     if ema20 is not None and ema60 is not None and ema120 is not None and ema20 > ema60 and ema60 > ema120:
         s = round(1.0 * r_trend, 2); score += s; details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
     if ema20 is not None and ema_5 is not None and ema_5 > ema20:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 5일선 > 20일선 [Early] (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 5일선 > 20일선 (+{s:.2f})")
     if ema20 is not None and ema60 is not None and ema20 <= ema60 and price > ema60:
         s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
     
@@ -178,7 +178,7 @@ def calculate_score(df, ind, weights=None, smart_money=False):
         if macd > macd_signal:
             s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 골든크로스 (+{s:.2f})")
     if macd_hist is not None and prev_macd_hist is not None and (macd_hist > 0 or macd_hist > prev_macd_hist):
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 히스토그램 개선 [Early] (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 히스토그램 개선 (+{s:.2f})")
 
     if sar is not None and price > sar:
         s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
@@ -195,17 +195,17 @@ def calculate_score(df, ind, weights=None, smart_money=False):
         if cci > 0:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
         if prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 [Early] (+{s:.2f})")
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 (+{s:.2f})")
             
     if plus_di is not None and minus_di is not None and plus_di > minus_di:
-        s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 [Early] (+{s:.2f})")
+        s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 (+{s:.2f})")
 
     # 3. Strength & Volume Factor (1.5점)
     if adx is not None and adx >= 20:
         s = round(0.5 * r_str, 2); score += s; details.append(f"ADX: 추세 형성 (+{s:.2f})")
         
     if vol_spike:
-        s = round(0.5 * r_str, 2); score += s; details.append(f"VOL: 거래량 폭증/양봉 [Early] (+{s:.2f})")
+        s = round(0.5 * r_str, 2); score += s; details.append(f"VOL: 거래량 폭증/양봉 (+{s:.2f})")
         
     if obv_trend or smart_money:
         s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 턴어라운드 (+{s:.2f})")

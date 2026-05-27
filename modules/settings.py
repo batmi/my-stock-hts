@@ -810,10 +810,10 @@ def reset_to_default(interactive=True):
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
-        "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
+        "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 95.0,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
         "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
-        "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
+        "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 100.0,
         "SUPER_MOMENTUM_USE": True, "SUPER_MOMENTUM_SCORE": 8.5,
         "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
     })
