@@ -629,8 +629,8 @@ def show_help():
 
     # [추가] 매매 필터링 섹션
     score_table.add_section()
-    score_table.add_row("매매 필터링 - 위험", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (점수 무관)")
-    score_table.add_row("매매 필터링 - 주의", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (보유는 가능)")
+    score_table.add_row("매매 필터링 - 위험", "60일선 & 120일선 동시 이탈 or RSI ≤ 20", "[blue]매도[/]", "매수 금지 / 즉시 매도 (단, 매수 점수 획득 시 예외 통과)")
+    score_table.add_row("매매 필터링 - 주의", "MACD 데드크로스, 60/120선 이탈, SAR 매도", "[yellow]주의[/]", "신규 진입 자제 (단, 매수 점수 획득 시 예외 통과)")
 
     # [추가] 매수 타이밍 섹션
     score_table.add_section()

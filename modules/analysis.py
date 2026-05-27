@@ -374,6 +374,43 @@ def classify_stock_state(df, ind, prev_rsi=None, thresholds=None, w52_pos=None, 
         if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp:
             return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호)"
 
+    # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
+    weights = thresholds.get("WEIGHTS") if thresholds else None
+    score, _ = calculate_score(df, ind, weights=weights, smart_money=smart_money)
+
+    # [수정] config.py의 설정값을 사용하여 상태 판정
+    if thresholds:
+        buy_score = thresholds.get("BUY_SCORE", config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
+        rise_score = thresholds.get("RISE_SCORE", config.ANALYSIS_THRESHOLDS["RISE_SCORE"])
+        buy_rsi_max = thresholds.get("BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
+        
+        use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
+    else:
+        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+        rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+        buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+        
+        use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
+        super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+        super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
+        super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
+
+    # [추가] 1순위 절대 방어 필터: 극단적 하락 추세(투매 패닉) 진행 중일 때는 아무리 점수가 높아도 칼날 잡기 금지
+    if plus_di is not None and minus_di is not None and minus_di > plus_di:
+        if adx is not None and adx >= 45: # ADX 45 이상의 초강력 하락장
+            return "매도", "[blue]", "초강력 투매 패닉 구간 (ADX 과열 및 -DI 우위)"
+
+    # 2순위: 얼리 스테이지 및 기본 매수 조건 (위 절대 필터를 통과한 종목만)
+    is_super = use_super and score >= super_score and w52_pos is not None and w52_pos >= super_w52
+    actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
+
+    if score >= buy_score and rsi < actual_buy_rsi_max:
+        if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
+        else: return "매수", "[red]", "매수 조건 충족 (얼리 스테이지 반등 포함)"
+
     reasons = []
     is_severe_danger = False
     
@@ -409,49 +446,13 @@ def classify_stock_state(df, ind, prev_rsi=None, thresholds=None, w52_pos=None, 
         is_caution = True
         reasons.append(f"ADX과열({adx:.1f})+RSI하락")
 
-    # [추가] MACD 데드크로스 (매도/조정 신호)
     if macd is not None and macd_signal is not None and macd < macd_signal:
         is_caution = True
         reasons.append("MACD 데드크로스")
         
-    # [추가] DMI 매도 시그널 (-DI가 +DI를 추월하고 ADX가 25 이상일 때)
-    if plus_di is not None and minus_di is not None and minus_di > plus_di:
-        if adx is not None and adx >= 25:
-            is_caution = True
-            reasons.append("DMI 매도 (-DI 우위 및 ADX 강세)")
 
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
-    
-    # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
-    weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(df, ind, weights=weights, smart_money=smart_money)
 
-    # [수정] config.py의 설정값을 사용하여 상태 판정
-    if thresholds:
-        buy_score = thresholds.get("BUY_SCORE", config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
-        rise_score = thresholds.get("RISE_SCORE", config.ANALYSIS_THRESHOLDS["RISE_SCORE"])
-        buy_rsi_max = thresholds.get("BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
-        
-        use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
-        super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
-    else:
-        buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-        rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
-        buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        
-        use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
-        super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
-        super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
-        super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
-
-    is_super = use_super and score >= super_score and w52_pos is not None and w52_pos >= super_w52
-    actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
-
-    if score >= buy_score and rsi < actual_buy_rsi_max:
-        if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
-        else: return "매수", "[red]", "매수 조건 충족"
     elif score >= rise_score:
         return "상승", "[orange3]", "상승 추세 (점수 양호)"
     else: return "관망", "[white]", "방향성 탐색 구간"
@@ -1841,9 +1842,7 @@ def _analyze_stock_worker(stock, params=None):
 
         # 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=params, w52_pos=w52_pos, smart_money=sm_flag
+            df, ind, prev_rsi=prev_rsi, thresholds=params, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         if state == "-": return {'error': '지표 계산용 데이터 부족 (신규상장 등)'}
@@ -1854,10 +1853,7 @@ def _analyze_stock_worker(stock, params=None):
 
         # [수정] 사용자 설정 가중치 적용
         weights = params.get('WEIGHTS') if params else None
-        score, _ = calculate_score(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            , weights=weights, smart_money=sm_flag
+        score, _ = calculate_score(df, ind, weights=weights, smart_money=sm_flag
         )
 
         # [수정] 체결강도 조회 최적화: 필터 조건에 맞는 종목만 조회
