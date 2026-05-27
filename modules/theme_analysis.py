@@ -1145,15 +1145,9 @@ def _analyze_stock_ui():
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
-            state, _, state_reason = analysis.classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            )
+            state, _, state_reason = analysis.classify_stock_state(df, ind, prev_rsi=prev_rsi)
 
-            score, _ = analysis.calculate_score(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
-            )
+            score, _ = analysis.calculate_score(df, ind)
 
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
