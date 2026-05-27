@@ -702,33 +702,33 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     """지정된 시장 국면에 맞게 시스템 전역 설정을 일괄 변경합니다."""
     if preset_type == "bull":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 70, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 20.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "ATR_STOP_MULTIPLIER": 2.0})
-        config.SCORING_WEIGHTS.update({"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0})
+        config.SCORING_WEIGHTS.update({"TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.2
         config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
         config.USE_MARKET_FILTER = True
         config.MARKET_FILTER_MA = 50
-        msg = "🟢 [강세장(Bull)] 전략 프리셋이 적용되었습니다.\n(수익 극대화 & 추세 추종)"
+        msg = "🟢 [강세장(Bull)] 전략 프리셋이 적용되었습니다.\n(주도주 돌파매매 및 추세 추종에 최적화)"
         
     elif preset_type == "bear":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 9.0, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 7.0, "STOP_LOSS_RATE": -3.0, "SELL_SCORE": 6.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5})
-        config.SCORING_WEIGHTS.update({"TREND": 1.0, "MOMENTUM": 4.0, "STRENGTH": 3.0, "SYNERGY": 2.0})
+        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 8.0, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False})
+        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 10.0, "STOP_LOSS_RATE": -3.0, "SELL_SCORE": 6.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5})
+        config.SCORING_WEIGHTS.update({"TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.1
         config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
         config.USE_MARKET_FILTER = False # 낙폭과대 역추세 스윙을 위해 시장 필터 임시 해제
         config.MARKET_FILTER_MA = 20
-        msg = "🔵 [약세장(Bear)] 전략 프리셋이 적용되었습니다.\n(생존 우선 & 낙폭과대 역추세 스윙)"
+        msg = "🔵 [약세장(Bear)] 전략 프리셋이 적용되었습니다.\n(보수적 퀀트 기준 적용 및 하락장 낙폭과대 수급(Volume) 유입 포착에 집중)"
         
     elif preset_type == "sideways":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 50, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False})
+        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 50, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False})
         config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 15.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8})
         config.SCORING_WEIGHTS.update({"TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0})
         config.SYSTEM_INVEST_PER_STOCK = 0.15
         config.SYSTEM_DAILY_LOSS_LIMIT = 7.0
         config.USE_MARKET_FILTER = True
         config.MARKET_FILTER_MA = 20
-        msg = "🟡 [횡보장(Sideways)] 전략 프리셋이 적용되었습니다.\n(박스권 단기 스윙 및 타이트한 트레일링 스탑)"
+        msg = "🟡 [횡보장(Sideways)] 전략 프리셋이 적용되었습니다.\n(과매도권(CCI/RSI) 선행 탈출 및 거래량 스파이크 포착에 최적화)"
         
     elif preset_type == "default":
         config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})

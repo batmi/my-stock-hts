@@ -93,9 +93,9 @@ def _get_preset_emoji():
     rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
     tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
     
-    if bs == 7.0 and tp == 40.0 and rsi == 70: return "🟢"
-    elif bs == 9.0 and tp == 7.0 and rsi == 65: return "🔵"
-    elif bs == 7.5 and tp == 15.0 and rsi == 50: return "🟡"
+    if bs == 7.0 and tp == 30.0 and rsi == 70: return "🟢"
+    elif bs == 8.0 and tp == 10.0 and rsi == 65: return "🔵"
+    elif bs == 7.0 and tp == 15.0 and rsi == 50: return "🟡"
     else: return "⚪"
 
 def _custom_print_breadcrumb():
@@ -558,25 +558,26 @@ def show_help():
 
     # 1. Trend Factor
     score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
-    score_table.add_row("(추세 4.0)", "20일선 > 60일선", f"+{0.5 * r_trend:.1f}", "수급선 정배열")
-    score_table.add_row("", "60일선 > 120일선", f"+{0.5 * r_trend:.1f}", "경기선 정배열")
+    score_table.add_row("(추세 4.0)", "EMA 5일선 > 20일선", f"+{0.5 * r_trend:.1f}", "5일선이 20일선 상회 (단기 추세 전환)")
+    score_table.add_row("", "20/60/120선 정배열", f"+{1.0 * r_trend:.1f}", "중장기 이평선 정배열 (0.5+0.5)")
     score_table.add_row("", "주가 > 60일선 돌파 (초기)", f"+{0.5 * r_trend:.1f}", "초기 추세 전환 (20선≤60선 시)")
-    score_table.add_row("", "MACD > Signal", f"+{1.0 * r_trend:.1f}", "골든크로스 (강력)")
-    score_table.add_row("", "MACD > 0", f"+{0.5 * r_trend:.1f}", "상승 국면 진입")
-    score_table.add_row("", "주가 > SAR", f"+{1.0 * r_trend:.1f}", "파라볼릭 매수")
+    score_table.add_row("", "MACD > Signal", f"+{0.5 * r_trend:.1f}", "골든크로스")
+    score_table.add_row("", "MACD 히스토그램 개선", f"+{0.5 * r_trend:.1f}", "히스토그램 양수 또는 상승 (MACD 선행)")
+    score_table.add_row("", "주가 > SAR", f"+{0.5 * r_trend:.1f}", "파라볼릭 매수")
     score_table.add_section()
 
     # 2. Momentum Factor
-    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", f"+{1.5 * r_mom:.1f}", "강세 구간 (주도주)")
-    score_table.add_row("(모멘텀 2.5)", "30 ≤ RSI < 50", f"+{0.5 * r_mom:.1f}", "반등/회복 시도")
+    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", f"+{0.5 * r_mom:.1f}", "강세 구간 (주도주)")
+    score_table.add_row("(모멘텀 2.5)", "30 ≤ RSI < 50 하단 반등", f"+{0.5 * r_mom:.1f}", "반등/회복 시도")
     score_table.add_row("", "CCI > 0", f"+{0.5 * r_mom:.1f}", "상승 추세")
-    score_table.add_row("", f"CCI > {cci_upper}", f"+{0.5 * r_mom:.1f}", "강한 상승 탄력")
+    score_table.add_row("", "CCI > -100 돌파", f"+{0.5 * r_mom:.1f}", "과매도권(-100) 하단 탈출 (초기 반등)")
+    score_table.add_row("", "+DI > -DI 교차", f"+{0.5 * r_mom:.1f}", "매수세가 매도세 역전 (모멘텀 발생)")
     score_table.add_section()
 
     # 3. Strength & Volume
     score_table.add_row("Strength/Volume", "ADX ≥ 20", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
-    score_table.add_row("(강도/수급 1.5)", "OBV > OBV 이동평균", f"+{0.5 * r_str:.1f}", "수급 양호 (단순 거래량)")
-    score_table.add_row("", "스마트머니", f"+{0.5 * r_str:.1f}", "최근 2일(당일/전일) 외인/기관 쌍끌이 or 순매수 전환")
+    score_table.add_row("(강도/수급 1.5)", "거래량 폭증(200%+) & 양봉", f"+{0.5 * r_str:.1f}", "20일평균 대비 거래량 폭증 (자금 유입)")
+    score_table.add_row("", "OBV 상승 & 스마트머니", f"+{0.5 * r_str:.1f}", "메이저 수급 턴어라운드")
     score_table.add_section()
 
     # 4. Synergy Bonus

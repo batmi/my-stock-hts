@@ -86,12 +86,10 @@ def check_smart_money_turnaround(code, is_overseas=False):
         logger.debug(f"Smart Money Check Error for {code}: {e}")
         return False, ""
 
-def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None):
+def calculate_score(df, ind, weights=None, smart_money=False):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
     
-    # 기본 가중치 대비 비율 계산 (유연한 배점 적용)
-    # 기본값: TREND(4.0), MOMENTUM(2.5), STRENGTH(1.5), SYNERGY(2.0)
     r_trend = weights.get("TREND", 4.0) / 4.0
     r_mom = weights.get("MOMENTUM", 2.5) / 2.5
     r_str = weights.get("STRENGTH", 1.5) / 1.5
@@ -100,88 +98,119 @@ def calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, 
     score = 0
     details = []
 
+    if df is None or df.empty:
+        return 0.0, details
+
+    price = float(df.iloc[-1]['close'])
+    ema20 = ind.get('ema_20')
+    ema60 = ind.get('ema_60')
+    ema120 = ind.get('ema_120')
+    macd = ind.get('macd')
+    macd_signal = ind.get('macd_signal')
+    sar = ind.get('psar')
+    rsi = ind.get('rsi')
+    cci = ind.get('cci')
+    adx = ind.get('adx')
+    obv_trend = ind.get('obv_trend')
+
+    import numpy as np
+    
+    # [Early] 선행 지표 동적 계산
+    ema_5 = df['close'].ewm(span=config.INDICATOR_PARAMS.get('EMA_SHORT', 5), adjust=False).mean().iloc[-1] if len(df) > 0 else None
+    
+    macd_hist, prev_macd_hist = None, None
+    if macd is not None and macd_signal is not None:
+        fast = config.INDICATOR_PARAMS.get('MACD_FAST', 12)
+        slow = config.INDICATOR_PARAMS.get('MACD_SLOW', 26)
+        sig = config.INDICATOR_PARAMS.get('MACD_SIGNAL', 9)
+        macd_series = df['close'].ewm(span=fast, adjust=False).mean() - df['close'].ewm(span=slow, adjust=False).mean()
+        signal_series = macd_series.ewm(span=sig, adjust=False).mean()
+        hist_series = macd_series - signal_series
+        if len(hist_series) > 0: macd_hist = hist_series.iloc[-1]
+        if len(hist_series) > 1: prev_macd_hist = hist_series.iloc[-2]
+
+    plus_di, minus_di = ind.get('plus_di'), ind.get('minus_di')
+    if plus_di is None or minus_di is None:
+        try:
+            high_diff = df['high'].diff()
+            low_diff = df['low'].diff()
+            pos_dm = np.where((high_diff > 0) & (high_diff > -low_diff), high_diff, 0.0)
+            neg_dm = np.where((low_diff < 0) & (-low_diff > high_diff), -low_diff, 0.0)
+            tr1 = df['high'] - df['low']
+            tr2 = (df['high'] - df['close'].shift()).abs()
+            tr3 = (df['low'] - df['close'].shift()).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            adx_period = config.INDICATOR_PARAMS.get('ADX_PERIOD', 14)
+            atr = tr.ewm(alpha=1/adx_period, adjust=False).mean()
+            plus_di = 100 * pd.Series(pos_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr.iloc[-1]
+            minus_di = 100 * pd.Series(neg_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr.iloc[-1]
+        except: pass
+
+    prev_cci = None
+    if len(df) > 20:
+        try:
+            tp = (df['high'] + df['low'] + df['close']) / 3
+            cci_series = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
+            prev_cci = cci_series.iloc[-2]
+        except: pass
+
+    vol_spike = False
+    vol_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
+    vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
+    if len(df) >= vol_ma_period:
+        vol_ma = df['volume'].rolling(window=vol_ma_period).mean().iloc[-1]
+        vol = df['volume'].iloc[-1]
+        opn = df['open'].iloc[-1]
+        if vol_ma > 0 and vol >= (vol_ma * vol_ratio) and price > opn:
+            vol_spike = True
+
     # 1. Trend Factor (4.0점)
-    if ema20 is not None and price > ema20: 
-        s = round(0.5 * r_trend, 2)
-        score += s
-        details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
-    if ema20 is not None and ema60 is not None and ema20 > ema60: 
-        s = round(0.5 * r_trend, 2)
-        score += s
-        details.append(f"EMA: 20일선 > 60일선 (+{s:.2f})")
-    if ema60 is not None and ema120 is not None and ema60 > ema120: 
-        s = round(0.5 * r_trend, 2)
-        score += s
-        details.append(f"EMA: 60일선 > 120일선 (+{s:.2f})")
-        
-    # [추가] 초기 추세 전환 (Early Breakout) 가점
-    # 아직 20일선이 60일선 아래(역배열/조정)에 있지만, 주가가 60일선을 선제적으로 뚫고 올라왔을 때 가점 부여
+    if ema20 is not None and price > ema20:
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
+    if ema20 is not None and ema60 is not None and ema120 is not None and ema20 > ema60 and ema60 > ema120:
+        s = round(1.0 * r_trend, 2); score += s; details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
+    if ema20 is not None and ema_5 is not None and ema_5 > ema20:
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 5일선 > 20일선 [Early] (+{s:.2f})")
     if ema20 is not None and ema60 is not None and ema20 <= ema60 and price > ema60:
-        s = round(0.5 * r_trend, 2)
-        score += s
-        details.append(f"EMA: 60일선 돌파 (초기 추세 전환) (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
     
     if macd is not None and macd_signal is not None:
         if macd > macd_signal:
-            s = round(1.0 * r_trend, 2)
-            score += s
-            details.append(f"MACD: 골든크로스 (매수 우위) (+{s:.2f})")
-        if macd > 0:
-            s = round(0.5 * r_trend, 2)
-            score += s
-            details.append(f"MACD: 0선 상회 (상승 국면) (+{s:.2f})")
+            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 골든크로스 (+{s:.2f})")
+    if macd_hist is not None and prev_macd_hist is not None and (macd_hist > 0 or macd_hist > prev_macd_hist):
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 히스토그램 개선 [Early] (+{s:.2f})")
 
-    if sar is not None and price > sar: 
-        s = round(1.0 * r_trend, 2)
-        score += s
-        details.append(f"SAR: 주가 아래 (상승 추세) (+{s:.2f})")
+    if sar is not None and price > sar:
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
     
     # 2. Momentum Factor (2.5점)
     if rsi is not None:
-        if 50 <= rsi <= 75: 
-            s = round(1.5 * r_mom, 2)
-            score += s
-            details.append(f"RSI: {rsi:.1f} (강세 구간) (+{s:.2f})")
-        elif 30 <= rsi < 50: 
-            s = round(0.5 * r_mom, 2)
-            score += s
-            details.append(f"RSI: {rsi:.1f} (반등/회복) (+{s:.2f})")
-    
+        if 50 <= rsi <= 75:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 강세 구간 (+{s:.2f})")
+        elif 30 <= rsi < 50:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 반등 시도 (+{s:.2f})")
+            
+    cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
     if cci is not None:
-        if cci > 0: 
-            s = round(0.5 * r_mom, 2)
-            score += s
-            details.append(f"CCI: {cci:.1f} (상승 추세) (+{s:.2f})")
-        if cci > 100: 
-            s = round(0.5 * r_mom, 2)
-            score += s
-            details.append(f"CCI: {cci:.1f} (강한 상승 탄력) (+{s:.2f})")
+        if cci > 0:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
+        if prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 [Early] (+{s:.2f})")
+            
+    if plus_di is not None and minus_di is not None and plus_di > minus_di:
+        s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 [Early] (+{s:.2f})")
 
     # 3. Strength & Volume Factor (1.5점)
-    if adx is not None and adx >= 20: 
-        s = round(0.25 * r_str, 2) # 기존 0.5에서 비중 분할
-        score += s
-        details.append(f"ADX: {adx:.1f} (추세 형성) (+{s:.2f})")
-
-    # [추가] DMI 우위 반영 (+DI > -DI)
-    if plus_di is not None and minus_di is not None and adx is not None:
-        if plus_di > minus_di and adx >= 20:
-            s = round(0.25 * r_str, 2)
-            score += s
-            details.append(f"DMI: +DI 우위 (상승 추세) (+{s:.2f})")
-
-    if obv_trend: 
-        s = round(0.5 * r_str, 2) # [수정] 1.0 -> 0.5 변경
-        score += s
-        details.append(f"OBV: 이동평균 상회 (수급 양호) (+{s:.2f})")
+    if adx is not None and adx >= 20:
+        s = round(0.5 * r_str, 2); score += s; details.append(f"ADX: 추세 형성 (+{s:.2f})")
         
-    if smart_money:
-        s = round(0.5 * r_str, 2) # [추가] 스마트머니 가산점
-        score += s
-        details.append(f"SM: 메이저 수급 턴어라운드 (+{s:.2f})")
+    if vol_spike:
+        s = round(0.5 * r_str, 2); score += s; details.append(f"VOL: 거래량 폭증/양봉 [Early] (+{s:.2f})")
+        
+    if obv_trend or smart_money:
+        s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 턴어라운드 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
-    # Trend Confirmation (완화됨: 정배열이 아니어도 주가가 60일선 위에 있고 MACD/ADX가 양호하면 시너지 부여)
     if ema60 is not None and price > ema60 and (macd is not None and macd_signal is not None and macd > macd_signal) and (adx is not None and adx >= 15):
         s = round(1.0 * r_syn, 2)
         score += s
@@ -299,8 +328,40 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None):
-    if price is None or ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
+def classify_stock_state(df, ind, prev_rsi=None, thresholds=None, w52_pos=None, smart_money=False):
+    if df is None or df.empty: return "-", "[dim]", "데이터 부족"
+    
+    price = float(df.iloc[-1]['close'])
+    ema20 = ind.get('ema_20')
+    ema60 = ind.get('ema_60')
+    ema120 = ind.get('ema_120')
+    sar = ind.get('psar')
+    rsi = ind.get('rsi')
+    adx = ind.get('adx')
+    cci = ind.get('cci')
+    obv_trend = ind.get('obv_trend')
+    macd = ind.get('macd')
+    macd_signal = ind.get('macd_signal')
+    
+    plus_di, minus_di = ind.get('plus_di'), ind.get('minus_di')
+    if plus_di is None or minus_di is None:
+        import numpy as np
+        try:
+            high_diff = df['high'].diff()
+            low_diff = df['low'].diff()
+            pos_dm = np.where((high_diff > 0) & (high_diff > -low_diff), high_diff, 0.0)
+            neg_dm = np.where((low_diff < 0) & (-low_diff > high_diff), -low_diff, 0.0)
+            tr1 = df['high'] - df['low']
+            tr2 = (df['high'] - df['close'].shift()).abs()
+            tr3 = (df['low'] - df['close'].shift()).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            adx_period = config.INDICATOR_PARAMS.get('ADX_PERIOD', 14)
+            atr = tr.ewm(alpha=1/adx_period, adjust=False).mean()
+            plus_di = 100 * pd.Series(pos_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr.iloc[-1]
+            minus_di = 100 * pd.Series(neg_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr.iloc[-1]
+        except: pass
+
+    if ema60 is None or sar is None or rsi is None: return "-", "[dim]", "데이터 부족"
     
     # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
     use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
@@ -363,7 +424,7 @@ def classify_stock_state(price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, c
     
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money, plus_di=plus_di, minus_di=minus_di)
+    score, _ = calculate_score(df, ind, weights=weights, smart_money=smart_money)
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -728,15 +789,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         # 3. 상태 분류 및 점수 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+            df, ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         score, details = calculate_score(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-            weights=weights, smart_money=sm_flag
+            df, ind, weights=weights, smart_money=sm_flag
         )
 
     # 4. 결과 출력
@@ -1442,13 +1499,11 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
 
         # 3. 점수 및 상태 계산
         state, state_color, state_reason = classify_stock_state(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
-            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), w52_pos=w52_pos, smart_money=sm_flag
+            df, ind, prev_rsi=prev_rsi, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         score, _ = calculate_score(
-            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), smart_money=sm_flag
+            df, ind, smart_money=sm_flag
         )
         
         # [추가] 개별 룰 여부 확인
@@ -2671,7 +2726,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                         if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
                 except: pass
 
-            class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos_val)
+            class_name, class_color, _ = classify_stock_state(chart_df, ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val)
 
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"

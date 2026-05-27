@@ -244,7 +244,10 @@ class GlobalSettings(BaseModel):
         "RSI_UPPER": 70,               # RSI 과매수 기준선
         "RSI_MID": 50,                 # RSI 중간 기준선
         "RSI_LOWER": 30,               # RSI 과매도 기준선
-        "ATR_PERIOD": 14               # ATR 계산 기간
+        "ATR_PERIOD": 14,              # ATR 계산 기간
+        "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
+        "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
+        "VOLUME_SPIKE_RATIO": 2.0      # [추가] 거래량 폭발 기준 (200% 이상)
     }
 
 _settings_lock = threading.RLock()
