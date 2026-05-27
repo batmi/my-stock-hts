@@ -2514,9 +2514,9 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
     """(내부함수) print_table용 단일 종목 데이터 조회 및 가공 워커"""
     try:
         name, code = item
-        w52_pos_str, per_str, pbr_str, shar_str = "-", "-", "-", "-"
-        foreign_rate_str = "-"
-        inv_str = "-"
+        w52_pos_str, per_str, pbr_str, shar_str = "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]"
+        foreign_rate_str = "[dim]-[/dim]"
+        inv_str = "[dim]-[/dim]"
         cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
         strength_display = ""
 
@@ -2594,8 +2594,8 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             if detail:
                 if is_us_stock_context: 
-                    per_str = detail.get('perx', '-')
-                    pbr_str = detail.get('pbrx', '-') if detail.get('pbrx') != '-' else '-'
+                    per_str = detail.get('perx', '[dim]-[/dim]')
+                    pbr_str = detail.get('pbrx', '[dim]-[/dim]') if detail.get('pbrx') != '-' else '[dim]-[/dim]'
                 if is_us_etf_context:
                     try:
                         shar_val = float(detail.get('shar', 0))
@@ -2674,7 +2674,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             class_name, class_color, _ = classify_stock_state(curr, ind['ema_20'], ind['ema_60'], ind['ema_120'], ind['psar'], ind['rsi'], prev_rsi_val, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), thresholds=thresholds, w52_pos=w52_pos_val)
 
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
-            def fmt_idx(val): return f"{int(val):,}" if val is not None else "-"
+            def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             curr_price_color = "[white]"
             if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
@@ -2717,12 +2717,12 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             if sar_val is not None and not math.isnan(sar_val):
                 sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
             else:
-                sar_icon = "-"
+                sar_icon = "[dim]-[/dim]"
             
             # MACD 상태
             macd_val = ind.get('macd')
             sig_val = ind.get('macd_signal')
-            macd_icon = "-"
+            macd_icon = "[dim]-[/dim]"
             if macd_val is not None and sig_val is not None and not math.isnan(macd_val) and not math.isnan(sig_val):
                 zero_sign = "+" if macd_val > 0 else "-"
                 cross_char = "G" if macd_val > sig_val else "D"
@@ -2739,8 +2739,8 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 obv_val = None
                 
             if vol_sum == 0 or obv_trend is None or obv_val is None or math.isnan(obv_val):
-                obv_icon = "-"
-                obv_disp = "-"
+                obv_icon = "[dim]-[/dim]"
+                obv_disp = "[dim]-[/dim]"
             else:
                 obv_icon = "[red]▲[/]" if obv_trend else "[blue]▼[/]"
                 obv_c = "red" if obv_trend else "blue"
@@ -2754,7 +2754,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
-            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "[dim]-[/dim]"
             if ind['rsi'] is not None:
                 if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
                 elif 55 <= ind['rsi'] < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
@@ -2762,7 +2762,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
                 else: rsi_str = f"[blue]{rsi_str}[/]"
 
-            adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+            adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "[dim]-[/dim]"
             if ind['adx'] is not None:
                 if ind['adx'] >= 40: adx_str = f"[magenta]{adx_str}[/]" 
                 elif ind['adx'] >= 30: adx_str = f"[red]{adx_str}[/]"     
@@ -2770,7 +2770,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 elif ind['adx'] >= 15: adx_str = f"[yellow]{adx_str}[/]"
                 else: adx_str = f"[white]{adx_str}[/]"
 
-            cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+            cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "[dim]-[/dim]"
             if ind['cci'] is not None:
                 if ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
                 elif 0 < ind['cci'] < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
@@ -2808,10 +2808,10 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 elif is_us_etf_context: row_data.append(shar_str)
             return row_data, is_restricted, is_custom_rule
         else:
-            return [name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
+            return [name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
     except Exception as e:
         logger.error(f"[{code}] 분석 오류: {e}")
-        return [name, code, "[red]Error[/]", "-", *["-"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
+        return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
 
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     is_domestic_etf = ("ETF" in title and not is_overseas)

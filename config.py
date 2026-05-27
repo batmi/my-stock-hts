@@ -118,8 +118,8 @@ class GlobalSettings(BaseModel):
     # [추가] 차트 데이터 메모리 캐시 TTL (분)
     # 일봉 데이터 조회 시 불필요한 네트워크 통신을 줄이고 시스템 전체의 응답 속도를 높입니다.
     # 당일 현재가는 실시간으로 갱신되며, 과거 데이터만 캐싱됩니다. 자정(날짜 변경선)이 지나면 자동 무효화됩니다.
-    # (기본값: 180분, 0으로 설정 시 캐시 미사용)
-    CHART_CACHE_TTL_MINUTES: int = Field(default=180, ge=0)
+    # (기본값: 360분, 0으로 설정 시 캐시 미사용)
+    CHART_CACHE_TTL_MINUTES: int = Field(default=360, ge=0)
 
     # ==========================================================
     # [설정] 상관계수 필터링 (Pearson Correlation Filter)
