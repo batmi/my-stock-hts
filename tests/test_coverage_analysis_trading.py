@@ -111,4 +111,4 @@ def test_process_index_worker_futures_proxy(mock_dom, mock_fi):
         
         res = market._process_index_worker("미국채 5년물 금리", "^FVX", df_empty, df_empty)
         assert res['status'] == 'success'
-        assert "선물적용" in res['row_data'][0]
+        assert "(F)" in res['row_data'][0]

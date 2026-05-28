@@ -53,13 +53,15 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
     state, _, reason = analysis.classify_stock_state(
         price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
-        thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money
+        thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money,
+        plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI')
     )
     
     # 2. 점수 계산
     weights = thresholds.get("WEIGHTS") if thresholds else None
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, 
+        weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI')
     )
     
     # 3. 백테스팅용 플래그 변환

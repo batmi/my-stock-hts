@@ -945,11 +945,11 @@ class DefaultStrategy:
         sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
         state, _, state_reason = analysis.classify_stock_state(
-            df, ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+            df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         # [수정] 가중치(WEIGHTS) 전달
-        score, _ = analysis.calculate_score(df, ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
+        score, _ = analysis.calculate_score(df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
         
         # [수정] 역매수 상태에 따른 체결강도 분기
         if state == "역매수":
@@ -1029,11 +1029,11 @@ class DefaultStrategy:
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
             state, _, state_reason = analysis.classify_stock_state(
-                df, ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
             
             # [수정] 가중치(WEIGHTS) 전달
-            score, _ = analysis.calculate_score(df, ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
+            score, _ = analysis.calculate_score(df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
 
         # 2. 고정 익절/손절 및 시간 청산
         if tp_rate > 0 and profit_rate >= tp_rate:

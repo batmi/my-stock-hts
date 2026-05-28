@@ -101,7 +101,7 @@ def test_calculate_score_smart_money():
     
     # 정확히 0.5점 차이 확인
     assert score_sm == round(score_no_sm + 0.5, 2)
-    assert any("SM: 메이저 수급 턴어라운드" in d for d in details)
+    assert any("OBV/SM 턴어라운드" in d for d in details)
 
 # ==========================================================
 # 3. backtest._append_smart_money_signal 테스트

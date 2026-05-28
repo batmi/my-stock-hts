@@ -35,7 +35,9 @@ def sample_df():
         'OBV_MA': [1000.0] * 100,
         'ATR': [100.0] * 100,
         'MACD': [50.0] * 100,
-        'MACD_Signal': [40.0] * 100
+        'MACD_Signal': [40.0] * 100,
+        'PLUS_DI': [30.0] * 100,
+        'MINUS_DI': [10.0] * 100
     })
     return df
 
@@ -62,7 +64,7 @@ def test_simulate_strategy_atr_stop(sample_df):
     with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False}):
         res = backtest.simulate_strategy(
             sample_df, sample_df.iloc[0], 10000000, 
-            buy_score_limit=8.0, buy_rsi_limit=70, is_overseas=False
+            buy_score_limit=6.0, buy_rsi_limit=70, is_overseas=False
         )
         
         trades = res['trades']
@@ -108,7 +110,7 @@ def test_simulate_strategy_mr_grace_loss(sample_df):
         }):
             res = backtest.simulate_strategy(
                 sample_df.head(5).copy(), sample_df.iloc[0], 10000000, 
-                buy_score_limit=8.0, buy_rsi_limit=70, is_overseas=False
+                buy_score_limit=6.0, buy_rsi_limit=70, is_overseas=False
             )
             
             trades = res['trades']

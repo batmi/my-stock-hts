@@ -51,7 +51,8 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
         'ema_5': 10000, 'ema_20': 9000, 'ema_60': 8000, 'ema_120': 7000,
         'rsi': 60, 'adx': 30, 'cci': 100, 'obv': 1000, 'obv_trend': True,
         'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10,
-        'atr': 100
+        'atr': 100,
+        'plus_di': 30, 'minus_di': 10 # 추가 점수 확보용 DMI
     }
     
     # 예수금 Mock
@@ -99,7 +100,8 @@ def test_check_sell_conditions(mock_get_rules, mock_sell_qty, mock_calc, mock_pl
         'rsi': 90, # Overbought (상향된 기준치를 무조건 초과하도록 90으로 설정)
         'adx': 30, 'cci': 100, 'obv': 1000, 'obv_trend': True,
         'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10,
-        'atr': 100
+        'atr': 100,
+        'plus_di': 30, 'minus_di': 10
     }
     
     # 실행

@@ -23,7 +23,8 @@ def test_score_perfect_bull_market():
     macd_signal = 40 # MACD > Signal (골든크로스 상태)
     
     score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal
+        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci, obv_trend=obv_trend, macd=macd, macd_signal=macd_signal,
+        ema_5=9800, prev_cci=0, vol_spike=True, plus_di=30, minus_di=10, macd_hist=10, prev_macd_hist=5
     )
     
     # print(f"Calculated Score: {score}")
@@ -48,7 +49,7 @@ def test_score_bear_market():
     macd_signal = -40 # MACD < Signal (데드크로스 상태)
     
     score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal
+        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci, obv_trend=obv_trend, macd=macd, macd_signal=macd_signal
     )
     
     assert score < 5.0, f"하락장 조건에서는 5.0점 미만이어야 합니다. (현재: {score})"
@@ -88,7 +89,7 @@ def test_score_sideways_market():
     macd = 5; macd_signal = 0
     
     score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal
+        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci, obv_trend=obv_trend, macd=macd, macd_signal=macd_signal
     )
     
     assert score < 8.0, f"횡보장에서는 매수 기준 점수(8.0) 미만이어야 합니다. (현재: {score})"

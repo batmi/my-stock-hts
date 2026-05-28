@@ -22,7 +22,8 @@ def test_evaluate_market_indicator_branches():
     """수십 줄의 매크로 지표 임계값 텍스트 분기 커버리지 타격"""
     # 각 지표의 모든 분기를 최소 한 번씩 타격
     assert "재정 적자 우려" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 6.0)
-    assert "기간 프리미엄" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 5.0)
+    assert "장기 인플레 우려" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 5.2)
+    assert "구조적 고금리 안착 경계" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 5.0)
     assert "디플레이션 우려" in theme_analysis.evaluate_market_indicator("미국채 30년물 금리", 3.0)
     
     assert "에너지 쇼크" in theme_analysis.evaluate_market_indicator("가솔린 RBOB", 5.0)

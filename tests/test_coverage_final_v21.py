@@ -39,6 +39,61 @@ def test_settings_reset_to_default():
     res = settings.reset_to_default(interactive=False)
     assert "초기화" in res
 
+def test_custom_presets_save_load(tmp_path):
+    """커스텀 프리셋 저장 및 로드 검증"""
+    test_file = tmp_path / "presets.json"
+    
+    # 임시 파일을 config.PRESETS_FILE 경로로 사용하도록 패치
+    with patch('config.PRESETS_FILE', str(test_file)):
+        # 저장 테스트
+        test_data = {"bull": {"BUY_SCORE": 9.9}}
+        settings.save_custom_presets(test_data)
+        
+        # 로드 테스트
+        loaded = settings.load_custom_presets()
+        assert loaded == test_data
+        
+        # get_preset_values 호출 시 기본 프리셋과 병합되는지 확인
+        merged = settings.get_preset_values("bull")
+        assert merged["BUY_SCORE"] == 9.9
+        
+        # 설정하지 않은 값은 시스템 기본값을 유지하는지 확인
+        assert merged["BUY_RSI_MAX"] == settings.DEFAULT_PRESETS["bull"]["BUY_RSI_MAX"]
+
+@patch('modules.settings.utils.show_menu')
+@patch('modules.settings.Prompt.ask')
+@patch('modules.settings.save_custom_presets')
+def test_edit_strategy_preset_menu_reset(mock_save, mock_ask, mock_menu):
+    """커스텀 프리셋 전체 초기화 동작 검증"""
+    # 0(전체 초기화) -> q(종료)
+    mock_menu.side_effect = ["0", "q"]
+    mock_ask.return_value = "y" # 초기화 확인
+    
+    with patch('config.console.print'), patch('modules.settings.utils.pause'):
+        settings.edit_strategy_preset_menu()
+        
+    # 빈 딕셔너리로 저장하여 초기화하는지 검증
+    mock_save.assert_called_once_with({})
+
+@patch('modules.settings.utils.show_menu')
+@patch('modules.settings.apply_strategy_preset')
+def test_select_strategy_preset(mock_apply, mock_menu):
+    """전략 프리셋 선택 메뉴 동작 검증"""
+    mock_menu.side_effect = ["1", "2", "3", "9", "q"]
+    
+    with patch('modules.settings.utils.pause'):
+        settings.select_strategy_preset()
+        settings.select_strategy_preset()
+        settings.select_strategy_preset()
+        settings.select_strategy_preset()
+        settings.select_strategy_preset()
+        
+    assert mock_apply.call_count == 4
+    mock_apply.assert_any_call("bull")
+    mock_apply.assert_any_call("bear")
+    mock_apply.assert_any_call("sideways")
+    mock_apply.assert_any_call("default")
+
 # ---------------------------------------------------------
 # 2. theme_analysis.py 커버리지 보완 (크롤링 파싱 및 평가)
 # ---------------------------------------------------------

@@ -71,12 +71,12 @@ def test_generate_trading_autopsy_success(mock_model):
 
 @patch('modules.theme_analysis.genai.GenerativeModel')
 @patch('modules.theme_analysis._get_macro_context_str', return_value="Macro Context Info")
-def test_generate_portfolio_diagnosis_success(mock_macro, mock_model):
+def test_generate_daily_closing_report_success(mock_macro, mock_model):
     """포트폴리오 리스크 진단 AI 생성 검증"""
     config.GEMINI_API_KEY = "test_key"
     mock_model.return_value.generate_content.return_value.text = "AI Portfolio Diagnosis"
     
-    res = theme_analysis.generate_portfolio_diagnosis("포트폴리오 정보")
+    res = theme_analysis.generate_daily_closing_report("포트폴리오 정보")
     assert "AI Portfolio Diagnosis" in res
 
 @patch('modules.theme_analysis.genai.GenerativeModel')

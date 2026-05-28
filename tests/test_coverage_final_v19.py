@@ -26,7 +26,7 @@ def test_theme_analysis_genai_none_handling():
     res2 = theme_analysis.analyze_stock_with_gemini("005930", "삼성전자", "")
     res3 = theme_analysis.evaluate_backtest_with_gemini("005930", "삼성전자", "")
     res4 = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "", 0, "", 0, 0)
-    res5 = theme_analysis.generate_portfolio_diagnosis("")
+    res5 = theme_analysis.generate_daily_closing_report("")
     res6 = theme_analysis.generate_morning_briefing("")
     res7 = theme_analysis.generate_stock_curation()
     res8 = theme_analysis.ask_gemini("hi")

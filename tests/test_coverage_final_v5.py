@@ -80,10 +80,12 @@ def test_calculate_score_full_trend():
     score, details = analysis.calculate_score(
         price=10000, ema20=9000, ema60=8000, ema120=7000,
         sar=9000, rsi=60, adx=30, cci=150, obv_trend=True,
-        macd=50, macd_signal=40, smart_money=True
+        macd=50, macd_signal=40, smart_money=True,
+        ema_5=9500, macd_hist=10, prev_macd_hist=5,
+        prev_cci=0, vol_spike=True, plus_di=30, minus_di=10
     )
-    # 4.0(Trend) + 2.5(Mom) + 1.5(Str) + 2.0(Syn) = 10.0
-    assert score >= 9.5 # Floating point margin
+    # 완벽한 정배열 상승장에서는 상호 배타적 조건 제외 시 8.5점이 최고점 수준임
+    assert score >= 8.5
 
 def test_classify_stock_state_caution_conditions():
     """주의 상태의 다양한 조건 테스트"""

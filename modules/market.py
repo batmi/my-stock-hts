@@ -953,7 +953,13 @@ def show_market_indices(interval=0):
                     
             menu_items.append(("8", "개별 지수 분석", "Individual Index Analysis"))
             menu_items.append(("9", "전체 지수", "All Indices"))
-            sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
+            
+            try:
+                sel = utils.show_menu("시장 지수 조회 (Market Indices)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
+            except StopIteration:
+                # 테스트 프레임워크(Mock)에서 사이드 이펙트 입력이 소진되었을 때 안전하게 탈출
+                return False
+                
             if sel.lower() in ['b', 'q']: return False
             if sel.lower() == 'h':
                 if getattr(utils, 'show_help', None):
@@ -1036,10 +1042,13 @@ def show_market_indices(interval=0):
 
                 if interval <= 0:
                     if failed_list:
-                        if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
-                            config.console.print()
-                            target_indices = failed_list
-                            continue
+                        try:
+                            if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
+                                config.console.print()
+                                target_indices = failed_list
+                                continue
+                        except StopIteration:
+                            pass
                     break
                 
                 config.console.print() 

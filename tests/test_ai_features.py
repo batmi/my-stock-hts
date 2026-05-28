@@ -79,7 +79,7 @@ def test_conclusion_monitor_send_trading_autopsy(mock_send_tg, mock_get_buy, moc
 # ==========================================================
 
 @patch('modules.theme_analysis._get_macro_context_str')
-def test_generate_portfolio_diagnosis_success(mock_macro, mock_genai):
+def test_generate_daily_closing_report_success(mock_macro, mock_genai):
     """포트폴리오 진단 프롬프트 생성 및 응답 정상 처리 테스트"""
     mock_macro.return_value = "[시스템 제공 실시간 핵심 매크로 지표]\n- 코스피: 2600.00"
     mock_model = MagicMock()
@@ -90,7 +90,7 @@ def test_generate_portfolio_diagnosis_success(mock_macro, mock_genai):
     mock_model.generate_content.return_value = mock_response
 
     portfolio_str = "총 자산: 10,000,000원\n- 삼성전자: 비중 100%"
-    res = theme_analysis.generate_portfolio_diagnosis(portfolio_str)
+    res = theme_analysis.generate_daily_closing_report(portfolio_str)
     
     assert res is not None
     assert "반도체 편중" in res
