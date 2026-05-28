@@ -19,6 +19,11 @@ class GlobalSettings(BaseModel):
     """동적으로 변경 가능한 전역 설정값들을 관리하는 Pydantic 모델"""
 
     # ==========================================================
+    # [설정] 현재 활성화된 전략 프리셋 (Active Preset)
+    # ==========================================================
+    ACTIVE_PRESET: str = "default"
+
+    # ==========================================================
     # [설정] 스크린 디버그 로그 레벨 설정 (OFF / DEBUG / TRACE)
     # ==========================================================
     # OFF   : 로그 출력 없음
@@ -213,7 +218,7 @@ class GlobalSettings(BaseModel):
         "TIME_STOP_DAYS": 10,               # 보유 제한 기간 (일)
         "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
         "MR_GRACE_LOSS_RATE": -5.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
-        "TAKE_PROFIT_RSI": 80,              # 과열 매도 기준 RSI
+        "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
         "SUPER_TAKE_PROFIT_RSI": 85.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI
         "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
         "TRAILING_STOP_ACTIVATION_RATE": 15.0, # [트레일링 스탑] 감시 시작 수익률
@@ -308,6 +313,9 @@ STOCK_DATA_FILE = os.path.join(JSON_DIR, "stock.json")
 
 # API 접속 토큰을 캐싱하여 재사용하기 위한 파일 경로입니다.
 TOKEN_CACHE_FILE = os.path.join(JSON_DIR, "token_cache.json")
+
+# [추가] 사용자가 커스텀한 전략 프리셋 값을 저장할 파일 경로
+PRESETS_FILE = os.path.join(JSON_DIR, "presets.json")
 
 # [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
 DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")

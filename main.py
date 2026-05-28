@@ -89,13 +89,13 @@ Prompt.ask = _custom_ask
 _original_print_breadcrumb = utils.print_breadcrumb
 
 def _get_preset_emoji():
-    bs = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE")
-    rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
-    tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
+    preset = getattr(config, 'ACTIVE_PRESET', 'default')
     
-    if bs == 7.0 and tp == 30.0 and rsi == 70: return "🟢"
-    elif bs == 8.0 and tp == 10.0 and rsi == 65: return "🔵"
-    elif bs == 7.0 and tp == 15.0 and rsi == 50: return "🟡"
+    if preset == 'bull': return "🔴"
+    elif preset == 'bear': return "🔵"
+    elif preset == 'sideways': return "🟡"
+    elif preset == 'default': return "🟢"
+    elif preset == 'custom': return "⚪"
     else: return "⚪"
 
 def _custom_print_breadcrumb():

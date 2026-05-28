@@ -13,6 +13,7 @@ console = config.console
 def _save_dynamic_config():
     """현재 메모리 상의 설정을 파일로 저장 (영구 반영)"""
     data = {
+        "ACTIVE_PRESET": getattr(config, 'ACTIVE_PRESET', 'default'),
         "ANALYSIS_THRESHOLDS": config.ANALYSIS_THRESHOLDS,
         "SELL_STRATEGY": config.SELL_STRATEGY,
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
@@ -366,6 +367,9 @@ def _edit_config_table(title_source, items_source):
                 console.print(f"[red]잘못된 입력입니다: {e}[/red]")
         
         if changed_in_this_loop:
+            title_str = title_source() if callable(title_source) else title_source
+            if any(k in title_str for k in ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "Adaptive Thresholds", "Risk & Portfolio"]):
+                config.ACTIVE_PRESET = "custom"
             _save_dynamic_config()
             action_taken = True
             
@@ -588,6 +592,7 @@ def modify_scoring_weights():
                 
                 config.SCORING_WEIGHTS.update(new_weights)
                 
+                config.ACTIVE_PRESET = "custom"
                 _save_dynamic_config()
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
                 action_taken = True
@@ -698,53 +703,109 @@ def modify_trading_cycle_settings():
 
     return _edit_config_table("트레이딩 시간 및 주기 (Time & Cycle)", get_items)
 
+# =========================================================
+# [추가] 전략 프리셋 커스텀 (JSON 저장) 기능
+# =========================================================
+DEFAULT_PRESETS = {
+    "bull": {
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True,
+        "TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 90.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0, "SELL_SCORE": 5.0,
+        "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
+        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
+    },
+    "bear": {
+        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False,
+        "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -3.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5, "SELL_SCORE": 6.0,
+        "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0,
+        "SYSTEM_INVEST_PER_STOCK": 0.1, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
+    },
+    "sideways": {
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False,
+        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8, "SELL_SCORE": 5.0,
+        "TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0,
+        "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
+    },
+    "default": {
+        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True,
+        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 85.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0,
+        "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
+        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
+    }
+}
+
+def load_custom_presets():
+    path = getattr(config, 'PRESETS_FILE', os.path.join(config.JSON_DIR, "presets.json"))
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception: pass
+    return {}
+
+def save_custom_presets(presets):
+    path = getattr(config, 'PRESETS_FILE', os.path.join(config.JSON_DIR, "presets.json"))
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(presets, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        console.print(f"[red]프리셋 저장 실패: {e}[/red]")
+
+def get_preset_values(preset_type):
+    base = DEFAULT_PRESETS.get(preset_type, {}).copy()
+    customs = load_custom_presets().get(preset_type, {})
+    base.update(customs)
+    return base
+
 def apply_strategy_preset(preset_type="bull", interactive=True):
-    """지정된 시장 국면에 맞게 시스템 전역 설정을 일괄 변경합니다."""
-    if preset_type == "bull":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 70, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0})
-        config.SCORING_WEIGHTS.update({"TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0})
-        config.SYSTEM_INVEST_PER_STOCK = 0.2
-        config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
-        config.USE_MARKET_FILTER = True
-        config.MARKET_FILTER_MA = 50
-        msg = "🟢 [강세장(Bull)] 전략 프리셋이 적용되었습니다.\n(주도주 돌파매매 및 추세 추종에 최적화)"
-        
-    elif preset_type == "bear":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 8.0, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 10.0, "STOP_LOSS_RATE": -3.0, "SELL_SCORE": 6.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5})
-        config.SCORING_WEIGHTS.update({"TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0})
-        config.SYSTEM_INVEST_PER_STOCK = 0.1
-        config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
-        config.USE_MARKET_FILTER = False # 낙폭과대 역추세 스윙을 위해 시장 필터 임시 해제
-        config.MARKET_FILTER_MA = 20
-        msg = "🔵 [약세장(Bear)] 전략 프리셋이 적용되었습니다.\n(보수적 퀀트 기준 적용 및 하락장 낙폭과대 수급(Volume) 유입 포착에 집중)"
-        
-    elif preset_type == "sideways":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.0, "BUY_RSI_MAX": 50, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 15.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8})
-        config.SCORING_WEIGHTS.update({"TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0})
-        config.SYSTEM_INVEST_PER_STOCK = 0.15
-        config.SYSTEM_DAILY_LOSS_LIMIT = 7.0
-        config.USE_MARKET_FILTER = True
-        config.MARKET_FILTER_MA = 20
-        msg = "🟡 [횡보장(Sideways)] 전략 프리셋이 적용되었습니다.\n(과매도권(CCI/RSI) 선행 탈출 및 거래량 스파이크 포착에 최적화)"
-        
-    elif preset_type == "default":
-        config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": 7.5, "BUY_RSI_MAX": 65, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True})
-        config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0})
-        config.SCORING_WEIGHTS.update({"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0})
-        config.SYSTEM_INVEST_PER_STOCK = 0.2
-        config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
-        config.USE_MARKET_FILTER = True
-        config.MARKET_FILTER_MA = 50
-        msg = "⚪ [기본설정(Default)] 전략 프리셋이 적용되었습니다.\n(시스템 권장 설정으로 복귀)"
-    else:
+    if preset_type not in DEFAULT_PRESETS:
         return "⚠️ 알 수 없는 프리셋입니다. (bull/bear/sideways/default 중 선택)"
+        
+    vals = get_preset_values(preset_type)
+    
+    config.ANALYSIS_THRESHOLDS.update({
+        "BUY_SCORE": vals["BUY_SCORE"],
+        "BUY_RSI_MAX": vals["BUY_RSI_MAX"],
+        "USE_MEAN_REVERSION": vals["USE_MEAN_REVERSION"],
+        "MR_RSI_MAX": vals["MR_RSI_MAX"],
+        "SUPER_MOMENTUM_USE": vals["SUPER_MOMENTUM_USE"]
+    })
+    config.SELL_STRATEGY.update({
+        "TAKE_PROFIT_RATE": vals["TAKE_PROFIT_RATE"],
+        "TAKE_PROFIT_RSI": vals["TAKE_PROFIT_RSI"],
+        "STOP_LOSS_RATE": vals["STOP_LOSS_RATE"],
+        "SELL_SCORE": vals.get("SELL_SCORE", 5.0),
+        "HALF_TAKE_PROFIT_USE": vals["HALF_TAKE_PROFIT_USE"],
+        "TIME_STOP_DAYS": vals["TIME_STOP_DAYS"],
+        "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
+        "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"],
+        "ATR_STOP_MULTIPLIER": vals["ATR_STOP_MULTIPLIER"]
+    })
+    config.SCORING_WEIGHTS.update({
+        "TREND": vals["TREND"],
+        "MOMENTUM": vals["MOMENTUM"],
+        "STRENGTH": vals["STRENGTH"],
+        "SYNERGY": vals["SYNERGY"]
+    })
+    config.SYSTEM_INVEST_PER_STOCK = vals["SYSTEM_INVEST_PER_STOCK"]
+    config.SYSTEM_DAILY_LOSS_LIMIT = vals["SYSTEM_DAILY_LOSS_LIMIT"]
+    config.USE_MARKET_FILTER = vals["USE_MARKET_FILTER"]
+    config.MARKET_FILTER_MA = vals["MARKET_FILTER_MA"]
+    
+    config.ACTIVE_PRESET = preset_type
+    
+    msg = ""
+    if preset_type == "bull":
+        msg = "🔴 [강세장(Bull)] 전략 프리셋이 적용되었습니다.\n(주도주 돌파매매 및 추세 추종에 최적화)"
+    elif preset_type == "bear":
+        msg = "🔵 [약세장(Bear)] 전략 프리셋이 적용되었습니다.\n(보수적 퀀트 기준 적용 및 하락장 낙폭과대 수급(Volume) 유입 포착에 집중)"
+    elif preset_type == "sideways":
+        msg = "🟡 [횡보장(Sideways)] 전략 프리셋이 적용되었습니다.\n(과매도권(CCI/RSI) 선행 탈출 및 거래량 스파이크 포착에 최적화)"
+    elif preset_type == "default":
+        msg = "🟢 [기본설정(Default)] 전략 프리셋이 적용되었습니다.\n(시스템 권장 설정으로 복귀)"
         
     _save_dynamic_config()
     
-    # [추가] 변경된 주요 설정값 요약 데이터 구성
+    # 변경된 주요 설정값 요약 데이터 구성
     summary_data = [
         ("매수 허들 (점수/RSI)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
@@ -775,13 +836,92 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     detail_msg = "\n\n[적용된 주요 설정]\n" + "\n".join([f"• {k}: {v}" for k, v in summary_data])
     return msg + (detail_msg if not interactive else "")
 
+def _edit_single_preset(preset_type):
+    name_map = {"bull": "강세장", "bear": "약세장", "sideways": "횡보장", "default": "기본설정"}
+    title = f"{name_map[preset_type]} 프리셋 세부 설정 조정"
+    
+    while True:
+        vals = get_preset_values(preset_type)
+        
+        def make_setter(key, typ):
+            def setter(v):
+                all_presets = load_custom_presets()
+                if preset_type not in all_presets:
+                    all_presets[preset_type] = {}
+                if typ == 'float': v = float(v)
+                elif typ == 'int': v = int(v)
+                elif typ == 'bool': v = bool(v)
+                all_presets[preset_type][key] = v
+                save_custom_presets(all_presets)
+            return setter
+            
+        def make_getter(key):
+            return lambda: get_preset_values(preset_type)[key]
+
+        items = [
+            {"desc": "매수 기준 점수", "help": "진입 임계값", "name": "BUY_SCORE", "type": "float", "section": "Buy", "get": make_getter("BUY_SCORE"), "set": make_setter("BUY_SCORE", 'float')},
+            {"desc": "매수 허용 RSI 상한", "help": "과열 방지", "name": "BUY_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("BUY_RSI_MAX"), "set": make_setter("BUY_RSI_MAX", 'float')},
+            {"desc": "역추세 매수 사용", "help": "낙폭과대 반등", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("USE_MEAN_REVERSION"), "set": make_setter("USE_MEAN_REVERSION", 'bool')},
+            {"desc": "슈퍼 모멘텀 사용", "help": "주도주 랠리 시 RSI 완화", "name": "SUPER_MOMENTUM_USE", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("SUPER_MOMENTUM_USE"), "set": make_setter("SUPER_MOMENTUM_USE", 'bool')},
+            
+            {"desc": "익절 수익률(%)", "help": "목표 수익", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RATE"), "set": make_setter("TAKE_PROFIT_RATE", 'float')},
+            {"desc": "반익절 사용 여부", "help": "절반 수익 도달 시 절반 매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "Sell", "get": make_getter("HALF_TAKE_PROFIT_USE"), "set": make_setter("HALF_TAKE_PROFIT_USE", 'bool')},
+            {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 청산", "name": "SELL_SCORE", "type": "float", "section": "Sell", "get": make_getter("SELL_SCORE"), "set": make_setter("SELL_SCORE", 'float')},
+            {"desc": "과열 매도 RSI", "help": "RSI 과열 시 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RSI"), "set": make_setter("TAKE_PROFIT_RSI", 'float')},
+            {"desc": "손절 수익률(%)", "help": "기본 손절 라인", "name": "STOP_LOSS_RATE", "type": "float", "section": "Sell", "get": make_getter("STOP_LOSS_RATE"), "set": make_setter("STOP_LOSS_RATE", 'float')},
+            {"desc": "ATR 손절 배수", "help": "동적 손절 배수 설정", "name": "ATR_STOP_MULTIPLIER", "type": "float", "section": "Sell", "get": make_getter("ATR_STOP_MULTIPLIER"), "set": make_setter("ATR_STOP_MULTIPLIER", 'float')},
+            {"desc": "시간청산 보유기한(일)", "help": "제한일 초과 시 강제 매도", "name": "TIME_STOP_DAYS", "type": "int", "section": "Sell", "get": make_getter("TIME_STOP_DAYS"), "set": make_setter("TIME_STOP_DAYS", 'int')},
+            {"desc": "TS 발동 수익률(%)", "help": "트레일링 감시 시작", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_ACTIVATION_RATE"), "set": make_setter("TRAILING_STOP_ACTIVATION_RATE", 'float')},
+            {"desc": "TS 하락 감지율(%)", "help": "트레일링 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_CALLBACK_RATE"), "set": make_setter("TRAILING_STOP_CALLBACK_RATE", 'float')},
+            
+            {"desc": "추세 가중치", "help": "Trend", "name": "TREND", "type": "float", "section": "Weights", "get": make_getter("TREND"), "set": make_setter("TREND", 'float')},
+            {"desc": "모멘텀 가중치", "help": "Momentum", "name": "MOMENTUM", "type": "float", "section": "Weights", "get": make_getter("MOMENTUM"), "set": make_setter("MOMENTUM", 'float')},
+            {"desc": "강도 가중치", "help": "Strength", "name": "STRENGTH", "type": "float", "section": "Weights", "get": make_getter("STRENGTH"), "set": make_setter("STRENGTH", 'float')},
+            {"desc": "시너지 가중치", "help": "Synergy", "name": "SYNERGY", "type": "float", "section": "Weights", "get": make_getter("SYNERGY"), "set": make_setter("SYNERGY", 'float')},
+            
+            {"desc": "시장 필터링 사용", "help": "지수 하락 시 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk", "get": make_getter("USE_MARKET_FILTER"), "set": make_setter("USE_MARKET_FILTER", 'bool')},
+            {"desc": "시장 필터 SMA(일)", "help": "필터 감지 이평선 주기", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk", "get": make_getter("MARKET_FILTER_MA"), "set": make_setter("MARKET_FILTER_MA", 'int')},
+            {"desc": "종목당 투자 비중", "help": "0.1 ~ 1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float')}
+        ]
+        
+        acted = _edit_config_table(title, items)
+        if not acted: break
+
+def edit_strategy_preset_menu():
+    """전략 프리셋 개별 조정 메뉴"""
+    while True:
+        utils.clear_screen()
+        menu_items = [
+            ("1", "강세장 (Bull) 프리셋 수정", "Edit Bull"),
+            ("2", "약세장 (Bear) 프리셋 수정", "Edit Bear"),
+            ("3", "횡보장 (Sideways) 프리셋 수정", "Edit Sideways"),
+            ("0", "커스텀 프리셋 전체 초기화", "Reset All Custom Presets")
+        ]
+        choice = utils.show_menu("전략 프리셋 세부 조정", menu_items, default_choice="b")
+        if choice.lower() in ['b', 'q']: return False
+        
+        if choice == "0":
+            if Prompt.ask("\n모든 커스텀 프리셋 설정을 초기화하고 시스템 기본값으로 되돌리시겠습니까?", choices=["y", "n"], default="n") == 'y':
+                save_custom_presets({})
+                console.print("[green]초기화가 완료되었습니다.[/green]")
+                utils.pause()
+            continue
+            
+        ptype = ""
+        if choice == "1": ptype = "bull"
+        elif choice == "2": ptype = "bear"
+        elif choice == "3": ptype = "sideways"
+        
+        _edit_single_preset(ptype)
+
 def select_strategy_preset():
     """시장 국면별 전략 프리셋 선택 메뉴"""
     menu_items = [
         ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
         ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
         ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
-        ("0", "기본설정 (Default) - 시스템 권장 설정", "Default")
+        ("9", "기본설정 (Default) - 시스템 권장 설정", "Default"),
+        ("0", "전략 프리셋 조정", "Edit Presets")
     ]
     choice = utils.show_menu("시장 국면별 전략 프리셋 (Strategy Presets)", menu_items, default_choice="b")
     if choice.lower() in ['b', 'q']: return False
@@ -789,7 +929,9 @@ def select_strategy_preset():
     if choice == "1": apply_strategy_preset("bull")
     elif choice == "2": apply_strategy_preset("bear")
     elif choice == "3": apply_strategy_preset("sideways")
-    elif choice == "0": apply_strategy_preset("default")
+    elif choice == "9": apply_strategy_preset("default")
+    elif choice == "0":
+        edit_strategy_preset_menu()
     return True
 
 def reset_to_default(interactive=True):
@@ -818,7 +960,7 @@ def reset_to_default(interactive=True):
         "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
     })
     config.SELL_STRATEGY.update({
-        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80, "SELL_SCORE": 5.0,
+        "STOP_LOSS_RATE": -7.0, "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 85.0, "SELL_SCORE": 5.0,
         "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
@@ -871,12 +1013,14 @@ def reset_to_default(interactive=True):
     config.SLIPPAGE_RATE = 0.002
     config.USE_CORRELATION_FILTER = True
     config.CORRELATION_THRESHOLD = 0.7
+    
+    config.ACTIVE_PRESET = "default"
 
     if interactive:
         console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
         return True
     else:
-        return "⚪ [초기화(Default)] 시스템의 모든 설정이 최초 기본값으로 초기화되었습니다."
+        return "🟢 [초기화(Default)] 시스템의 모든 설정이 최초 기본값으로 초기화되었습니다."
 
 def system_config_menu():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)

@@ -146,7 +146,8 @@ class TelegramCommander:
             "🔵 상태 요약": "/status",
             "🟡 상태 요약": "/status",
             "⚪ 상태 요약": "/status",
-            "💰 계좌 잔고": "/balance",
+            "🔴 상태 요약": "/status",
+            " 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
             "📈 시장 지수": "/market",
@@ -1400,13 +1401,12 @@ class TelegramCommander:
         if not getattr(config, 'ENABLE_TELEGRAM', True):
             return None
             
-        bs = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE")
-        rsi = config.ANALYSIS_THRESHOLDS.get("BUY_RSI_MAX")
-        tp = config.SELL_STRATEGY.get("TAKE_PROFIT_RATE")
-        
-        if bs == 7.0 and tp == 20.0 and rsi == 70: emoji = "🟢"
-        elif bs == 9.0 and tp == 5.0 and rsi == 65: emoji = "🔵"
-        elif bs == 7.5 and tp == 10.0 and rsi == 50: emoji = "🟡"
+        preset = getattr(config, 'ACTIVE_PRESET', 'default')
+        if preset == 'bull': emoji = "🔴"
+        elif preset == 'bear': emoji = "🔵"
+        elif preset == 'sideways': emoji = "�"
+        elif preset == 'default': emoji = "🟢"
+        elif preset == 'custom': emoji = "⚪"
         else: emoji = "⚪"
             
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
