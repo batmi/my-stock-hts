@@ -120,6 +120,23 @@ class DBManager:
                     )
                 ''')
                 
+                # [추가] 예약 주문 테이블 생성
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS reserved_orders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cano TEXT, acnt TEXT, market TEXT,
+                        order_type TEXT, code TEXT, name TEXT,
+                        qty INTEGER, order_price REAL,
+                        condition_type TEXT, target_price REAL, target_time TEXT,
+                        status TEXT DEFAULT 'PENDING', odno TEXT,
+                        fail_reason TEXT,
+                        expire_dt TEXT,
+                        lowest_price REAL DEFAULT 0.0,
+                        highest_price REAL DEFAULT 0.0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [info[1] for info in cursor.fetchall()]
@@ -160,6 +177,41 @@ class DBManager:
                                 config.console.print(f"[dim green][DB] stock_strategies 테이블에 {col} 컬럼 추가 완료[/dim green]")
                         except Exception as e:
                             config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패({col}): {e}[/red]")
+
+                # reserved_orders 테이블 컬럼 확장 (fail_reason 추가)
+                cursor.execute("PRAGMA table_info(reserved_orders)")
+                ro_columns = [info[1] for info in cursor.fetchall()]
+                if "fail_reason" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN fail_reason TEXT")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 fail_reason 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(fail_reason): {e}[/red]")
+
+                if "expire_dt" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN expire_dt TEXT")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 expire_dt 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(expire_dt): {e}[/red]")
+
+                if "lowest_price" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN lowest_price REAL DEFAULT 0.0")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 lowest_price 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(lowest_price): {e}[/red]")
+
+                if "highest_price" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN highest_price REAL DEFAULT 0.0")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 highest_price 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(highest_price): {e}[/red]")
 
                 conn.commit()
                 conn.close()
@@ -640,6 +692,90 @@ class DBManager:
             return row[0] if row else None
         except:
             return None
+            
+    def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None):
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO reserved_orders (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt))
+            conn.commit()
+
+    def get_pending_reserved_orders(self):
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM reserved_orders WHERE status = 'PENDING'")
+            return [dict(row) for row in cursor.fetchall()]
+        except: return []
+
+    def update_reserved_order_status(self, order_id, status, odno=None, fail_reason=None):
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            if odno: cursor.execute("UPDATE reserved_orders SET status=?, odno=? WHERE id=?", (status, odno, order_id))
+            elif fail_reason: cursor.execute("UPDATE reserved_orders SET status=?, fail_reason=? WHERE id=?", (status, fail_reason, order_id))
+            else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
+            conn.commit()
+            
+    def update_reserved_order_lowest(self, order_id, price):
+        """트레일링 매수용 최저점 추적 업데이트"""
+        with self.lock:
+            conn = self._get_conn()
+            conn.cursor().execute("UPDATE reserved_orders SET lowest_price=? WHERE id=?", (price, order_id))
+            conn.commit()
+            
+    def update_reserved_order_highest(self, order_id, price):
+        """트레일링 매도용 최고점 추적 업데이트"""
+        with self.lock:
+            conn = self._get_conn()
+            conn.cursor().execute("UPDATE reserved_orders SET highest_price=? WHERE id=?", (price, order_id))
+            conn.commit()
+            
+    def cancel_reserved_sell_orders(self, cano, acnt, code):
+        """특정 계좌/종목의 대기 중인 예약 매도 주문을 일괄 취소 처리 (전량 매도 시)"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE reserved_orders 
+                        SET status='CANCELED', fail_reason='수동/자동 전량 매도로 인한 예약 자동 취소' 
+                        WHERE cano=? AND acnt=? AND code=? AND order_type='sell' AND status='PENDING'
+                    ''', (cano, acnt, code))
+                    updated = cursor.rowcount
+                    conn.commit()
+                    return updated
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+            return 0
+            
+    def cancel_reserved_buy_orders(self, cano, acnt, code):
+        """특정 계좌/종목의 대기 중인 예약 매수 주문을 일괄 취소 처리 (신규 매수 시 중복 방지)"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE reserved_orders 
+                        SET status='CANCELED', fail_reason='수동/자동 매수로 인한 예약 매수 자동 취소' 
+                        WHERE cano=? AND acnt=? AND code=? AND order_type='buy' AND status='PENDING'
+                    ''', (cano, acnt, code))
+                    updated = cursor.rowcount
+                    conn.commit()
+                    return updated
+                except sqlite3.OperationalError: time.sleep(0.5); continue
+                except: break
+            return 0
 
 # 전역 인스턴스
 db = DBManager()

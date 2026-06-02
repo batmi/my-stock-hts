@@ -1812,6 +1812,38 @@ def get_current_price(code, is_overseas):
             return safe_int(output.get('stck_prpr'))
     return 0
 
+def get_order_book(code, is_overseas=False):
+    """호가창 데이터 조회 (최대 10호가)"""
+    cache_key = f"ob_{code}_{is_overseas}"
+    cached = _get_micro_cache(cache_key, ttl=2.0)
+    if cached: return cached
+
+    if not is_overseas:
+        url_path = "uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+        res = call_api(url_path, "domestic", "quotations", "order_book", params=params, tr_id="FHKST01010200", timeout=3)
+        if res.get('rt_cd') == '0':
+            _set_micro_cache(cache_key, res)
+        return res
+    else:
+        cached_ex = config.session.exchange_cache.get(code)
+        exchanges = []
+        if cached_ex: exchanges.append(cached_ex)
+        for e in ["NASD", "NAS", "NYSE", "NYS", "AMEX", "AMS"]:
+            if e not in exchanges: exchanges.append(e)
+        
+        url_path = "uapi/overseas-price/v1/quotations/inquire-asking-price"
+        for excd in exchanges:
+            params = {"AUTH": "", "EXCD": excd, "SYMB": code}
+            res = call_api(url_path, "overseas", "quotations", "order_book", params=params, tr_id="HHDFS76200200", timeout=3)
+            if res.get('rt_cd') == '0':
+                out = res.get('output1', {})
+                if out and (float(out.get('pask1', 0)) > 0 or float(out.get('pbid1', 0)) > 0):
+                    if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                    _set_micro_cache(cache_key, res)
+                    return res
+        return {'rt_cd': '9999'}
+
 def get_investor_trend(code, market_div="J"):
     cache_key = f"inv_{code}_{market_div}"
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 수급 정보 유지 시간 연장

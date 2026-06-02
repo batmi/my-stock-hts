@@ -4350,6 +4350,13 @@ class AutoTrader:
                         self.half_tp_cache.add(code)
                         db_manager.db.insert_half_tp(code)
                     else:
+                        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                        target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                        canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, code)
+                        if canceled_cnt > 0:
+                            self.log(f"[예약취소] 전량 매도로 인해 대기 중이던 {name} 매도 예약 주문 {canceled_cnt}건 자동 취소")
+                            api.send_telegram_message(f"🗑 [예약 취소] {name}({code}) 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.")
+                            
                         self.half_tp_cache.discard(code)
                         db_manager.db.delete_half_tp(code)
                         db_manager.db.delete_trailing_stop(code)
@@ -4860,6 +4867,14 @@ class AutoTrader:
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
             if odno: 
+                # [추가] 매수 주문 성공 시 대기 중인 예약 매수 취소 방어 로직 (중복 진입 방지)
+                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, cand['code'])
+                if canceled_cnt > 0:
+                    self.log(f"[예약취소] 신규 매수로 인해 대기 중이던 {cand['name']} 매수 예약 주문 {canceled_cnt}건 자동 취소")
+                    api.send_telegram_message(f"🗑 [예약 취소] {cand['name']}({cand['code']}) 신규 매수로 인해 대기 중이던 매수 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.")
+                
                 self.half_tp_cache.discard(cand['code']) # 신규 매수 시 기존 반익절 캐시 방어적 초기화
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영

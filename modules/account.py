@@ -189,6 +189,14 @@ def sync_today_trades():
 
 def _display_balance_details(cano, acnt_prdt_cd):
     """특정 계좌의 잔고 상세 출력"""
+    
+    reserved_codes = set()
+    try:
+        pending_reserves = db_manager.db.get_pending_reserved_orders()
+        reserved_codes = set(o['code'] for o in pending_reserves if o.get('cano') == cano and o.get('acnt') == acnt_prdt_cd)
+    except Exception as e:
+        logger.debug(f"reserved_codes fetch error: {e}")
+        
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
@@ -233,7 +241,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
             for item in output1:
                 code = item['pdno']
                 m_mark = "[M]" if code in m_codes else ""
-                name = f"{item['prdt_name']} ({code}) {m_mark}".strip()
+                res_mark = "[magenta]예약(O)[/magenta]" if code in reserved_codes else ""
+                name = f"{item['prdt_name']} ({code}) {m_mark} {res_mark}".strip()
                 qty = int(item['hldg_qty'])
                 buy_price = float(item['pchs_avg_pric'])
                 cur_price = int(item['prpr'])
@@ -347,7 +356,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 has_ovrs_item = True
                 code = item.get('ovrs_pdno', '-')
                 m_mark = "[M]" if code in m_codes else ""
-                name = f"{item.get('ovrs_item_name', '-')} {m_mark}".strip()
+                res_mark = "[magenta]예약(O)[/magenta]" if code in reserved_codes else ""
+                name = f"{item.get('ovrs_item_name', '-')} {m_mark} {res_mark}".strip()
                 pchs_avg = float(item.get('pchs_avg_pric', 0))
                 profit = float(item.get('frcr_evlu_pfls_amt', 0))
                 rate = float(item.get('evlu_pfls_rt', 0))
@@ -954,6 +964,10 @@ def view_trade_history():
         logger.error(f"[HISTORY_DEBUG] sync_today_trades error: {e}")
 
     trades = []
+    reserved_trades = []
+    keyword = ""
+    start_dt = ""
+    
     if choice == "1":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
@@ -994,6 +1008,80 @@ def view_trade_history():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         export_trade_history_to_excel()
         return
+
+    # [추가] 예약 주문 내역 병합
+    if choice in ["1", "2", "3"]:
+        try:
+            conn = db_manager.db._get_conn()
+            cursor = conn.cursor()
+            q = "SELECT * FROM reserved_orders WHERE status != 'PENDING'"
+            params = []
+            if choice == "2":
+                q += " AND created_at >= ?"
+                params.append(start_dt + " 00:00:00")
+            elif choice == "3":
+                q += " AND (code LIKE ? OR name LIKE ?)"
+                params.append(f"%{keyword}%")
+                params.append(f"%{keyword}%")
+                
+            cursor.execute(q, params)
+            res_rows = cursor.fetchall()
+            for r in res_rows:
+                cano = r['cano']
+                acnt = r['acnt']
+                acc_str = f"{cano}-{acnt}"
+                
+                # 모의/실전 필터링
+                is_sim_account = False
+                if config.session.is_simulation:
+                    if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                        is_sim_account = True
+                    else:
+                        continue 
+                else:
+                    if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                        pass 
+                    elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
+                        pass 
+                    else:
+                        continue
+
+                t_type = "매수" if r['order_type'] == 'buy' else "매도"
+                reason = f"조건: {r['condition_type']}"
+                
+                c_type = r['condition_type']
+                if c_type == 'TIME': reason += f" ({r['target_time']})"
+                elif 'SCORE' in c_type: reason += f" (목표점수: {r['target_price']}점)"
+                elif 'RSI' in c_type: reason += f" (목표RSI: {r['target_price']})"
+                elif c_type == 'TRAILING_BUY': reason += f" (바닥 반등: {r['target_price']}%)"
+                elif c_type == 'TRAILING_SELL': reason += f" (고점 하락: {r['target_price']}%)"
+                else: reason += f" ({r['target_price']})"
+                    
+                status_str = r['status']
+                fail_reason = r['fail_reason'] if 'fail_reason' in r.keys() else None
+                if status_str == 'CANCELED': status_str = '예약취소'
+                elif status_str == 'FAILED': 
+                    status_str = '발동실패'
+                    if fail_reason: reason += f" [실패 사유: {fail_reason}]"
+                elif status_str == 'TRIGGERED': status_str = '예약발동'
+                elif status_str == 'EXPIRED': status_str = '기간만료'
+                
+                reserved_trades.append({
+                    'id': f"R{r['id']}", 'time': r['created_at'], 'type': f"{t_type}(예약)",
+                    'code': r['code'], 'name': r['name'], 'qty': r['qty'], 'price': r['order_price'],
+                    'odno': r['odno'] or '-', 'org_odno': None, 'account': acc_str,
+                    'is_sim': 1 if is_sim_account else 0, 'snapshot': None, 'profit_amt': 0,
+                    'profit_rate': 0.0, 'reason': reason, 'strategy_score': 0,
+                    'order_status': status_str, 'stop_loss_rate': 0.0
+                })
+        except Exception as e:
+            logger.error(f"[HISTORY_DEBUG] 예약 주문 내역 조회 실패: {e}")
+            
+    if reserved_trades:
+        trades.extend(reserved_trades)
+        trades.sort(key=lambda x: x['time'], reverse=True)
+        if choice == "1":
+            trades = trades[:50]
 
     if not trades:
         logger.debug("[HISTORY_DEBUG] 조회된 내역 없음. 리턴.")
@@ -1104,6 +1192,7 @@ def view_trade_history():
             tag_disp = ""
             if "자동" in clean_type: tag_disp = "([yellow]자동[/])"
             elif "수동" in clean_type: tag_disp = "([green]수동[/])"
+            elif "예약" in clean_type: tag_disp = "([magenta]예약[/])"
             else: tag_disp = "([dim]외부[/])"
             
             type_str = f"{type_disp}{tag_disp}"
@@ -1114,6 +1203,9 @@ def view_trade_history():
             elif "체결(추정)" in status_str: status_str = "[green]체결 추정[/]" # [수정] 괄호 제거 및 색상 적용
             elif "취소" in status_str: status_str = f"[yellow]{status_str}[/]"
             elif "정정" in status_str: status_str = f"[magenta]{status_str}[/]"
+            elif "예약발동" in status_str: status_str = "[bold green]예약발동[/]"
+            elif "발동실패" in status_str: status_str = "[bold red]발동실패[/]"
+            elif "기간만료" in status_str: status_str = "[dim]기간만료[/]"
             else: status_str = f"[dim]{status_str}[/]"
 
             # 가격 포맷팅

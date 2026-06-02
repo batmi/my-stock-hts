@@ -7,11 +7,13 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import json
 import time
-from datetime import datetime
+import concurrent.futures
+from datetime import datetime, timedelta
 import config
 import context # [추가]
 import api
 import utils
+from modules import manage
 from modules import account
 import indicators # [추가] ATR 계산을 위해 추가
 from modules import db_manager
@@ -292,6 +294,129 @@ def _create_fill_history(db_order, reason_msg):
     except Exception as e:
         logger.error(f"[ORDER_DEBUG] 체결 히스토리 생성 실패: {e}", exc_info=True)
         return float(db_order.get('price', 0)) if db_order else 0.0
+            
+def _show_order_book(code, name, is_overseas, levels=5):
+    """간단한 호가창 출력 (5호가)"""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]호가창 및 지표 데이터 조회 중...[/cyan]"),
+        console=config.console,
+        transient=True
+    ) as progress:
+        progress.add_task("order_book")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            fut_ob = ex.submit(api.get_order_book, code, is_overseas)
+            fut_chart = ex.submit(api.get_chart_data, code, is_overseas)
+            res = fut_ob.result()
+            df = fut_chart.result()
+            
+    caption_str = ""
+    if df is not None and not df.empty:
+        ind = indicators.calculate_indicators(df)
+        curr = float(df.iloc[-1]['close'])
+        
+        sar_val = ind.get('psar')
+        sar_icon = "[red]⬆[/]" if sar_val and curr > sar_val else ("[blue]⬇[/]" if sar_val else "-")
+        
+        macd_val = ind.get('macd')
+        sig_val = ind.get('macd_signal')
+        macd_icon = "-"
+        if macd_val is not None and sig_val is not None:
+            zero_sign = "+" if macd_val > 0 else "-"
+            cross_char = "G" if macd_val > sig_val else "D"
+            m_color = "red" if macd_val > sig_val else "blue"
+            macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+            
+        obv_trend = ind.get('obv_trend')
+        obv_icon = "[red]▲[/]" if obv_trend is True else ("[blue]▼[/]" if obv_trend is False else "-")
+        trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
+        
+        rsi_val = ind.get('rsi')
+        rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "-"
+        if rsi_val is not None:
+            if rsi_val >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
+            elif 55 <= rsi_val < 70: rsi_str = f"[red]{rsi_str}[/]"
+            elif 45 <= rsi_val < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+            elif 30 < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+            else: rsi_str = f"[blue]{rsi_str}[/]"
+            
+        cci_val = ind.get('cci')
+        cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
+        if cci_val is not None:
+            if cci_val >= 100: cci_str = f"[red]{cci_str}[/]"
+            elif 0 < cci_val < 100: cci_str = f"[orange3]{cci_str}[/]"
+            elif -100 < cci_val <= 0: cci_str = f"[yellow]{cci_str}[/]"
+            else: cci_str = f"[blue]{cci_str}[/]"
+            
+        adx_val = ind.get('adx')
+        adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
+        if adx_val is not None:
+            if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]"
+            elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"
+            elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
+            elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
+            else: adx_str = f"[white]{adx_str}[/]"
+            
+        plus_di = ind.get('plus_di')
+        minus_di = ind.get('minus_di')
+        dmi_str = "-"
+        if plus_di is not None and minus_di is not None:
+            if plus_di > minus_di:
+                dmi_str = f"[red]{plus_di:.1f}[/]/[dim]{minus_di:.1f}[/]"
+            elif minus_di > plus_di:
+                dmi_str = f"[dim]{plus_di:.1f}[/]/[blue]{minus_di:.1f}[/]"
+            else:
+                dmi_str = f"{plus_di:.1f}/{minus_di:.1f}"
+                
+        caption_str = f"추세SMO: {trend_str} | RSI: {rsi_str} | CCI: {cci_str} | ADX: {adx_str} | DMI: {dmi_str}"
+        
+    if not res or res.get('rt_cd') != '0':
+        config.console.print("[yellow]호가창 데이터를 불러오지 못했습니다.[/yellow]")
+        return
+
+    out1 = res.get('output1', {})
+    
+    ask_prices, ask_vols = [], []
+    bid_prices, bid_vols = [], []
+    
+    if is_overseas:
+        for i in range(levels, 0, -1):
+            ask_prices.append(float(out1.get(f'pask{i}', 0)))
+            ask_vols.append(int(float(out1.get(f'vask{i}', 0))))
+        for i in range(1, levels + 1):
+            bid_prices.append(float(out1.get(f'pbid{i}', 0)))
+            bid_vols.append(int(float(out1.get(f'vbid{i}', 0))))
+    else:
+        for i in range(levels, 0, -1):
+            ask_prices.append(float(out1.get(f'askp{i}', 0)))
+            ask_vols.append(int(float(out1.get(f'askp_rsqn{i}', 0))))
+        for i in range(1, levels + 1):
+            bid_prices.append(float(out1.get(f'bidp{i}', 0)))
+            bid_vols.append(int(float(out1.get(f'bidp_rsqn{i}', 0))))
+
+    table = Table(title=f"📊 {name} 호가창 (상하 {levels}호가)", box=box.SIMPLE_HEAD, caption=caption_str, header_style="dim", border_style="dim", caption_style="none")
+    table.add_column("매도잔량", justify="right", style="blue")
+    table.add_column("호가", justify="center", style="bold")
+    table.add_column("매수잔량", justify="right", style="red")
+
+    has_data = False
+    for p, v in zip(ask_prices, ask_vols):
+        if p > 0:
+            has_data = True
+            p_str = f"${p:,.2f}" if is_overseas else f"{int(p):,}"
+            table.add_row(f"{v:,}", f"[blue]{p_str}[/blue]", "")
+            
+    for p, v in zip(bid_prices, bid_vols):
+        if p > 0:
+            has_data = True
+            p_str = f"${p:,.2f}" if is_overseas else f"{int(p):,}"
+            table.add_row("", f"[red]{p_str}[/red]", f"{v:,}")
+
+    if has_data:
+        config.console.print(table)
+    else:
+        config.console.print("[dim]현재가 호가 데이터가 없습니다.[/dim]")
 
 def show_open_orders():
     """모든 계좌의 미체결 내역을 조회하고 테이블로 출력하며, 선택 가능한 주문 리스트를 반환합니다."""
@@ -777,8 +902,15 @@ def send_order(order_type):
         if curr_price > 0:
             price_fmt = f"${curr_price:,.2f}" if is_overseas else f"{int(curr_price):,}원"
             config.console.print(f"\n[bold green]현재가: {price_fmt}[/bold green]")
+            
+            # [추가] 일반 매매 호가창 출력 여부 확인
+            config.console.print()
+            if Prompt.ask("현재가 호가창을 확인하시겠습니까?", choices=["y", "n"], default="n") == "y":
+                _show_order_book(stock_code, stock_name, is_overseas)
+                config.console.print()
 
         default_qty = "1"
+        max_qty = 0
         if order_type == 'buy':
             if curr_price > 0:
                 if is_overseas:
@@ -1017,9 +1149,21 @@ def send_order(order_type):
                 if order_type == 'sell':
                     msg += f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
                     
+                    if int(qty) >= int(max_qty):
+                        canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, stock_code)
+                        if canceled_cnt > 0:
+                            config.console.print(f"\n[bold magenta]💡 안내: 잔고 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
+                            msg += f"\n🗑 [예약취소] 잔고 매도로 매도 예약 {canceled_cnt}건 자동 취소"
+                    
                 msg += f"\n주문번호: {odno}"
                 
                 if order_type == 'buy':
+                    # [추가] 매수 시 기존 예약 매수 주문 자동 취소 (비중 중복 방어)
+                    canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, stock_code)
+                    if canceled_cnt > 0:
+                        config.console.print(f"\n[bold magenta]💡 안내: 신규 매수 진행으로 인해 대기 중이던 매수 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
+                        msg += f"\n🗑 [예약취소] 신규 매수로 매수 예약 {canceled_cnt}건 자동 취소"
+
                     if calculated_score > 0:
                         rsi_str = f"{indicator_info.get('rsi', 0):.1f}" if indicator_info.get('rsi') is not None else "-"
                         msg += f"\n📊 [지표] 점수:{calculated_score}점 / RSI:{rsi_str}"
@@ -1316,6 +1460,466 @@ def modify_order():
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
+def register_reserved_order():
+    """예약 주문 등록 메뉴"""
+    config.console.print("\n[bold yellow]예약 주문 등록 (Reserve Order)[/bold yellow]")
+    
+    target_cano, target_acnt, acc_label = select_account()
+    if not target_cano:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    menu_items = [("1", "예약 매수", "Buy"), ("2", "예약 매도", "Sell")]
+    choice = utils.show_menu("주문 방향", menu_items, default_choice="1")
+    if choice.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
+
+    order_type = "buy" if choice == "1" else "sell"
+    
+    stock_info = {}
+    if order_type == "sell":
+        res = select_stock_from_balance(target_cano, target_acnt)
+        if not res or res[0] in [None, False]:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        stock_code, stock_name, is_overseas, _, stock_info = res
+    else:
+        stock_code, stock_name, is_overseas = utils.select_target_stock()
+        if not stock_code:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+
+    market = "US" if is_overseas else "KR"
+    
+    # [추가] 현재가 및 매입단가(보유 시) 조회 (퍼센트 기준 계산용)
+    current_price = api.get_current_price(stock_code, is_overseas)
+    buy_price = 0.0
+    if order_type == "sell":
+        buy_price = float(stock_info.get('buy_price', 0.0))
+                        
+    price_info = f"현재가: ${current_price:,.2f}" if is_overseas else f"현재가: {int(current_price):,}원"
+    if buy_price > 0:
+        b_fmt = f"${buy_price:,.2f}" if is_overseas else f"{int(buy_price):,}원"
+        price_info += f" / 매입단가: {b_fmt}"
+        
+    config.console.print(f"\n선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan] [dim]({price_info})[/dim]")
+    
+    base_price = buy_price if buy_price > 0 else current_price
+    base_label = "매입단가" if buy_price > 0 else "현재가"
+    
+    # [추가] 예약 매매 호가창 출력 여부 확인
+    config.console.print()
+    ans_ob = Prompt.ask("현재가 호가창을 확인하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="y")
+    if ans_ob.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    if ans_ob == "y":
+        _show_order_book(stock_code, stock_name, is_overseas)
+        config.console.print()
+    
+    cond_items = [
+        ("1", "스탑로스/하향이탈 (STOP)", "현재가가 목표가 이하로 하락 시"),
+        ("2", "돌파/상향이탈 (BREAKOUT)", "현재가가 목표가 이상으로 상승 시"),
+        ("3", "지정가 도달 (LIMIT)", "현재가가 목표가와 일치 시 (터치 기준)"),
+        ("4", "특정 시간 (TIME)", "지정된 시간에 무조건 주문"),
+        ("5", "퀀트 점수 (SCORE)", "시스템 종합 점수 조건 충족 시"),
+        ("6", "트레일링 매수 (TRAILING_BUY)", "최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
+        ("7", "트레일링 매도 (TRAILING_SELL)", "최고점 달성 후 N% 하락 시 (매도 전용)"),
+        ("8", "RSI 지표 (RSI)", "RSI 수치 조건 충족 시")
+    ]
+    cond_choice = utils.show_menu("예약 발동 조건", cond_items)
+    if cond_choice.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    if order_type == 'sell' and cond_choice == '6':
+        config.console.print("[red]트레일링 매수(6번) 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
+        return False
+        
+    if order_type == 'buy' and cond_choice == '7':
+        config.console.print("[red]트레일링 매도(7번) 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
+        return False
+    
+    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "LIMIT", "4": "TIME", "5": "SCORE", "6": "TRAILING_BUY", "7": "TRAILING_SELL", "8": "RSI"}
+    condition_type = condition_map[cond_choice]
+    
+    target_price = 0.0
+    target_time = ""
+    
+    if condition_type == "TIME":
+        config.console.print(f"\n[cyan]◆ 발동 시간 설정[/cyan]")
+        config.console.print(f"[dim]  - 1: 당일 장 마감 무렵 (15:20)[/dim]")
+        config.console.print(f"[dim]  - 2: 다음 영업일 개장 시 (09:00)[/dim]")
+        config.console.print(f"[dim]  - 직접 입력: YYYYMMDDHHMM 또는 HHMM (예: 1510, 202606011510)[/dim]")
+        raw_time = Prompt.ask("발동 시간 선택 또는 입력")
+        
+        if not raw_time or raw_time.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        
+        if raw_time == "1":
+            target_time = datetime.now().strftime("%Y%m%d") + "1520"
+        elif raw_time == "2":
+            next_day = datetime.now() + timedelta(days=1)
+            if next_day.weekday() == 5: next_day += timedelta(days=2) # 토요일이면 월요일로
+            elif next_day.weekday() == 6: next_day += timedelta(days=1) # 일요일이면 월요일로
+            target_time = next_day.strftime("%Y%m%d") + "0900"
+        else:
+            target_time = "".join(filter(str.isdigit, raw_time))
+            
+    elif condition_type == "SCORE":
+        config.console.print(f"\n[cyan]◆ 발동 목표 점수 설정[/cyan]")
+        target_price_str = Prompt.ask("목표 점수 입력 (예: 7.5)")
+        if not target_price_str or target_price_str.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        target_price = float(target_price_str.replace(',', ''))
+        updown = Prompt.ask("발동 방향 (1: 점수 이상 돌파 시, 2: 점수 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1")
+        if updown.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        condition_type = "SCORE_UP" if updown == "1" else "SCORE_DOWN"
+        
+    elif condition_type == "RSI":
+        config.console.print(f"\n[cyan]◆ 발동 목표 RSI 수치 설정[/cyan]")
+        target_price_str = Prompt.ask("목표 RSI 입력 (예: 30 또는 75)")
+        if not target_price_str or target_price_str.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        target_price = float(target_price_str.replace(',', ''))
+        updown = Prompt.ask("발동 방향 (1: RSI 이상 돌파 시, 2: RSI 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="2")
+        if updown.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        condition_type = "RSI_UP" if updown == "1" else "RSI_DOWN"
+        
+    elif condition_type == "TRAILING_BUY":
+        config.console.print(f"\n[cyan]◆ 반등 폭 설정 (트레일링 매수)[/cyan]")
+        target_price_str = Prompt.ask("최저점 대비 추격 매수할 반등 폭(%) 입력 (예: 3.0)")
+        if not target_price_str or target_price_str.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        target_price = float(target_price_str.replace('%', '').strip())
+    elif condition_type == "TRAILING_SELL":
+        config.console.print(f"\n[cyan]◆ 하락 폭 설정 (트레일링 매도)[/cyan]")
+        target_price_str = Prompt.ask("최고점 대비 하락 시 매도할 폭(%) 입력 (예: 3.0)")
+        if not target_price_str or target_price_str.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        target_price = float(target_price_str.replace('%', '').strip())
+    else:
+        config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력[/cyan]")
+        config.console.print(f"[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
+        config.console.print(f"[dim]  - 퍼센트(%): +5%, -3% ({base_label} 대비 설정)[/dim]")
+        target_price_str = Prompt.ask("목표가 입력")
+        if not target_price_str or target_price_str.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+            return False
+        if '%' in target_price_str:
+            pct = float(target_price_str.replace('%', '').strip())
+            target_price = base_price * (1 + (pct / 100.0))
+            if not is_overseas: target_price = int(target_price)
+            t_fmt = f"${target_price:,.2f}" if is_overseas else f"{int(target_price):,}원"
+            config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 목표가: {t_fmt}[/dim]")
+        else:
+            target_price = float(target_price_str.replace(',', ''))
+        
+    config.console.print(f"\n[cyan]◆ 주문 실행 단가 입력 (지정가 / 시장가)[/cyan]")
+    is_price_target = condition_type in ["STOP", "BREAKOUT", "LIMIT"]
+    
+    config.console.print(f"[dim]  - 절대 가격: 49900 (해당 가격으로 주문)[/dim]")
+    config.console.print(f"[dim]  - 퍼센트(%): -1% ({base_label} 대비 가격으로 주문)[/dim]")
+    config.console.print(f"[dim]  - m (알파벳): 시장가 주문 (발동 시점의 시장가)[/dim]")
+    if is_price_target:
+        config.console.print(f"[dim]  - 엔터(빈 값) 또는 0: 목표가와 동일하게 자동 설정[/dim]")
+    else:
+        config.console.print(f"[dim]  - 엔터(빈 값) 또는 0: {base_label}와 동일하게 자동 설정[/dim]")
+        
+    order_price_str = Prompt.ask("주문 단가 입력", default="")
+    if order_price_str.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    if order_price_str.lower() == 'm':
+        order_price = 0.0
+        config.console.print(f"[dim] -> 발동 시점의 시장가로 자동 설정[/dim]")
+    elif not order_price_str or order_price_str == "0":
+        if is_price_target:
+            order_price = target_price
+            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+            config.console.print(f"[dim] -> 목표가와 동일하게 자동 설정: {op_fmt}[/dim]")
+        else:
+            order_price = base_price
+            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+            config.console.print(f"[dim] -> {base_label}와 동일하게 자동 설정: {op_fmt}[/dim]")
+    elif '%' in order_price_str:
+        pct = float(order_price_str.replace('%', '').strip())
+        order_price = base_price * (1 + (pct / 100.0))
+        if not is_overseas: order_price = int(order_price)
+        op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+        config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 주문 단가: {op_fmt}[/dim]")
+    else:
+        order_price = float(order_price_str.replace(',', ''))
+    
+    if order_type == "sell":
+        max_qty = int(stock_info.get('qty', 0))
+        qty_str = Prompt.ask(f"주문 수량(주) [dim](보유 잔고: {max_qty:,}주)[/dim]", default=str(max_qty))
+    else:
+        qty_str = Prompt.ask("주문 수량(주)")
+        
+    if not qty_str or qty_str.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    qty = int(qty_str.replace(',', ''))
+    
+    if order_type == "sell" and qty > max_qty:
+        config.console.print(f"[red]⚠️ 입력하신 수량({qty:,}주)이 보유 수량({max_qty:,}주)보다 많습니다. 잔고 전량으로 자동 조정합니다.[/red]")
+        qty = max_qty
+    
+    config.console.print(f"\n[cyan]◆ 유효 기간 (만료일) 설정[/cyan]")
+    config.console.print(f"[dim]  - 1: 당일 (오늘 장 마감 전까지)[/dim]")
+    config.console.print(f"[dim]  - 2: 이번 주 (7일 후까지)[/dim]")
+    config.console.print(f"[dim]  - 3: 이번 달 (30일 후까지)[/dim]")
+    config.console.print(f"[dim]  - 4: 무기한 (취소할 때까지 유지)[/dim]")
+    config.console.print(f"[dim]  - 직접 입력: YYYYMMDD (예: 20261231)[/dim]")
+    expire_choice = Prompt.ask("유효 기간 선택 또는 입력", default="1")
+    if expire_choice.lower() in ['b', 'q']:
+        config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    today_dt = datetime.now()
+    if expire_choice == "1": expire_dt = today_dt.strftime("%Y%m%d")
+    elif expire_choice == "2": expire_dt = (today_dt + timedelta(days=7)).strftime("%Y%m%d")
+    elif expire_choice == "3": expire_dt = (today_dt + timedelta(days=30)).strftime("%Y%m%d")
+    elif expire_choice == "4": expire_dt = "20991231"
+    else: expire_dt = "".join(filter(str.isdigit, expire_choice))
+    if not expire_dt or len(expire_dt) < 8: expire_dt = "20991231"
+    
+    t_type_str = "[red]매수[/red]" if order_type == "buy" else "[blue]매도[/blue]"
+    
+    if condition_type == "TIME":
+        if len(target_time) >= 12: tt_disp = f"{target_time[:4]}-{target_time[4:6]}-{target_time[6:8]} {target_time[8:10]}:{target_time[10:12]}"
+        elif len(target_time) == 4: tt_disp = f"{target_time[:2]}:{target_time[2:4]}"
+        else: tt_disp = target_time
+        cond_str = f"시간 {tt_disp}"
+    elif 'SCORE' in condition_type:
+        cond_str = f"점수 {target_price}점 {'이상' if 'UP' in condition_type else '이하'}"
+    elif 'RSI' in condition_type:
+        cond_str = f"RSI {target_price} {'이상' if 'UP' in condition_type else '이하'}"
+    elif condition_type == 'TRAILING_BUY':
+        cond_str = f"최저점 대비 {target_price}% 반등 시"
+    elif condition_type == 'TRAILING_SELL':
+        cond_str = f"최고점 대비 {target_price}% 하락 시"
+    else:
+        if is_overseas:
+            cond_str = f"목표가 ${target_price:,.2f}"
+        else:
+            cond_str = f"목표가 {int(target_price):,}원"
+    
+    expire_disp = "무기한" if expire_dt == "20991231" else f"{expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}까지"
+    
+    if order_price == 0:
+        op_disp = "시장가"
+    else:
+        op_disp = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+
+    confirm_msg = (
+        f"\n[bold white on yellow] [ 예약 {t_type_str.replace('[/red]', '').replace('[/blue]', '').replace('[red]', '').replace('[blue]', '')} 주문 최종 확인 ] [/]\n"
+        f" 종목: {stock_name} ({stock_code})\n"
+        f" 조건: [bold]{condition_type}[/bold] ({cond_str})\n"
+        f" 주문: {t_type_str} {qty}주 @ {op_disp} (지정가)\n"
+        f" 유효: {expire_disp}\n"
+    )
+    config.console.print(Panel(confirm_msg, expand=False))
+    
+    ans = Prompt.ask("위 내용으로 예약 주문을 시스템에 등록하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+    if ans.lower() in ['b', 'q', 'n']:
+        if ans.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        else:
+            config.console.print("[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+        return False
+        
+    if ans == "y":
+        db_manager.db.insert_reserved_order(
+            cano=target_cano, acnt=target_acnt, market=market,
+            order_type=order_type, code=stock_code, name=stock_name,
+            qty=qty, order_price=order_price,
+            condition_type=condition_type, target_price=target_price, target_time=target_time, expire_dt=expire_dt
+        )
+        config.console.print("[bold green]✅ 예약 주문이 성공적으로 등록되었습니다.[/bold green]")
+        
+        # [추가] 예약 주문 등록 시 텔레그램 알림 전송
+        clean_type_str = t_type_str.replace('[/red]', '').replace('[/blue]', '').replace('[red]', '').replace('[blue]', '')
+        api.send_telegram_message(f"📝 [예약 등록] {stock_name}({stock_code})\n구분: {clean_type_str}\n조건: {condition_type} ({cond_str})\n수량: {qty}주\n지정가: {op_disp}\n유효: {expire_disp}")
+            
+def manage_reserved_orders():
+    """예약 주문 내역 및 취소 메뉴"""
+    config.console.print("\n[bold green]예약 주문 관리 내역[/bold green]")
+    orders = db_manager.db.get_pending_reserved_orders()
+    if not orders:
+        config.console.print("[yellow]현재 대기 중인 예약 주문이 없습니다.[/yellow]")
+        return False
+        
+    table = Table(title="예약 주문 대기 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("ID", justify="center", style="cyan")
+    table.add_column("계좌번호", justify="center")
+    table.add_column("계좌구분", justify="center")
+    table.add_column("종목명(코드)")
+    table.add_column("구분", justify="center")
+    table.add_column("조건", justify="center")
+    table.add_column("주문(수량@지정가)", justify="right")
+    table.add_column("유효기간", justify="center")
+    
+    for o in orders:
+        is_ovs = (o.get('market') == 'US')
+        
+        cano = o.get('cano', '')
+        acnt = o.get('acnt', '')
+        
+        acc_label = "기타"
+        if config.session.is_simulation:
+            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                acc_label = "[bold yellow]모의[/bold yellow]"
+        else:
+            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                acc_label = "[bold yellow]실전[/bold yellow]"
+            elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
+                acc_label = "[bold orange3]자동[/bold orange3]"
+                
+        if o['condition_type'] == 'TIME':
+            tt = o['target_time']
+            if len(tt) >= 12: t_str = f"{tt[:4]}-{tt[4:6]}-{tt[6:8]} {tt[8:10]}:{tt[10:12]}"
+            elif len(tt) == 4: t_str = f"{tt[:2]}:{tt[2:4]}"
+            else: t_str = tt
+        else:
+            if 'SCORE' in o['condition_type']:
+                t_str = f"{o['target_price']}점 {'이상' if 'UP' in o['condition_type'] else '이하'}"
+            elif 'RSI' in o['condition_type']:
+                t_str = f"RSI {o['target_price']} {'이상' if 'UP' in o['condition_type'] else '이하'}"
+            elif o['condition_type'] == 'TRAILING_BUY':
+                t_str = f"바닥 대비 {o['target_price']}% 반등"
+            elif o['condition_type'] == 'TRAILING_SELL':
+                t_str = f"고점 대비 {o['target_price']}% 하락"
+            else:
+                if is_ovs:
+                    t_str = f"${o['target_price']:,.2f}"
+                else:
+                    t_str = f"{int(o['target_price']):,}원"
+                
+        cond_str = f"{o['condition_type'].replace('_UP','').replace('_DOWN','')} ({t_str})"
+        
+        if o['order_price'] == 0:
+            op_disp = "시장가"
+        else:
+            op_disp = f"${o['order_price']:,.2f}" if is_ovs else f"{int(o['order_price']):,}원"
+            
+        ord_str = f"{o['qty']}주 @ {op_disp}"
+        t_type = "[red]매수[/]" if o['order_type'] == 'buy' else "[blue]매도[/]"
+        acc_str = f"{cano}-{acnt}"
+        
+        exp = o.get('expire_dt', '20991231')
+        exp_str = "무기한" if not exp or exp == "20991231" else f"{exp[:4]}-{exp[4:6]}-{exp[6:8]}"
+        table.add_row(str(o['id']), acc_str, acc_label, f"{o['name']}({o['code']})", t_type, cond_str, ord_str, exp_str)
+        
+    config.console.print(table)
+    config.console.print()
+    cancel_input = Prompt.ask("취소할 예약 주문 ID 선택 [dim](다중: 1,3 / 전체: 0 / 이전: b, 메인: q, 취소: Enter)[/dim]", default="")
+    if not cancel_input or cancel_input.lower() in ['b', 'q']:
+        if cancel_input and cancel_input.lower() in ['b', 'q']:
+            config.console.print("[yellow]입력이 취소되었습니다.[/yellow]")
+        return False
+    
+    if cancel_input.strip() == "0":
+        cancel_ids = [str(o['id']) for o in orders]
+    else:
+        cancel_ids = [cid.strip() for cid in cancel_input.split(',') if cid.strip().isdigit()]
+    
+    if cancel_ids:
+        canceled_list = []
+        for cid in cancel_ids:
+            target_order = next((o for o in orders if str(o['id']) == cid), None)
+            
+            if target_order:
+                db_manager.db.update_reserved_order_status(int(cid), 'CANCELED')
+                canceled_list.append(cid)
+        
+                t_type = "매수" if target_order['order_type'] == 'buy' else "매도"
+                cond_str = target_order['condition_type']
+                api.send_telegram_message(f"🗑️ [예약 수동 취소] {target_order['name']}({target_order['code']})\n사용자에 의해 대기 중이던 예약 {t_type} 주문(ID: {cid})이 취소되었습니다.\n조건: {cond_str}")
+                
+        if canceled_list:
+            config.console.print(f"[bold green]✅ 예약 주문(ID: {', '.join(canceled_list)})이 취소되었습니다.[/bold green]")
+        else:
+            config.console.print("[yellow]취소할 수 있는 유효한 예약 주문 ID가 없습니다.[/yellow]")
+
+def get_reserved_orders_summary():
+    """텔레그램 전송용 예약 주문 현황 요약 문자열 생성"""
+    orders = db_manager.db.get_pending_reserved_orders()
+    if not orders:
+        return "📭 현재 대기 중인 예약 주문이 없습니다."
+        
+    msg = f"⏳ [대기 중인 예약 주문 현황] (총 {len(orders)}건)\n\n"
+    for o in orders:
+        is_ovs = (o.get('market') == 'US')
+        
+        cano = o.get('cano', '')
+        acnt = o.get('acnt', '')
+        
+        acc_label = "기타"
+        if config.session.is_simulation:
+            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                acc_label = "모의"
+        else:
+            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                acc_label = "실전"
+            elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
+                acc_label = "자동"
+                
+        if o['condition_type'] == 'TIME':
+            tt = o['target_time']
+            if len(tt) >= 12: t_str = f"{tt[:4]}-{tt[4:6]}-{tt[6:8]} {tt[8:10]}:{tt[10:12]}"
+            elif len(tt) == 4: t_str = f"{tt[:2]}:{tt[2:4]}"
+            else: t_str = tt
+        else:
+            if 'SCORE' in o['condition_type']:
+                t_str = f"{o['target_price']}점 {'이상' if 'UP' in o['condition_type'] else '이하'}"
+            elif 'RSI' in o['condition_type']:
+                t_str = f"RSI {o['target_price']} {'이상' if 'UP' in o['condition_type'] else '이하'}"
+            elif o['condition_type'] == 'TRAILING_BUY':
+                t_str = f"바닥 대비 {o['target_price']}% 반등"
+            elif o['condition_type'] == 'TRAILING_SELL':
+                t_str = f"고점 대비 {o['target_price']}% 하락"
+            else:
+                if is_ovs:
+                    t_str = f"${o['target_price']:,.2f}"
+                else:
+                    t_str = f"{int(o['target_price']):,}원"
+            
+        cond_str = f"{o['condition_type'].replace('_UP','').replace('_DOWN','')} ({t_str})"
+        
+        if o['order_price'] == 0:
+            op_disp = "시장가"
+        else:
+            op_disp = f"${o['order_price']:,.2f}" if is_ovs else f"{int(o['order_price']):,}원"
+            
+        ord_str = f"{o['qty']}주 @ {op_disp}"
+        t_type = "🔴 매수" if o['order_type'] == 'buy' else "🔵 매도"
+        
+        exp = o.get('expire_dt', '20991231')
+        exp_str = "무기한" if not exp or exp == "20991231" else f"{exp[:4]}-{exp[4:6]}-{exp[6:8]}"
+        
+        msg += f"🔹 {o['name']}({o['code']}) [{acc_label}]\n"
+        msg += f"  {t_type} | {ord_str}\n"
+        msg += f"  조건: {cond_str}\n"
+        msg += f"  유효: {exp_str} (ID: {o['id']})\n\n"
+        
+    return msg.strip()
+
 def order_menu():
     """매수/매도 주문 선택 메뉴"""
     menu_items = [("1", "매수 주문", "Buy Order"), ("2", "매도 주문", "Sell Order")]
@@ -1337,7 +1941,13 @@ def stock_order_menu():
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_items = [("1", "[red]매수[/red] 주문", "Buy"), ("2", "[blue]매도[/blue] 주문", "Sell"), ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel")]
+        menu_items = [
+            ("1", "[red]매수[/red] 주문", "Buy"), 
+            ("2", "[blue]매도[/blue] 주문", "Sell"), 
+            ("3", "[magenta]정정/취소[/magenta] 주문", "Modify/Cancel"), 
+            ("4", "[yellow]예약 주문 등록[/yellow]", "Reserve Order"), 
+            ("5", "[green]예약 주문 관리/취소[/green]", "Manage Reserves")
+        ]
         choice = utils.show_menu("종목 주문 관리 (Stock Order Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() in ['b', 'q']: return False
@@ -1349,7 +1959,7 @@ def stock_order_menu():
         
         last_choice = choice
 
-        menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문"}
+        menu_map = {"1": "매수 주문", "2": "매도 주문", "3": "정정/취소 주문", "4": "예약 주문 등록", "5": "예약 주문 관리/취소"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -1359,3 +1969,7 @@ def stock_order_menu():
             if send_order("sell") is not False: utils.pause()
         elif choice == "3":
             if modify_order() is not False: utils.pause()
+        elif choice == "4":
+            if register_reserved_order() is not False: utils.pause()
+        elif choice == "5":
+            if manage_reserved_orders() is not False: utils.pause()

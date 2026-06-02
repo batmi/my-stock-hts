@@ -27,6 +27,7 @@ import api
 import utils  
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
+from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
 
 config.console.print("  - 모듈 로딩 완료. 시스템 사전 점검을 준비합니다.\n")
 
@@ -805,6 +806,7 @@ def main():
         auto_trade.ConclusionMonitor().start()
         telegram_cmd = telegram_bot.TelegramCommander()
         telegram_cmd.start()
+        ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"
@@ -1036,6 +1038,7 @@ def main():
             progress.update(task, description="[cyan][2/4] 백그라운드 서비스(텔레그램/감시) 종료 중...[/cyan]")
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
+            ReservedOrderMonitor().stop() # [추가] 예약 주문 모니터링 중지
             time.sleep(0.5)
             config.console.print("[2/4] 백그라운드 서비스(텔레그램/감시) 종료 [bold green][완료][/]")
             

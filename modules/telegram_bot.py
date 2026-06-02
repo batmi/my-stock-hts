@@ -68,6 +68,7 @@ class TelegramCommander:
             "/profit": self._cmd_profit,
             "/restrict": self._cmd_restricted,
             "/pending": self._cmd_pending,           # [추가] 미체결 조회
+            "/reserves": self._cmd_reserves,         # [추가] 예약 주문 현황 및 취소
             "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
             "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
             "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
@@ -155,6 +156,7 @@ class TelegramCommander:
             "❓ 도움말": "/help",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
+            "⏳ 예약 현황": "/reserves",
             "🛑 거래 정지": "/stop",
             "▶️ 거래 시작": "/start"
         }
@@ -586,6 +588,7 @@ class TelegramCommander:
             "• /balance : 자산 및 예수금 조회\n"
             "• /holdings : 보유 종목 및 수익률 조회\n"
             "• /pending : 미체결 주문 내역 조회\n"
+            "• /reserves [d ID] : 예약매매 현황 및 취소 (d)\n"
             "• /profit [기간] : 실현 손익 (d/w/m/n)\n"
             "• /history [기간] : 거래 내역 (d/w/m/n)\n"
             "• /report [기간] : 성과 리포트 (d/w/m/n)\n"
@@ -1023,6 +1026,49 @@ class TelegramCommander:
             
         return msg.strip()
 
+    def _cmd_reserves(self, args):
+        from modules import trading
+        if not args:
+            return trading.get_reserved_orders_summary()
+            
+        subcmd = args[0].lower()
+        if subcmd in ["d", "del", "delete", "cancel", "c"]:
+            if len(args) < 2:
+                return "⚠️ 사용법: /reserves d [예약주문ID]\n(다중: 5, 6 / 전체: 0)"
+                
+            orders = db_manager.db.get_pending_reserved_orders()
+            if not orders:
+                return "📭 취소할 예약 주문이 없습니다."
+                
+            raw_ids = " ".join(args[1:]).replace(',', ' ').split()
+            
+            if "0" in raw_ids or "all" in [x.lower() for x in raw_ids]:
+                cancel_ids = [str(o['id']) for o in orders]
+            else:
+                cancel_ids = [cid.strip() for cid in raw_ids if cid.strip().isdigit()]
+            
+            if not cancel_ids:
+                return "⚠️ 유효한 예약 주문 ID를 입력해주세요."
+                
+            canceled_msgs = []
+            
+            for cid in cancel_ids:
+                cancel_id = int(cid)
+                target_order = next((o for o in orders if o['id'] == cancel_id), None)
+                
+                if not target_order:
+                    canceled_msgs.append(f"⚠️ 대기 중인 예약 주문(ID: {cancel_id})을 찾을 수 없습니다.")
+                    continue
+                    
+                db_manager.db.update_reserved_order_status(cancel_id, 'CANCELED')
+                
+                t_type = "매수" if target_order['order_type'] == 'buy' else "매도"
+                canceled_msgs.append(f"🗑️ [예약 취소 완료] {target_order['name']} ({t_type}, ID: {cancel_id})")
+                
+            return "\n".join(canceled_msgs)
+        else:
+            return "⚠️ 알 수 없는 명령어입니다.\n사용법:\n• 전체 현황: /reserves\n• 특정 취소: /reserves d [ID,ID,...]"
+
     def _cmd_profit(self, args):
         days = 0
         if args:
@@ -1414,7 +1460,8 @@ class TelegramCommander:
             "keyboard": [
                 [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
                 [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
-                [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, toggle_btn]
+                [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, {"text": "⏳ 예약 현황"}],
+                [toggle_btn]
             ],
             "resize_keyboard": True
         }
