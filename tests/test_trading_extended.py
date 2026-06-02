@@ -9,6 +9,8 @@ def test_send_order_cancel(mock_ask):
     # 계좌 선택(1) -> 종목 선택(취소 q)
     mock_ask.side_effect = ["1", "q"]
     
+    config.session.is_simulation = True
+    
     with patch('config.console.print') as mock_print:
         trading.send_order("buy")
 
@@ -19,6 +21,10 @@ def test_send_order_api_fail(mock_cp, mock_place, mock_ask):
     """주문 전송 API 실패 테스트"""
     # 종목선택(5) -> 코드(005930) -> 유효성확인(y) -> 수량(1) -> 단가(0) -> 확인(y)
     mock_ask.side_effect = ["5", "005930", "y", "1", "0", "y"]
+    
+    config.session.is_simulation = True
+    config.session.cano = "12345678"
+    config.session.acnt_prdt_cd = "01"
     
     mock_place.return_value = {'rt_cd': '1', 'msg1': '주문 전송 실패'}
     

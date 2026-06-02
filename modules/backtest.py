@@ -520,8 +520,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
                                name="Unknown", code="Unknown", days=0):
-    """Monte Carlo 시뮬레이션 실행 (1,000회 반복)"""
-    config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (1,000 runs) ━━━[/]")
+    """Monte Carlo 시뮬레이션 실행 (10,000회 반복)"""
+    config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (10,000 runs) ━━━[/]")
     config.console.print("[dim]가격 데이터 노이즈(±1%) 및 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략의 견고성을 검증합니다.[/dim]\n")
     
     # 결과 저장용 리스트
@@ -557,9 +557,9 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=1000)
+        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=10000)
         
-        for _ in range(1000):
+        for _ in range(10000):
             # 1. 데이터 노이즈 주입 (복사본 사용)
             noisy_df = sim_df.copy()
             # 정규분포 노이즈 (평균 0, 표준편차 1%)

@@ -901,7 +901,7 @@ def edit_strategy_preset_menu():
         if choice.lower() in ['b', 'q']: return False
         
         if choice == "0":
-            if Prompt.ask("\n모든 커스텀 프리셋 설정을 초기화하고 시스템 기본값으로 되돌리시겠습니까?", choices=["y", "n"], default="n") == 'y':
+            if Prompt.ask("\n모든 커스텀 프리셋 설정을 초기화하고 각 프리셋의 고유 기본값으로 되돌리시겠습니까?", choices=["y", "n"], default="n") == 'y':
                 save_custom_presets({})
                 console.print("[green]초기화가 완료되었습니다.[/green]")
                 utils.pause()

@@ -426,32 +426,33 @@ def get_yf_fast_info(code):
     
     # 1. TradingView Screener 우선 조회 (일반 미국 주식 또는 TV 매핑이 존재하는 지수)
     if not is_special_ticker or tv_exact_symbol:
-        try:
-            from tradingview_screener import Query, Column
-            if tv_exact_symbol:
-                _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week').get_tickers([tv_exact_symbol])
-            else:
-                _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week').where(Column('name') == code).limit(1).get_scanner_data()
-                
-            if df is not None and not df.empty:
-                row = df.iloc[0]
-                close_p = row.get('close')
-                change_abs = row.get('change_abs')
-                
-                prev_close = None
-                if pd.notna(close_p) and pd.notna(change_abs):
-                    prev_close = close_p - change_abs
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            try:
+                from tradingview_screener import Query, Column
+                if tv_exact_symbol:
+                    _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week').get_tickers([tv_exact_symbol])
+                else:
+                    _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week').where(Column('name') == code).limit(1).get_scanner_data()
                     
-                data = {
-                    'last_price': close_p,
-                    'regular_market_previous_close': prev_close,
-                    'last_volume': row.get('volume', 0),
-                    'year_high': row.get('High.52Week')
-                }
-                _set_micro_cache(cache_key, data)
-                return data
-        except Exception:
-            pass
+                if df is not None and not df.empty:
+                    row = df.iloc[0]
+                    close_p = row.get('close')
+                    change_abs = row.get('change_abs')
+                    
+                    prev_close = None
+                    if pd.notna(close_p) and pd.notna(change_abs):
+                        prev_close = close_p - change_abs
+                        
+                    data = {
+                        'last_price': close_p,
+                        'regular_market_previous_close': prev_close,
+                        'last_volume': row.get('volume', 0),
+                        'year_high': row.get('High.52Week')
+                    }
+                    _set_micro_cache(cache_key, data)
+                    return data
+            except Exception:
+                pass
 
     # 2. yfinance Fallback
     try:

@@ -6,7 +6,7 @@ import sys
 @patch('main.auto_trade.AutoTrader')
 @patch('main.telegram_bot.TelegramCommander')
 @patch('main.auto_trade.ConclusionMonitor')
-@patch('main.api.get_access_token')
+@patch('main.preflight_check', return_value=True)
 @patch('main.api.check_and_refresh_token_if_expired')
 @patch('main.config.session.load_stock_config')
 @patch('main.config.session.initialize')
@@ -14,7 +14,7 @@ import sys
 @patch('main.os._exit')
 @patch('main.time.sleep')
 @patch('modules.db_queue.install_proxy')
-def test_main_auto_mode(mock_install_proxy, mock_sleep, mock_exit, mock_ask, mock_init, mock_load, mock_check_token, mock_token, mock_monitor, mock_bot, mock_trader):
+def test_main_auto_mode(mock_install_proxy, mock_sleep, mock_exit, mock_ask, mock_init, mock_load, mock_check_token, mock_preflight, mock_monitor, mock_bot, mock_trader):
     """메인 함수 자동 시작 모드 테스트"""
     test_args = ['main.py', '--mode', '1', '--auto']
     

@@ -124,6 +124,7 @@ pysqlite3
 pytest
 pytest-cov
 pytest-sugar
+pytest-xdist
 python_bcrypt
 python_calamine
 python_socks

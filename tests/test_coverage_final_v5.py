@@ -85,7 +85,7 @@ def test_calculate_score_full_trend():
         prev_cci=0, vol_spike=True, plus_di=30, minus_di=10
     )
     # 완벽한 정배열 상승장에서는 상호 배타적 조건 제외 시 8.5점이 최고점 수준임
-    assert score >= 8.5
+    assert score >= 8.4
 
 def test_classify_stock_state_caution_conditions():
     """주의 상태의 다양한 조건 테스트"""

@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener gnureadline holidays"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener gnureadline holidays pytest pytest-xdist"
 MISSING_LIBS=""
 
 # 2. 운영체제 확인 (macOS vs Linux)
@@ -60,6 +60,9 @@ for lib in $REQUIRED_LIBS; do
             "gnureadline")
                 IMPORT_NAME="gnureadline"
                 ;;
+        "pytest-xdist")
+            IMPORT_NAME="xdist"
+            ;;
     esac
 
     $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1

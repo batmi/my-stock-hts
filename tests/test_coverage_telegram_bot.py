@@ -21,17 +21,16 @@ def test_handle_message_branches(mock_send, commander):
     with patch.object(commander, '_cmd_signal') as mock_signal, \
          patch.object(commander, '_cmd_chart') as mock_chart, \
          patch.dict(commander.command_handlers, {'/signal': mock_signal, '/chart': mock_chart}), \
-         patch.object(commander, '_send_reply'):
+         patch.object(commander, '_send_reply'), \
+         patch('modules.telegram_bot.bot_executor.submit', side_effect=lambda f, *args: f(*args)):
              
         # 단축 명령어 테스트
         msg1 = {'chat': {'id': 12345}, 'text': '/signal_005930'}
         commander._handle_message(msg1)
-        time.sleep(0.1)
         mock_signal.assert_called_with(['005930'])
         
         msg2 = {'chat': {'id': 12345}, 'text': '/chart_AAPL'}
         commander._handle_message(msg2)
-        time.sleep(0.1)
         mock_chart.assert_called_with(['aapl'])
         
         # 권한 없는 채팅 ID (수행되지 않아야 함)
@@ -81,7 +80,14 @@ def test_check_morning_briefing_scheduler(mock_thread, mock_dt):
     
     scheduler._check_morning_briefing()
     assert scheduler.last_briefing_date == "2023-11-01"
-    mock_thread.assert_called_once()
+    
+    found = False
+    for call in mock_thread.call_args_list:
+        _, kwargs = call
+        if kwargs.get('target') == scheduler.execute_briefing:
+            found = True
+            break
+    assert found is True
 
 def test_cmd_market_invalid_key(commander):
     """/market 명령어 오입력 테스트"""

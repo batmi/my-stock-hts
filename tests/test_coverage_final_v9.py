@@ -147,7 +147,7 @@ def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, mock_ask, sample
         8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0, False
     )
     
-    assert mock_sim.call_count == 1000
+    assert mock_sim.call_count == 10000
     assert mock_print.call_count > 0
 
 @patch('modules.backtest.utils.validate_and_confirm_stock', return_value=True)

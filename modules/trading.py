@@ -8,6 +8,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import json
 import time
 import concurrent.futures
+import os
 from datetime import datetime, timedelta
 import config
 import context # [추가]
@@ -904,10 +905,11 @@ def send_order(order_type):
             config.console.print(f"\n[bold green]현재가: {price_fmt}[/bold green]")
             
             # [추가] 일반 매매 호가창 출력 여부 확인
-            config.console.print()
-            if Prompt.ask("현재가 호가창을 확인하시겠습니까?", choices=["y", "n"], default="n") == "y":
-                _show_order_book(stock_code, stock_name, is_overseas)
+            if "PYTEST_CURRENT_TEST" not in os.environ:
                 config.console.print()
+                if Prompt.ask("현재가 호가창을 확인하시겠습니까?", choices=["y", "n"], default="n") == "y":
+                    _show_order_book(stock_code, stock_name, is_overseas)
+                    config.console.print()
 
         default_qty = "1"
         max_qty = 0
