@@ -1775,10 +1775,16 @@ class TelegramCommander:
 
             # 이평선 상태
             ema_state = "혼조/역배열"
-            if ind['ema_20'] is not None and ind['ema_60'] is not None and ind['ema_120'] is not None:
+            if ind.get('ema_20') is not None and ind.get('ema_60') is not None and ind.get('ema_120') is not None:
                 if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
             
+            def _fmt_ema(v): return f"{int(v):,}" if not is_overseas else f"${v:,.2f}"
+            e5 = _fmt_ema(ind['ema_5']) if ind.get('ema_5') is not None else "-"
+            e20 = _fmt_ema(ind['ema_20']) if ind.get('ema_20') is not None else "-"
+            e60 = _fmt_ema(ind['ema_60']) if ind.get('ema_60') is not None else "-"
+            e120 = _fmt_ema(ind['ema_120']) if ind.get('ema_120') is not None else "-"
+
             # [수정] 매수/보유 판단 로직 (보정된 기준 사용)
             buy_score_limit = buy_score
             buy_rsi_limit = buy_rsi
@@ -1840,6 +1846,10 @@ class TelegramCommander:
             msg += f"TradingView 의견: {tv_rating_str}\n"
             msg += f"\n[주요 지표]\n"
             msg += f"• EMA: {ema_state}\n"
+            msg += f"   5: {e5}\n"
+            msg += f"   20: {e20}\n"
+            msg += f"   60: {e60}\n"
+            msg += f"   120: {e120}\n"
             msg += f"• SAR: {sar_state}\n"
             msg += f"• MACD: {macd_state}\n"
             msg += f"• OBV: {obv_state}\n"
