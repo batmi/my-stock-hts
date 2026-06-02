@@ -1780,10 +1780,10 @@ class TelegramCommander:
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
             
             def _fmt_ema(v): return f"{int(v):,}" if not is_overseas else f"${v:,.2f}"
-            e5 = _fmt_ema(ind['ema_5']) if ind.get('ema_5') is not None else "-"
-            e20 = _fmt_ema(ind['ema_20']) if ind.get('ema_20') is not None else "-"
-            e60 = _fmt_ema(ind['ema_60']) if ind.get('ema_60') is not None else "-"
-            e120 = _fmt_ema(ind['ema_120']) if ind.get('ema_120') is not None else "-"
+            e5 = _fmt_ema(ind.get('ema_5')) if ind.get('ema_5') is not None else "-"
+            e20 = _fmt_ema(ind.get('ema_20')) if ind.get('ema_20') is not None else "-"
+            e60 = _fmt_ema(ind.get('ema_60')) if ind.get('ema_60') is not None else "-"
+            e120 = _fmt_ema(ind.get('ema_120')) if ind.get('ema_120') is not None else "-"
 
             # [수정] 매수/보유 판단 로직 (보정된 기준 사용)
             buy_score_limit = buy_score

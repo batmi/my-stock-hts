@@ -148,7 +148,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
         if df is not None and not df.empty:
             # 이동평균선 계산
             for w in [5, 20, 60, 120]:
-                df[f'ma{w}'] = df['close'].rolling(window=w).mean()
+                df[f'ma{w}'] = df['close'].ewm(span=w, adjust=False).mean()
 
             # 등락폭/등락률 계산
             df['diff'] = df['close'].diff()
@@ -355,7 +355,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
         if df is not None and not df.empty:
             # 이동평균선 계산
             for w in [5, 20, 60, 120]:
-                df[f'ma{w}'] = df['close'].rolling(window=w).mean()
+                df[f'ma{w}'] = df['close'].ewm(span=w, adjust=False).mean()
 
             # 등락폭/등락률 계산
             df['diff'] = df['close'].diff()

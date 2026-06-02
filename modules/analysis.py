@@ -745,17 +745,21 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         df = None
         vol_strength = None
+        inv_data = None
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
             if is_domestic_index:
                 fut_chart = ex.submit(get_domestic_index_data, code)
                 fut_vol = None
+                fut_inv = None
             else:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
+                fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas else None
             
             df = fut_chart.result()
             vol_strength = fut_vol.result() if fut_vol else None
+            inv_data = fut_inv.result() if fut_inv else None
             
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
@@ -1061,6 +1065,34 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     else:
         ema_align = "데이터 부족"; ema_color = "[dim]"
     table_tech.add_row("이평 배열", f"{ema_color}{ema_align}[/]", "5/20/60/120일선 배열")
+    
+    def _fmt_ema(v): return f"{int(v):,}" if not is_overseas else f"${v:,.2f}"
+    
+    v5 = ind.get('ema_5')
+    v20 = ind.get('ema_20')
+    v60 = ind.get('ema_60')
+    v120 = ind.get('ema_120')
+
+    c5 = "[red]" if (v5 is not None and v20 is not None and v5 > v20) else ("[blue]" if v5 is not None else "")
+    c20 = "[red]" if (v20 is not None and v60 is not None and v20 > v60) else ("[blue]" if v20 is not None else "")
+    c60 = "[red]" if (v60 is not None and v120 is not None and v60 > v120) else ("[blue]" if v60 is not None else "")
+    
+    c120 = ""
+    if df is not None and not df.empty and len(df) > 121:
+        try:
+            ema120_series = df['close'].ewm(span=120, adjust=False).mean()
+            if ema120_series.iloc[-1] > ema120_series.iloc[-2]: c120 = "[red]"
+            else: c120 = "[blue]"
+        except: pass
+    elif v120 is not None:
+        c120 = "[blue]"
+        
+    e5_disp = f"{c5}{_fmt_ema(v5)}[/]" if v5 is not None else "-"
+    e20_disp = f"{c20}{_fmt_ema(v20)}[/]" if v20 is not None else "-"
+    e60_disp = f"{c60}{_fmt_ema(v60)}[/]" if v60 is not None else "-"
+    e120_disp = f"{c120}{_fmt_ema(v120)}[/]" if v120 is not None else "-"
+
+    table_tech.add_row("주요 이평선", f"5선: {e5_disp} | 20선: {e20_disp} | 60선: {e60_disp} | 120선: {e120_disp}", "지수이동평균(EMA) 가격")
 
     # 이격도
     d_20 = (current_price / ind['ema_20'] * 100) if ind['ema_20'] is not None else 0
@@ -1083,6 +1115,23 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # [수정] 스마트머니를 표의 가장 아래로 이동
     if not is_overseas and not is_domestic_index:
+        inv_str = "[dim]-[/dim]"
+        if inv_data and len(inv_data) > 0:
+            item = inv_data[0]
+            p = api.safe_int(item.get('prsn_ntby_qty'))
+            f = api.safe_int(item.get('frgn_ntby_qty'))
+            o = api.safe_int(item.get('orgn_ntby_qty'))
+            def _fmt_i(val):
+                if val == 0: return "[dim]-[/dim]"
+                abs_val = abs(val)
+                if abs_val >= 1_000_000: s = f"{val/1_000_000:+.1f}M"
+                elif abs_val >= 1000: s = f"{val/1000:+.0f}K"
+                else: s = f"{val:+,}"
+                return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
+            inv_str = f"개인: {_fmt_i(p)} | 외인: {_fmt_i(f)} | 기관: {_fmt_i(o)}"
+            
+        table_tech.add_row("수급", inv_str, "당일 개인/외국인/기관 순매수량")
+        
         sm_str = f"[red]{sm_reason}[/]" if sm_flag else "[dim]특이사항 없음[/]"
         table_tech.add_row("스마트머니", sm_str, "외인/기관 쌍끌이 및 순매수 전환")
 
@@ -3308,7 +3357,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
 
     # 이동평균선 계산
     for w in [5, 20, 60, 120]:
-        df[f'ma{w}'] = df['close'].rolling(window=w).mean()
+        df[f'ma{w}'] = df['close'].ewm(span=w, adjust=False).mean()
 
     # 등락폭/등락률 계산 (get_chart_data는 기본 제공하지 않음)
     df['diff'] = df['close'].diff()
