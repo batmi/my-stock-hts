@@ -72,7 +72,7 @@ class ReservedOrderMonitor:
         
         for order in pending_orders:
             code, condition_type = order['code'], order['condition_type']
-            target_price = float(order['target_price'])
+            target_price = float(order.get('target_price', 0.0))
             order_type = order['order_type']
             is_overseas = (order['market'] == 'US')
             

@@ -1590,6 +1590,9 @@ def register_reserved_order():
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
         return False
     
+    if order_price_str.lower() == 'm':
+        order_price_str = "0"
+        
     if order_price_str == "0":
         order_price = 0.0
         config.console.print(f"[dim] -> 발동 시점의 시장가로 자동 설정[/dim]")

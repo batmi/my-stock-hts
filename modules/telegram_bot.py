@@ -148,13 +148,14 @@ class TelegramCommander:
             "🟡 상태 요약": "/status",
             "⚪ 상태 요약": "/status",
             "🔴 상태 요약": "/status",
-            " 계좌 잔고": "/balance",
+            "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
-            "📝 관심 종목": "/stocks",
+            " 관심 종목": "/stocks",
             "📈 시장 지수": "/market",
             "🔎 종목 스캔": "/scan k",
-            "❓ 도움말": "/help",
-            "📜 주간 거래": "/history w",
+            "🇺🇸 미국 스캔": "/scan u",
+            "💬 AI 질문": "/ask 요즘 주식 시장 어때?",
+            " 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
             "⏳ 예약 현황": "/reserves",
             "🛑 거래 정지": "/stop",
@@ -1450,7 +1451,7 @@ class TelegramCommander:
         preset = getattr(config, 'ACTIVE_PRESET', 'default')
         if preset == 'bull': emoji = "🔴"
         elif preset == 'bear': emoji = "🔵"
-        elif preset == 'sideways': emoji = "�"
+        elif preset == 'sideways': emoji = "🟡"
         elif preset == 'default': emoji = "🟢"
         elif preset == 'custom': emoji = "⚪"
         else: emoji = "⚪"
@@ -1458,10 +1459,11 @@ class TelegramCommander:
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
-                [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
-                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
-                [{"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}, {"text": "⏳ 예약 현황"}],
-                [toggle_btn]
+                [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}],
+                [{"text": "💰 계좌 잔고"}, {"text": "💼 보유 종목"}, {"text": "📝 관심 종목"}],
+                [{"text": "🔎 종목 스캔"}, {"text": "🇺🇸 미국 스캔"}],
+                [{"text": "⏳ 예약 현황"}, {"text": "💬 AI 질문"}],
+                [toggle_btn, {"text": "📊 월간 성과"}]
             ],
             "resize_keyboard": True
         }

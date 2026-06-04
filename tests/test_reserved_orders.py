@@ -109,11 +109,11 @@ def test_register_reserved_order_buy_limit(mock_insert, mock_tg, mock_get_price,
     
     # Prompt 입력값 순서:
     # 1. 목표가: '79000'
-    # 2. 주문단가: '0' (목표가와 동일하게 자동 설정)
+    # 2. 주문단가: '' (목표가와 동일하게 자동 설정)
     # 3. 주문수량: '10'
     # 4. 유효기간: '4' (무기한)
     # 5. 최종확인: 'y'
-    mock_ask.side_effect = ["79000", "0", "10", "4", "y"]
+    mock_ask.side_effect = ["79000", "", "10", "4", "y"]
     
     result = trading.register_reserved_order()
     
@@ -346,6 +346,94 @@ def test_monitor_trigger_price_based(mock_execute, mock_get_price, mock_get_orde
     with patch('modules.reserved_order_monitor.datetime') as mock_dt:
         mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
         monitor._check_orders()
+        
+    assert mock_execute.call_count == 3
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_time_condition(mock_execute, mock_get_orders):
+    """TIME 조건 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    mock_get_orders.return_value = [
+        {"id": 1, "code": "005930", "name": "삼성전자", "condition_type": "TIME", "target_time": "1520", "order_type": "buy", "market": "KR", "expire_dt": "20991231", "target_price": 0.0},
+        {"id": 2, "code": "000660", "name": "SK하이닉스", "condition_type": "TIME", "target_time": "202401010900", "order_type": "sell", "market": "KR", "expire_dt": "20991231", "target_price": 0.0},
+    ]
+    
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        # 첫 번째 1520 도달, 두 번째 202401010900 도달
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1525" if fmt == "%H%M" else ("202401010905" if fmt == "%Y%m%d%H%M" else "20240101")
+        monitor._check_orders()
+        
+    assert mock_execute.call_count == 2
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_limit_condition(mock_execute, mock_get_price, mock_get_orders):
+    """LIMIT (지정가) 매수/매도 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    mock_get_orders.return_value = [
+        {"id": 1, "code": "005930", "name": "삼성전자", "condition_type": "LIMIT", "target_price": 80000, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+        {"id": 2, "code": "000660", "name": "SK하이닉스", "condition_type": "LIMIT", "target_price": 150000, "order_type": "sell", "market": "KR", "expire_dt": "20991231"},
+    ]
+    
+    # 매수는 목표가 80000 이하여야 하므로 79000에서 발동
+    # 매도는 목표가 150000 이상이어야 하므로 151000에서 발동
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 79000.0, "000660": 151000.0}.get(code, 0.0)
+    
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+        
+    assert mock_execute.call_count == 2
+
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_lowest')
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_trailing_buy(mock_execute, mock_get_price, mock_get_orders, mock_update_lowest):
+    """TRAILING_BUY 조건 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    mock_get_orders.return_value = [
+        {"id": 1, "code": "005930", "name": "삼성전자", "condition_type": "TRAILING_BUY", "target_price": 3.0, "order_type": "buy", "market": "KR", "expire_dt": "20991231", "lowest_price": 70000.0},
+    ]
+    
+    # 목표 반등률: 3.0%
+    # lowest_price가 70000.0일 때, 3% 상승하면 72100.0
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 72500.0}.get(code, 0.0)
+    
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+        
+    assert mock_execute.call_count == 1
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_chart_data')
+@patch('modules.reserved_order_monitor.indicators.calculate_indicators')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_down_conditions(mock_execute, mock_calc, mock_chart, mock_get_price, mock_get_orders):
+    """SCORE_DOWN, RSI_UP, EMA_DOWN 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    
+    mock_get_orders.return_value = [
+        {"id": 1, "code": "005930", "name": "삼성전자", "condition_type": "EMA_DOWN", "target_price": 20, "order_type": "sell", "market": "KR", "expire_dt": "20991231"},
+        {"id": 2, "code": "000660", "name": "SK하이닉스", "condition_type": "RSI_UP", "target_price": 70, "order_type": "sell", "market": "KR", "expire_dt": "20991231"},
+        {"id": 3, "code": "035420", "name": "NAVER", "condition_type": "SCORE_DOWN", "target_price": 4.0, "order_type": "sell", "market": "KR", "expire_dt": "20991231"},
+    ]
+    
+    # EMA_DOWN: ema_20보다 현재가가 낮아야 함
+    # RSI_UP: rsi가 70 이상이어야 함
+    # SCORE_DOWN: score가 4.0 이하여야 함
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 79000.0, "000660": 150000.0, "035420": 200000.0}.get(code, 0.0)
+    mock_chart.return_value = pd.DataFrame({'close': [100.0, 200.0]})
+    mock_calc.return_value = {'ema_20': 80000.0, 'rsi': 75.0}
+    
+    with patch('modules.analysis.calculate_score', return_value=(3.5, {})):
+        with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+            mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+            monitor._check_orders()
         
     assert mock_execute.call_count == 3
 
