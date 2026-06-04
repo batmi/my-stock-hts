@@ -108,13 +108,12 @@ def test_register_reserved_order_buy_limit(mock_insert, mock_tg, mock_get_price,
     mock_get_price.return_value = 80000.0
     
     # Prompt 입력값 순서:
-    # 1. 호가창 확인: 'n'
-    # 2. 목표가: '79000'
-    # 3. 주문단가: '0' (목표가와 동일하게 자동 설정)
-    # 4. 주문수량: '10'
-    # 5. 유효기간: '4' (무기한)
-    # 6. 최종확인: 'y'
-    mock_ask.side_effect = ["n", "79000", "0", "10", "4", "y"]
+    # 1. 목표가: '79000'
+    # 2. 주문단가: '0' (목표가와 동일하게 자동 설정)
+    # 3. 주문수량: '10'
+    # 4. 유효기간: '4' (무기한)
+    # 5. 최종확인: 'y'
+    mock_ask.side_effect = ["79000", "0", "10", "4", "y"]
     
     result = trading.register_reserved_order()
     
@@ -147,13 +146,12 @@ def test_register_reserved_order_sell_time(mock_insert, mock_get_price, mock_sel
     mock_get_price.return_value = 160.0
     
     # Prompt 입력값 순서:
-    # 1. 호가창 확인: 'n'
-    # 2. 시간 조건: '1' (당일 장 마감 무렵 15:20)
-    # 3. 주문단가: 'm' (발동 시 시장가)
-    # 4. 주문수량: '25'
-    # 5. 유효기간: '1' (당일)
-    # 6. 최종확인: 'y'
-    mock_ask.side_effect = ["n", "1", "m", "25", "1", "y"]
+    # 1. 시간 조건: '1' (당일 장 마감 무렵 15:20)
+    # 2. 주문단가: 'm' (발동 시 시장가)
+    # 3. 주문수량: '25'
+    # 4. 유효기간: '1' (당일)
+    # 5. 최종확인: 'y'
+    mock_ask.side_effect = ["1", "m", "25", "1", "y"]
     
     trading.register_reserved_order()
     
@@ -171,16 +169,19 @@ def test_register_reserved_order_sell_time(mock_insert, mock_get_price, mock_sel
 @patch('modules.trading.db_manager.db.update_reserved_order_status')
 def test_manage_reserved_orders(mock_update, mock_get_orders, mock_ask):
     """예약 주문 관리 및 삭제 처리 테스트"""
-    mock_get_orders.return_value = [
-        {
-            "id": 1, "cano": "12345678", "acnt": "01", "market": "KR", 
-            "order_type": "buy", "code": "005930", "name": "삼성전자",
-            "qty": 10, "order_price": 79000.0, "condition_type": "LIMIT",
-            "target_price": 79000.0, "target_time": "", "expire_dt": "20991231"
-        }
+    mock_get_orders.side_effect = [
+        [
+            {
+                "id": 1, "cano": "12345678", "acnt": "01", "market": "KR", 
+                "order_type": "buy", "code": "005930", "name": "삼성전자",
+                "qty": 10, "order_price": 79000.0, "condition_type": "LIMIT",
+                "target_price": 79000.0, "target_time": "", "expire_dt": "20991231"
+            }
+        ],
+        []
     ]
-    # 취소할 ID 입력
-    mock_ask.return_value = "1"
+    # 취소할 ID 입력, 두 번째 루프에서는 빈 리스트를 반환하여 종료됨
+    mock_ask.side_effect = ["1", "q"]
     
     with patch('modules.trading.api.send_telegram_message') as mock_tg:
         trading.manage_reserved_orders()
@@ -200,8 +201,8 @@ def test_register_reserved_order_score_up(mock_insert, mock_get_price, mock_sele
     mock_show_menu.side_effect = ["1", "5"] # 1: 예약 매수, 5: 퀀트 점수(SCORE)
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
-    # Prompt 입력: 호가창(n), 목표점수(7.5), 발동방향(1:이상돌파), 주문단가(0:현재가), 주문수량(10), 유효기간(4:무기한), 최종확인(y)
-    mock_ask.side_effect = ["n", "7.5", "1", "0", "10", "4", "y"]
+    # Prompt 입력: 목표점수(7.5), 발동방향(1:이상돌파), 주문단가(0:현재가), 주문수량(10), 유효기간(4:무기한), 최종확인(y)
+    mock_ask.side_effect = ["7.5", "1", "0", "10", "4", "y"]
     
     with patch('modules.trading.api.send_telegram_message'):
         trading.register_reserved_order()
@@ -222,8 +223,8 @@ def test_register_reserved_order_trailing_buy(mock_insert, mock_get_price, mock_
     mock_show_menu.side_effect = ["1", "6"] # 1: 예약 매수, 6: 트레일링 매수
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
-    # Prompt 입력: 호가창(n), 반등폭(3.0%), 주문단가(-1%), 주문수량(10), 유효기간(1:당일), 최종확인(y)
-    mock_ask.side_effect = ["n", "3.0", "-1%", "10", "1", "y"]
+    # Prompt 입력: 반등폭(3.0%), 주문단가(-1%), 주문수량(10), 유효기간(1:당일), 최종확인(y)
+    mock_ask.side_effect = ["3.0", "-1%", "10", "1", "y"]
     
     with patch('modules.trading.api.send_telegram_message'):
         trading.register_reserved_order()
@@ -241,15 +242,112 @@ def test_register_reserved_order_trailing_buy(mock_insert, mock_get_price, mock_
 def test_register_reserved_order_cancel_by_user(mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
     """사용자가 예약 매매 도중 취소(q)를 입력했을 때의 처리 확인"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.return_value = "1"
+    mock_show_menu.side_effect = ["1", "3"] # 1: 예약 매수, 3: 지정가 도달
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
-    # 호가창 확인 프롬프트에서 'q' 입력
+    # 목표가 입력 단계에서 'q' 입력
     mock_ask.side_effect = ["q"]
     
     # 중단 시 False 반환
     result = trading.register_reserved_order()
     assert result is False
+
+@patch('modules.trading.Prompt.ask')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.select_account')
+@patch('modules.trading.utils.select_target_stock')
+@patch('modules.trading.api.get_current_price')
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+def test_register_reserved_order_rsi_down(mock_insert, mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
+    """RSI(RSI_DOWN) 조건의 예약 매수 등록 흐름 테스트"""
+    mock_select_account.return_value = ("12345678", "01", "실전투자")
+    mock_show_menu.side_effect = ["1", "8"] # 1: 예약 매수, 8: RSI
+    mock_select_stock.return_value = ("005930", "삼성전자", False)
+    mock_get_price.return_value = 80000.0
+    # Prompt 입력: 목표RSI(30), 발동방향(2:이하하락), 주문단가(0:시장가), 주문수량(10), 유효기간(4:무기한), 최종확인(y)
+    mock_ask.side_effect = ["30", "2", "0", "10", "4", "y"]
+    
+    with patch('modules.trading.api.send_telegram_message'):
+        trading.register_reserved_order()
+        
+    mock_insert.assert_called_once()
+    assert mock_insert.call_args[1]['condition_type'] == "RSI_DOWN"
+    assert mock_insert.call_args[1]['target_price'] == 30.0
+
+@patch('modules.trading.Prompt.ask')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.select_account')
+@patch('modules.trading.select_stock_from_balance')
+@patch('modules.trading.api.get_current_price')
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+def test_register_reserved_order_ema_up(mock_insert, mock_get_price, mock_select_bal, mock_select_account, mock_show_menu, mock_ask):
+    """EMA(EMA_UP) 조건의 예약 매도 등록 흐름 테스트"""
+    mock_select_account.return_value = ("12345678", "01", "실전투자")
+    mock_show_menu.side_effect = ["2", "9"] # 2: 예약 매도, 9: EMA
+    mock_select_bal.return_value = ("005930", "삼성전자", False, None, {"qty": 100, "buy_price": 75000.0})
+    mock_get_price.return_value = 80000.0
+    # Prompt 입력: 목표EMA(60), 발동방향(1:상향돌파), 주문단가(0:시장가), 주문수량(50), 유효기간(1:당일), 최종확인(y)
+    mock_ask.side_effect = ["60", "1", "0", "50", "1", "y"]
+    
+    with patch('modules.trading.api.send_telegram_message'):
+        trading.register_reserved_order()
+        
+    mock_insert.assert_called_once()
+    assert mock_insert.call_args[1]['condition_type'] == "EMA_UP"
+    assert mock_insert.call_args[1]['target_price'] == 60.0
+
+# -------------------------------------------------------------------
+# 4. ReservedOrderMonitor 발동 로직 테스트
+# -------------------------------------------------------------------
+from modules.reserved_order_monitor import ReservedOrderMonitor
+import pandas as pd
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_chart_data')
+@patch('modules.reserved_order_monitor.indicators.calculate_indicators')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_ema_rsi_score(mock_execute, mock_calc, mock_chart, mock_get_price, mock_get_orders):
+    """EMA, RSI, SCORE 기반 예약 매매 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    
+    mock_get_orders.return_value = [
+        {"id": 1, "code": "005930", "name": "삼성전자", "condition_type": "EMA_UP", "target_price": 60, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+        {"id": 2, "code": "000660", "name": "SK하이닉스", "condition_type": "RSI_DOWN", "target_price": 30, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+        {"id": 3, "code": "035420", "name": "NAVER", "condition_type": "SCORE_UP", "target_price": 7.5, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+    ]
+    
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 85000.0, "000660": 150000.0, "035420": 200000.0}.get(code, 0.0)
+    mock_chart.return_value = pd.DataFrame({'close': [100.0, 200.0]})
+    mock_calc.return_value = {'ema_60': 80000.0, 'rsi': 25.0}
+    
+    with patch('modules.analysis.calculate_score', return_value=(8.0, {})):
+        with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+            mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+            monitor._check_orders()
+        
+    assert mock_execute.call_count == 3
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_price_based(mock_execute, mock_get_price, mock_get_orders):
+    """가격(목표가/트레일링) 기반 예약 매매 발동 모니터링 테스트"""
+    monitor = ReservedOrderMonitor()
+    
+    mock_get_orders.return_value = [
+        {"id": 4, "code": "005930", "name": "삼성전자", "condition_type": "STOP", "target_price": 70000, "order_type": "sell", "market": "KR", "expire_dt": "20991231"},
+        {"id": 5, "code": "000660", "name": "SK하이닉스", "condition_type": "BREAKOUT", "target_price": 160000, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+        {"id": 6, "code": "035420", "name": "NAVER", "condition_type": "TRAILING_SELL", "target_price": 5.0, "order_type": "sell", "market": "KR", "expire_dt": "20991231", "highest_price": 200000.0},
+    ]
+    
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 69000.0, "000660": 165000.0, "035420": 185000.0}.get(code, 0.0)
+    
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+        
+    assert mock_execute.call_count == 3
 
 
 # -------------------------------------------------------------------

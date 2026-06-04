@@ -494,15 +494,47 @@ class ConclusionMonitor:
                                     profit_rate = 0.0
                                     score = 0
                                     stop_loss_rate = 0.0
+                                    reason_to_save = "체결 확인"
+                                    actual_reason = ""
                                     if origin_trade:
                                         db_type_name = origin_trade['type']
                                         profit_amt = origin_trade.get('profit_amt', 0)
                                         profit_rate = origin_trade.get('profit_rate', 0.0)
                                         score = origin_trade.get('strategy_score', 0)
                                         stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
+                                        orig_reason = origin_trade.get('reason', '')
+                                        if orig_reason and "체결 확인" not in orig_reason:
+                                            reason_to_save = f"체결 확인 ({orig_reason})"
+                                            actual_reason = orig_reason
+                                    else:
+                                        # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
+                                        try:
+                                            conn = db_manager.db._get_conn()
+                                            cursor = conn.cursor()
+                                            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
+                                            r_row = cursor.fetchone()
+                                            if r_row:
+                                                t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
+                                                db_type_name = f"{t_type}(예약)"
+                                                c_type = r_row['condition_type']
+                                                tp_val = r_row['target_price']
+                                                res_reason = f"조건: {c_type}"
+                                                if c_type == 'TIME': res_reason += f" ({r_row['target_time']})"
+                                                elif 'SCORE' in c_type: res_reason += f" (목표: {tp_val}점)"
+                                                elif 'RSI' in c_type: res_reason += f" (목표: {tp_val})"
+                                                elif 'EMA' in c_type: res_reason += f" (EMA {int(tp_val)} {'돌파' if 'UP' in c_type else '이탈'})"
+                                                elif c_type == 'TRAILING_BUY': res_reason += f" (바닥반등 {tp_val}%)"
+                                                elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
+                                                else: res_reason += f" (목표가 {tp_val})"
+                                                reason_to_save = f"체결 확인 ({res_reason})"
+                                                actual_reason = res_reason
+                                        except Exception as e:
+                                            logger.debug(f"[Monitor] 예약 주문 조회 실패: {e}")
                                 except Exception:
                                     db_type_name = type_name
                                     stop_loss_rate = 0.0
+                                    reason_to_save = "체결 확인"
+                                    actual_reason = ""
                                 
                                 # [추가] 매도 체결 시 실현 손익 및 사유 조회
                                 profit_msg = ""
@@ -531,6 +563,10 @@ class ConclusionMonitor:
                                             if found_record.get('reason'):
                                                 reason_msg = f"\n사유: {found_record['reason']}"
                                     except: pass
+                                
+                                # [추가] 매도 사유 조회가 안 되었거나 매수인 경우 actual_reason 활용
+                                if not reason_msg and actual_reason:
+                                    reason_msg = f"\n사유: {actual_reason}"
 
                                 # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
                                 if not initial:
@@ -654,7 +690,7 @@ class ConclusionMonitor:
                                         logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
-                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason="체결 확인", custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
+                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
                                     
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                     # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
@@ -750,7 +786,7 @@ class ConclusionMonitor:
 
             name = trade.get('name', code)
             price = float(trade.get('price', 0))
-            is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+            is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
             
             # [추가] 시장가(0)인 경우 현재가 조회하여 대체
             if price <= 0:
@@ -780,6 +816,13 @@ class ConclusionMonitor:
             if isinstance(snapshot_data, dict):
                 snapshot_data = json.dumps(snapshot_data, ensure_ascii=False)
             
+            # [추가] 예약 매매 사유 보존 로직
+            reason_to_save = f"체결 확인 ({reason})"
+            if "예약" in type_str:
+                orig_reason = trade.get('reason', '')
+                if orig_reason and "체결 확인" not in orig_reason:
+                    reason_to_save = f"체결 확인 ({orig_reason})"
+
             # 1. 원본 '접수' 기록 보존을 위해 상태 덮어쓰기 로직 제거
             
             # 2. 체결 히스토리 생성 (중복 방지 및 재시도 로직)
@@ -800,7 +843,7 @@ class ConclusionMonitor:
                 db_manager.db.insert_trade(
                     type_str, code, name, qty, price, odno, 
                     order_status="체결(추정)", 
-                    reason=f"체결 확인 ({reason})", 
+                    reason=reason_to_save, 
                     custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     snapshot=snapshot_data,
                     score=trade.get('strategy_score', 0),
@@ -941,7 +984,7 @@ class DefaultStrategy:
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
                 
-        is_overseas = not (code.isdigit() and len(code) == 6)
+        is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
         sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
         state, _, state_reason = analysis.classify_stock_state(

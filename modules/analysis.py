@@ -29,6 +29,12 @@ from modules import db_manager
 
 logger = logging.getLogger(__name__)
 
+# [Pylance 에러 방지용] 잔여 코드 및 중복 함수로 인한 미정의 변수 참조 경고 차단
+reserved_codes = set()
+m_codes = set()
+restricted_stocks = set()
+rules_map = {}
+
 # [수정] 스마트머니 캐시 (종목코드 -> {'time': datetime, 'flag': bool, 'reason': str})
 _SMART_MONEY_CACHE = {}
 _SMART_MONEY_CACHE_LOCK = threading.RLock() # [추가] 스레드 동기화 락
@@ -1497,8 +1503,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
 
-def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_map):
+def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_map, reserved_codes=None, m_codes=None):
     """(내부함수) 관심 종목 일괄 분석용 단일 워커 (병렬 처리용)"""
+    if reserved_codes is None: reserved_codes = set()
+    if m_codes is None: m_codes = set()
     try:
         code = item['code']
         name = item['name']
@@ -1555,24 +1563,42 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas=False)
 
         # 3. 점수 및 상태 계산
+        rule = rules_map.get(code)
+        thresholds = None
+        weights = None
+        
+        if rule:
+            thresholds = {
+                "BUY_SCORE": rule['buy_score'],
+                "BUY_RSI_MAX": rule['buy_rsi'],
+                "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                "WEIGHTS": rule.get('weights'),
+                "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+            }
+            weights = rule.get('weights')
+
         state, state_color, state_reason = classify_stock_state(
-            df=df, ind=ind, prev_rsi=prev_rsi, w52_pos=w52_pos, smart_money=sm_flag
+            df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
         score, _ = calculate_score(
-            df=df, ind=ind, smart_money=sm_flag
+            df=df, ind=ind, weights=weights, smart_money=sm_flag
         )
         
         # [추가] 개별 룰 여부 확인
         is_custom_rule = code in rules_map
         is_restricted = code in restricted_stocks
+        is_reserved = code in reserved_codes
+        is_memo = code in m_codes
         
         return {
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': state, 'state_color': state_color,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
             'vol_strength': vol_strength, 'is_custom_rule': is_custom_rule,
-            'is_restricted': is_restricted
+            'is_restricted': is_restricted,
+            'is_reserved': is_reserved,
+            'is_memo': is_memo
         }
     except Exception:
         return None
@@ -1588,12 +1614,26 @@ def diagnose_group_stocks(market_filter=None):
         
     # [추가] 개별 룰 로드 (전체 조회 최적화)
     custom_rules = db_manager.db.get_all_stock_strategies()
-    rules_map = {r['code']: True for r in custom_rules}
+    rules_map = {}
+    for r in custom_rules:
+        r_dict = dict(r)
+        if r_dict.get('weights') and isinstance(r_dict['weights'], str):
+            try: r_dict['weights'] = json.loads(r_dict['weights'])
+            except: r_dict['weights'] = None
+        rules_map[r_dict['code']] = r_dict
 
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
     restricted_stocks = auto_trade.load_restricted_stocks()
     any_restricted = False
+    
+    # [추가] 예약 매매 및 메모 마커 조회
+    try:
+        pending_reserves = db_manager.db.get_pending_reserved_orders()
+        reserved_codes = set(o['code'] for o in pending_reserves)
+    except:
+        reserved_codes = set()
+    m_codes = utils.get_memo_codes()
 
     results = []
     
@@ -1613,7 +1653,7 @@ def diagnose_group_stocks(market_filter=None):
         # [최적화] ThrottledSession 제어 기반으로 모의투자(2) / 실전(4) 통합 병렬 처리 허용
         max_w = 2 if config.session.is_simulation else 4
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-            futures = [executor.submit(_diagnose_group_stock_worker, item, market_filter, restricted_stocks, rules_map) for item in targets]
+            futures = [executor.submit(_diagnose_group_stock_worker, item, market_filter, restricted_stocks, rules_map, reserved_codes, m_codes) for item in targets]
             for future in concurrent.futures.as_completed(futures):
                 res = future.result()
                 if res: results.append(res)
@@ -1624,6 +1664,7 @@ def diagnose_group_stocks(market_filter=None):
         config.console.print(f"[yellow]해당 조건({market_filter})에 맞는 종목이 없거나 데이터를 불러올 수 없습니다.[/yellow]")
         return
 
+    used_marks = set()
     # 정렬 기준 개선: 1. 점수 높은 순, 2. RSI 낮은 순 (상승 여력)
     # RSI가 None인 경우 맨 뒤로 보내기 위해 999 처리
     results.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999))
@@ -1664,12 +1705,22 @@ def diagnose_group_stocks(market_filter=None):
         vol_str = f"{vol_val:.1f}%" if vol_val else "-"
         
         name_display = r['name']
-        if r.get('is_custom_rule'):
-            name_display += "*"
-        
+        marks = []
         if r.get('is_restricted'):
-            name_display += "-"
-            any_restricted = True
+            marks.append("-")
+            used_marks.add('-')
+        if r.get('is_custom_rule'):
+            marks.append("+")
+            used_marks.add('+')
+        if r.get('is_memo'):
+            marks.append("=")
+            used_marks.add('=')
+        if r.get('is_reserved'):
+            marks.append("[magenta]*[/magenta]")
+            used_marks.add('*')
+            
+        if marks:
+            name_display += f"[dim]{''.join(marks)}[/dim]"
         
         table.add_row(
             f"{name_display}({r['code']})",
@@ -1685,8 +1736,6 @@ def diagnose_group_stocks(market_filter=None):
     sys.stdout.flush()
     config.console.print()
     
-    if any_restricted:
-        config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
 
 def get_analysis_params():
     """분석에 사용할 파라미터를 사용자로부터 입력받습니다."""
@@ -1850,8 +1899,13 @@ def _get_master_stock_list(market_type):
         
     return stock_list
 
-def _analyze_stock_worker(stock, params=None):
+def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=None, reserved_codes=None, m_codes=None):
     """(내부함수) 단일 종목 분석 워커 (멀티스레드용)"""
+    if restricted_stocks is None: restricted_stocks = {}
+    if rules_map is None: rules_map = {}
+    if reserved_codes is None: reserved_codes = set()
+    if m_codes is None: m_codes = set()
+    
     code = stock['code']
     name = stock['name']
     is_custom_rule = stock.get('is_custom_rule', False) # [추가]
@@ -2156,7 +2210,7 @@ def analyze_market_stocks(market_type):
                 # [최적화] 전체 종목 분석 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
                 max_w = 2 if config.session.is_simulation else 4
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                    futures = {executor.submit(_analyze_stock_worker, stock, params): stock for stock in stock_list}
+                    futures = {executor.submit(_analyze_stock_worker, stock, params, restricted_stocks, rules_map, reserved_codes, m_codes): stock for stock in stock_list}
                     for future in concurrent.futures.as_completed(futures):
                         completed_count += 1
                         stock = futures[future]
@@ -2336,9 +2390,14 @@ def analyze_market_stocks(market_type):
                 vol_str = f"{v_color}{vol_val:.1f}%[/]"
             
             name_display = item['name']
-            if item['code'] in restricted_stocks:
-                name_display += "-"
-                any_restricted_in_page = True
+            marks = []
+            if item['code'] in restricted_stocks: marks.append("-")
+            if item.get('is_custom_rule'): marks.append("+")
+            if item['code'] in m_codes: marks.append("=")
+            if item['code'] in reserved_codes: marks.append("[magenta]*[/magenta]")
+            
+            if marks:
+                name_display += f"[dim]{''.join(marks)}[/dim]"
 
             table.add_row(
                 str(start_idx + i + 1),
@@ -2362,9 +2421,6 @@ def analyze_market_stocks(market_type):
         config.console.print(table, crop=False)
         sys.stdout.flush()
         
-        if any_restricted_in_page:
-            config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
-
         if page < total_pages - 1:
                 if Prompt.ask(f"[dim]다음 페이지를 보시겠습니까? (이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="y").lower() in ['b', 'q', 'n']:
                     break
@@ -2406,7 +2462,25 @@ def save_all_market_analysis():
 
     # [추가] 개별 룰 로드 (전체 조회 최적화)
     custom_rules = db_manager.db.get_all_stock_strategies()
-    rules_map = {r['code']: r for r in custom_rules}
+    rules_map = {}
+    for r in custom_rules:
+        r_dict = dict(r)
+        if r_dict.get('weights') and isinstance(r_dict['weights'], str):
+            try: r_dict['weights'] = json.loads(r_dict['weights'])
+            except: r_dict['weights'] = None
+        rules_map[r_dict['code']] = r_dict
+    
+    # [추가] 예약 매매 및 메모 마커 조회
+    reserved_codes = set()
+    try:
+        pending_reserves = db_manager.db.get_pending_reserved_orders()
+        reserved_codes = set(o['code'] for o in pending_reserves)
+    except: pass
+    m_codes = utils.get_memo_codes()
+
+    # [추가] 트레이딩 제한 종목 로드
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
 
     markets = ["KOSPI", "KOSDAQ"]
     results = {} # market -> list of dict
@@ -2435,7 +2509,7 @@ def save_all_market_analysis():
                 
                 # 1. 기술적 분석 병렬 처리
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                    futures = {executor.submit(_analyze_stock_worker, stock, None): stock for stock in stock_list}
+                    futures = {executor.submit(_analyze_stock_worker, stock, None, restricted_stocks, rules_map, reserved_codes, m_codes): stock for stock in stock_list}
                     for future in concurrent.futures.as_completed(futures):
                         try:
                             result = future.result()
@@ -2476,8 +2550,12 @@ def save_all_market_analysis():
                             macd_state = "골든" if macd_val > sig_val else "데드"
 
                         name_display = item['name']
-                        if item.get('is_custom_rule'):
-                            name_display += "*"
+                        marks = []
+                        if item['code'] in restricted_stocks: marks.append("-")
+                        if item.get('is_custom_rule'): marks.append("+")
+                        if item['code'] in m_codes: marks.append("=")
+                        if item['code'] in reserved_codes: marks.append("*")
+                        if marks: name_display += "".join(marks)
 
                         # [추가] 비고 (개별 룰 요약)
                         note = ""
@@ -2616,7 +2694,7 @@ def save_all_market_analysis():
     except Exception as e:
         config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
 
-def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj):
+def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes):
     """(내부함수) print_table용 단일 종목 데이터 조회 및 가공 워커"""
     try:
         name, code = item
@@ -2680,7 +2758,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                     else: s_color = "[blue]"
                     strength_display = f" {s_color}[{rt_strength:,.0f}%][/]"
                 else: strength_display = " [dim][0%][/dim]"
-            if curr_data.get('rt_cd') == '0':
+            if curr_data and curr_data.get('rt_cd') == '0':
                 out = curr_data.get('output', {})
                 foreign_rate_str = f"{out.get('hts_frgn_ehrt', '-')}%"
                 try:
@@ -2719,7 +2797,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                         w52_pos_str = f"{w_color}{pos:.1f}%[/]"
                 except: pass
 
-        if curr_data.get('rt_cd') == '0':
+        if curr_data and curr_data.get('rt_cd') == '0':
             out = curr_data['output']
             if is_overseas:
                 curr = float(out.get('last', 0) or 0)
@@ -2748,7 +2826,18 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             # 적응형 임계값 적용
             thresholds = None
-            if market_regime_adj and not is_overseas:
+            rule = rules_map.get(code)
+            if rule:
+                # 개별 룰이 존재하는 경우 개별 룰의 임계값을 최우선 적용
+                thresholds = {
+                    "BUY_SCORE": rule['buy_score'],
+                    "BUY_RSI_MAX": rule['buy_rsi'],
+                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                    "WEIGHTS": rule.get('weights'),
+                    "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
+                }
+            elif market_regime_adj and not is_overseas:
+                # 개별 룰이 없으면 시장 국면에 따른 보정값 적용
                 mrkt_name = curr_data['output'].get('rprs_mrkt_kor_name', '')
                 score_adj = 0.0
                 if "코스닥" in mrkt_name:
@@ -2860,50 +2949,62 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
 
             trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
-            rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "[dim]-[/dim]"
-            if ind['rsi'] is not None:
-                if ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
-                elif 55 <= ind['rsi'] < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
-                elif 45 <= ind['rsi'] < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-                elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind['rsi'] < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+            rsi_str = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "[dim]-[/dim]"
+            if ind.get('rsi') is not None:
+                if ind.get('rsi') >= config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[magenta]{rsi_str}[/]"
+                elif 55 <= ind.get('rsi') < config.INDICATOR_PARAMS["RSI_UPPER"]: rsi_str = f"[red]{rsi_str}[/]"
+                elif 45 <= ind.get('rsi') < 55: rsi_str = f"[orange3]{rsi_str}[/]"
+                elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind.get('rsi') < 45: rsi_str = f"[yellow]{rsi_str}[/]"
                 else: rsi_str = f"[blue]{rsi_str}[/]"
 
-            adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "[dim]-[/dim]"
-            if ind['adx'] is not None:
-                if ind['adx'] >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                elif ind['adx'] >= 30: adx_str = f"[red]{adx_str}[/]"     
-                elif ind['adx'] >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                elif ind['adx'] >= 15: adx_str = f"[yellow]{adx_str}[/]"
+            adx_str = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "[dim]-[/dim]"
+            if ind.get('adx') is not None:
+                if ind.get('adx') >= 40: adx_str = f"[magenta]{adx_str}[/]" 
+                elif ind.get('adx') >= 30: adx_str = f"[red]{adx_str}[/]"     
+                elif ind.get('adx') >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                elif ind.get('adx') >= 15: adx_str = f"[yellow]{adx_str}[/]"
                 else: adx_str = f"[white]{adx_str}[/]"
 
-            cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "[dim]-[/dim]"
-            if ind['cci'] is not None:
-                if ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
-                elif 0 < ind['cci'] < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
-                elif config.INDICATOR_PARAMS["CCI_LOWER"] < ind['cci'] <= 0: cci_str = f"[yellow]{cci_str}[/]"
+            cci_str = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "[dim]-[/dim]"
+            if ind.get('cci') is not None:
+                if ind.get('cci') >= config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[red]{cci_str}[/]"
+                elif 0 < ind.get('cci') < config.INDICATOR_PARAMS["CCI_UPPER"]: cci_str = f"[orange3]{cci_str}[/]"
+                elif config.INDICATOR_PARAMS["CCI_LOWER"] < ind.get('cci') <= 0: cci_str = f"[yellow]{cci_str}[/]"
                 else: cci_str = f"[blue]{cci_str}[/]"
 
             final_name_str = name
-            if ind['ema_5'] is not None and ind['ema_20'] is not None and ind['ema_60'] is not None and ind['adx'] is not None and ind['rsi'] is not None and ind['cci'] is not None:
-                all_ema_green = (ind['ema_5'] > ind['ema_20'] and ind['ema_20'] > ind['ema_60'])
-                all_ema_red = (ind['ema_5'] < ind['ema_20'] and ind['ema_20'] < ind['ema_60'])
-                price_above_ema5 = (curr > ind['ema_5'])
-                if ind['adx'] >= 40 and ind['rsi'] >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
-                elif all_ema_green and price_above_ema5 and ind['adx'] >= 30 and ind['rsi'] >= 55 and ind['cci'] >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
-                elif all_ema_red and price_above_ema5 and ind['adx'] >= 20 and ind['rsi'] >= 45 and ind['cci'] >= 0: final_name_str = f"[orange3]{name}[/]"
-                elif (ind['ema_20'] > ind['ema_60'] and ind['ema_60'] > ind['ema_5']) and ind['adx'] >= 30 and ind['rsi'] <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind['cci'] <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
+            if ind.get('ema_5') is not None and ind.get('ema_20') is not None and ind.get('ema_60') is not None and ind.get('adx') is not None and ind.get('rsi') is not None and ind.get('cci') is not None:
+                all_ema_green = (ind.get('ema_5') > ind.get('ema_20') and ind.get('ema_20') > ind.get('ema_60'))
+                all_ema_red = (ind.get('ema_5') < ind.get('ema_20') and ind.get('ema_20') < ind.get('ema_60'))
+                price_above_ema5 = (curr > ind.get('ema_5'))
+                if ind.get('adx') >= 40 and ind.get('rsi') >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind.get('cci') >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
+                elif all_ema_green and price_above_ema5 and ind.get('adx') >= 30 and ind.get('rsi') >= 55 and ind.get('cci') >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
+                elif all_ema_red and price_above_ema5 and ind.get('adx') >= 20 and ind.get('rsi') >= 45 and ind.get('cci') >= 0: final_name_str = f"[orange3]{name}[/]"
+                elif (ind.get('ema_20') > ind.get('ema_60') and ind.get('ema_60') > ind.get('ema_5')) and ind.get('adx') >= 30 and ind.get('rsi') <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind.get('cci') <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
             
             # 제한 종목 표시
             is_restricted = False
+            marks = []
             if code in restricted_stocks:
-                final_name_str += "-"
+                marks.append("-")
                 is_restricted = True
 
             # 개별 룰 적용 종목 표시
             is_custom_rule = False
             if code in rules_map:
-                final_name_str += "+"
+                marks.append("+")
                 is_custom_rule = True
+                
+            is_memo = False
+            if code in m_codes:
+                marks.append("=")
+                is_memo = True
+            is_reserved = False
+            if code in reserved_codes:
+                marks.append("[magenta]*[/magenta]")
+                is_reserved = True
+            if marks:
+                final_name_str += f"[dim]{''.join(marks)}[/dim]"
 
             row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, cci_str, adx_str]
             if not is_overseas:
@@ -2912,12 +3013,12 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             else:
                 if is_us_stock_context: row_data.extend([per_str, pbr_str])
                 elif is_us_etf_context: row_data.append(shar_str)
-            return row_data, is_restricted, is_custom_rule
+            return row_data, is_restricted, is_custom_rule, is_memo, is_reserved
         else:
-            return [name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
+            return [name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
     except Exception as e:
         logger.error(f"[{code}] 분석 오류: {e}")
-        return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False
+        return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
 
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     is_domestic_etf = ("ETF" in title and not is_overseas)
@@ -2987,13 +3088,27 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     
     # [추가] 개별 룰 로드
     custom_rules = db_manager.db.get_all_stock_strategies()
-    rules_map = {r['code']: True for r in custom_rules}
+    rules_map = {}
+    for r in custom_rules:
+        r_dict = dict(r)
+        if r_dict.get('weights') and isinstance(r_dict['weights'], str):
+            try: r_dict['weights'] = json.loads(r_dict['weights'])
+            except: r_dict['weights'] = None
+        rules_map[r_dict['code']] = r_dict
     any_custom_rule = False
     
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
     restricted_stocks = auto_trade.load_restricted_stocks()
     any_restricted = False
+    
+    # [추가] 예약 매매 및 메모 마커 조회
+    reserved_codes = set()
+    try:
+        pending_reserves = db_manager.db.get_pending_reserved_orders()
+        reserved_codes = set(o['code'] for o in pending_reserves)
+    except: pass
+    m_codes = utils.get_memo_codes()
     
     if not is_overseas:
         if use_investor_data: table.add_column("수급(개/외/기)", justify="center")
@@ -3012,6 +3127,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         # KIS API 동시 호출 제한(TPS) 방지를 위해 실전투자 시 5로 하향
         max_w = 4 if config.session.is_simulation else 5
     try:
+        used_marks = set()
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -3035,7 +3151,9 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                         use_investor_data, 
                         restricted_stocks, 
                         rules_map, 
-                        market_regime_adj
+                        market_regime_adj,
+                        reserved_codes,
+                        m_codes
                     ) for item in data_list
                 ]
                 
@@ -3058,10 +3176,12 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                     failed_list.append(data_list[idx])
                     continue
                 
-                row_data, is_res, is_cust = result_item
+                row_data, is_res, is_cust, is_mem, is_rsv = result_item
                 
-                if is_res: any_restricted = True
-                if is_cust: any_custom_rule = True
+                if is_res: used_marks.add('-')
+                if is_cust: used_marks.add('+')
+                if is_mem: used_marks.add('=')
+                if is_rsv: used_marks.add('*')
                 
                 if len(row_data) > 3 and (row_data[3] == "실패" or "Error" in str(row_data[2])):
                     failed_list.append(data_list[idx])
@@ -3076,11 +3196,14 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     try:
         config.console.print(table, crop=False)
         
-        if any_restricted:
-            config.console.print("[dim] (-) 시스템 트레이딩 거래 제한 종목입니다.[/dim]")
-        if any_custom_rule:
-            config.console.print("[dim] (+) 시스템 트레이딩 시 개별 룰이 적용된 종목입니다.[/dim]")
-            
+        mark_desc = []
+        if '-' in used_marks: mark_desc.append("-: 시스템 트레이딩 제한 종목")
+        if '+' in used_marks: mark_desc.append("+: 개별 룰 적용 종목")
+        if '=' in used_marks: mark_desc.append("=: 메모 설정 종목")
+        if '*' in used_marks: mark_desc.append("*: 예약 매매 설정 종목")
+        if mark_desc:
+            config.console.print(f"[dim] ※ {' | '.join(mark_desc)}[/dim]")
+
         sys.stdout.flush()
     except Exception as e:
         logger.error(f"테이블 출력 중 오류(tmux 리사이즈 등): {e}")

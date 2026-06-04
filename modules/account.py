@@ -162,12 +162,41 @@ def sync_today_trades():
                                         profit_rate = origin_trade.get('profit_rate', 0.0)
                                         score = origin_trade.get('strategy_score', 0)
                                         stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
+                                        orig_reason = origin_trade.get('reason', '')
+                                        if orig_reason and "체결 확인" not in orig_reason:
+                                            reason_to_save = f"체결 확인 ({orig_reason})"
+                                        else:
+                                            reason_to_save = "체결 확인"
+                                    else:
+                                        reason_to_save = "체결 확인"
+                                        # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
+                                        try:
+                                            conn = db_manager.db._get_conn()
+                                            cursor = conn.cursor()
+                                            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
+                                            r_row = cursor.fetchone()
+                                            if r_row:
+                                                t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
+                                                type_str = f"{t_type}(예약)"
+                                                c_type = r_row['condition_type']
+                                                tp_val = r_row['target_price']
+                                                res_reason = f"조건: {c_type}"
+                                                if c_type == 'TIME': res_reason += f" ({r_row['target_time']})"
+                                                elif 'SCORE' in c_type: res_reason += f" (목표: {tp_val}점)"
+                                                elif 'RSI' in c_type: res_reason += f" (목표: {tp_val})"
+                                                elif 'EMA' in c_type: res_reason += f" (EMA {int(tp_val)} {'돌파' if 'UP' in c_type else '이탈'})"
+                                                elif c_type == 'TRAILING_BUY': res_reason += f" (바닥반등 {tp_val}%)"
+                                                elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
+                                                else: res_reason += f" (목표가 {tp_val})"
+                                                reason_to_save = f"체결 확인 ({res_reason})"
+                                        except Exception as e:
+                                            logger.debug(f"[Account] 예약 주문 조회 실패: {e}")
                                     
                                     db_manager.db.insert_trade(
                                         type_str, item.get('pdno'), item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm'), 
                                         tot_qty, avg_price, odno, 
                                         order_status="체결", custom_time=trade_time,
-                                        reason="체결 확인",
+                                        reason=reason_to_save,
                                         profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score,
                                         stop_loss_rate=stop_loss_rate
                                     )
@@ -197,6 +226,12 @@ def _display_balance_details(cano, acnt_prdt_cd):
     except Exception as e:
         logger.debug(f"reserved_codes fetch error: {e}")
         
+    # [추가] 제한 종목 및 개별 룰 로드
+    from modules import auto_trade
+    restricted_stocks = auto_trade.load_restricted_stocks()
+    custom_rules = db_manager.db.get_all_stock_strategies()
+    rules_map = {r['code']: True for r in custom_rules}
+
     # ---------------------------
     # [국내 주식 잔고]
     # ---------------------------
@@ -223,6 +258,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         if output1:
             table = Table(title="\n[국내] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
             table.add_column("종목명", justify="left")
+            table.add_column("코드", justify="center", style="dim")
             table.add_column("보유수량", justify="right")
             table.add_column("매입단가", justify="right")
             table.add_column("현재가", justify="right")
@@ -240,9 +276,15 @@ def _display_balance_details(cano, acnt_prdt_cd):
             m_codes = utils.get_memo_codes() # [추가]
             for item in output1:
                 code = item['pdno']
-                m_mark = "[M]" if code in m_codes else ""
-                res_mark = "[magenta]예약(O)[/magenta]" if code in reserved_codes else ""
-                name = f"{item['prdt_name']} ({code}) {m_mark} {res_mark}".strip()
+                name = item['prdt_name']
+                
+                marks = []
+                if code in restricted_stocks: marks.append("-")
+                if code in rules_map: marks.append("+")
+                if code in m_codes: marks.append("=")
+                if code in reserved_codes: marks.append("[magenta]*[/magenta]")
+                mark_str = "".join(marks)
+                if mark_str: name = f"{name}[dim]{mark_str}[/dim]".strip()
                 qty = int(item['hldg_qty'])
                 buy_price = float(item['pchs_avg_pric'])
                 cur_price = int(item['prpr'])
@@ -286,6 +328,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
                 table.add_row(
                     name,
+                    code,
                     f"{qty:,}주",
                     f"{buy_price:,.0f}원",
                     f"{cur_price:,}원",
@@ -306,7 +349,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     total_rate = (calculated_total_profit / calculated_total_pchs) * 100
                 
                 profit_color = "[red]" if calculated_total_profit > 0 else ("[blue]" if calculated_total_profit < 0 else "[white]")
-                config.console.print(f"[bold]  국내 총 매입금액:[/bold] {calculated_total_pchs:,}원  |  [bold]총 평가금액:[/bold] {calculated_total_eval:,}원  |  [bold]총 평가손익:[/bold] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
+                config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {calculated_total_pchs:,}원  |  [bold dim]총 평가금액:[/bold dim] {calculated_total_eval:,}원  |  [bold dim]총 평가손익:[/bold dim] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
         else:
             config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
 
@@ -330,7 +373,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
     else:
         table_ovrs = Table(title="\n[해외] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-        table_ovrs.add_column("종목명(코드)", justify="left")
+        table_ovrs.add_column("종목명", justify="left")
+        table_ovrs.add_column("코드", justify="center", style="dim")
         table_ovrs.add_column("거래소", justify="center")
         table_ovrs.add_column("보유수량", justify="right")
         table_ovrs.add_column("매입단가($)", justify="right")
@@ -355,9 +399,15 @@ def _display_balance_details(cano, acnt_prdt_cd):
             if qty > 0:
                 has_ovrs_item = True
                 code = item.get('ovrs_pdno', '-')
-                m_mark = "[M]" if code in m_codes else ""
-                res_mark = "[magenta]예약(O)[/magenta]" if code in reserved_codes else ""
-                name = f"{item.get('ovrs_item_name', '-')} {m_mark} {res_mark}".strip()
+                name = item.get('ovrs_item_name', '-')
+                
+                marks = []
+                if code in restricted_stocks: marks.append("-")
+                if code in rules_map: marks.append("+")
+                if code in m_codes: marks.append("=")
+                if code in reserved_codes: marks.append("[magenta]*[/magenta]")
+                mark_str = "".join(marks)
+                if mark_str: name = f"{name}[dim]{mark_str}[/dim]".strip()
                 pchs_avg = float(item.get('pchs_avg_pric', 0))
                 profit = float(item.get('frcr_evlu_pfls_amt', 0))
                 rate = float(item.get('evlu_pfls_rt', 0))
@@ -403,7 +453,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                 
                 table_ovrs.add_row(
-                    f"{name} ({code})", 
+                    name,
+                    code,
                     exc_name,
                     f"{qty:,.0f}", 
                     f"{pchs_avg:,.2f}",
@@ -423,7 +474,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
                 total_ovrs_rate = (tot_ovrs_profit / tot_ovrs_pchs) * 100
                 
             profit_color = "[red]" if tot_ovrs_profit > 0 else ("[blue]" if tot_ovrs_profit < 0 else "[white]")
-            config.console.print(f"[bold]  해외 총 매입금액:[/bold] ${tot_ovrs_pchs:,.2f}  |  [bold]총 평가금액:[/bold] ${tot_ovrs_evlu:,.2f}  |  [bold]총 평가손익:[/bold] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+            config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${tot_ovrs_pchs:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${tot_ovrs_evlu:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
 
         else:
             config.console.print("\n[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
@@ -1066,8 +1117,16 @@ def view_trade_history():
                 elif status_str == 'TRIGGERED': status_str = '예약발동'
                 elif status_str == 'EXPIRED': status_str = '기간만료'
                 
+                time_val = r['created_at']
+                if time_val:
+                    try:
+                        dt = datetime.strptime(time_val, "%Y-%m-%d %H:%M:%S") + timedelta(hours=9)
+                        time_val = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        pass
+
                 reserved_trades.append({
-                    'id': f"R{r['id']}", 'time': r['created_at'], 'type': f"{t_type}(예약)",
+                    'id': f"R{r['id']}", 'time': time_val, 'type': f"{t_type}(예약)",
                     'code': r['code'], 'name': r['name'], 'qty': r['qty'], 'price': r['order_price'],
                     'odno': r['odno'] or '-', 'org_odno': None, 'account': acc_str,
                     'is_sim': 1 if is_sim_account else 0, 'snapshot': None, 'profit_amt': 0,

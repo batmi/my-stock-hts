@@ -56,7 +56,7 @@ class ReservedOrderMonitor:
         # 차트 조회가 필요한 종목 식별 (RATE LIMIT 방어용 캐시 예열)
         chart_required_codes = set()
         for order in pending_orders:
-            if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN']:
+            if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
                 code = order['code']
                 now_ts = time.time()
                 # 캐시가 1시간 지났거나 없으면 업데이트
@@ -104,7 +104,7 @@ class ReservedOrderMonitor:
                 curr_price = current_prices[code]
                 if curr_price <= 0: continue
                 
-                if condition_type in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN']:
+                if condition_type in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
                     cached = self.chart_cache.get(code)
                     if cached:
                         # [핵심] 원본 캐시를 복사 후 마지막 행(오늘)의 종가만 현재가로 교체하여 지표 계산
@@ -125,6 +125,14 @@ class ReservedOrderMonitor:
                                     trigger, reason = True, f"RSI 도달 ({rsi_val:.1f} >= {target_price})"
                                 elif condition_type == 'RSI_DOWN' and rsi_val <= target_price:
                                     trigger, reason = True, f"RSI 하락 ({rsi_val:.1f} <= {target_price})"
+                        elif 'EMA' in condition_type:
+                            ema_key = f"ema_{int(target_price)}"
+                            ema_val = ind.get(ema_key)
+                            if ema_val is not None:
+                                if condition_type == 'EMA_UP' and curr_price >= ema_val:
+                                    trigger, reason = True, f"EMA {int(target_price)}선 상향돌파 (현재가: {curr_price:,.2f})"
+                                elif condition_type == 'EMA_DOWN' and curr_price <= ema_val:
+                                    trigger, reason = True, f"EMA {int(target_price)}선 하향이탈 (현재가: {curr_price:,.2f})"
                                     
                 elif condition_type == 'TRAILING_BUY':
                     lowest = float(order.get('lowest_price', 0.0))
@@ -190,6 +198,14 @@ class ReservedOrderMonitor:
             db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)
             display_price = "시장가" if order_price == 0 else (f"{int(order_price):,}원" if order['market'] == 'KR' else f"${order_price:,.2f}")
             api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n종목: {order['name']}({order['code']})\n단가: {display_price}\n조건: {reason}\n주문번호: {odno}")
+            
+            # [추가] 해당 종목의 나머지 예약 주문 일괄 취소 및 알림
+            canceled_orders = db_manager.db.cancel_other_reserved_orders(order['id'], order['cano'], order['acnt'], order['code'])
+            for co in canceled_orders:
+                t_type = "매수" if co['order_type'] == 'buy' else "매도"
+                cond_str = co['condition_type']
+                api.send_telegram_message(f"🗑️ [예약 일괄 취소]\n종목: {co['name']}({co['code']})\n사유: 동일 종목의 다른 예약 매매 발동으로 인한 일괄 자동 취소\n조건: {cond_str} ({t_type})")
+                
         else:
             fail_msg = res.get('msg1', '알 수 없는 오류')
             db_manager.db.update_reserved_order_status(order['id'], 'FAILED', fail_reason=fail_msg)

@@ -777,6 +777,36 @@ class DBManager:
                 except: break
             return 0
 
+    def cancel_other_reserved_orders(self, triggered_id, cano, acnt, code):
+        """특정 예약 주문이 발동되었을 때, 동일 계좌/종목의 나머지 대기 중인 예약 주문을 일괄 취소"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT * FROM reserved_orders 
+                        WHERE cano=? AND acnt=? AND code=? AND id != ? AND status='PENDING'
+                    ''', (cano, acnt, code, triggered_id))
+                    targets = [dict(row) for row in cursor.fetchall()]
+                    
+                    if targets:
+                        cursor.execute('''
+                            UPDATE reserved_orders 
+                            SET status='CANCELED', fail_reason='동일 종목의 다른 예약 매매 발동으로 인한 자동 취소' 
+                            WHERE cano=? AND acnt=? AND code=? AND id != ? AND status='PENDING'
+                        ''', (cano, acnt, code, triggered_id))
+                        conn.commit()
+                    return targets
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+            return []
+
 # 전역 인스턴스
 db = DBManager()
 atexit.register(db.run_vacuum)
