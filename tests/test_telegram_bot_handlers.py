@@ -26,8 +26,10 @@ def test_cmd_config(commander):
 @patch('modules.telegram_bot.db_manager.db.get_trades')
 def test_cmd_history(mock_get_trades, commander):
     """체결 내역 조회 명령어 테스트"""
+    from datetime import datetime
+    recent_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     mock_get_trades.return_value = [
-        {'time': '2023-01-01 10:00:00', 'type': 'buy', 'name': 'Samsung', 'code': '005930', 'qty': 10, 'price': 50000, 'odno': '1', 'order_status': '체결'}
+        {'time': recent_time, 'type': 'buy', 'name': 'Samsung', 'code': '005930', 'qty': 10, 'price': 50000, 'odno': '1', 'order_status': '체결'}
     ]
     
     with patch.object(commander.trader, '_refine_trade_records') as mock_refine:

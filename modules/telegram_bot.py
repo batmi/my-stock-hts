@@ -38,6 +38,8 @@ class TelegramCommander:
         self.thread = None
         self.last_update_id = 0
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
+        self._trade_cache = {}
+        self._trade_cache_lock = threading.Lock()
         
         # [리팩토링] 명령어 핸들러 매핑
         self.command_handlers = {
@@ -240,18 +242,7 @@ class TelegramCommander:
         elif config.session.auto_cano:
             target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
-        raw_trades = db_manager.db.get_trades(limit=None, is_sim=config.session.is_simulation, account=target_account)
-        
-        trades = []
-        for r in raw_trades:
-            type_str = r.get('type', '')
-            simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
-            parsed_r = dict(r)
-            parsed_r['type'] = simple_type
-            trades.append(parsed_r)
-
-        if hasattr(self.trader, '_refine_trade_records'):
-            trades = self.trader._refine_trade_records(trades)
+        trades = self._get_refined_trades_cached(target_account=target_account)
 
         if not trades:
             return "📭 매매 기록이 없습니다."
@@ -1085,6 +1076,9 @@ class TelegramCommander:
             elif arg in ["m", "month", "monthly", "월간"]: days = 30
             elif arg.isdigit(): days = int(arg)
         
+        period_str = "일간" if days == 0 else ("주간" if days == 7 else ("월간" if days == 30 else f"최근 {days}일"))
+        self._send_reply(f"⏳ [{period_str} 손익 조회] 매매 내역 및 자산 데이터를 분석 중입니다. 데이터 양에 따라 시간이 다소 소요될 수 있습니다...")
+
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
         start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -1154,23 +1148,13 @@ class TelegramCommander:
         else:
             title = f"📅 [기간별 실현 손익 (최근 {days}일)]"
             
-        raw_trades = db_manager.db.get_trades(start_date=start_dt, end_date=end_dt)
+        all_trades = self._get_refined_trades_cached(target_account=None)
         
         trades = []
-        for r in raw_trades:
-            type_str = r.get('type', '')
-            simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
-            parsed_r = dict(r)
-            parsed_r['type'] = simple_type
-            trades.append(parsed_r)
-
-        # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
-        if hasattr(self.trader, '_refine_trade_records'):
-            trades = self.trader._refine_trade_records(trades)
-            
-        # [추가] 통계 계산을 위해 시간순(과거->최신)으로 정렬
-        if trades:
-            trades.sort(key=lambda x: x.get('time', ''))
+        for t in all_trades:
+            t_date = t.get('time', '')[:10]
+            if start_dt <= t_date <= end_dt:
+                trades.append(t)
             
         stats = self.trader._calculate_statistics(trades)
         
@@ -1442,6 +1426,37 @@ class TelegramCommander:
             return f"⚠️ 보유 종목 조회 중 오류 발생: {str(e)}"
 
     # --- 내부 로직 메서드 ---
+    def _get_refined_trades_cached(self, target_account=None):
+        """DB에서 전체 거래 내역을 조회 및 정제(Refine)한 결과를 60초간 메모리에 캐싱"""
+        now = time.time()
+        is_sim = config.session.is_simulation
+        cache_key = f"{is_sim}_{target_account}"
+        
+        with self._trade_cache_lock:
+            cached = self._trade_cache.get(cache_key)
+            if cached and now - cached['time'] < 60: # 60초 이내 캐시 반환 (속도 대폭 향상)
+                return cached['data']
+                
+            raw_trades = db_manager.db.get_trades(limit=None, is_sim=is_sim, account=target_account)
+            
+            trades = []
+            for r in raw_trades:
+                type_str = r.get('type', '')
+                simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
+                parsed_r = dict(r)
+                parsed_r['type'] = simple_type
+                trades.append(parsed_r)
+
+            if hasattr(self.trader, '_refine_trade_records'):
+                trades = self.trader._refine_trade_records(trades)
+                
+            if trades:
+                # 통계 계산 최적화를 위해 시간순(과거->최신)으로 기본 정렬
+                trades.sort(key=lambda x: x.get('time', ''))
+                
+            self._trade_cache[cache_key] = {'time': now, 'data': trades}
+            return trades
+
     def _send_reply(self, text, reply_markup=None, is_urgent=False, sync=False):
         if reply_markup is None:
             reply_markup = self._get_default_keyboard()
@@ -2100,12 +2115,16 @@ class TelegramCommander:
             elif days == 30: period_str = "월간"
             else: period_str = f"최근 {days}일"
 
-        # [수정] 전체 내역 조회 (체결 필터 제거)
-        trades = db_manager.db.get_trades(limit=None, start_date=start_date)
+        all_trades = self._get_refined_trades_cached(target_account=None)
         
-        # [추가] 동일한 주문번호(odno)의 접수-체결 중복 내역 병합 및 제거
-        if hasattr(self.trader, '_refine_trade_records'):
-            trades = self.trader._refine_trade_records(trades)
+        trades = []
+        for t in all_trades:
+            t_date = t.get('time', '')[:10]
+            if not start_date or t_date >= start_date:
+                trades.append(t)
+                
+        # 최신 거래 내역이 상단에 오도록 정렬 (과거순 -> 최신순 정렬 역순)
+        trades.sort(key=lambda x: x.get('time', ''), reverse=True)
         
         # 기간 표시 문자열 생성
         if start_date:

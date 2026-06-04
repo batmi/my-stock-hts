@@ -139,6 +139,9 @@ def test_cmd_stats_empty(mock_trades):
     # 매매 기록이 비어있으면 검색 전에 종료되므로 가짜 데이터를 하나 넣어줌
     mock_trades.return_value = [{'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 100, 'time': '2023-01-01', 'odno': '1'}]
     
+    # [추가] 앞선 조회로 인해 메모리에 빈 리스트가 캐싱되어 있으므로 캐시 강제 초기화
+    cmd._trade_cache.clear()
+
     with patch.object(cmd, '_resolve_stock', return_value=(None, None, False)):
         res2 = cmd._cmd_stats(["없는종목"])
         assert "찾을 수 없습니다" in res2
