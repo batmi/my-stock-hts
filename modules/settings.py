@@ -708,25 +708,25 @@ def modify_trading_cycle_settings():
 # =========================================================
 DEFAULT_PRESETS = {
     "bull": {
-        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True,
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 95.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 90.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0, "SELL_SCORE": 5.0,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
-        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "SUPER_MOMENTUM_USE": False,
+        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -3.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5, "SELL_SCORE": 6.0,
         "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.1, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
     },
     "sideways": {
-        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": False,
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8, "SELL_SCORE": 5.0,
         "TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
-        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "SUPER_MOMENTUM_USE": True,
+        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 85.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
@@ -765,8 +765,10 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     config.ANALYSIS_THRESHOLDS.update({
         "BUY_SCORE": vals["BUY_SCORE"],
         "BUY_RSI_MAX": vals["BUY_RSI_MAX"],
+        "BUY_VOL_STRENGTH": vals.get("BUY_VOL_STRENGTH", 100.0),
         "USE_MEAN_REVERSION": vals["USE_MEAN_REVERSION"],
         "MR_RSI_MAX": vals["MR_RSI_MAX"],
+        "MR_VOL_STRENGTH": vals.get("MR_VOL_STRENGTH", 100.0),
         "SUPER_MOMENTUM_USE": vals["SUPER_MOMENTUM_USE"]
     })
     config.SELL_STRATEGY.update({
@@ -807,9 +809,9 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     
     # 변경된 주요 설정값 요약 데이터 구성
     summary_data = [
-        ("매수 허들 (점수/RSI)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만"),
+        ("매수 허들 (점수/RSI/체결강도)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}% 이상"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
-        ("역추세 매수 (RSI)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하)"),
+        ("역추세 매수 (RSI/체결강도)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 100.0)}% 이상)"),
         ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 5.0)} 미만 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
         ("익절 / 손절", f"+{config.SELL_STRATEGY['TAKE_PROFIT_RATE']}% (반익절: {'ON' if config.SELL_STRATEGY.get('HALF_TAKE_PROFIT_USE', True) else 'OFF'}) / {config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 3.0)}%"),
@@ -861,7 +863,9 @@ def _edit_single_preset(preset_type):
         items = [
             {"desc": "매수 기준 점수", "help": "진입 임계값", "name": "BUY_SCORE", "type": "float", "section": "Buy", "get": make_getter("BUY_SCORE"), "set": make_setter("BUY_SCORE", 'float')},
             {"desc": "매수 허용 RSI 상한", "help": "과열 방지", "name": "BUY_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("BUY_RSI_MAX"), "set": make_setter("BUY_RSI_MAX", 'float')},
+            {"desc": "매수 체결강도 기준", "help": "매수 수급 확인", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("BUY_VOL_STRENGTH"), "set": make_setter("BUY_VOL_STRENGTH", 'float')},
             {"desc": "역추세 매수 사용", "help": "낙폭과대 반등", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("USE_MEAN_REVERSION"), "set": make_setter("USE_MEAN_REVERSION", 'bool')},
+            {"desc": "역추세 체결강도 기준", "help": "바닥권 매수세 확인", "name": "MR_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("MR_VOL_STRENGTH"), "set": make_setter("MR_VOL_STRENGTH", 'float')},
             {"desc": "슈퍼 모멘텀 사용", "help": "주도주 랠리 시 RSI 완화", "name": "SUPER_MOMENTUM_USE", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("SUPER_MOMENTUM_USE"), "set": make_setter("SUPER_MOMENTUM_USE", 'bool')},
             
             {"desc": "익절 수익률(%)", "help": "목표 수익", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RATE"), "set": make_setter("TAKE_PROFIT_RATE", 'float')},
@@ -952,7 +956,7 @@ def reset_to_default(interactive=True):
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
-        "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 95.0,
+            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
         "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
         "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 100.0,
