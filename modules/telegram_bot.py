@@ -150,12 +150,11 @@ class TelegramCommander:
             "🔴 상태 요약": "/status",
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
-            " 관심 종목": "/stocks",
+            "📝 관심 종목": "/stocks",
             "📈 시장 지수": "/market",
-            "🔎 종목 스캔": "/scan k",
-            "🇺🇸 미국 스캔": "/scan u",
-            "💬 AI 질문": "/ask 요즘 주식 시장 어때?",
-            " 주간 거래": "/history w",
+            " 종목 스캔": "/scan k",
+            "❓ 도움말": "/help",
+            "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
             "⏳ 예약 현황": "/reserves",
             "🛑 거래 정지": "/stop",
@@ -176,6 +175,12 @@ class TelegramCommander:
             target = command.replace('/signal_', '')
             args = [target] + args
             command = '/signal'
+
+        # [추가] /analyze_종목코드 단축 명령어 지원
+        if command.startswith('/analyze_'):
+            target = command.replace('/analyze_', '')
+            args = [target] + args
+            command = '/analyze'
 
         # [추가] /chart_종목코드 단축 명령어 지원
         if command.startswith('/chart_'):
@@ -1459,11 +1464,10 @@ class TelegramCommander:
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
             "keyboard": [
-                [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}],
-                [{"text": "💰 계좌 잔고"}, {"text": "💼 보유 종목"}, {"text": "📝 관심 종목"}],
-                [{"text": "🔎 종목 스캔"}, {"text": "🇺🇸 미국 스캔"}],
-                [{"text": "⏳ 예약 현황"}, {"text": "💬 AI 질문"}],
-                [toggle_btn, {"text": "📊 월간 성과"}]
+                [{"text": f"{emoji} 상태 요약"}, {"text": "📈 시장 지수"}, {"text": "❓ 도움말"}],
+                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "💰 계좌 잔고"}],
+                [{"text": "📜 주간 거래"}, {"text": "� 월간 성과"}, {"text": "⏳ 예약 현황"}],
+                [toggle_btn]
             ],
             "resize_keyboard": True
         }
@@ -1937,7 +1941,7 @@ class TelegramCommander:
                         name += "+"
                         
                     # [수정] 차트 링크를 일봉(/chart_code)에서 시봉(/chart_h_code)으로 변경
-                    msg += f"\n - {name} ({code})\n   /signal_{code} /chart_h_{code}"
+                    msg += f"\n - {name} ({code})\n   /signal_{code} /analyze_{code} /chart_h_{code}"
                 msg += "\n"
         
         if not has_stock:
