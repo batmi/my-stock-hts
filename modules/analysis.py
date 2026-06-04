@@ -3197,12 +3197,12 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         config.console.print(table, crop=False)
         
         mark_desc = []
-        if '-' in used_marks: mark_desc.append("-: 시스템 트레이딩 제한 종목")
-        if '+' in used_marks: mark_desc.append("+: 개별 룰 적용 종목")
-        if '=' in used_marks: mark_desc.append("=: 메모 설정 종목")
-        if '*' in used_marks: mark_desc.append("*: 예약 매매 설정 종목")
+        if '-' in used_marks: mark_desc.append("[dim]([/dim] - [dim]) 시스템 트레이딩 제한 종목[/dim]")
+        if '+' in used_marks: mark_desc.append("[dim]([/dim] + [dim]) 개별 룰 적용 종목[/dim]")
+        if '=' in used_marks: mark_desc.append("[dim]([/dim] = [dim]) 메모 설정 종목[/dim]")
+        if '*' in used_marks: mark_desc.append("[dim]([/dim] * [dim]) 예약 매매 설정 종목[/dim]")
         if mark_desc:
-            config.console.print(f"[dim] ※ {' | '.join(mark_desc)}[/dim]")
+            config.console.print(f" [dim]※[/dim] {' [dim]|[/dim] '.join(mark_desc)}")
 
         sys.stdout.flush()
     except Exception as e:
