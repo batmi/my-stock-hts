@@ -1,0 +1,9 @@
+# 모든 텍스트 파일의 줄바꿈을 LF(리눅스/맥 방식)로 통일 (인코딩/이모지 깨짐 방지)
+* text=auto eol=lf
+
+# 주요 확장자별 명시적 설정
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf

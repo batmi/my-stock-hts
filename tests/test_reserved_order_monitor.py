@@ -108,7 +108,7 @@ def test_check_orders_trailing_buy(mock_execute, mock_update_low, mock_get_price
 def test_execute_order_success(mock_tg, mock_update, mock_place, monitor):
     """_execute_order 성공 로직 검증"""
     order = {
-        'id': 5, 'code': '005930', 'market': 'KR', 'order_type': 'buy', 'name': '삼성전자', 'qty': 10, 'order_price': 80000
+        'id': 5, 'cano': '12345678', 'acnt': '01', 'code': '005930', 'market': 'KR', 'order_type': 'buy', 'name': '삼성전자', 'qty': 10, 'order_price': 80000
     }
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '123456'}}
     
