@@ -92,7 +92,7 @@ def check_smart_money_turnaround(code, is_overseas=False):
         logger.debug(f"Smart Money Check Error for {code}: {e}")
         return False, ""
 
-def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False):
+def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
     
@@ -103,6 +103,10 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 
     score = 0
     details = []
+    
+    # [Fix] df가 전달되지 않는 백테스팅 환경을 위한 변수 초기화
+    vol_spike_flag = vol_spike
+    vol_trend_flag = vol_trend
 
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
@@ -161,15 +165,20 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 prev_cci = cci_series.iloc[-2]
             except: pass
 
-        if not vol_spike:
-            vol_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
-            vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
-            if len(df) >= vol_ma_period:
-                vol_ma = df['volume'].rolling(window=vol_ma_period).mean().iloc[-1]
+        vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
+        if len(df) >= vol_ma_period:
+            vol_ma20 = df['volume'].rolling(window=vol_ma_period).mean().iloc[-1]
+            vol_ma5 = df['volume'].rolling(window=5).mean().iloc[-1]
+            
+            if vol_ma5 > vol_ma20:
+                vol_trend_flag = True
+                
+            if not vol_spike_flag:
+                vol_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
                 vol = df['volume'].iloc[-1]
                 opn = df['open'].iloc[-1]
-                if vol_ma > 0 and vol >= (vol_ma * vol_ratio) and price > opn:
-                    vol_spike = True
+                if vol_ma20 > 0 and vol >= (vol_ma20 * vol_ratio) and price > opn:
+                    vol_spike_flag = True
                 
     if price is None:
         return 0.0, details
@@ -181,8 +190,11 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(1.0 * r_trend, 2); score += s; details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
     if ema20 is not None and ema_5 is not None and ema_5 > ema20:
         s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 5일선 > 20일선 (+{s:.2f})")
-    if ema20 is not None and ema60 is not None and ema20 <= ema60 and price > ema60:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
+    if ema20 is not None and ema60 is not None:
+        if ema20 <= ema60 and price > ema60:
+            s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
+        elif ema_5 is not None and price > ema_5 and ema_5 > ema20 and ema20 > ema60:
+            s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 단기 급등 추세 (+{s:.2f})")
     
     if macd is not None and macd_signal is not None:
         if macd > macd_signal:
@@ -197,6 +209,8 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     if rsi is not None:
         if 50 <= rsi <= 75:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 강세 구간 (+{s:.2f})")
+            if rsi >= 60:
+                s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
         elif 30 <= rsi < 50:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 반등 시도 (+{s:.2f})")
             
@@ -206,6 +220,8 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
         if prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 (+{s:.2f})")
+        elif cci >= 50:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 모멘텀 심화 (+{s:.2f})")
             
     if plus_di is not None and minus_di is not None and plus_di > minus_di:
         s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 (+{s:.2f})")
@@ -214,11 +230,15 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     if adx is not None and adx >= 20:
         s = round(0.5 * r_str, 2); score += s; details.append(f"ADX: 추세 형성 (+{s:.2f})")
         
-    if vol_spike:
-        s = round(0.5 * r_str, 2); score += s; details.append(f"VOL: 거래량 폭증/양봉 (+{s:.2f})")
+    if vol_spike_flag or vol_trend_flag:
+        s = round(0.5 * r_str, 2); score += s
+        if vol_spike_flag:
+            details.append(f"VOL: 거래량 폭증/양봉 (+{s:.2f})")
+        else:
+            details.append(f"VOL: 거래량 추세 상승 (+{s:.2f})")
         
     if obv_trend or smart_money:
-        s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 턴어라운드 (+{s:.2f})")
+        s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 개선 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
     if ema60 is not None and price > ema60 and (macd is not None and macd_signal is not None and macd > macd_signal) and (adx is not None and adx >= 15):

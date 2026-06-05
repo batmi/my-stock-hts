@@ -619,18 +619,32 @@ class ConclusionMonitor:
                                                         "BUY_VOL_STRENGTH": rule.get('buy_vol_strength') # [추가] 개별 체결강도
                                                     }
                                                     rule_tag = " [개별 룰 적용]"
+                                                    
+                                                w52_pos = 0.0
+                                                if len(df) > 0:
+                                                    recent_df = df.tail(250)
+                                                    h52 = recent_df['high'].max()
+                                                    l52 = recent_df['low'].min()
+                                                    if h52 > l52:
+                                                        w52_pos = (current_price - l52) / (h52 - l52) * 100
 
                                                 # [수정] 상태 및 사유 조회 (thresholds 적용)
                                                 state, _, state_reason = analysis.classify_stock_state(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                                                     ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                                                    thresholds=thresholds, smart_money=sm_flag
+                                                    thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
+                                                    plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
                                                 )
 
                                                 score, _ = analysis.calculate_score(
                                                     current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'), smart_money=sm_flag
+                                                    ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                                                    ema_5=ind.get('ema_5'), prev_cci=ind.get('prev_cci'), vol_spike=ind.get('vol_spike'),
+                                                    smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                                                    macd_hist=ind.get('macd_hist'), prev_macd_hist=ind.get('prev_macd_hist'),
+                                                    df=df, ind=ind
                                                 )
+                                                score = round(score, 1)
                                                 
                                                 rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
                                                 adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
@@ -988,11 +1002,23 @@ class DefaultStrategy:
         sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
         state, _, state_reason = analysis.classify_stock_state(
-            df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+            thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
+            plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
         )
         
-        # [수정] 가중치(WEIGHTS) 전달
-        score, _ = analysis.calculate_score(df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
+        # [수정] 가중치(WEIGHTS) 및 누락된 세부 지표 전달
+        score, _ = analysis.calculate_score(
+            current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+            ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+            ema_5=ind.get('ema_5'), prev_cci=ind.get('prev_cci'), vol_spike=ind.get('vol_spike'),
+            weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag,
+            plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+            macd_hist=ind.get('macd_hist'), prev_macd_hist=ind.get('prev_macd_hist'),
+            df=df, ind=ind
+        )
+        score = round(score, 1)
         
         # [수정] 역매수 상태에 따른 체결강도 분기
         if state == "역매수":
@@ -1072,11 +1098,23 @@ class DefaultStrategy:
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
             state, _, state_reason = analysis.classify_stock_state(
-                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
             )
             
-            # [수정] 가중치(WEIGHTS) 전달
-            score, _ = analysis.calculate_score(df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag)
+            # [수정] 가중치(WEIGHTS) 및 누락된 세부 지표 전달
+            score, _ = analysis.calculate_score(
+                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
+                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
+                ema_5=ind.get('ema_5'), prev_cci=ind.get('prev_cci'), vol_spike=ind.get('vol_spike'),
+                weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag,
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                    macd_hist=ind.get('macd_hist'), prev_macd_hist=ind.get('prev_macd_hist'),
+                    df=df, ind=ind
+            )
+            score = round(score, 1)
 
         # 2. 고정 익절/손절 및 시간 청산
         if tp_rate > 0 and profit_rate >= tp_rate:

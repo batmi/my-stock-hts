@@ -1145,19 +1145,33 @@ def _analyze_stock_ui():
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
                 except: pass
 
+            w52_pos = 0.0
+            if len(df) > 0:
+                recent_df = df.tail(250)
+                h52 = recent_df['high'].max()
+                l52 = recent_df['low'].min()
+                if h52 > l52:
+                    w52_pos = (current_price - l52) / (h52 - l52) * 100
+                    
+            sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas)
+
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], 
                 ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                w52_pos=w52_pos, smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
             )
 
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], ind['adx'], ind['cci'], 
                 ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                ema_5=ind.get('ema_5'), prev_cci=ind.get('prev_cci'), vol_spike=ind.get('vol_spike'),
+                smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                macd_hist=ind.get('macd_hist'), prev_macd_hist=ind.get('prev_macd_hist'),
+                df=df, ind=ind
             )
+            score = round(score, 1)
 
             rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
             adx_val = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"

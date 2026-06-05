@@ -48,6 +48,14 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
     w52_pos = row.get('w52_pos', 0.0)
     smart_money = row.get('smart_money', False) # [추가] 사전 병합된 스마트머니 시그널 확인
+    
+    # [추가] 점수 산정에 필요한 세부 지표들
+    ema_5 = row.get('EMA5')
+    prev_cci = prev_row['CCI'] if prev_row is not None else None
+    vol_spike = row.get('VOL_SPIKE', False)
+    vol_trend = row.get('VOL_TREND', False)
+    macd_hist = row.get('MACD_Hist')
+    prev_macd_hist = prev_row['MACD_Hist'] if prev_row is not None else None
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
@@ -60,9 +68,12 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     # 2. 점수 계산
     weights = thresholds.get("WEIGHTS") if thresholds else None
     raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, 
-        weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI')
+        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal,
+        ema_5=ema_5, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
+        weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
+        macd_hist=macd_hist, prev_macd_hist=prev_macd_hist
     )
+    raw_score = round(raw_score, 1) # [Fix] 부동소수점 오차 제거 (예: 6.9999 -> 7.0)
     
     # 3. 백테스팅용 플래그 변환
     can_buy_state = (state not in ["매도", "주의"]) # 매도/주의가 아니면 매수 후보 (역매수 포함)
@@ -1191,6 +1202,7 @@ def run_backtest():
             df = _append_smart_money_signal(df, code, is_overseas)
 
             # 지표 계산
+            df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
             df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
             df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
             df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
@@ -1201,7 +1213,18 @@ def run_backtest():
             df['OBV'] = indicators.get_obv_full_series(df)
             df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
             df['ATR'] = indicators.get_atr_full_series(df) # [추가] ATR 계산
-            df['MACD'], df['MACD_Signal'], _ = indicators.get_macd_full_series(df)
+            
+            macd_res = indicators.get_macd_full_series(df)
+            if len(macd_res) == 3:
+                df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = macd_res
+            else:
+                df['MACD'], df['MACD_Signal'] = macd_res
+                df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+                
+            df['VOL_MA20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+            df['VOL_MA5'] = df['volume'].rolling(window=5, min_periods=1).mean()
+            df['VOL_TREND'] = df['VOL_MA5'] > df['VOL_MA20']
+            df['VOL_SPIKE'] = (df['volume'] > df['VOL_MA20'] * 2.0) & (df['close'] > df['open'])
 
             # 분석 기간 필터링
             # [수정] 행 개수 기준이 아닌 날짜 기준으로 필터링

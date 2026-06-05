@@ -590,7 +590,7 @@ def show_help():
     score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
     score_table.add_row("(추세 4.0)", "EMA 5일선 > 20일선", f"+{0.5 * r_trend:.1f}", "5일선이 20일선 상회 (단기 추세 전환)")
     score_table.add_row("", "20/60/120선 정배열", f"+{1.0 * r_trend:.1f}", "중장기 이평선 정배열 (0.5+0.5)")
-    score_table.add_row("", "주가 > 60일선 돌파 (초기)", f"+{0.5 * r_trend:.1f}", "초기 추세 전환 (20선≤60선 시)")
+    score_table.add_row("", "주가 > 60선 돌파 or 단기급등", f"+{0.5 * r_trend:.1f}", "역배열 초기 돌파 또는 주가>5>20>60 정배열 급등")
     score_table.add_row("", "MACD > Signal", f"+{0.5 * r_trend:.1f}", "골든크로스")
     score_table.add_row("", "MACD 히스토그램 개선", f"+{0.5 * r_trend:.1f}", "히스토그램 양수 또는 상승 (MACD 선행)")
     score_table.add_row("", "주가 > SAR", f"+{0.5 * r_trend:.1f}", "파라볼릭 매수")
@@ -598,16 +598,16 @@ def show_help():
 
     # 2. Momentum Factor
     score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", f"+{0.5 * r_mom:.1f}", "강세 구간 (주도주)")
-    score_table.add_row("(모멘텀 2.5)", "30 ≤ RSI < 50 하단 반등", f"+{0.5 * r_mom:.1f}", "반등/회복 시도")
+    score_table.add_row("(모멘텀 2.5)", "30≤RSI<50 반등 or RSI≥60", f"+{0.5 * r_mom:.1f}", "바닥 반등 시도 또는 모멘텀 확장")
     score_table.add_row("", "CCI > 0", f"+{0.5 * r_mom:.1f}", "상승 추세")
-    score_table.add_row("", "CCI > -100 돌파", f"+{0.5 * r_mom:.1f}", "과매도권(-100) 하단 탈출 (초기 반등)")
+    score_table.add_row("", "CCI -100 탈출 or CCI≥50", f"+{0.5 * r_mom:.1f}", "과매도권 탈출 또는 강한 상승 모멘텀 심화")
     score_table.add_row("", "+DI > -DI 교차", f"+{0.5 * r_mom:.1f}", "매수세가 매도세 역전 (모멘텀 발생)")
     score_table.add_section()
 
     # 3. Strength & Volume
     score_table.add_row("Strength/Volume", "ADX ≥ 20", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
-    score_table.add_row("(강도/수급 1.5)", "거래량 폭증(200%+) & 양봉", f"+{0.5 * r_str:.1f}", "20일평균 대비 거래량 폭증 (자금 유입)")
-    score_table.add_row("", "OBV 상승 & 스마트머니", f"+{0.5 * r_str:.1f}", "메이저 수급 턴어라운드")
+    score_table.add_row("(강도/수급 1.5)", "거래량 폭증 or 5일>20일 추세상승", f"+{0.5 * r_str:.1f}", "단기 거래량 모멘텀 개선 (안정적 수급)")
+    score_table.add_row("", "OBV 상승 or 스마트머니", f"+{0.5 * r_str:.1f}", "보조 지표 및 메이저 수급 턴어라운드")
     score_table.add_section()
 
     # 4. Synergy Bonus

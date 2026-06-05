@@ -783,7 +783,7 @@ def _manage_specific_stock_memos(code, name, mode='view'):
                 success_cnt = 0
                 for m_idx in valid_indices:
                     m = memos[m_idx - 1]
-                    if utils.delete_stock_memo_by_id(m['id']):
+                    if utils.delete_stock_memo_by_id(int(m['id'])):
                         success_cnt += 1
                 
                 if success_cnt == len(valid_indices):
@@ -931,8 +931,10 @@ def manage_stock_memos_by_mode(mode):
                 continue
             elif idx_str.lower() == 'd':
                 context.USER_ACTION_BREADCRUMB.append("[메모 삭제]")
-                manage_stock_memos_by_mode('delete')
+                res_del = manage_stock_memos_by_mode('delete')
                 context.USER_ACTION_BREADCRUMB.pop()
+                if res_del in ('quit_to_main', 'quit_to_menu'):
+                    return res_del
                 continue
 
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
