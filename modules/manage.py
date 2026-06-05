@@ -1031,18 +1031,23 @@ def manage_stock_menu():
                 utils.pause()
             continue
         
-        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
+        is_success = False
         if choice == "1":
             view_watchlist()
-            utils.pause()
+            is_success = True
         elif choice == "2":
-            if get_current_price(mode='add') is not False: utils.pause()
+            if get_current_price(mode='add') is not False: is_success = True
         elif choice == "3":
-            if delete_stock() is not False: utils.pause()
+            if delete_stock() is not False: is_success = True
         elif choice == "4":
-            if reorder_stock() is not False: utils.pause()
+            if reorder_stock() is not False: is_success = True
         elif choice == "5":
             manage_stock_memos_by_mode('view')
+            is_success = True
+            
+        if is_success:
+            last_choice = choice
+            utils.pause()

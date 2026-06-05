@@ -1529,16 +1529,20 @@ def run_theme_analysis():
                 utils.pause()
             continue
         
-        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
         
+        is_success = False
         if choice == '1':
             _show_naver_themes()
-            utils.pause()
+            is_success = True
         elif choice == '2':
-            if _run_tradingview_screener() is not False: utils.pause()
+            if _run_tradingview_screener() is not False: is_success = True
         elif choice == '3':
-            if _analyze_with_gemini_ui() is not False: utils.pause()
+            if _analyze_with_gemini_ui() is not False: is_success = True
         elif choice == '4':
-            if _analyze_stock_ui() is not False: utils.pause()
+            if _analyze_stock_ui() is not False: is_success = True
+            
+        if is_success:
+            last_choice = choice
+            utils.pause()

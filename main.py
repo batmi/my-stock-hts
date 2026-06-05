@@ -3,6 +3,7 @@
 import sys
 import time
 import os
+import re
 
 # [추가] 프로그램 실행 직후 지연 체감을 줄이기 위한 초기 프로그래스 출력
 print("  - 필수 데이터 분석 라이브러리(pandas, yfinance 등) 로딩 중...", flush=True)
@@ -11,7 +12,7 @@ from datetime import datetime
 import threading
 import signal
 import logging
-from rich.prompt import Prompt
+from rich.prompt import Prompt, InvalidResponse
 from rich.table import Table
 from rich import box
 from rich.markup import escape
@@ -60,8 +61,13 @@ def _custom_process_response(self, value: str):
     val = value.strip()
     if val.startswith('/'):
         cmd = val[1:].strip()
-        if cmd and cmd.isdigit():
-            raise GlobalCommandJump(list(cmd))
+        # [수정] 숫자 외에도 '@' 기호나 영문 티커 등 다양한 입력을 지원하도록 제한 완화
+        if cmd:
+            command_list = [c for c in re.split(r'[, ]+', cmd) if c]
+            if command_list:
+                raise GlobalCommandJump(command_list)
+                
+        raise InvalidResponse("\n[yellow]유효하지 않은 글로벌 명령어입니다. (예: /5,1 또는 /2 12@)[/yellow]\n")
             
     # [추가] 서브메뉴에서 q 입력 시 빈 점프 예외를 던져 메인 메뉴로 즉시 탈출
     if val.lower() == 'q' and getattr(context, 'USER_ACTION_BREADCRUMB', []) and len(context.USER_ACTION_BREADCRUMB) > 0:
@@ -76,12 +82,35 @@ def _custom_ask(cls, prompt="", *args, **kwargs):
         val = _global_command_queue.pop(0)
         time.sleep(0.15) # 시각적인 딜레이 (타이핑 효과)
         config.console.print(f"{prompt} [cyan]{val}[/cyan]")
-        return val
+        
+        # 내부 큐에서 꺼낸 명령어에 대해서도 기본 유효성 검사 수행
+        init_kwargs = kwargs.copy()
+        init_kwargs.pop('default', None)
+        init_kwargs.pop('stream', None)
+        
+        prompt_obj = cls(prompt, *args, **init_kwargs)
+        if prompt_obj.choices is not None:
+            if not prompt_obj.check_choice(val):
+                config.console.print(prompt_obj.illegal_choice_message)
+                _global_command_queue.clear() # 잘못된 매크로는 중단
+                return _original_ask(prompt, *args, **kwargs)
+                
+        try:
+            return prompt_obj.process_response(val)
+        except InvalidResponse as e:
+            config.console.print(e.message if hasattr(e, 'message') else str(e))
+            _global_command_queue.clear()
+            return _original_ask(prompt, *args, **kwargs)
+        except GlobalCommandJump as e:
+            _global_command_queue = e.command_list
+            return cls.ask(prompt, *args, **kwargs)
+            
     return _original_ask(prompt, *args, **kwargs)
 
 Prompt.check_choice = _custom_check_choice
 Prompt.process_response = _custom_process_response
 Prompt.ask = _custom_ask
+Prompt.illegal_choice_message = "\n[yellow]유효하지 않은 선택입니다. 사용 가능한 옵션 중 하나를 선택해 주세요.[/yellow]\n"
 # =========================================================================
 
 # =========================================================================
@@ -892,7 +921,6 @@ def main():
 
                 context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_name}")
                     
-                last_choice = choice
                 action_taken = None
 
                 if choice == "0": action_taken = settings.system_config_menu()
@@ -901,6 +929,7 @@ def main():
                 elif choice == "3": 
                     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
                     last_sub_choice = "6"
+                    action_taken = False
                     while True:
                         utils.clear_screen()
                         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
@@ -912,14 +941,12 @@ def main():
                         sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice=last_sub_choice)
                         
                         if sub_choice.lower() in ['b', 'q']: 
-                            action_taken = False
                             break
                         if sub_choice.lower() == 'h': 
                             show_help()
                             utils.pause()
                             continue
                             
-                        last_sub_choice = sub_choice
                         sub_map = dict((k, v) for k, v, _ in menu_items)
                         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
                         
@@ -976,6 +1003,8 @@ def main():
                                 if c_type == '2': p_type = 'hourly'
                                 elif c_type == '3': p_type = 'intraday'
                                 chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
+                                last_sub_choice = sub_choice
+                                action_taken = True
                                 utils.pause()
                 elif choice == "4": action_taken = backtest.run_backtest()
                 elif choice == "5": action_taken = auto_trade.system_trading_menu() 
@@ -991,6 +1020,7 @@ def main():
                         action_taken = False
                 
                 if action_taken is not False:
+                    last_choice = choice
                     utils.pause()
             except GlobalCommandJump as e:
                 global _global_command_queue

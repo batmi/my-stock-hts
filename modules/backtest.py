@@ -865,7 +865,6 @@ def run_backtest():
                 utils.pause()
             continue
         
-        last_choice = sub_choice
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {menu_map_dict[sub_choice]}")
 
@@ -1228,6 +1227,7 @@ def run_backtest():
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                        time_stop_days, use_atr_stop, atr_mult, half_tp_use,
                                        name=name, code=code, days=days)
+            last_choice = sub_choice
             utils.pause()
             continue
 
@@ -1983,4 +1983,5 @@ def run_backtest():
 
         # [이동] 경고 문구 출력 (가장 마지막)
         config.console.print("\n[bold red]경고: 과거의 성과가 미래의 수익을 보장하지는 않습니다.[/bold red]")
+        last_choice = sub_choice
         utils.pause()
