@@ -27,19 +27,19 @@ def cleanup_db_connection():
 @patch('modules.market.api.get_yf_fast_info', return_value=None) # fast_info 무시하고 과거 데이터 로직 타게 함
 def test_market_process_index_worker_gap_patching(mock_fast_info):
     """주말/휴장일로 인한 데이터 갭 발생 시 분봉 데이터를 활용한 패치(Patch) 로직 커버리지"""
-    # 일봉은 과거에 멈춰있고, 분봉은 최신 데이터가 있는 상황 시뮬레이션
-    past_date = datetime.now() - timedelta(days=5)
-    recent_date = datetime.now()
+    # 평일(월요일)로 기준일 고정하여 주말 테스트 시 is_gap 조건이 False가 되는 문제를 완벽 방지
+    real_now = datetime(2024, 4, 15, 12, 0, 0)
+    past_date = real_now - timedelta(days=10)
     
     df_daily = pd.DataFrame({
         'close': [100.0]*60,
         'open': [100.0]*60, 'high': [100.0]*60, 'low': [100.0]*60, 'volume': [1000]*60
     }, index=pd.date_range(end=past_date, periods=60))
     
-    # 분봉에는 어제/오늘 데이터가 있음
+    # 분봉에는 충분히 최근의 데이터가 있음
     df_intra = pd.DataFrame({
-        'close': [105.0, 106.0]
-    }, index=pd.DatetimeIndex([recent_date - timedelta(days=1), recent_date]))
+        'close': [105.0, 106.0, 107.0]
+    }, index=pd.DatetimeIndex([real_now - timedelta(days=1), real_now, real_now + timedelta(days=1)]))
     
     # S&P500 (해외 지수여야 패치 로직이 돎)
     res = market._process_index_worker("S&P500", "^GSPC", df_daily, df_intra)

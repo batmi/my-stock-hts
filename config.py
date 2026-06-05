@@ -225,7 +225,10 @@ class GlobalSettings(BaseModel):
         "TRAILING_STOP_CALLBACK_RATE": 4.0,    # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
         "ATR_STOP_MULTIPLIER": 2.0,         # ATR 기반 손절 적용 배수
-        "MAX_ATR_STOP_LOSS_RATE": -15.0     # 동적 손절의 최대 한계선
+        "MAX_ATR_STOP_LOSS_RATE": -15.0,    # 동적 손절의 최대 한계선
+        "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면
+        "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
+        "DEFENSIVE_HALF_SELL_USE": True     # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
     }
 
     # ==========================================================

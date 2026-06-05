@@ -51,11 +51,11 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     
     # [추가] 점수 산정에 필요한 세부 지표들
     ema_5 = row.get('EMA5')
-    prev_cci = prev_row['CCI'] if prev_row is not None else None
+    prev_cci = prev_row.get('CCI') if prev_row is not None else None
     vol_spike = row.get('VOL_SPIKE', False)
     vol_trend = row.get('VOL_TREND', False)
     macd_hist = row.get('MACD_Hist')
-    prev_macd_hist = prev_row['MACD_Hist'] if prev_row is not None else None
+    prev_macd_hist = prev_row.get('MACD_Hist') if prev_row is not None else None
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
@@ -306,6 +306,17 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             loss_rate = (price - position['avg_price']) / position['avg_price'] * 100
             if high_price > ts_highest_price: ts_highest_price = high_price
             
+            max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100 if position['avg_price'] > 0 else 0
+            
+            # [추가] 본전 청산(BEP) 로직 적용
+            bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+            bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
+            is_bep_applied = False
+            if max_profit_rate >= bep_activation:
+                if sl_rate_to_use < bep_stop:
+                    sl_rate_to_use = bep_stop
+                    is_bep_applied = True
+                    
             # [추가] 현재 보유 기간(일수) 계산
             current_holding_days = (current_date_dt - buy_date_dt).days if buy_date_dt and pd.notna(current_date_dt) else 0
 
@@ -328,9 +339,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if take_profit_limit > 0 and loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
             elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit: # [수정] half_tp_limit 사용
                 sell_signal = True; reason = "반익절"; sell_ratio = 0.5
-            elif sl_rate_to_use < 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
+            elif sl_rate_to_use != 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
                 sell_signal = True
-                if use_atr_stop and sl_rate_to_use != stop_loss_limit:
+                if is_bep_applied:
+                    reason = "본전청산"
+                elif use_atr_stop and sl_rate_to_use != stop_loss_limit:
                     reason = "ATR손절" # [수정] ATR 손절 사유
                 else:
                     reason = "손절"
@@ -340,10 +353,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
-                max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100
                 if max_profit_rate >= ts_activation:
                     drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
-                    if drop_rate >= ts_callback: sell_signal = True; reason = "트레일링스탑"
+                    
+                    actual_ts_callback = ts_callback
+                    atr_val = row.get('ATR', 0)
+                    if use_atr_stop and atr_val > 0:
+                        actual_ts_callback = (atr_val * atr_mult / ts_highest_price) * 100
+                    if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
                     
             # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
             actual_tp_rsi = take_profit_rsi_limit

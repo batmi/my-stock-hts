@@ -1,6 +1,7 @@
 from modules.auto_trade import DefaultStrategy
 import config
 import pytest
+from unittest.mock import patch
 
 @pytest.fixture
 def strategy():
@@ -19,7 +20,7 @@ def test_take_profit(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10000
     )
     
     assert result['action'] == 'sell'
@@ -37,7 +38,7 @@ def test_half_take_profit(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds, already_half_sold=False
+        profit_rate=profit_rate, thresholds=thresholds, already_half_sold=False, highest_price=11600
     )
     assert result['action'] == 'sell'
     assert result['sell_ratio'] == 0.5
@@ -55,22 +56,22 @@ def test_stop_loss(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10000
     )
     
     assert result['action'] == 'sell'
     assert "손절" in result['reason']
 
 def test_trailing_stop(strategy):
-    """트레일링 스탑 테스트: 외부에서 감지된 TS 메시지가 있을 경우 매도"""
+    """트레일링 스탑 테스트: 조건 달성 시 매도"""
     # 반익절 로직이 먼저 트리거되는 것을 방지하기 위해 끄기
-    ts_msg = "트레일링스탑 (최고가:12000원, 하락률:-3.5%)"
     config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = False
+    config.SELL_STRATEGY["USE_ATR_STOP"] = False # 고정 비율 사용 테스트
     
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=11500, buy_price=10000, 
-        profit_rate=15.0, ts_msg=ts_msg
+        profit_rate=15.0, highest_price=12500 # 25% 상승 후 11500(-8%) 하락
     )
     
     assert result['action'] == 'sell'
@@ -90,7 +91,7 @@ def test_hold_condition(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10500
     )
     
     assert result['action'] == 'hold'
@@ -108,7 +109,7 @@ def test_rsi_overbought_sell(strategy, sample_uptrend_df):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=sample_uptrend_df, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10000
     )
     
     assert result['action'] == 'sell'
@@ -127,7 +128,7 @@ def test_trend_broken_sell(strategy, sample_downtrend_df):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=sample_downtrend_df, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10000
     )
     
     assert result['action'] == 'sell'
@@ -148,7 +149,7 @@ def test_atr_stop_loss_logic(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=10200
     )
     
     assert result['action'] == 'sell'
@@ -161,8 +162,102 @@ def test_atr_stop_loss_logic(strategy):
     result_hold = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None, 
         current_price=current_price_hold, buy_price=buy_price, 
-        profit_rate=profit_rate_hold, ts_msg="", thresholds=thresholds
+        profit_rate=profit_rate_hold, thresholds=thresholds, highest_price=10000
     )
     
     # df=None이므로 기술적 지표에 의한 매도는 발생하지 않음
     assert result_hold['action'] == 'hold'
+
+def test_break_even_stop(strategy):
+    """본전 청산(Break-Even Stop) 테스트: 최고 수익률 달성 후 가격 하락 시 본전(+0.5%) 청산 방어"""
+    thresholds = {
+        "BREAK_EVEN_PROFIT_RATE": 7.0,
+        "BREAK_EVEN_STOP_RATE": 0.5,
+        "STOP_LOSS_RATE": -7.0,
+        "USE_ATR_STOP": False
+    }
+    
+    buy_price = 10000
+    highest_price = 10800 # +8.0% (본전청산 발동 조건 7.0% 만족)
+    current_price = 10040 # +0.4% (본전 청산선 0.5% 하향 이탈)
+    profit_rate = 0.4
+    
+    result = strategy.analyze_sell(
+        code="005930", name="삼성전자", df=None, 
+        current_price=current_price, buy_price=buy_price, 
+        profit_rate=profit_rate, thresholds=thresholds, highest_price=highest_price
+    )
+    
+    assert result['action'] == 'sell'
+    assert "본전청산" in result['reason']
+
+@patch('modules.auto_trade.indicators.calculate_indicators')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.analysis.calculate_score')
+def test_dynamic_atr_trailing_stop(mock_calc_score, mock_classify, mock_calc_ind, strategy):
+    """ATR 기반 동적 트레일링 스탑 테스트 (휩쏘 방어 검증)"""
+    import pandas as pd
+    df = pd.DataFrame({'close': [11000], 'high': [11000], 'low': [11000]})
+    
+    # 종목의 현재 ATR이 300원이라고 가정
+    mock_calc_ind.return_value = {
+        'atr': 300, 'rsi': 50, 'adx': 20, 'cci': 0, 'psar': 9000,
+        'ema_20': 10000, 'ema_60': 9000, 'ema_120': 8000,
+        'obv_trend': True, 'macd': 1, 'macd_signal': 0,
+        'plus_di': 25, 'minus_di': 15, 'ema_5': 10500,
+        'prev_cci': 0, 'vol_spike': False, 'macd_hist': 1, 'prev_macd_hist': 0
+    }
+    mock_classify.return_value = ("상승", "", "")
+    mock_calc_score.return_value = (7.0, [])
+    
+    thresholds = {
+        "ts_activation": 10.0,
+        "ts_callback": 2.0, # 고정 비율로는 고점 대비 2% 하락 시 매도
+        "USE_ATR_STOP": True,
+        "ATR_STOP_MULTIPLIER": 2.0
+    }
+    buy_price = 10000
+    highest_price = 11500 # +15% 수익 도달 (트레일링 발동)
+    
+    # 시나리오 1: 11,500원에서 11,200원으로 하락 (-2.6% 하락)
+    # 고정 비율 2.0%라면 매도되어야 하지만, 변동성(ATR) 동적 허용치(300*2=600원, 약 5.21%) 덕분에 홀딩해야 함
+    result_hold = strategy.analyze_sell(
+        code="005930", name="삼성전자", df=df, 
+        current_price=11200, buy_price=buy_price, 
+        profit_rate=12.0, thresholds=thresholds, highest_price=highest_price
+    )
+    assert result_hold['action'] == 'hold'
+    
+    # 시나리오 2: 11,500원에서 10,800원으로 하락 (-6.08% 하락)
+    # 동적 ATR 허용치 5.21%마저 초과 이탈하였으므로 확실하게 트레일링 스탑(매도)을 실행해야 함
+    result_sell = strategy.analyze_sell(
+        code="005930", name="삼성전자", df=df, 
+        current_price=10800, buy_price=buy_price, 
+        profit_rate=8.0, thresholds=thresholds, highest_price=highest_price
+    )
+    assert result_sell['action'] == 'sell'
+    assert "트레일링스탑" in result_sell['reason']
+
+def test_defensive_half_sell(strategy):
+    """방어적 반매도 (하락 반전 신호) 테스트"""
+    import pandas as pd
+    df = pd.DataFrame({'close': [10000], 'high': [10500], 'low': [9900]})
+    
+    # 현재가(10000)가 5일선(10500) 및 SAR(10100)보다 낮음 (하락 반전)
+    mock_ind = {
+        'psar': 10100, 'ema_5': 10500, 'rsi': 50, 'adx': 20, 'cci': 0,
+        'ema_20': 9500, 'ema_60': 9000, 'ema_120': 8500,
+        'macd': 1, 'macd_signal': 0, 'obv_trend': True,
+        'plus_di': 25, 'minus_di': 15, 'prev_cci': 0, 'vol_spike': False, 'macd_hist': 1, 'prev_macd_hist': 0
+    }
+    thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -10.0}
+    
+    with patch('modules.auto_trade.indicators.calculate_indicators', return_value=mock_ind), \
+         patch('modules.auto_trade.analysis.classify_stock_state', return_value=("관망", "", "")), \
+         patch('modules.auto_trade.analysis.calculate_score', return_value=(6.0, [])):
+        
+        res = strategy.analyze_sell("005930", "Test", df, current_price=10000, buy_price=10000, profit_rate=0.0, thresholds=thresholds)
+        
+        assert res['action'] == 'sell'
+        assert res['sell_ratio'] == 0.5
+        assert "방어적 반매도" in res['reason']

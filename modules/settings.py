@@ -99,6 +99,9 @@ def view_system_config():
         sell = config.SELL_STRATEGY
         table.add_row("  └ 역매수 유예 손실\n    [dim]역매수 종목 유예 기간 내 허용 하락폭[/dim]", "MR_GRACE_LOSS_RATE", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%")
         
+    table.add_row("과열 이격도 상한\n[dim]20일선 기준 이 비율 이상 시 단기과열[/dim]", "ANALYSIS_THRESHOLDS['DISPARITY_UPPER']", f"{thresholds.get('DISPARITY_UPPER', 110.0)}%")
+    table.add_row("침체 이격도 하한\n[dim]20일선 기준 이 비율 이하 시 과매도[/dim]", "ANALYSIS_THRESHOLDS['DISPARITY_LOWER']", f"{thresholds.get('DISPARITY_LOWER', 90.0)}%")
+        
     table.add_row("슈퍼 모멘텀 (RSI 유연화)\n[dim]주도주 랠리 시 RSI 허용치 완화[/dim]", "SUPER_MOMENTUM_USE", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}")
     if thresholds.get('SUPER_MOMENTUM_USE', True):
         table.add_row("  └ 슈퍼 매수 발동 점수\n    [dim]기준 점수 이상 & 신고가 90% 이상 시 발동[/dim]", "SUPER_MOMENTUM_SCORE", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}")
@@ -124,6 +127,9 @@ def view_system_config():
     table.add_row("ATR 손절 사용\n[dim]변동성 기반 동적 손절[/dim]", "SELL_STRATEGY['USE_ATR_STOP']", f"{sell.get('USE_ATR_STOP', False)}")
     table.add_row("  └ ATR 손절 배수\n    [dim]ATR * 배수 만큼 손절폭 설정[/dim]", "SELL_STRATEGY['ATR_STOP_MULTIPLIER']", f"{sell.get('ATR_STOP_MULTIPLIER', 2.0)}")
     table.add_row("  └ ATR 손절 최대 한도\n    [dim]비정상적인 과도한 손절폭 제한[/dim]", "SELL_STRATEGY['MAX_ATR_STOP_LOSS_RATE']", f"{sell.get('MAX_ATR_STOP_LOSS_RATE', -15.0)}%")
+    table.add_row("본전 청산 수익률\n[dim]손절선 상향 발동 기준 수익률[/dim]", "SELL_STRATEGY['BREAK_EVEN_PROFIT_RATE']", f"{sell.get('BREAK_EVEN_PROFIT_RATE', 7.0)}%")
+    table.add_row("본전 청산 손절선\n[dim]발동 시 상향될 새로운 손절률[/dim]", "SELL_STRATEGY['BREAK_EVEN_STOP_RATE']", f"{sell.get('BREAK_EVEN_STOP_RATE', 0.5)}%")
+    table.add_row("방어적 반매도 사용\n[dim]하락 반전 시 50% 선매도[/dim]", "SELL_STRATEGY['DEFENSIVE_HALF_SELL_USE']", f"{sell.get('DEFENSIVE_HALF_SELL_USE', True)}")
 
     table.add_section()
 
@@ -192,6 +198,9 @@ def view_system_config():
     table.add_row("MACD (Fast/Slow/Sig)\n[dim]이동평균수렴확산[/dim]", "INDICATOR_PARAMS['MACD_FAST', 'MACD_SLOW', 'MACD_SIGNAL']", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
     table.add_row("OBV EMA 기간\n[dim]거래량 추세 지수이동평균[/dim]", "INDICATOR_PARAMS['OBV_MA_PERIOD']", f"{ind.get('OBV_MA_PERIOD')}")
     table.add_row("ATR 기간\n[dim]평균 진폭 (변동성)[/dim]", "INDICATOR_PARAMS['ATR_PERIOD']", f"{ind.get('ATR_PERIOD')}")
+    table.add_row("단기 이평선(EMA) 기간\n[dim]단기 급등 추세 판단용[/dim]", "INDICATOR_PARAMS['EMA_SHORT']", f"{ind.get('EMA_SHORT', 5)}")
+    table.add_row("거래량 이동평균 기간\n[dim]수급 추세 및 폭발 판단용[/dim]", "INDICATOR_PARAMS['VOLUME_MA_PERIOD']", f"{ind.get('VOLUME_MA_PERIOD', 20)}")
+    table.add_row("거래량 폭발 배수\n[dim]이동평균 대비 폭발 기준[/dim]", "INDICATOR_PARAMS['VOLUME_SPIKE_RATIO']", f"{ind.get('VOLUME_SPIKE_RATIO', 2.0)}")
 
     table.add_section()
 
@@ -389,6 +398,10 @@ def modify_analysis_thresholds():
          "get": lambda: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_RSI_MAX": v})},
         {"desc": "매수 체결강도 기준", "help": "수급 확인 (이 값 이상이어야 매수)", "name": "BUY_VOL_STRENGTH", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_VOL_STRENGTH": v})},
+        {"desc": "과열 이격도 상한", "help": "20일선 대비 단기 과열 기준 (예: 110.0)", "name": "DISPARITY_UPPER", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_UPPER": v})},
+        {"desc": "침체 이격도 하한", "help": "20일선 대비 과매도 기준 (예: 90.0)", "name": "DISPARITY_LOWER", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_LOWER", 90.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_LOWER": v})},
         {"desc": "역추세(낙폭과대) 사용", "help": "하락장/급락 시 반등 매수", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"USE_MEAN_REVERSION": v})},
         {"desc": "역추세 RSI 상한", "help": "과매도 진입 기준 (예: 40)", "name": "MR_RSI_MAX", "type": "float",
@@ -439,7 +452,13 @@ def modify_sell_strategy():
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})},
         {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0), "set": lambda v: config.SELL_STRATEGY.update({"MAX_ATR_STOP_LOSS_RATE": v})}
+     "get": lambda: config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0), "set": lambda v: config.SELL_STRATEGY.update({"MAX_ATR_STOP_LOSS_RATE": v})},
+    {"desc": "본전 청산 발동 수익률(%)", "help": "최고 수익률이 이 값에 도달하면 손절선 상향 (0: 미사용)", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float",
+     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_PROFIT_RATE": v})},
+    {"desc": "본전 청산 손절선(%)", "help": "본전 청산 발동 시 변경될 손절률 (예: 0.5)", "name": "BREAK_EVEN_STOP_RATE", "type": "float",
+     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_STOP_RATE": v})},
+    {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"],
+     "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})}
     ]
     return _edit_config_table("매도 전략 설정 (SELL_STRATEGY)", items)
 
@@ -487,7 +506,14 @@ def modify_indicator_params():
          "get": lambda: config.INDICATOR_PARAMS["OBV_MA_PERIOD"], "set": lambda v: config.INDICATOR_PARAMS.update({"OBV_MA_PERIOD": v})},
         
         {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "ATR",
-         "get": lambda: config.INDICATOR_PARAMS.get("ATR_PERIOD", 14), "set": lambda v: config.INDICATOR_PARAMS.update({"ATR_PERIOD": v})}
+         "get": lambda: config.INDICATOR_PARAMS.get("ATR_PERIOD", 14), "set": lambda v: config.INDICATOR_PARAMS.update({"ATR_PERIOD": v})},
+         
+        {"desc": "단기 EMA 기간", "help": "단기 급등 추세 판단 (기본 5)", "name": "EMA_SHORT", "type": "int", "section": "Trend",
+         "get": lambda: config.INDICATOR_PARAMS.get("EMA_SHORT", 5), "set": lambda v: config.INDICATOR_PARAMS.update({"EMA_SHORT": v})},
+        {"desc": "거래량 이동평균 기간", "help": "단기 수급 추세 판단 (기본 20)", "name": "VOLUME_MA_PERIOD", "type": "int", "section": "Volume",
+         "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_MA_PERIOD", 20), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_MA_PERIOD": v})},
+        {"desc": "거래량 폭발 배수", "help": "이평선 대비 폭증 기준 (기본 2.0)", "name": "VOLUME_SPIKE_RATIO", "type": "float", "section": "Volume",
+         "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_SPIKE_RATIO", 2.0), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_SPIKE_RATIO": v})}
     ]
     return _edit_config_table("기술적 지표 파라미터 (Indicators)", items)
 
@@ -713,25 +739,25 @@ def modify_trading_cycle_settings():
 DEFAULT_PRESETS = {
     "bull": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 95.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 90.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0, "SELL_SCORE": 5.0,
+        "TAKE_PROFIT_RATE": 40.0, "TAKE_PROFIT_RSI": 90.0, "STOP_LOSS_RATE": -7.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0, "SELL_SCORE": 5.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
         "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
-        "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -3.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5, "SELL_SCORE": 6.0,
+        "TAKE_PROFIT_RATE": 20.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -3.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 3, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "ATR_STOP_MULTIPLIER": 1.5, "SELL_SCORE": 6.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
         "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.1, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
     },
     "sideways": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
-        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8, "SELL_SCORE": 5.0,
+        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 80.0, "STOP_LOSS_RATE": -5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 5, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "ATR_STOP_MULTIPLIER": 1.8, "SELL_SCORE": 5.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
         "TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
         "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 85.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0,
+        "TAKE_PROFIT_RATE": 30.0, "TAKE_PROFIT_RSI": 85.0, "STOP_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "HALF_TAKE_PROFIT_USE": True, "TIME_STOP_DAYS": 10, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0, "ATR_STOP_MULTIPLIER": 2.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     }
@@ -784,7 +810,9 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "TIME_STOP_DAYS": vals["TIME_STOP_DAYS"],
         "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
         "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"],
-        "ATR_STOP_MULTIPLIER": vals["ATR_STOP_MULTIPLIER"]
+        "ATR_STOP_MULTIPLIER": vals["ATR_STOP_MULTIPLIER"],
+        "BREAK_EVEN_PROFIT_RATE": vals.get("BREAK_EVEN_PROFIT_RATE", 7.0),
+        "BREAK_EVEN_STOP_RATE": vals.get("BREAK_EVEN_STOP_RATE", 0.5)
     })
     config.SCORING_WEIGHTS.update({
         "TREND": vals["TREND"],
@@ -819,6 +847,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 5.0)} 미만 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
         ("익절 / 손절", f"+{config.SELL_STRATEGY['TAKE_PROFIT_RATE']}% (반익절: {'ON' if config.SELL_STRATEGY.get('HALF_TAKE_PROFIT_USE', True) else 'OFF'}) / {config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 3.0)}%"),
+        ("본전 청산 (방어)", f"수익 +{config.SELL_STRATEGY.get('BREAK_EVEN_PROFIT_RATE', 7.0)}% 도달 시 손절선 +{config.SELL_STRATEGY.get('BREAK_EVEN_STOP_RATE', 0.5)}%로 상향"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 20))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
         ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']}"),
@@ -881,6 +910,8 @@ def _edit_single_preset(preset_type):
             {"desc": "시간청산 보유기한(일)", "help": "제한일 초과 시 강제 매도", "name": "TIME_STOP_DAYS", "type": "int", "section": "Sell", "get": make_getter("TIME_STOP_DAYS"), "set": make_setter("TIME_STOP_DAYS", 'int')},
             {"desc": "TS 발동 수익률(%)", "help": "트레일링 감시 시작", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_ACTIVATION_RATE"), "set": make_setter("TRAILING_STOP_ACTIVATION_RATE", 'float')},
             {"desc": "TS 하락 감지율(%)", "help": "트레일링 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_CALLBACK_RATE"), "set": make_setter("TRAILING_STOP_CALLBACK_RATE", 'float')},
+            {"desc": "본전 청산 발동(%)", "help": "손절선 상향 기준 수익률", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float", "section": "Sell", "get": make_getter("BREAK_EVEN_PROFIT_RATE"), "set": make_setter("BREAK_EVEN_PROFIT_RATE", 'float')},
+            {"desc": "본전 청산 손절선(%)", "help": "상향될 새 손절선", "name": "BREAK_EVEN_STOP_RATE", "type": "float", "section": "Sell", "get": make_getter("BREAK_EVEN_STOP_RATE"), "set": make_setter("BREAK_EVEN_STOP_RATE", 'float')},
             
             {"desc": "추세 가중치", "help": "Trend", "name": "TREND", "type": "float", "section": "Weights", "get": make_getter("TREND"), "set": make_setter("TREND", 'float')},
             {"desc": "모멘텀 가중치", "help": "Momentum", "name": "MOMENTUM", "type": "float", "section": "Weights", "get": make_getter("MOMENTUM"), "set": make_setter("MOMENTUM", 'float')},
@@ -973,15 +1004,17 @@ def reset_to_default(interactive=True):
         ,"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
         "HALF_TAKE_PROFIT_USE": True,
         "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
-        "MR_GRACE_LOSS_RATE": -5.0, "SUPER_TAKE_PROFIT_RSI": 85.0,
-        "MAX_ATR_STOP_LOSS_RATE": -15.0
+        "MR_GRACE_LOSS_RATE": -5.0, "SUPER_TAKE_PROFIT_RSI": 85.0, "MAX_ATR_STOP_LOSS_RATE": -15.0,
+        "BREAK_EVEN_PROFIT_RATE": 7.0,
+        "BREAK_EVEN_STOP_RATE": 0.5,
+        "DEFENSIVE_HALF_SELL_USE": True
     })
     config.INDICATOR_PARAMS.update({
         "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
         "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
         "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
         "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-        "ATR_PERIOD": 14
+        "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0
     })
     config.SCORING_WEIGHTS.update({
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0

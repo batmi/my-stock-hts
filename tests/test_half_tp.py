@@ -25,7 +25,7 @@ def test_half_tp_trigger(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=current_price, buy_price=buy_price,
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds,
+        profit_rate=profit_rate, thresholds=thresholds,
         already_half_sold=False # 아직 반익절 하지 않은 상태
     )
     
@@ -45,7 +45,7 @@ def test_half_tp_already_sold(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=current_price, buy_price=buy_price,
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds,
+        profit_rate=profit_rate, thresholds=thresholds,
         already_half_sold=True # DB/메모리에 이미 반익절 한 것으로 기록된 상태
     )
     
@@ -59,7 +59,7 @@ def test_half_tp_disabled(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=11500, buy_price=10000,
-        profit_rate=15.0, ts_msg="", thresholds=thresholds,
+        profit_rate=15.0, thresholds=thresholds,
         already_half_sold=False
     )
     
@@ -73,7 +73,7 @@ def test_full_tp_after_half_tp(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=13000, buy_price=10000,
-        profit_rate=30.0, ts_msg="", thresholds=thresholds,
+        profit_rate=30.0, thresholds=thresholds,
         already_half_sold=True # 이미 절반을 판 상태
     )
     

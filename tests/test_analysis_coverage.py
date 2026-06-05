@@ -46,3 +46,27 @@ def test_print_period_price_common_empty():
                 # mock_print.call_args_list를 순회하며 Table 인스턴스가 있는지 확인
                 # 데이터가 없으면 Table이 생성되어 print되지 않음
                 assert not any(isinstance(arg[0], analysis.Table) for call in mock_print.call_args_list for arg in call.args if arg)
+
+def test_calculate_score_perfect_10_points():
+    """새롭게 개선된 상호 배타적 OR 조건을 통해 10.0점 만점이 계산되는지 검증"""
+    # Trend (4.0) + Momentum (2.5) + Strength (1.5) + Synergy (2.0) = 10.0
+    score, details = analysis.calculate_score(
+        price=10000,
+        ema20=9000, ema60=8000, ema120=7000, # 정배열 (+1.0), 현재가>20선 (+0.5)
+        sar=8000,                            # 주가>SAR (+0.5)
+        rsi=65,                              # 50~75 강세 (+0.5), >=60 확장 (+0.5) [NEW OR]
+        adx=25,                              # ADX >= 20 (+0.5)
+        cci=100,                             # >0 상승 (+0.5), >=50 심화 (+0.5) [NEW OR]
+        obv_trend=True,                      # OBV 상승 (+0.5)
+        macd=100, macd_signal=50,            # 골든크로스 (+0.5)
+        ema_5=9500,                          # 5>20선 (+0.5), 5>20>60 급등 (+0.5) [NEW OR]
+        macd_hist=50, prev_macd_hist=30,     # 히스토그램 개선 (+0.5)
+        prev_cci=80,
+        vol_spike=False, vol_trend=True,     # 거래량 추세 상승 (+0.5) [NEW OR]
+        smart_money=False,
+        plus_di=30, minus_di=15,             # +DI > -DI (+0.5)
+        weights={"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0} # 타 테스트 오염 방지
+    )
+    
+    assert score == 10.0
+    assert len(details) == 17 # 각 가산점에 대한 상세 내역 개수 확인

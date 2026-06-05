@@ -1048,7 +1048,7 @@ class DefaultStrategy:
             'smart_money': sm_flag
         }
 
-    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, ts_msg="", thresholds=None, already_half_sold=False, holding_days=0, is_mr_holding=False):
+    def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, thresholds=None, already_half_sold=False, holding_days=0, is_mr_holding=False, highest_price=0.0):
         """매도 청산 여부 판단"""
         reason = ""
         ind = {}
@@ -1076,6 +1076,17 @@ class DefaultStrategy:
         
         mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
         
+        # [추가] 본전 청산(BEP) 및 ATR 기반 트레일링 설정 로드
+        use_atr_stop = thresholds.get("USE_ATR_STOP", config.SELL_STRATEGY.get("USE_ATR_STOP", True)) if thresholds else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+        atr_mult = thresholds.get("ATR_STOP_MULTIPLIER", config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)) if thresholds else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+        ts_activation = thresholds.get("ts_activation", config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
+        ts_callback = thresholds.get("ts_callback", config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+        
+        bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+        bep_stop = thresholds.get("BREAK_EVEN_STOP_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
+        
+        defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True)
+
         # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
 
@@ -1116,20 +1127,54 @@ class DefaultStrategy:
             )
             score = round(score, 1)
 
+        # [추가] 본전 청산(BEP) 임계값 재설정 로직
+        is_bep_applied = False
+        max_profit_rate = 0.0
+        if highest_price > 0 and buy_price > 0:
+            max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
+            if max_profit_rate >= bep_activation:
+                if sl_rate < bep_stop:
+                    sl_rate = bep_stop
+                    is_bep_applied = True
+                    
+        # [추가] 트레일링 스탑 동적 콜백 계산 및 판별
+        ts_msg = ""
+        if highest_price > 0 and buy_price > 0:
+            if max_profit_rate >= ts_activation:
+                drop_rate = ((highest_price - current_price) / highest_price) * 100
+                actual_ts_callback = ts_callback
+                
+                atr_val = ind.get('atr', 0) if ind else 0
+                if use_atr_stop and atr_val > 0:
+                    actual_ts_callback = (atr_val * atr_mult / highest_price) * 100
+                    
+                if drop_rate >= actual_ts_callback:
+                    ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
+
         # 2. 고정 익절/손절 및 시간 청산
         if tp_rate > 0 and profit_rate >= tp_rate:
             reason = f"익절({profit_rate}%)"
         elif tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
             reason = f"반익절({profit_rate:.1f}%)"
             sell_ratio = 0.5
-        elif sl_rate < 0 and profit_rate <= sl_rate:
-            reason = f"손절({profit_rate}%)"
-        # [수정] 시간 청산 (현재 매수 상태인 경우 청산 보류)
-        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            if state in ["매수", "강매수", "역매수", "상승"]:
-                pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
+        elif sl_rate != 0 and profit_rate <= sl_rate:
+            if is_bep_applied:
+                reason = f"본전청산({profit_rate:.1f}%)"
             else:
-                reason = f"시간청산({holding_days}일경과, 기대수익미달)"
+                reason = f"손절({profit_rate:.1f}%)"
+        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
+            time_stop_triggered = True
+            # [수정] 매도 최적화 4번: 시간 청산 유예 조건을 가격 상방 모멘텀 유무로 엄격하게 변경
+            if df is not None and not df.empty and len(df) >= 10:
+                if state in ["매수", "강매수", "역매수", "상승"]:
+                    recent_5d_high = df['high'].tail(5).max()
+                    recent_10d_high = df['high'].tail(10).max()
+                    # 최근 5일의 고점이 최근 10일 고점과 같거나 크면 상방 모멘텀이 살아있는 것으로 간주
+                    if recent_5d_high >= recent_10d_high:
+                        time_stop_triggered = False # 유예
+            
+            if time_stop_triggered:
+                reason = f"시간청산({holding_days}일경과, 상방모멘텀 상실)"
         # 3. 트레일링 스탑 (외부에서 계산된 메시지 반영)
         elif ts_msg:
             reason = ts_msg
@@ -1154,6 +1199,13 @@ class DefaultStrategy:
                 else:
                     reason = f"RSI과열(기준:{actual_tp_rsi})"
             
+            # [추가] 매도 최적화 3번: 방어적 반매도 (하락 반전 신호 발생 시 절반 덜어내기)
+            if not reason and defensive_half_tp and not already_half_sold:
+                if ind.get('psar') is not None and ind.get('ema_5') is not None:
+                    if current_price < ind['psar'] and current_price < ind['ema_5']:
+                        reason = "하락반전(방어적 반매도)"
+                        sell_ratio = 0.5
+
             # 5. 추세 이탈
             if not reason and (state == "매도" or score < sell_score_limit):
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
@@ -4339,7 +4391,6 @@ class AutoTrader:
                     holding_days = (datetime.now() - buy_dt).days
                 except: pass
 
-            ts_msg = ""
             with self._lock:
                 cached_highest = self.trailing_stop_cache.get(code)
                 if cached_highest is None:
@@ -4355,17 +4406,10 @@ class AutoTrader:
                     with self._lock:
                         self.trailing_stop_cache[code] = current_price
                     highest_price = current_price
-            
-            if highest_price and highest_price > 0:
-                max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
-                if max_profit_rate >= ts_activation:
-                    drop_rate = ((highest_price - current_price) / highest_price) * 100
-                    if drop_rate >= ts_callback:
-                        ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 최고가 대비 하락률:-{drop_rate:.1f}%)"
 
             df = api.get_chart_data(code, is_overseas=False)
             already_half_sold = code in self.half_tp_cache
-            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, ts_msg, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding)
+            result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
             
             ind = result['ind']
             rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"

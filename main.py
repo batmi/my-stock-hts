@@ -703,6 +703,8 @@ def show_help():
     time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
     time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
     time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+    bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+    bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
 
     score_table.add_row("매도 - 익절", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
     
@@ -715,10 +717,15 @@ def show_help():
     atr_status = "[green]ON[/green]" if use_atr else "[red]OFF[/red]"
     score_table.add_row(f"매도 - ATR손절 ({atr_status})", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", "변동성 기반 동적 손절")
     
-    time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
-    score_table.add_row(f"매도 - 시간청산 ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}%", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
+    score_table.add_row("매도 - 본전청산", f"수익 +{bep_activation}% 달성 후 하락 시", "[blue]본전청산[/]", f"손실 방지 (손절선을 +{bep_stop}%로 끌어올림)")
     
-    score_table.add_row("매도 - 트레일링", f"수익 {ts_activation}% 도달 후 고점 대비 -{ts_callback}%", "[blue]매도[/]", "수익 보전 (Trailing Stop)")
+    time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
+    score_table.add_row(f"매도 - 시간청산 ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}% (최근 5일 고점 갱신 부재)", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
+    
+    def_half_status = "[green]ON[/green]" if config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True) else "[red]OFF[/red]"
+    score_table.add_row(f"매도 - 방어적 반매도 ({def_half_status})", f"주가 < SAR & 주가 < 5일선 동시 이탈 시", "[blue]반매도[/]", "하락 반전 신호 감지 시 50% 덜어내기 (리스크 방어)")
+
+    score_table.add_row("매도 - 트레일링", f"수익 {ts_activation}% 도달 후 고점 대비 하락 시", "[blue]매도[/]", "수익 보전 (ATR 사용 시 동적 변동폭 적용)")
     score_table.add_row("매도 - 과열", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 - 추세이탈", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
 

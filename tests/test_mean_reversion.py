@@ -76,7 +76,7 @@ def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
     # 보유 3일차, 수익률 -2.0% -> 추세이탈 매도가 무시되고 HOLD 반환해야 함
     res = strategy.analyze_sell(
         code="000", name="Test", df=df, current_price=980, buy_price=1000,
-        profit_rate=-2.0, ts_msg="", thresholds=thresholds,
+        profit_rate=-2.0, thresholds=thresholds,
         holding_days=3, is_mr_holding=True
     )
     assert res['action'] == 'hold'
@@ -99,7 +99,7 @@ def test_mr_grace_period_time_over(mock_score, mock_classify, mock_ind):
         # 보유 6일차 (유예기간 만료) -> 점수 미달로 인해 SELL 반환해야 함
         res = strategy.analyze_sell(
             code="000", name="Test", df=df, current_price=980, buy_price=1000,
-            profit_rate=-2.0, ts_msg="", thresholds=thresholds,
+            profit_rate=-2.0, thresholds=thresholds,
             holding_days=6, is_mr_holding=True
         )
     assert res['action'] == 'sell'

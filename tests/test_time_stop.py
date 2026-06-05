@@ -27,7 +27,7 @@ def test_time_stop_trigger(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=current_price, buy_price=buy_price,
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds,
+        profit_rate=profit_rate, thresholds=thresholds,
         already_half_sold=False, holding_days=11 # 10일 초과
     )
     
@@ -48,7 +48,7 @@ def test_time_stop_profit_exceeded(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=current_price, buy_price=buy_price,
-        profit_rate=profit_rate, ts_msg="", thresholds=thresholds,
+        profit_rate=profit_rate, thresholds=thresholds,
         already_half_sold=False, holding_days=11 # 10일 초과
     )
     
@@ -64,7 +64,7 @@ def test_time_stop_time_not_reached(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=10100, buy_price=10000,
-        profit_rate=1.0, ts_msg="", thresholds=thresholds,
+        profit_rate=1.0, thresholds=thresholds,
         already_half_sold=False, holding_days=7 # 10일 미만
     )
     
@@ -80,7 +80,7 @@ def test_time_stop_disabled(strategy):
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
         current_price=10100, buy_price=10000,
-        profit_rate=1.0, ts_msg="", thresholds=thresholds,
+        profit_rate=1.0, thresholds=thresholds,
         already_half_sold=False, holding_days=11 # 10일 초과
     )
     

@@ -37,7 +37,7 @@ def test_check_holiday_notification_both_closed(mock_tg, mock_name, mock_us_holi
     mock_name.side_effect = ["어린이날", "독립기념일"]
     
     with patch('modules.scheduler.datetime') as mock_dt:
-        now = datetime.now()
+        now = datetime(2023, 5, 1) # 평일(월요일)로 고정하여 주말 예외 회피
         # 시간을 알림 전송 타겟 시간(08:30~09:30)으로 강제 모킹
         mock_dt.now.return_value = datetime.combine(now.date(), time(8, 45))
         mock_dt.today.return_value = now

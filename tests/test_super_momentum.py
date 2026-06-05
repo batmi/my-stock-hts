@@ -84,14 +84,14 @@ def test_analyze_sell_super_momentum(mock_calc_ind, mock_classify, mock_calc_sco
         # 결과: 슈퍼 모멘텀 한도 85.0 이내이므로 '매도 보류(hold)' 되어야 함
         mock_calc_score.return_value = (9.0, [])
         mock_calc_ind.return_value = {**base_ind, 'rsi': 80.0}
-        res1 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds)
+        res1 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds, highest_price=9600)
         assert res1['action'] == 'hold'
         assert res1['reason'] == ''
 
         # 케이스 2: 퀀트 점수 9.0, 현재가 9500원(w52 90%), RSI 88.0
         # 결과: 슈퍼 모멘텀 한도 85.0을 초과하므로 '매도(sell)' 되어야 함
         mock_calc_ind.return_value = {**base_ind, 'rsi': 88.0}
-        res2 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds)
+        res2 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds, highest_price=9600)
         assert res2['action'] == 'sell'
         assert "슈퍼모멘텀" in res2['reason']
         assert "85.0" in res2['reason']
@@ -100,7 +100,7 @@ def test_analyze_sell_super_momentum(mock_calc_ind, mock_classify, mock_calc_sco
         # 결과: 점수 미달로 슈퍼 모멘텀 해제. 기본 RSI 한도 75.0 초과이므로 즉시 '매도(sell)'
         mock_calc_score.return_value = (8.0, [])
         mock_calc_ind.return_value = {**base_ind, 'rsi': 80.0}
-        res3 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds)
+        res3 = strategy.analyze_sell("005930", "Test", df, current_price=9500, buy_price=9000, profit_rate=5.5, thresholds=mock_thresholds, highest_price=9600)
         assert res3['action'] == 'sell'
         assert "기준:75.0" in res3['reason']
         assert "슈퍼모멘텀" not in res3['reason']
@@ -108,6 +108,6 @@ def test_analyze_sell_super_momentum(mock_calc_ind, mock_classify, mock_calc_sco
         # 케이스 4: [동적 회귀] 점수 9.0 유지 중이나 현재가가 8500원으로 하락해 고점 근접률 70%(90% 미달), RSI 80.0
         # 결과: 고점 근접 조건 미달로 슈퍼 모멘텀 해제. 기본 RSI 한도 초과로 '매도(sell)'
         mock_calc_score.return_value = (9.0, [])
-        res4 = strategy.analyze_sell("005930", "Test", df, current_price=8500, buy_price=9000, profit_rate=-5.5, thresholds=mock_thresholds)
+        res4 = strategy.analyze_sell("005930", "Test", df, current_price=8500, buy_price=9000, profit_rate=-5.5, thresholds=mock_thresholds, highest_price=9000)
         assert res4['action'] == 'sell'
         assert "기준:75.0" in res4['reason']
