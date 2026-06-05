@@ -200,8 +200,8 @@ class GlobalSettings(BaseModel):
     # 시장 국면(강세/약세/횡보)에 따라 매수 기준 점수를 동적으로 조절합니다.
     MARKET_REGIME_PARAMS: dict = {
         "USE_ADAPTIVE_THRESHOLD": True,  # 적응형 임계값 사용 여부
-        "BULL_SCORE_ADJ": -1.0,          # 강세장: 기준 완화 (예: 8.0 -> 7.0)
-        "BEAR_SCORE_ADJ": 1.0,           # 약세장: 기준 강화 (예: 8.0 -> 9.0)
+        "BULL_SCORE_ADJ": -0.5,          # 강세장: 기준 완화 (예: 8.0 -> 7.5)
+        "BEAR_SCORE_ADJ": 0.5,           # 약세장: 기준 강화 (예: 8.0 -> 8.5)
         "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
         "REGIME_MA_PERIOD": 20,          # 추세 판단용 지수이동평균선 (EMA, 일)
         "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
