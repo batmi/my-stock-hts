@@ -1288,7 +1288,7 @@ def _run_tradingview_screener():
                 else:
                     task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
                 
-                select_cols = ['name', 'description', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
+                select_cols = ['name', 'description', 'sector', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
                 query = Query().set_markets(market).select(*select_cols)
                 
                 if p_choice == "1":
@@ -1344,6 +1344,7 @@ def _run_tradingview_screener():
                     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
                     table.add_column("티커/코드", justify="left", style="cyan")
                     table.add_column("종목명", justify="left")
+                    table.add_column("업종", justify="left", style="dim", overflow="fold")
                     table.add_column("현재가", justify="right")
                     table.add_column("등락률", justify="right")
                     table.add_column("52주(%)", justify="right")
@@ -1357,9 +1358,37 @@ def _run_tradingview_screener():
                     table.add_column("거래량", justify="right")
                     table.add_column("평균거래량", justify="right")
                     
+                    sector_map_ko = {
+                        "Electronic Technology": "전자기술",
+                        "Technology Services": "기술서비스",
+                        "Health Technology": "의료기술",
+                        "Health Services": "의료서비스",
+                        "Finance": "금융",
+                        "Consumer Durables": "내구소비재",
+                        "Consumer Non-Durables": "비내구소비재",
+                        "Consumer Services": "소비자서비스",
+                        "Retail Trade": "소매유통",
+                        "Producer Manufacturing": "제조업",
+                        "Commercial Services": "상업서비스",
+                        "Energy Minerals": "에너지광물",
+                        "Non-Energy Minerals": "비에너지광물",
+                        "Industrial Services": "산업서비스",
+                        "Utilities": "유틸리티",
+                        "Transportation": "운송",
+                        "Communications": "통신",
+                        "Distribution Services": "유통서비스",
+                        "Process Industries": "가공산업",
+                        "Miscellaneous": "기타"
+                    }
+                    
                     for idx, row in df.iterrows():
                         ticker = str(row.get('name', '')).strip()
                         name = str(row.get('description', ticker)).strip()
+                        sector = str(row.get('sector', '-')).strip()
+                        if sector == 'nan' or not sector:
+                            sector = "-"
+                        else:
+                            sector = sector_map_ko.get(sector, sector)
                         
                         if market == "korea":
                             kor_name = api.get_stock_name_by_code(ticker, is_overseas=False)
@@ -1456,7 +1485,7 @@ def _run_tradingview_screener():
                         avg_vol_str = f"{avg_vol_k:,.0f}K"
 
                         table.add_row(
-                            ticker, name, close_str, change_str, w52_pos_str, sma20_str,
+                            ticker, name, sector, close_str, change_str, w52_pos_str, sma20_str,
                             macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                         )
                         progress.advance(active_task)
