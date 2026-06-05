@@ -227,7 +227,7 @@ def view_system_config():
     console.print()
     return True
 
-def _edit_config_table(title_source, items_source):
+def _edit_config_table(title_source, items_source, check_preset=True):
     """설정 변경을 위한 공통 테이블 UI 함수"""
     action_taken = False
     while True:
@@ -274,6 +274,7 @@ def _edit_config_table(title_source, items_source):
             targets = [items[int(choice)-1]]
             
         changed_in_this_loop = False
+        changed_preset_keys = False
         for item in targets:
             curr_val = item['get']()
             console.print(f"\n[bold cyan]>> {item['desc']} 수정[/bold cyan]")
@@ -314,6 +315,8 @@ def _edit_config_table(title_source, items_source):
                             item['callback']()
                         console.print(f"[cyan]>> 설정이 변경되었습니다: {target_val}[/cyan]")
                         changed_in_this_loop = True
+                        if item.get('name') in DEFAULT_PRESETS.get('default', {}):
+                            changed_preset_keys = True
                     break
                 
                 if canceled:
@@ -362,13 +365,14 @@ def _edit_config_table(title_source, items_source):
                     item['callback']()
                     
                 changed_in_this_loop = True
+                if item.get('name') in DEFAULT_PRESETS.get('default', {}):
+                    changed_preset_keys = True
                     
             except Exception as e:
                 console.print(f"[red]잘못된 입력입니다: {e}[/red]")
         
         if changed_in_this_loop:
-            title_str = title_source() if callable(title_source) else title_source
-            if any(k in title_str for k in ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "Adaptive Thresholds", "Risk & Portfolio"]):
+            if check_preset and changed_preset_keys:
                 config.ACTIVE_PRESET = "custom"
             _save_dynamic_config()
             action_taken = True
@@ -426,9 +430,9 @@ def modify_sell_strategy():
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
         {"desc": "슈퍼 모멘텀 과열 매도 RSI", "help": "추세 유지 시 매도 지연 RSI (예: 85.0)", "name": "SUPER_TAKE_PROFIT_RSI", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})},
-        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TS_ACTIVATION", "type": "float",
+        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
-        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TS_CALLBACK", "type": "float",
+        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
         {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
@@ -608,9 +612,9 @@ def modify_market_regime_params():
     items = [
         {"desc": "적응형 임계값 사용", "help": "시장 국면에 따른 점수 조절", "name": "USE_ADAPTIVE_THRESHOLD", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.MARKET_REGIME_PARAMS["USE_ADAPTIVE_THRESHOLD"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"USE_ADAPTIVE_THRESHOLD": v})},
-        {"desc": "강세장 점수 보정", "help": "강세장일 때 기준 점수 조정값 (예: -1.0)", "name": "BULL_SCORE_ADJ", "type": "float",
+        {"desc": "강세장 점수 보정", "help": "강세장일 때 기준 점수 조정값 (예: -0.5)", "name": "BULL_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["BULL_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BULL_SCORE_ADJ": v})},
-        {"desc": "약세장 점수 보정", "help": "약세장일 때 기준 점수 조정값 (예: +1.0)", "name": "BEAR_SCORE_ADJ", "type": "float",
+        {"desc": "약세장 점수 보정", "help": "약세장일 때 기준 점수 조정값 (예: +0.5)", "name": "BEAR_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["BEAR_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BEAR_SCORE_ADJ": v})},
         {"desc": "횡보장 점수 보정", "help": "횡보장일 때 기준 점수 조정값 (예: 0.0)", "name": "SIDEWAYS_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})},
@@ -888,7 +892,7 @@ def _edit_single_preset(preset_type):
             {"desc": "종목당 투자 비중", "help": "0.1 ~ 1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float')}
         ]
         
-        acted = _edit_config_table(title, items)
+        acted = _edit_config_table(title, items, check_preset=False)
         if not acted: break
 
 def edit_strategy_preset_menu():
@@ -983,7 +987,7 @@ def reset_to_default(interactive=True):
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
     })
     config.MARKET_REGIME_PARAMS.update({
-        "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -1.0, "BEAR_SCORE_ADJ": 1.0,
+        "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
         "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
     })
     
