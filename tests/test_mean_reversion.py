@@ -19,11 +19,14 @@ def test_mr_state_classification():
         "MR_DISPARITY_MAX": 90.0
     }
     
+    # 양봉 마감 여부 판별용 데이터프레임 전달 (종가 > 시가)
+    df = pd.DataFrame({'close': [8500], 'open': [8400]})
+    
     # 이격도 85% (8500 / 10000 = 85%), RSI 반등 (30 -> 35)
     state, _, _ = analysis.classify_stock_state(
         price=8500, ema20=10000, ema60=11000, ema120=12000,
         sar=9000, rsi=35.0, prev_rsi=30.0,
-        adx=20, cci=-120, obv_trend=False, thresholds=thresholds
+        adx=20, cci=-120, obv_trend=False, thresholds=thresholds, df=df
     )
     assert state == "역매수"
 

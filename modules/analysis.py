@@ -597,7 +597,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
         ]
-        choice = utils.show_menu("개별 종목 분석 (Individual Analysis)", menu_items, default_choice="5")
+        choice = utils.show_menu("개별 종목 분석 (Individual Analysis)", menu_items, default_choice="1")
         if choice.lower() in ['b', 'q']: return False
         
         menu_map = dict((k, v) for k, v, _ in menu_items)
@@ -798,24 +798,39 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         df = None
         vol_strength = None
         inv_data = None
+        ob_data = None
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             if is_domestic_index:
                 fut_chart = ex.submit(get_domestic_index_data, code)
                 fut_vol = None
                 fut_inv = None
+                fut_ob = None
             else:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas else None
+                fut_ob = ex.submit(api.get_order_book, code, False) if not is_overseas else None
             
             df = fut_chart.result()
             vol_strength = fut_vol.result() if fut_vol else None
             inv_data = fut_inv.result() if fut_inv else None
+            ob_data = fut_ob.result() if fut_ob else None
             
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
+            
+        # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
+        ask_bid_ratio = None
+        if ob_data and ob_data.get('rt_cd') == '0':
+            out1 = ob_data.get('output1', {})
+            total_ask = api.safe_int(out1.get('total_askp_rsqn'))
+            total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
+            if total_bid > 0:
+                ask_bid_ratio = total_ask / total_bid
+            elif total_ask > 0:
+                ask_bid_ratio = 99.9 # 매수 잔량은 없고 매도만 있는 상태
 
         # 2. 지표 계산
         progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")
@@ -1261,6 +1276,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if rule_applied and custom_rule.get('buy_vol_strength'):
                 buy_vol_limit = custom_rule['buy_vol_strength']
                 
+        min_ask_bid_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
+        if rule_applied and custom_rule.get('buy_ask_bid_ratio') is not None:
+            min_ask_bid_ratio = custom_rule['buy_ask_bid_ratio']
+                
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
         super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
         super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
@@ -1273,16 +1292,21 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
         is_safe_state = state not in ["매도", "주의", "-"]
         is_buy_vol = True
+        is_ask_bid_ok = True
         if vol_strength is not None:
             is_buy_vol = vol_strength >= buy_vol_limit
+        if ask_bid_ratio is not None and min_ask_bid_ratio > 0:
+            is_ask_bid_ok = ask_bid_ratio >= min_ask_bid_ratio
+            
+        is_buy_all_ok = is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol and is_ask_bid_ok
         
         if is_mr_state:
-            buy_result = "[bold magenta]매수 가능 (역추세)[/]" if is_buy_vol else "[bold blue]매수 불가 (체결강도 미달)[/]"
+            buy_result = "[bold magenta]매수 가능 (역추세)[/]" if (is_buy_vol and is_ask_bid_ok) else "[bold blue]매수 불가 (체결/잔량 미달)[/]"
         else:
             if state == "강매수":
-                buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+                buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if is_buy_all_ok else "[bold blue]매수 불가[/]"
             else:
-                buy_result = "[bold red]매수 가능[/]" if (is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol) else "[bold blue]매수 불가[/]"
+                buy_result = "[bold red]매수 가능[/]" if is_buy_all_ok else "[bold blue]매수 불가[/]"
         
         buy_reason_list = []
         if not is_safe_state: buy_reason_list.append(f"진입 불가 상태 ({state})")
@@ -1299,6 +1323,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
                 buy_reason_list.append(rsi_reason)
         if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
+        if not is_ask_bid_ok: buy_reason_list.append(f"비대칭성 미달 ({ask_bid_ratio:.2f}배 < {min_ask_bid_ratio}배)")
+        
         buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
         
         table_logic.add_row("매수 판단", buy_result, buy_reason)
@@ -1324,6 +1350,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             vol_str = f"{v_color}{vol_strength:.1f}%[/]"
             vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
         table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
+
+        if not is_overseas and not is_index:
+            ask_bid_str = "-"
+            ask_bid_eval = ""
+            if ask_bid_ratio is not None and min_ask_bid_ratio > 0:
+                ab_color = "[red]" if is_ask_bid_ok else "[blue]"
+                ask_bid_str = f"{ab_color}{ask_bid_ratio:.2f}배[/]"
+                ask_bid_eval = "[bold red]양호[/]" if is_ask_bid_ok else "[bold blue]미달[/]"
+                table_logic.add_row("호가 비대칭성", ask_bid_str, f"{ask_bid_eval} (기준: {min_ask_bid_ratio}배 이상)")
+            elif min_ask_bid_ratio <= 0:
+                table_logic.add_row("호가 비대칭성", "[dim]미사용[/]", "-")
+            else:
+                table_logic.add_row("호가 비대칭성", "-", "데이터 확인 불가")
 
         rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
         rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"

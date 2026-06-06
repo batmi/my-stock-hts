@@ -26,11 +26,12 @@ def mock_chart_df():
 @patch('modules.auto_trade.load_restricted_stocks', return_value={})
 @patch('api.get_chart_data')
 @patch('api.get_realtime_vol_strength')
+@patch('api.get_order_book')
 @patch('api.fetch_buyable_quantity')
 @patch('api.place_order')
 @patch('indicators.calculate_indicators')
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
-def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_vol, mock_get_chart, mock_restricted, trader, mock_chart_df):
+def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, trader, mock_chart_df):
     """매수 조건 점검 및 주문 실행 테스트"""
     # Setup
     trader.is_running = True
@@ -39,6 +40,7 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     # Mocks
     mock_get_chart.return_value = mock_chart_df
     mock_vol.return_value = 150.0
+    mock_ob.return_value = {'rt_cd': '0', 'output1': {'total_askp_rsqn': '200', 'total_bidp_rsqn': '100'}}
     mock_qty.return_value = 10
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}
     
@@ -50,7 +52,7 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     mock_calc.return_value = {
         'ema_5': 10000, 'ema_20': 9000, 'ema_60': 8000, 'ema_120': 7000,
         'rsi': 60, 'adx': 30, 'cci': 100, 'obv': 1000, 'obv_trend': True,
-        'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10,
+        'psar': 9000, 'macd': 50, 'macd_signal': 40, 'macd_hist': 10, 'prev_macd_hist': 5,
         'atr': 100,
         'plus_di': 30, 'minus_di': 10 # 추가 점수 확보용 DMI
     }

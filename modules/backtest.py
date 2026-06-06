@@ -877,7 +877,7 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
             
 def run_backtest():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
-    last_choice = "6"
+    last_choice = "1"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         menu_items = [
