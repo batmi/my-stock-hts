@@ -977,7 +977,7 @@ class DefaultStrategy:
     def __init__(self):
         self.trailing_stop_cache = {}
 
-    def analyze_buy(self, code, name, df, current_price, vol_strength=None, thresholds=None):
+    def analyze_buy(self, code, name, df, current_price, vol_strength=None, thresholds=None, ask_bid_ratio=None):
         """매수 진입 여부 판단"""
         if df is None or df.empty:
             return None
@@ -1026,10 +1026,21 @@ class DefaultStrategy:
         else:
             min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
         
-        # [수정] 체결강도 미달 시 None 반환 대신 action을 wait로 처리하여 로그 출력 보장
+        # [수정] 체결강도 미달 및 가짜 체결강도(호가창 비대칭성) 필터링
         is_vol_ok = True
-        if vol_strength is not None and vol_strength < min_vol:
-            is_vol_ok = False
+        vol_reject_reason = ""
+        min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.5)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.5)
+        
+        if vol_strength is not None:
+            if vol_strength < min_vol:
+                is_vol_ok = False
+                vol_reject_reason = f"체결미달({vol_strength:.1f}%<{min_vol}%)"
+            elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
+                # [핵심] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성 확인)
+                # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
+                if ask_bid_ratio < min_ask_bid_ratio:
+                    is_vol_ok = False
+                    vol_reject_reason = f"가짜체결 의심(비대칭성 {ask_bid_ratio:.2f}배<{min_ask_bid_ratio}배)"
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',
@@ -1045,6 +1056,8 @@ class DefaultStrategy:
             'macd_signal': ind.get('macd_signal'),
             'obv_trend': ind.get('obv_trend'),
             'vol_strength': vol_strength,
+            'ask_bid_ratio': ask_bid_ratio,
+            'vol_reject_reason': vol_reject_reason,
             'smart_money': sm_flag
         }
 
@@ -4662,17 +4675,31 @@ class AutoTrader:
             
             if not self.is_running: return None # API 호출 전 최종 확인
             
-            # 5. [최적화] 데이터 조회 및 분석 (병렬 Fan-out)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            # 5. [최적화] 차트, 체결강도, 호가창 데이터 병렬(동시) 조회
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code)
+                fut_ob = ex.submit(api.get_order_book, code, False)
                 
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result()
                 except: vol_strength = None
+                try: ob_data = fut_ob.result()
+                except: ob_data = None
                 
             if df is None or df.empty: return None
             current_price = float(df.iloc[-1]['close'])
+            
+            # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
+            ask_bid_ratio = None
+            if ob_data and ob_data.get('rt_cd') == '0':
+                out1 = ob_data.get('output1', {})
+                total_ask = api.safe_int(out1.get('total_askp_rsqn'))
+                total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
+                if total_bid > 0:
+                    ask_bid_ratio = total_ask / total_bid
+                elif total_ask > 0:
+                    ask_bid_ratio = 99.9 # 매수 잔량은 없고 매도만 있는 상태
             
             # [추가] 상관계수 필터링
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
@@ -4711,6 +4738,7 @@ class AutoTrader:
                     "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 시장 보정 무시 (절대값)
                     "BUY_RSI_MAX": rule['buy_rsi'],
                     "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                    "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.5)),
                     "WEIGHTS": rule.get('weights')
                 }
             else:
@@ -4720,7 +4748,7 @@ class AutoTrader:
                 }
             
             # 전략 실행
-            result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds)
+            result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds, ask_bid_ratio=ask_bid_ratio)
             if not result: return None
             
             # 로그 출력을 위한 문자열 구성
@@ -4740,7 +4768,14 @@ class AutoTrader:
             vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             rule_msg = " [개별 룰 적용]" if rule else ""
             
-            log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}"
+            # [추가] 가짜 체결강도로 걸러진 경우 사유 표시
+            vol_reject_msg = ""
+            if result.get('vol_reject_reason'):
+                vol_reject_msg = f" [{result['vol_reject_reason']}]"
+            elif result.get('ask_bid_ratio') is not None:
+                vol_reject_msg = f" [매도잔량비:{result['ask_bid_ratio']:.2f}]"
+            
+            log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}"
             
             if result['action'] == "buy":
                 reentry_msg = ""
@@ -5224,6 +5259,7 @@ def _input_and_save_rule(code, name):
         "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
         "buy_vol_strength": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), # [수정] 안전한 접근
+        "buy_ask_bid_ratio": config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.5),
         "sell_score": config.SELL_STRATEGY["SELL_SCORE"],
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
@@ -5266,6 +5302,7 @@ def _input_and_save_rule(code, name):
         new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (기본: 7.5점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한 (기본: 65)", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
+        new_strategy['buy_ask_bid_ratio'] = ask_val('buy_ask_bid_ratio', "매도잔량 비대칭성 기준 (기본: 1.5배, 0: 미사용)", "가짜 체결강도 방어 (매도/매수잔량 비율)", float)
 
         console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
         new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 30.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
@@ -5361,7 +5398,7 @@ def _input_and_save_rule(code, name):
         table.add_column("구분", justify="center", style="cyan")
         table.add_column("설정값", justify="left")
         
-        table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑")
+        table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑ / 비대칭 {new_strategy['buy_ask_bid_ratio']}배↑")
         half_tp_str = "ON" if new_strategy['half_take_profit_use'] else "OFF"
         table.add_row("청산 타점", f"익절 +{new_strategy['take_profit']}% (반익절: {half_tp_str}) / 과열 RSI {new_strategy['take_profit_rsi']}↑ / 시간청산 {new_strategy['time_stop_days']}일")
         table.add_row("트레일링", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")

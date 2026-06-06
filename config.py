@@ -160,6 +160,11 @@ class GlobalSettings(BaseModel):
         # 100% 이상은 매수세가 매도세보다 강함을 의미합니다.
         "BUY_VOL_STRENGTH": 100.0,
 
+        # [추가] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성)
+        # 매도 잔량이 매수 잔량보다 이 비율(배) 이상 많아야 진짜 상승 에너지로 판단합니다.
+        # (기본값: 1.5배 / 0으로 설정 시 미사용)
+        "BUY_ASK_BID_RATIO": 1.5,
+
         # [추가] 역추세 (낙폭과대) 매수 설정 (Mean Reversion)
         # 하락장이나 급락 구간에서 지표가 과매도에 도달한 후 반등하는 시점을 포착합니다.
         "USE_MEAN_REVERSION": True,      # 역추세 매수 사용 여부
@@ -211,24 +216,24 @@ class GlobalSettings(BaseModel):
     # [설정] 매도 전략 임계값 (Backtest & Trading)
     # ==========================================================
     SELL_STRATEGY: dict = {
-        "STOP_LOSS_RATE": -7.0,             # [손절 기준] 진입가 대비 이 값 이하로 하락 시 즉시 매도
         "TAKE_PROFIT_RATE": 30.0,           # [익절 기준] 진입가 대비 이 값 이상 도달 시 즉시 매도
         "HALF_TAKE_PROFIT_USE": True,       # [반익절] 목표 익절률의 절반에 도달하면 50% 분할 매도 여부
-        "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
-        "TIME_STOP_DAYS": 10,               # 보유 제한 기간 (일)
-        "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
-        "MR_GRACE_LOSS_RATE": -5.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
-        "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
-        "SUPER_TAKE_PROFIT_RSI": 85.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI
-        "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
-        "TRAILING_STOP_ACTIVATION_RATE": 15.0, # [트레일링 스탑] 감시 시작 수익률
-        "TRAILING_STOP_CALLBACK_RATE": 4.0,    # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
+        "DEFENSIVE_HALF_SELL_USE": True,    # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
+        "STOP_LOSS_RATE": -7.0,             # [손절 기준] 진입가 대비 이 값 이하로 하락 시 즉시 매도
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
         "ATR_STOP_MULTIPLIER": 2.0,         # ATR 기반 손절 적용 배수
         "MAX_ATR_STOP_LOSS_RATE": -15.0,    # 동적 손절의 최대 한계선
         "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면 손절선 상향 (ATR 사용 시 동적 연동)
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
-        "DEFENSIVE_HALF_SELL_USE": True     # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
+        "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
+        "TIME_STOP_DAYS": 10,               # 보유 제한 기간 (일)
+        "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
+        "MR_GRACE_LOSS_RATE": -5.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
+        "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
+        "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
+        "SUPER_TAKE_PROFIT_RSI": 85.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI
+        "TRAILING_STOP_ACTIVATION_RATE": 15.0, # [트레일링 스탑] 감시 시작 수익률
+        "TRAILING_STOP_CALLBACK_RATE": 4.0     # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
     }
 
     # ==========================================================
