@@ -23,6 +23,13 @@ def mock_chart_df():
     })
     return df
 
+@patch('modules.auto_trade.analysis.classify_stock_state', return_value=("매수", "[red]", "조건 충족"))
+@patch('modules.auto_trade.analysis.calculate_score', return_value=(9.0, []))
+@patch('time.sleep')
+@patch('api.get_investor_trend', return_value=[])
+@patch('api.get_current_price_data', return_value={'rt_cd': '0', 'output': {}})
+@patch('modules.auto_trade.analysis.get_market_regime', return_value=("Sideways", 0.0))
+@patch('modules.auto_trade.api.prefetch_multiple_current_prices')
 @patch('modules.auto_trade.load_restricted_stocks', return_value={})
 @patch('api.get_chart_data')
 @patch('api.get_realtime_vol_strength')
@@ -31,7 +38,7 @@ def mock_chart_df():
 @patch('api.place_order')
 @patch('indicators.calculate_indicators')
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
-def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, trader, mock_chart_df):
+def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, mock_cp, mock_inv, mock_sleep, mock_score, mock_classify, trader, mock_chart_df):
     """매수 조건 점검 및 주문 실행 테스트"""
     # Setup
     trader.is_running = True
@@ -47,6 +54,7 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     # 테스트 간섭 방지를 위해 명시적 임계값 고정
     config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 7.0
     config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = 65.0
+    config.ANALYSIS_THRESHOLDS["BUY_ASK_BID_RATIO"] = 1.2
 
     # 매수 신호가 나오도록 지표 설정
     mock_calc.return_value = {
@@ -56,6 +64,9 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
         'atr': 100,
         'plus_di': 30, 'minus_di': 10 # 추가 점수 확보용 DMI
     }
+    
+    # 테스트 속도를 위해 분석 대상 종목 수를 1개로 제한
+    trader.consecutive_errors = 0
     
     # 예수금 Mock
     deposit_res = {'d2_deposit': 1000000}
@@ -71,13 +82,15 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     assert args[2] == "005930" # code
     assert args[1] == "buy" # type
 
+@patch('modules.auto_trade.analysis.get_market_regime', return_value=("Sideways", 0.0))
+@patch('modules.auto_trade.api.prefetch_multiple_current_prices')
 @patch('modules.auto_trade.load_restricted_stocks', return_value={})
 @patch('api.get_chart_data')
 @patch('api.place_order')
 @patch('indicators.calculate_indicators')
 @patch('api.fetch_sellable_quantity', return_value=10)
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
-def test_check_sell_conditions(mock_get_rules, mock_sell_qty, mock_calc, mock_place, mock_get_chart, mock_restricted, trader, mock_chart_df):
+def test_check_sell_conditions(mock_get_rules, mock_sell_qty, mock_calc, mock_place, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, trader, mock_chart_df):
     """매도 조건 점검 및 주문 실행 테스트"""
     # Setup
     mock_sell_qty.return_value = 10  # 명시적 반환값 설정
