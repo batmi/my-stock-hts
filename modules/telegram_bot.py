@@ -580,7 +580,7 @@ class TelegramCommander:
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
             "• /config : 트레이딩 전략 설정값 조회\n"
-            "• /preset [설정] : 시장 설정 프리셋 (b/r/s/d)\n"
+            "• /preset <설정> : 시장 설정 프리셋 (b/r/s/d)\n"
             "• /rules [종목] : 개별 트레이딩 룰 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
@@ -981,6 +981,8 @@ class TelegramCommander:
             return f"⚠️ '{name}({code})' 종목은 현재 제한 목록에 없습니다."
 
     def _cmd_pending(self, args):
+        self._send_reply("⏳ [미체결 주문 내역] 데이터를 조회 중입니다. 잠시만 기다려주세요...", sync=True)
+        
         accounts = []
         if config.session.cano:
             accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의" if config.session.is_simulation else "실전"))
@@ -993,14 +995,23 @@ class TelegramCommander:
         
         for cano, acnt, label in accounts:
             with utils.AccountContext(cano):
-                dom_orders = api.get_domestic_open_orders(cano, acnt)
-                us_orders = api.get_overseas_open_orders(cano, acnt)
+                try:
+                    dom_orders = api.get_domestic_open_orders(cano, acnt)
+                except Exception as e:
+                    logger.error(f"국내 미체결 조회 에러: {e}")
+                    dom_orders = []
+                    
+                try:
+                    us_orders = api.get_overseas_open_orders(cano, acnt)
+                except Exception as e:
+                    logger.error(f"해외 미체결 조회 에러: {e}")
+                    us_orders = []
                 
                 if dom_orders or us_orders:
                     has_any_orders = True
                     msg += f"\n[{label} 계좌: {cano}-{acnt}]\n"
                     
-                    for o in dom_orders:
+                    for o in (dom_orders or []):
                         name = o.get('prdt_name')
                         pdno = o.get('pdno')
                         odno = o.get('odno')
@@ -1015,17 +1026,26 @@ class TelegramCommander:
                         price_str = f"{ord_unpr:,}원" if ord_unpr > 0 else "시장가"
                         msg += f"• [국내] {sll_buy} | {name}({pdno})\n  잔량: {rmn_qty}주 | 단가: {price_str} | No.{odno}\n"
                         
-                    for o in us_orders:
+                    for o in (us_orders or []):
                         name = o.get('prdt_name')
                         pdno = o.get('pdno')
                         odno = o.get('odno')
-                        rmn_qty = api.safe_int(float(o.get('nccs_qty', 0)))
+                        
+                        qty_val = o.get('nccs_qty', 0)
+                        if not qty_val or str(qty_val).strip() == "": qty_val = 0
+                        rmn_qty = api.safe_int(float(qty_val))
                         
                         ord_unpr = 0.0
                         for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
-                            if o.get(key) and float(o.get(key)) > 0:
-                                ord_unpr = float(o.get(key))
-                                break
+                            val = o.get(key)
+                            if val and str(val).strip():
+                                try:
+                                    f_val = float(val)
+                                    if f_val > 0:
+                                        ord_unpr = f_val
+                                        break
+                                except ValueError:
+                                    pass
                                 
                         sll_buy_code = o.get('sll_buy_dvsn_cd')
                         sll_buy = "매수" if sll_buy_code == "02" else ("매도" if sll_buy_code == "01" else sll_buy_code)
@@ -1272,7 +1292,7 @@ class TelegramCommander:
 
     def _cmd_preset(self, args):
         if not args:
-            return "⚠️ 사용법: /preset [설정] (b:강세/r:약세/s:횡보/d:초기화)\n(예: /preset d)"
+            return "⚠️ 사용법: /preset <설정> (b:강세/r:약세/s:횡보/d:초기화)\n(예: /preset d)"
             
         target = args[0].lower()
         preset_type = None

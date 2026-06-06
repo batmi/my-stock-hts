@@ -2290,7 +2290,7 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
             "SLL_BUY_DVSN_CD": "00",
             "INQR_DVSN": "00",
             "PDNO": "",
-            "CCLD_DVSN": "00", # [수정] 00: 전체 (02 미체결 조회가 안될 경우 대비)
+            "CCLD_DVSN": "02", # [수정] 모의투자는 02(미체결)로 조회해야 정상 반환됨
             "ORD_GNO_BRNO": "",
             "ODNO": "",
             "INQR_DVSN_3": "00",
