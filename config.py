@@ -165,7 +165,7 @@ class GlobalSettings(BaseModel):
         "USE_MEAN_REVERSION": True,      # 역추세 매수 사용 여부
         "MR_RSI_MAX": 40.0,              # 진입 허용 최대 RSI (과매도 기준)
         "MR_DISPARITY_MAX": 90.0,        # 20일선 대비 이격도 (90% 이하일 때만 진입)
-        "MR_VOL_STRENGTH": 100.0,        # 바닥권 반등 시 강한 매수세를 확인하기 위한 높은 체결강도 기준
+    "MR_VOL_STRENGTH": 120.0,        # 바닥권 매수세 확인을 위한 높은 체결강도 기준 (투매 방어)
 
         # [이격도 경고 기준]
         # 20일 이동평균선 대비 현재가 비율(%) 기준
@@ -226,7 +226,7 @@ class GlobalSettings(BaseModel):
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
         "ATR_STOP_MULTIPLIER": 2.0,         # ATR 기반 손절 적용 배수
         "MAX_ATR_STOP_LOSS_RATE": -15.0,    # 동적 손절의 최대 한계선
-        "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면
+        "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면 손절선 상향 (ATR 사용 시 동적 연동)
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
         "DEFENSIVE_HALF_SELL_USE": True     # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
     }

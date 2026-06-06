@@ -116,20 +116,20 @@ def view_system_config():
     sell = config.SELL_STRATEGY
     table.add_row("익절 수익률\n[dim]목표 수익 달성 시 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RATE']", f"{sell.get('TAKE_PROFIT_RATE')}%")
     table.add_row("반익절 사용\n[dim]익절 수익률의 절반 도달 시 50% 선매도[/dim]", "SELL_STRATEGY['HALF_TAKE_PROFIT_USE']", f"{sell.get('HALF_TAKE_PROFIT_USE', True)}")
-    table.add_row("시간 청산 사용\n[dim]장기 횡보 종목 강제 매도[/dim]", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}")
-    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "TIME_STOP_DAYS", f"{sell.get('TIME_STOP_DAYS', 5)}일")
-    table.add_row("  └ 최소 기대 수익\n    [dim]해당 기간 내 도달해야 할 수익률[/dim]", "TIME_STOP_MIN_PROFIT_RATE", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%")
+    table.add_row("방어적 반매도 사용\n[dim]하락 반전 시 50% 선매도[/dim]", "SELL_STRATEGY['DEFENSIVE_HALF_SELL_USE']", f"{sell.get('DEFENSIVE_HALF_SELL_USE', True)}")
     table.add_row("손절 수익률\n[dim]손실 제한 (Stop Loss)[/dim]", "SELL_STRATEGY['STOP_LOSS_RATE']", f"{sell.get('STOP_LOSS_RATE')}%")
-    table.add_row("매도(추세이탈) 점수\n[dim]점수 하락 시 매도[/dim]", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}")
-    table.add_row("과열 매도 RSI\n[dim]RSI 과열 시 선제 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RSI']", f"{sell.get('TAKE_PROFIT_RSI')}")
-    table.add_row("TS 발동 수익률\n[dim]트레일링 스탑 감시 시작점[/dim]", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
-    table.add_row("TS 하락 감지율\n[dim]최고가 대비 하락 시 매도[/dim]", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
     table.add_row("ATR 손절 사용\n[dim]변동성 기반 동적 손절[/dim]", "SELL_STRATEGY['USE_ATR_STOP']", f"{sell.get('USE_ATR_STOP', False)}")
     table.add_row("  └ ATR 손절 배수\n    [dim]ATR * 배수 만큼 손절폭 설정[/dim]", "SELL_STRATEGY['ATR_STOP_MULTIPLIER']", f"{sell.get('ATR_STOP_MULTIPLIER', 2.0)}")
     table.add_row("  └ ATR 손절 최대 한도\n    [dim]비정상적인 과도한 손절폭 제한[/dim]", "SELL_STRATEGY['MAX_ATR_STOP_LOSS_RATE']", f"{sell.get('MAX_ATR_STOP_LOSS_RATE', -15.0)}%")
     table.add_row("본전 청산 수익률\n[dim]손절선 상향 발동 기준 수익률[/dim]", "SELL_STRATEGY['BREAK_EVEN_PROFIT_RATE']", f"{sell.get('BREAK_EVEN_PROFIT_RATE', 7.0)}%")
     table.add_row("본전 청산 손절선\n[dim]발동 시 상향될 새로운 손절률[/dim]", "SELL_STRATEGY['BREAK_EVEN_STOP_RATE']", f"{sell.get('BREAK_EVEN_STOP_RATE', 0.5)}%")
-    table.add_row("방어적 반매도 사용\n[dim]하락 반전 시 50% 선매도[/dim]", "SELL_STRATEGY['DEFENSIVE_HALF_SELL_USE']", f"{sell.get('DEFENSIVE_HALF_SELL_USE', True)}")
+    table.add_row("시간 청산 사용\n[dim]장기 횡보 종목 강제 매도[/dim]", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}")
+    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "TIME_STOP_DAYS", f"{sell.get('TIME_STOP_DAYS', 5)}일")
+    table.add_row("  └ 최소 기대 수익\n    [dim]해당 기간 내 도달해야 할 수익률[/dim]", "TIME_STOP_MIN_PROFIT_RATE", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%")
+    table.add_row("매도(추세이탈) 점수\n[dim]점수 하락 시 매도[/dim]", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}")
+    table.add_row("과열 매도 RSI\n[dim]RSI 과열 시 선제 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RSI']", f"{sell.get('TAKE_PROFIT_RSI')}")
+    table.add_row("TS 발동 수익률\n[dim]트레일링 스탑 감시 시작점[/dim]", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
+    table.add_row("TS 하락 감지율\n[dim]최고가 대비 하락 시 매도[/dim]", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
 
     table.add_section()
 
@@ -429,14 +429,24 @@ def modify_sell_strategy():
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": v})},
         {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
+        {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float",
+         "get": lambda: config.SELL_STRATEGY["STOP_LOSS_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"STOP_LOSS_RATE": v})},
+        {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
+        {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float",
+         "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})},
+        {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float",
+     "get": lambda: config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0), "set": lambda v: config.SELL_STRATEGY.update({"MAX_ATR_STOP_LOSS_RATE": v})},
+    {"desc": "본전 청산 발동 수익률(%)", "help": "최고 수익률이 이 값에 도달하면 손절선 상향 (0: 미사용, ATR 사용 시 동적 연동)", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float",
+     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_PROFIT_RATE": v})},
+    {"desc": "본전 청산 손절선(%)", "help": "본전 청산 발동 시 변경될 손절률 (예: 0.5)", "name": "BREAK_EVEN_STOP_RATE", "type": "float",
+     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_STOP_RATE": v})},
         {"desc": "시간 청산 사용", "help": "장기 횡보 시 강제 매도", "name": "TIME_STOP_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_USE": v})},
         {"desc": "시간 청산 기준일", "help": "매수 후 제한 일수 (예: 10)", "name": "TIME_STOP_DAYS", "type": "int",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
         {"desc": "시간청산 최소수익(%)", "help": "기간 내 달성해야 할 목표치", "name": "TIME_STOP_MIN_PROFIT_RATE", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_MIN_PROFIT_RATE": v})},
-        {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float",
-         "get": lambda: config.SELL_STRATEGY["STOP_LOSS_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"STOP_LOSS_RATE": v})},
         {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 매도", "name": "SELL_SCORE", "type": "float",
          "get": lambda: config.SELL_STRATEGY["SELL_SCORE"], "set": lambda v: config.SELL_STRATEGY.update({"SELL_SCORE": v})},
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float",
@@ -447,16 +457,6 @@ def modify_sell_strategy():
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
-        {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
-        {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float",
-         "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})},
-        {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float",
-     "get": lambda: config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0), "set": lambda v: config.SELL_STRATEGY.update({"MAX_ATR_STOP_LOSS_RATE": v})},
-    {"desc": "본전 청산 발동 수익률(%)", "help": "최고 수익률이 이 값에 도달하면 손절선 상향 (0: 미사용)", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float",
-     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_PROFIT_RATE": v})},
-    {"desc": "본전 청산 손절선(%)", "help": "본전 청산 발동 시 변경될 손절률 (예: 0.5)", "name": "BREAK_EVEN_STOP_RATE", "type": "float",
-     "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_STOP_RATE": v})},
     {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"],
      "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})}
     ]
@@ -903,15 +903,15 @@ def _edit_single_preset(preset_type):
             
             {"desc": "익절 수익률(%)", "help": "목표 수익", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RATE"), "set": make_setter("TAKE_PROFIT_RATE", 'float')},
             {"desc": "반익절 사용 여부", "help": "절반 수익 도달 시 절반 매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "Sell", "get": make_getter("HALF_TAKE_PROFIT_USE"), "set": make_setter("HALF_TAKE_PROFIT_USE", 'bool')},
-            {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 청산", "name": "SELL_SCORE", "type": "float", "section": "Sell", "get": make_getter("SELL_SCORE"), "set": make_setter("SELL_SCORE", 'float')},
-            {"desc": "과열 매도 RSI", "help": "RSI 과열 시 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RSI"), "set": make_setter("TAKE_PROFIT_RSI", 'float')},
             {"desc": "손절 수익률(%)", "help": "기본 손절 라인", "name": "STOP_LOSS_RATE", "type": "float", "section": "Sell", "get": make_getter("STOP_LOSS_RATE"), "set": make_setter("STOP_LOSS_RATE", 'float')},
             {"desc": "ATR 손절 배수", "help": "동적 손절 배수 설정", "name": "ATR_STOP_MULTIPLIER", "type": "float", "section": "Sell", "get": make_getter("ATR_STOP_MULTIPLIER"), "set": make_setter("ATR_STOP_MULTIPLIER", 'float')},
-            {"desc": "시간청산 보유기한(일)", "help": "제한일 초과 시 강제 매도", "name": "TIME_STOP_DAYS", "type": "int", "section": "Sell", "get": make_getter("TIME_STOP_DAYS"), "set": make_setter("TIME_STOP_DAYS", 'int')},
-            {"desc": "TS 발동 수익률(%)", "help": "트레일링 감시 시작", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_ACTIVATION_RATE"), "set": make_setter("TRAILING_STOP_ACTIVATION_RATE", 'float')},
-            {"desc": "TS 하락 감지율(%)", "help": "트레일링 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_CALLBACK_RATE"), "set": make_setter("TRAILING_STOP_CALLBACK_RATE", 'float')},
             {"desc": "본전 청산 발동(%)", "help": "손절선 상향 기준 수익률", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float", "section": "Sell", "get": make_getter("BREAK_EVEN_PROFIT_RATE"), "set": make_setter("BREAK_EVEN_PROFIT_RATE", 'float')},
             {"desc": "본전 청산 손절선(%)", "help": "상향될 새 손절선", "name": "BREAK_EVEN_STOP_RATE", "type": "float", "section": "Sell", "get": make_getter("BREAK_EVEN_STOP_RATE"), "set": make_setter("BREAK_EVEN_STOP_RATE", 'float')},
+            {"desc": "시간청산 보유기한(일)", "help": "제한일 초과 시 강제 매도", "name": "TIME_STOP_DAYS", "type": "int", "section": "Sell", "get": make_getter("TIME_STOP_DAYS"), "set": make_setter("TIME_STOP_DAYS", 'int')},
+            {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 청산", "name": "SELL_SCORE", "type": "float", "section": "Sell", "get": make_getter("SELL_SCORE"), "set": make_setter("SELL_SCORE", 'float')},
+            {"desc": "과열 매도 RSI", "help": "RSI 과열 시 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "Sell", "get": make_getter("TAKE_PROFIT_RSI"), "set": make_setter("TAKE_PROFIT_RSI", 'float')},
+            {"desc": "TS 발동 수익률(%)", "help": "트레일링 감시 시작", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_ACTIVATION_RATE"), "set": make_setter("TRAILING_STOP_ACTIVATION_RATE", 'float')},
+            {"desc": "TS 하락 감지율(%)", "help": "트레일링 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "Sell", "get": make_getter("TRAILING_STOP_CALLBACK_RATE"), "set": make_setter("TRAILING_STOP_CALLBACK_RATE", 'float')},
             
             {"desc": "추세 가중치", "help": "Trend", "name": "TREND", "type": "float", "section": "Weights", "get": make_getter("TREND"), "set": make_setter("TREND", 'float')},
             {"desc": "모멘텀 가중치", "help": "Momentum", "name": "MOMENTUM", "type": "float", "section": "Weights", "get": make_getter("MOMENTUM"), "set": make_setter("MOMENTUM", 'float')},

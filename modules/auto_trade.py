@@ -1146,7 +1146,13 @@ class DefaultStrategy:
                 
                 atr_val = ind.get('atr', 0) if ind else 0
                 if use_atr_stop and atr_val > 0:
-                    actual_ts_callback = (atr_val * atr_mult / highest_price) * 100
+                    dynamic_callback = (atr_val * atr_mult / highest_price) * 100
+                    
+                    # [리스크 관리 방어 로직 추가]
+                    # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
+                    # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 50% 이상을 반납하는 것 방지
+                    max_allowed_callback = max(ts_callback, max_profit_rate * 0.5)
+                    actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
                     
                 if drop_rate >= actual_ts_callback:
                     ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
@@ -1202,8 +1208,10 @@ class DefaultStrategy:
             # [추가] 매도 최적화 3번: 방어적 반매도 (하락 반전 신호 발생 시 절반 덜어내기)
             if not reason and defensive_half_tp and not already_half_sold:
                 if ind.get('psar') is not None and ind.get('ema_5') is not None:
-                    if current_price < ind['psar'] and current_price < ind['ema_5']:
-                        reason = "하락반전(방어적 반매도)"
+                    # [엣지 케이스 방어] 손실 구간에서의 조기 손절(반손절)을 방지하고 '수익 보전' 목적에 맞게,
+                    # 최소한의 의미 있는 수익(time_stop_min_profit, 기본 3.0%) 이상일 때만 발동하도록 안전장치 추가
+                    if profit_rate >= time_stop_min_profit and current_price < ind['psar'] and current_price < ind['ema_5']:
+                        reason = f"하락반전(방어적 반매도, 수익률:+{profit_rate:.1f}%)"
                         sell_ratio = 0.5
 
             # 5. 추세 이탈
@@ -4379,6 +4387,13 @@ class AutoTrader:
             if applied_sl_rate is not None:
                 if thresholds is None: thresholds = {}
                 thresholds["STOP_LOSS_RATE"] = applied_sl_rate
+                
+                # [수정] 실제 매도 평가에 사용될 손절선 변수(sl_rate) 갱신
+                sl_rate = applied_sl_rate
+                
+                # [추가] ATR 동적 손절 사용 시, 본전 청산 발동 기준을 손절폭(절대값)과 1:1로 자동 동기화
+                if applied_sl_rate < 0:
+                    bep_activation = abs(applied_sl_rate)
                 
             holding_days = 0
             is_mr_holding = False

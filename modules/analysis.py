@@ -196,11 +196,16 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         elif ema_5 is not None and price > ema_5 and ema_5 > ema20 and ema20 > ema60:
             s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 단기 급등 추세 (+{s:.2f})")
     
-    if macd is not None and macd_signal is not None:
-        if macd > macd_signal:
-            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 골든크로스 (+{s:.2f})")
-    if macd_hist is not None and prev_macd_hist is not None and (macd_hist > 0 or macd_hist > prev_macd_hist):
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 히스토그램 개선 (+{s:.2f})")
+    # [추가] 장기 추세 지지 확인 (누락된 0.5점 보완으로 Trend 4.0 만점 완성)
+    if ema120 is not None and price > ema120:
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 장기 지지(현재가>120일선) (+{s:.2f})")
+
+    # [수정] 단순 MACD > Signal 상태 유지가 아닌, 신규 골든크로스 또는 0선 위 확산 추세일 때만 점수 부여 (인플레이션 방지)
+    if macd_hist is not None and prev_macd_hist is not None:
+        if macd_hist > 0 and prev_macd_hist <= 0:
+            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 신규 골든크로스 (+{s:.2f})")
+        elif macd is not None and macd > 0 and macd_hist > prev_macd_hist and macd_hist > 0:
+            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 상승 추세 확산 (+{s:.2f})")
 
     if sar is not None and price > sar:
         s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
@@ -241,16 +246,19 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 개선 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
-    if ema60 is not None and price > ema60 and (macd is not None and macd_signal is not None and macd > macd_signal) and (adx is not None and adx >= 15):
+    # [수정] 시너지 보너스를 단순히 상태 유지가 아닌 '모멘텀 확산(macd_hist > prev_macd_hist)' 중일 때만 부여하여 고점 점수 인플레이션 방지
+    is_macd_expanding = (macd_hist is not None and prev_macd_hist is not None and macd_hist > 0 and macd_hist > prev_macd_hist)
+    
+    if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= 20):
         s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"추세 시작: 주가>60일선+MACD골든+ADX상승 (+{s:.2f})")
+        details.append(f"추세 시작: 주가>60일선+MACD확산+ADX 20↑ (+{s:.2f})")
         
     # Momentum Thrust
-    if (macd is not None and macd_signal is not None and macd > macd_signal) and (rsi is not None and rsi >= 50) and obv_trend:
+    if is_macd_expanding and (rsi is not None and rsi >= 60) and obv_trend:
         s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"모멘텀 폭발: MACD골든+RSI강세+OBV (+{s:.2f})")
+        details.append(f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")
 
     return round(score, 2), details
 
@@ -396,16 +404,26 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     if price is None or ema60 is None or sar is None or rsi is None:
         return "-", "[dim]", "데이터 부족"
     
-    # [추가] 1. 낙폭과대(역추세) 반등 조건 최우선 확인
+    # [수정] 1순위 절대 방어 필터를 가장 위로 끌어올림 (역추세 매수보다 우선 적용하여 떨어지는 칼날 완벽 방어)
+    if plus_di is not None and minus_di is not None and minus_di > plus_di:
+        if adx is not None and adx >= 45: # ADX 45 이상의 초강력 하락장
+            return "매도", "[blue]", "초강력 투매 패닉 구간 (ADX 과열 및 -DI 우위)"
+
+    # [추가] 2. 낙폭과대(역추세) 반등 조건 확인
     use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
     if use_mr and ema20 is not None and prev_rsi is not None and rsi is not None:
         mr_rsi = thresholds.get("MR_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
         mr_disp = thresholds.get("MR_DISPARITY_MAX", config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
         
         disparity = (price / ema20) * 100
-        # 조건: RSI 침체 도달 후 전일 대비 상승(반등 확인) & 이격도 충분히 하락
-        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp:
-            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호)"
+        
+        is_yangbong = False
+        if df is not None and not df.empty:
+            is_yangbong = df.iloc[-1]['close'] > df.iloc[-1]['open']
+            
+        # [수정] 단순 RSI 반등이 아닌 '양봉(종가>시가)' 마감 여부를 추가하여 확실한 턴어라운드만 포착
+        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong:
+            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 출현)"
 
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
@@ -431,19 +449,6 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
         super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
 
-    # [추가] 1순위 절대 방어 필터: 극단적 하락 추세(투매 패닉) 진행 중일 때는 아무리 점수가 높아도 칼날 잡기 금지
-    if plus_di is not None and minus_di is not None and minus_di > plus_di:
-        if adx is not None and adx >= 45: # ADX 45 이상의 초강력 하락장
-            return "매도", "[blue]", "초강력 투매 패닉 구간 (ADX 과열 및 -DI 우위)"
-
-    # 2순위: 얼리 스테이지 및 기본 매수 조건 (위 절대 필터를 통과한 종목만)
-    is_super = use_super and score >= super_score and w52_pos is not None and w52_pos >= super_w52
-    actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
-
-    if score >= buy_score and rsi < actual_buy_rsi_max:
-        if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
-        else: return "매수", "[red]", "매수 조건 충족 (얼리 스테이지 반등 포함)"
-
     reasons = []
     is_severe_danger = False
     
@@ -466,7 +471,7 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     if ema120 is not None and price < ema120: 
         is_caution = True
         reasons.append("120일선 이탈")
-    if sar > price: 
+    if sar is not None and sar > price: 
         is_caution = True
         reasons.append("SAR 매도신호")
     if rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10): 
@@ -482,7 +487,28 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     if macd is not None and macd_signal is not None and macd < macd_signal:
         is_caution = True
         reasons.append("MACD 데드크로스")
+    # [추가] DMI 매도세 우위 필터
+    if plus_di is not None and minus_di is not None and minus_di > plus_di:
+        is_caution = True
+        reasons.append("-DI 우위(매도세 강함)")
+
+    # 2순위: 얼리 스테이지 및 기본 매수 조건 (위험 필터를 모두 통과해야 함)
+    is_super = use_super and score >= super_score and w52_pos is not None and w52_pos >= super_w52
+    actual_buy_rsi_max = super_rsi if is_super else buy_rsi_max
+
+    if score >= buy_score and rsi < actual_buy_rsi_max:
+        # [핵심 방어 로직] 하락 반전 신호(고점 꺾임)를 방어하기 위한 강력 필터
+        # 다음 조건 중 하나라도 해당되면 아무리 점수가 높아도 "매수"가 아닌 "주의"로 강등
+        down_trend_flags = []
+        if sar is not None and sar > price: down_trend_flags.append("SAR 매도신호")
+        if macd is not None and macd_signal is not None and macd < macd_signal: down_trend_flags.append("MACD 데드크로스")
+        if plus_di is not None and minus_di is not None and minus_di > plus_di: down_trend_flags.append("-DI 우위")
         
+        if down_trend_flags:
+            is_caution = True
+        else:
+            if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
+            else: return "매수", "[red]", "매수 조건 충족 (얼리 스테이지 반등 포함)"
 
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
 

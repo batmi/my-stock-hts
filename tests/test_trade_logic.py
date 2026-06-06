@@ -256,7 +256,8 @@ def test_defensive_half_sell(strategy):
          patch('modules.auto_trade.analysis.classify_stock_state', return_value=("관망", "", "")), \
          patch('modules.auto_trade.analysis.calculate_score', return_value=(6.0, [])):
         
-        res = strategy.analyze_sell("005930", "Test", df, current_price=10000, buy_price=10000, profit_rate=0.0, thresholds=thresholds)
+        # 방어적 반매도는 최소 수익권(기본 3.0%) 이상일 때 발동해야 하므로 profit_rate를 4.1%로 설정
+        res = strategy.analyze_sell("005930", "Test", df, current_price=10000, buy_price=9600, profit_rate=4.1, thresholds=thresholds)
         
         assert res['action'] == 'sell'
         assert res['sell_ratio'] == 0.5
