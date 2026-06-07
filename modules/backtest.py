@@ -359,9 +359,22 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     actual_ts_callback = ts_callback
                     atr_val = row.get('ATR', 0)
                     if use_atr_stop and atr_val > 0:
-                        actual_ts_callback = (atr_val * atr_mult / ts_highest_price) * 100
+                        dynamic_callback = (atr_val * atr_mult / ts_highest_price) * 100
+                        # [추가] 트레일링 스탑 하/상한선 방어 로직 동기화
+                        max_allowed_callback = max(ts_callback, max_profit_rate * 0.5)
+                        actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
+                        
                     if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
                     
+            # [추가] 방어적 반매도 로직 동기화
+            defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True)
+            if not sell_signal and defensive_half_tp and not half_tp_executed:
+                psar_val = row.get('SAR')
+                ema5_val = row.get('EMA5')
+                if psar_val is not None and ema5_val is not None:
+                    if loss_rate >= time_stop_min_profit and price < psar_val and price < ema5_val:
+                        sell_signal = True; reason = "방어적 반매도"; sell_ratio = 0.5
+
             # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
             actual_tp_rsi = take_profit_rsi_limit
             if use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52:
@@ -459,6 +472,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if use_atr_stop and atr_val > 0:
                 stop_distance = atr_val * atr_mult
                 atr_sl_rate = -((stop_distance / buy_price) * 100)
+                
+                # [추가] ATR 손절 최대 한도 적용
+                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+                if max_atr_sl != 0 and atr_sl_rate < max_atr_sl:
+                    atr_sl_rate = max_atr_sl
             
             # [수정] 리스크 기반 포지션 사이징 적용 (백테스팅)
             invest_amt = balance
@@ -1597,8 +1615,8 @@ def run_backtest():
             reason_table.add_column("비중", justify="right")
             reason_table.add_column("승률", justify="right")
             reason_table.add_column("평균 수익률", justify="right")
-            reason_table.add_column("최대 수익률", justify="right")
-            reason_table.add_column("최대 손실률", justify="right")
+            reason_table.add_column("최고 수익률", justify="right")
+            reason_table.add_column("최저 수익률", justify="right")
             reason_table.add_column("총 손익", justify="right")
             reason_table.add_column("평균 보유", justify="right")
             

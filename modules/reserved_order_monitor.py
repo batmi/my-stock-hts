@@ -6,6 +6,7 @@ import api
 from modules import analysis
 import indicators
 from modules import db_manager
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class ReservedOrderMonitor:
                 self._check_orders()
             except Exception as e:
                 logger.error(f"[Reserve] 예약 주문 감시 에러: {e}")
-            time.sleep(3.0)  # 요청하신 3초 주기 감시
+            time.sleep(10.0)  # 스윙 투자에 적합한 서버 최적화 주기 (10초)
             
     def _check_orders(self):
         try:
@@ -92,8 +93,11 @@ class ReservedOrderMonitor:
                     elif len(tt) <= 4 and now_time_str_short >= tt:
                         trigger, reason = True, f"지정 시간({tt}) 도달"
             else:
-                # [추가] 장 마감 시간대 API 자원 최적화 (네트워크 시세 조회 완벽 차단)
-                if not is_overseas and (now_time_str_short >= "1530" or now_time_str_short < "0900"):
+                # [수정] 장 마감 시간대 API 자원 최적화 (시스템 설정 시간 연동)
+                start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0900")
+                end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1530")
+                
+                if not is_overseas and (now_time_str_short >= end_time or now_time_str_short < start_time):
                     continue
                 # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
                 if is_overseas and ("0800" <= now_time_str_short < "1600"):
