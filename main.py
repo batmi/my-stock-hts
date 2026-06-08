@@ -119,7 +119,11 @@ Prompt.illegal_choice_message = "\n[yellow]유효하지 않은 선택입니다. 
 _original_print_breadcrumb = utils.print_breadcrumb
 
 def _get_preset_emoji():
-    preset = getattr(config, 'ACTIVE_PRESET', 'default')
+    try:
+        from modules import settings
+        preset = settings.check_and_update_active_preset()
+    except Exception:
+        preset = getattr(config, 'ACTIVE_PRESET', 'default')
     
     if preset == 'bull': return "🔴"
     elif preset == 'bear': return "🔵"
@@ -832,7 +836,7 @@ def main():
 
         # 4. 텔레그램 봇 비활성화 옵션 처리
         if args.no_bot:
-            config.ENABLE_TELEGRAM = False
+            config.settings.ENABLE_TELEGRAM = False
             config.console.print("텔레그램 봇 명령어 수신 기능을 비활성화합니다.")
 
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)

@@ -12,43 +12,48 @@ console = config.console
 
 def _save_dynamic_config():
     """현재 메모리 상의 설정을 파일로 저장 (영구 반영)"""
+    try:
+        check_and_update_active_preset()
+    except Exception:
+        pass
+
     data = {
-        "ACTIVE_PRESET": getattr(config, 'ACTIVE_PRESET', 'default'),
+        "ACTIVE_PRESET": getattr(config.settings, 'ACTIVE_PRESET', 'default'),
         "ANALYSIS_THRESHOLDS": config.ANALYSIS_THRESHOLDS,
         "SELL_STRATEGY": config.SELL_STRATEGY,
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
-        "SYSTEM_MAX_HOLDINGS": getattr(config, 'SYSTEM_MAX_HOLDINGS', 10),
-        "SYSTEM_TRADING_INTERVAL": getattr(config, 'SYSTEM_TRADING_INTERVAL', 180),
-        "SYSTEM_DAILY_LOSS_LIMIT": getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
-        "USE_MARKET_FILTER": getattr(config, 'USE_MARKET_FILTER', True),
-        "MARKET_FILTER_MA": getattr(config, 'MARKET_FILTER_MA', 20),
-        "CONCLUSION_CHECK_INTERVAL": getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5),
-        "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
-        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60),
-        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
-        "CHART_CACHE_TTL_MINUTES": getattr(config, 'CHART_CACHE_TTL_MINUTES', 180),
-        "ENABLE_TELEGRAM": getattr(config, 'ENABLE_TELEGRAM', True),
-        "TELEGRAM_INSTANCE_NAME": getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"),
-        "TELEGRAM_POLLING_TIMEOUT": getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10),
-        "AUTO_MORNING_BRIEFING_USE": getattr(config, 'AUTO_MORNING_BRIEFING_USE', False),
-        "AUTO_MORNING_BRIEFING_TIME": getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
-        "SCREEN_DEBUG_LEVEL": getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"),
-        "CLEAR_SCREEN_ON_MENU": getattr(config, 'CLEAR_SCREEN_ON_MENU', False),
-        "FILE_DEBUG_LEVEL": getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"),
-        "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
-        "SYSTEM_TRADING_START_TIME": getattr(config, 'SYSTEM_TRADING_START_TIME', "0915"),
-        "SYSTEM_TRADING_END_TIME": getattr(config, 'SYSTEM_TRADING_END_TIME', "1515"),
-        "SYSTEM_RISK_PER_TRADE": getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0),
-        "USE_VOLATILITY_TARGETING": getattr(config, 'USE_VOLATILITY_TARGETING', True),
-        "TARGET_VOLATILITY": getattr(config, 'TARGET_VOLATILITY', 0.20),
-        "VOLATILITY_SCALING_MAX": getattr(config, 'VOLATILITY_SCALING_MAX', 2.0),
-        "VOLATILITY_SCALING_MIN": getattr(config, 'VOLATILITY_SCALING_MIN', 0.5),
-        "SLIPPAGE_RATE": getattr(config, 'SLIPPAGE_RATE', 0.002),
-        "USE_CORRELATION_FILTER": getattr(config, 'USE_CORRELATION_FILTER', True),
-        "CORRELATION_THRESHOLD": getattr(config, 'CORRELATION_THRESHOLD', 0.7)
+        "SYSTEM_INVEST_PER_STOCK": getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2),
+        "SYSTEM_MAX_HOLDINGS": getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10),
+        "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180),
+        "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
+        "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
+        "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 20),
+        "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
+        "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
+        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60),
+        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
+        "CHART_CACHE_TTL_MINUTES": getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 180),
+        "ENABLE_TELEGRAM": getattr(config.settings, 'ENABLE_TELEGRAM', True),
+        "TELEGRAM_INSTANCE_NAME": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', "HTS"),
+        "TELEGRAM_POLLING_TIMEOUT": getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10),
+        "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
+        "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
+        "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "OFF"),
+        "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
+        "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
+        "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
+        "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0915"),
+        "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1515"),
+        "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0),
+        "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
+        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.20),
+        "VOLATILITY_SCALING_MAX": getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0),
+        "VOLATILITY_SCALING_MIN": getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5),
+        "SLIPPAGE_RATE": getattr(config.settings, 'SLIPPAGE_RATE', 0.002),
+        "USE_CORRELATION_FILTER": getattr(config.settings, 'USE_CORRELATION_FILTER', True),
+        "CORRELATION_THRESHOLD": getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)
     }
     
     try:
@@ -163,26 +168,26 @@ def view_system_config():
     # 3. 리스크 및 자산 배분 설정
     # =========================================================
     table.add_row("[bold]3. 리스크 및 자산 배분 설정[/]", "", "")
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
-    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)}")
-    table.add_row("ETF 매수 포함 여부\n[dim]시스템 매수 대상에 국내 ETF 포함[/dim]", "SYSTEM_INCLUDE_ETF", f"{getattr(config, 'SYSTEM_INCLUDE_ETF', False)}")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
+    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10)}")
+    table.add_row("ETF 매수 포함 여부\n[dim]시스템 매수 대상에 국내 ETF 포함[/dim]", "SYSTEM_INCLUDE_ETF", f"{getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False)}")
     
-    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+    slippage = getattr(config.settings, 'SLIPPAGE_RATE', 0.002)
     slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
     table.add_row("슬리피지 비율\n[dim]주문가 보정 및 백테스트 비용[/dim]", "SLIPPAGE_RATE", slippage_str)
     
-    table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config, 'USE_VOLATILITY_TARGETING', True)}")
-    if getattr(config, 'USE_VOLATILITY_TARGETING', True):
-        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config, 'TARGET_VOLATILITY', 0.20)}")
-        table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)} ~ {getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)}")
+    table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)}")
+    if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
+        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.20)}")
+        table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5)} ~ {getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}")
         
-    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config, 'USE_MARKET_FILTER', True)}")
-    table.add_row("  └ 시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config, 'MARKET_FILTER_MA', 50)}")
-    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
-    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
-    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
-    table.add_row("상관계수 필터링 사용\n[dim]유사 테마 종목 중복 매수 방지[/dim]", "USE_CORRELATION_FILTER", f"{getattr(config, 'USE_CORRELATION_FILTER', True)}")
-    table.add_row("  └ 상관계수 임계값\n    [dim]동조화 판단 기준치 (0.0~1.0)[/dim]", "CORRELATION_THRESHOLD", f"{getattr(config, 'CORRELATION_THRESHOLD', 0.7)}")
+    table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}")
+    table.add_row("  └ 시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 50)}")
+    table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
+    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
+    table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
+    table.add_row("상관계수 필터링 사용\n[dim]유사 테마 종목 중복 매수 방지[/dim]", "USE_CORRELATION_FILTER", f"{getattr(config.settings, 'USE_CORRELATION_FILTER', True)}")
+    table.add_row("  └ 상관계수 임계값\n    [dim]동조화 판단 기준치 (0.0~1.0)[/dim]", "CORRELATION_THRESHOLD", f"{getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)}")
 
     table.add_section()
 
@@ -211,28 +216,28 @@ def view_system_config():
     # =========================================================
     table.add_row("[bold]5. 환경 및 시스템 설정[/]", "", "")
     table.add_row("[bold dim]  5-1. 트레이딩 시간 및 주기[/]", "", "")
-    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config, 'SYSTEM_TRADING_START_TIME', '0920')}")
-    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config, 'SYSTEM_TRADING_END_TIME', '1510')}")
-    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)}")
-    table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)}")
-    table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
-    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
-    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
-    table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config, 'CHART_CACHE_TTL_MINUTES', 180)}")
+    table.add_row("거래 시작 시간\n[dim]매매 허용 시작 시각 (HHMM)[/dim]", "SYSTEM_TRADING_START_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_START_TIME', '0920')}")
+    table.add_row("거래 종료 시간\n[dim]매매 허용 종료 시각 (HHMM)[/dim]", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1510')}")
+    table.add_row("모니터링 주기 (초)\n[dim]자동매매 루프 실행 간격[/dim]", "SYSTEM_TRADING_INTERVAL", f"{getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180)}")
+    table.add_row("체결 감시 주기\n[dim]주문 직후 체결 확인 간격[/dim]", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5)}")
+    table.add_row("대기 모드 주기\n[dim]주문이 없는 평상시 체결 확인 간격[/dim]", "CONCLUSION_CHECK_IDLE_INTERVAL", f"{getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)}")
+    table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
+    table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
+    table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 180)}")
     
     table.add_section()
     table.add_row("[bold dim]  5-2. 텔레그램 및 AI 브리핑[/]", "", "")
-    table.add_row("사용 여부\n[dim]알림 기능 활성화 여부[/dim]", "ENABLE_TELEGRAM", f"{getattr(config, 'ENABLE_TELEGRAM', True)}")
-    table.add_row("인스턴스 이름\n[dim]알림 메시지 머리말[/dim]", "TELEGRAM_INSTANCE_NAME", f"{getattr(config, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
-    table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
-    table.add_row("장전 AI 브리핑\n[dim]매일 글로벌 매크로 시황 전송[/dim]", "AUTO_MORNING_BRIEFING_USE", f"{getattr(config, 'AUTO_MORNING_BRIEFING_USE', False)}")
-    table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
+    table.add_row("사용 여부\n[dim]알림 기능 활성화 여부[/dim]", "ENABLE_TELEGRAM", f"{getattr(config.settings, 'ENABLE_TELEGRAM', True)}")
+    table.add_row("인스턴스 이름\n[dim]알림 메시지 머리말[/dim]", "TELEGRAM_INSTANCE_NAME", f"{getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', 'HTS')}")
+    table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
+    table.add_row("장전 AI 브리핑\n[dim]매일 글로벌 매크로 시황 전송[/dim]", "AUTO_MORNING_BRIEFING_USE", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False)}")
+    table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
 
     table.add_section()
     table.add_row("[bold dim]  5-3. 화면 및 로그 설정[/]", "", "")
-    table.add_row("화면 자동 지우기\n[dim]메뉴 이동 시 터미널 클리어[/dim]", "CLEAR_SCREEN_ON_MENU", f"{getattr(config, 'CLEAR_SCREEN_ON_MENU', False)}")
-    table.add_row("화면 로그 레벨\n[dim]터미널 디버그 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
-    table.add_row("파일 로그 레벨\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config, 'FILE_DEBUG_LEVEL', 'WARNING')}")
+    table.add_row("화면 자동 지우기\n[dim]메뉴 이동 시 터미널 클리어[/dim]", "CLEAR_SCREEN_ON_MENU", f"{getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False)}")
+    table.add_row("화면 로그 레벨\n[dim]터미널 디버그 출력 레벨[/dim]", "SCREEN_DEBUG_LEVEL", f"{getattr(config.settings, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
+    table.add_row("파일 로그 레벨\n[dim]로그 파일 저장 레벨[/dim]", "FILE_DEBUG_LEVEL", f"{getattr(config.settings, 'FILE_DEBUG_LEVEL', 'WARNING')}")
 
     console.print(table)
     console.print()
@@ -384,7 +389,7 @@ def _edit_config_table(title_source, items_source, check_preset=True):
         
         if changed_in_this_loop:
             if check_preset and changed_preset_keys:
-                config.ACTIVE_PRESET = "custom"
+                config.settings.ACTIVE_PRESET = "custom"
             _save_dynamic_config()
             action_taken = True
             
@@ -539,27 +544,27 @@ def _on_telegram_enable_changed():
 def modify_telegram_settings():
     items = [
         {"desc": "텔레그램 알림 사용", "help": "알림 기능 활성화 여부", "name": "ENABLE_TELEGRAM", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: getattr(config, 'ENABLE_TELEGRAM', True), "set": lambda v: setattr(config, 'ENABLE_TELEGRAM', v),
+         "get": lambda: getattr(config.settings, 'ENABLE_TELEGRAM', True), "set": lambda v: setattr(config.settings, 'ENABLE_TELEGRAM', v),
          "callback": _on_telegram_enable_changed},
         {"desc": "인스턴스 이름", "help": "알림 메시지 머리말", "name": "TELEGRAM_INSTANCE_NAME", "type": "str",
-         "get": lambda: getattr(config, 'TELEGRAM_INSTANCE_NAME', "HTS"), "set": lambda v: setattr(config, 'TELEGRAM_INSTANCE_NAME', v)},
+         "get": lambda: getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', "HTS"), "set": lambda v: setattr(config.settings, 'TELEGRAM_INSTANCE_NAME', v)},
         {"desc": "폴링 타임아웃(초)", "help": "봇 명령어 수신 대기 시간", "name": "TELEGRAM_POLLING_TIMEOUT", "type": "int",
-         "get": lambda: getattr(config, 'TELEGRAM_POLLING_TIMEOUT', 10), "set": lambda v: setattr(config, 'TELEGRAM_POLLING_TIMEOUT', v)},
+         "get": lambda: getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10), "set": lambda v: setattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', v)},
         {"desc": "장전 AI 브리핑 사용", "help": "매일 지정된 시간에 글로벌 매크로 시황 알림", "name": "AUTO_MORNING_BRIEFING_USE", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: getattr(config, 'AUTO_MORNING_BRIEFING_USE', False), "set": lambda v: setattr(config, 'AUTO_MORNING_BRIEFING_USE', v)},
+         "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', v)},
         {"desc": "장전 AI 브리핑 시간", "help": "발송 시각 (예: 0830)", "name": "AUTO_MORNING_BRIEFING_TIME", "type": "time",
-         "get": lambda: getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config, 'AUTO_MORNING_BRIEFING_TIME', v)}
+         "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', v)}
     ]
     return _edit_config_table("텔레그램 설정 (Telegram)", items)
 
 def modify_log_settings():
     items = [
         {"desc": "화면 자동 지우기", "help": "메뉴 이동 시 터미널 화면 클리어 여부", "name": "CLEAR_SCREEN_ON_MENU", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: getattr(config, 'CLEAR_SCREEN_ON_MENU', False), "set": lambda v: setattr(config, 'CLEAR_SCREEN_ON_MENU', v)},
+         "get": lambda: getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False), "set": lambda v: setattr(config.settings, 'CLEAR_SCREEN_ON_MENU', v)},
         {"desc": "화면 로그 레벨", "help": "터미널 출력 레벨", "name": "SCREEN_DEBUG_LEVEL", "type": "str", "choices": ["OFF", "TRACE", "DEBUG"],
-         "get": lambda: getattr(config, 'SCREEN_DEBUG_LEVEL', "OFF"), "set": lambda v: setattr(config, 'SCREEN_DEBUG_LEVEL', v)},
+         "get": lambda: getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "OFF"), "set": lambda v: setattr(config.settings, 'SCREEN_DEBUG_LEVEL', v)},
         {"desc": "파일 로그 레벨", "help": "로그 파일 저장 레벨", "name": "FILE_DEBUG_LEVEL", "type": "str", "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
-         "get": lambda: getattr(config, 'FILE_DEBUG_LEVEL', "WARNING"), "set": lambda v: setattr(config, 'FILE_DEBUG_LEVEL', v),
+         "get": lambda: getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"), "set": lambda v: setattr(config.settings, 'FILE_DEBUG_LEVEL', v),
          "callback": config.setup_logging}
     ]
     return _edit_config_table("화면 및 로그 설정 (Screen & Log)", items)
@@ -628,7 +633,7 @@ def modify_scoring_weights():
                 
                 config.SCORING_WEIGHTS.update(new_weights)
                 
-                config.ACTIVE_PRESET = "custom"
+                config.settings.ACTIVE_PRESET = "custom"
                 _save_dynamic_config()
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
                 action_taken = True
@@ -670,44 +675,44 @@ def modify_risk_portfolio_settings():
     def get_items():
         items = [
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config, 'SYSTEM_INVEST_PER_STOCK', v),
+             "get": lambda: getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config, 'SYSTEM_MAX_HOLDINGS', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_HOLDINGS', v)},
             {"desc": "ETF 매수 포함 여부", "help": "시스템 매수 대상에 국내 ETF 포함", "name": "SYSTEM_INCLUDE_ETF", "type": "bool", "choices": ["y", "n"], "section": "Portfolio",
-             "get": lambda: getattr(config, 'SYSTEM_INCLUDE_ETF', False), "set": lambda v: setattr(config, 'SYSTEM_INCLUDE_ETF', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False), "set": lambda v: setattr(config.settings, 'SYSTEM_INCLUDE_ETF', v)},
             {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config, 'SLIPPAGE_RATE', 0.002), "set": lambda v: setattr(config, 'SLIPPAGE_RATE', v)},
+             "get": lambda: getattr(config.settings, 'SLIPPAGE_RATE', 0.002), "set": lambda v: setattr(config.settings, 'SLIPPAGE_RATE', v)},
              
             {"desc": "변동성 타겟팅 사용", "help": "ATR 기반 비중 조절 사용 여부", "name": "USE_VOLATILITY_TARGETING", "type": "bool", "choices": ["y", "n"], "section": "Volatility",
-             "get": lambda: getattr(config, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config, 'USE_VOLATILITY_TARGETING', v)}
+             "get": lambda: getattr(config.settings, 'USE_VOLATILITY_TARGETING', True), "set": lambda v: setattr(config.settings, 'USE_VOLATILITY_TARGETING', v)}
         ]
         
-        if getattr(config, 'USE_VOLATILITY_TARGETING', True):
+        if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
             items.extend([
                 {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%, 0.3=30%", "name": "TARGET_VOLATILITY", "type": "float", "section": "Volatility",
-                 "get": lambda: getattr(config, 'TARGET_VOLATILITY', 0.30), "set": lambda v: setattr(config, 'TARGET_VOLATILITY', v)},
+                 "get": lambda: getattr(config.settings, 'TARGET_VOLATILITY', 0.30), "set": lambda v: setattr(config.settings, 'TARGET_VOLATILITY', v)},
                 {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "Volatility",
-                 "get": lambda: getattr(config, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MAX', v)},
+                 "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MAX', v)},
                 {"desc": "스케일링 최소 배수", "help": "비중 축소 제한", "name": "VOLATILITY_SCALING_MIN", "type": "float", "section": "Volatility",
-                 "get": lambda: getattr(config, 'VOLATILITY_SCALING_MIN', 0.5), "set": lambda v: setattr(config, 'VOLATILITY_SCALING_MIN', v)}
+                 "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MIN', v)}
             ])
             
         items.extend([
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
-             "get": lambda: getattr(config, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config, 'USE_MARKET_FILTER', v)},
+             "get": lambda: getattr(config.settings, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_MARKET_FILTER', v)},
             {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk",
-             "get": lambda: getattr(config, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config, 'MARKET_FILTER_MA', v)},
+             "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
             {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "Risk",
-             "get": lambda: getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
             {"desc": "일일 손실 제한 (%)", "help": "자산 보호를 위한 비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk",
-             "get": lambda: getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
             {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "Risk",
-             "get": lambda: getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config, 'SYSTEM_RISK_PER_TRADE', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config.settings, 'SYSTEM_RISK_PER_TRADE', v)},
             {"desc": "상관계수 필터링 사용", "help": "유사 테마 종목 중복 매수 방지", "name": "USE_CORRELATION_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk",
-             "get": lambda: getattr(config, 'USE_CORRELATION_FILTER', True), "set": lambda v: setattr(config, 'USE_CORRELATION_FILTER', v)},
+             "get": lambda: getattr(config.settings, 'USE_CORRELATION_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_CORRELATION_FILTER', v)},
             {"desc": "상관계수 임계값", "help": "이 값 이상일 때 동조화로 판단 (0.0~1.0)", "name": "CORRELATION_THRESHOLD", "type": "float", "section": "Risk",
-             "get": lambda: getattr(config, 'CORRELATION_THRESHOLD', 0.7), "set": lambda v: setattr(config, 'CORRELATION_THRESHOLD', v)},
+             "get": lambda: getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7), "set": lambda v: setattr(config.settings, 'CORRELATION_THRESHOLD', v)},
         ])
         return items
 
@@ -718,22 +723,22 @@ def modify_trading_cycle_settings():
     def get_items():
         items = [
             {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_START_TIME', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
             {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config, 'SYSTEM_TRADING_END_TIME', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
             {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
-             "get": lambda: getattr(config, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config, 'SYSTEM_TRADING_INTERVAL', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},
 
             {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_INTERVAL', v)},
+             "get": lambda: getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', v)},
             {"desc": "대기 모드 주기(초)", "help": "주문이 없는 평상시 체결 확인 간격", "name": "CONCLUSION_CHECK_IDLE_INTERVAL", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
+             "get": lambda: getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300), "set": lambda v: setattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', v)},
             {"desc": "집중 감시 시간(초)", "help": "주문 후 집중 감시 유지 시간", "name": "CONCLUSION_CHECK_ACTIVE_DURATION", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
+             "get": lambda: getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60), "set": lambda v: setattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', v)},
             {"desc": "미체결 취소 대기(초)", "help": "지정가 주문 유지 시간", "name": "UNFILLED_ORDER_CANCEL_SECONDS", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
+             "get": lambda: getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
             {"desc": "차트 데이터 캐시(분)", "help": "일봉 메모리 캐시 유지 시간", "name": "CHART_CACHE_TTL_MINUTES", "type": "int", "section": "Execution",
-             "get": lambda: getattr(config, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config, 'CHART_CACHE_TTL_MINUTES', v)},
+             "get": lambda: getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config.settings, 'CHART_CACHE_TTL_MINUTES', v)},
         ]
         return items
 
@@ -762,8 +767,8 @@ DEFAULT_PRESETS = {
         "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
-        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
+        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
+        "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     }
@@ -791,6 +796,51 @@ def get_preset_values(preset_type):
     customs = load_custom_presets().get(preset_type, {})
     base.update(customs)
     return base
+
+def check_and_update_active_preset():
+    """현재 전략 설정값들이 특정 프리셋과 일치하는지 확인하고 ACTIVE_PRESET을 동적으로 갱신합니다."""
+    current_vals = {}
+    for key in DEFAULT_PRESETS['default'].keys():
+        if key in config.ANALYSIS_THRESHOLDS:
+            current_vals[key] = config.ANALYSIS_THRESHOLDS[key]
+        elif key in config.SELL_STRATEGY:
+            current_vals[key] = config.SELL_STRATEGY[key]
+        elif key in config.SCORING_WEIGHTS:
+            current_vals[key] = config.SCORING_WEIGHTS[key]
+        elif key in config.MARKET_REGIME_PARAMS:
+            current_vals[key] = config.MARKET_REGIME_PARAMS[key]
+        else:
+            current_vals[key] = getattr(config.settings, key, None)
+            
+    matched_preset = "custom"
+    
+    for p_name in ['bull', 'bear', 'sideways', 'default']:
+        p_vals = get_preset_values(p_name)
+        is_match = True
+        for k, v in p_vals.items():
+            curr_v = current_vals.get(k)
+            if isinstance(v, (int, float)) and isinstance(curr_v, (int, float)):
+                if abs(float(v) - float(curr_v)) > 1e-5:
+                    is_match = False; break
+            elif v != curr_v:
+                is_match = False; break
+                
+        if is_match:
+            matched_preset = p_name
+            break
+            
+    if getattr(config.settings, 'ACTIVE_PRESET', 'default') != matched_preset:
+        config.settings.ACTIVE_PRESET = matched_preset
+        try:
+            import json, os
+            path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f: data = json.load(f)
+                data['ACTIVE_PRESET'] = matched_preset
+                with open(path, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+        except Exception: pass
+            
+    return matched_preset
 
 def apply_strategy_preset(preset_type="bull", interactive=True):
     if preset_type not in DEFAULT_PRESETS:
@@ -831,12 +881,12 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "STRENGTH": vals["STRENGTH"],
         "SYNERGY": vals["SYNERGY"]
     })
-    config.SYSTEM_INVEST_PER_STOCK = vals["SYSTEM_INVEST_PER_STOCK"]
-    config.SYSTEM_DAILY_LOSS_LIMIT = vals["SYSTEM_DAILY_LOSS_LIMIT"]
-    config.USE_MARKET_FILTER = vals["USE_MARKET_FILTER"]
-    config.MARKET_FILTER_MA = vals["MARKET_FILTER_MA"]
+    config.settings.SYSTEM_INVEST_PER_STOCK = vals["SYSTEM_INVEST_PER_STOCK"]
+    config.settings.SYSTEM_DAILY_LOSS_LIMIT = vals["SYSTEM_DAILY_LOSS_LIMIT"]
+    config.settings.USE_MARKET_FILTER = vals["USE_MARKET_FILTER"]
+    config.settings.MARKET_FILTER_MA = vals["MARKET_FILTER_MA"]
     
-    config.ACTIVE_PRESET = preset_type
+    config.settings.ACTIVE_PRESET = preset_type
     
     msg = ""
     if preset_type == "bull":
@@ -997,83 +1047,12 @@ def reset_to_default(interactive=True):
             return False
         console.print()
 
-    # 1. 파일 삭제
-    config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
-    if os.path.exists(config_path):
-        try:
-            os.remove(config_path)
-            if interactive: console.print(f"[dim]설정 파일 삭제 완료: {config_path}[/dim]")
-        except Exception as e:
-            if interactive: console.print(f"[red]설정 파일 삭제 실패: {e}[/red]")
-
-    # 2. 메모리 변수 초기화 (기본값 복원)
-    config.ANALYSIS_THRESHOLDS.update({
-            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True,
-        "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
-        "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
-        "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 100.0,
-        "SUPER_MOMENTUM_USE": True, "SUPER_MOMENTUM_SCORE": 8.5,
-        "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
-    })
-    config.SELL_STRATEGY.update({
-        "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
-        "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0,
-        "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
-        "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
-        "MR_GRACE_LOSS_RATE": -5.0,
-        "SELL_SCORE": 5.0,
-        "TAKE_PROFIT_RSI": 85.0, "SUPER_TAKE_PROFIT_RSI": 85.0,
-        "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
-    })
-    config.INDICATOR_PARAMS.update({
-        "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
-        "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
-        "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
-        "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-        "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0
-    })
-    config.SCORING_WEIGHTS.update({
-        "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
-    })
-    config.MARKET_REGIME_PARAMS.update({
-        "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
-        "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
-    })
+    # 1. 설정 파일 삭제 및 모든 메모리 설정값 갱신
+    config.reset_all_settings()
     
-    config.SYSTEM_INVEST_PER_STOCK = 0.2
-    config.SYSTEM_MAX_HOLDINGS = 10
-    config.SYSTEM_TRADING_INTERVAL = 180
-    config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
-    config.USE_MARKET_FILTER = True
-    config.MARKET_FILTER_MA = 50
-    config.CONCLUSION_CHECK_INTERVAL = 5
-    config.CONCLUSION_CHECK_IDLE_INTERVAL = 300
-    config.CONCLUSION_CHECK_ACTIVE_DURATION = 60
-    config.ENABLE_TELEGRAM = True
-    config.TELEGRAM_INSTANCE_NAME = "HTS"
-    config.TELEGRAM_POLLING_TIMEOUT = 10
-    config.AUTO_MORNING_BRIEFING_USE = False
-    config.AUTO_MORNING_BRIEFING_TIME = "0830"
-    config.SCREEN_DEBUG_LEVEL = "OFF"
-    config.CLEAR_SCREEN_ON_MENU = False
-    config.FILE_DEBUG_LEVEL = "WARNING"
-    config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 5
-    config.SYSTEM_TRADING_START_TIME = "0920"
-    config.SYSTEM_TRADING_END_TIME = "1510"
-    config.SYSTEM_RISK_PER_TRADE = 5.0
-    config.USE_VOLATILITY_TARGETING = True
-    config.TARGET_VOLATILITY = 0.20
-    config.VOLATILITY_SCALING_MAX = 2.0
-    config.VOLATILITY_SCALING_MIN = 0.5
-    config.UNFILLED_ORDER_CANCEL_SECONDS = 120
-    config.CHART_CACHE_TTL_MINUTES = 180
-    config.SLIPPAGE_RATE = 0.002
-    config.USE_CORRELATION_FILTER = True
-    config.CORRELATION_THRESHOLD = 0.7
-    
-    config.ACTIVE_PRESET = "default"
-
     if interactive:
+        config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+        console.print(f"[dim]설정 파일 삭제 및 기본값 복원 완료: {config_path}[/dim]")
         console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
         return True
     else:

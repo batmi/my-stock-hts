@@ -1503,7 +1503,12 @@ class TelegramCommander:
         if not getattr(config, 'ENABLE_TELEGRAM', True):
             return None
             
-        preset = getattr(config, 'ACTIVE_PRESET', 'default')
+        try:
+            from modules import settings
+            preset = settings.check_and_update_active_preset()
+        except Exception:
+            preset = getattr(config, 'ACTIVE_PRESET', 'default')
+            
         if preset == 'bull': emoji = "🔴"
         elif preset == 'bear': emoji = "🔵"
         elif preset == 'sideways': emoji = "🟡"

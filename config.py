@@ -601,6 +601,26 @@ def reset_custom_settings(keys_to_reset):
         except Exception as e:
             print(f"[Config] 설정 초기화 중 오류: {e}")
 
+# [추가] 모든 커스텀 설정 삭제 및 시스템 기본값으로 완전 초기화
+def reset_all_settings():
+    global settings
+    import os
+    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
+    if os.path.exists(config_path):
+        try: os.remove(config_path)
+        except Exception: pass
+
+    with _settings_lock:
+        settings = GlobalSettings()
+        
+        import sys
+        current_module = sys.modules[__name__]
+        settings_keys = getattr(settings, 'model_dump', settings.dict)().keys()
+        
+        for key in settings_keys:
+            if key in current_module.__dict__:
+                del current_module.__dict__[key]
+
 # [추가] 설정 항목에 대한 한글 설명 매핑 (UI 출력용)
 CONFIG_DESCRIPTIONS = {
     "ACTIVE_PRESET": "현재 활성화된 전략 프리셋",
