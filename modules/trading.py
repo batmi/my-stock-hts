@@ -1101,10 +1101,10 @@ def send_order(order_type):
 
                     if calculated_score > 0:
                         rsi_str = f"{indicator_info.get('rsi', 0):.1f}" if indicator_info.get('rsi') is not None else "-"
-                        msg += f"\n📊 [지표] 점수:{calculated_score}점 / RSI:{rsi_str}"
+                        msg += f"\n[지표] 점수:{calculated_score}점 / RSI:{rsi_str}"
 
                     if stop_loss_rate_to_save != 0.0:
-                        msg += f"\n📉 [ATR 손절] {stop_loss_rate_to_save:.2f}% 설정 (ATR손절 적용)"
+                        msg += f"\n[ATR 손절] {stop_loss_rate_to_save:.2f}% 설정 (ATR손절 적용)"
                 
                 api.send_telegram_message(msg)
                 

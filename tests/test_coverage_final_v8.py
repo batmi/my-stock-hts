@@ -92,7 +92,7 @@ def test_delete_stock_rules(mock_view, mock_delete, mock_ask, mock_get_rules):
 def test_input_and_save_rule_new(mock_save_weights, mock_save, mock_ask, mock_get_strat, mock_price):
     """새로운 룰 입력 및 저장"""
     mock_ask.side_effect = [
-            "8.5", "60", "100", "1.2", "10.0", "y", "75", "5.0", "10.0", "3.0", "10",
+                "8.5", "60", "100", "y", "1.2", "10.0", "y", "75", "5.0", "10.0", "3.0", "10",
             "20", "n", "-5.0", "4.0", "2.5", "1.5", "2.0", "Test Memo"
     ]
     

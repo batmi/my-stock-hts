@@ -20,8 +20,8 @@ def test_modify_analysis_thresholds(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_analysis_thresholds_new_items(mock_ask):
     """새로 추가된 분석 임계값 설정 변경 테스트 (비대칭성, 역추세 RSI)"""
-    # 5번 항목(비대칭성) -> 1.8 -> 9번 항목(역추세 RSI) -> 35.0 -> 종료(q)
-    mock_ask.side_effect = ["5", "1.8", "9", "35.0", "q"]
+    # 6번 항목(비대칭성) -> 1.8 -> 10번 항목(역추세 RSI) -> 35.0 -> 종료(q)
+    mock_ask.side_effect = ["6", "1.8", "10", "35.0", "q"]
     
     orig_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
     orig_mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
@@ -40,12 +40,12 @@ def test_modify_risk_portfolio_settings_new_items(mock_ask):
     # USE_VOLATILITY_TARGETING이 켜져 있을 때 일일 손실 제한은 12번째 항목
     mock_ask.side_effect = ["12", "15.0", "q"]
     
-    orig_loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
+    orig_loss_limit = getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
     try:
         settings.modify_risk_portfolio_settings()
-        assert getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT') == 15.0
+        assert getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT') == 15.0
     finally:
-        setattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', orig_loss_limit)
+        setattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', orig_loss_limit)
 
 @patch('rich.prompt.Prompt.ask')
 def test_modify_telegram_settings(mock_ask):
@@ -53,11 +53,11 @@ def test_modify_telegram_settings(mock_ask):
     # 1번 항목(사용여부) 선택 -> 변경(y) -> 종료(q)
     mock_ask.side_effect = ["1", "y", "q"]
     
-    original_val = config.ENABLE_TELEGRAM
-    config.ENABLE_TELEGRAM = True # 초기값 True로 고정
+    original_val = getattr(config.settings, 'ENABLE_TELEGRAM', True)
+    config.settings.ENABLE_TELEGRAM = True # 초기값 True로 고정
     
     try:
         settings.modify_telegram_settings()
-        assert config.ENABLE_TELEGRAM is False
+        assert getattr(config.settings, 'ENABLE_TELEGRAM', True) is False
     finally:
-        config.ENABLE_TELEGRAM = original_val
+        config.settings.ENABLE_TELEGRAM = original_val
