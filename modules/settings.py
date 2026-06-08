@@ -91,7 +91,8 @@ def view_system_config():
     table.add_row("상승 추세 점수\n[dim]관망/상승 판단 기준[/dim]", "ANALYSIS_THRESHOLDS['RISE_SCORE']", f"{thresholds.get('RISE_SCORE')}")
     table.add_row("매수 허용 RSI 상한\n[dim]과열 방지 (이 값보다 낮아야 매수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_RSI_MAX']", f"{thresholds.get('BUY_RSI_MAX')}")
     table.add_row("매수 체결강도 기준\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_VOL_STRENGTH']", f"{thresholds.get('BUY_VOL_STRENGTH')}%")
-    table.add_row("매도잔량 비대칭성 기준\n[dim]가짜 체결강도 방어 (매도/매수잔량 배수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', 1.2)}배")
+    table.add_row("비대칭성 자동 계산\n[dim]체결강도 100% 기준으로 비례하여 자동 조정[/dim]", "ANALYSIS_THRESHOLDS['AUTO_ADJUST_ASK_BID_RATIO']", f"{thresholds.get('AUTO_ADJUST_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True))}")
+    table.add_row("매도잔량 비대칭성 기준\n[dim]가짜 체결강도 방어 (체결강도 100% 기준 비율)[/dim]", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배")
     table.add_row("역추세 매수 사용\n[dim]낙폭과대 반등 노리기[/dim]", "ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION']", f"{thresholds.get('USE_MEAN_REVERSION', True)}")
     if thresholds.get('USE_MEAN_REVERSION', True):
         table.add_row("  └ 역추세 RSI\n    [dim]과매도/침체 기준[/dim]", "MR_RSI_MAX", f"{thresholds.get('MR_RSI_MAX', 40.0)}")
@@ -399,8 +400,10 @@ def modify_analysis_thresholds():
          "get": lambda: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_RSI_MAX": v})},
         {"desc": "매수 체결강도 기준", "help": "수급 확인 (이 값 이상이어야 매수)", "name": "BUY_VOL_STRENGTH", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_VOL_STRENGTH": v})},
-        {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (매도잔량이 매수잔량의 몇 배 이상인지, 기본 1.2, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float",
-         "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_ASK_BID_RATIO": v})},
+        {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준으로 비례하여 매도잔량비를 자동 조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"AUTO_ADJUST_ASK_BID_RATIO": v})},
+        {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 비율, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_ASK_BID_RATIO": v})},
         {"desc": "과열 이격도 상한", "help": "20일선 대비 단기 과열 기준 (예: 110.0)", "name": "DISPARITY_UPPER", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_UPPER": v})},
         {"desc": "침체 이격도 하한", "help": "20일선 대비 과매도 기준 (예: 90.0)", "name": "DISPARITY_LOWER", "type": "float",
@@ -741,25 +744,25 @@ def modify_trading_cycle_settings():
 # =========================================================
 DEFAULT_PRESETS = {
     "bull": {
-        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.2, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 40.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
-        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 2.0, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
+        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 20.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0,
         "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.1, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
     },
     "sideways": {
-        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.5, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0,
         "TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
-        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.2, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
+        "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
@@ -799,7 +802,8 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "BUY_SCORE": vals["BUY_SCORE"],
         "BUY_RSI_MAX": vals["BUY_RSI_MAX"],
         "BUY_VOL_STRENGTH": vals.get("BUY_VOL_STRENGTH", 100.0),
-        "BUY_ASK_BID_RATIO": vals.get("BUY_ASK_BID_RATIO", 1.2),
+        "BUY_ASK_BID_RATIO": vals.get("BUY_ASK_BID_RATIO", 1.0),
+        "AUTO_ADJUST_ASK_BID_RATIO": vals.get("AUTO_ADJUST_ASK_BID_RATIO", True),
         "USE_MEAN_REVERSION": vals["USE_MEAN_REVERSION"],
         "MR_RSI_MAX": vals["MR_RSI_MAX"],
         "MR_VOL_STRENGTH": vals.get("MR_VOL_STRENGTH", 100.0),
@@ -848,7 +852,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     
     # 변경된 주요 설정값 요약 데이터 구성
     summary_data = [
-        ("매수 허들 (점수/RSI/체결/비대칭)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 비대칭 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.2)}배↑"),
+        ("매수 허들 (점수/RSI/체결/비대칭)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 비대칭 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)}배↑ (자동연동: {'ON' if config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True) else 'OFF'})"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
         ("역추세 매수 (RSI/체결강도)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 100.0)}% 이상)"),
         ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 5.0)} 미만 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
@@ -904,7 +908,8 @@ def _edit_single_preset(preset_type):
             {"desc": "매수 기준 점수", "help": "진입 임계값", "name": "BUY_SCORE", "type": "float", "section": "Buy", "get": make_getter("BUY_SCORE"), "set": make_setter("BUY_SCORE", 'float')},
             {"desc": "매수 허용 RSI 상한", "help": "과열 방지", "name": "BUY_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("BUY_RSI_MAX"), "set": make_setter("BUY_RSI_MAX", 'float')},
             {"desc": "매수 체결강도 기준", "help": "매수 수급 확인", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("BUY_VOL_STRENGTH"), "set": make_setter("BUY_VOL_STRENGTH", 'float')},
-            {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (매도/매수잔량 배수)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "Buy", "get": make_getter("BUY_ASK_BID_RATIO"), "set": make_setter("BUY_ASK_BID_RATIO", 'float')},
+            {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준 비례 자동조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("AUTO_ADJUST_ASK_BID_RATIO"), "set": make_setter("AUTO_ADJUST_ASK_BID_RATIO", 'bool')},
+            {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 배수)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "Buy", "get": make_getter("BUY_ASK_BID_RATIO"), "set": make_setter("BUY_ASK_BID_RATIO", 'float')},
             {"desc": "역추세 매수 사용", "help": "낙폭과대 반등", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("USE_MEAN_REVERSION"), "set": make_setter("USE_MEAN_REVERSION", 'bool')},
             {"desc": "역추세 RSI 상한", "help": "과매도 진입 기준", "name": "MR_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("MR_RSI_MAX"), "set": make_setter("MR_RSI_MAX", 'float')},
             {"desc": "역추세 체결강도 기준", "help": "바닥권 매수세 확인", "name": "MR_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("MR_VOL_STRENGTH"), "set": make_setter("MR_VOL_STRENGTH", 'float')},
@@ -1003,7 +1008,7 @@ def reset_to_default(interactive=True):
 
     # 2. 메모리 변수 초기화 (기본값 복원)
     config.ANALYSIS_THRESHOLDS.update({
-            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.2,
+            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True,
         "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90,
         "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, 
         "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 100.0,

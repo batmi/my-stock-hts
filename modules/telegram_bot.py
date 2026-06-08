@@ -916,7 +916,7 @@ class TelegramCommander:
             sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
 
             msg += (f"\n• {name}({code})\n"
-                    f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', 100.0)}% / 비대칭 {r.get('buy_ask_bid_ratio', 1.2)}배↑\n"
+                    f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
                     f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
                     f"   리스크: 비중 {r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2))*100:.0f}% / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
@@ -2023,13 +2023,15 @@ class TelegramCommander:
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
-        buy_ask_bid = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
+        buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        buy_ask_bid = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
+        auto_adj = "ON" if config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True) else "OFF"
         msg += f"\n[매수 조건]\n"
         msg += f"• 종합 점수: {buy_score}점 이상 (상승: {rise_score}점)\n"
         msg += f"• RSI 상한: {buy_rsi} 미만\n"
         msg += f"• 체결강도: {buy_vol}% 이상\n"
-        msg += f"• 매도잔량 비대칭성: {buy_ask_bid}배 이상\n"
+        msg += f"• 비대칭성 자동 연동: {auto_adj}\n"
+        msg += f"• 매도잔량 비대칭성: {buy_ask_bid}배 이상 (100% 기준)\n"
         
         msg += f"\n[역추세 매수 (낙폭과대 반등)]\n"
         use_mr = config.ANALYSIS_THRESHOLDS.get('USE_MEAN_REVERSION', True)

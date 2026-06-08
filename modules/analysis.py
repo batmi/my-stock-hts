@@ -1276,9 +1276,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if rule_applied and custom_rule.get('buy_vol_strength'):
                 buy_vol_limit = custom_rule['buy_vol_strength']
                 
-        min_ask_bid_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
+        min_ask_bid_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
         if rule_applied and custom_rule.get('buy_ask_bid_ratio') is not None:
             min_ask_bid_ratio = custom_rule['buy_ask_bid_ratio']
+            
+        auto_adjust = config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
+        if rule_applied and custom_rule.get('auto_adjust_ask_bid_ratio') is not None:
+            auto_adjust = bool(custom_rule['auto_adjust_ask_bid_ratio'])
+
+        if auto_adjust and min_ask_bid_ratio > 0 and buy_vol_limit > 0:
+            ratio_multiplier = buy_vol_limit / 100.0
+            min_ask_bid_ratio = round(min_ask_bid_ratio * ratio_multiplier, 2)
                 
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
         super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
@@ -2660,6 +2668,10 @@ def save_all_market_analysis():
                             if rule.get('buy_score') != def_buy_score: changes.append(f"매수점수({rule['buy_score']})")
                             if rule.get('buy_rsi') != def_buy_rsi: changes.append(f"매수RSI({rule['buy_rsi']})")
                             if rule.get('buy_vol_strength') and rule['buy_vol_strength'] != def_buy_vol: changes.append(f"체결({rule['buy_vol_strength']}%)")
+                            def_ask_ratio = config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)
+                            if rule.get('buy_ask_bid_ratio') is not None and rule['buy_ask_bid_ratio'] != def_ask_ratio: changes.append(f"비대칭성({rule['buy_ask_bid_ratio']}배)")
+                            def_auto = config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True)
+                            if rule.get('auto_adjust_ask_bid_ratio') is not None and bool(rule['auto_adjust_ask_bid_ratio']) != def_auto: changes.append(f"자동연동({bool(rule['auto_adjust_ask_bid_ratio'])})")
                             if rule.get('sell_score') != def_sell_score: changes.append(f"매도점수({rule['sell_score']})")
                             if rule.get('take_profit') != def_tp: changes.append(f"익절({rule['take_profit']}%)")
                             if rule.get('stop_loss') != def_sl: changes.append(f"손절({rule['stop_loss']}%)")

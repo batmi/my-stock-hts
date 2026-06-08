@@ -616,7 +616,10 @@ class ConclusionMonitor:
                                                     thresholds = {
                                                         "BUY_SCORE": rule['buy_score'],
                                                         "BUY_RSI_MAX": rule['buy_rsi'],
-                                                        "BUY_VOL_STRENGTH": rule.get('buy_vol_strength') # [추가] 개별 체결강도
+                                                        "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                                                        "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
+                                                        "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
+                                                        "WEIGHTS": rule.get('weights')
                                                     }
                                                     rule_tag = " [개별 룰 적용]"
                                                     
@@ -1029,7 +1032,14 @@ class DefaultStrategy:
         # [수정] 체결강도 미달 및 가짜 체결강도(호가창 비대칭성) 필터링
         is_vol_ok = True
         vol_reject_reason = ""
-        min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
+        min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
+
+        # [추가] 체결강도 100% 기준으로 매도잔량비 자동 비례 계산
+        auto_adjust = thresholds.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
+        
+        if auto_adjust and min_ask_bid_ratio > 0 and min_vol > 0:
+            ratio_multiplier = min_vol / 100.0
+            min_ask_bid_ratio = round(min_ask_bid_ratio * ratio_multiplier, 2)
         
         if vol_strength is not None:
             if vol_strength < min_vol:
@@ -2721,7 +2731,7 @@ class AutoTrader:
             # 별도 테이블로 상세 표시
             rule_table = Table(title="종목별 개별 트레이딩 룰 목록", title_justify="center", title_style="", box=box.HORIZONTALS, header_style="dim", border_style="dim")
             rule_table.add_column("종목명(코드)", justify="left")
-            rule_table.add_column("매수(점수/RSI/체결)", justify="center")
+            rule_table.add_column("매수(점수/RSI/체결/비대칭)", justify="center")
             rule_table.add_column("청산(익절/TS/RSI/기한)", justify="center")
             rule_table.add_column("리스크(비중/손절)", justify="center")
             rule_table.add_column("가중치", justify="center") # [추가]
@@ -2743,7 +2753,7 @@ class AutoTrader:
 
                 rule_table.add_row(
                     name_disp,
-                    f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
+                    f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
                     f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
                     f"{ratio_str} / {sl_str}",
                     w_str,
@@ -2860,8 +2870,10 @@ class AutoTrader:
         # 매수 조건
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-        buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
-        table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑")
+        buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        buy_ask_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
+        auto_adj = "ON" if config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True) else "OFF"
+        table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑ / 비대칭 {buy_ask_ratio}배↑ (자동연동: {auto_adj})")
 
         # [추가] 역추세 매수 표시
         use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
@@ -4738,7 +4750,8 @@ class AutoTrader:
                     "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 시장 보정 무시 (절대값)
                     "BUY_RSI_MAX": rule['buy_rsi'],
                     "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                    "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)),
+                    "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
+                    "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
                     "WEIGHTS": rule.get('weights')
                 }
             else:
@@ -5191,7 +5204,7 @@ def _view_stock_rules():
 
     table = Table(title="종목별 개별 트레이딩 룰 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명(코드)", justify="left")
-    table.add_column("매수(점수/RSI/체결)", justify="center")
+    table.add_column("매수(점수/RSI/체결/비대칭)", justify="center")
     table.add_column("청산(익절/TS/RSI/기한)", justify="center")
     table.add_column("리스크(비중/손절)", justify="center")
     table.add_column("가중치", justify="center")
@@ -5216,7 +5229,7 @@ def _view_stock_rules():
 
         table.add_row(
             f"{r['name']}({r['code']})",
-            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', 100.0)}%",
+            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
             f"+{r['take_profit']}%{half_tp_str} / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
@@ -5259,7 +5272,8 @@ def _input_and_save_rule(code, name):
         "buy_score": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "buy_rsi": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
         "buy_vol_strength": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), # [수정] 안전한 접근
-        "buy_ask_bid_ratio": config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2),
+        "auto_adjust_ask_bid_ratio": 1 if config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True) else 0,
+        "buy_ask_bid_ratio": config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0),
         "sell_score": config.SELL_STRATEGY["SELL_SCORE"],
         "stop_loss": config.SELL_STRATEGY["STOP_LOSS_RATE"],
         "take_profit": config.SELL_STRATEGY["TAKE_PROFIT_RATE"],
@@ -5302,7 +5316,14 @@ def _input_and_save_rule(code, name):
         new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (기본: 7.5점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
         new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한 (기본: 65)", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
         new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
-        new_strategy['buy_ask_bid_ratio'] = ask_val('buy_ask_bid_ratio', "매도잔량 비대칭성 기준 (기본: 1.2배, 0: 미사용)", "가짜 체결강도 방어 (매도/매수잔량 비율)", float)
+        
+        curr_auto = "y" if current.get('auto_adjust_ask_bid_ratio', defaults['auto_adjust_ask_bid_ratio']) else "n"
+        val_auto = Prompt.ask(f"매도잔량비 자동 연동 (y: 사용 / n: 미사용) [dim](현재: {curr_auto})\n[dim]체결강도 설정값에 비례하여 최저 1.0배 자동 조정[/dim]", choices=["y", "n", "b", "q"], default=curr_auto)
+        if val_auto.lower() in ['b', 'q']: raise QuitInput()
+        new_strategy['auto_adjust_ask_bid_ratio'] = 1 if val_auto.lower() == 'y' else 0
+        
+        default_ratio = config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)
+        new_strategy['buy_ask_bid_ratio'] = ask_val('buy_ask_bid_ratio', f"매도잔량 비대칭성 기준 (기본: {default_ratio}배, 0: 미사용)", "가짜 체결강도 방어 (체결강도 100% 기준 매도/매수잔량 비율)", float)
 
         console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
         new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 30.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
@@ -5398,7 +5419,8 @@ def _input_and_save_rule(code, name):
         table.add_column("구분", justify="center", style="cyan")
         table.add_column("설정값", justify="left")
         
-        table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑ / 비대칭 {new_strategy['buy_ask_bid_ratio']}배↑")
+        auto_str = "ON" if new_strategy.get('auto_adjust_ask_bid_ratio', 1) else "OFF"
+        table.add_row("매수 타점", f"점수 {new_strategy['buy_score']}점↑ / RSI {new_strategy['buy_rsi']}↓ / 체결 {new_strategy['buy_vol_strength']}%↑ / 비대칭 {new_strategy['buy_ask_bid_ratio']}배↑ (자동연동: {auto_str})")
         half_tp_str = "ON" if new_strategy['half_take_profit_use'] else "OFF"
         table.add_row("청산 타점", f"익절 +{new_strategy['take_profit']}% (반익절: {half_tp_str}) / 과열 RSI {new_strategy['take_profit_rsi']}↑ / 시간청산 {new_strategy['time_stop_days']}일")
         table.add_row("트레일링", f"+{new_strategy['ts_activation']}% 도달 후 -{new_strategy['ts_callback']}% 하락 시")
