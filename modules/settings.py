@@ -1079,6 +1079,323 @@ def reset_to_default(interactive=True):
     else:
         return "🟢 [초기화(Default)] 시스템의 모든 설정이 최초 기본값으로 초기화되었습니다."
 
+def manage_custom_settings():
+    """[6] 커스텀 변경된 설정 내역 조회 및 기본값 초기화"""
+    import time
+    import re
+    
+    context.USER_ACTION_BREADCRUMB.append("[6] 커스텀 설정 조회/초기화")
+
+    while True:
+        utils.clear_screen()
+        utils.print_breadcrumb()
+
+        changed_items = config.get_custom_settings()
+
+        if not changed_items:
+            console.print("\n[dim]현재 기본값에서 변경된 커스텀 설정이 없습니다.[/dim]\n")
+            time.sleep(1.5)
+            context.USER_ACTION_BREADCRUMB.pop()
+            return
+
+        console.print()
+        table = Table(
+            title="커스텀 변경된 설정 내역 (Custom Configuration)",
+            box=box.HORIZONTALS,
+            show_header=True,
+            header_style="dim",
+            border_style="dim",
+            expand=False,
+            padding=(0, 1)
+        )
+        table.add_column("No.", justify="right", style="dim")
+        table.add_column("설정 항목 (Description)", justify="left", style="white")
+        table.add_column("변수명 (Config Name)", justify="left", style="dim")
+        table.add_column("기본값 (Default)", justify="right", style="dim")
+        table.add_column("현재값 (Custom)", justify="right", style="cyan")
+
+        short_names = {
+            "BUY_SCORE": "매수 기준 점수",
+            "RISE_SCORE": "상승 추세 점수",
+            "BUY_RSI_MAX": "매수 허용 RSI 상한",
+            "BUY_VOL_STRENGTH": "매수 체결강도 기준",
+            "AUTO_ADJUST_ASK_BID_RATIO": "비대칭성 자동 계산",
+            "BUY_ASK_BID_RATIO": "매도잔량 비율 기준",
+            "USE_MEAN_REVERSION": "역추세 매수 사용",
+            "MR_RSI_MAX": "역추세 RSI",
+            "MR_DISPARITY_MAX": "역추세 이격도",
+            "MR_VOL_STRENGTH": "역추세 체결강도",
+            "DISPARITY_UPPER": "과열 이격도 상한",
+            "DISPARITY_LOWER": "침체 이격도 하한",
+            "SUPER_MOMENTUM_USE": "슈퍼 모멘텀 (RSI 유연화)",
+            "SUPER_MOMENTUM_SCORE": "슈퍼 매수 발동 점수",
+            "SUPER_MOMENTUM_W52_POS": "슈퍼 52주 위치 기준",
+            "SUPER_BUY_RSI_MAX": "완화된 매수 RSI 상한",
+            "TAKE_PROFIT_RATE": "익절 수익률",
+            "HALF_TAKE_PROFIT_USE": "반익절 사용",
+            "DEFENSIVE_HALF_SELL_USE": "방어적 반매도 사용",
+            "STOP_LOSS_RATE": "손절 수익률",
+            "USE_ATR_STOP": "ATR 손절 사용",
+            "ATR_STOP_MULTIPLIER": "ATR 손절 배수",
+            "MAX_ATR_STOP_LOSS_RATE": "ATR 최대 손절률",
+            "BREAK_EVEN_PROFIT_RATE": "본전 청산 발동 수익률",
+            "BREAK_EVEN_STOP_RATE": "본전 청산 손절선",
+            "TIME_STOP_USE": "시간 청산 사용",
+            "TIME_STOP_DAYS": "시간 청산 기준일",
+            "TIME_STOP_MIN_PROFIT_RATE": "시간청산 최소수익",
+            "MR_GRACE_LOSS_RATE": "역매수 유예 손실",
+            "SELL_SCORE": "매도(추세이탈) 점수",
+            "TAKE_PROFIT_RSI": "과열 매도 RSI",
+            "SUPER_TAKE_PROFIT_RSI": "슈퍼 모멘텀 과열 매도 RSI",
+            "TRAILING_STOP_ACTIVATION_RATE": "TS 발동 수익률",
+            "TRAILING_STOP_CALLBACK_RATE": "TS 하락 감지율",
+            "TREND": "추세 팩터",
+            "MOMENTUM": "모멘텀 팩터",
+            "STRENGTH": "강도/수급 팩터",
+            "SYNERGY": "시너지 가산점",
+            "USE_ADAPTIVE_THRESHOLD": "적응형 임계값 사용",
+            "BULL_SCORE_ADJ": "강세장 점수 보정",
+            "BEAR_SCORE_ADJ": "약세장 점수 보정",
+            "SIDEWAYS_SCORE_ADJ": "횡보장 점수 보정",
+            "REGIME_MA_PERIOD": "추세 판단 EMA (일)",
+            "REGIME_ADX_THRESHOLD": "추세 판단 ADX",
+            "SYSTEM_INVEST_PER_STOCK": "종목당 투자 비중",
+            "SYSTEM_MAX_HOLDINGS": "최대 보유 종목 수",
+            "SYSTEM_INCLUDE_ETF": "ETF 매수 포함 여부",
+            "SLIPPAGE_RATE": "슬리피지 비율",
+            "USE_VOLATILITY_TARGETING": "변동성 타겟팅 사용",
+            "TARGET_VOLATILITY": "목표 연간 변동성",
+            "VOLATILITY_SCALING_MAX": "스케일링 최대 배수",
+            "VOLATILITY_SCALING_MIN": "스케일링 최소 배수",
+            "USE_MARKET_FILTER": "시장 필터링 사용",
+            "MARKET_FILTER_MA": "시장 필터링 SMA (일)",
+            "SYSTEM_MAX_CONSECUTIVE_ERRORS": "연속 에러 허용",
+            "SYSTEM_DAILY_LOSS_LIMIT": "일일 손실 제한 (%)",
+            "SYSTEM_RISK_PER_TRADE": "1회 최대 리스크 (%)",
+            "USE_CORRELATION_FILTER": "상관계수 필터링 사용",
+            "CORRELATION_THRESHOLD": "상관계수 임계값",
+            "CHART_LOOKBACK_DAYS": "데이터 조회 기간",
+            "SAR_AF_START": "SAR 가속 시작",
+            "SAR_AF_STEP": "SAR 가속 증가",
+            "SAR_AF_MAX": "SAR 가속 최대",
+            "RSI_PERIOD": "RSI 계산 기간",
+            "RSI_SIGNAL": "RSI 시그널 기간",
+            "RSI_UPPER": "RSI 과매수 기준",
+            "RSI_MID": "RSI 중심선",
+            "RSI_LOWER": "RSI 과매도 기준",
+            "ADX_PERIOD": "ADX 계산 기간",
+            "CCI_WINDOW": "CCI 계산 기간",
+            "CCI_UPPER": "CCI 과매수 기준",
+            "CCI_LOWER": "CCI 과매도 기준",
+            "MACD_FAST": "MACD Fast EMA",
+            "MACD_SLOW": "MACD Slow EMA",
+            "MACD_SIGNAL": "MACD Signal",
+            "OBV_MA_PERIOD": "OBV EMA 기간",
+            "ATR_PERIOD": "ATR 계산 기간",
+            "EMA_SHORT": "단기 이평선(EMA) 기간",
+            "VOLUME_MA_PERIOD": "거래량 이동평균 기간",
+            "VOLUME_SPIKE_RATIO": "거래량 폭발 배수",
+            "SYSTEM_TRADING_START_TIME": "거래 시작 시간",
+            "SYSTEM_TRADING_END_TIME": "거래 종료 시간",
+            "SYSTEM_TRADING_INTERVAL": "모니터링 주기 (초)",
+            "CONCLUSION_CHECK_INTERVAL": "체결 감시 주기(초)",
+            "CONCLUSION_CHECK_IDLE_INTERVAL": "대기 모드 주기(초)",
+            "CONCLUSION_CHECK_ACTIVE_DURATION": "집중 감시 시간(초)",
+            "UNFILLED_ORDER_CANCEL_SECONDS": "미체결 취소 대기(초)",
+            "CHART_CACHE_TTL_MINUTES": "차트 캐시 시간(분)",
+            "ENABLE_TELEGRAM": "사용 여부",
+            "TELEGRAM_INSTANCE_NAME": "인스턴스 이름",
+            "TELEGRAM_POLLING_TIMEOUT": "폴링 타임아웃",
+            "AUTO_MORNING_BRIEFING_USE": "장전 AI 브리핑 사용",
+            "AUTO_MORNING_BRIEFING_TIME": "장전 AI 브리핑 시간",
+            "CLEAR_SCREEN_ON_MENU": "화면 자동 지우기",
+            "SCREEN_DEBUG_LEVEL": "화면 로그 레벨",
+            "FILE_DEBUG_LEVEL": "파일 로그 레벨",
+        }
+
+        category_map = {
+            "BUY_SCORE": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "RISE_SCORE": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "BUY_RSI_MAX": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "BUY_VOL_STRENGTH": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "AUTO_ADJUST_ASK_BID_RATIO": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "BUY_ASK_BID_RATIO": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "USE_MEAN_REVERSION": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "MR_RSI_MAX": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "MR_DISPARITY_MAX": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "MR_VOL_STRENGTH": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "MR_GRACE_LOSS_RATE": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "DISPARITY_UPPER": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "DISPARITY_LOWER": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "SUPER_MOMENTUM_USE": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "SUPER_MOMENTUM_SCORE": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "SUPER_MOMENTUM_W52_POS": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "SUPER_BUY_RSI_MAX": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "SUPER_TAKE_PROFIT_RSI": ("1. 매수 및 매도 전략 설정", "1-1. 매수/분석 임계값"),
+            "TAKE_PROFIT_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "HALF_TAKE_PROFIT_USE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "DEFENSIVE_HALF_SELL_USE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "STOP_LOSS_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "USE_ATR_STOP": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "ATR_STOP_MULTIPLIER": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "MAX_ATR_STOP_LOSS_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "BREAK_EVEN_PROFIT_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "BREAK_EVEN_STOP_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TIME_STOP_USE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TIME_STOP_DAYS": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TIME_STOP_MIN_PROFIT_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "SELL_SCORE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TAKE_PROFIT_RSI": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TRAILING_STOP_ACTIVATION_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TRAILING_STOP_CALLBACK_RATE": ("1. 매수 및 매도 전략 설정", "1-2. 매도/청산 전략"),
+            "TREND": ("2. 스코어링 및 시장 국면 설정", "2-1. 스코어링 가중치"),
+            "MOMENTUM": ("2. 스코어링 및 시장 국면 설정", "2-1. 스코어링 가중치"),
+            "STRENGTH": ("2. 스코어링 및 시장 국면 설정", "2-1. 스코어링 가중치"),
+            "SYNERGY": ("2. 스코어링 및 시장 국면 설정", "2-1. 스코어링 가중치"),
+            "USE_ADAPTIVE_THRESHOLD": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "BULL_SCORE_ADJ": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "BEAR_SCORE_ADJ": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "SIDEWAYS_SCORE_ADJ": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_MA_PERIOD": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_ADX_THRESHOLD": ("2. 스코어링 및 시장 국면 설정", "2-2. 적응형 임계값 (시장국면)"),
+            "SYSTEM_INVEST_PER_STOCK": ("3. 리스크 및 자산 배분 설정", ""),
+            "SYSTEM_MAX_HOLDINGS": ("3. 리스크 및 자산 배분 설정", ""),
+            "SYSTEM_INCLUDE_ETF": ("3. 리스크 및 자산 배분 설정", ""),
+            "SLIPPAGE_RATE": ("3. 리스크 및 자산 배분 설정", ""),
+            "USE_VOLATILITY_TARGETING": ("3. 리스크 및 자산 배분 설정", ""),
+            "TARGET_VOLATILITY": ("3. 리스크 및 자산 배분 설정", ""),
+            "VOLATILITY_SCALING_MAX": ("3. 리스크 및 자산 배분 설정", ""),
+            "VOLATILITY_SCALING_MIN": ("3. 리스크 및 자산 배분 설정", ""),
+            "USE_MARKET_FILTER": ("3. 리스크 및 자산 배분 설정", ""),
+            "MARKET_FILTER_MA": ("3. 리스크 및 자산 배분 설정", ""),
+            "SYSTEM_MAX_CONSECUTIVE_ERRORS": ("3. 리스크 및 자산 배분 설정", ""),
+            "SYSTEM_DAILY_LOSS_LIMIT": ("3. 리스크 및 자산 배분 설정", ""),
+            "SYSTEM_RISK_PER_TRADE": ("3. 리스크 및 자산 배분 설정", ""),
+            "USE_CORRELATION_FILTER": ("3. 리스크 및 자산 배분 설정", ""),
+            "CORRELATION_THRESHOLD": ("3. 리스크 및 자산 배분 설정", ""),
+            "CHART_LOOKBACK_DAYS": ("4. 기술적 지표 파라미터", ""),
+            "SAR_AF_START": ("4. 기술적 지표 파라미터", ""),
+            "SAR_AF_STEP": ("4. 기술적 지표 파라미터", ""),
+            "SAR_AF_MAX": ("4. 기술적 지표 파라미터", ""),
+            "RSI_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "RSI_SIGNAL": ("4. 기술적 지표 파라미터", ""),
+            "RSI_UPPER": ("4. 기술적 지표 파라미터", ""),
+            "RSI_MID": ("4. 기술적 지표 파라미터", ""),
+            "RSI_LOWER": ("4. 기술적 지표 파라미터", ""),
+            "ADX_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "CCI_WINDOW": ("4. 기술적 지표 파라미터", ""),
+            "CCI_UPPER": ("4. 기술적 지표 파라미터", ""),
+            "CCI_LOWER": ("4. 기술적 지표 파라미터", ""),
+            "MACD_FAST": ("4. 기술적 지표 파라미터", ""),
+            "MACD_SLOW": ("4. 기술적 지표 파라미터", ""),
+            "MACD_SIGNAL": ("4. 기술적 지표 파라미터", ""),
+            "OBV_MA_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "ATR_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "EMA_SHORT": ("4. 기술적 지표 파라미터", ""),
+            "VOLUME_MA_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "VOLUME_SPIKE_RATIO": ("4. 기술적 지표 파라미터", ""),
+            "SYSTEM_TRADING_START_TIME": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "SYSTEM_TRADING_END_TIME": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "SYSTEM_TRADING_INTERVAL": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "CONCLUSION_CHECK_INTERVAL": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "CONCLUSION_CHECK_IDLE_INTERVAL": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "CONCLUSION_CHECK_ACTIVE_DURATION": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "UNFILLED_ORDER_CANCEL_SECONDS": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "CHART_CACHE_TTL_MINUTES": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "ENABLE_TELEGRAM": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
+            "TELEGRAM_INSTANCE_NAME": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
+            "TELEGRAM_POLLING_TIMEOUT": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
+            "AUTO_MORNING_BRIEFING_USE": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
+            "AUTO_MORNING_BRIEFING_TIME": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
+            "CLEAR_SCREEN_ON_MENU": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
+            "SCREEN_DEBUG_LEVEL": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
+            "FILE_DEBUG_LEVEL": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
+        }
+        
+        category_order = {
+            "1. 매수 및 매도 전략 설정": 1, "2. 스코어링 및 시장 국면 설정": 2, 
+            "3. 리스크 및 자산 배분 설정": 3, "4. 기술적 지표 파라미터": 4, 
+            "5. 환경 및 시스템 설정": 5, "기타 설정": 99
+        }
+        
+        sub_category_order = {
+            "1-1. 매수/분석 임계값": 1, "1-2. 매도/청산 전략": 2, "2-1. 스코어링 가중치": 1, 
+            "2-2. 적응형 임계값 (시장국면)": 2, "5-1. 트레이딩 시간 및 주기": 1, 
+            "5-2. 텔레그램 및 AI 브리핑": 2, "5-3. 화면 및 로그 설정": 3, "": 0, "기타": 99
+        }
+
+        keys_list = list(changed_items.keys())
+        keys_list.sort(key=lambda k: (
+            category_order.get(category_map.get(changed_items[k].get("key", k), ("기타 설정", ""))[0], 99),
+            sub_category_order.get(category_map.get(changed_items[k].get("key", k), ("기타 설정", ""))[1], 99),
+            k
+        ))
+        
+        current_main = None
+        current_sub = None
+        
+        for i, key in enumerate(keys_list):
+            info = changed_items[key]
+            dict_key = info.get("key", key)
+            desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(dict_key, "사용자 설정 항목")
+            short_name = short_names.get(dict_key, dict_key)
+            
+            key_display = f"{short_name}\n[white dim]{desc}[/white dim]"
+            
+            main_cat, sub_cat = category_map.get(dict_key, ("기타 설정", ""))
+            if main_cat != current_main or sub_cat != current_sub:
+                table.add_section()
+                if main_cat != current_main:
+                    table.add_row("", f"[bold]{main_cat}[/bold]", "", "", "")
+                    current_main = main_cat
+                if sub_cat:
+                    table.add_row("", f"[bold dim]  {sub_cat}[/bold dim]", "", "", "")
+                current_sub = sub_cat
+                
+            table.add_row(
+                str(i + 1),
+                key_display,
+                key,
+                str(info["default"]),
+                str(info["current"])
+            )
+
+        console.print(table)
+        console.print()
+
+        ans = Prompt.ask(
+            "초기화할 설정 번호를 입력하세요 [dim](다중: 1,3 / 전체: 0 / 취소: b 또는 Enter)[/dim]"
+        )
+
+        if not ans or ans.lower() in ['b', 'q']:
+            context.USER_ACTION_BREADCRUMB.pop()
+            return
+
+        target_indices = []
+        if ans == '0':
+            target_indices = list(range(1, len(keys_list) + 1))
+        elif ',' in ans or ' ' in ans:
+            parts = re.split(r'[, ]+', ans)
+            target_indices = [int(p) for p in parts if p.isdigit()]
+        elif ans.isdigit():
+            target_indices = [int(ans)]
+
+        valid_keys_to_reset = []
+        for i in target_indices:
+            if 1 <= i <= len(keys_list):
+                valid_keys_to_reset.append(keys_list[i - 1])
+
+        if not valid_keys_to_reset:
+            console.print("[red]잘못된 번호입니다.[/red]")
+            time.sleep(1)
+            continue
+
+        confirm = Prompt.ask(f"선택한 {len(valid_keys_to_reset)}개의 설정을 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n")
+        if confirm.lower() == 'y':
+            config.reset_custom_settings(valid_keys_to_reset)
+            console.print(f"\n[green]✅ 성공적으로 초기화되었습니다.[/green]")
+            time.sleep(1.5)
+
 def system_config_menu():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "9"
@@ -1092,6 +1409,7 @@ def system_config_menu():
             ("3", "리스크 및 자산 배분 설정", "Risk & Portfolio"),
             ("4", "기술적 지표 파라미터", "Indicators"),
             ("5", "환경 및 시스템 설정", "Environment & System"),
+            ("6", "커스텀 설정 조회 및 초기화", "Manage Custom Settings"),
             ("7", "시장 국면별 전략 프리셋", "Strategy Presets"),
             ("8", "데이터 캐시 초기화", "Clear Cache"),
             ("9", "시스템 설정 전체 조회", "View Config"),
@@ -1144,6 +1462,9 @@ def system_config_menu():
             if sub_choice == "1": modify_trading_cycle_settings()
             elif sub_choice == "2": modify_telegram_settings()
             elif sub_choice == "3": modify_log_settings()
+            
+        elif choice == "6":
+            manage_custom_settings()
         
         elif choice == "7":
             if select_strategy_preset() is not False: utils.pause()

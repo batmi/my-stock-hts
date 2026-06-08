@@ -548,6 +548,160 @@ def load_dynamic_config():
         except Exception as e:
             print(f"[Config] 동적 설정 로드 실패: {e}")
 
+# [추가] 커스텀 변경된 설정 내역 추출
+def get_custom_settings():
+    default_settings = getattr(GlobalSettings(), 'model_dump', GlobalSettings().dict)()
+    current_settings = getattr(settings, 'model_dump', settings.dict)()
+    
+    changed_items = {}
+    for k, v in current_settings.items():
+        if k in ["ACTIVE_PRESET"]: continue
+        default_v = default_settings.get(k)
+        if isinstance(v, dict) and isinstance(default_v, dict):
+            for sub_k, sub_v in v.items():
+                sub_default = default_v.get(sub_k)
+                if sub_v != sub_default:
+                    changed_items[f"{k}.{sub_k}"] = {"parent": k, "key": sub_k, "default": sub_default, "current": sub_v}
+        else:
+            if v != default_v:
+                changed_items[k] = {"parent": None, "key": k, "default": default_v, "current": v}
+    return changed_items
+
+# [추가] 지정된 커스텀 설정을 초기화하고 다시 로드
+def reset_custom_settings(keys_to_reset):
+    global settings
+    import json
+    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
+    
+    if not os.path.exists(config_path):
+        return
+
+    with _settings_lock:
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            for key_path in keys_to_reset:
+                if '.' in key_path:
+                    parent, child = key_path.split('.', 1)
+                    if parent in data and child in data[parent]:
+                        del data[parent][child]
+                        if not data[parent]:
+                            del data[parent]
+                else:
+                    if key_path in data:
+                        del data[key_path]
+
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            
+            # 초기 상태를 베이스로 새 설정 덮어씌우기
+            settings = GlobalSettings()
+            load_dynamic_config()
+        except Exception as e:
+            print(f"[Config] 설정 초기화 중 오류: {e}")
+
+# [추가] 설정 항목에 대한 한글 설명 매핑 (UI 출력용)
+CONFIG_DESCRIPTIONS = {
+    "ACTIVE_PRESET": "현재 활성화된 전략 프리셋",
+    "SCREEN_DEBUG_LEVEL": "터미널 디버그 출력 레벨",
+    "CLEAR_SCREEN_ON_MENU": "메뉴 이동 시 터미널 클리어",
+    "FILE_DEBUG_LEVEL": "로그 파일 저장 레벨",
+    "ENABLE_TELEGRAM": "텔레그램 알림 기능 활성화 여부",
+    "AUTO_MORNING_BRIEFING_USE": "매일 글로벌 매크로 시황 전송 여부",
+    "AUTO_MORNING_BRIEFING_TIME": "장전 AI 브리핑 발송 시각",
+    "TELEGRAM_INSTANCE_NAME": "알림 메시지 머리말 (인스턴스 식별)",
+    "TELEGRAM_POLLING_TIMEOUT": "봇 명령어 수신 대기 시간",
+    "SYSTEM_TRADING_INTERVAL": "자동매매 루프 실행 간격 (초)",
+    "SYSTEM_INVEST_PER_STOCK": "전체 자산 대비 한 종목 투자 비율",
+    "SYSTEM_MAX_HOLDINGS": "포트폴리오에 담을 수 있는 최대 종목 수",
+    "SYSTEM_INCLUDE_ETF": "매수 대상에 ETF 포함 여부",
+    "USE_MARKET_FILTER": "지수 하락 시 신규 매수 보류 여부",
+    "MARKET_FILTER_MA": "시장 추세 판단용 단순이동평균선 (일)",
+    "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
+    "SYSTEM_DAILY_LOSS_LIMIT": "자산 보호를 위한 비상 정지 기준 손실률",
+    "SYSTEM_RISK_PER_TRADE": "1회 매매 시 계좌 대비 최대 허용 손실률",
+    "USE_VOLATILITY_TARGETING": "변동성(ATR) 타겟팅 비중 조절 사용 여부",
+    "TARGET_VOLATILITY": "목표 연간 변동성",
+    "VOLATILITY_SCALING_MAX": "변동성 비중 확대 최대 배수",
+    "VOLATILITY_SCALING_MIN": "변동성 비중 축소 최소 배수",
+    "SLIPPAGE_RATE": "주문가 보정 및 백테스트 슬리피지 비율",
+    "SYSTEM_TRADING_START_TIME": "거래 시작 시간 (HHMM)",
+    "SYSTEM_TRADING_END_TIME": "거래 종료 시간 (HHMM)",
+    "CONCLUSION_CHECK_INTERVAL": "주문 직후 집중 체결 확인 주기 (초)",
+    "CONCLUSION_CHECK_IDLE_INTERVAL": "평상시 체결 확인 주기 (초)",
+    "CONCLUSION_CHECK_ACTIVE_DURATION": "주문 후 짧은 주기 모니터링 시간 (초)",
+    "UNFILLED_ORDER_CANCEL_SECONDS": "미체결 주문 자동 취소 대기 시간 (초)",
+    "CHART_CACHE_TTL_MINUTES": "차트 데이터 메모리 캐시 시간 (분)",
+    "USE_CORRELATION_FILTER": "상관계수 필터링 (중복 테마 매수 방지) 사용",
+    "CORRELATION_THRESHOLD": "동조화 판단 상관계수 임계값",
+    "BUY_SCORE": "매수 기준 종합 점수",
+    "RISE_SCORE": "상승 추세 판단 기준 점수",
+    "BUY_RSI_MAX": "매수 진입 허용 최고 RSI (과열 방지)",
+    "BUY_VOL_STRENGTH": "매수 최소 체결강도 기준",
+    "BUY_ASK_BID_RATIO": "매수 최소 매도잔량 비대칭성 비율",
+    "AUTO_ADJUST_ASK_BID_RATIO": "매도잔량비 체결강도 비례 자동 조정 여부",
+    "USE_MEAN_REVERSION": "낙폭과대 역추세 매수 사용 여부",
+    "MR_RSI_MAX": "역추세 매수 최대 허용 RSI",
+    "MR_DISPARITY_MAX": "역추세 매수 20일선 대비 최대 이격도",
+    "MR_VOL_STRENGTH": "역추세 매수 최소 체결강도 기준",
+    "DISPARITY_UPPER": "20일선 대비 단기 과열 이격도 상한",
+    "DISPARITY_LOWER": "20일선 대비 과매도 이격도 하한",
+    "SUPER_MOMENTUM_USE": "주도주 슈퍼 모멘텀 전략 사용 여부",
+    "SUPER_MOMENTUM_SCORE": "슈퍼 모멘텀 발동 최소 점수",
+    "SUPER_MOMENTUM_W52_POS": "슈퍼 모멘텀 발동 최소 52주 고점 위치",
+    "SUPER_BUY_RSI_MAX": "슈퍼 모멘텀 발동 시 완화되는 매수 진입 RSI",
+    "SUPER_TAKE_PROFIT_RSI": "슈퍼 모멘텀 발동 시 상향되는 매도 RSI",
+    "TREND": "추세 팩터 가중치 (이평선, MACD, SAR)",
+    "MOMENTUM": "모멘텀 팩터 가중치 (RSI, CCI, DMI)",
+    "STRENGTH": "수급/강도 팩터 가중치 (ADX, OBV)",
+    "SYNERGY": "시너지 가산점 가중치",
+    "USE_ADAPTIVE_THRESHOLD": "시장 국면에 따른 매수 점수 동적 조절 여부",
+    "BULL_SCORE_ADJ": "강세장 점수 보정값",
+    "BEAR_SCORE_ADJ": "약세장 점수 보정값",
+    "SIDEWAYS_SCORE_ADJ": "횡보장 점수 보정값",
+    "REGIME_MA_PERIOD": "시장 국면 판단용 EMA 기간",
+    "REGIME_ADX_THRESHOLD": "추세장/횡보장 구분 ADX 기준",
+    "TAKE_PROFIT_RATE": "목표 익절 수익률",
+    "HALF_TAKE_PROFIT_USE": "목표 익절률의 절반 도달 시 50% 분할 매도 여부",
+    "DEFENSIVE_HALF_SELL_USE": "하락 반전 시 50% 방어적 수익실현 여부",
+    "STOP_LOSS_RATE": "고정 손절 수익률",
+    "USE_ATR_STOP": "ATR 기반 동적 손절 사용 여부",
+    "ATR_STOP_MULTIPLIER": "ATR 기반 손절 배수",
+    "MAX_ATR_STOP_LOSS_RATE": "동적 손절 최대 허용 한계선",
+    "BREAK_EVEN_PROFIT_RATE": "본전 청산 발동을 위한 최고 수익률",
+    "BREAK_EVEN_STOP_RATE": "본전 청산 시 끌어올릴 새로운 손절률",
+    "TIME_STOP_USE": "장기 보유 종목 시간 청산 여부",
+    "TIME_STOP_DAYS": "시간 청산 제한 보유 일수",
+    "TIME_STOP_MIN_PROFIT_RATE": "시간 청산 회피 최소 달성 수익률",
+    "MR_GRACE_LOSS_RATE": "역매수 유예기간 중 최대 허용 손실률",
+    "SELL_SCORE": "추세 이탈 매도 기준 점수",
+    "TAKE_PROFIT_RSI": "과열 매도 기준 RSI",
+    "TRAILING_STOP_ACTIVATION_RATE": "트레일링 스탑 감시 시작 수익률",
+    "TRAILING_STOP_CALLBACK_RATE": "최고가 대비 트레일링 스탑 매도 이탈률",
+    "CHART_LOOKBACK_DAYS": "차트 데이터 조회 기간 (일)",
+    "SAR_AF_START": "파라볼릭 SAR 가속변수 시작값",
+    "SAR_AF_STEP": "파라볼릭 SAR 가속변수 증가값",
+    "SAR_AF_MAX": "파라볼릭 SAR 가속변수 최대값",
+    "ADX_PERIOD": "ADX 계산 기간",
+    "CCI_WINDOW": "CCI 계산 기간",
+    "CCI_UPPER": "CCI 과매수 기준선",
+    "CCI_LOWER": "CCI 과매도 기준선",
+    "MACD_FAST": "MACD 단기선 (Fast EMA)",
+    "MACD_SLOW": "MACD 장기선 (Slow EMA)",
+    "MACD_SIGNAL": "MACD 시그널선 기간",
+    "OBV_MA_PERIOD": "OBV 이동평균 기간",
+    "RSI_PERIOD": "RSI 계산 기간",
+    "RSI_SIGNAL": "RSI 시그널(이동평균) 기간",
+    "RSI_UPPER": "RSI 과매수 기준선",
+    "RSI_MID": "RSI 중간 기준선",
+    "RSI_LOWER": "RSI 과매도 기준선",
+    "ATR_PERIOD": "ATR 계산 기간",
+    "EMA_SHORT": "단기 이평선(EMA) 기간",
+    "VOLUME_MA_PERIOD": "거래량 이동평균 기간",
+    "VOLUME_SPIKE_RATIO": "거래량 폭발 기준 비율"
+}
+
 # 모듈 로드 시 자동 실행
 load_dynamic_config()
 

@@ -2140,6 +2140,35 @@ class TelegramCommander:
             for r in custom_rules:
                 msg += f"• {r['name']}({r['code']})\n"
         
+        # [추가] 기본 설정과 비교하여 변경된 커스텀 설정 항목 출력
+        try:
+            from config import GlobalSettings
+            default_settings = getattr(GlobalSettings(), 'model_dump', GlobalSettings().dict)()
+            current_settings = getattr(config.settings, 'model_dump', config.settings.dict)()
+            
+            changed_items = []
+            for k, v in current_settings.items():
+                if k in ["ACTIVE_PRESET"]: continue
+                default_v = default_settings.get(k)
+                if isinstance(v, dict) and isinstance(default_v, dict):
+                    for sub_k, sub_v in v.items():
+                        sub_default = default_v.get(sub_k)
+                        if sub_v != sub_default:
+                            desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(sub_k, "")
+                            desc_str = f"\n  └ {desc}" if desc else ""
+                            changed_items.append(f"• {sub_k}: {sub_default} ➔ {sub_v}{desc_str}")
+                else:
+                    if v != default_v:
+                        desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(k, "")
+                        desc_str = f"\n  └ {desc}" if desc else ""
+                        changed_items.append(f"• {k}: {default_v} ➔ {v}{desc_str}")
+                        
+            if changed_items:
+                msg += f"\n[커스텀 변경된 설정 내역]\n"
+                msg += "\n".join(changed_items)
+        except Exception as e:
+            logger.debug(f"Changed settings extraction error: {e}")
+
         return msg
 
     def _get_trade_history(self, days=None):
