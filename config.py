@@ -613,6 +613,38 @@ def reset_all_settings():
     with _settings_lock:
         settings = GlobalSettings()
         
+        # [추가] 파이썬 클래스 딕셔너리의 메모리 참조 오염을 방지하기 위해 
+        # 초기화 시 하드코딩된 순수 기본값으로 강제 복원
+        settings.ANALYSIS_THRESHOLDS = {
+            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
+            "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True,
+            "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
+            "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
+            "SUPER_MOMENTUM_SCORE": 8.5, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
+        }
+        settings.SELL_STRATEGY = {
+            "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
+            "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
+            "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
+            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
+            "MR_GRACE_LOSS_RATE": -5.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
+            "SUPER_TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
+        }
+        settings.SCORING_WEIGHTS = {
+            "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
+        }
+        settings.MARKET_REGIME_PARAMS = {
+            "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
+            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
+        }
+        settings.INDICATOR_PARAMS = {
+            "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
+            "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
+            "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
+            "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
+            "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0
+        }
+        
         import sys
         current_module = sys.modules[__name__]
         settings_keys = getattr(settings, 'model_dump', settings.dict)().keys()

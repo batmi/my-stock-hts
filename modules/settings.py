@@ -1372,7 +1372,7 @@ def manage_custom_settings():
         confirm = Prompt.ask(f"선택한 {len(valid_keys_to_reset)}개의 설정을 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n")
         if confirm.lower() == 'y':
             config.reset_custom_settings(valid_keys_to_reset)
-            console.print(f"\n[green]✅ 성공적으로 초기화되었습니다.[/green]")
+            console.print(f"\n[green]성공적으로 초기화되었습니다.[/green]")
             time.sleep(1.5)
 
 def system_config_menu():
