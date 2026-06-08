@@ -1331,7 +1331,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
                 buy_reason_list.append(rsi_reason)
         if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
-        if not is_ask_bid_ok: buy_reason_list.append(f"비대칭성 미달 ({ask_bid_ratio:.2f}배 < {min_ask_bid_ratio}배)")
+        if not is_ask_bid_ok: buy_reason_list.append(f"매도잔량비 미달 ({ask_bid_ratio:.2f}배 < {min_ask_bid_ratio}배)")
         
         buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
         
@@ -1366,11 +1366,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 ab_color = "[red]" if is_ask_bid_ok else "[blue]"
                 ask_bid_str = f"{ab_color}{ask_bid_ratio:.2f}배[/]"
                 ask_bid_eval = "[bold red]양호[/]" if is_ask_bid_ok else "[bold blue]미달[/]"
-                table_logic.add_row("호가 비대칭성", ask_bid_str, f"{ask_bid_eval} (기준: {min_ask_bid_ratio}배 이상)")
+                table_logic.add_row("매도잔량 비율", ask_bid_str, f"{ask_bid_eval} (기준: {min_ask_bid_ratio}배 이상)")
             elif min_ask_bid_ratio <= 0:
-                table_logic.add_row("호가 비대칭성", "[dim]미사용[/]", "-")
+                table_logic.add_row("매도잔량 비율", "[dim]미사용[/]", "-")
             else:
-                table_logic.add_row("호가 비대칭성", "-", "데이터 확인 불가")
+                table_logic.add_row("매도잔량 비율", "-", "데이터 확인 불가")
 
         rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
         rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
@@ -2669,7 +2669,7 @@ def save_all_market_analysis():
                             if rule.get('buy_rsi') != def_buy_rsi: changes.append(f"매수RSI({rule['buy_rsi']})")
                             if rule.get('buy_vol_strength') and rule['buy_vol_strength'] != def_buy_vol: changes.append(f"체결({rule['buy_vol_strength']}%)")
                             def_ask_ratio = config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)
-                            if rule.get('buy_ask_bid_ratio') is not None and rule['buy_ask_bid_ratio'] != def_ask_ratio: changes.append(f"비대칭성({rule['buy_ask_bid_ratio']}배)")
+                            if rule.get('buy_ask_bid_ratio') is not None and rule['buy_ask_bid_ratio'] != def_ask_ratio: changes.append(f"매도잔량비({rule['buy_ask_bid_ratio']}배)")
                             def_auto = config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True)
                             if rule.get('auto_adjust_ask_bid_ratio') is not None and bool(rule['auto_adjust_ask_bid_ratio']) != def_auto: changes.append(f"자동연동({bool(rule['auto_adjust_ask_bid_ratio'])})")
                             if rule.get('sell_score') != def_sell_score: changes.append(f"매도점수({rule['sell_score']})")

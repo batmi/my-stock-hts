@@ -92,7 +92,7 @@ def view_system_config():
     table.add_row("매수 허용 RSI 상한\n[dim]과열 방지 (이 값보다 낮아야 매수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_RSI_MAX']", f"{thresholds.get('BUY_RSI_MAX')}")
     table.add_row("매수 체결강도 기준\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", "ANALYSIS_THRESHOLDS['BUY_VOL_STRENGTH']", f"{thresholds.get('BUY_VOL_STRENGTH')}%")
     table.add_row("비대칭성 자동 계산\n[dim]체결강도 100% 기준으로 비례하여 자동 조정[/dim]", "ANALYSIS_THRESHOLDS['AUTO_ADJUST_ASK_BID_RATIO']", f"{thresholds.get('AUTO_ADJUST_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True))}")
-    table.add_row("매도잔량 비대칭성 기준\n[dim]가짜 체결강도 방어 (체결강도 100% 기준 비율)[/dim]", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배")
+    table.add_row("매도잔량 비율 기준\n[dim]가짜 체결강도 방어 (체결강도 100% 기준 비율)[/dim]", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배")
     table.add_row("역추세 매수 사용\n[dim]낙폭과대 반등 노리기[/dim]", "ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION']", f"{thresholds.get('USE_MEAN_REVERSION', True)}")
     if thresholds.get('USE_MEAN_REVERSION', True):
         table.add_row("  └ 역추세 RSI\n    [dim]과매도/침체 기준[/dim]", "MR_RSI_MAX", f"{thresholds.get('MR_RSI_MAX', 40.0)}")
@@ -402,7 +402,7 @@ def modify_analysis_thresholds():
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_VOL_STRENGTH": v})},
         {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준으로 비례하여 매도잔량비를 자동 조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"],
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"AUTO_ADJUST_ASK_BID_RATIO": v})},
-        {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 비율, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float",
+        {"desc": "매도잔량 비율 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 비율, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_ASK_BID_RATIO": v})},
         {"desc": "과열 이격도 상한", "help": "20일선 대비 단기 과열 기준 (예: 110.0)", "name": "DISPARITY_UPPER", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_UPPER": v})},
@@ -852,7 +852,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     
     # 변경된 주요 설정값 요약 데이터 구성
     summary_data = [
-        ("매수 허들 (점수/RSI/체결/비대칭)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 비대칭 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)}배↑ (자동연동: {'ON' if config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True) else 'OFF'})"),
+        ("매수 허들 (점수/RSI/체결/잔량비)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 잔량비 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)}배↑ (자동연동: {'ON' if config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True) else 'OFF'})"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
         ("역추세 매수 (RSI/체결강도)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 100.0)}% 이상)"),
         ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 5.0)} 미만 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
@@ -909,7 +909,7 @@ def _edit_single_preset(preset_type):
             {"desc": "매수 허용 RSI 상한", "help": "과열 방지", "name": "BUY_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("BUY_RSI_MAX"), "set": make_setter("BUY_RSI_MAX", 'float')},
             {"desc": "매수 체결강도 기준", "help": "매수 수급 확인", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("BUY_VOL_STRENGTH"), "set": make_setter("BUY_VOL_STRENGTH", 'float')},
             {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준 비례 자동조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("AUTO_ADJUST_ASK_BID_RATIO"), "set": make_setter("AUTO_ADJUST_ASK_BID_RATIO", 'bool')},
-            {"desc": "매도잔량 비대칭성 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 배수)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "Buy", "get": make_getter("BUY_ASK_BID_RATIO"), "set": make_setter("BUY_ASK_BID_RATIO", 'float')},
+            {"desc": "매도잔량 비율 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 배수)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "Buy", "get": make_getter("BUY_ASK_BID_RATIO"), "set": make_setter("BUY_ASK_BID_RATIO", 'float')},
             {"desc": "역추세 매수 사용", "help": "낙폭과대 반등", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "Buy", "get": make_getter("USE_MEAN_REVERSION"), "set": make_setter("USE_MEAN_REVERSION", 'bool')},
             {"desc": "역추세 RSI 상한", "help": "과매도 진입 기준", "name": "MR_RSI_MAX", "type": "float", "section": "Buy", "get": make_getter("MR_RSI_MAX"), "set": make_setter("MR_RSI_MAX", 'float')},
             {"desc": "역추세 체결강도 기준", "help": "바닥권 매수세 확인", "name": "MR_VOL_STRENGTH", "type": "float", "section": "Buy", "get": make_getter("MR_VOL_STRENGTH"), "set": make_setter("MR_VOL_STRENGTH", 'float')},
