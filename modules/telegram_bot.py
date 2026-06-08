@@ -1974,9 +1974,7 @@ class TelegramCommander:
         
         groups = {
             "stocks_kr": "🇰🇷 국내주식",
-            "etfs_kr": "🇰🇷 국내ETF",
-            "stocks_us": "🇺🇸 미국주식",
-            "etfs_us": "🇺🇸 미국ETF"
+            "etfs_kr": "🇰🇷 국내ETF"
         }
         
         has_stock = False
