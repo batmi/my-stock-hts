@@ -81,6 +81,14 @@ class ReservedOrderMonitor:
             if expire_dt and expire_dt != "20991231" and today_str > expire_dt:
                 db_manager.db.update_reserved_order_status(order['id'], 'EXPIRED')
                 api.send_telegram_message(f"🗑 [예약 주문 만료]\n종목: {order['name']}({order['code']})\n사유: 설정된 유효 기간({expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}) 경과로 자동 취소되었습니다.")
+                
+                # [추가] 만료(취소) 내역 거래내역에 기록
+                t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}취소(예약)"
+                db_manager.db.insert_trade(
+                    t_type, order['code'], order['name'], order['qty'], 
+                    order.get('order_price', 0), f"RES_EXP_{order['id']}", 
+                    order_status="취소", reason="유효 기간 만료로 인한 예약 자동 취소"
+                )
                 continue
 
             trigger, reason = False, ""
@@ -203,12 +211,36 @@ class ReservedOrderMonitor:
             display_price = "시장가" if order_price == 0 else (f"{int(order_price):,}원" if order['market'] == 'KR' else f"${order_price:,.2f}")
             api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n종목: {order['name']}({order['code']})\n단가: {display_price}\n조건: {reason}\n주문번호: {odno}")
             
+            # [추가] 예약 발동 내역을 거래 내역(trades)에 기록 (접수 상태)
+            t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}(예약)"
+            snapshot = analysis.get_snapshot(order['code'], is_overseas=(order['market'] == 'US'))
+            db_manager.db.insert_trade(
+                t_type, order['code'], order['name'], order['qty'], 
+                order_price, odno, snapshot=snapshot, reason=f"예약발동: {reason}"
+            )
+            
+            # [추가] 미체결 추적 및 모의투자 체결 보정을 위해 OrderManager에 등록
+            from modules import auto_trade
+            trader = auto_trade.AutoTrader()
+            if hasattr(trader, 'order_manager'):
+                trader.order_manager.register_manual_order(order['code'], odno)
+                
+            # [추가] 즉각적인 체결 확인을 위해 ConclusionMonitor 트리거
+            auto_trade.ConclusionMonitor().check_now()
+
             # [추가] 해당 종목의 나머지 예약 주문 일괄 취소 및 알림
             canceled_orders = db_manager.db.cancel_other_reserved_orders(order['id'], order['cano'], order['acnt'], order['code'])
             for co in canceled_orders:
                 t_type = "매수" if co['order_type'] == 'buy' else "매도"
                 cond_str = co['condition_type']
                 api.send_telegram_message(f"🗑️ [예약 일괄 취소]\n종목: {co['name']}({co['code']})\n사유: 동일 종목의 다른 예약 매매 발동으로 인한 일괄 자동 취소\n조건: {cond_str} ({t_type})")
+                
+                # [추가] 일괄 취소 내역 거래내역에 기록
+                db_manager.db.insert_trade(
+                    f"{t_type}취소(예약)", co['code'], co['name'], co['qty'], 
+                    co.get('order_price', 0), f"RES_CAN_{co['id']}", 
+                    order_status="취소", reason=f"일괄 자동 취소 (조건: {cond_str})"
+                )
                 
         else:
             fail_msg = res.get('msg1', '알 수 없는 오류')

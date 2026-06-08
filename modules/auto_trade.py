@@ -1034,13 +1034,13 @@ class DefaultStrategy:
         if vol_strength is not None:
             if vol_strength < min_vol:
                 is_vol_ok = False
-                vol_reject_reason = f"체결미달({vol_strength:.1f}%<{min_vol}%)"
+                vol_reject_reason = f"체결:{vol_strength:.1f}%<{min_vol}%"
             elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
                 # [핵심] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성 확인)
                 # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
                 if ask_bid_ratio < min_ask_bid_ratio:
                     is_vol_ok = False
-                    vol_reject_reason = f"가짜체결 의심(비대칭성 {ask_bid_ratio:.2f}배<{min_ask_bid_ratio}배)"
+                    vol_reject_reason = f"매도잔량비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',

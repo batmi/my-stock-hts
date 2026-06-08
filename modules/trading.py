@@ -1450,7 +1450,7 @@ def register_reserved_order():
     config.console.print()
     
     # [추가] 예약 매매 일괄 취소 정책 안내
-    config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결(발동)되면 해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
+    config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결되면 해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
     config.console.print()
     
     cond_items = [
@@ -1459,8 +1459,8 @@ def register_reserved_order():
         ("3", "지정가 도달 (LIMIT)", "현재가가 목표가와 일치 시 (터치 기준)"),
         ("4", "특정 시간 (TIME)", "지정된 시간에 무조건 주문"),
         ("5", "퀀트 점수 (SCORE)", "시스템 종합 점수 조건 충족 시"),
-        ("6", "트레일링 매수 (TRAILING_BUY)", "최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
-        ("7", "트레일링 매도 (TRAILING_SELL)", "최고점 달성 후 N% 하락 시 (매도 전용)"),
+        ("6", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
+        ("7", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
         ("8", "RSI 지표 (RSI)", "RSI 수치 조건 충족 시"),
         ("9", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시")
     ]
@@ -1545,14 +1545,16 @@ def register_reserved_order():
         
     elif condition_type == "TRAILING_BUY":
         config.console.print(f"\n[cyan]◆ 반등 폭 설정 (트레일링 매수)[/cyan]")
-        target_price_str = Prompt.ask("최저점 대비 추격 매수할 반등 폭(%) 입력 (예: 3.0)")
+        config.console.print("[dim]※ '최저점'은 본 예약 주문이 등록된 시점 이후부터 갱신된 가장 낮은 가격을 의미합니다.[/dim]")
+        target_price_str = Prompt.ask("예약 후 최저점 대비 추격 매수할 반등 폭(%) 입력 (예: 3.0)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return False
         target_price = float(target_price_str.replace('%', '').strip())
     elif condition_type == "TRAILING_SELL":
         config.console.print(f"\n[cyan]◆ 하락 폭 설정 (트레일링 매도)[/cyan]")
-        target_price_str = Prompt.ask("최고점 대비 하락 시 매도할 폭(%) 입력 (예: 3.0)")
+        config.console.print("[dim]※ '최고점'은 본 예약 주문이 등록된 시점 이후부터 갱신된 가장 높은 가격을 의미합니다.[/dim]")
+        target_price_str = Prompt.ask("예약 후 최고점 대비 하락 시 매도할 폭(%) 입력 (예: 3.0)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return False
@@ -1827,6 +1829,13 @@ def manage_reserved_orders():
                     t_type = "매수" if target_order['order_type'] == 'buy' else "매도"
                     cond_str = target_order['condition_type']
                     api.send_telegram_message(f"🗑️ [예약 수동 취소] {target_order['name']}({target_order['code']})\n사용자에 의해 대기 중이던 예약 {t_type} 주문(ID: {cid})이 취소되었습니다.\n조건: {cond_str}")
+                    
+                    # [추가] 수동 취소 내역 거래내역에 기록
+                    db_manager.db.insert_trade(
+                        f"{t_type}취소(예약)", target_order['code'], target_order['name'], target_order['qty'], 
+                        target_order.get('order_price', 0), f"RES_CAN_{cid}", 
+                        order_status="취소", reason=f"수동 취소 (조건: {cond_str})"
+                    )
                     
             config.console.print()
             if canceled_list:
