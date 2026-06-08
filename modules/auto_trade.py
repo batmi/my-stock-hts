@@ -506,6 +506,10 @@ class ConclusionMonitor:
                                         if orig_reason and "체결 확인" not in orig_reason:
                                             reason_to_save = f"체결 확인 ({orig_reason})"
                                             actual_reason = orig_reason
+                                            
+                                        # [추가] 시간 역전 방지: KIS 거래소 서버 시간이 로컬 접수 시간보다 과거인 경우 동기화 보정
+                                        if trade_time_str and origin_trade.get('time') and trade_time_str < origin_trade['time']:
+                                            trade_time_str = origin_trade['time']
                                     else:
                                         # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
                                         try:
