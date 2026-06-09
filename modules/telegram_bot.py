@@ -656,7 +656,11 @@ class TelegramCommander:
 
     def _cmd_signal(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /signal 삼성전자"
-        return self._analyze_stock(" ".join(args))
+        keyword = " ".join(args)
+        code, name, _ = self._resolve_stock(keyword)
+        display_name = f"{name}({code})" if code else keyword
+        self._send_reply(f"⏳ '{display_name}' 기술적 분석 및 진단 중...\n(데이터 조회 및 지표 계산에 약간의 시간이 소요될 수 있습니다)")
+        return self._analyze_stock(keyword)
         
     def _cmd_analyze(self, args):
         if not args: return "⚠️ 종목명이나 코드를 입력해주세요.\n예: /analyze 삼성전자"
