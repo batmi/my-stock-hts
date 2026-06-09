@@ -1012,7 +1012,8 @@ class DefaultStrategy:
             current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
             ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
             thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
-            plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+            plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+            df=df, ind=ind
         )
         
         # [수정] 가중치(WEIGHTS) 및 누락된 세부 지표 전달
@@ -1139,7 +1140,8 @@ class DefaultStrategy:
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
                 thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
-                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                df=df, ind=ind
             )
             
             # [수정] 가중치(WEIGHTS) 및 누락된 세부 지표 전달
@@ -4364,6 +4366,7 @@ class AutoTrader:
             
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
+            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             score_adj = market_regime_adj.get(market_type, 0.0)
             
             ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
@@ -4451,7 +4454,14 @@ class AutoTrader:
                         self.trailing_stop_cache[code] = current_price
                     highest_price = current_price
 
-            df = api.get_chart_data(code, is_overseas=False)
+            df = api.get_chart_data(code, is_overseas=is_overseas_stock)
+            
+            # [추가] 차트 데이터 당일 종가/고가/저가 실시간 갱신 (지표 불일치 완벽 방지)
+            if df is not None and not df.empty and current_price > 0:
+                df.iloc[-1, df.columns.get_loc('close')] = float(current_price)
+                if current_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(current_price)
+                if current_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(current_price)
+
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
             
@@ -4691,19 +4701,32 @@ class AutoTrader:
             
             if not self.is_running: return None # API 호출 전 최종 확인
             
+            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+            
             # 5. [최적화] 차트, 체결강도, 호가창 데이터 병렬(동시) 조회
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=False)
-                fut_vol = ex.submit(api.get_realtime_vol_strength, code)
-                fut_ob = ex.submit(api.get_order_book, code, False)
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
+                fut_ob = ex.submit(api.get_order_book, code, is_overseas_stock)
                 
                 df = fut_chart.result()
-                try: vol_strength = fut_vol.result()
+                try: vol_strength = fut_vol.result() if fut_vol else None
                 except: vol_strength = None
-                try: ob_data = fut_ob.result()
+                try: ob_data = fut_ob.result() if fut_ob else None
                 except: ob_data = None
                 
             if df is None or df.empty: return None
+            
+            # [수정] 캐시된 차트 데이터의 당일 미확정 종가를 실시간 최신 현재가로 업데이트
+            # (종목 분석 메뉴와 시스템 트레이딩 간의 지표 및 점수 불일치 원천 차단)
+            try:
+                realtime_price = api.get_current_price(code, is_overseas=is_overseas_stock)
+                if realtime_price and realtime_price > 0:
+                    df.iloc[-1, df.columns.get_loc('close')] = float(realtime_price)
+                    if realtime_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(realtime_price)
+                    if realtime_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(realtime_price)
+            except: pass
+            
             current_price = float(df.iloc[-1]['close'])
             
             # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산

@@ -130,7 +130,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         if ema_5 is None:
             ema_5 = df['close'].ewm(span=config.INDICATOR_PARAMS.get('EMA_SHORT', 5), adjust=False).mean().iloc[-1]
             
-        if macd is not None and macd_signal is not None and macd_hist is None:
+        if macd is not None and macd_signal is not None and (macd_hist is None or prev_macd_hist is None):
             fast = config.INDICATOR_PARAMS.get('MACD_FAST', 12)
             slow = config.INDICATOR_PARAMS.get('MACD_SLOW', 26)
             sig = config.INDICATOR_PARAMS.get('MACD_SIGNAL', 9)
@@ -821,6 +821,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
             
+        # [추가] 실시간 현재가 조회 및 차트 데이터 최신화 (점수 불일치 방지)
+        try:
+            rt_price = api.get_current_price(code, is_overseas=is_overseas)
+            if rt_price > 0:
+                df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
+                if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
+                if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
+        except: pass
+
         # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
         ask_bid_ratio = None
         if ob_data and ob_data.get('rt_cd') == '0':
@@ -1631,6 +1640,19 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             if market_filter == "KOSDAQ" and not is_kosdaq: return None
 
         if df is None or df.empty: return None
+        
+        # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가/종가 최신화
+        try:
+            if cp_data and cp_data.get('rt_cd') == '0':
+                rt_price = float(cp_data['output'].get('stck_prpr', 0))
+            else:
+                rt_price = api.get_current_price(code, is_overseas=False)
+                
+            if rt_price > 0:
+                df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
+                if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
+                if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
+        except: pass
         
         ind = indicators.calculate_indicators(df)
         current_price = float(df.iloc[-1]['close'])
@@ -2828,6 +2850,19 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             if curr_data and curr_data.get('rt_cd') == '0' and chart_df is not None and not chart_df.empty:
                 break
             time.sleep(0.5)
+
+        # [추가] 차트 데이터 당일 종가/고가/저가 실시간 갱신 (점수 0.5점 오차 방지)
+        try:
+            rt_price = 0.0
+            if curr_data and curr_data.get('rt_cd') == '0':
+                if is_overseas: rt_price = float(curr_data['output'].get('last', 0) or 0)
+                else: rt_price = float(curr_data['output'].get('stck_prpr', 0))
+                
+            if rt_price > 0 and chart_df is not None and not chart_df.empty:
+                chart_df.iloc[-1, chart_df.columns.get_loc('close')] = float(rt_price)
+                if rt_price > chart_df.iloc[-1]['high']: chart_df.iloc[-1, chart_df.columns.get_loc('high')] = float(rt_price)
+                if rt_price < chart_df.iloc[-1]['low']: chart_df.iloc[-1, chart_df.columns.get_loc('low')] = float(rt_price)
+        except: pass
 
         ind = indicators.calculate_indicators(chart_df)
 

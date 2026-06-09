@@ -702,7 +702,8 @@ class TelegramCommander:
             state, _, state_reason = analysis.classify_stock_state(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                w52_pos=w52_pos, smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                w52_pos=w52_pos, smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                df=df, ind=ind
             )
 
             score, _ = analysis.calculate_score(
@@ -1790,7 +1791,8 @@ class TelegramCommander:
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'],
                 ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
                 thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
-                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
+                df=df, ind=ind
             )
             score, _ = analysis.calculate_score(
                 current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
@@ -1859,11 +1861,47 @@ class TelegramCommander:
             buy_score_limit = buy_score
             buy_rsi_limit = buy_rsi
             
+            # [추가] 실시간 체결강도 및 매도잔량비 조회 (자동매매와 조건 일치)
+            vol_strength = None
+            ask_bid_ratio = None
+            if not is_overseas:
+                try:
+                    vol_strength = api.get_realtime_vol_strength(code)
+                    ob_data = api.get_order_book(code, False)
+                    if ob_data and ob_data.get('rt_cd') == '0':
+                        out1 = ob_data.get('output1', {})
+                        total_ask = api.safe_int(out1.get('total_askp_rsqn'))
+                        total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
+                        if total_bid > 0: ask_bid_ratio = total_ask / total_bid
+                        elif total_ask > 0: ask_bid_ratio = 99.9
+                except: pass
+            
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
             is_safe_state = state not in ["매도", "주의"]
             
-            if is_buy_score and is_buy_rsi and is_safe_state:
+            # 자동매매와 동일한 수급 필터링 기준 산출
+            min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+            if state == "역매수":
+                min_vol = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
+            
+            min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
+            auto_adjust = thresholds.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
+            if auto_adjust and min_ask_bid_ratio > 0 and min_vol > 0:
+                min_ask_bid_ratio = round(min_ask_bid_ratio * (min_vol / 100.0), 2)
+                
+            is_vol_ok = True
+            vol_reason = ""
+            if vol_strength is not None:
+                if vol_strength < min_vol:
+                    is_vol_ok = False
+                    vol_reason = f"체결미달({vol_strength:.1f}%<{min_vol}%)"
+                elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
+                    if ask_bid_ratio < min_ask_bid_ratio:
+                        is_vol_ok = False
+                        vol_reason = f"매도잔량부족(비율 {ask_bid_ratio:.2f}<{min_ask_bid_ratio})"
+            
+            if is_buy_score and is_buy_rsi and is_safe_state and is_vol_ok:
                 buy_result = f"🔴 매수 가능 (조건 충족{regime_msg})"
             else:
                 reasons = []
@@ -1872,6 +1910,8 @@ class TelegramCommander:
                 if not is_buy_rsi:
                     rsi_val = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "N/A"
                     reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")
+                if not is_vol_ok:
+                    reasons.append(vol_reason)
                 buy_result = f"🔵 매수 불가 ({', '.join(reasons)})"
 
             # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회
@@ -1927,6 +1967,10 @@ class TelegramCommander:
             msg += f"• CCI: {cci_str}\n"
             msg += f"• ADX: {adx_str}\n"
             msg += f"• DMI: {dmi_str}"
+            if vol_strength is not None:
+                msg += f"\n• 체결강도: {vol_strength:.1f}%"
+            if ask_bid_ratio is not None and ask_bid_ratio != 99.9:
+                msg += f"\n• 매도/매수잔량비: {ask_bid_ratio:.2f}배"
             
             return msg
         except Exception as e:
