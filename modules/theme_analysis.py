@@ -18,6 +18,7 @@ import json
 import context # [추가]
 from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
 from modules.executors import ai_executor, io_executor
+from modules import db_manager
 
 # [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
 # (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)

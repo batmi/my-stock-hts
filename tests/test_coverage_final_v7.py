@@ -72,7 +72,7 @@ def test_check_sell_conditions_trailing_stop(mock_del, mock_get_high, mock_updat
     }]
     
     mock_qty.return_value = 10
-    mock_chart.return_value = pd.DataFrame({'close': [11000]})
+    mock_chart.return_value = pd.DataFrame({'close': [11000], 'open': [11000], 'high': [11500], 'low': [10500]})
     
     # 최고가 12000원 (20% 수익) -> 현재 11000원 (10% 수익) -> 고점 대비 약 8.3% 하락
     # 설정: 발동 10%, 콜백 3% -> 매도 조건 충족
@@ -119,7 +119,7 @@ def test_classify_stock_state_neutral():
 def test_calculate_daily_status_sell_condition():
     """백테스트 일별 상태 계산 - 매도 조건"""
     row = pd.Series({
-        'close': 9000, 'EMA20': 10000, 'EMA60': 11000, 'EMA120': 12000,
+        'close': 9000, 'open': 9000, 'EMA20': 10000, 'EMA60': 11000, 'EMA120': 12000,
         'SAR': 13000, 'RSI': 30, 'ADX': 20, 'CCI': -100, 'OBV': 1000, 'OBV_MA': 1000,
         'MACD': -10, 'MACD_Signal': 0
     })

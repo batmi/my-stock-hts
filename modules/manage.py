@@ -14,6 +14,7 @@ import utils
 import constants
 import re
 import indicators
+from modules import analysis
 
 logger = logging.getLogger(__name__)
 
