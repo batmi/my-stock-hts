@@ -4836,7 +4836,7 @@ class AutoTrader:
                     'reentry_msg': reentry_msg
                 }
                 reentry_log = f" [{reentry_msg}]" if reentry_msg else ""
-                log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{reentry_log}"
+                log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}{reentry_log}"
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
                 return {'type': 'log_only', 'log': log_msg}
