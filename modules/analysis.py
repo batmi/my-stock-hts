@@ -122,6 +122,12 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         macd_signal = ind.get('macd_signal')
         if plus_di is None: plus_di = ind.get('plus_di')
         if minus_di is None: minus_di = ind.get('minus_di')
+        
+        # [추가] 인자로 넘어오지 않은 세부 지표들을 ind 딕셔너리에서 직접 추출하여 일관성(SSOT) 확보
+        if ema_5 is None: ema_5 = ind.get('ema_5')
+        if prev_cci is None: prev_cci = ind.get('prev_cci')
+        if macd_hist is None: macd_hist = ind.get('macd_hist')
+        if prev_macd_hist is None: prev_macd_hist = ind.get('prev_macd_hist')
 
     import numpy as np
     
@@ -160,9 +166,12 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 
         if prev_cci is None and len(df) > 20:
             try:
+                window = config.INDICATOR_PARAMS.get('CCI_WINDOW', 20)
                 tp = (df['high'] + df['low'] + df['close']) / 3
-                cci_series = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
-                prev_cci = cci_series.iloc[-2]
+                sma_tp = tp.rolling(window=window).mean()
+                mad = tp.rolling(window=window).apply(lambda x: np.abs(x - x.mean()).mean(), raw=False)
+                cci_series = (tp - sma_tp) / (0.015 * mad)
+                if len(cci_series) > 1: prev_cci = cci_series.iloc[-2]
             except: pass
 
         vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
@@ -366,7 +375,7 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None):
+def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False):
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
         ema20 = ind.get('ema_20')
@@ -381,6 +390,12 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         macd_signal = ind.get('macd_signal')
         if plus_di is None: plus_di = ind.get('plus_di')
         if minus_di is None: minus_di = ind.get('minus_di')
+
+        # [추가] 인자로 넘어오지 않은 세부 지표들을 ind 딕셔너리에서 직접 추출
+        if ema_5 is None: ema_5 = ind.get('ema_5')
+        if prev_cci is None: prev_cci = ind.get('prev_cci')
+        if macd_hist is None: macd_hist = ind.get('macd_hist')
+        if prev_macd_hist is None: prev_macd_hist = ind.get('prev_macd_hist')
 
         if plus_di is None or minus_di is None:
             import numpy as np
@@ -417,17 +432,22 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         
         disparity = (price / ema20) * 100
         
-        is_yangbong = False
+        is_yangbong_flag = is_yangbong
         if df is not None and not df.empty:
-            is_yangbong = df.iloc[-1]['close'] > df.iloc[-1]['open']
+            is_yangbong_flag = df.iloc[-1]['close'] > df.iloc[-1]['open']
             
         # [수정] 단순 RSI 반등이 아닌 '양봉(종가>시가)' 마감 여부를 추가하여 확실한 턴어라운드만 포착
-        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong:
+        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong_flag:
             return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 출현)"
 
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal, weights=weights, smart_money=smart_money, plus_di=plus_di, minus_di=minus_di, df=df, ind=ind)
+    score, _ = calculate_score(
+        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci, 
+        obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money, 
+        plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist, 
+        prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend
+    )
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -2998,7 +3018,8 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                         if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
                 except: pass
 
-            class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val)
+            sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
+            class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val, smart_money=sm_flag)
 
             def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"

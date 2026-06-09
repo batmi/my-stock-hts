@@ -14,6 +14,7 @@ from rich import box
 from rich.prompt import Prompt
 from rich.padding import Padding
 import utils
+import json
 import context # [추가]
 from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
 from modules.executors import ai_executor, io_executor
@@ -1154,22 +1155,48 @@ def _analyze_stock_ui():
                     w52_pos = (current_price - l52) / (h52 - l52) * 100
                     
             sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas)
+            
+            # [추가] 개별 룰 및 시장 국면(적응형 임계값) 보정 적용
+            from modules import db_manager
+            custom_rule = db_manager.db.get_stock_strategy(code)
+            buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+            buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
+            weights = config.SCORING_WEIGHTS
+            
+            if custom_rule:
+                buy_score = custom_rule['buy_score']
+                buy_rsi = custom_rule['buy_rsi']
+                if custom_rule.get('weights'):
+                    try:
+                        w_data = custom_rule['weights']
+                        if isinstance(w_data, str): weights = json.loads(w_data)
+                        elif isinstance(w_data, dict): weights = w_data
+                    except: pass
+            
+            score_adj = 0.0
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+                market_type = "KOSPI"
+                try:
+                    cp = api.get_current_price_data(code, False)
+                    if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
+                        market_type = "KOSDAQ"
+                except: pass
+                _, score_adj = analysis.get_market_regime(market_type)
+                if not custom_rule:
+                    buy_score += score_adj
+
+            thresholds = {
+                "BUY_SCORE": buy_score,
+                "BUY_RSI_MAX": buy_rsi,
+                "WEIGHTS": weights
+            }
 
             state, _, state_reason = analysis.classify_stock_state(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], prev_rsi, ind['adx'], ind['cci'], 
-                ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                w52_pos=w52_pos, smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di')
+                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
 
             score, _ = analysis.calculate_score(
-                current_price, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                ind['psar'], ind['rsi'], ind['adx'], ind['cci'], 
-                ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal'),
-                ema_5=ind.get('ema_5'), prev_cci=ind.get('prev_cci'), vol_spike=ind.get('vol_spike'),
-                smart_money=sm_flag, plus_di=ind.get('plus_di'), minus_di=ind.get('minus_di'),
-                macd_hist=ind.get('macd_hist'), prev_macd_hist=ind.get('prev_macd_hist'),
-                df=df, ind=ind
+                df=df, ind=ind, weights=weights, smart_money=sm_flag
             )
             score = round(score, 1)
 

@@ -157,6 +157,7 @@ def calculate_indicators(df):
         mask = df['mad'] != 0
         df.loc[mask, 'cci'] = (df.loc[mask, 'tp'] - df.loc[mask, 'sma_tp']) / (0.015 * df.loc[mask, 'mad'])
         indicators['cci'] = df['cci'].iloc[-1]
+        if len(df['cci']) > 1: indicators['prev_cci'] = df['cci'].iloc[-2]
 
     if len(df) >= 28:
         adx_series, di_p_series, di_m_series = get_adx_full_series(df)
@@ -175,5 +176,6 @@ def calculate_indicators(df):
         indicators['macd'] = macd.iloc[-1]
         indicators['macd_signal'] = signal.iloc[-1]
         indicators['macd_hist'] = hist.iloc[-1]
+        if len(hist) > 1: indicators['prev_macd_hist'] = hist.iloc[-2]
 
     return indicators

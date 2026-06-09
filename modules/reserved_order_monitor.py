@@ -2,6 +2,7 @@ import time
 import threading
 import logging
 from datetime import datetime
+import json
 import api
 from modules import analysis
 import indicators
@@ -125,7 +126,17 @@ class ReservedOrderMonitor:
                         ind = indicators.calculate_indicators(df)
                         
                         if 'SCORE' in condition_type:
-                            score, _ = analysis.calculate_score(df=df, ind=ind)
+                            custom_rule = db_manager.db.get_stock_strategy(code)
+                            weights = config.SCORING_WEIGHTS
+                            if custom_rule and custom_rule.get('weights'):
+                                try:
+                                    w_data = custom_rule['weights']
+                                    if isinstance(w_data, str): weights = json.loads(w_data)
+                                    elif isinstance(w_data, dict): weights = w_data
+                                except: pass
+                            sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas=is_overseas)
+                            score, _ = analysis.calculate_score(df=df, ind=ind, weights=weights, smart_money=sm_flag)
+                            
                             if condition_type == 'SCORE_UP' and score >= target_price:
                                 trigger, reason = True, f"목표 점수 도달 ({score}점 >= {target_price}점)"
                             elif condition_type == 'SCORE_DOWN' and score <= target_price:

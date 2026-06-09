@@ -58,11 +58,14 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     prev_macd_hist = prev_row.get('MACD_Hist') if prev_row is not None else None
 
     # [수정] analysis 모듈을 사용하여 로직 동기화
+    is_yangbong_flag = (row['close'] > row['open'])
     # 1. 상태 분류 (위험/주의/관망/상승/매수)
     state, _, reason = analysis.classify_stock_state(
         price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
         thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money,
-        plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI')
+        plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
+        ema_5=ema_5, macd_hist=macd_hist, prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
+        is_yangbong=is_yangbong_flag
     )
     
     # 2. 점수 계산
@@ -565,7 +568,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
-                               name="Unknown", code="Unknown", days=0):
+                               weights=None, name="Unknown", code="Unknown", days=0):
     """Monte Carlo 시뮬레이션 실행 (10,000회 반복)"""
     config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (10,000 runs) ━━━[/]")
     config.console.print("[dim]가격 데이터 노이즈(±1%) 및 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략의 견고성을 검증합니다.[/dim]\n")
@@ -623,7 +626,8 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
                                     ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
                                     time_stop_days_limit=time_stop_days,
                                     use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
-                                    execution_noise=True)
+                                    execution_noise=True,
+                                    weights=weights)
             
             # 결과 수집
             returns.append(res['total_return'])
@@ -1284,7 +1288,7 @@ def run_backtest():
             run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                        time_stop_days, use_atr_stop, atr_mult, half_tp_use,
-                                       name=name, code=code, days=days)
+                                       weights=weights, name=name, code=code, days=days)
             last_choice = sub_choice
             utils.pause()
             continue
@@ -1738,7 +1742,8 @@ def run_backtest():
                                         take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                                         ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
                                         time_stop_days_limit=time_stop_days,
-                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use)
+                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
+                                        weights=weights)
                 
                 # 결과 계산
                 total_trades = len(res['trades'])
@@ -1807,7 +1812,8 @@ def run_backtest():
                                         take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                                         ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
                                         time_stop_days_limit=time_stop_days,
-                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use)
+                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
+                                        weights=weights)
                 
                 total_trades = len(res['trades'])
                 sell_trades_inner = res['win_trades'] + res['loss_trades']
@@ -1869,7 +1875,8 @@ def run_backtest():
                                             take_profit_rsi=take_profit_rsi, sell_score=sell_score,
                                             ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
                                             time_stop_days_limit=time_stop_days,
-                                            use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use)
+                                            use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
+                                            weights=weights)
                     
                     total_trades = len(res['trades'])
                     sell_trades_inner = res['win_trades'] + res['loss_trades']

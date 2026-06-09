@@ -973,14 +973,27 @@ def send_order(order_type):
                 # [수정] 차트 데이터 조회 및 지표 계산 (ATR 사용 여부와 무관하게 수행)
                 df = api.get_chart_data(stock_code, is_overseas)
                 if df is not None and not df.empty:
+                    # [추가] 주문 단가(시장가인 경우 현재가)를 바탕으로 차트 갱신
+                    if calc_price > 0:
+                        df.iloc[-1, df.columns.get_loc('close')] = float(calc_price)
+                        if calc_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(calc_price)
+                        if calc_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(calc_price)
+                        
                     ind = indicators.calculate_indicators(df)
                     indicator_info = ind
                     
                     # 점수 계산
-                    current_price_val = float(df.iloc[-1]['close'])
+                    custom_rule = db_manager.db.get_stock_strategy(stock_code)
+                    weights = config.SCORING_WEIGHTS
+                    if custom_rule and custom_rule.get('weights'):
+                        try:
+                            w_data = custom_rule['weights']
+                            if isinstance(w_data, str): weights = json.loads(w_data)
+                            elif isinstance(w_data, dict): weights = w_data
+                        except: pass
+                    sm_flag, _ = analysis.check_smart_money_turnaround(stock_code, is_overseas)
                     score, _ = analysis.calculate_score(
-                        current_price_val, ind['ema_20'], ind['ema_60'], ind['ema_120'], 
-                        ind['psar'], ind['rsi'], ind['adx'], ind['cci'], ind.get('obv_trend'), ind.get('macd'), ind.get('macd_signal')
+                        df=df, ind=ind, weights=weights, smart_money=sm_flag
                     )
                     calculated_score = score
 
