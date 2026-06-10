@@ -1716,6 +1716,7 @@ class AutoTrader:
             cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
             cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
+            cls._instance.stock_state_cache = {}      # [추가] 분석된 종목 상태 캐시 (텔레그램 연동용)
             cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
@@ -1743,6 +1744,14 @@ class AutoTrader:
         # 로거 객체가 없거나 핸들러가 연결되지 않은 경우 재설정
         if not getattr(self, 'file_logger', None) or not self.file_logger.handlers:
             self.file_logger = config.get_autotrade_logger()
+
+    def set_stock_state(self, code, state):
+        """종목의 기술적 상태 캐시 업데이트 (텔레그램 /stocks 연동용)"""
+        with self._lock:
+            if state:
+                self.stock_state_cache[code] = state
+            else:
+                self.stock_state_cache.pop(code, None)
 
     def _refine_trade_records(self, records):
         """거래 내역 중복 제거 및 우선순위 적용 (전략 사유 > 체결 확인)"""
@@ -4040,6 +4049,20 @@ class AutoTrader:
 
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                         self._monitor_account_status(holdings, summary, deposit_res)
+                        
+                        # [추가] 관심 종목 변경 및 분석 제외 종목 메모리 캐시 정리
+                        try:
+                            valid_codes = {h['pdno'] for h in holdings}
+                            for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
+                                for item in config.session.stock_data.get(key, []):
+                                    valid_codes.add(item['code'])
+                                    
+                            with self._lock:
+                                keys_to_delete = [k for k in self.stock_state_cache if k not in valid_codes]
+                                for k in keys_to_delete:
+                                    del self.stock_state_cache[k]
+                        except Exception as e:
+                            logger.debug(f"상태 캐시 정리 중 오류: {e}")
                     
                     self.was_market_open = current_market_status
                     
@@ -4343,10 +4366,12 @@ class AutoTrader:
             
             # [추가] 트레이딩 제한 종목은 매도 분석에서 완전히 제외 (수동 매수/홀딩용)
             if code in restricted_stocks:
+                self.set_stock_state(code, None)
                 self.log(f"[분석스킵] {name}: 트레이딩 제한 종목 (수동 홀딩)")
                 return
             
             if self.order_manager.is_pending(code):
+                self.set_stock_state(code, None)
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 return
             
@@ -4360,6 +4385,7 @@ class AutoTrader:
             if not self.is_running: return # 대기 후 재확인
             
             if qty <= 0: 
+                self.set_stock_state(code, None)
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 주문 가능 수량 0")
                 return
             
@@ -4463,6 +4489,9 @@ class AutoTrader:
 
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
+            
+            # [추가] 분석 성공 시 상태 업데이트
+            self.set_stock_state(code, result['state'])
             
             ind = result['ind']
             rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
@@ -4681,10 +4710,12 @@ class AutoTrader:
             
             # 1. 트레이딩 제한 종목 체크
             if code in restricted_stocks:
+                self.set_stock_state(code, None)
                 return {'type': 'restricted_skip', 'name': name}
             
             # 2. 진행 중인 주문 체크
             if self.order_manager.is_pending(code):
+                self.set_stock_state(code, None)
                 return None
 
             # 3. 보유 종목 체크
@@ -4696,6 +4727,7 @@ class AutoTrader:
                 market_stat = self.market_index_status.get(market_type)
                 if market_stat and isinstance(market_stat, dict):
                     if not market_stat.get('is_healthy', True):
+                        self.set_stock_state(code, None)
                         return {'type': 'market_skip', 'name': name, 'market_type': market_type}
             
             if not self.is_running: return None # API 호출 전 최종 확인
@@ -4714,7 +4746,9 @@ class AutoTrader:
                 try: ob_data = fut_ob.result() if fut_ob else None
                 except: ob_data = None
                 
-            if df is None or df.empty: return None
+            if df is None or df.empty:
+                self.set_stock_state(code, None)
+                return None
             
             # [수정] 캐시된 차트 데이터의 당일 미확정 종가를 실시간 최신 현재가로 업데이트
             # (종목 분석 메뉴와 시스템 트레이딩 간의 지표 및 점수 불일치 원천 차단)
@@ -4762,6 +4796,7 @@ class AutoTrader:
                         corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
                         if corr >= corr_threshold:
                             log_msg = f"[상관관계 보류] {name}({code}): 보유 종목 '{hold_name}'과 높은 상관관계 (상관계수: {corr:.2f} >= {corr_threshold})"
+                            self.set_stock_state(code, None)
                             return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
 
             # 룰 및 임계값 설정
@@ -4788,7 +4823,12 @@ class AutoTrader:
             
             # 전략 실행
             result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds, ask_bid_ratio=ask_bid_ratio)
-            if not result: return None
+            if not result:
+                self.set_stock_state(code, None)
+                return None
+                
+            # [추가] 분석 성공 시 상태 업데이트
+            self.set_stock_state(code, result['state'])
             
             # 로그 출력을 위한 문자열 구성
             rsi_val = f"{result['rsi']:.1f}" if result['rsi'] is not None else "-"
