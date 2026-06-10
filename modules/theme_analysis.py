@@ -6,6 +6,7 @@ import warnings
 import math
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
+import time
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
@@ -1365,7 +1366,19 @@ def _run_tradingview_screener():
                 else:
                     query = query.limit(20)
             
-                count, df = query.get_scanner_data()
+                count, df = 0, None
+                for attempt in range(3):
+                    try:
+                        count, df = query.get_scanner_data()
+                        break
+                    except Exception as e:
+                        if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                            if attempt < 2:
+                                time.sleep(1.5)
+                            else:
+                                config.console.print(f"\n[yellow]⚠️ TradingView 서버 응답 지연 (Timeout). '{p_name}' 검색을 건너뜁니다.[/yellow]")
+                        else:
+                            raise e
                 
                 if df is not None and not df.empty:
                     if p_choice == "3":

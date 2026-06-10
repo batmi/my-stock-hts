@@ -474,7 +474,19 @@ class TelegramCommander:
                 else:
                     query = query.limit(20)
                     
-                count, df = query.get_scanner_data()
+                count, df = 0, None
+                for attempt in range(3):
+                    try:
+                        count, df = query.get_scanner_data()
+                        break
+                    except Exception as e:
+                        if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                            if attempt < 2:
+                                time.sleep(1.5)
+                            else:
+                                logger.warning(f"TradingView Screener Timeout: {preset_key}")
+                        else:
+                            raise e
                 
                 if df is not None and not df.empty:
                     if preset_key == "Breakout":
