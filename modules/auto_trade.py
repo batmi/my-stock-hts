@@ -3310,12 +3310,23 @@ class AutoTrader:
                 w = stats['worst_trade']
                 msg += f"최다 손실: {w['name']} ({w['profit_amt']:+,}원 / {w['profit_rate']:+.2f}%)\n"
             
+            msg += f"\n[매수 사유 분포]\n"
+            buy_reasons = stats.get('buy_reasons', {})
+            total_buys = stats['buy_count']
+            if total_buys > 0:
+                for r, count in buy_reasons.most_common():
+                    msg += f"• {r}: {count}건 ({count/total_buys*100:.1f}%)\n"
+            else:
+                msg += "• 매수 내역 없음\n"
+
             msg += f"\n[매도 사유 분포]\n"
             reasons = stats.get('sell_reasons', {})
             total_sells = stats['sell_count']
             if total_sells > 0:
                 for r, count in reasons.most_common():
-                    msg += f"{r}: {count}건 ({count/total_sells*100:.0f}%)\n"
+                    msg += f"• {r}: {count}건 ({count/total_sells*100:.1f}%)\n"
+            else:
+                msg += "• 매도 내역 없음\n"
                     
             if holdings_summary:
                 msg += f"\n[현재 보유 현황]\n"
@@ -3355,6 +3366,7 @@ class AutoTrader:
         best_trade = None
         worst_trade = None
         sell_reasons = Counter()
+        buy_reasons = Counter()
         
         # [추가] 보유 기간 계산
         total_holding_seconds = 0
@@ -3371,6 +3383,21 @@ class AutoTrader:
             if r['type'] == 'buy':
                 if code not in buy_times: buy_times[code] = []
                 buy_times[code].append(dt)
+                
+                reason_raw = r.get('reason', '')
+                reason_key = "기타"
+                if "조건 만족" in reason_raw:
+                    if "슈퍼모멘텀" in reason_raw:
+                        reason_key = "추격 매수 (돌파)"
+                    else:
+                        reason_key = "스코어 진입 (조건 만족)"
+                elif "역매수" in reason_raw or "역추세" in reason_raw:
+                    reason_key = "역추세 매수 (낙폭과대)"
+                elif "수동" in reason_raw or "사용자 수동 주문" in reason_raw:
+                    reason_key = "수동 매수"
+                elif "예약" in reason_raw:
+                    reason_key = "예약 매수"
+                buy_reasons[reason_key] += 1
             elif r['type'] == 'sell':
                 # 매도 시 매수 기록과 매칭 (FIFO: 먼저 산 것을 먼저 판다고 가정)
                 if code in buy_times and buy_times[code]:
@@ -3457,7 +3484,8 @@ class AutoTrader:
             "sell_trades_exist": len(sell_trades) > 0,
             "best_trade": best_trade,
             "worst_trade": worst_trade,
-            "sell_reasons": sell_reasons
+            "sell_reasons": sell_reasons,
+            "buy_reasons": buy_reasons
         }
 
     def _print_summary_table(self, stats, holdings_summary=None):
