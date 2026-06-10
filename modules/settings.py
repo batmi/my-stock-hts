@@ -293,7 +293,7 @@ def _edit_config_table(title_source, items_source, check_preset=True):
         console.print(table)
         
         console.print()
-        choice = Prompt.ask("\n수정할 항목 번호 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=[str(i+1) for i in range(len(items))] + ['a', 'b', 'q', 'A', 'B', 'Q'], default='b')
+        choice = Prompt.ask("\n수정할 항목 번호 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=[str(i+1) for i in range(len(items))] + ['a', 'b', 'q', 'A', 'B', 'Q'], default='b', show_choices=False)
         console.print()
         
         if choice.lower() in ['b', 'q']:
@@ -628,7 +628,7 @@ def modify_scoring_weights():
         console.print(table)
         
         console.print()
-        choice = Prompt.ask("\n수정할 여부 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=['a', 'b', 'q', 'A', 'B', 'Q'], default='b')
+        choice = Prompt.ask("\n수정할 여부 선택 [dim](전체: a, 이전: b, 메인: q)[/dim]", choices=['a', 'b', 'q', 'A', 'B', 'Q'], default='b', show_choices=False)
         console.print()
         
         if choice.lower() in ['b', 'q']:
