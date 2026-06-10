@@ -65,6 +65,22 @@ def _save_dynamic_config():
     except Exception as e:
         console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
 
+def _get_custom_settings_summary():
+    """커스텀 프리셋 전환 시 텔레그램 알림에 포함할 변경 내역 요약 문자열 생성"""
+    changed_items = config.get_custom_settings()
+    if not changed_items:
+        return ""
+        
+    lines = []
+    for key, info in changed_items.items():
+        dict_key = info.get("key", key)
+        desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(dict_key, dict_key)
+        lines.append(f"• {desc}: {info['default']} ➔ {info['current']}")
+        
+    if lines:
+        return "\n\n[현재 적용된 커스텀 설정 내역]\n" + "\n".join(lines)
+    return ""
+
 def view_system_config():
     """현재 시스템 설정 조회"""
     from rich.table import Table
@@ -398,7 +414,8 @@ def _edit_config_table(title_source, items_source, check_preset=True):
                 try:
                     if getattr(config, 'ENABLE_TELEGRAM', True):
                         from modules.telegram_bot import TelegramCommander
-                        TelegramCommander()._send_reply("⚪ [설정 변경] 세부 설정이 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.")
+                        custom_summary = _get_custom_settings_summary()
+                        TelegramCommander()._send_reply(f"⚪ [설정 변경] 세부 설정이 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.{custom_summary}")
                 except Exception:
                     pass
             
@@ -647,7 +664,8 @@ def modify_scoring_weights():
                 try:
                     if getattr(config, 'ENABLE_TELEGRAM', True):
                         from modules.telegram_bot import TelegramCommander
-                        TelegramCommander()._send_reply("⚪ [설정 변경] 스코어링 가중치가 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.")
+                        custom_summary = _get_custom_settings_summary()
+                        TelegramCommander()._send_reply(f"⚪ [설정 변경] 스코어링 가중치가 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.{custom_summary}")
                 except Exception:
                     pass
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
