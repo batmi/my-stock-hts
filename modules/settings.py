@@ -388,10 +388,19 @@ def _edit_config_table(title_source, items_source, check_preset=True):
                 console.print(f"[red]잘못된 입력입니다: {e}[/red]")
         
         if changed_in_this_loop:
+            old_preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
             if check_preset and changed_preset_keys:
                 config.settings.ACTIVE_PRESET = "custom"
             _save_dynamic_config()
             action_taken = True
+            
+            if check_preset and changed_preset_keys and old_preset != "custom":
+                try:
+                    if getattr(config, 'ENABLE_TELEGRAM', True):
+                        from modules.telegram_bot import TelegramCommander
+                        TelegramCommander()._send_reply("⚪ [설정 변경] 세부 설정이 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.")
+                except Exception:
+                    pass
             
     return action_taken
 
@@ -635,6 +644,12 @@ def modify_scoring_weights():
                 
                 config.settings.ACTIVE_PRESET = "custom"
                 _save_dynamic_config()
+                try:
+                    if getattr(config, 'ENABLE_TELEGRAM', True):
+                        from modules.telegram_bot import TelegramCommander
+                        TelegramCommander()._send_reply("⚪ [설정 변경] 스코어링 가중치가 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.")
+                except Exception:
+                    pass
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
                 action_taken = True
                 
@@ -930,6 +945,15 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         console.print("[dim]설정 메뉴에서 각 세부 항목을 다시 조정할 수 있습니다.[/dim]")
         
     detail_msg = "\n\n[적용된 주요 설정]\n" + "\n".join([f"• {k}: {v}" for k, v in summary_data])
+    
+    if interactive:
+        try:
+            if getattr(config, 'ENABLE_TELEGRAM', True):
+                from modules.telegram_bot import TelegramCommander
+                TelegramCommander()._send_reply(msg + detail_msg)
+        except Exception:
+            pass
+            
     return msg + (detail_msg if not interactive else "")
 
 def _edit_single_preset(preset_type):
@@ -1050,6 +1074,13 @@ def reset_to_default(interactive=True):
     # 1. 설정 파일 삭제 및 모든 메모리 설정값 갱신
     config.reset_all_settings()
     
+    try:
+        if getattr(config, 'ENABLE_TELEGRAM', True):
+            from modules.telegram_bot import TelegramCommander
+            TelegramCommander()._send_reply("🟢 [초기화(Default)] 시스템의 모든 설정이 최초 기본값으로 초기화되었습니다.")
+    except Exception:
+        pass
+        
     if interactive:
         config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
         console.print(f"[dim]설정 파일 삭제 및 기본값 복원 완료: {config_path}[/dim]")
@@ -1372,6 +1403,13 @@ def manage_custom_settings():
         confirm = Prompt.ask(f"선택한 {len(valid_keys_to_reset)}개의 설정을 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n")
         if confirm.lower() == 'y':
             config.reset_custom_settings(valid_keys_to_reset)
+            
+            try:
+                if getattr(config, 'ENABLE_TELEGRAM', True):
+                    from modules.telegram_bot import TelegramCommander
+                    TelegramCommander()._send_reply("🔄 [설정 변경] 선택한 커스텀 설정이 기본값으로 초기화되었습니다.")
+            except Exception:
+                pass
             console.print(f"\n[green]성공적으로 초기화되었습니다.[/green]")
             time.sleep(1.5)
 
