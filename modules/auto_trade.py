@@ -1083,7 +1083,7 @@ class DefaultStrategy:
         if time_stop_days <= 0:
             use_time_stop = False
         
-        mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
+        mr_grace_loss_rate = thresholds.get("MR_GRACE_LOSS_RATE", config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -7.0)) if thresholds else config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -7.0)
         
         # [추가] 본전 청산(BEP) 및 ATR 기반 트레일링 설정 로드
         use_atr_stop = thresholds.get("USE_ATR_STOP", config.SELL_STRATEGY.get("USE_ATR_STOP", True)) if thresholds else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
@@ -1218,12 +1218,13 @@ class DefaultStrategy:
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
-                if state == "매도":
-                    reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
+                
+                # [수정] 역추세 매수 종목은 점수 하락뿐만 아니라 '매도' 상태일지라도 지정된 유예 기간 내에는 손절을 보류함
+                if is_mr_holding and holding_days <= time_stop_days and profit_rate > mr_grace_loss_rate:
+                    pass # 유예 기간 적용
                 else:
-                    # [추가] 역추세 매수 종목은 유예 기간(TIME_STOP_DAYS) 및 허용 손실률(-5%) 내에서는 추세 이탈로 손절하지 않음
-                    if is_mr_holding and holding_days <= time_stop_days and profit_rate > mr_grace_loss_rate:
-                        pass # 유예 기간 적용
+                    if state == "매도":
+                        reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                     else:
                         reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             

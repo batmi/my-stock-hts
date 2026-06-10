@@ -337,7 +337,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if time_stop_days <= 0:
                 use_time_stop = False
 
-            mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -5.0)
+            mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -7.0)
 
             if take_profit_limit > 0 and loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
             elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit: # [수정] half_tp_limit 사용

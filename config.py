@@ -233,7 +233,7 @@ class GlobalSettings(BaseModel):
         "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
         "TIME_STOP_DAYS": 10,               # 보유 제한 기간 (일)
         "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
-        "MR_GRACE_LOSS_RATE": -5.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
+        "MR_GRACE_LOSS_RATE": -7.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
         "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
         "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
         "SUPER_TAKE_PROFIT_RSI": 85.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI
@@ -627,7 +627,7 @@ def reset_all_settings():
             "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
             "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
-            "MR_GRACE_LOSS_RATE": -5.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
+            "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
             "SUPER_TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         }
         settings.SCORING_WEIGHTS = {
