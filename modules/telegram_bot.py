@@ -891,6 +891,7 @@ class TelegramCommander:
         return None
 
     def _cmd_stocks(self, args):
+        self._send_reply("⏳ [관심 종목 조회] 등록된 관심 종목의 현재 상태를 분석 중입니다. 잠시만 기다려주세요...")
         return self._get_monitoring_list()
 
     def _cmd_config(self, args):
@@ -2041,13 +2042,23 @@ class TelegramCommander:
         # [추가] 제한 종목 및 개별 룰 로드
         restricted_stocks = auto_trade.load_restricted_stocks()
         custom_rules = db_manager.db.get_all_stock_strategies()
-        rules_map = {r['code']: True for r in custom_rules}
+        rules_map = {r['code']: r for r in custom_rules}
         
         groups = {
             "stocks_kr": "🇰🇷 국내주식",
             "etfs_kr": "🇰🇷 국내ETF"
         }
         
+        # [추가] 시장 국면 (KOSPI/KOSDAQ) 보정값 (적응형 임계값용)
+        market_regime_adj = {}
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+            for m_type in ["KOSPI", "KOSDAQ"]:
+                try:
+                    _, adj = analysis.get_market_regime(m_type)
+                    market_regime_adj[m_type] = adj
+                except:
+                    market_regime_adj[m_type] = 0.0
+
         has_stock = False
         for key, label in groups.items():
             stocks = config.session.stock_data.get(key, [])
@@ -2061,11 +2072,65 @@ class TelegramCommander:
                     # [추가] 상태 표시 (제한: -, 개별룰: +)
                     if code in restricted_stocks:
                         name += "-"
-                    if code in rules_map:
+                    
+                    rule = rules_map.get(code)
+                    if rule:
                         name += "+"
                         
-                    # [수정] 차트 링크를 일봉(/chart_code)에서 시봉(/chart_h_code)으로 변경
-                    msg += f"\n - {name} ({code})\n   /signal_{code} /analyze_{code} /chart_h_{code}"
+                    # [추가] 종목별 상태 분류 구하기
+                    state_str = "조회불가"
+                    try:
+                        df = api.get_chart_data(code, is_overseas=False)
+                        if df is not None and not df.empty:
+                            # 당일 시세 실시간 갱신 (점수 정확도 향상)
+                            try:
+                                rt_price = api.get_current_price(code, is_overseas=False)
+                                if rt_price > 0:
+                                    df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
+                                    if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
+                                    if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
+                            except: pass
+
+                            ind = indicators.calculate_indicators(df)
+                            
+                            # prev_rsi (분류용)
+                            delta = df['close'].diff()
+                            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                            prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+                            
+                            sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas=False)
+                            
+                            w52_pos = 0.0
+                            current_price = float(df.iloc[-1]['close'])
+                            recent_df = df.tail(250)
+                            h52 = recent_df['high'].max()
+                            l52 = recent_df['low'].min()
+                            if h52 > l52:
+                                w52_pos = (current_price - l52) / (h52 - l52) * 100
+                            
+                            market_type = auto_trade.AutoTrader()._get_stock_market_type(code)
+                            score_adj = market_regime_adj.get(market_type, 0.0)
+                            
+                            thresholds = {}
+                            if rule:
+                                thresholds["BUY_SCORE"] = rule.get('buy_score', config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
+                                thresholds["BUY_RSI_MAX"] = rule.get('buy_rsi', config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
+                            else:
+                                thresholds["BUY_SCORE"] = config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj
+                                
+                            state, _, _ = analysis.classify_stock_state(
+                                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+                            )
+                            state_str = state
+                    except Exception as e:
+                        logger.debug(f"[Telegram] _get_monitoring_list 분석 중 오류 ({code}): {e}")
+
+                    state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+                    emoji = state_emoji_map.get(state_str, "❓")
+                    state_display = f"{emoji} {state_str}"
+                    
+                    msg += f"\n - {name} ({code}) {state_display}\n   /signal_{code}  /analyze_{code}  /chart_h_{code}"
                 msg += "\n"
         
         if not has_stock:
