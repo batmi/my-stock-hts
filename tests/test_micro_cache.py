@@ -39,20 +39,20 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
     # API 응답 모킹
     mock_call_api.return_value = {"rt_cd": "0", "output": {"stck_prpr": "50000"}}
     
-    # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함
+    # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (정규장 1회 + NXT장 1회 = 총 2회)
     res1 = api.get_current_price_data("005930", is_overseas=False)
     assert res1["output"]["stck_prpr"] == "50000"
-    assert mock_call_api.call_count == 1
+    assert mock_call_api.call_count == 2
     
     # 두 번째 호출: 캐시가 존재하므로 call_api가 호출되지 않아야 함 (중복 방지 성공)
     res2 = api.get_current_price_data("005930", is_overseas=False)
     assert res2["output"]["stck_prpr"] == "50000"
-    assert mock_call_api.call_count == 1  # 호출 횟수가 증가하지 않음!
+    assert mock_call_api.call_count == 2  # 호출 횟수가 증가하지 않음!
     
     # 시간 경과 시뮬레이션 (TTL 만료 시 재호출 여부 확인)
     with patch('time.time', return_value=time.time() + 65.0): # 기본 TTL 60초 초과
         res3 = api.get_current_price_data("005930", is_overseas=False)
-        assert mock_call_api.call_count == 2  # 캐시 만료로 다시 API가 호출되어야 함
+        assert mock_call_api.call_count == 4  # 캐시 만료로 다시 API가 호출되어야 함 (총 4회)
 
 @patch('api.yf.Ticker')
 def test_get_yf_fast_info_uses_micro_cache(mock_ticker):

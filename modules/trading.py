@@ -926,11 +926,23 @@ def send_order(order_type):
         else:
             # [국내] 시장가 주문 처리
             if is_market_order:
-                ord_dvsn = "01"
-                display_price = "시장가(0)"
+                now_time = datetime.now().strftime("%H%M")
+                is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+                
                 if curr_price == 0:
                      p = api.get_current_price(stock_code, False)
                      if p > 0: curr_price = int(p)
+                     
+                if is_nxt_market:
+                    # 대체거래소(NXT)는 시장가 주문 미지원하므로 현재가 기준 지정가로 변경
+                    ord_dvsn = "00"
+                    display_price = f"{curr_price:,}원 (NXT지정가)"
+                    price = str(int(curr_price))
+                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
+                else:
+                    ord_dvsn = "01"
+                    display_price = "시장가(0)"
+                    
                 calc_price = curr_price
             else:
                 ord_dvsn = "00"
@@ -1304,7 +1316,23 @@ def modify_order():
     req_qty = final_qty
 
     if not is_overseas:
-        ord_dvsn = "01" if price == "0" else "00"
+        from datetime import datetime
+        now_time = datetime.now().strftime("%H%M")
+        is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+        
+        if price == "0":
+            if is_nxt_market:
+                ord_dvsn = "00"
+                try:
+                    p = api.get_current_price(pdno, is_overseas=False)
+                    if p > 0: price = str(int(p))
+                except: pass
+                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
+            else:
+                ord_dvsn = "01"
+        else:
+            ord_dvsn = "00"
+            
         req_qty = 0 if qty == "0" or qty == target_rmn else int(final_qty)
 
     if config.FILE_DEBUG_LEVEL == "DEBUG":

@@ -6,12 +6,12 @@
 TR_ID_CONFIG = {
     "domestic": {
         "trade": {
-            "buy": {"real": "TTTC0802U", "sim": "VTTC0802U"},
-            "sell": {"real": "TTTC0801U", "sim": "VTTC0801U"},
+            "buy": {"real": "TTTC0012U", "sim": "VTTC0012U"},
+            "sell": {"real": "TTTC0011U", "sim": "VTTC0011U"},
         },
         "modify": {
-            "cancel": {"real": "TTTC0803U", "sim": "VTTC0803U"},
-            "revise": {"real": "TTTC0803U", "sim": "VTTC0803U"}
+            "cancel": {"real": "TTTC0013U", "sim": "VTTC0013U"},
+            "revise": {"real": "TTTC0013U", "sim": "VTTC0013U"}
         },
         "inquiry": {
             "balance": {"real": "TTTC8434R", "sim": "VTTC8434R"},

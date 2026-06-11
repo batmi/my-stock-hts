@@ -102,8 +102,8 @@ class GlobalSettings(BaseModel):
     # 3. 급등주/변동성 장세: 0.005 ~ 0.010 (0.5% ~ 1.0%) - 체결 최우선
     SLIPPAGE_RATE: float = Field(default=0.002, ge=0.0)
 
-    SYSTEM_TRADING_START_TIME: str = "0920" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
-    SYSTEM_TRADING_END_TIME: str = "1510"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
+    SYSTEM_TRADING_START_TIME: str = "0800" # 거래 시작 시간 (HHMM) - 장 시작 후 안정화 대기
+    SYSTEM_TRADING_END_TIME: str = "2000"   # 거래 종료 시간 (HHMM) - 장 마감 전 정리
 
     # [추가] 체결 감시 모니터링 주기 (초)
     # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)

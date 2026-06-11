@@ -1664,7 +1664,10 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가/종가 최신화
         try:
             if cp_data and cp_data.get('rt_cd') == '0':
-                rt_price = float(cp_data['output'].get('stck_prpr', 0))
+                # [수정] NXT 장 현재가(ats_prpr)가 있으면 우선 반영, 없으면 정규장 현재가 반영
+                nxt_price = float(cp_data['output'].get('ats_prpr', 0) or 0)
+                krx_price = float(cp_data['output'].get('stck_prpr', 0) or 0)
+                rt_price = nxt_price if nxt_price > 0 else krx_price
             else:
                 rt_price = api.get_current_price(code, is_overseas=False)
                 
@@ -2875,8 +2878,12 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         try:
             rt_price = 0.0
             if curr_data and curr_data.get('rt_cd') == '0':
-                if is_overseas: rt_price = float(curr_data['output'].get('last', 0) or 0)
-                else: rt_price = float(curr_data['output'].get('stck_prpr', 0))
+                if is_overseas: 
+                    rt_price = float(curr_data['output'].get('last', 0) or 0)
+                else: 
+                    nxt_price = float(curr_data['output'].get('ats_prpr', 0) or 0)
+                    krx_price = float(curr_data['output'].get('stck_prpr', 0) or 0)
+                    rt_price = nxt_price if nxt_price > 0 else krx_price
                 
             if rt_price > 0 and chart_df is not None and not chart_df.empty:
                 chart_df.iloc[-1, chart_df.columns.get_loc('close')] = float(rt_price)
@@ -2959,7 +2966,9 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 curr_fmt = f"${curr:,.2f}"
                 diff_str = f"{diff:+.2f}"
             else:
-                curr = int(out['stck_prpr'])
+                nxt_curr = int(out.get('ats_prpr', 0) or 0)
+                krx_curr = int(out.get('stck_prpr', 0) or 0)
+                curr = nxt_curr if nxt_curr > 0 else krx_curr
                 rate = float(out['prdy_ctrt'])
                 diff = int(out['prdy_vrss'])
                 curr_fmt = f"{curr:,}"

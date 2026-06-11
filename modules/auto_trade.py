@@ -257,9 +257,15 @@ class ConclusionMonitor:
 
         now = datetime.now()
         current_time = now.strftime("%H%M")
-        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
-        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
-        return start_time <= current_time <= end_time
+        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0800")
+        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "2000")
+        
+        if start_time <= current_time <= end_time:
+            # [추가] 정규장 단일가 매매 동기화를 위한 대체거래소 휴게 시간
+            if "0850" <= current_time < "0900": return False
+            if "1525" <= current_time < "1530": return False
+            return True
+        return False
 
     def _run_loop(self):
         my_thread = threading.current_thread()
@@ -3859,9 +3865,15 @@ class AutoTrader:
         now = datetime.now()
         current_time = now.strftime("%H%M")
         
-        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0915")
-        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1515")
-        return start_time <= current_time <= end_time
+        start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0800")
+        end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "2000")
+        
+        if start_time <= current_time <= end_time:
+            # [추가] 정규장 단일가 매매 동기화를 위한 대체거래소 휴게 시간
+            if "0850" <= current_time < "0900": return False
+            if "1525" <= current_time < "1530": return False
+            return True
+        return False
 
     def _get_holdings_message(self, target_cano):
         """보유 종목 현황 메시지 생성 (장 시작/마감 알림용)"""

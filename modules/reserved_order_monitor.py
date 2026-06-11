@@ -103,10 +103,14 @@ class ReservedOrderMonitor:
                         trigger, reason = True, f"지정 시간({tt}) 도달"
             else:
                 # [수정] 장 마감 시간대 API 자원 최적화 (시스템 설정 시간 연동)
-                start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0900")
-                end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1530")
+                start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0800")
+                end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "2000")
                 
                 if not is_overseas and (now_time_str_short >= end_time or now_time_str_short < start_time):
+                    continue
+                    
+                # [추가] 정규장 단일가 매매 동기화를 위한 대체거래소 휴게 시간은 발동 스킵
+                if not is_overseas and (("0850" <= now_time_str_short < "0900") or ("1525" <= now_time_str_short < "1530")):
                     continue
                 # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
                 if is_overseas and ("0800" <= now_time_str_short < "1600"):
@@ -201,8 +205,14 @@ class ReservedOrderMonitor:
         order_price = float(order['order_price'])
         if order_price == 0:
             if order['market'] == 'KR':
-                ord_dvsn = "01"
-                price_str = "0"
+                now_time = datetime.now().strftime("%H%M")
+                if ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850"):
+                    ord_dvsn = "00"
+                    curr = api.get_current_price(order['code'], is_overseas=False)
+                    price_str = str(int(curr)) if curr > 0 else "0"
+                else:
+                    ord_dvsn = "01"
+                    price_str = "0"
             else:
                 ord_dvsn = "00"
                 curr_price = api.get_current_price(order['code'], is_overseas=True)

@@ -44,8 +44,8 @@ def _save_dynamic_config():
         "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
-        "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0915"),
-        "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1515"),
+        "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0800"),
+        "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000"),
         "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0),
         "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
         "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.20),
@@ -756,9 +756,9 @@ def modify_trading_cycle_settings():
     def get_items():
         items = [
             {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM)", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0920"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0800"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
             {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM)", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "Time",
-             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1510"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
+             "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
             {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "Time",
              "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},
 

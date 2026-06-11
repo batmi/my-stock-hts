@@ -1776,6 +1776,19 @@ def get_current_price_data(code, is_overseas):
                             out['w52_lwpr'] = str(int(real_l52))
             except Exception as e:
                 logger.debug(f"[API] 52주 고가 보정 중 오류: {e}")
+
+            # [추가] NXT(대체거래소) 시세 조회 및 병합 (NX 코드 사용)
+            out = res.get('output', {})
+            try:
+                nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
+                nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
+                if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
+                    nxt_price = nxt_res['output'].get('stck_prpr')
+                    if nxt_price and safe_int(nxt_price) > 0:
+                        out['ats_prpr'] = str(nxt_price)
+            except Exception as e:
+                logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
+
             _set_micro_cache(cache_key, res)
         return res
     
@@ -1810,6 +1823,9 @@ def get_current_price(code, is_overseas):
                 logger.debug(f"get_current_price float cast error: {e}")
                 return 0.0
         else:
+            ats_val = output.get('ats_prpr')
+            if ats_val and safe_int(ats_val) > 0:
+                return safe_int(ats_val)
             return safe_int(output.get('stck_prpr'))
     return 0
 
@@ -1926,6 +1942,8 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 체결강도의 실시간성 확보를 위해 캐시 유지 시간을 3초로 단축
     if cached is not None: return cached
     
+    final_vol = None
+    
     for attempt in range(3):
         # [수정] Timeout을 2초에서 3초로 늘려 로그에 나타난 ReadTimeoutError 빈도 완화
         data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}, timeout=3, retries=0)
@@ -1942,13 +1960,34 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
                         valid_val = float(str(tday_rltv).replace(',', ''))
                         if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                             logger.debug(f"[VOL_STRENGTH_PARSED] [{code}] Extracted Value: {valid_val}%")
-                        _set_micro_cache(cache_key, valid_val)
-                        return valid_val
+                        final_vol = valid_val
                     except Exception as e:
                         if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]: logger.debug(f"[VOL_STRENGTH_ERROR] [{code}] Parse Error: {e}")
                         pass
         elif data.get('msg_cd') == 'EGW00201': time.sleep(0.2)
         else: time.sleep(0.2)
+        
+        if final_vol is not None:
+            break
+            
+    # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
+    try:
+        nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
+        if nxt_data and nxt_data.get('rt_cd') == '0':
+            nxt_items = nxt_data.get('output', [])
+            if nxt_items:
+                nxt_tday_rltv = nxt_items[0].get('tday_rltv')
+                if nxt_tday_rltv and str(nxt_tday_rltv).strip():
+                    nxt_vol = float(str(nxt_tday_rltv).replace(',', ''))
+                    if nxt_vol > 0:
+                        final_vol = nxt_vol
+    except Exception as e:
+        logger.debug(f"[API] NXT(대체거래소) 체결강도 조회 오류 (NX 코드 시도): {e}")
+
+    if final_vol is not None:
+        _set_micro_cache(cache_key, final_vol)
+        return final_vol
+        
     return None
 
 def fetch_overseas_detail_price(code, excd):
@@ -2365,11 +2404,17 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     
     if market == "domestic":
         url_path = constants.API_URLS["DOMESTIC"]["TRADING"][action.upper()]
+        category = "trade"
+            
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
             "PDNO": code, "ORD_DVSN": ord_dvsn, 
             "ORD_QTY": str(qty), "ORD_UNPR": str(price)
         }
+        
+        # [추가] 모의투자가 아닐 경우 SOR (최적주문집행) 거래소 코드 적용
+        if not config.session.is_simulation:
+            data["EXCG_ID_DVSN_CD"] = "SOR"
     else: # overseas
         # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
         trade_excd = exchange_code
@@ -2385,7 +2430,7 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn
         }
 
-    return call_api(url_path, market, "trade", action, data=data, method="POST")
+    return call_api(url_path, market, category, action, data=data, method="POST")
 
 def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_dvsn, exchange_code=None):
     """
@@ -2397,8 +2442,14 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     
     if market == "domestic":
         url_path = constants.API_URLS["DOMESTIC"]["TRADING"]["REVISE_CANCEL"]
+        category = "modify"
+            
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
+        
+        # [추가] 모의투자가 아닐 경우 SOR (최적주문집행) 거래소 코드 적용
+        if not config.session.is_simulation:
+            data["EXCG_ID_DVSN_CD"] = "SOR"
     else: # overseas
         # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
         trade_excd = exchange_code
@@ -2408,9 +2459,10 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
 
         url_path = constants.API_URLS["OVERSEAS"]["TRADING"]["REVISE_CANCEL"]
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "OVRS_EXCG_CD": trade_excd, "PDNO": code, "ORGN_ODNO": org_no, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price)}
+        category = "modify"
     
     # action 파라미터는 TR_ID 조회를 위해 사용됨 (modify/cancel)
-    return call_api(url_path, market, "modify", action, data=data, method="POST")
+    return call_api(url_path, market, category, action, data=data, method="POST")
 
 def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """예수금(주문가능현금) 조회 (국내/모의)"""
