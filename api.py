@@ -1805,6 +1805,21 @@ def get_current_price_data(code, is_overseas):
             if data.get('rt_cd') == '0':
                 if float(data.get('output', {}).get('last', 0) or 0) > 0:
                     if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                    
+                    # [추가] 미국 주식 프리/애프터마켓 시세 실시간 반영 로직
+                    # KIS 정규장 종가(last) 대신 TradingView/yfinance의 실시간 장외 최신가로 덮어쓰기
+                    try:
+                        fi = get_yf_fast_info(code)
+                        if fi and fi.get('last_price'):
+                            global_rt_price = float(fi['last_price'])
+                            kis_regular_price = float(data['output'].get('last', 0))
+                            
+                            # KIS 종가와 글로벌 실시간 가격이 다르면 장외 거래 시세로 간주하여 반영
+                            if global_rt_price > 0 and abs(global_rt_price - kis_regular_price) > 0.0001:
+                                data['output']['last'] = str(global_rt_price)
+                    except Exception as e:
+                        logger.debug(f"[API] 해외주식 장외 시세 병합 오류: {e}")
+                        
                     _set_micro_cache(cache_key, data)
                     return data
         res_err = {'rt_cd': '9999'}
