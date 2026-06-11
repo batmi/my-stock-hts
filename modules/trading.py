@@ -1951,7 +1951,7 @@ def get_reserved_orders_summary():
             except Exception:
                 created_str = created_at[5:16] if len(created_at) >= 16 else "-"
         
-        msg += f"🔹 {o['name']}({o['code']}) [{acc_label}]\n"
+        msg += f"{o['name']}({o['code']}) [{acc_label}]\n"
         msg += f"  {t_type} | {ord_str}\n"
         msg += f"  조건: {cond_str}\n"
         msg += f"  등록: {created_str} | 유효: {exp_str} (ID: {o['id']})\n\n"

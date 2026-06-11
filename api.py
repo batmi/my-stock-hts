@@ -25,6 +25,62 @@ from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
 
+# [추가] 대체거래소(NXT) 관련 마스터 파일 캐시
+_NXT_TRADEABLE_CACHE = set()
+_NXT_MASTER_LOADED = False
+_NXT_MASTER_LOCK = threading.RLock()
+
+def load_nxt_master():
+    """KIS API의 NXT 종목 마스터 파일을 다운로드하여 거래 가능 종목 코드를 추출합니다."""
+    global _NXT_MASTER_LOADED
+    with _NXT_MASTER_LOCK:
+        if _NXT_MASTER_LOADED: return
+        
+        try:
+            # NXT 마스터 파일 다운로드 및 파싱을 시도합니다.
+            base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
+            # KIS OpenAPI 대체거래소 종목정보 다운로드 API 경로
+            url_path = "uapi/domestic-stock/v1/quotations/nxt-master" 
+            
+            token = get_current_token()
+            key = config.session.app_key if config.session.is_simulation else config.session.real_app_key
+            secret = config.session.app_secret if config.session.is_simulation else config.session.real_app_secret
+            
+            headers = {
+                "authorization": f"Bearer {token}",
+                "appKey": key,
+                "appSecret": secret,
+                "tr_id": "CTCA0703C", # 대체거래소 마스터 조회 TR_ID
+                "custtype": "P"
+            }
+            
+            res = requests.get(f"{base_url}/{url_path}", headers=headers, timeout=5)
+            if res.status_code == 200:
+                # 마스터 파일 파싱 (한 줄씩 파이프(|) 구분되어 있다고 가정)
+                lines = res.text.splitlines()
+                for line in lines:
+                    parts = line.split('|')
+                    if len(parts) > 0 and len(parts[0]) == 6 and parts[0][0].isdigit():
+                        _NXT_TRADEABLE_CACHE.add(parts[0])
+                logger.info(f"NXT 거래 가능 종목 마스터 파일 로드 완료 ({len(_NXT_TRADEABLE_CACHE)}종목)")
+        except Exception as e:
+            logger.debug(f"NXT 마스터 파일 로드 실패 (Fallback 동적 조회 사용): {e}")
+        finally:
+            _NXT_MASTER_LOADED = True
+
+def is_nxt_tradeable(code):
+    """NXT 거래 대상 종목 여부를 확인합니다."""
+    if not _NXT_MASTER_LOADED:
+        load_nxt_master()
+    
+    # 1. 마스터 파일이 정상 로드되어 캐시에 종목이 있는 경우
+    if _NXT_TRADEABLE_CACHE:
+        return code in _NXT_TRADEABLE_CACHE
+        
+    # 2. 마스터 로드에 실패했거나 미지원 상태일 경우, 종목 그룹으로 확인 (ETF는 무조건 불가)
+    # 안전장치로 일단 일반 주식은 모두 통과시킵니다 (오류로 매매 못하는 것 방지)
+    return True
+
 # [추가] 휴장일 캐시
 _HOLIDAY_CACHE = {}
 

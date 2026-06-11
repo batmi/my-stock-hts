@@ -4399,6 +4399,17 @@ class AutoTrader:
                 self.set_stock_state(code, None)
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 return
+
+            # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 매도 스킵
+            now_time = datetime.now().strftime("%H%M")
+            is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+            
+            if is_nxt_market and not is_overseas_stock:
+                is_etf = any(e['code'] == code for e in config.session.stock_data.get('etfs_kr', []))
+                if is_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
+                    self.set_stock_state(code, None)
+                    return
             
             qty = api.safe_int(item.get('ord_psbl_qty'))
             profit_rate = float(item['evlu_pfls_rt'])
@@ -4737,6 +4748,17 @@ class AutoTrader:
             if code in restricted_stocks:
                 self.set_stock_state(code, None)
                 return {'type': 'restricted_skip', 'name': name}
+
+            # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 스킵
+            now_time = datetime.now().strftime("%H%M")
+            is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+            
+            if is_nxt_market and not is_overseas_stock:
+                is_etf = item.get('group') == 'etfs_kr'
+                if is_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
+                    self.set_stock_state(code, None)
+                    return {'type': 'log_only', 'log': f"[NXT스킵] {name}({code}): 대체거래소(NXT) 거래 불가 종목(ETF 포함)으로 분석을 스킵합니다."}
             
             # 2. 진행 중인 주문 체크
             if self.order_manager.is_pending(code):

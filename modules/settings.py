@@ -1352,10 +1352,13 @@ def manage_custom_settings():
             "5-2. 텔레그램 및 AI 브리핑": 2, "5-3. 화면 및 로그 설정": 3, "": 0, "기타": 99
         }
 
+        short_names_keys = list(short_names.keys())
+
         keys_list = list(changed_items.keys())
         keys_list.sort(key=lambda k: (
             category_order.get(category_map.get(changed_items[k].get("key", k), ("기타 설정", ""))[0], 99),
             sub_category_order.get(category_map.get(changed_items[k].get("key", k), ("기타 설정", ""))[1], 99),
+            short_names_keys.index(changed_items[k].get("key", k)) if changed_items[k].get("key", k) in short_names_keys else 999,
             k
         ))
         
