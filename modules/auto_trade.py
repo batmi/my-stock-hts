@@ -4069,19 +4069,32 @@ class AutoTrader:
                     if is_log_needed:
                         self.log("모니터링 완료. 대기 중...")
                 
-                # 설정된 주기만큼 대기 (중단 요청 시 즉시 반응)
-                # [확인] 설정된 간격(현재 180초)마다 위 로직을 반복합니다.
                 interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
                 
-                # [수정] 대기 시간 중에도 주기적으로 미체결 주문 관리 수행 (5초 단위)
-                # 긴 대기 시간(예: 3분) 동안 미체결 주문이 방치되는 것을 방지
-                for _ in range(interval): 
-                    if not self.is_running: break
-                    
-                    # 5초마다 미체결 관리 호출 (단, 루프 시작 직후는 제외)
-                    if _ > 0 and _ % 5 == 0:
-                        self.order_manager.manage_unfilled_orders()
+                # [수정] 미체결 주문 확인 시 발생하는 API 호출 지연(Delay)이 누적되어
+                # 모니터링 주기가 설정값(180초)을 크게 초과하는 문제를 해결하기 위해 절대 시간 기반 대기 적용
+                wait_start_time = time.time()
+                last_unfilled_check = wait_start_time
+                last_idle_unfilled_check = wait_start_time
+                
+                while self.is_running:
+                    now = time.time()
+                    if now - wait_start_time >= interval:
+                        break
                         
+                    # 5초 주기 도달 시
+                    if now - last_unfilled_check >= 5:
+                        last_unfilled_check = time.time()
+                        
+                        with self.order_manager._lock:
+                            has_pending = bool(self.order_manager.pending_orders)
+                            
+                        # 시스템 내부에 대기 중인 미체결 주문이 있다면 5초 주기로 즉각 확인
+                        # 없다면 외부 HTS 등 타 매체 주문 감지를 위해 60초 간격으로만 최소한의 API 확인 수행
+                        if has_pending or (now - last_idle_unfilled_check >= 60):
+                            self.order_manager.manage_unfilled_orders()
+                            last_idle_unfilled_check = time.time()
+                            
                     time.sleep(1)
                 
                 # 정상 루프 완료 시 에러 카운트 초기화
