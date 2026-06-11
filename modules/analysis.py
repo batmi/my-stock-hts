@@ -2968,9 +2968,18 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
             else:
                 nxt_curr = int(out.get('ats_prpr', 0) or 0)
                 krx_curr = int(out.get('stck_prpr', 0) or 0)
+                base_price = int(out.get('stck_sdpr', 0) or 0)
                 curr = nxt_curr if nxt_curr > 0 else krx_curr
-                rate = float(out['prdy_ctrt'])
-                diff = int(out['prdy_vrss'])
+                
+                if base_price > 0:
+                    diff = curr - base_price
+                    rate = (diff / base_price) * 100
+                else:
+                    try: rate = float(out.get('prdy_ctrt', 0))
+                    except: rate = 0.0
+                    try: diff = int(out.get('prdy_vrss', 0))
+                    except: diff = 0
+                    
                 curr_fmt = f"{curr:,}"
                 diff_str = f"{diff:+}"
 
