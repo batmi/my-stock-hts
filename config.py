@@ -70,8 +70,8 @@ class GlobalSettings(BaseModel):
     # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 10)
     SYSTEM_MAX_HOLDINGS: int = Field(default=10, gt=0)
 
-    # [추가] 시스템 트레이딩 매수 대상에 ETF 포함 여부
-    # 기본값: False (국내 주식만 대상으로 함)
+    # [추가] 자동매매 대상에 ETF 포함 여부
+    # 기본값: False (관심종목 중 국내 주식만 시스템 트레이딩 대상으로 함)
     SYSTEM_INCLUDE_ETF: bool = False
 
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
@@ -667,7 +667,7 @@ CONFIG_DESCRIPTIONS = {
     "SYSTEM_TRADING_INTERVAL": "자동매매 루프 실행 간격 (초)",
     "SYSTEM_INVEST_PER_STOCK": "전체 자산 대비 한 종목 투자 비율",
     "SYSTEM_MAX_HOLDINGS": "포트폴리오에 담을 수 있는 최대 종목 수",
-    "SYSTEM_INCLUDE_ETF": "매수 대상에 ETF 포함 여부",
+    "SYSTEM_INCLUDE_ETF": "자동매매 대상에 ETF 포함 여부",
     "USE_MARKET_FILTER": "지수 하락 시 신규 매수 보류 여부",
     "MARKET_FILTER_MA": "시장 추세 판단용 단순이동평균선 (일)",
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",

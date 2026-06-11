@@ -2255,7 +2255,7 @@ def analyze_market_stocks(market_type):
                 "TRUSTON ", "FOCUS ", "UNTACT ", "WOORI ", "WON ", "BNK ", "KINDEX ", 
                 "네비게이터 ", "TIME ", "KIWOOM ", "HK ", "1Q ", "KoAct ", "ITF ", 
                 "VITA ", "UNICORN ", "더제이 ", "파워 ", "MIDAS ", "에셋플러스 ", 
-                "KCGI ", "DAISHIN343 ", "아이엠에셋 ", "대신 ", "유진 ", 
+                "KCGI ", "DAISHIN343 ", "아이엠에셋 ", "대신 ", "유진 ", "IBK ",
                 "ETN ", "스팩 ", "SPAC ", "리츠 ", "REIT "
             ]
             original_len = len(stock_list)
