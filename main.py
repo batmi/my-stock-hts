@@ -5,6 +5,12 @@ import time
 import os
 import re
 
+# Mac/Linux 환경에서 한글 입력 시 백스페이스(Delete) 시각적 잔상 현상 방지
+try:
+    import readline
+except ImportError:
+    pass
+
 # [추가] 프로그램 실행 직후 지연 체감을 줄이기 위한 초기 프로그래스 출력
 print("  - 필수 데이터 분석 라이브러리(pandas, yfinance 등) 로딩 중...", flush=True)
 
@@ -111,6 +117,33 @@ Prompt.check_choice = _custom_check_choice
 Prompt.process_response = _custom_process_response
 Prompt.ask = _custom_ask
 Prompt.illegal_choice_message = "\n[yellow]유효하지 않은 선택입니다. 사용 가능한 옵션 중 하나를 선택해 주세요.[/yellow]\n"
+# =========================================================================
+
+# =========================================================================
+# [추가] readline과 rich.Prompt 충돌로 인한 백스페이스 프롬프트 지워짐 현상 해결
+# =========================================================================
+import rich.console
+
+_original_console_input = rich.console.Console.input
+
+def _custom_console_input(self, prompt="", *args, **kwargs):
+    password = kwargs.get("password", False)
+    if not getattr(self, "is_terminal", True) or password:
+        return _original_console_input(self, prompt, *args, **kwargs)
+        
+    try:
+        # 1. rich 렌더링 엔진을 통해 마크업 태그가 파싱된 평문(Plain) 텍스트만 추출
+        with self.capture() as cap:
+            print_kwargs = {k: v for k, v in kwargs.items() if k not in ["stream", "password"]}
+            self.print(prompt, *args, end="", **print_kwargs)
+        plain_prompt = cap.get()
+        
+        # 2. 내장 input 함수에 평문 프롬프트를 직접 전달하여 readline 너비 계산 오류(지워짐 현상) 원천 차단
+        return input(plain_prompt)
+    except Exception:
+        return _original_console_input(self, prompt, *args, **kwargs)
+
+rich.console.Console.input = _custom_console_input
 # =========================================================================
 
 # =========================================================================
