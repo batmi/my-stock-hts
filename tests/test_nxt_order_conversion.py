@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from modules.reserved_order_monitor import ReservedOrderMonitor
 import api
 from modules import db_manager
+import config
 
 @pytest.fixture
 def monitor():
@@ -26,6 +27,7 @@ def mock_db_and_api(monkeypatch):
 def test_nxt_aftermarket_order_conversion(monitor, mock_db_and_api, monkeypatch):
     """1. 애프터마켓(15:30~20:00) 예약 시장가(0) 주문이 지정가(00)로 자동 변환되는지 테스트"""
     
+    monkeypatch.setattr(config, 'SLIPPAGE_RATE', 0.0)
     # 시간 모킹 (오후 4시 = NXT 애프터마켓)
     monkeypatch.setattr('modules.reserved_order_monitor.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
     monkeypatch.setattr(api, 'get_current_price', lambda code, is_overseas: 50000)
@@ -43,6 +45,7 @@ def test_nxt_aftermarket_order_conversion(monitor, mock_db_and_api, monkeypatch)
 def test_nxt_premarket_order_conversion(monitor, mock_db_and_api, monkeypatch):
     """2. 프리마켓(08:00~08:50) 예약 시장가(0) 주문이 지정가(00)로 자동 변환되는지 테스트"""
     
+    monkeypatch.setattr(config, 'SLIPPAGE_RATE', 0.0)
     # 시간 모킹 (오전 8시 30분 = NXT 프리마켓)
     monkeypatch.setattr('modules.reserved_order_monitor.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 30)))
     monkeypatch.setattr(api, 'get_current_price', lambda code, is_overseas: 60000)

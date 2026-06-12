@@ -1669,7 +1669,7 @@ def register_reserved_order():
     
     config.console.print(f"[dim]  - 절대 가격: 49900 (해당 가격으로 주문)[/dim]")
     config.console.print(f"[dim]  - 퍼센트(%): -1% ({base_label} 대비 가격으로 주문)[/dim]")
-    config.console.print(f"[dim]  - 0: 시장가 주문 (발동 시점의 시장가)[/dim]")
+    config.console.print(f"[dim]  - 0: 시장가 주문 (발동 시점의 시장가 또는 슬리피지가 반영된 현재가 지정가)[/dim]")
     if is_price_target:
         config.console.print(f"[dim]  - 엔터(빈 값): [bold yellow]발동 조건(목표가)과 완전히 동일한 가격[/bold yellow]으로 자동 설정[/dim]")
     else:

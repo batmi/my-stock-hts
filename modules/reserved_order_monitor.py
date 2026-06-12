@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 import json
 import api
+import utils
 from modules import analysis
 import indicators
 from modules import db_manager
@@ -209,6 +210,10 @@ class ReservedOrderMonitor:
                 if ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850"):
                     ord_dvsn = "00"
                     curr = api.get_current_price(order['code'], is_overseas=False)
+                    if curr > 0:
+                        slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+                        adj_price = curr * (1 + slippage) if order['order_type'] == 'buy' else curr * (1 - slippage)
+                        curr = utils.adjust_to_tick(adj_price, is_overseas=False)
                     price_str = str(int(curr)) if curr > 0 else "0"
                 else:
                     ord_dvsn = "01"
@@ -217,6 +222,10 @@ class ReservedOrderMonitor:
                 ord_dvsn = "00"
                 curr_price = api.get_current_price(order['code'], is_overseas=True)
                 if curr_price > 0:
+                    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+                    adj_price = curr_price * (1 + slippage) if order['order_type'] == 'buy' else curr_price * (1 - slippage)
+                    curr_price = utils.adjust_to_tick(adj_price, is_overseas=True)
+                    
                     if curr_price >= 1.0: price_str = f"{curr_price:.2f}"
                     else: price_str = f"{curr_price:.4f}"
                 else:

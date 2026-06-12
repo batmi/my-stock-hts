@@ -247,6 +247,12 @@ class TelegramCommander:
         if not trades:
             return "📭 매매 기록이 없습니다."
 
+        # [추가] 체결된 내역만 통계에 포함 (접수, 취소 등 미체결 제외)
+        trades = [r for r in trades if "체결" in r.get('order_status', '')]
+        
+        if not trades:
+            return "📭 체결된 매매 기록이 없습니다."
+
         filter_code = None
         if keyword:
             code, name, _ = self._resolve_stock(keyword)
@@ -1224,6 +1230,9 @@ class TelegramCommander:
             t_date = t.get('time', '')[:10]
             if start_dt <= t_date <= end_dt:
                 trades.append(t)
+                
+        # [추가] 체결된 내역만 통계에 포함 (접수, 취소 등 미체결 제외)
+        trades = [r for r in trades if "체결" in r.get('order_status', '')]
             
         stats = self.trader._calculate_statistics(trades)
         

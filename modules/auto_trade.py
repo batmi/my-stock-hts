@@ -2161,6 +2161,9 @@ class AutoTrader:
                             today_trades_parsed.append(parsed_r)
                             
                         today_trades_refined = self._refine_trade_records(today_trades_parsed)
+                        # [추가] 체결된 내역만 당일 매매 요약에 포함
+                        today_trades_refined = [r for r in today_trades_refined if "체결" in r.get('order_status', '')]
+                        
                         buy_cnt = len([x for x in today_trades_refined if x['type'] == 'buy'])
                         sell_cnt = len([x for x in today_trades_refined if x['type'] == 'sell'])
                         
@@ -2384,6 +2387,8 @@ class AutoTrader:
                     today_trades_parsed.append(parsed_r)
                 
                 today_trades_refined = self._refine_trade_records(today_trades_parsed)
+                # [추가] 체결된 내역만 당일 매매 요약에 포함
+                today_trades_refined = [r for r in today_trades_refined if "체결" in r.get('order_status', '')]
                 sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
                 realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
             except: pass
@@ -2783,6 +2788,9 @@ class AutoTrader:
             
             # 중복 제거 및 정제
             today_trades_refined = self._refine_trade_records(today_trades_parsed)
+            
+            # [추가] 체결된 내역만 당일 매매 요약에 포함
+            today_trades_refined = [r for r in today_trades_refined if "체결" in r.get('order_status', '')]
             
             buy_trades = [x for x in today_trades_refined if x['type'] == 'buy']
             sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
@@ -3206,6 +3214,9 @@ class AutoTrader:
             # [추가] 중복 제거 및 정제 (시스템 주문과 체결 확인 병합)
             self.trade_records = self._refine_trade_records(self.trade_records)
             
+            # [추가] 성과 평가(Report)에서는 체결된 내역만 포함하도록 필터링 (미체결/접수/취소 등 제외)
+            self.trade_records = [r for r in self.trade_records if "체결" in r.get('order_status', '')]
+            
             # [추가] 시간순 정렬 (통계 계산 및 기간 표시 정확성 확보)
             if self.trade_records:
                 self.trade_records.sort(key=lambda x: x['time'])
@@ -3260,6 +3271,9 @@ class AutoTrader:
             
         # [추가] 중복 제거 및 정제
         refined_records = self._refine_trade_records(temp_records)
+        
+        # [추가] 성과 평가(Report)에서는 체결된 내역만 포함하도록 필터링
+        refined_records = [r for r in refined_records if "체결" in r.get('order_status', '')]
         
         # [추가] 시간순 정렬 (통계 계산 및 기간 표시 정확성 확보)
         if refined_records:
