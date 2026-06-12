@@ -16,18 +16,16 @@ from modules.telegram_bot import TelegramCommander
 # 1. DBManager 예약 주문 처리 테스트
 # -------------------------------------------------------------------
 @pytest.fixture
-def test_db():
+def test_db(tmp_path):
     """테스트용 독립된 SQLite DB 인스턴스 생성"""
     old_db_path = config.DB_FILE_PATH
-    test_db_path = "test_reserved_orders.db"
+    test_db_path = str(tmp_path / "test_reserved_orders.db")
     config.DB_FILE_PATH = test_db_path
     
     db = DBManager()
     yield db
     
     db.close_connection()
-    if os.path.exists(test_db_path):
-        os.remove(test_db_path)
     config.DB_FILE_PATH = old_db_path
 
 def test_db_reserved_orders_lifecycle(test_db):
@@ -248,9 +246,9 @@ def test_register_reserved_order_cancel_by_user(mock_get_price, mock_select_stoc
     # 목표가 입력 단계에서 'q' 입력
     mock_ask.side_effect = ["q"]
     
-    # 중단 시 False 반환
+    # 중단 시 None 반환
     result = trading.register_reserved_order()
-    assert result is False
+    assert result is None
 
 @patch('modules.trading.Prompt.ask')
 @patch('modules.trading.utils.show_menu')

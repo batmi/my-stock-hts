@@ -24,7 +24,20 @@ def setup_teardown():
     config.USE_CORRELATION_FILTER = True
     config.CORRELATION_THRESHOLD = 0.7
     
+    # API 통신으로 인한 Rate Limit 에러 및 의도치 않은 분기(NXT스킵 등) 방지
+    patcher1 = patch('modules.auto_trade.api.get_current_price', return_value=0)
+    patcher2 = patch('modules.auto_trade.api.get_order_book', return_value={'rt_cd': '0', 'output1': {'total_askp_rsqn': '100', 'total_bidp_rsqn': '100'}})
+    patcher3 = patch('modules.auto_trade.api.is_nxt_tradeable', return_value=True)
+    
+    patcher1.start()
+    patcher2.start()
+    patcher3.start()
+    
     yield
+    
+    patcher1.stop()
+    patcher2.stop()
+    patcher3.stop()
     
     # 테스트 종료 후 원상 복구
     config.USE_CORRELATION_FILTER = original_use
@@ -175,15 +188,17 @@ def test_analyze_candidates_logging(mock_prefetch, mock_worker):
     targets = [{'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}, {'code': '000660', 'name': 'SK하이닉스', 'group': 'stocks_kr'}]
     
     with patch.object(trader, 'log') as mock_log:
-        candidates = trader._analyze_candidates(targets, {'005380'}, {}, {}, {'005380': '현대차'}, {'005380': 'stocks_kr'})
-        
-        # 통과한 종목은 1개 뿐이어야 함
-        assert len(candidates) == 1
-        assert candidates[0]['code'] == '000660'
-        
-        # 종합 집계 로그가 정상적으로 남았는지 검증
-        log_calls = [call.args[0] for call in mock_log.call_args_list]
-        assert any("보유 종목과 유사 테마로 매수 보류 (1종목): 삼성전자" in log for log in log_calls)
+        # 실제 네트워크 API 호출(토큰 에러 유발) 방지
+        with patch('modules.auto_trade.api.get_chart_data', return_value=pd.DataFrame()):
+            candidates = trader._analyze_candidates(targets, {'005380'}, {}, {}, {'005380': '현대차'}, {'005380': 'stocks_kr'})
+            
+            # 통과한 종목은 1개 뿐이어야 함
+            assert len(candidates) == 1
+            assert candidates[0]['code'] == '000660'
+            
+            # 종합 집계 로그가 정상적으로 남았는지 검증
+            log_calls = [call.args[0] for call in mock_log.call_args_list]
+            assert any("보유 종목과 유사 테마로 매수 보류 (1종목): 삼성전자" in log for log in log_calls)
 
 @patch('modules.auto_trade.AutoTrader._get_stock_market_type', return_value='KOSPI')
 @patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
