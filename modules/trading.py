@@ -910,8 +910,47 @@ def send_order(order_type):
         calc_price = 0
         display_price = ""
         is_market_order = (price == "0")
+        ord_dvsn_name = "정규장"
 
         if is_overseas:
+            # [추가] 미국 서머타임(DST) 및 현재 시장 시간 자동 판별
+            now_utc = datetime.utcnow()
+            year = now_utc.year
+            
+            # 매년 3월 두 번째 일요일 07:00 UTC (02:00 EST) 서머타임 시작
+            march_first = datetime(year, 3, 1)
+            march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
+            dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
+            
+            # 매년 11월 첫 번째 일요일 06:00 UTC (02:00 EDT) 서머타임 종료
+            nov_first = datetime(year, 11, 1)
+            nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
+            dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
+            
+            is_dst = dst_start_utc <= now_utc < dst_end_utc
+            now_et = now_utc - timedelta(hours=4 if is_dst else 5)
+            time_et = now_et.time()
+            
+            time_0400 = datetime.strptime("04:00", "%H:%M").time()
+            time_0930 = datetime.strptime("09:30", "%H:%M").time()
+            time_1600 = datetime.strptime("16:00", "%H:%M").time()
+            time_2000 = datetime.strptime("20:00", "%H:%M").time()
+            
+            if time_0400 <= time_et < time_0930:
+                ord_dvsn = "32"
+                ord_dvsn_name = "프리마켓"
+            elif time_0930 <= time_et < time_1600:
+                ord_dvsn = "00"
+                ord_dvsn_name = "정규장"
+            elif time_1600 <= time_et <= time_2000:
+                ord_dvsn = "34"
+                ord_dvsn_name = "애프터마켓"
+            else:
+                ord_dvsn = "31"
+                ord_dvsn_name = "데이마켓(주간거래)"
+                
+            config.console.print(f"\n[cyan]◆ 미국 시장 시간 자동 판별: {ord_dvsn_name} [dim](현지시각: {now_et.strftime('%H:%M')}, 서머타임 {'적용' if is_dst else '미적용'})[/dim][/cyan]")
+
             # [해외] 시장가(0) 입력 시 현재가 기준 지정가로 변환
             if is_market_order:
                 if curr_price > 0:
@@ -919,13 +958,18 @@ def send_order(order_type):
                         price = f"{curr_price:.2f}"
                     else:
                         price = f"{curr_price:.4f}"
-                    config.console.print(f"[yellow]안내: 0(시장가)을 입력하여 현재가(${price}) 기준 지정가로 주문을 접수합니다.[/yellow]")
+                    
+                    if ord_dvsn == "31":
+                        config.console.print(f"[yellow]안내: 주간거래(데이마켓)는 시장가 주문이 불가하므로 현재가(${price}) 지정가로 자동 변환됩니다.[/yellow]")
+                    else:
+                        config.console.print(f"[yellow]안내: 0(시장가)을 입력하여 현재가(${price}) 기준 지정가({ord_dvsn_name})로 주문을 접수합니다.[/yellow]")
                 else:
                     config.console.print("[red]오류: 현재가 정보를 가져오지 못해 0(시장가) 주문을 수행할 수 없습니다.[/red]")
                     return
             
             calc_price = float(price)
-            display_price = f"${price}" + (" (현재가)" if is_market_order else " (지정가)")
+            display_price = f"${price}" + (" (현재가 자동변환)" if is_market_order else " (지정가)")
+            display_price += f" [{ord_dvsn_name}]"
         else:
             # [국내] 시장가 주문 처리
             if is_market_order:
@@ -939,7 +983,7 @@ def send_order(order_type):
                 if is_nxt_market:
                     # 대체거래소(NXT)는 시장가 주문 미지원하므로 현재가 기준 지정가로 변경
                     ord_dvsn = "00"
-                    display_price = f"{curr_price:,}원 (NXT지정가)"
+                    display_price = f"{curr_price:,}원 (NXT현재가 자동변환)"
                     price = str(int(curr_price))
                     config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
                 else:
