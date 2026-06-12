@@ -711,6 +711,26 @@ class DBManager:
             return [dict(row) for row in cursor.fetchall()]
         except: return []
 
+    def get_completed_reserved_orders(self, start_date=None, keyword=None):
+        """발동 완료되거나 취소된 예약 주문 내역 조회 (히스토리용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            q = "SELECT * FROM reserved_orders WHERE status != 'PENDING'"
+            params = []
+            
+            if start_date:
+                q += " AND created_at >= ?"
+                params.append(start_date + " 00:00:00")
+            if keyword:
+                q += " AND (code LIKE ? OR name LIKE ?)"
+                params.append(f"%{keyword}%")
+                params.append(f"%{keyword}%")
+                
+            cursor.execute(q, params)
+            return [dict(row) for row in cursor.fetchall()]
+        except: return []
+
     def update_reserved_order_status(self, order_id, status, odno=None, fail_reason=None):
         with self.lock:
             conn = self._get_conn()

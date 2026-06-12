@@ -342,6 +342,8 @@ class ConclusionMonitor:
                 self.consecutive_errors += 1
                 logger.error(f"체결 감시 중 오류: {e}")
                 has_error = True
+                if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                    config.console.print(f"[bold red][ERROR] 체결 감시 중 오류 발생: {e}[/bold red]")
             
             # [추가] Rate Limit 감지 시 호출 간격 자동 조절
             if is_rate_limited:
@@ -1689,6 +1691,8 @@ class RiskManager:
             
             # [추가] 화면에 붉은색 경고 출력
             console.print(f"\n[bold red]🛑 [비상 정지] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n[dim]자산 보호를 위해 시스템을 정지했습니다.[/dim]\n")
+            if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                console.print(f"[bold red][ERROR] 일일 손실 한도({-loss_limit_pct}%) 초과로 인해 시스템이 강제 정지되었습니다.[/bold red]")
             
             msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
             
@@ -1918,6 +1922,8 @@ class AutoTrader:
                     self.log("초기화 실패로 자동매매를 시작할 수 없습니다.")
                     if api._is_screen_output_allowed():
                         console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
+                        if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                            console.print("[bold red][ERROR] 시스템 초기화 실패[/bold red]")
                     return
 
             self.is_running = True
@@ -2041,6 +2047,8 @@ class AutoTrader:
             logger.error(f"자동매매 시작 실패: {e}")
             if api._is_screen_output_allowed():
                 console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
+                if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                    console.print(f"[bold red][ERROR] 자동매매 시작 실패: {e}[/bold red]")
 
             if self.initial_asset > 0:
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
@@ -2081,6 +2089,8 @@ class AutoTrader:
 
         if use_status:
             console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
+            if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                console.print("[bold red][ERROR] 시스템 트레이딩 정지 완료[/bold red]")
             
         self.log("시스템 중단")
         
@@ -4131,6 +4141,8 @@ class AutoTrader:
                 max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
                 self.log(f"에러 발생({self.consecutive_errors}/{max_err}): {str(e)}")
                 console.print(f"[dim red]⚠️ 에러 발생: {str(e)}[/dim red]")
+                if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                    console.print(f"[bold red][ERROR] 시스템 트레이딩 루프 예외 발생 ({self.consecutive_errors}/{max_err}): {str(e)}[/bold red]")
                 
                 if self.consecutive_errors >= max_err:
                     # [수정] 중단 대신 대기 모드로 전환
@@ -4138,6 +4150,8 @@ class AutoTrader:
                     
                     # [개선] 상세 알림 메시지 구성
                     err_reason = str(e)
+                    if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                        console.print(f"\n[bold red][ERROR] 연속 에러 {max_err}회 초과! 자동매매 시스템이 대기 모드(정지)로 전환되었습니다. (사유: {err_reason})[/bold red]\n")
                     msg = f"🚨 [시스템 긴급 대기] 연속 에러 {max_err}회 발생\n매매를 일시 중단하고 서버 복구를 대기합니다.\n\n원인: {err_reason}\n\n서버 복구 확인 시 자동으로 재개됩니다."
                     
                     # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)

@@ -27,9 +27,10 @@ class GlobalSettings(BaseModel):
     # [설정] 스크린 디버그 로그 레벨 설정 (OFF / DEBUG / TRACE)
     # ==========================================================
     # OFF   : 로그 출력 없음
+    # ERROR : [ERROR] 시스템 에러 및 정지 로그 화면 출력
     # TRACE : [TRACE] 로그 화면 출력
-    # DEBUG : [TRACE] 및 [DEBUG] 로그 화면 출력
-    SCREEN_DEBUG_LEVEL: str = "OFF"
+    # DEBUG : [TRACE], [DEBUG] 및 [ERROR] 로그 화면 출력
+    SCREEN_DEBUG_LEVEL: str = "ERROR"
 
     # ==========================================================
     # [설정] 화면 자동 지우기 (Clear Screen)

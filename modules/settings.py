@@ -40,7 +40,7 @@ def _save_dynamic_config():
         "TELEGRAM_POLLING_TIMEOUT": getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10),
         "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
         "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
-        "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "OFF"),
+        "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),
         "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
@@ -587,8 +587,8 @@ def modify_log_settings():
     items = [
         {"desc": "화면 자동 지우기", "help": "메뉴 이동 시 터미널 화면 클리어 여부", "name": "CLEAR_SCREEN_ON_MENU", "type": "bool", "choices": ["y", "n"],
          "get": lambda: getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False), "set": lambda v: setattr(config.settings, 'CLEAR_SCREEN_ON_MENU', v)},
-        {"desc": "화면 로그 레벨", "help": "터미널 출력 레벨", "name": "SCREEN_DEBUG_LEVEL", "type": "str", "choices": ["OFF", "TRACE", "DEBUG"],
-         "get": lambda: getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "OFF"), "set": lambda v: setattr(config.settings, 'SCREEN_DEBUG_LEVEL', v)},
+        {"desc": "화면 로그 레벨", "help": "터미널 출력 레벨", "name": "SCREEN_DEBUG_LEVEL", "type": "str", "choices": ["OFF", "ERROR", "TRACE", "DEBUG"],
+         "get": lambda: getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"), "set": lambda v: setattr(config.settings, 'SCREEN_DEBUG_LEVEL', v)},
         {"desc": "파일 로그 레벨", "help": "로그 파일 저장 레벨", "name": "FILE_DEBUG_LEVEL", "type": "str", "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
          "get": lambda: getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"), "set": lambda v: setattr(config.settings, 'FILE_DEBUG_LEVEL', v),
          "callback": config.setup_logging}

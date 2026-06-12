@@ -1063,20 +1063,14 @@ def view_trade_history():
     # [추가] 예약 주문 내역 병합
     if choice in ["1", "2", "3"]:
         try:
-            conn = db_manager.db._get_conn()
-            cursor = conn.cursor()
-            q = "SELECT * FROM reserved_orders WHERE status != 'PENDING'"
-            params = []
-            if choice == "2":
-                q += " AND created_at >= ?"
-                params.append(start_dt + " 00:00:00")
+            res_rows = []
+            if choice == "1":
+                res_rows = db_manager.db.get_completed_reserved_orders()
+            elif choice == "2":
+                res_rows = db_manager.db.get_completed_reserved_orders(start_date=start_dt)
             elif choice == "3":
-                q += " AND (code LIKE ? OR name LIKE ?)"
-                params.append(f"%{keyword}%")
-                params.append(f"%{keyword}%")
+                res_rows = db_manager.db.get_completed_reserved_orders(keyword=keyword)
                 
-            cursor.execute(q, params)
-            res_rows = cursor.fetchall()
             for r in res_rows:
                 cano = r['cano']
                 acnt = r['acnt']
