@@ -144,6 +144,7 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     # ---------------------------
     if not candidates:
         config.console.print("\n[yellow]매도 가능한 잔고가 없습니다.[/yellow]")
+        utils.pause()
         return None, None, False, None, None
 
     title = f"\n[{'해외' if is_overseas else '국내'}] 매도 가능 종목 리스트"
@@ -209,9 +210,11 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
             return selected['code'], selected['name'], is_overseas, mapped_excd, selected
         else:
             config.console.print("[red]잘못된 번호입니다.[/red]")
+            utils.pause()
             return None, None, False, None, None
     except ValueError:
         config.console.print("[red]숫자를 입력해주세요.[/red]")
+        utils.pause()
         return None, None, False, None, None
 
 def _create_fill_history(db_order, reason_msg):
@@ -1047,7 +1050,7 @@ def send_order(order_type):
         config.console.print()
         if ans != "y":
             config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
-            return False
+            return None
 
         # 8. 주문 전송
         market_api_param = "overseas" if is_overseas else "domestic"
@@ -1443,13 +1446,13 @@ def register_reserved_order():
     target_cano, target_acnt, acc_label = select_account()
     if not target_cano:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     
     menu_items = [("1", "예약 매수", "Buy"), ("2", "예약 매도", "Sell")]
     choice = utils.show_menu("주문 방향", menu_items, default_choice="1")
     if choice.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     
     menu_map_dict = dict((k, v) for k, v, _ in menu_items)
     context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
@@ -1461,13 +1464,13 @@ def register_reserved_order():
         res = select_stock_from_balance(target_cano, target_acnt)
         if not res or res[0] in [None, False]:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         stock_code, stock_name, is_overseas, _, stock_info = res
     else:
         stock_code, stock_name, is_overseas = utils.select_target_stock()
         if not stock_code:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
 
     market = "US" if is_overseas else "KR"
     
@@ -1508,15 +1511,15 @@ def register_reserved_order():
     cond_choice = utils.show_menu("예약 발동 조건", cond_items)
     if cond_choice.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     
     if order_type == 'sell' and cond_choice == '6':
         config.console.print("[red]트레일링 매수(6번) 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
-        return False
+        return None
         
     if order_type == 'buy' and cond_choice == '7':
         config.console.print("[red]트레일링 매도(7번) 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
-        return False
+        return None
     
     condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "LIMIT", "4": "TIME", "5": "SCORE", "6": "TRAILING_BUY", "7": "TRAILING_SELL", "8": "RSI", "9": "EMA"}
     condition_type = condition_map[cond_choice]
@@ -1533,7 +1536,7 @@ def register_reserved_order():
         
         if not raw_time or raw_time.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         
         if raw_time == "1":
             target_time = datetime.now().strftime("%Y%m%d") + "1520"
@@ -1550,12 +1553,12 @@ def register_reserved_order():
         target_price_str = Prompt.ask("목표 점수 입력 (예: 7.5)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         target_price = float(target_price_str.replace(',', ''))
         updown = Prompt.ask("발동 방향 (1: 점수 이상 돌파 시, 2: 점수 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1")
         if updown.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         condition_type = "SCORE_UP" if updown == "1" else "SCORE_DOWN"
         
     elif condition_type == "RSI":
@@ -1563,12 +1566,12 @@ def register_reserved_order():
         target_price_str = Prompt.ask("목표 RSI 입력 (예: 30 또는 75)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         target_price = float(target_price_str.replace(',', ''))
         updown = Prompt.ask("발동 방향 (1: RSI 이상 돌파 시, 2: RSI 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="2")
         if updown.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         condition_type = "RSI_UP" if updown == "1" else "RSI_DOWN"
         
     elif condition_type == "EMA":
@@ -1576,12 +1579,12 @@ def register_reserved_order():
         target_price_str = Prompt.ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         target_price = float(target_price_str)
         updown = Prompt.ask("발동 방향 (1: 상향 돌파 시, 2: 하향 이탈 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1" if order_type == "buy" else "2")
         if updown.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         condition_type = "EMA_UP" if updown == "1" else "EMA_DOWN"
         
     elif condition_type == "TRAILING_BUY":
@@ -1590,7 +1593,7 @@ def register_reserved_order():
         target_price_str = Prompt.ask("예약 후 최저점 대비 추격 매수할 반등 폭(%) 입력 (예: 3.0)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         target_price = float(target_price_str.replace('%', '').strip())
     elif condition_type == "TRAILING_SELL":
         config.console.print(f"\n[cyan]◆ 하락 폭 설정 (트레일링 매도)[/cyan]")
@@ -1598,7 +1601,7 @@ def register_reserved_order():
         target_price_str = Prompt.ask("예약 후 최고점 대비 하락 시 매도할 폭(%) 입력 (예: 3.0)")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         target_price = float(target_price_str.replace('%', '').strip())
     else:
         config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력[/cyan]")
@@ -1607,7 +1610,7 @@ def register_reserved_order():
         target_price_str = Prompt.ask("목표가 입력")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return False
+            return None
         if '%' in target_price_str:
             pct = float(target_price_str.replace('%', '').strip())
             target_price = base_price * (1 + (pct / 100.0))
@@ -1631,7 +1634,7 @@ def register_reserved_order():
     order_price_str = Prompt.ask("주문 단가 입력", default="")
     if order_price_str.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     
     if order_price_str.lower() == 'm':
         order_price_str = "0"
@@ -1665,7 +1668,7 @@ def register_reserved_order():
         
     if not qty_str or qty_str.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     qty = int(qty_str.replace(',', ''))
     
     if order_type == "sell" and qty > max_qty:
@@ -1681,7 +1684,7 @@ def register_reserved_order():
     expire_choice = Prompt.ask("유효 기간 선택 또는 입력", default="1")
     if expire_choice.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
     
     today_dt = datetime.now()
     if expire_choice == "1": expire_dt = today_dt.strftime("%Y%m%d")
@@ -1733,7 +1736,7 @@ def register_reserved_order():
     ans = Prompt.ask("위 내용으로 예약 주문을 시스템에 등록하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
     if ans.lower() in ['b', 'q', 'n']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return False
+        return None
         
     if ans == "y":
         db_manager.db.insert_reserved_order(
@@ -1844,13 +1847,14 @@ def manage_reserved_orders():
         config.console.print()
         orders = _print_reserved_orders_table()
         if not orders:
-            return False
+            return None
             
         config.console.print()
         cancel_input = Prompt.ask("취소할 예약 주문 ID 선택 [dim](다중: 1,3 / 전체: 0 / 이전: b, 메인: q, 취소: Enter)[/dim]", default="")
         if not cancel_input or cancel_input.lower() in ['b', 'q']:
             if cancel_input and cancel_input.lower() in ['b', 'q']:
                 config.console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
+                return None
             return False
         
         if cancel_input.strip() == "0":

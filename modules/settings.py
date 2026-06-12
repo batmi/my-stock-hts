@@ -1122,7 +1122,7 @@ def manage_custom_settings():
 
         if not changed_items:
             console.print("\n[dim]현재 기본값에서 변경된 커스텀 설정이 없습니다.[/dim]\n")
-            time.sleep(1.5)
+            utils.pause()
             context.USER_ACTION_BREADCRUMB.pop()
             return
 
@@ -1418,7 +1418,7 @@ def manage_custom_settings():
 
         if not valid_keys_to_reset:
             console.print("[red]잘못된 번호입니다.[/red]")
-            time.sleep(1)
+            utils.pause()
             continue
 
         confirm = Prompt.ask(f"선택한 {len(valid_keys_to_reset)}개의 설정을 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n")
@@ -1432,7 +1432,7 @@ def manage_custom_settings():
             except Exception:
                 pass
             console.print(f"\n[green]성공적으로 초기화되었습니다.[/green]")
-            time.sleep(1.5)
+            utils.pause()
 
 def system_config_menu():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)

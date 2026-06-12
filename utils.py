@@ -390,6 +390,7 @@ def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하�
         if not is_valid:
             config.console.print(f"[bold red]오류: 유효하지 않은 종목이거나 현재가가 존재하지 않습니다. ({code})[/bold red]")
             config.console.print(f"[dim]사유: {msg}[/dim]\n")
+            pause()
             return False
 
     config.console.print(f"[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code})")
@@ -451,6 +452,7 @@ def select_stock_for_chart():
     
     if not target_list:
         config.console.print(f"[yellow]{group_map[group_choice]} 목록이 비어있습니다.[/yellow]")
+        pause()
         return None, None, None
         
     idx, item = search_stock_in_list(target_list, title=f"{group_map[group_choice]} 목록")

@@ -1032,6 +1032,7 @@ def main():
                                     context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {target_name}")
                             else:
                                 config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
+                                utils.pause()
 
                         if target_code: 
                             logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
@@ -1061,7 +1062,7 @@ def main():
                     except Exception as e:
                         config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
                         logging.error(f"자산 관리 메뉴 오류: {e}")
-                        action_taken = False
+                        action_taken = None
                 
                 if action_taken is not False:
                     last_choice = choice

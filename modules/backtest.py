@@ -957,7 +957,7 @@ def run_backtest():
                     context.USER_ACTION_BREADCRUMB.append(f"[종목선택] {name}")
             else:
                 config.console.print("[yellow]목록이 비어있습니다.[/yellow]")
-                time.sleep(1)
+                utils.pause()
                 continue
 
         if not code: continue
@@ -1234,7 +1234,7 @@ def run_backtest():
 
             if df is None or df.empty:
                 config.console.print("[red]데이터를 불러올 수 없습니다.[/red]")
-                time.sleep(1)
+                utils.pause()
                 continue
                 
             # [추가] 스마트머니(수급) 시그널 사전 병합
