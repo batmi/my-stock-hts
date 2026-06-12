@@ -471,10 +471,10 @@ YF_TO_TV_EXACT = {
     "ZB=F": "CBOT:ZB1!"            # 미국채 30년물 선물
 }
 
-def get_yf_fast_info(code):
+def get_yf_fast_info(code, ttl=60.0):
     """TV 단건 조회 + yf_fast_info Fallback (캐싱 포함)"""
     cache_key = f"yf_fi_{code}"
-    cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] TTL 상향
+    cached = _get_micro_cache(cache_key, ttl=ttl) # [수정] 상황에 맞게 TTL 조절 가능토록 인자 추가
     if cached: return cached
 
     tv_exact_symbol = YF_TO_TV_EXACT.get(code)
@@ -486,18 +486,27 @@ def get_yf_fast_info(code):
             try:
                 from tradingview_screener import Query, Column
                 if tv_exact_symbol:
-                    _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week').get_tickers([tv_exact_symbol])
+                    _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').get_tickers([tv_exact_symbol])
                 else:
-                    _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week').where(Column('name') == code).limit(1).get_scanner_data()
+                    _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').where(Column('name') == code).limit(1).get_scanner_data()
                     
                 if df is not None and not df.empty:
                     row = df.iloc[0]
                     close_p = row.get('close')
                     change_abs = row.get('change_abs')
                     
+                    # [추가] 장외(프리/애프터마켓) 가격이 존재할 경우 실시간 가격으로 우선 적용
+                    pre_close = row.get('premarket_close')
+                    post_close = row.get('postmarket_close')
+                    
+                    if pd.notna(post_close) and post_close > 0:
+                        close_p = post_close
+                    elif pd.notna(pre_close) and pre_close > 0:
+                        close_p = pre_close
+                    
                     prev_close = None
-                    if pd.notna(close_p) and pd.notna(change_abs):
-                        prev_close = close_p - change_abs
+                    if pd.notna(row.get('close')) and pd.notna(change_abs):
+                        prev_close = row.get('close') - change_abs
                         
                     data = {
                         'last_price': close_p,
@@ -672,7 +681,7 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
         tv_success_codes = set()
         try:
             from tradingview_screener import Query
-            _, df = Query().set_markets('america').select('name', 'close', 'change_abs', 'volume', 'High.52Week').get_tickers(codes)
+            _, df = Query().set_markets('america').select('name', 'close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').get_tickers(codes)
             
             if df is not None and not df.empty:
                 for _, row in df.iterrows():
@@ -681,11 +690,19 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                     
                     close_p = row.get('close')
                     change_abs = row.get('change_abs')
+                    
+                    pre_close = row.get('premarket_close')
+                    post_close = row.get('postmarket_close')
+                    if pd.notna(post_close) and post_close > 0:
+                        close_p = post_close
+                    elif pd.notna(pre_close) and pre_close > 0:
+                        close_p = pre_close
+                        
                     if pd.isna(close_p): continue
                     
                     prev_close = None
-                    if pd.notna(change_abs):
-                        prev_close = close_p - change_abs
+                    if pd.notna(row.get('close')) and pd.notna(change_abs):
+                        prev_close = row.get('close') - change_abs
                         
                     data = {
                         'last_price': close_p,
@@ -1865,7 +1882,7 @@ def get_current_price_data(code, is_overseas):
                     # [추가] 미국 주식 프리/애프터마켓 시세 실시간 반영 로직
                     # KIS 정규장 종가(last) 대신 TradingView/yfinance의 실시간 장외 최신가로 덮어쓰기
                     try:
-                        fi = get_yf_fast_info(code)
+                        fi = get_yf_fast_info(code, ttl=3.0) # [수정] 실시간 시세 갱신을 위해 TTL을 3초로 단축
                         if fi and fi.get('last_price'):
                             global_rt_price = float(fi['last_price'])
                             kis_regular_price = float(data['output'].get('last', 0))
@@ -2494,6 +2511,7 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
         elif exchange_code == "AMS": trade_excd = "AMEX"
 
         url_path = constants.API_URLS["OVERSEAS"]["TRADING"]["ORDER"]
+        category = "trade"
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
             "OVRS_EXCG_CD": trade_excd, "PDNO": code, 

@@ -894,7 +894,13 @@ def send_order(order_type):
         qty = Prompt.ask(f"[{title_color}]{title_text} 수량(주)[/] [dim](이전: b, 메인: q)[/dim]", default=default_qty)
         if qty.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
-        qty = qty.replace(',', '')
+        
+        qty = qty.replace(',', '').replace('주', '').strip()
+        try:
+            float(qty)
+        except ValueError:
+            config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]")
+            return False
 
         unit = "달러" if is_overseas else "원"
         price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 이전: b, 메인: q[/dim]"
@@ -903,7 +909,13 @@ def send_order(order_type):
         if price.lower() in ['b', 'q']: return False
         context.USER_ACTION_BREADCRUMB.append(f"[단가] {price}")
         if is_overseas and not price: config.console.print("[red]가격을 입력해야 합니다.[/red]"); return
-        price = price.replace(',', '')
+        
+        price = price.replace(',', '').replace('$', '').replace('원', '').strip()
+        try:
+            float(price)
+        except ValueError:
+            config.console.print("[red]단가는 숫자만 입력 가능합니다.[/red]")
+            return False
 
         # 6. 가격 처리 및 주문 구분 설정
         ord_dvsn = "00"
@@ -1307,7 +1319,20 @@ def modify_order():
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         price = "0"
 
-    qty = qty.replace(',', ''); price = price.replace(',', '')
+    qty = qty.replace(',', '').replace('주', '').strip()
+    price = price.replace(',', '').replace('$', '').replace('원', '').strip()
+    
+    try:
+        float(qty)
+    except ValueError:
+        config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]")
+        return False
+    try:
+        float(price)
+    except ValueError:
+        config.console.print("[red]단가는 숫자만 입력 가능합니다.[/red]")
+        return False
+        
     final_qty = target_rmn if qty == "0" else qty
     
     # 표시용 가격 문자열
@@ -1598,7 +1623,11 @@ def register_reserved_order():
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
-        target_price = float(target_price_str.replace(',', ''))
+        try:
+            target_price = float(target_price_str.replace(',', '').replace('점', '').strip())
+        except ValueError:
+            config.console.print("\n[red]점수는 숫자만 입력 가능합니다.[/red]")
+            return None
         updown = Prompt.ask("발동 방향 (1: 점수 이상 돌파 시, 2: 점수 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1")
         if updown.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
@@ -1611,7 +1640,11 @@ def register_reserved_order():
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
-        target_price = float(target_price_str.replace(',', ''))
+        try:
+            target_price = float(target_price_str.replace(',', '').strip())
+        except ValueError:
+            config.console.print("\n[red]RSI는 숫자만 입력 가능합니다.[/red]")
+            return None
         updown = Prompt.ask("발동 방향 (1: RSI 이상 돌파 시, 2: RSI 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="2")
         if updown.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
@@ -1638,7 +1671,11 @@ def register_reserved_order():
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
-        target_price = float(target_price_str.replace('%', '').strip())
+        try:
+            target_price = float(target_price_str.replace('%', '').strip())
+        except ValueError:
+            config.console.print("\n[red]반등 폭은 숫자만 입력 가능합니다.[/red]")
+            return None
     elif condition_type == "TRAILING_SELL":
         config.console.print(f"\n[cyan]◆ 하락 폭 설정 (트레일링 매도)[/cyan]")
         config.console.print("[dim]※ '최고점'은 본 예약 주문이 등록된 시점 이후부터 갱신된 가장 높은 가격을 의미합니다.[/dim]")
@@ -1646,7 +1683,11 @@ def register_reserved_order():
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
-        target_price = float(target_price_str.replace('%', '').strip())
+        try:
+            target_price = float(target_price_str.replace('%', '').strip())
+        except ValueError:
+            config.console.print("\n[red]하락 폭은 숫자만 입력 가능합니다.[/red]")
+            return None
     else:
         config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력[/cyan]")
         config.console.print(f"[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
@@ -1656,13 +1697,21 @@ def register_reserved_order():
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
         if '%' in target_price_str:
-            pct = float(target_price_str.replace('%', '').strip())
-            target_price = base_price * (1 + (pct / 100.0))
-            if not is_overseas: target_price = int(target_price)
-            t_fmt = f"${target_price:,.2f}" if is_overseas else f"{int(target_price):,}원"
-            config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 목표가: {t_fmt}[/dim]")
+            try:
+                pct = float(target_price_str.replace('%', '').strip())
+                target_price = base_price * (1 + (pct / 100.0))
+                if not is_overseas: target_price = int(target_price)
+                t_fmt = f"${target_price:,.2f}" if is_overseas else f"{int(target_price):,}원"
+                config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 목표가: {t_fmt}[/dim]")
+            except ValueError:
+                config.console.print("\n[red]퍼센트는 숫자만 입력 가능합니다.[/red]")
+                return None
         else:
-            target_price = float(target_price_str.replace(',', ''))
+            try:
+                target_price = float(target_price_str.replace(',', '').replace('$', '').replace('원', '').strip())
+            except ValueError:
+                config.console.print("\n[red]목표가는 숫자만 입력 가능합니다.[/red]")
+                return None
         
     config.console.print(f"\n[cyan]◆ 주문 실행 단가 입력 (지정가 / 시장가)[/cyan]")
     is_price_target = condition_type in ["STOP", "BREAKOUT", "LIMIT"]
@@ -1696,13 +1745,21 @@ def register_reserved_order():
             op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
             config.console.print(f"[dim] -> {base_label}와 동일하게 자동 설정: {op_fmt}[/dim]")
     elif '%' in order_price_str:
-        pct = float(order_price_str.replace('%', '').strip())
-        order_price = base_price * (1 + (pct / 100.0))
-        if not is_overseas: order_price = int(order_price)
-        op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
-        config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 주문 단가: {op_fmt}[/dim]")
+        try:
+            pct = float(order_price_str.replace('%', '').strip())
+            order_price = base_price * (1 + (pct / 100.0))
+            if not is_overseas: order_price = int(order_price)
+            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+            config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 주문 단가: {op_fmt}[/dim]")
+        except ValueError:
+            config.console.print("\n[red]퍼센트는 숫자만 입력 가능합니다.[/red]")
+            return None
     else:
-        order_price = float(order_price_str.replace(',', ''))
+        try:
+            order_price = float(order_price_str.replace(',', '').replace('$', '').replace('원', '').strip())
+        except ValueError:
+            config.console.print("\n[red]주문 단가는 숫자만 입력 가능합니다.[/red]")
+            return None
     
     if order_type == "sell":
         max_qty = int(stock_info.get('qty', 0))
@@ -1713,7 +1770,11 @@ def register_reserved_order():
     if not qty_str or qty_str.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
         return None
-    qty = int(qty_str.replace(',', ''))
+    try:
+        qty = int(qty_str.replace(',', '').replace('주', '').strip())
+    except ValueError:
+        config.console.print("\n[red]수량은 숫자만 입력 가능합니다.[/red]")
+        return None
     
     if order_type == "sell" and qty > max_qty:
         config.console.print(f"[red]⚠️ 입력하신 수량({qty:,}주)이 보유 수량({max_qty:,}주)보다 많습니다. 잔고 전량으로 자동 조정합니다.[/red]")
