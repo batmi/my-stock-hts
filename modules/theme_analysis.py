@@ -324,6 +324,11 @@ def evaluate_market_indicator(name, price, yh_rate=None):
             elif yh_rate >= -10.0: status_desc = "건전한 조정"
             elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입"
             elif yh_rate < -20.0: status_desc = "은행업/경제 하락 사이클/침체"
+        elif name == "DJU (유틸/전력)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리/방어주 및 전력인프라 강세"
+            elif yh_rate >= -10.0: status_desc = "건전한 조정"
+            elif yh_rate >= -15.0: status_desc = "기술적 조정기/금리인하 지연 우려"
+            elif yh_rate < -15.0: status_desc = "전력/유틸리티 섹터 침체"
         elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
             if yh_rate >= -10.0: status_desc = "신고가 랠리/크립토 불장"
             elif yh_rate >= -25.0: status_desc = "건전한 조정/변동성 허용 구간"
