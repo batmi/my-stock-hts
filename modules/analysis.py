@@ -1896,11 +1896,14 @@ def get_analysis_params():
     if val.lower() in ['b', 'q']: return None
     if val.isdigit(): params['BUY_RSI_MAX'] = int(val)
     
-    current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-    val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", default=str(current_vol))
-    if val.lower() in ['b', 'q']: return None
-    try: params['BUY_VOL_STRENGTH'] = float(val)
-    except: params['BUY_VOL_STRENGTH'] = current_vol
+    if use_vol:
+        current_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
+        val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", default=str(current_vol))
+        if val.lower() in ['b', 'q']: return None
+        try: params['BUY_VOL_STRENGTH'] = float(val)
+        except: params['BUY_VOL_STRENGTH'] = current_vol
+    else:
+        params['BUY_VOL_STRENGTH'] = 0.0
 
     config.console.print("\n[bold]2. 스캐닝 필터 설정[/bold]")
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']}점)\n[dim]매수에는 미달하지만 관망/상승으로 판단할 점수 기준[/dim]", default=str(params['RISE_SCORE']))
@@ -2115,7 +2118,11 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             elif filter_mode == "RISE": target_vol_states = ["상승"]
         
         # 현재 상태가 조회 대상에 포함될 때만 체결강도 API 호출
-        if state in target_vol_states:
+        use_vol = True
+        if params is not None and not params.get("USE_VOL", True):
+            use_vol = False
+            
+        if use_vol and state in target_vol_states:
             # [추가] 조회 실패 시 재시도 로직 (최대 2회)
             for _ in range(2):
                 try:
@@ -2126,7 +2133,9 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 엄격히 체크 (필터링)
         if state in ["매수", "강매수", "역매수", "상승"]:
             try:
-                if state == "역매수":
+                if not use_vol:
+                    min_vol = 0.0
+                elif state == "역매수":
                     min_vol = params.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if params else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
                 elif params and 'BUY_VOL_STRENGTH' in params:
                     min_vol = params.get('BUY_VOL_STRENGTH', 100.0)
@@ -2247,11 +2256,14 @@ def analyze_market_stocks(market_type):
 
         config.console.print()
         
-        # [추가] ETF 종목 포함 여부 확인
-        include_etf_choice = Prompt.ask("ETF 종목을 포함하여 분석하시겠습니까? [dim](y: 포함, n: 제외, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
-        if include_etf_choice in ['b', 'q']: return False
+        # [추가] ETF 종목 포함 여부 확인 (KOSPI에서만 질문)
+        if market_type == "KOSPI":
+            include_etf_choice = Prompt.ask("ETF 종목을 포함하여 분석하시겠습니까? [dim](y: 포함, n: 제외, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+            if include_etf_choice in ['b', 'q']: return False
+        else:
+            include_etf_choice = 'n'
         
-        if include_etf_choice == 'n':
+        if include_etf_choice == 'n' and market_type == "KOSPI":
             etf_keywords = [
                 "KODEX ", "TIGER ", "KBSTAR ", "RISE ", "ACE ", "ARIRANG ", "PLUS ", 
                 "KOSEF ", "HANARO ", "SOL ", "TIMEFOLIO ", "히어로즈 ", "마이티 ", "TREX ", 
@@ -2265,23 +2277,33 @@ def analyze_market_stocks(market_type):
             stock_list = [s for s in stock_list if not any(kw in s['name'] for kw in etf_keywords)]
             config.console.print(f"[dim]이름 기반 ETF/ETN 등 1차 제외 완료: {original_len}개 -> {len(stock_list)}개[/dim]\n")
             
+        # [수정] 매수 체결강도 사용 여부 확인 프롬프트 간결화 및 기본값(n) 변경
+        use_vol_choice = Prompt.ask("매수 체결강도(수급) 조건을 사용하여 분석하시겠습니까? [dim](y: 사용, n: 미사용, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+        if use_vol_choice in ['b', 'q']: return False
+        use_vol = (use_vol_choice == 'y')
+            
+        config.console.print()
+            
         # 파라미터 설정
         change_settings = Prompt.ask("분석 조건을 변경하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
         if change_settings in ['b', 'q']: return False
 
         if change_settings == 'y':
-            params = get_analysis_params()
+            params = get_analysis_params(use_vol=use_vol)
             if params is None: return False
             params['INCLUDE_ETF'] = (include_etf_choice == 'y')
+            params['USE_VOL'] = use_vol
         else:
             params = {
                 "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
                 "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-                "BUY_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0),
+                "BUY_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0) if use_vol else 0.0,
+                "MR_VOL_STRENGTH": config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0) if use_vol else 0.0,
                 "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
                 "OUTPUT_FILTER": "BUY",
                 "WEIGHTS": config.SCORING_WEIGHTS,
-                "INCLUDE_ETF": (include_etf_choice == 'y')
+                "INCLUDE_ETF": (include_etf_choice == 'y'),
+                "USE_VOL": use_vol
             }
             config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
