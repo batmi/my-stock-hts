@@ -604,6 +604,108 @@ def _load_analysis_result(market_type):
     else:
         return _load_analysis_result_logic(market_type)
 
+def _get_master_stock_list(market_type):
+    """(내부함수) 마스터 파일 다운로드 및 파싱하여 종목 리스트 반환"""
+    base_dir = getattr(config, 'DATA_DIR', 'data')
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+
+    if market_type == 'KOSPI':
+        url = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
+        filename = "kospi_code.mst"
+    else:
+        url = "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"
+        filename = "kosdaq_code.mst"
+
+    zip_path = os.path.join(base_dir, f"{filename}.zip")
+    extract_path = os.path.join(base_dir, filename)
+    
+    stock_list = []
+
+    try:
+        # [수정] 파일이 존재하고 오늘 다운로드된 것이라면 다운로드 스킵
+        need_download = True
+        if os.path.exists(zip_path) and os.path.exists(extract_path):
+            file_time = datetime.fromtimestamp(os.path.getmtime(zip_path))
+            if file_time.date() == datetime.now().date():
+                need_download = False
+                config.console.print(f"[dim]{market_type} 마스터 파일이 최신입니다. (기존 파일 사용)[/dim]")
+
+        if need_download:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                "•",
+                DownloadColumn(),
+                "•",
+                TransferSpeedColumn(),
+                "•",
+                TimeRemainingColumn(),
+                console=config.console
+            ) as progress:
+                task_id = progress.add_task(f"[cyan]{market_type} 마스터 파일 다운로드...[/cyan]", total=None)
+                
+                def report_hook(block_num, block_size, total_size):
+                    progress.update(task_id, total=total_size, completed=block_num * block_size)
+                
+                urllib.request.urlretrieve(url, zip_path, reporthook=report_hook)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task(f"[cyan]{market_type} 데이터 압축 해제 중...[/cyan]", total=None)
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(base_dir)
+        
+        # [수정] 파일 파싱 시 Progress Bar 적용 (파일 크기 기준)
+        file_size = os.path.getsize(extract_path)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task(f"[cyan]{market_type} 종목 리스트 파싱 중...[/cyan]", total=file_size)
+            
+            with open(extract_path, 'rb') as f:
+                for line in f:
+                    progress.advance(task, advance=len(line))
+                    try:
+                        code = line[0:9].decode('cp949').strip()
+                        name = line[21:61].decode('cp949').strip()
+                        
+                        # [수정] 영문이 포함된 최신 ETF(예: 0080G0)를 지원하기 위해 숫자로 시작하는 6자리 영문/숫자 코드로 완화
+                        if len(code) == 6 and code[0].isdigit() and code.isalnum():
+                            stock_list.append({'code': code, 'name': name})
+                    except Exception:
+                        continue
+    except Exception as e:
+        config.console.print(f"[red]{market_type} 마스터 파일 처리 실패: {e}[/red]")
+        
+    return stock_list
+
+# [추가] 마스터 코드 기반 시장 구분 캐시
+_MASTER_KOSDAQ_CODES = None
+
+def _get_market_type_by_master(code):
+    """마스터 파일을 참조하여 종목의 시장 구분(KOSPI/KOSDAQ)을 정확히 반환합니다."""
+    global _MASTER_KOSDAQ_CODES
+    if _MASTER_KOSDAQ_CODES is None:
+        try:
+            k_list = _get_master_stock_list("KOSDAQ")
+            _MASTER_KOSDAQ_CODES = set(s['code'] for s in k_list)
+        except Exception as e:
+            logger.debug(f"KOSDAQ 마스터 목록 로드 실패: {e}")
+            _MASTER_KOSDAQ_CODES = set()
+    return "KOSDAQ" if code in _MASTER_KOSDAQ_CODES else "KOSPI"
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
@@ -747,15 +849,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if cp.get('rt_cd') == '0':
                     foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
                     
-                    raw_market = cp['output'].get('rprs_mrkt_kor_name', 'KOSPI')
-                    # API 원시 데이터(KOSPI200 등)를 표준 시장 포맷으로 통일
-                    if "KOSDAQ" in raw_market.upper() or "코스닥" in raw_market:
-                        market_type = "KOSDAQ"
-                    else:
-                        market_type = "KOSPI"
+                    # [수정] 국내 주식 현재가 API 응답에는 시장구분 필드가 없으므로 마스터 파일을 이용해 판별
+                    market_type = _get_market_type_by_master(code)
                         
-                    if not std_market:
-                        market_str = market_type
+                    # [수정] std_market이 잘못 캐시되어 있는 경우를 대비하여 실시간 API 조회값을 최우선 반영
+                    market_str = market_type
                     
                     if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
                         regime, score_adj = get_market_regime(market_type)
@@ -1652,12 +1750,11 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
 
         if market_filter and cp_data:
             if cp_data.get('rt_cd') != '0': return None
-            mrkt_name = cp_data['output'].get('rprs_mrkt_kor_name', '')
-            is_kospi = "유가증권" in mrkt_name or "KOSPI" in mrkt_name
-            is_kosdaq = "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name
             
-            if market_filter == "KOSPI" and not is_kospi: return None
-            if market_filter == "KOSDAQ" and not is_kosdaq: return None
+            # [수정] 현재가 데이터에는 시장 정보가 없으므로 마스터 파일 기반으로 필터링
+            m_type = _get_market_type_by_master(code)
+            if market_filter == "KOSPI" and m_type != "KOSPI": return None
+            if market_filter == "KOSDAQ" and m_type != "KOSDAQ": return None
 
         if df is None or df.empty: return None
         
@@ -1875,8 +1972,8 @@ def diagnose_group_stocks(market_filter=None):
     config.console.print()
     
 
-def get_analysis_params():
-    """분석에 사용할 파라미터를 사용자로부터 입력받습니다."""
+def get_analysis_params(use_vol=True):
+    """분석에 사용할 파라미터를 사용자로부터 입력받습니다. (매수 체결강도 옵션 연동)"""
     params = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
@@ -1951,94 +2048,6 @@ def get_analysis_params():
     else: params['OUTPUT_FILTER'] = 'ALL'
 
     return params
-
-def _get_master_stock_list(market_type):
-    """(내부함수) 마스터 파일 다운로드 및 파싱하여 종목 리스트 반환"""
-    base_dir = getattr(config, 'DATA_DIR', 'data')
-    if not os.path.exists(base_dir):
-        os.makedirs(base_dir)
-
-    if market_type == 'KOSPI':
-        url = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
-        filename = "kospi_code.mst"
-    else:
-        url = "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"
-        filename = "kosdaq_code.mst"
-
-    zip_path = os.path.join(base_dir, f"{filename}.zip")
-    extract_path = os.path.join(base_dir, filename)
-    
-    stock_list = []
-
-    try:
-        # [수정] 파일이 존재하고 오늘 다운로드된 것이라면 다운로드 스킵
-        need_download = True
-        if os.path.exists(zip_path) and os.path.exists(extract_path):
-            file_time = datetime.fromtimestamp(os.path.getmtime(zip_path))
-            if file_time.date() == datetime.now().date():
-                need_download = False
-                config.console.print(f"[dim]{market_type} 마스터 파일이 최신입니다. (기존 파일 사용)[/dim]")
-
-        if need_download:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                "•",
-                DownloadColumn(),
-                "•",
-                TransferSpeedColumn(),
-                "•",
-                TimeRemainingColumn(),
-                console=config.console
-            ) as progress:
-                task_id = progress.add_task(f"[cyan]{market_type} 마스터 파일 다운로드...[/cyan]", total=None)
-                
-                def report_hook(block_num, block_size, total_size):
-                    progress.update(task_id, total=total_size, completed=block_num * block_size)
-                
-                urllib.request.urlretrieve(url, zip_path, reporthook=report_hook)
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=config.console,
-                transient=True
-            ) as progress:
-                progress.add_task(f"[cyan]{market_type} 데이터 압축 해제 중...[/cyan]", total=None)
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(base_dir)
-        
-        # [수정] 파일 파싱 시 Progress Bar 적용 (파일 크기 기준)
-        file_size = os.path.getsize(extract_path)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=config.console,
-            transient=True
-        ) as progress:
-            task = progress.add_task(f"[cyan]{market_type} 종목 리스트 파싱 중...[/cyan]", total=file_size)
-            
-            with open(extract_path, 'rb') as f:
-                for line in f:
-                    progress.advance(task, advance=len(line))
-                    try:
-                        code = line[0:9].decode('cp949').strip()
-                        name = line[21:61].decode('cp949').strip()
-                        
-                        # [수정] 영문이 포함된 최신 ETF(예: 0080G0)를 지원하기 위해 숫자로 시작하는 6자리 영문/숫자 코드로 완화
-                        if len(code) == 6 and code[0].isdigit() and code.isalnum():
-                            stock_list.append({'code': code, 'name': name})
-                    except Exception:
-                        continue
-    except Exception as e:
-        config.console.print(f"[red]{market_type} 마스터 파일 처리 실패: {e}[/red]")
-        
-    return stock_list
 
 def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=None, reserved_codes=None, m_codes=None):
     """(내부함수) 단일 종목 분석 워커 (멀티스레드용)"""
@@ -3030,9 +3039,9 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 }
             elif market_regime_adj and not is_overseas:
                 # 개별 룰이 없으면 시장 국면에 따른 보정값 적용
-                mrkt_name = curr_data['output'].get('rprs_mrkt_kor_name', '')
+                mrkt_name = str(curr_data['output'].get('rprs_mrkt_kor_name') or curr_data['output'].get('rprs_mrkt_eng_name') or '')
                 score_adj = 0.0
-                if "코스닥" in mrkt_name:
+                if "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name.upper():
                     score_adj = market_regime_adj.get("KOSDAQ", 0.0)
                 else:
                     score_adj = market_regime_adj.get("KOSPI", 0.0)

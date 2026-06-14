@@ -238,41 +238,26 @@ def preflight_check():
 
     if not checks_ok: return False
 
-    # 3. 종목 데이터 로드 및 누락된 exchange 정보 보완
+    # 3. 종목 데이터 로드 및 누락/오류 exchange 정보 보완
     config.session.load_stock_config()
-    missing_codes = []
+    
+    # [수정] API 현재가 조회 응답에 시장 구분이 없어 오분류(전부 KOSPI)되던 버그를 마스터 리스트를 통해 영구 교정
+    from modules import analysis
+    needs_update = False
+    
     for key in ["stocks_kr", "etfs_kr"]:
         for item in config.session.stock_data.get(key, []):
-            if "exchange" not in item:
-                missing_codes.append((key, item))
+            code = item.get('code')
+            if code:
+                correct_exchange = analysis._get_market_type_by_master(code)
+                if "exchange" not in item or item["exchange"] != correct_exchange:
+                    item["exchange"] = correct_exchange
+                    needs_update = True
                 
-    if missing_codes:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            console=config.console,
-            transient=True
-        ) as progress:
-            task = progress.add_task(f"[cyan]  - {len(missing_codes)}개 종목의 시장(exchange) 정보 업데이트 중...[/cyan]", total=len(missing_codes))
-            updated = False
-            for key, item in missing_codes:
-                code = item['code']
-                try:
-                    res = api.get_current_price_data(code, is_overseas=False)
-                    if res and res.get('rt_cd') == '0':
-                        market_name = res['output'].get('rprs_mrkt_kor_name', '')
-                        item['exchange'] = "KOSDAQ" if "KOSDAQ" in market_name else "KOSPI"
-                        updated = True
-                        time.sleep(0.1) # Rate Limit 방어
-                except Exception:
-                    pass
-                progress.advance(task)
-            if updated:
-                config.session.save_stock_config(config.session.stock_data)
-                config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
-                config.console.print("  - 성공: 누락된 시장(exchange) 정보 업데이트 완료.")
+    if needs_update:
+        config.session.save_stock_config(config.session.stock_data)
+        config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
+        config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
         
     return checks_ok
 
