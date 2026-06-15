@@ -1423,12 +1423,25 @@ def manage_custom_settings():
 
         confirm = Prompt.ask(f"선택한 {len(valid_keys_to_reset)}개의 설정을 기본값으로 초기화하시겠습니까?", choices=["y", "n"], default="n")
         if confirm.lower() == 'y':
+            # 텔레그램 요약 메시지 생성을 위해 초기화 전 정보 미리 추출
+            reset_details = []
+            for k in valid_keys_to_reset:
+                info = changed_items.get(k, {})
+                dict_key = info.get("key", k)
+                short_name = short_names.get(dict_key, dict_key)
+                prev_val = info.get("current", "-")
+                def_val = info.get("default", "-")
+                reset_details.append(f"• {short_name}: {prev_val} ➔ {def_val}")
+                
             config.reset_custom_settings(valid_keys_to_reset)
             
             try:
                 if getattr(config, 'ENABLE_TELEGRAM', True):
                     from modules.telegram_bot import TelegramCommander
-                    TelegramCommander()._send_reply("🔄 [설정 변경] 선택한 커스텀 설정이 기본값으로 초기화되었습니다.")
+                    msg = "🔄 [설정 변경] 선택한 커스텀 설정이 기본값으로 초기화되었습니다."
+                    if reset_details:
+                        msg += "\n\n[초기화 내역]\n" + "\n".join(reset_details)
+                    TelegramCommander()._send_reply(msg)
             except Exception:
                 pass
             console.print(f"\n[green]성공적으로 초기화되었습니다.[/green]")
