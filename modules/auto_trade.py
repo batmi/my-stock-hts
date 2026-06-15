@@ -3208,18 +3208,9 @@ class AutoTrader:
                 type_str = r['type']
                 simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                 
-                self.trade_records.append({
-                    "type": simple_type,
-                    "code": r['code'],
-                    "name": r['name'],
-                    "qty": int(r['qty']),
-                    "price": float(r['price']),
-                    "profit_rate": float(r['profit_rate'] or 0),
-                    "profit_amt": int(r['profit_amt'] or 0),
-                    "reason": r['reason'],
-                    "time": r['time'],
-                    "odno": r['odno']
-                })
+                parsed_r = dict(r)
+                parsed_r['type'] = simple_type
+                self.trade_records.append(parsed_r)
             
             # [추가] 중복 제거 및 정제 (시스템 주문과 체결 확인 병합)
             self.trade_records = self._refine_trade_records(self.trade_records)
@@ -3266,18 +3257,9 @@ class AutoTrader:
             type_str = r['type']
             simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
             
-            temp_records.append({
-                "type": simple_type,
-                "code": r['code'],
-                "name": r['name'],
-                "qty": int(r['qty']),
-                "price": float(r['price']),
-                "profit_rate": float(r['profit_rate'] or 0),
-                "profit_amt": int(r['profit_amt'] or 0),
-                "reason": r['reason'],
-                "time": r['time'],
-                "odno": r['odno']
-            })
+            parsed_r = dict(r)
+            parsed_r['type'] = simple_type
+            temp_records.append(parsed_r)
             
         # [추가] 중복 제거 및 정제
         refined_records = self._refine_trade_records(temp_records)
