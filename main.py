@@ -863,6 +863,13 @@ def main():
             config.settings.ENABLE_TELEGRAM = False
             config.console.print("텔레그램 봇 명령어 수신 기능을 비활성화합니다.")
 
+        # 5. 초기 프리셋 상태 동기화 (이모티콘 색상 결정)
+        try:
+            from modules import settings
+            settings.check_and_update_active_preset()
+        except Exception as e:
+            logging.debug(f"초기 프리셋 업데이트 실패: {e}")
+
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         
         # 6. 백그라운드 서비스 시작

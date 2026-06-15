@@ -76,7 +76,7 @@ class GlobalSettings(BaseModel):
     SYSTEM_INCLUDE_ETF: bool = False
 
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
-    MARKET_FILTER_MA: int = Field(default=50, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
+    MARKET_FILTER_MA: int = Field(default=30, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                             #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                             #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
