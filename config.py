@@ -61,15 +61,15 @@ class GlobalSettings(BaseModel):
     SYSTEM_TRADING_INTERVAL: int = Field(default=180, gt=0)
 
     # [종목당 최대 투자 비중]
-    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.2 = 20%)
+    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.3 = 30%)
     # - 리스크 기반 포지션 사이징(SYSTEM_RISK_PER_TRADE)과 함께 사용될 경우,
     #   두 방식 중 '더 적은 금액'이 최종 투자 금액으로 결정됩니다. (이중 안전장치: 몰빵 방지 + 리스크 관리)
     # - 만약 리스크 기반 사이징만 전적으로 따르고 싶다면 이 값을 1.0(100%)으로 설정하세요.
-    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.2, gt=0.0, le=1.0)
+    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.3, gt=0.0, le=1.0)
 
     # [최대 보유 종목 수]
-    # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 10)
-    SYSTEM_MAX_HOLDINGS: int = Field(default=10, gt=0)
+    # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 5)
+    SYSTEM_MAX_HOLDINGS: int = Field(default=5, gt=0)
 
     # [추가] 자동매매 대상에 ETF 포함 여부
     # 기본값: False (관심종목 중 국내 주식만 시스템 트레이딩 대상으로 함)

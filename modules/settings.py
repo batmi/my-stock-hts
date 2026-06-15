@@ -24,8 +24,8 @@ def _save_dynamic_config():
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2),
-        "SYSTEM_MAX_HOLDINGS": getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10),
+        "SYSTEM_INVEST_PER_STOCK": config.settings.SYSTEM_INVEST_PER_STOCK,
+        "SYSTEM_MAX_HOLDINGS": config.settings.SYSTEM_MAX_HOLDINGS,
         "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
@@ -48,7 +48,7 @@ def _save_dynamic_config():
         "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000"),
         "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0),
         "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
-        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.20),
+        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.30),
         "VOLATILITY_SCALING_MAX": getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0),
         "VOLATILITY_SCALING_MIN": getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5),
         "SLIPPAGE_RATE": getattr(config.settings, 'SLIPPAGE_RATE', 0.002),
@@ -184,8 +184,8 @@ def view_system_config():
     # 3. 리스크 및 자산 배분 설정
     # =========================================================
     table.add_row("[bold]3. 리스크 및 자산 배분 설정[/]", "", "")
-    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2)}")
-    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10)}")
+    table.add_row("종목당 투자 비중\n[dim]전체 자산 대비 한 종목 투자 비율[/dim]", "SYSTEM_INVEST_PER_STOCK", f"{config.settings.SYSTEM_INVEST_PER_STOCK}")
+    table.add_row("최대 보유 종목 수\n[dim]포트폴리오 최대 종목 개수[/dim]", "SYSTEM_MAX_HOLDINGS", f"{config.settings.SYSTEM_MAX_HOLDINGS}")
     table.add_row("자동매매 대상에 ETF 포함\n[dim]관심종목 내 ETF도 자동매매 대상으로 감시/매수[/dim]", "SYSTEM_INCLUDE_ETF", f"{getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False)}")
     
     slippage = getattr(config.settings, 'SLIPPAGE_RATE', 0.002)
@@ -194,7 +194,7 @@ def view_system_config():
     
     table.add_row("변동성 타겟팅\n[dim]ATR 기반 비중 조절 사용 여부[/dim]", "USE_VOLATILITY_TARGETING", f"{getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)}")
     if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
-        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.20)}")
+        table.add_row("  └ 목표 변동성\n    [dim]연간 변동성 목표치[/dim]", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.30)}")
         table.add_row("  └ 스케일링 범위\n    [dim]비중 조절 최소~최대 배수[/dim]", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5)} ~ {getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}")
         
     table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}")
@@ -708,10 +708,10 @@ def modify_risk_portfolio_settings():
     def get_items():
         items = [
             {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Portfolio",
-             "get": lambda: getattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', 0.2), "set": lambda v: setattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', v),
+                 "get": lambda: config.settings.SYSTEM_INVEST_PER_STOCK, "set": lambda v: setattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', v),
              "validator": lambda v: 0 < v <= 1.0},
             {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "Portfolio",
-             "get": lambda: getattr(config.settings, 'SYSTEM_MAX_HOLDINGS', 10), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_HOLDINGS', v)},
+                 "get": lambda: config.settings.SYSTEM_MAX_HOLDINGS, "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_HOLDINGS', v)},
             {"desc": "자동매매 대상에 ETF 포함", "help": "관심종목 내 ETF도 자동매매 대상으로 감시/매수", "name": "SYSTEM_INCLUDE_ETF", "type": "bool", "choices": ["y", "n"], "section": "Portfolio",
              "get": lambda: getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False), "set": lambda v: setattr(config.settings, 'SYSTEM_INCLUDE_ETF', v)},
             {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "Portfolio",
@@ -785,25 +785,25 @@ DEFAULT_PRESETS = {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 40.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
+        "SYSTEM_INVEST_PER_STOCK": 0.3, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
         "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 20.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0,
         "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 3.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.1, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
+        "SYSTEM_INVEST_PER_STOCK": 0.3, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
     },
     "sideways": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0,
         "TREND": 2.5, "MOMENTUM": 3.5, "STRENGTH": 2.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.15, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
+        "SYSTEM_INVEST_PER_STOCK": 0.3, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
         "BUY_SCORE": 7.5, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 10, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 30
+        "SYSTEM_INVEST_PER_STOCK": 0.3, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 30
     }
 }
 
@@ -945,7 +945,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 20))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
         ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']}"),
-        ("종목당 투자 비중", f"{getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2) * 100:.0f}%")
+        ("종목당 투자 비중", f"{config.settings.SYSTEM_INVEST_PER_STOCK * 100:.0f}%")
     ]
     
     if interactive:

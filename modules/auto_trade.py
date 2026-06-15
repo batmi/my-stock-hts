@@ -1651,7 +1651,7 @@ class RiskManager:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
             
-            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.30)
             scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
             scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
             
@@ -1986,7 +1986,7 @@ class AutoTrader:
             ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
             sell_score = config.SELL_STRATEGY["SELL_SCORE"]
             tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-            invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
+            invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
             
             use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
@@ -2164,7 +2164,7 @@ class AutoTrader:
                         today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation, account=target_account)
                         
                         today_trades_parsed = []
-                        for r in today_trades:
+                        for r in reversed(today_trades):
                             simple_type = "buy" if "매수" in r['type'] or "buy" in r['type'].lower() else "sell"
                             parsed_r = dict(r)
                             parsed_r['type'] = simple_type
@@ -2389,7 +2389,7 @@ class AutoTrader:
                 )
                 
                 today_trades_parsed = []
-                for r in today_trades:
+                for r in reversed(today_trades):
                     type_str = r['type']
                     simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                     parsed_r = dict(r)
@@ -2756,7 +2756,7 @@ class AutoTrader:
                     w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
                 sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-                ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100:.0f}%"
+                ratio_str = f"{r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100:.0f}%"
 
                 rule_table.add_row(
                     name_disp,
@@ -2789,7 +2789,7 @@ class AutoTrader:
             )
             
             today_trades_parsed = []
-            for r in today_trades:
+            for r in reversed(today_trades):
                 type_str = r['type']
                 simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                 parsed_r = dict(r)
@@ -2929,9 +2929,8 @@ class AutoTrader:
         table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
 
         # 투자 설정
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
-        if invest_ratio <= 0: invest_ratio = 0.2
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
+        max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
         table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})")
@@ -4305,7 +4304,7 @@ class AutoTrader:
                             )
                             
                             today_trades_parsed = []
-                            for r in today_trades:
+                            for r in reversed(today_trades):
                                 type_str = r['type']
                                 simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                                 parsed_r = dict(r)
@@ -4669,10 +4668,8 @@ class AutoTrader:
                 holding_groups_map[code] = code_to_group.get(code, 'stocks_kr')
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
-        if invest_ratio <= 0: invest_ratio = 0.2 # 0 이하일 경우 기본값 20%
-
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
+        max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
         
         if len(holding_codes) >= max_holdings:
             if self.consecutive_errors == 0: # 로그 도배 방지
@@ -5347,7 +5344,7 @@ def _view_stock_rules():
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-        ratio_str = f"{r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.1)) * 100:.0f}%"
+        ratio_str = f"{r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100:.0f}%"
         half_tp_str = " (반익절 O)" if r.get('half_take_profit_use', 1) else " (반익절 X)"
 
         table.add_row(
@@ -5405,7 +5402,7 @@ def _input_and_save_rule(code, name):
         "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0),
         "memo": "",
         "weights": None,
-        "invest_ratio": getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2),
+        "invest_ratio": config.settings.SYSTEM_INVEST_PER_STOCK,
         "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0),
@@ -5463,7 +5460,7 @@ def _input_and_save_rule(code, name):
         new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
             
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
-        curr_ratio_pct = current.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)) * 100
+        curr_ratio_pct = current.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100
         val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})\n[dim]전체 자산 대비 이 종목에 투자할 비중 한도[/dim]", default=str(int(curr_ratio_pct)))
         if val.lower() in ['b', 'q']: raise QuitInput()
         new_strategy['invest_ratio'] = float(val) / 100.0

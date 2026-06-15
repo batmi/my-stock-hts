@@ -959,7 +959,7 @@ class TelegramCommander:
             msg += (f"\n• {name}({code})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
                     f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
-                    f"   리스크: 비중 {r.get('invest_ratio', getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2))*100:.0f}% / 손절 {sl_str}\n"
+                    f"   리스크: 비중 {r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK)*100:.0f}% / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
                     f"{memo_part}")
         return msg
@@ -1518,7 +1518,7 @@ class TelegramCommander:
             raw_trades = db_manager.db.get_trades(limit=None, is_sim=is_sim, account=target_account)
             
             trades = []
-            for r in raw_trades:
+            for r in reversed(raw_trades):
                 type_str = r.get('type', '')
                 simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                 parsed_r = dict(r)
@@ -2222,8 +2222,8 @@ class TelegramCommander:
         msg += f"• OBV: EMA {ind.get('OBV_MA_PERIOD')}\n"
 
         # 기타
-        invest_ratio = getattr(config, 'SYSTEM_INVEST_PER_STOCK', 0.2)
-        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 10)
+        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
+        max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
@@ -2232,7 +2232,7 @@ class TelegramCommander:
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
 
         use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
-        vol_target = getattr(config, 'TARGET_VOLATILITY', 0.2)
+        vol_target = getattr(config, 'TARGET_VOLATILITY', 0.3)
         vol_str = f"ON (목표 {vol_target*100:.0f}%)" if use_vol else "OFF"
 
         msg += f"\n[기타]\n"
