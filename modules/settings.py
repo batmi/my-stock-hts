@@ -116,22 +116,22 @@ def view_system_config():
     table.add_row("매도잔량 비율 기준\n[dim]가짜 체결강도 방어 (체결강도 100% 기준 비율)[/dim]", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배")
     table.add_row("역추세 매수 사용\n[dim]낙폭과대 반등 노리기[/dim]", "ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION']", f"{thresholds.get('USE_MEAN_REVERSION', True)}")
     if thresholds.get('USE_MEAN_REVERSION', True):
-        table.add_row("  └ 역추세 RSI\n    [dim]과매도/침체 기준[/dim]", "MR_RSI_MAX", f"{thresholds.get('MR_RSI_MAX', 40.0)}")
-        table.add_row("  └ 역추세 이격도\n    [dim]20일선 기준 하락폭 한계[/dim]", "MR_DISPARITY_MAX", f"{thresholds.get('MR_DISPARITY_MAX', 90.0)}%")
-        table.add_row("  └ 역추세 체결강도\n    [dim]바닥 매수세 확증 기준[/dim]", "MR_VOL_STRENGTH", f"{thresholds.get('MR_VOL_STRENGTH', 120.0)}%")
+        table.add_row("  └ 역추세 RSI\n    [dim]과매도/침체 기준[/dim]", "ANALYSIS_THRESHOLDS['MR_RSI_MAX']", f"{thresholds.get('MR_RSI_MAX', 40.0)}")
+        table.add_row("  └ 역추세 이격도\n    [dim]20일선 기준 하락폭 한계[/dim]", "ANALYSIS_THRESHOLDS['MR_DISPARITY_MAX']", f"{thresholds.get('MR_DISPARITY_MAX', 90.0)}%")
+        table.add_row("  └ 역추세 체결강도\n    [dim]바닥 매수세 확증 기준[/dim]", "ANALYSIS_THRESHOLDS['MR_VOL_STRENGTH']", f"{thresholds.get('MR_VOL_STRENGTH', 120.0)}%")
         sell = config.SELL_STRATEGY
-        table.add_row("  └ 역매수 유예 손실\n    [dim]역매수 종목 유예 기간 내 허용 하락폭[/dim]", "MR_GRACE_LOSS_RATE", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%")
+        table.add_row("  └ 역매수 유예 손실\n    [dim]역매수 종목 유예 기간 내 허용 하락폭[/dim]", "SELL_STRATEGY['MR_GRACE_LOSS_RATE']", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%")
         
     table.add_row("과열 이격도 상한\n[dim]20일선 기준 이 비율 이상 시 단기과열[/dim]", "ANALYSIS_THRESHOLDS['DISPARITY_UPPER']", f"{thresholds.get('DISPARITY_UPPER', 110.0)}%")
     table.add_row("침체 이격도 하한\n[dim]20일선 기준 이 비율 이하 시 과매도[/dim]", "ANALYSIS_THRESHOLDS['DISPARITY_LOWER']", f"{thresholds.get('DISPARITY_LOWER', 90.0)}%")
         
-    table.add_row("슈퍼 모멘텀 (RSI 유연화)\n[dim]주도주 랠리 시 RSI 허용치 완화[/dim]", "SUPER_MOMENTUM_USE", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}")
+    table.add_row("슈퍼 모멘텀 (RSI 유연화)\n[dim]주도주 랠리 시 RSI 허용치 완화[/dim]", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE']", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}")
     if thresholds.get('SUPER_MOMENTUM_USE', True):
-        table.add_row("  └ 슈퍼 매수 발동 점수\n    [dim]기준 점수 이상 & 신고가 90% 이상 시 발동[/dim]", "SUPER_MOMENTUM_SCORE", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}")
-        table.add_row("  └ 슈퍼 52주 위치 기준\n    [dim]신고가 근접 여부 (예: 90.0% 이상)[/dim]", "SUPER_MOMENTUM_W52_POS", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%")
-        table.add_row("  └ 완화된 매수 RSI 상한\n    [dim]발동 시 적용되는 진입 최대 RSI[/dim]", "SUPER_BUY_RSI_MAX", f"{thresholds.get('SUPER_BUY_RSI_MAX', 75.0)}")
+        table.add_row("  └ 슈퍼 매수 발동 점수\n    [dim]기준 점수 이상 & 신고가 90% 이상 시 발동[/dim]", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_SCORE']", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}")
+        table.add_row("  └ 슈퍼 52주 위치 기준\n    [dim]신고가 근접 여부 (예: 90.0% 이상)[/dim]", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_W52_POS']", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%")
+        table.add_row("  └ 완화된 매수 RSI 상한\n    [dim]발동 시 적용되는 진입 최대 RSI[/dim]", "ANALYSIS_THRESHOLDS['SUPER_BUY_RSI_MAX']", f"{thresholds.get('SUPER_BUY_RSI_MAX', 75.0)}")
         sell = config.SELL_STRATEGY
-        table.add_row("  └ 슈퍼 매도 과열 RSI\n    [dim]추세 유지 시 매도 지연 RSI 기준[/dim]", "SUPER_TAKE_PROFIT_RSI", f"{sell.get('SUPER_TAKE_PROFIT_RSI', 85.0)}")
+        table.add_row("  └ 슈퍼 매도 과열 RSI\n    [dim]추세 유지 시 매도 지연 RSI 기준[/dim]", "SELL_STRATEGY['SUPER_TAKE_PROFIT_RSI']", f"{sell.get('SUPER_TAKE_PROFIT_RSI', 85.0)}")
     
     table.add_section()
 
@@ -147,8 +147,8 @@ def view_system_config():
     table.add_row("본전 청산 수익률\n[dim]손절선 상향 발동 기준 수익률[/dim]", "SELL_STRATEGY['BREAK_EVEN_PROFIT_RATE']", f"{sell.get('BREAK_EVEN_PROFIT_RATE', 7.0)}%")
     table.add_row("본전 청산 손절선\n[dim]발동 시 상향될 새로운 손절률[/dim]", "SELL_STRATEGY['BREAK_EVEN_STOP_RATE']", f"{sell.get('BREAK_EVEN_STOP_RATE', 0.5)}%")
     table.add_row("시간 청산 사용\n[dim]장기 횡보 종목 강제 매도[/dim]", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}")
-    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "TIME_STOP_DAYS", f"{sell.get('TIME_STOP_DAYS', 5)}일")
-    table.add_row("  └ 최소 기대 수익\n    [dim]해당 기간 내 도달해야 할 수익률[/dim]", "TIME_STOP_MIN_PROFIT_RATE", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%")
+    table.add_row("  └ 청산 기준일\n    [dim]매수 후 경과 일수 (달력 기준)[/dim]", "SELL_STRATEGY['TIME_STOP_DAYS']", f"{sell.get('TIME_STOP_DAYS', 5)}일")
+    table.add_row("  └ 최소 기대 수익\n    [dim]해당 기간 내 도달해야 할 수익률[/dim]", "SELL_STRATEGY['TIME_STOP_MIN_PROFIT_RATE']", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%")
     table.add_row("매도(추세이탈) 점수\n[dim]점수 하락 시 매도[/dim]", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}")
     table.add_row("과열 매도 RSI\n[dim]RSI 과열 시 선제 매도[/dim]", "SELL_STRATEGY['TAKE_PROFIT_RSI']", f"{sell.get('TAKE_PROFIT_RSI')}")
     table.add_row("TS 발동 수익률\n[dim]트레일링 스탑 감시 시작점[/dim]", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
