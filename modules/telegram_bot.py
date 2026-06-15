@@ -609,7 +609,7 @@ class TelegramCommander:
             "• /report [기간] : 성과 리포트 (d/w/m/n)\n"
             "• /stats [종목] : 종목별 매매 성과 분석\n\n"
             "📈 [시장 및 종목 분석]\n"
-            "• /market [그룹] : 지수 현황 (k/g/s/r/c/b)\n"
+            "• /market [그룹] : 지수 현황 (k/u/s/r/g/c/b)\n"
             "• /signal <종목/지수> : 기술적 분석 및 진단\n"
             "• /analyze <종목/지수> : AI 종목/지수 심층 진단\n"
             "• /chart [기간] <종목/지수> : 차트 전송 (d/h/m)\n"
@@ -643,9 +643,10 @@ class TelegramCommander:
     def _cmd_market(self, args):
         group_map = {
             'k': "국내 지수 (Domestic Indices)",
-            'g': "글로벌 지수 (Global Indices)",
-            's': "섹터 및 주요 지표 (Sectors & Key Indicators)",
+            'u': "미국 지수 (US Indices)",
+            's': "섹터 및 지표 (Sectors & Indicators)",
             'r': "금리 및 환율 (Rates & FX)",
+            'g': "글로벌 지수 (Global Indices)",
             'c': "원자재 (Commodities)",
             'b': "암호화폐 (Cryptocurrency)"
         }

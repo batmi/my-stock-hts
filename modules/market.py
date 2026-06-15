@@ -33,20 +33,21 @@ def clear_market_yf_cache():
 ALL_INDICES = [
     # 1. 국내 지수
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
-    # 2. 글로벌 지수
+    # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
-    ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
-    ("Germany - 닥스40", "^GDAXI"), ("Europe - 스톡스50", "^STOXX50E"),
-    # 3. 섹터 및 주요 지표
-    ("SOX (반도체)", "^SOX"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJU (유틸/전력)", "^DJU"), ("VIX (변동성)", "^VIX"),
+    # 3. 섹터 및 지표
+    ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
     ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
-    # 5. 원자재
+    # 5. 글로벌 지수
+    ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
+    ("UK - FTSE 100", "^FTSE"), ("France - CAC 40", "^FCHI"), ("Germany - DAX 40", "^GDAXI"), ("Europe - STOXX 50", "^STOXX50E"),
+    # 6. 원자재
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
-    # 6. 암호화폐
+    # 7. 암호화폐
     ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"), ("솔라나", "SOL-USD"), ("리플", "XRP-USD")
 ]
 
@@ -465,7 +466,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             "코스피", "코스닥", "코스피200", "코스닥150",
             "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
-            "Taiwan - 대만가권", "Germany - 닥스40", "Europe - 스톡스50",
+            "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40", 
+            "Germany - DAX 40", "Europe - STOXX 50",
             "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
         ]
 
@@ -537,6 +539,36 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
             elif -15.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
+        elif name == "DRG (제약)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -15.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
+        elif name == "DJT (운송)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
+        elif name == "XAL (항공)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+        elif name == "XOI (에너지)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
+        elif name == "HUI (금광)":
+            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
+            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
+            elif -30.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -30.0: display_name = f"[blue]{name}[/]"
+        elif name in ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]:
+            if high_52_rate >= -3.0: display_name = f"[red]{name}[/]"
+            elif -8.0 <= high_52_rate < -3.0: display_name = f"[orange3]{name}[/]"
+            elif -20.0 <= high_52_rate < -8.0: display_name = f"[yellow]{name}[/]"
+            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
         elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
             if high_52_rate >= -10.0: display_name = f"[red]{name}[/]"
             elif -25.0 <= high_52_rate < -10.0: display_name = f"[orange3]{name}[/]"
@@ -931,15 +963,6 @@ def show_market_indices(interval=0):
     
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "9"
-    
-    # [추가] 런타임에 3번 그룹(섹터 및 주요 지표)에 BKX (은행) 지수를 동적으로 편입
-    if hasattr(config, 'INDICES_GROUPS') and "3" in config.INDICES_GROUPS:
-        grp3_idx = config.INDICES_GROUPS["3"].get('indices', [])
-        if "BKX (은행)" not in grp3_idx:
-            if "NBI (바이오)" in grp3_idx:
-                grp3_idx.insert(grp3_idx.index("NBI (바이오)") + 1, "BKX (은행)")
-            else:
-                grp3_idx.append("BKX (은행)")
 
     while True:
         utils.clear_screen()

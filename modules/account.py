@@ -1200,7 +1200,7 @@ def view_trade_history():
         table.add_column("주문번호", justify="center", style="dim", width=10, overflow="fold")
         # 계좌 컬럼 제거됨
         table.add_column("유형", justify="center", width=14, no_wrap=True)
-        table.add_column("상태", justify="center", width=6, overflow="fold")
+        table.add_column("상태", justify="center", width=10, overflow="fold")
         table.add_column("종목명(코드)", justify="left", overflow="fold")
         table.add_column("수량", justify="right", width=6, overflow="fold")
         table.add_column("단가", justify="right", width=9, overflow="fold")

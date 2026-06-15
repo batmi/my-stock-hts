@@ -329,6 +329,36 @@ def evaluate_market_indicator(name, price, yh_rate=None):
             elif yh_rate >= -10.0: status_desc = "건전한 조정"
             elif yh_rate >= -15.0: status_desc = "기술적 조정기/금리인하 지연 우려"
             elif yh_rate < -15.0: status_desc = "전력/유틸리티 섹터 침체"
+        elif name == "DRG (제약)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (방어주 부각)"
+            elif yh_rate >= -10.0: status_desc = "건전한 조정 및 파이프라인 숨고르기"
+            elif yh_rate >= -15.0: status_desc = "기술적 조정기 진입 (임상/약가 리스크)"
+            elif yh_rate < -15.0: status_desc = "제약/헬스케어 하락 사이클 및 침체"
+        elif name == "DJT (운송)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (실물 경기 호황)"
+            elif yh_rate >= -10.0: status_desc = "건전한 조정"
+            elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입 (경기 둔화 우려 반영)"
+            elif yh_rate < -20.0: status_desc = "운송업 및 실물경제 하락 사이클/침체"
+        elif name == "XAL (항공)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (여행 수요 폭발)"
+            elif yh_rate >= -15.0: status_desc = "건전한 조정 및 유가/환율 숨고르기"
+            elif yh_rate >= -25.0: status_desc = "기술적 조정기 진입 (운영비 증가 우려)"
+            elif yh_rate < -25.0: status_desc = "항공업 하락 사이클/침체 (외부 쇼크 반영)"
+        elif name == "XOI (에너지)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (유가 상승 수혜)"
+            elif yh_rate >= -10.0: status_desc = "건전한 조정"
+            elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입 (원유 수요 둔화 우려)"
+            elif yh_rate < -20.0: status_desc = "에너지/정유업 하락 사이클/침체"
+        elif name == "HUI (금광)":
+            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (안전자산 선호 극대화)"
+            elif yh_rate >= -15.0: status_desc = "건전한 조정 및 금값 단기 숨고르기"
+            elif yh_rate >= -30.0: status_desc = "기술적 조정기 진입 (고금리/강달러 압박)"
+            elif yh_rate < -30.0: status_desc = "금광업 하락 사이클 및 투심 위축"
+        elif name in ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]:
+            if yh_rate >= -3.0: status_desc = "신고가 근접/초강세장"
+            elif yh_rate >= -8.0: status_desc = "안정적인 상승장/건전한 조정"
+            elif yh_rate >= -20.0: status_desc = "일반 조정/중립 구간"
+            elif yh_rate < -20.0: status_desc = "침체/약세장 진입"
         elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
             if yh_rate >= -10.0: status_desc = "신고가 랠리/크립토 불장"
             elif yh_rate >= -25.0: status_desc = "건전한 조정/변동성 허용 구간"

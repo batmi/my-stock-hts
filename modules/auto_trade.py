@@ -3648,7 +3648,7 @@ class AutoTrader:
             
             if r['type'] == 'buy':
                 stock_stats[code]['buy'] += 1
-                stock_stats[code]['total_buy_amt'] += int(r['price'] * r['qty']) # [추가] 매수 금액 누적
+                stock_stats[code]['total_buy_amt'] += int(float(r.get('price', 0) or 0) * float(r.get('qty', 0) or 0)) # [추가] 매수 금액 누적
                 buy_times_per_stock[code].append(dt)
             elif r['type'] == 'sell':
                 stock_stats[code]['sell'] += 1
@@ -3753,7 +3753,8 @@ class AutoTrader:
             type_str = "[red]매수[/]" if r['type'] == 'buy' else "[blue]매도[/]"
             
             # [수정] 단가 포맷팅 (시장가 0원 처리)
-            price_val = float(r['price'])
+            price_val = float(r.get('price', 0) or 0)
+            qty_val = float(r.get('qty', 0) or 0)
             if price_val <= 0:
                 price_str = "시장가"
                 amt_str = "-"
@@ -3763,7 +3764,7 @@ class AutoTrader:
                 else:
                     price_str = f"{price_val:,.2f}"
                 
-                trade_amt = int(price_val * r['qty'])
+                trade_amt = int(price_val * qty_val)
                 amt_str = f"{trade_amt:,}"
             
             profit_display = "-"
