@@ -16,6 +16,7 @@ import indicators
 from modules import analysis, account, chart, db_manager, auto_trade, market, theme_analysis
 from modules.auto_trade import AutoTrader
 from modules.executors import bot_executor
+from modules.scheduler import SystemScheduler
 
 logger = logging.getLogger(__name__)
 console = config.console
@@ -40,6 +41,7 @@ class TelegramCommander:
         self.trader = AutoTrader() # 싱글톤 인스턴스 참조
         self._trade_cache = {}
         self._trade_cache_lock = threading.Lock()
+        self.session = requests.Session() # 커넥션 풀링(소켓 누수 방지)
         
         # [리팩토링] 명령어 핸들러 매핑
         self.command_handlers = {
@@ -86,7 +88,6 @@ class TelegramCommander:
         self.thread.start()
         logger.debug("[Telegram] 명령어 수신 대기 시작...")
 
-        from modules.scheduler import SystemScheduler
         SystemScheduler().start()
 
         # [추가] 봇 재시작 알림 전송
@@ -100,7 +101,6 @@ class TelegramCommander:
         if self.thread:
             self.thread.join(timeout=2)
 
-        from modules.scheduler import SystemScheduler
         SystemScheduler().stop()
 
     def _run_loop(self):
@@ -111,7 +111,8 @@ class TelegramCommander:
         while self.is_running and self.thread is my_thread:
             try:
                 params = {"offset": self.last_update_id + 1, "timeout": timeout, "allowed_updates": ["message"]}
-                response = requests.get(url, params=params, timeout=timeout + 5)
+                # 매번 새로운 소켓을 열지 않고 연결을 재사용
+                response = self.session.get(url, params=params, timeout=timeout + 5)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -220,13 +221,11 @@ class TelegramCommander:
 
     def _cmd_briefing(self, args):
         self._send_reply("⏳ [AI 시황 브리핑] 실시간 글로벌 마켓 데이터를 수집하고 AI 시황 브리핑을 작성 중입니다. 잠시만 기다려주세요...")
-        from modules.scheduler import SystemScheduler
         bot_executor.submit(SystemScheduler().execute_briefing)
         return None
 
     def _cmd_closing(self, args):
         self._send_reply("⏳ [AI 장 마감 종합 브리핑] 오늘 시장 흐름, 보유 종목 특이사항 및 당일 매매 내역을 종합 분석 중입니다. 잠시만 기다려주세요...")
-        from modules.scheduler import SystemScheduler
         bot_executor.submit(SystemScheduler().execute_daily_closing_report)
         return None
             

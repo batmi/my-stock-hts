@@ -12,6 +12,9 @@ MISSING_LIBS=""
 # 2. 운영체제 확인 (macOS vs Linux)
 OS_NAME=$(uname -s)
 
+# [추가] macOS/Linux 환경에서 'Too many open files' (Errno 24) 네트워크 에러 방지를 위해 파일 개수 한도 증가
+ulimit -n 4096 2>/dev/null
+
 # 3. 실행할 파이썬 및 핍(PIP) 경로 찾기
 if [ -d "./.venv" ]; then
     PYTHON_PATH="./.venv/bin/python"
