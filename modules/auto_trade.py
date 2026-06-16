@@ -2261,7 +2261,7 @@ class AutoTrader:
                     else: return ' ' * pad_len + s
 
                 header = (
-                    f"{pad('종목명', 30, '<')} "
+                    f"{pad('종목명', 45, '<')} "
                     f"{pad('보유수량', 10, '>')} "
                     f"{pad('매입단가', 12, '>')} "
                     f"{pad('현재가', 12, '>')} "
@@ -2272,12 +2272,12 @@ class AutoTrader:
                 )
                 
                 self.log("")
-                self.log("─" * 125)
+                self.log("─" * 140)
                 self.log(header)
-                self.log("─" * 125)
+                self.log("─" * 140)
                 
                 if not valid_holdings:
-                    self.log(f"{pad('보유 종목 없음', 30, '<')} ")
+                    self.log(f"{pad('보유 종목 없음', 45, '<')} ")
                 else:
                     for item in valid_holdings:
                         name = f"{item['prdt_name']} ({item['pdno']})"
@@ -2289,9 +2289,9 @@ class AutoTrader:
                         profit = int(item['evlu_pfls_amt'])
                         rate = float(item['evlu_pfls_rt'])
                         
-                        row_str = f"{pad(name, 30, '<')} {pad(f'{qty:,}주', 10, '>')} {pad(f'{buy_price:,.0f}원', 12, '>')} {pad(f'{cur_price:,.0f}원', 12, '>')} {pad(f'{pchs_amt:,}원', 15, '>')} {pad(f'{eval_amt:,}원', 15, '>')} {pad(f'{profit:+,}원', 14, '>')} {pad(f'{rate:.2f}%', 10, '>')}"
+                        row_str = f"{pad(name, 45, '<')} {pad(f'{qty:,}주', 10, '>')} {pad(f'{buy_price:,.0f}원', 12, '>')} {pad(f'{cur_price:,.0f}원', 12, '>')} {pad(f'{pchs_amt:,}원', 15, '>')} {pad(f'{eval_amt:,}원', 15, '>')} {pad(f'{profit:+,}원', 14, '>')} {pad(f'{rate:.2f}%', 10, '>')}"
                         self.log(row_str)
-                self.log("─" * 125)
+                self.log("─" * 140)
                 self.log("")
         except Exception as e:
             self.log(f"보유 종목 로깅 실패: {e}")
@@ -4238,7 +4238,7 @@ class AutoTrader:
 
                 # 헤더 출력
                 header = (
-                    f"{pad('종목명', 30, '<')} "
+                    f"{pad('종목명', 45, '<')} "
                     f"{pad('보유수량', 10, '>')} "
                     f"{pad('매입단가', 12, '>')} "
                     f"{pad('현재가', 12, '>')} "
@@ -4248,9 +4248,9 @@ class AutoTrader:
                     f"{pad('수익률', 10, '>')}"
                 )
                 
-                self.log("─" * 125)
+                self.log("─" * 140)
                 self.log(header)
-                self.log("─" * 125)
+                self.log("─" * 140)
                 
                 for item in valid_holdings:
                     name = f"{item['prdt_name']} ({item['pdno']})"
@@ -4263,7 +4263,7 @@ class AutoTrader:
                     rate = float(item['evlu_pfls_rt'])
                     
                     row_str = (
-                        f"{pad(name, 30, '<')} "
+                        f"{pad(name, 45, '<')} "
                         f"{pad(f'{qty:,}주', 10, '>')} "
                         f"{pad(f'{buy_price:,.0f}원', 12, '>')} "
                         f"{pad(f'{cur_price:,.0f}원', 12, '>')} "
@@ -4274,7 +4274,7 @@ class AutoTrader:
                     )
                     self.log(row_str)
                 
-                self.log("─" * 125)
+                self.log("─" * 140)
                 if summary and len(summary) > 0:
                     s_data = summary[0]
                     
