@@ -951,10 +951,15 @@ class ThrottledSession(requests.Session):
                                 msg_disp = msg_cd if msg_cd else "(Empty)"
                                 msg1_disp = msg1 if msg1 else "(Empty)"
                                 
-                                # EGW00201(초당 거래건수 초과)인 경우 API Gateway 차단이므로 안전하게 재시도 처리
-                                if msg_cd == 'EGW00201':
+                                # EGW00201: 전체 API 초당 거래건수 초과
+                                # EGW00215: 원장(계좌/주문) API 초당 거래건수 초과
+                                if msg_cd == 'EGW00201' or (msg_cd == 'EGW00215' and 'inquire' in url):
                                     should_retry = True
-                                    retry_reason = f"Rate Limit Exceeded (EGW00201): {msg1_disp}"
+                                    retry_reason = f"Rate Limit Exceeded ({msg_cd}): {msg1_disp}"
+                                elif msg_cd == 'EGW00215' and 'inquire' not in url:
+                                    # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
+                                    req_body = kwargs.get('data', '')
+                                    logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
                                 elif msg_cd == 'MCA00124' and 'chk-holiday' in url and is_sim_server:
                                     # 모의투자 서버에서 휴장일 조회 미지원 에러 로그 무시 (모의투자 모드에서만 동작하도록 명확화)
                                     pass

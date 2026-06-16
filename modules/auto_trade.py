@@ -4165,6 +4165,7 @@ class AutoTrader:
                 self.consecutive_errors += 1
                 max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
                 self.log(f"에러 발생({self.consecutive_errors}/{max_err}): {str(e)}")
+                logger.error(f"시스템 트레이딩 루프 예외 발생 ({self.consecutive_errors}/{max_err}): {str(e)}")
                 console.print(f"[dim red]⚠️ 에러 발생: {str(e)}[/dim red]")
                 if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
                     console.print(f"[bold red][ERROR] 시스템 트레이딩 루프 예외 발생 ({self.consecutive_errors}/{max_err}): {str(e)}[/bold red]")
