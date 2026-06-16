@@ -964,9 +964,17 @@ class ThrottledSession(requests.Session):
                                     # 모의투자 서버에서 휴장일 조회 미지원 에러 로그 무시 (모의투자 모드에서만 동작하도록 명확화)
                                     pass
                                 else:
-                                    # OPSQ2000 등 원장 거부 에러는 중복 주문 위험이 있으므로 재시도하지 않음
-                                    req_body = kwargs.get('data', '')
-                                    logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
+                                    # 단순 조회(GET) 요청이면서 일시적인 API 서버/MCI 오류인 경우 안전하게 재시도 처리
+                                    if method == 'GET' and ('MCI' in msg1_disp or '게이트웨이' in msg1_disp):
+                                        should_retry = True
+                                        retry_reason = f"KIS Server Intermittent Error ({msg_cd}): {msg1_disp}"
+                                    else:
+                                        req_body = kwargs.get('data', '')
+                                        # 조회 API와 주문 API를 구분하여 에러 로그 출력
+                                        if method == 'GET' or 'inquire' in url:
+                                            logger.error(f"⚠️ [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp}")
+                                        else:
+                                            logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
 
                         except Exception as e:
                             # JSON 파싱 실패 등
