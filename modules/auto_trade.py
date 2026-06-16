@@ -1944,7 +1944,13 @@ class AutoTrader:
             # [추가] 장 마감 상태에서 시작했을 경우 명확한 안내 메시지 출력
             if not self.was_market_open:
                 self.log("━" * 85)
-                self.log("💤 [장 마감 대기] 현재는 거래 시간이 아닙니다. 장 시작 시 자동으로 매매가 개시됩니다.")
+                now_time_str = datetime.now().strftime("%H%M")
+                if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                    self.log("⏸️ [휴게 시간 대기] 현재는 단일가 매매 동기화 시간입니다. 거래 재개 시 자동으로 매매가 개시됩니다.")
+                elif api.is_holiday_today() or datetime.now().weekday() > 4:
+                    self.log("💤 [휴장일 대기] 오늘은 주말 또는 공휴일입니다. 다음 거래일에 자동으로 매매가 개시됩니다.")
+                else:
+                    self.log("💤 [장 마감 대기] 현재는 거래 시간이 아닙니다. 장 시작 시 자동으로 매매가 개시됩니다.")
                 self.log("━" * 85)
             
             # [수정] 시작 메시지 생성 로직은 초기화 시 저장된 데이터 활용
@@ -2299,7 +2305,13 @@ class AutoTrader:
                 status_text = "RUNNING"
                 status_icon = "🟢"
             else:
-                status_text = "WAITING"
+                now_time_str = datetime.now().strftime("%H%M")
+                if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                    status_text = "WAITING (휴게 시간 대기)"
+                elif api.is_holiday_today() or datetime.now().weekday() > 4:
+                    status_text = "WAITING (공휴일/주말 휴장)"
+                else:
+                    status_text = "WAITING"
                 status_icon = "🟡"
         
         msg = f"{status_icon} [시스템 상태: {status_text}]\n"
@@ -2667,7 +2679,17 @@ class AutoTrader:
             table.add_row("실행 시간", f"{start_str} (경과: {elapsed_str})")
         
         # 2. 마켓 상태
-        market_status = "장 운영 중 (거래 가능)" if self.is_market_open() else "장 마감/휴장 (대기 중)"
+        if self.is_market_open():
+            market_status = "장 운영 중 (거래 가능)"
+        else:
+            now_time_str = datetime.now().strftime("%H%M")
+            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                market_status = "휴게 시간 (단일가 매매 동기화 대기 중)"
+            elif api.is_holiday_today():
+                market_status = "공휴일 휴장 (대기 중)"
+            else:
+                market_status = "장 마감 (대기 중)"
+                
         if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
         table.add_row("마켓 상태", market_status)
         
@@ -3965,34 +3987,55 @@ class AutoTrader:
                     # [추가] 장 시작/마감 상태 변경 감지 및 로그
                     if self.was_market_open is not None:
                         if not self.was_market_open and current_market_status:
+                            now_time_str = datetime.now().strftime("%H%M")
                             self.log("━" * 80)
-                            self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
+                            if "0900" <= now_time_str < "0910":
+                                self.log(f"📢 [정규장 시작] 정규 주식 시장 거래가 개시되었습니다. ({datetime.now().strftime('%H:%M')})")
+                                msg = "🔔 [정규장 시작] 정규 주식 시장 거래가 개시되었습니다."
+                            elif "1530" <= now_time_str < "1540":
+                                self.log(f"📢 [거래 재개] 단일가 매매 동기화가 완료되어 거래를 재개합니다. ({datetime.now().strftime('%H:%M')})")
+                                msg = "🔔 [거래 재개] 휴게 시간이 종료되어 매매를 재개합니다."
+                            else:
+                                self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
+                                msg = "🔔 [장 시작] 거래 가능 시간이 되었습니다."
                             self.log("━" * 80)
                             
-                            msg = "🔔 [장 시작] 거래 가능 시간이 되었습니다."
                             msg += self._get_holdings_message(target_cano)
                             api.send_telegram_message(msg)
                         elif self.was_market_open and not current_market_status:
-                            self.log("━" * 80)
-                            self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
-                            self.log("━" * 80)
-                            
-                            msg = "🌙 [장 마감] 거래 시간이 종료되었습니다."
-                            msg += self._get_holdings_message(target_cano)
-                            api.send_telegram_message(msg)
-                            
-                            # [추가] 장 마감 후 AI 마감 브리핑 자동 실행 (기존 포트폴리오 진단 대체)
-                            try:
-                                from modules.scheduler import SystemScheduler
-                                threading.Thread(target=SystemScheduler().execute_daily_closing_report, daemon=True, name="DailyClosingReport").start()
-                                self.log("장 마감 종합 브리핑(AI) 작성을 백그라운드에서 시작합니다.")
-                            except Exception as e:
-                                self.log(f"장 마감 브리핑 스케줄러 호출 실패: {e}")
+                            now_time_str = datetime.now().strftime("%H%M")
+                            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                                self.log("━" * 80)
+                                self.log(f"⏸️ [휴게 시간] 거래소 단일가 매매 동기화를 위해 잠시 매매를 멈춥니다. ({datetime.now().strftime('%H:%M')})")
+                                self.log("━" * 80)
+                                
+                                msg = f"⏸️ [휴게 시간] 거래소 단일가 매매 동기화를 위해 잠시 매매를 멈춥니다.\n(해당 시간: {datetime.now().strftime('%H:%M')} ~)"
+                                api.send_telegram_message(msg)
+                            else:
+                                self.log("━" * 80)
+                                self.log(f"💤 [거래 종료] 시스템 트레이딩 거래가 종료되었습니다. ({datetime.now().strftime('%H:%M')})")
+                                self.log("━" * 80)
+                                
+                                msg = "🌙 [장 마감] 거래 시간이 종료되었습니다."
+                                msg += self._get_holdings_message(target_cano)
+                                api.send_telegram_message(msg)
+                                
+                                # [추가] 장 마감 후 AI 마감 브리핑 자동 실행 (기존 포트폴리오 진단 대체)
+                                try:
+                                    from modules.scheduler import SystemScheduler
+                                    threading.Thread(target=SystemScheduler().execute_daily_closing_report, daemon=True, name="DailyClosingReport").start()
+                                    self.log("장 마감 종합 브리핑(AI) 작성을 백그라운드에서 시작합니다.")
+                                except Exception as e:
+                                    self.log(f"장 마감 브리핑 스케줄러 호출 실패: {e}")
                     
                     # [변경] 장 마감 시 분석 중단 (트래픽 감소)
                     if not current_market_status:
                         if is_log_needed:
-                            self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
+                            now_time_str = datetime.now().strftime("%H%M")
+                            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                                self.log("시스템 상태: WAITING (단일가 매매 동기화 대기)")
+                            else:
+                                self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
                         self.was_market_open = current_market_status
                     else:
                         status_msg = "RUNNING"
