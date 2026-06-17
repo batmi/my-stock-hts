@@ -1680,6 +1680,12 @@ class RiskManager:
         if loss_limit_pct <= 0 or self.trader.initial_asset <= 0: return
         if current_total <= 0: return
 
+        # [Fix] 비정상적인 데이터(갑작스런 반토막 이상 하락 등 API 데이터 누락 의심) 필터링
+        # (주로 증권사 API 통신 오류로 인해 주식 평가액이 0으로 수신되어 예수금만 계산될 때 발생합니다.)
+        if current_total < self.trader.initial_asset * 0.5:
+            self.trader.log(f"⚠️ 비정상적인 자산 급감 감지(API 오류 의심). 손실 한도 체크를 스킵합니다. (현재자산: {current_total:,}원)")
+            return
+
         loss_rate = (current_total - self.trader.initial_asset) / self.trader.initial_asset * 100
         
         if config.FILE_DEBUG_LEVEL == "DEBUG":
@@ -4325,19 +4331,30 @@ class AutoTrader:
                     acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                     
                     asset_data = account.get_asset_status_data(target_cano, acnt_cd)
-                    if asset_data:
+                    
+                    # [Fix] API 지연/오류로 인해 account 모듈 내부에서 주식 잔고가 누락(0)된 경우 감지
+                    is_asset_broken = False
+                    if asset_data and total_eval > 0 and asset_data.get('sec_eval', 0) == 0:
+                        is_asset_broken = True
+
+                    if asset_data and not is_asset_broken:
                         current_total = asset_data.get('tot_asset', 0)
                         order_possible = asset_data.get('order_possible', deposit_d2)
                     else:
                         # Fallback (API 실패 시 기존 로직으로 대안 계산)
-                        cash = deposit_d2 + deposit_res.get('foreign_deposit', 0)
+                        cash = deposit_d2 + (deposit_res.get('foreign_deposit', 0) if deposit_res else 0)
                         current_total = cash + total_eval
-                        order_possible = deposit_res.get('order_possible', deposit_d2)
+                        order_possible = deposit_res.get('order_possible', deposit_d2) if deposit_res else deposit_d2
+                        
+                        if is_asset_broken:
+                            self.log(f"⚠️ 통합 자산 조회 이상 감지 (API 지연 추정). 안전을 위해 이전 자산({current_total:,}원)으로 대체합니다.")
                     
                     # [추가] 일일 손실 제한 체크
                     if current_total > 0:
+                        is_first_init = False
                         # [Fix] 초기 자산 로드 실패(0원) 시, 첫 유효 조회 값으로 보정
                         if self.initial_asset == 0:
+                            is_first_init = True
                             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                             acc_str = f"{target_cano}-{acnt}"
@@ -4386,6 +4403,31 @@ class AutoTrader:
                             realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
                         except Exception:
                             pass
+                            
+                        # [수정] 오프라인(프로그램 종료) 상태에서의 입출금까지 완벽히 감지하도록 수학적 불변 원리 적용
+                        # 매매 손익이 아닌 외부 현금 입출금을 스스로 포착하여 일일 손실 제한(Loss Cut) 오작동을 방지합니다.
+                        current_cash = current_total - total_eval
+                        current_principal = current_cash + tot_pchs - realized_profit
+                        
+                        if not is_first_init:
+                            transfer_amt = current_principal - self.initial_asset
+                            
+                            # 5만원 이상 원금 변동 발생 시 입출금으로 간주 (수수료, 환차손 등 미세 오차 무시)
+                            if abs(transfer_amt) >= 50000 and self.initial_asset > 0:
+                                action_str = "입금" if transfer_amt > 0 else "출금"
+                                self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
+                                self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
+                                
+                                self.initial_asset += int(transfer_amt)
+                                
+                                account_key = f"{target_cano}-{acnt_cd}"
+                                save_daily_initial_asset(account_key, self.initial_asset)
+                                try:
+                                    today_str = datetime.now().strftime("%Y-%m-%d")
+                                    db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
+                                except: pass
+                                
+                                api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
                             
                         realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
                         daily_profit = current_total - self.initial_asset
