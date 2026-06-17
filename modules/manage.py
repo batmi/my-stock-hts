@@ -636,13 +636,13 @@ def delete_stock():
     else:
         return False
 
-def reorder_stock():
-    """관심 종목 순서 재배치"""
+def modify_stock_info():
+    """관심 종목 정보(순서 및 이름) 변경"""
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-        config.console.print(f"[dim cyan][TRACE] 종목 순서 변경 메뉴 진입[/dim cyan]")
+        config.console.print(f"[dim cyan][TRACE] 종목 정보 변경 메뉴 진입[/dim cyan]")
 
     menu_items = [("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"), ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF")]
-    cat_choice = utils.show_menu("어떤 그룹의 순서를 변경하시겠습니까?", menu_items, default_choice="1")
+    cat_choice = utils.show_menu("어떤 그룹의 종목 정보를 변경하시겠습니까?", menu_items, default_choice="1")
     if cat_choice.lower() not in ['b', 'q']:
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{cat_choice}] {menu_map_dict[cat_choice]}")
@@ -653,40 +653,57 @@ def reorder_stock():
     
     target_list = config.session.stock_data[target_key]
     
-    if len(target_list) < 2:
-        config.console.print(f"[yellow]'{group_name}' 그룹에 순서를 변경할 만큼 종목이 충분하지 않습니다.[/yellow]")
+    if len(target_list) < 1:
+        config.console.print(f"[yellow]'{group_name}' 그룹에 정보를 변경할 종목이 없습니다.[/yellow]")
         return
         
     m_codes = utils.get_memo_codes()
     from_idx, target_stock = utils.search_stock_in_list(target_list, title=f"{group_name} 목록", display_func=lambda i, item: f"[{i+1}] {item['name']} ({item['code']}) {'[M]' if item['code'] in m_codes else ''}".rstrip())
     if not target_stock: return False
-    context.USER_ACTION_BREADCRUMB.append(f"[이동대상] {target_stock['name']}")
+    context.USER_ACTION_BREADCRUMB.append(f"[정보변경대상] {target_stock['name']}")
     
     config.console.print()
-    to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](이전: b, 메인: q)[/dim]")
+    to_idx_str = Prompt.ask(f"'{target_stock['name']}' 종목을 몇 번 위치로 이동하시겠습니까? (1~{len(target_list)}) [dim](엔터: 현위치 유지, 이전: b, 메인: q)[/dim]")
     config.console.print()
-    if to_idx_str.lower() not in ['b', 'q']:
+    
+    if to_idx_str.lower() in ['b', 'q']: return False
+    
+    to_idx = from_idx
+    if to_idx_str.strip() != "":
         context.USER_ACTION_BREADCRUMB.append(f"[목표위치] {to_idx_str}")
-    if to_idx_str.lower() in ['b', 'q'] or not to_idx_str.isdigit(): return False
+        if not to_idx_str.isdigit():
+            config.console.print("[red]잘못된 번호입니다.[/red]")
+            return
+        to_idx = int(to_idx_str) - 1
+        if to_idx < 0 or to_idx >= len(target_list):
+            config.console.print("[red]잘못된 번호입니다.[/red]")
+            return
+            
+    new_name_str = Prompt.ask(f"'{target_stock['name']}' 종목의 새 이름을 입력하세요 [dim](엔터: '{target_stock['name']}' 유지, 이전: b, 메인: q)[/dim]")
+    config.console.print()
     
-    to_idx = int(to_idx_str) - 1
-    if to_idx < 0 or to_idx >= len(target_list):
-        config.console.print("[red]잘못된 번호입니다.[/red]")
-        return
+    if new_name_str.lower() in ['b', 'q']: return False
+    
+    new_name = target_stock['name']
+    if new_name_str.strip() != "":
+        context.USER_ACTION_BREADCRUMB.append(f"[새이름] {new_name_str}")
+        new_name = new_name_str.strip()
         
-    if from_idx == to_idx:
-        config.console.print("[yellow]현재 위치와 같습니다.[/yellow]")
+    if from_idx == to_idx and new_name == target_stock['name']:
+        config.console.print("[yellow]변경된 내용이 없습니다.[/yellow]")
         return
         
     logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
     
-    # 리스트 순서 변경 (pop 후 insert)
-    target_list.insert(to_idx, target_list.pop(from_idx))
+    # 리스트 순서 변경 (pop 후 insert) 및 이름 변경
+    item = target_list.pop(from_idx)
+    item['name'] = new_name
+    target_list.insert(to_idx, item)
     
     config.session.save_stock_config(config.session.stock_data)
     config.session.load_stock_config()
     
-    config.console.print(f"\n[bold green]'{target_stock['name']}' 종목이 {to_idx + 1}번 위치로 이동되었습니다.[/bold green]")
+    config.console.print(f"\n[bold green]'{new_name}' 종목 정보가 성공적으로 변경되었습니다. (위치: {to_idx + 1}번)[/bold green]")
 
 def _manage_specific_stock_memos(code, name, mode='view'):
     """(내부) 특정 종목의 메모 리스트 상세 관리"""
@@ -1022,7 +1039,7 @@ def manage_stock_menu():
             ("1", "관심 종목 전체 조회", "View Watchlist"),
             ("2", "관심 종목 추가", "Add Stock"), 
             ("3", "관심 종목 삭제", "Delete Stock"), 
-            ("4", "관심 종목 순서 변경", "Reorder Stock"), 
+            ("4", "관심 종목 정보 변경", "Modify Stock Info"), 
             ("5", "관심 종목 메모 관리", "Manage Memo")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
@@ -1046,7 +1063,7 @@ def manage_stock_menu():
         elif choice == "3":
             if delete_stock() is not False: is_success = True
         elif choice == "4":
-            if reorder_stock() is not False: is_success = True
+            if modify_stock_info() is not False: is_success = True
         elif choice == "5":
             manage_stock_memos_by_mode('view')
             is_success = True
