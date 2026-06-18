@@ -1251,9 +1251,13 @@ def view_trade_history():
             type_str = f"{type_disp}{tag_disp}"
 
             # 상태 표시
-            status_str = t.get('order_status', '접수') # 기본값 접수
-            if status_str == "체결": status_str = "[green]체결[/]"
+            raw_status_str = t.get('order_status', '접수')
+            status_str = raw_status_str
+            if "부분체결" in status_str: status_str = "[bold cyan]부분체결[/]"
+            elif status_str == "체결": status_str = "[green]체결[/]"
             elif "체결(추정)" in status_str: status_str = "[green]체결 추정[/]" # [수정] 괄호 제거 및 색상 적용
+            elif "취소(추정)" in status_str: status_str = "[bold yellow]취소 추정[/]"
+            elif "거부" in status_str or "에러" in status_str or "REJECTED" in status_str.upper(): status_str = "[bold red]주문거부[/]"
             elif "취소" in status_str: status_str = f"[yellow]{status_str}[/]"
             elif "정정" in status_str: status_str = f"[magenta]{status_str}[/]"
             elif "예약발동" in status_str: status_str = "[bold green]예약발동[/]"
@@ -1311,11 +1315,17 @@ def view_trade_history():
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
             
-            # 사용자 수동 주문인 경우 스냅샷에서 지표 정보 추출하여 표시
-            if "수동" in reason_display and t.get('snapshot'):
+            if t.get('snapshot'):
                 try:
                     snap_data = json.loads(t['snapshot'])
-                    if 'indicators' in snap_data:
+                    
+                    # 자동매매 상태(강매수, 역매수 등)가 스냅샷에 존재하면 사유에 명시적 추가
+                    state_val = snap_data.get('state')
+                    if state_val and is_buy and state_val not in reason_display:
+                        reason_display = f"[{state_val}] {reason_display}"
+                    
+                    # 사용자 수동 주문인 경우 스냅샷에서 지표 정보 추출하여 표시
+                    if "수동" in reason_display and 'indicators' in snap_data:
                         ind = snap_data['indicators']
                         add_info = []
                         if ind.get('rsi') is not None: add_info.append(f"RSI:{ind['rsi']:.1f}")
@@ -1324,6 +1334,95 @@ def view_trade_history():
                         if add_info:
                             reason_display += f" [{', '.join(add_info)}]"
                 except: pass
+
+            # [추가] 매수 사유 분류 커스텀 태그 적용
+            if is_buy and reason_display != "-":
+                buy_tag = ""
+                if "슈퍼모멘텀" in reason_display or "BREAKOUT" in reason_display: buy_tag = "돌파매수"
+                elif "역매수" in reason_display or "역추세" in reason_display or "TRAILING_BUY" in reason_display: buy_tag = "눌림목"
+                elif "조건 만족" in reason_display or "SCORE" in reason_display: buy_tag = "추세매수"
+                elif "수동" in reason_display: buy_tag = "수동매수"
+                
+                if buy_tag and f"[{buy_tag}]" not in reason_display:
+                    if reason_display.startswith("["): # [강매수] 등 스냅샷 태그 뒤에 병합
+                        close_idx = reason_display.find("]")
+                        if close_idx != -1:
+                            reason_display = f"{reason_display[:close_idx+1]} [{buy_tag}]{reason_display[close_idx+1:]}"
+                    else:
+                        reason_display = f"[{buy_tag}] {reason_display}"
+
+            # [추가] 매도 사유 분류 태그 적용
+            if is_sell and reason_display != "-":
+                sell_tag = ""
+                if "반익절" in reason_display: sell_tag = "반익절"
+                elif "과열" in reason_display: sell_tag = "과열매도"
+                elif "익절" in reason_display: sell_tag = "익절"
+                elif "ATR" in reason_display and "손절" in reason_display: sell_tag = "ATR손절"
+                elif "손절" in reason_display: sell_tag = "손절"
+                elif "트레일링" in reason_display: sell_tag = "트레일링스탑"
+                elif "시간" in reason_display and "청산" in reason_display: sell_tag = "시간청산"
+                elif "추세" in reason_display or "점수" in reason_display or "매도진입" in reason_display: sell_tag = "추세이탈"
+                elif "수동" in reason_display: sell_tag = "수동매도"
+                
+                if sell_tag and not reason_display.startswith("["):
+                    reason_display = f"[{sell_tag}] {reason_display}"
+
+            # [추가] 기간만료/발동실패 상태 사유 태그 적용
+            if reason_display != "-" and ("기간만료" in raw_status_str or "발동실패" in raw_status_str):
+                if not reason_display.startswith("["):
+                    fail_tag = "기간만료" if "기간만료" in raw_status_str else "발동실패"
+                    reason_display = f"[{fail_tag}] {reason_display}"
+
+            # [추가] 예약취소 상태 사유 태그 적용
+            if reason_display != "-" and ("예약취소" in raw_status_str or "RES_CAN" in str(t.get('odno', ''))):
+                if not reason_display.startswith("["):
+                    reason_display = f"[예약취소] {reason_display}"
+
+            # [추가] 예약 주문 발동 사유 태그 적용
+            if reason_display != "-" and ("예약" in clean_type or "예약발동" in status_str):
+                if not reason_display.startswith("["):
+                    reserve_tag = "예약매수" if is_buy else ("예약매도" if is_sell else "예약발동")
+                    reason_display = f"[{reserve_tag}] {reason_display}"
+
+            # [추가] 정정/취소 주문 사유 태그 적용
+            if reason_display != "-" and (is_mod or is_cancel):
+                if not reason_display.startswith("["):
+                    mod_tag = "정정" if is_mod else "취소"
+                    reason_display = f"[{mod_tag}] {reason_display}"
+
+            # [추가] 부분체결 상태 사유 태그 적용
+            if reason_display != "-" and "부분체결" in raw_status_str:
+                if not reason_display.startswith("["):
+                    reason_display = f"[부분체결] {reason_display}"
+
+            # [추가] 체결(추정) 상태 사유 태그 적용
+            if reason_display != "-" and "체결(추정)" in raw_status_str:
+                if not reason_display.startswith("["):
+                    reason_display = f"[체결추정] {reason_display}"
+
+            # [추가] 취소(추정) 상태 사유 태그 적용
+            if reason_display != "-" and "취소(추정)" in raw_status_str:
+                if not reason_display.startswith("["):
+                    reason_display = f"[취소추정] {reason_display}"
+
+            # [추가] 주문거부 상태 사유 태그 적용
+            if reason_display != "-" and ("거부" in raw_status_str or "에러" in raw_status_str or "REJECTED" in raw_status_str.upper()):
+                if not reason_display.startswith("["):
+                    reason_display = f"[bold red]\\[주문거부][/] {reason_display}"
+
+            # [추가] 접수(미체결) 상태 사유 태그 적용
+            if reason_display != "-" and raw_status_str == "접수":
+                if not reason_display.startswith("["):
+                    reason_display = f"[미체결] {reason_display}"
+
+            # [추가] 자동/수동/외부 사유 태그 적용
+            if reason_display != "-":
+                if "자동" in clean_type and "[자동]" not in reason_display:
+                    reason_display = f"[자동] {reason_display}"
+                elif "수동" in clean_type and "[수동]" not in reason_display:
+                    reason_display = f"[수동] {reason_display}"
+                elif "자동" not in clean_type and "수동" not in clean_type and "예약" not in clean_type and "[외부]" not in reason_display:
+                    reason_display = f"[외부] {reason_display}"
 
             # [수정] 사유 내 강제 줄바꿈 제거 (2줄 내 유동적 출력 지원)
             reason_display = reason_display.replace('\n', ' ')

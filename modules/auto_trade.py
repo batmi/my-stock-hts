@@ -214,6 +214,7 @@ class ConclusionMonitor:
             cls._instance.is_running = False
             cls._instance.thread = None
             cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
+            cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
             cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
             
             # [수정] 적응형 폴링 설정 로드
@@ -447,8 +448,10 @@ class ConclusionMonitor:
                             if is_overseas_trade:
                                 ord_qty = api.safe_int(item.get('ft_ord_qty'))
                                 ccld_qty = api.safe_int(item.get('ft_ccld_qty'))
-                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty', 0))
                                 rmn_qty = api.safe_int(item.get('nccs_qty'))
+                                # [수정] 해외주식 취소 수량 필드(cncl_cfrm_qty) 누락 대비 계산식 적용
+                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty', ord_qty - ccld_qty - rmn_qty))
+                                if cncl_qty < 0: cncl_qty = 0
                                 avg_price = float(item.get('ft_ccld_unpr3', 0))
                                 type_name = item.get('sll_buy_dvsn_cd_name')
                                 if not type_name:
@@ -476,10 +479,67 @@ class ConclusionMonitor:
                                 AutoTrader().update_order_status(code_chk, odno, new_status)
                             
                             tot_ccld_qty = ccld_qty
-                            if tot_ccld_qty <= 0: continue
+                            tot_cncl_qty = cncl_qty  # [추가] 취소 수량 누적치
                             
                             order_key = f"{cano}-{odno}"
                             prev_qty = self.order_status.get(order_key, 0)
+                            
+                            if not hasattr(self, 'cancel_status'): self.cancel_status = {}
+                            prev_cncl_qty = self.cancel_status.get(order_key, 0)
+                            
+                            # [추가] 부분/전량 취소 감지 (수동 취소, 외부 앱 취소, 사후 강제 취소 등)
+                            if tot_cncl_qty > prev_cncl_qty:
+                                new_cncl_qty = tot_cncl_qty - prev_cncl_qty
+                                name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
+                                code = item.get('pdno')
+                                
+                                origin_trade = db_manager.db.get_trade_by_odno(odno)
+                                db_type_name = type_name or ""
+                                price_val = avg_price
+                                if origin_trade:
+                                    db_type_name = origin_trade.get('type', type_name)
+                                    if price_val <= 0: price_val = float(origin_trade.get('price', 0))
+                                
+                                db_type_name = db_type_name or ""
+                                
+                                # 수동 취소 또는 시스템(타임아웃) 등 이미 알림/저장된 이력인지 확인
+                                is_external_cancel = True
+                                try:
+                                    conn = db_manager.db._get_conn()
+                                    cursor = conn.cursor()
+                                    cursor.execute("SELECT id, reason FROM trades WHERE org_odno = ? AND order_status IN ('취소', '취소(추정)') ORDER BY id DESC LIMIT 1", (odno,))
+                                    cancel_record = cursor.fetchone()
+                                    
+                                    if cancel_record:
+                                        rec_reason = cancel_record['reason']
+                                        if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
+                                            # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
+                                            is_external_cancel = False
+                                except: pass
+                                
+                                if not initial:
+                                    if is_external_cancel:
+                                        is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
+                                        price_str = f"${price_val:,.2f}" if is_overseas_stock else f"{price_val:,.0f}원"
+                                        if price_val <= 0: price_str = "시장가"
+                                        
+                                        cancel_title = "부분 취소" if (rmn_qty > 0 or tot_ccld_qty > 0) else "전량 취소"
+                                        t_type = "매수" if "buy" in db_type_name.lower() or "매수" in db_type_name else ("매도" if "sell" in db_type_name.lower() or "매도" in db_type_name else "주문")
+                                        
+                                        msg = f"⚠️ [{t_type} {cancel_title} 감지] {name}({code})\n취소 수량: {new_cncl_qty}주 / 단가: {price_str}\n주문번호: {odno}\n사유: 앱(MTS)/HTS 외부 취소 또는 사후 강제 취소"
+                                        with utils.AccountContext(cano):
+                                            api.send_telegram_message(msg)
+                                            
+                                        # 외부 취소 이력 DB 등록
+                                        db_manager.db.insert_trade(f"{t_type}취소(외부)", code, name, new_cncl_qty, price_val, f"EXT_CAN_{odno}_{tot_cncl_qty}", org_odno=odno, reason=f"외부/사후 취소 감지 ({cancel_title})", order_status="취소")
+                                else:
+                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                        logger.debug(f"[Init] 취소 내역 동기화: {name} {tot_cncl_qty}주 (ODNO: {odno})")
+                                
+                                with self._lock:
+                                    self.cancel_status[order_key] = tot_cncl_qty
+
+                            if tot_ccld_qty <= 0: continue
                             
                             if tot_ccld_qty > prev_qty: logger.debug(f"[ORDER_DEBUG] 신규 체결 감지: {odno} (기존:{prev_qty} -> 신규:{tot_ccld_qty}) Initial={initial}")
                             if tot_ccld_qty > prev_qty:
@@ -540,13 +600,20 @@ class ConclusionMonitor:
                                                 else: res_reason += f" (목표가 {tp_val})"
                                                 reason_to_save = f"체결 확인 ({res_reason})"
                                                 actual_reason = res_reason
+                                            else:
+                                                db_type_name = f"{type_name}(외부)"
+                                                reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
+                                                actual_reason = "앱(MTS)/HTS 외부 주문 감지"
                                         except Exception as e:
                                             logger.debug(f"[Monitor] 예약 주문 조회 실패: {e}")
+                                            db_type_name = f"{type_name}(외부)"
+                                            reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
+                                            actual_reason = "앱(MTS)/HTS 외부 주문 감지"
                                 except Exception:
-                                    db_type_name = type_name
+                                    db_type_name = f"{type_name}(외부)"
                                     stop_loss_rate = 0.0
-                                    reason_to_save = "체결 확인"
-                                    actual_reason = ""
+                                    reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
+                                    actual_reason = "앱(MTS)/HTS 외부 주문 감지"
                                 
                                 # [추가] 매도 체결 시 실현 손익 및 사유 조회
                                 profit_msg = ""
@@ -1276,6 +1343,26 @@ class OrderManager:
                                 time.sleep(1.5) # KIS API 잔고 갱신 대기
                                 self.trader.log_current_holdings()
                             threading.Thread(target=_delayed_log_holdings, daemon=True).start()
+                            
+                        # [추가] 사후 주문 거부(REJECTED) 시 텔레그램 알림 발송
+                        elif status == OrderStatus.REJECTED:
+                            try:
+                                trade = db_manager.db.get_trade_by_odno(odno)
+                                if trade:
+                                    t_str = trade.get('type', '')
+                                    t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "주문")
+                                    name = trade.get('name', code)
+                                    qty = trade.get('qty', 0)
+                                    price = float(trade.get('price', 0))
+                                    
+                                    is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+                                    price_str = f"${price:,.2f}" if is_overseas else f"{price:,.0f}원"
+                                    if price <= 0: price_str = "시장가"
+                                    
+                                    msg = f"🚫 [{t_type} 사후 거부] {name}({code})\n수량: {qty}주 / 단가: {price_str}\n주문번호: {odno}\n사유: 사후 주문 거부 (상세 사유는 HTS/MTS 확인)"
+                                    api.send_telegram_message(msg)
+                            except Exception as e:
+                                self.trader.log(f"REJECTED 알림 전송 실패: {e}")
                     else:
                         self.trader.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
 
@@ -1434,11 +1521,44 @@ class OrderManager:
                     if not odno or qty <= 0 or not ord_time_str: continue
                     api_checked_odnos.add(odno)
                     
+                    # [추가] 외부 앱(MTS/HTS)에서 들어온 신규 미체결 주문 감지 및 DB 등록
+                    trade = db_manager.db.get_trade_by_odno(odno)
+                    if not trade:
+                        sll_buy_name = item.get('sll_buy_dvsn_cd_name')
+                        if not sll_buy_name:
+                            sll_buy_cd = item.get('sll_buy_dvsn_cd', '')
+                            sll_buy_name = "매수" if sll_buy_cd == "02" else ("매도" if sll_buy_cd == "01" else "주문")
+                            
+                        price = float(item.get('ord_unpr', 0))
+                        t_type = f"{sll_buy_name}(외부)"
+                        
+                        # DB에 접수 상태로 기록
+                        db_manager.db.insert_trade(
+                            t_type, code, name, qty, price, odno, 
+                            order_status="접수", reason="앱(MTS)/HTS 외부 주문 감지"
+                        )
+                        
+                        # 내부 트래킹(메모리)에 등록
+                        with self._lock:
+                            if code not in self.pending_orders:
+                                self.pending_orders[code] = {}
+                            self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+                            
+                        self.trader.log(f"[외부 주문 감지] {name}({code}) {sll_buy_name} {qty}주 (No.{odno})")
+                        msg = f"📡 [{sll_buy_name} 외부접수] {name}({code})\n수량: {qty}주\n단가: {int(price):,}원\n주문번호: {odno}\n사유: 앱(MTS)/HTS 등 외부 주문 감지"
+                        api.send_telegram_message(msg)
+                        
+                        trade = db_manager.db.get_trade_by_odno(odno)
+
                     try:
                         ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
                         elapsed = (now - ord_dt).total_seconds()
                         
                         if elapsed >= cancel_seconds:
+                            # [추가] 외부에서 들어온 주문은 시스템이 자동 취소(타임아웃)하지 않도록 보호
+                            if trade and "(외부)" in trade.get('type', ''):
+                                continue
+                                
                             self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
                             
                             res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
@@ -1451,6 +1571,10 @@ class OrderManager:
                                     t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "")
                                 type_label = f"{t_type}취소" if t_type else "주문 취소"
                                 api.send_telegram_message(f"🗑 [{type_label}] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
+                                
+                                # [추가] DB에 취소 이력 남기기 (CANCELED 알림 중복 방지)
+                                cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
+                                db_manager.db.insert_trade(f"{t_type}취소(자동)", code, name, qty, 0, cancel_odno, org_odno=odno, reason=f"미체결 시간 초과 (자동 취소)", order_status="취소")
                             else:
                                 self.trader.log(f"취소 실패: {res.get('msg1')}")
                     except Exception: pass

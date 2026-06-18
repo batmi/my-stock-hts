@@ -2373,12 +2373,118 @@ class TelegramCommander:
             date_str = t['time'][5:19] # MM-DD HH:MM:SS
             
             status = t.get('order_status', '접수')
-            if "체결(추정)" in status: status = "체결 추정"
-            
-            if "체결" in status:
+            raw_status = status
+            if "부분체결" in status:
+                status = "⏳ 부분체결"
+            elif "체결(추정)" in status:
+                status = "✅ 체결 추정"
+            elif "취소(추정)" in status:
+                status = "⚠️ 취소 추정"
+            elif "거부" in status or "에러" in status or "REJECTED" in status.upper():
+                status = "🚫 주문거부"
+            elif "체결" in status:
                 status = f"✅ {status}"
             
-            reason = t.get('reason')
+            reason = t.get('reason') or ""
+            
+            # 스냅샷에서 상태(강매수 등) 추출하여 사유에 병합
+            if t.get('snapshot'):
+                try:
+                    snap_data = json.loads(t['snapshot'])
+                    state_val = snap_data.get('state')
+                    if state_val and is_buy and state_val not in reason:
+                        reason = f"[{state_val}] {reason}"
+                except: pass
+
+            # [추가] 매수 사유 분류 커스텀 태그 적용
+            if is_buy and reason:
+                buy_tag = ""
+                if "슈퍼모멘텀" in reason or "BREAKOUT" in reason: buy_tag = "돌파매수"
+                elif "역매수" in reason or "역추세" in reason or "TRAILING_BUY" in reason: buy_tag = "눌림목"
+                elif "조건 만족" in reason or "SCORE" in reason: buy_tag = "추세매수"
+                elif "수동" in reason: buy_tag = "수동매수"
+                
+                if buy_tag and f"[{buy_tag}]" not in reason:
+                    if reason.startswith("["): # [강매수] 등 스냅샷 태그 뒤에 병합
+                        close_idx = reason.find("]")
+                        if close_idx != -1:
+                            reason = f"{reason[:close_idx+1]} [{buy_tag}]{reason[close_idx+1:]}"
+                    else:
+                        reason = f"[{buy_tag}] {reason}"
+
+            # [추가] 매도 사유 분류 태그 적용
+            if is_sell and reason:
+                sell_tag = ""
+                if "반익절" in reason: sell_tag = "반익절"
+                elif "과열" in reason: sell_tag = "과열매도"
+                elif "익절" in reason: sell_tag = "익절"
+                elif "ATR" in reason and "손절" in reason: sell_tag = "ATR손절"
+                elif "손절" in reason: sell_tag = "손절"
+                elif "트레일링" in reason: sell_tag = "트레일링스탑"
+                elif "시간" in reason and "청산" in reason: sell_tag = "시간청산"
+                elif "추세" in reason or "점수" in reason or "매도진입" in reason: sell_tag = "추세이탈"
+                elif "수동" in reason: sell_tag = "수동매도"
+                
+                if sell_tag and not reason.startswith("["):
+                    reason = f"[{sell_tag}] {reason}"
+
+            # [추가] 기간만료/발동실패 상태 사유 태그 적용
+            if reason and ("기간만료" in raw_status or "발동실패" in raw_status):
+                if not reason.startswith("["):
+                    fail_tag = "기간만료" if "기간만료" in raw_status else "발동실패"
+                    reason = f"[{fail_tag}] {reason}"
+
+            # [추가] 예약취소 상태 사유 태그 적용
+            if reason and ("예약취소" in raw_status or "RES_CAN" in str(t.get('odno', ''))):
+                if not reason.startswith("["):
+                    reason = f"[예약취소] {reason}"
+
+            # [추가] 예약 주문 발동 사유 태그 적용
+            if reason and ("예약" in clean_type or "예약발동" in status):
+                if not reason.startswith("["):
+                    reserve_tag = "예약매수" if is_buy else ("예약매도" if is_sell else "예약발동")
+                    reason = f"[{reserve_tag}] {reason}"
+
+            # [추가] 정정/취소 주문 사유 태그 적용
+            if reason and (is_mod or is_cancel):
+                if not reason.startswith("["):
+                    mod_tag = "정정" if is_mod else "취소"
+                    reason = f"[{mod_tag}] {reason}"
+
+            # [추가] 부분체결 상태 사유 태그 적용
+            if reason and "부분체결" in raw_status:
+                if not reason.startswith("["):
+                    reason = f"[부분체결] {reason}"
+
+            # [추가] 체결(추정) 상태 사유 태그 적용
+            if reason and "체결(추정)" in raw_status:
+                if not reason.startswith("["):
+                    reason = f"[체결추정] {reason}"
+
+            # [추가] 취소(추정) 상태 사유 태그 적용
+            if reason and "취소(추정)" in raw_status:
+                if not reason.startswith("["):
+                    reason = f"[취소추정] {reason}"
+
+            # [추가] 주문거부 상태 사유 태그 적용
+            if reason and ("거부" in raw_status or "에러" in raw_status or "REJECTED" in raw_status.upper()):
+                if not reason.startswith("[") and not reason.startswith("🔴"):
+                    reason = f"🔴 [주문거부] {reason}"
+
+            # [추가] 접수(미체결) 상태 사유 태그 적용
+            if reason and raw_status == "접수":
+                if not reason.startswith("["):
+                    reason = f"[미체결] {reason}"
+
+            # [추가] 자동/수동/외부 사유 태그 적용
+            if reason:
+                if "자동" in clean_type and "[자동]" not in reason:
+                    reason = f"[자동] {reason}"
+                elif "수동" in clean_type and "[수동]" not in reason:
+                    reason = f"[수동] {reason}"
+                elif "자동" not in clean_type and "수동" not in clean_type and "예약" not in clean_type and "[외부]" not in reason:
+                    reason = f"[외부] {reason}"
+
             reason_msg = ""
             if reason:
                 # [수정] 사유 내에 대괄호가 포함된 경우 포맷팅 (줄바꿈 및 들여쓰기)

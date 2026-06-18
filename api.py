@@ -2356,7 +2356,7 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
         "SLL_BUY_DVSN_CD": "00",
         "INQR_DVSN": "00",
         "PDNO": "",
-        "CCLD_DVSN": "01", # 01: 체결
+        "CCLD_DVSN": "00", # [수정] 00: 전체 조회 (취소/미체결 포함)
         "ORD_GNO_BRNO": "",
         "ODNO": "",
         "INQR_DVSN_3": "00",
@@ -2388,7 +2388,7 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
             "ORD_STRT_DT": today,
             "ORD_END_DT": today,
             "SLL_BUY_DVSN": "00",
-            "CCLD_NCCS_DVSN": "01", # 01: 체결
+            "CCLD_NCCS_DVSN": "00", # [수정] 00: 전체 조회 (취소/미체결 포함)
             "CTX_AREA_FK200": "",
             "CTX_AREA_NK200": ""
         }
