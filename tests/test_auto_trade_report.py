@@ -18,8 +18,8 @@ def test_get_performance_report_no_data(mock_get_trades, trader):
 def test_get_performance_report_with_data(mock_get_trades, trader):
     """데이터가 있을 때 성과 리포트 테스트"""
     mock_get_trades.return_value = [
-            {'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 60000, 'time': '2023-01-01 10:00:00', 'odno': '1', 'profit_rate': 0, 'profit_amt': 0, 'reason': '매수', 'order_status': '체결'},
-            {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절', 'order_status': '체결'}
+                {'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 60000, 'time': '2023-01-01 10:00:00', 'odno': '1', 'profit_rate': 0, 'profit_amt': 0, 'reason': '매수', 'order_status': '체결'},
+                {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절', 'order_status': '체결'}
     ]
     report = trader.get_performance_report()
     assert "총 실현 손익: +10,000원" in report

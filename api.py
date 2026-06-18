@@ -2389,7 +2389,10 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
             "SLL_BUY_DVSN": "00",
             "CCLD_NCCS_DVSN": "00", # [수정] 00: 전체 조회 (취소/미체결 포함)
             "CTX_AREA_FK200": "",
-            "CTX_AREA_NK200": ""
+            "CTX_AREA_NK200": "",
+            "ORD_DT": "",
+            "ORD_GNO_BRNO": "",
+            "ODNO": ""
         }
         
         # [Fix] 모의투자 환경에서 SORT_SQN 누락 시 에러(OPSQ2001) 발생 대응
