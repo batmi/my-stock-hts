@@ -68,8 +68,8 @@ def test_cmd_report(mock_get_trades, commander):
     """리포트 명령어 테스트"""
     # Mock DB response
     mock_get_trades.return_value = [
-        {'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 60000, 'time': '2023-01-01 10:00:00', 'odno': '1', 'profit_rate': 0, 'profit_amt': 0, 'reason': '매수'},
-        {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절'}
+            {'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 60000, 'time': '2023-01-01 10:00:00', 'odno': '1', 'profit_rate': 0, 'profit_amt': 0, 'reason': '매수', 'order_status': '체결'},
+            {'type': 'sell', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 61000, 'time': '2023-01-01 11:00:00', 'odno': '2', 'profit_amt': 10000, 'profit_rate': 1.6, 'reason': '익절', 'order_status': '체결'}
     ]
     
     # /report d (일간)

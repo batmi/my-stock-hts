@@ -119,8 +119,7 @@ def test_sell_slippage(mock_adjust, mock_chart, mock_fetch_qty, mock_place, rese
 
 @patch('modules.auto_trade.api.get_unfilled_orders')
 @patch('modules.auto_trade.api.revise_cancel_order')
-@patch('modules.auto_trade.datetime')
-def test_unfilled_order_cancel(mock_datetime, mock_revise, mock_get_unfilled, reset_autotrader):
+def test_unfilled_order_cancel(mock_revise, mock_get_unfilled, reset_autotrader):
     """
     [미체결 주문 취소 테스트]
     취소 대기 시간 120초(2분) 설정 시,
@@ -128,11 +127,6 @@ def test_unfilled_order_cancel(mock_datetime, mock_revise, mock_get_unfilled, re
     """
     config.UNFILLED_ORDER_CANCEL_SECONDS = 120
     trader = auto_trade.AutoTrader()
-    
-    # 현재 시간 고정: 12시 00분 00초
-    now = datetime(2023, 1, 2, 12, 0, 0)
-    mock_datetime.now.return_value = now
-    mock_datetime.strptime = datetime.strptime
     
     # 미체결 주문 데이터 Mocking
     orders = [
@@ -142,9 +136,17 @@ def test_unfilled_order_cancel(mock_datetime, mock_revise, mock_get_unfilled, re
     mock_get_unfilled.return_value = orders
     mock_revise.return_value = {'rt_cd': '0', 'msg1': '정상'}
     
-    with patch.object(trader, 'is_market_open', return_value=True):
-        # 실행
-        trader.order_manager.manage_unfilled_orders()
+    # 현재 시간 고정: 12시 00분 00초
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2023, 1, 2, 12, 0, 0)
+            
+    with patch('modules.auto_trade.datetime', FakeDatetime):
+        with patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value={'type': 'buy'}):
+            with patch.object(trader, 'is_market_open', return_value=True):
+                # 실행
+                trader.order_manager.manage_unfilled_orders()
     
     # 검증: 주문번호 1001만 취소 요청되었는지 확인
     assert mock_revise.call_count == 1

@@ -2553,7 +2553,7 @@ class AutoTrader:
                 
                 today_trades_refined = self._refine_trade_records(today_trades_parsed)
                 # [추가] 체결된 내역만 당일 매매 요약에 포함
-                today_trades_refined = [r for r in today_trades_refined if "체결" in r.get('order_status', '')]
+                today_trades_refined = [r for r in today_trades_refined if not r.get('order_status') or "체결" in r.get('order_status', '')]
                 sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
                 realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
             except: pass

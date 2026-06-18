@@ -63,12 +63,12 @@ def test_manage_unfilled_orders_cancel(mock_cancel, mock_get_unfilled):
             return cls(2023, 1, 2, 10, 0, 0)
 
     with patch('modules.auto_trade.datetime', FakeDatetime):
-        
-        with patch.object(trader, 'is_market_open', return_value=True):
-            # Set threshold to 10 seconds
-            config.UNFILLED_ORDER_CANCEL_SECONDS = 10
-        
-            trader.order_manager.manage_unfilled_orders()
+        with patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value={'type': 'buy'}):
+            with patch.object(trader, 'is_market_open', return_value=True):
+                # Set threshold to 10 seconds
+                config.UNFILLED_ORDER_CANCEL_SECONDS = 10
+            
+                trader.order_manager.manage_unfilled_orders()
 
         
     mock_cancel.assert_called()

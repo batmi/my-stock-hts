@@ -130,10 +130,10 @@ def test_reorder_stock_logic(mock_ask, mock_save, mock_load):
         "etfs_kr": [], "stocks_us": [], "etfs_us": []
     }
     
-    # 1(국내주식) -> 3(C 종목 선택) -> 1(1번 위치로 이동)
-    mock_ask.side_effect = ["1", "3", "1"]
+    # 1(국내주식) -> 3(C 종목 선택) -> 1(1번 위치로 이동) -> "" (새 이름 입력 생략)
+    mock_ask.side_effect = ["1", "3", "1", ""]
     
-    manage.reorder_stock()
+    manage.modify_stock_info()
         
     # 순서가 C, A, B 로 바뀌었는지 확인
     assert config.session.stock_data["stocks_kr"][0]["code"] == "3"

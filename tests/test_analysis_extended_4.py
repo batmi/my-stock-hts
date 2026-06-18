@@ -6,7 +6,8 @@ import config
 @patch('modules.analysis._get_master_stock_list')
 @patch('modules.analysis._analyze_stock_worker')
 @patch('rich.prompt.Prompt.ask')
-def test_analyze_market_stocks(mock_ask, mock_worker, mock_master):
+@patch('modules.analysis._load_analysis_result', return_value=None)
+def test_analyze_market_stocks(mock_load, mock_ask, mock_worker, mock_master):
     """시장 전체 분석 함수 테스트"""
     # Setup
     mock_master.return_value = [{'code': '005930', 'name': 'Samsung'}]
@@ -17,8 +18,8 @@ def test_analyze_market_stocks(mock_ask, mock_worker, mock_master):
         'is_target': True, 'vol_strength': 150.0, 'w52_pos': 80.0
     }
     
-    # User Input Mock (새로 분석 -> 설정 변경 안함 -> 상세 분석 메뉴에서 종료)
-    mock_ask.side_effect = ['n', 'n', 'q'] 
+    # User Input Mock (ETF 제외 -> 체결강도 미사용 -> 설정 변경 안함 -> 상세 분석 메뉴에서 종료)
+    mock_ask.side_effect = ['n', 'n', 'n', 'q'] 
     
     with patch('config.console.print'):
         analysis.analyze_market_stocks("KOSPI")

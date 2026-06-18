@@ -440,7 +440,7 @@ def test_check_buy_conditions_max_holdings_limit():
     trader.consecutive_errors = 0
     
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
-    config.SYSTEM_MAX_HOLDINGS = 2
+    config.settings.SYSTEM_MAX_HOLDINGS = 2
     
     # Holdings 2
     holdings = [{'pdno': '1', 'prdt_name': 'Stock1', 'hldg_qty': '10'}, {'pdno': '2', 'prdt_name': 'Stock2', 'hldg_qty': '10'}]

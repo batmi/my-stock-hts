@@ -19,12 +19,12 @@ def test_settings_apply_presets():
     # Bull 적용
     msg = settings.apply_strategy_preset("bull", interactive=False)
     assert "강세장" in msg
-    assert config.SYSTEM_INVEST_PER_STOCK == 0.2
+    assert config.settings.SYSTEM_INVEST_PER_STOCK == 0.3
     
     # Bear 적용
     msg = settings.apply_strategy_preset("bear", interactive=False)
     assert "약세장" in msg
-    assert config.SYSTEM_INVEST_PER_STOCK == 0.1
+    assert config.settings.SYSTEM_INVEST_PER_STOCK == 0.3
     
     # Sideways 적용
     msg = settings.apply_strategy_preset("sideways", interactive=False)

@@ -54,14 +54,18 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
         res3 = api.get_current_price_data("005930", is_overseas=False)
         assert mock_call_api.call_count == 4  # 캐시 만료로 다시 API가 호출되어야 함 (총 4회)
 
+@patch('tradingview_screener.Query')
 @patch('api.yf.Ticker')
-def test_get_yf_fast_info_uses_micro_cache(mock_ticker):
+def test_get_yf_fast_info_uses_micro_cache(mock_ticker, mock_query):
     """3. get_yf_fast_info 함수가 yfinance 통신을 캐싱하여 중복을 방지하는지 검증"""
     mock_fast_info = MagicMock()
     mock_fast_info.last_price = 150.0
     mock_fast_info.regular_market_previous_close = 145.0
     mock_ticker.return_value.fast_info = mock_fast_info
     
+    # TV Screener 강제 실패 유도 (yfinance Fallback 정상 작동 확인용)
+    mock_query.side_effect = Exception("Force Fallback")
+
     # 첫 호출
     info1 = api.get_yf_fast_info("AAPL")
     assert info1["last_price"] == 150.0

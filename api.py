@@ -482,42 +482,41 @@ def get_yf_fast_info(code, ttl=60.0):
     
     # 1. TradingView Screener 우선 조회 (일반 미국 주식 또는 TV 매핑이 존재하는 지수)
     if not is_special_ticker or tv_exact_symbol:
-        if "PYTEST_CURRENT_TEST" not in os.environ:
-            try:
-                from tradingview_screener import Query, Column
-                if tv_exact_symbol:
-                    _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').get_tickers([tv_exact_symbol])
-                else:
-                    _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').where(Column('name') == code).limit(1).get_scanner_data()
+        try:
+            from tradingview_screener import Query, Column
+            if tv_exact_symbol:
+                _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').get_tickers([tv_exact_symbol])
+            else:
+                _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').where(Column('name') == code).limit(1).get_scanner_data()
+                
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                close_p = row.get('close')
+                change_abs = row.get('change_abs')
+                
+                # [추가] 장외(프리/애프터마켓) 가격이 존재할 경우 실시간 가격으로 우선 적용
+                pre_close = row.get('premarket_close')
+                post_close = row.get('postmarket_close')
+                
+                if pd.notna(post_close) and post_close > 0:
+                    close_p = post_close
+                elif pd.notna(pre_close) and pre_close > 0:
+                    close_p = pre_close
+                
+                prev_close = None
+                if pd.notna(row.get('close')) and pd.notna(change_abs):
+                    prev_close = row.get('close') - change_abs
                     
-                if df is not None and not df.empty:
-                    row = df.iloc[0]
-                    close_p = row.get('close')
-                    change_abs = row.get('change_abs')
-                    
-                    # [추가] 장외(프리/애프터마켓) 가격이 존재할 경우 실시간 가격으로 우선 적용
-                    pre_close = row.get('premarket_close')
-                    post_close = row.get('postmarket_close')
-                    
-                    if pd.notna(post_close) and post_close > 0:
-                        close_p = post_close
-                    elif pd.notna(pre_close) and pre_close > 0:
-                        close_p = pre_close
-                    
-                    prev_close = None
-                    if pd.notna(row.get('close')) and pd.notna(change_abs):
-                        prev_close = row.get('close') - change_abs
-                        
-                    data = {
-                        'last_price': close_p,
-                        'regular_market_previous_close': prev_close,
-                        'last_volume': row.get('volume', 0),
-                        'year_high': row.get('High.52Week')
-                    }
-                    _set_micro_cache(cache_key, data)
-                    return data
-            except Exception:
-                pass
+                data = {
+                    'last_price': close_p,
+                    'regular_market_previous_close': prev_close,
+                    'last_volume': row.get('volume', 0),
+                    'year_high': row.get('High.52Week')
+                }
+                _set_micro_cache(cache_key, data)
+                return data
+        except Exception:
+            pass
 
     # 2. yfinance Fallback
     try:
