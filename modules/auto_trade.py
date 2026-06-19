@@ -4536,23 +4536,43 @@ class AutoTrader:
                         if not is_first_init:
                             transfer_amt = current_principal - self.initial_asset
                             
-                            # 5만원 이상 원금 변동 발생 시 입출금으로 간주 (수수료, 환차손 등 미세 오차 무시)
+                            # [Fix] 5만원 이상 원금 변동 발생 시 입출금으로 간주하되, 주문 체결 중 API 데이터 불일치(Lag)로 인한
+                            # 오작동을 방지하기 위해 3회 연속(약 30초) 동일한 변동이 감지될 때만 실제 입출금으로 확정합니다.
                             if abs(transfer_amt) >= 50000 and self.initial_asset > 0:
-                                action_str = "입금" if transfer_amt > 0 else "출금"
-                                self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
-                                self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
-                                
-                                self.initial_asset += int(transfer_amt)
-                                
-                                account_key = f"{target_cano}-{acnt_cd}"
-                                save_daily_initial_asset(account_key, self.initial_asset)
-                                try:
-                                    today_str = datetime.now().strftime("%Y-%m-%d")
-                                    db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
-                                except: pass
-                                
-                                api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
-                            
+                                if not hasattr(self, '_pending_transfer_amt'):
+                                    self._pending_transfer_amt = 0
+                                    self._pending_transfer_count = 0
+                                    
+                                # 오차 범위 500원 이내면 동일한 변동으로 간주
+                                if abs(self._pending_transfer_amt - transfer_amt) < 500:
+                                    self._pending_transfer_count += 1
+                                else:
+                                    self._pending_transfer_amt = transfer_amt
+                                    self._pending_transfer_count = 1
+                                    
+                                if self._pending_transfer_count >= 3:
+                                    action_str = "입금" if transfer_amt > 0 else "출금"
+                                    self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
+                                    self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
+                                    
+                                    self.initial_asset += int(transfer_amt)
+                                    
+                                    account_key = f"{target_cano}-{acnt_cd}"
+                                    save_daily_initial_asset(account_key, self.initial_asset)
+                                    try:
+                                        today_str = datetime.now().strftime("%Y-%m-%d")
+                                        db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
+                                    except: pass
+                                    
+                                    api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
+                                    
+                                    # 처리 후 초기화
+                                    self._pending_transfer_count = 0
+                                    self._pending_transfer_amt = 0
+                            else:
+                                if hasattr(self, '_pending_transfer_count'):
+                                    self._pending_transfer_count = 0
+                                    self._pending_transfer_amt = 0
                         realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
                         daily_profit = current_total - self.initial_asset
                         daily_profit_rate = (daily_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
