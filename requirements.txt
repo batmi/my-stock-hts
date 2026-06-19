@@ -10,7 +10,7 @@ apsw
 argcomplete
 asyncpg
 attr
-BeautifulSoup
+beautifulsoup4
 bjoern
 bokeh
 boto3
@@ -19,20 +19,17 @@ brotli
 brotlicffi
 ca_certs_locater
 cairocffi
-Carbon
 cchardet
 cefpython3
 cffi
 chardet
 checks
-Cheetah
 cheroot
 cherrypy
 choreographer
 click
 clr
 colorama
-ConfigParser
 cudf
 cupy
 curio
@@ -42,7 +39,6 @@ dask_expr
 defcon
 defusedxml
 diesel
-dl
 docutils
 duckdb
 email_validator
@@ -66,7 +62,6 @@ gunicorn
 h2
 holidays
 html5lib
-HTMLParser
 httpx_aiohttp
 hypothesis
 ibis
@@ -92,7 +87,6 @@ modin
 mtrand
 multidict
 munkres
-MySQL-python
 mysql_connector_repackaged
 numexpr
 oauth2client
@@ -111,10 +105,7 @@ psycopg2cffi
 PyInstaller
 pymysql
 pyOpenSSL
-PyQt4
-PyQt5
 PyQt6
-PySide2
 PySide6
 pyspark
 pysqlcipher
@@ -142,7 +133,6 @@ scikit_learn
 scipy
 selenium
 sentencepiece
-sets
 setuptools_scm
 shiboken2
 shiboken6
@@ -160,7 +150,6 @@ sqlparse
 statsmodels
 sympy
 tensorflow
-thread
 threadpoolctl
 toml
 tornado
