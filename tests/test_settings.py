@@ -1,8 +1,9 @@
 import pytest
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import patch, mock_open, MagicMock
 import config
+from modules import settings
 
 @pytest.fixture
 def temp_config_dir(tmp_path):
@@ -95,3 +96,59 @@ def test_load_dynamic_config_invalid_json(temp_config_dir):
             config.load_dynamic_config()
         except Exception as e:
             pytest.fail(f"잘못된 JSON 파일 처리 중 예외가 전파되었습니다: {e}")
+
+def test_save_dynamic_config():
+    """_save_dynamic_config 함수가 json 데이터를 파일에 정상적으로 쓰는지 검증"""
+    m_open = mock_open()
+    with patch('builtins.open', m_open), \
+         patch('modules.settings.console.print'), \
+         patch('modules.settings.check_and_update_active_preset'):
+         
+         # 임의의 값 설정
+         config.settings.ACTIVE_PRESET = "test_preset"
+         config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 99.9
+         
+         settings._save_dynamic_config()
+         
+         m_open.assert_called_once()
+         # 쓰여진 데이터 검증
+         handle = m_open()
+         written_data = "".join([call[0][0] for call in handle.write.call_args_list])
+         data = json.loads(written_data)
+         assert data["ACTIVE_PRESET"] == "test_preset"
+         assert data["ANALYSIS_THRESHOLDS"]["BUY_SCORE"] == 99.9
+
+@patch('modules.settings.console.print')
+def test_view_system_config(mock_print):
+    """현재 시스템 설정 조회 함수가 예외 없이 동작하는지 검증"""
+    # 단순 조회 기능이므로 에러가 안나는지만 검증
+    res = settings.view_system_config()
+    assert res is True
+    mock_print.assert_called()
+
+@patch('modules.settings.Prompt.ask', side_effect=["1", "88.8", "q"])
+@patch('modules.settings._save_dynamic_config')
+def test_edit_config_table_value_change(mock_save, mock_ask):
+    """_edit_config_table 내부에서 설정값이 변경되는 로직 검증"""
+    test_val = {"TARGET": 10.0}
+    
+    items = [
+        {"desc": "테스트", "help": "도움말", "name": "TARGET", "type": "float",
+         "get": lambda: test_val["TARGET"], "set": lambda v: test_val.update({"TARGET": v})}
+    ]
+    
+    action_taken = settings._edit_config_table("테스트 타이틀", items, check_preset=False)
+    
+    assert action_taken is True
+    assert test_val["TARGET"] == 88.8
+    mock_save.assert_called_once()
+
+@patch('modules.settings.Prompt.ask', side_effect=["q"])
+def test_edit_config_table_cancel(mock_ask):
+    """_edit_config_table 메뉴 진입 직후 종료 로직 검증"""
+    items = [
+        {"desc": "테스트", "help": "도움말", "name": "TARGET", "type": "float",
+         "get": lambda: 10.0, "set": lambda v: None}
+    ]
+    action_taken = settings._edit_config_table("테스트", items, check_preset=False)
+    assert action_taken is False
