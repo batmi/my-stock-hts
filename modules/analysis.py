@@ -220,28 +220,36 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
     
     # 2. Momentum Factor (2.5점)
+    score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
+    score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
+    score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 30)
+
     if rsi is not None:
-        if 50 <= rsi <= 75:
+        # [Fix] RSI 상단 제한(75) 해제하여 과열 구간에서도 모멘텀 점수 유지 (스코어 클리프 방지)
+        if rsi >= score_rsi_mid:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 강세 구간 (+{s:.2f})")
-            if rsi >= 60:
+            if rsi >= score_rsi_strong:
                 s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
-        elif 30 <= rsi < 50:
+        elif score_rsi_rebound <= rsi < score_rsi_mid:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 반등 시도 (+{s:.2f})")
             
     cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
+    cci_strong = config.INDICATOR_PARAMS.get('SCORE_CCI_STRONG', 0)
+    cci_mom = config.INDICATOR_PARAMS.get('SCORE_CCI_MOMENTUM', 50)
     if cci is not None:
-        if cci > 0:
+        if cci > cci_strong:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
         if prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 (+{s:.2f})")
-        elif cci >= 50:
+        elif cci >= cci_mom:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 모멘텀 심화 (+{s:.2f})")
             
     if plus_di is not None and minus_di is not None and plus_di > minus_di:
         s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 (+{s:.2f})")
 
     # 3. Strength & Volume Factor (1.5점)
-    if adx is not None and adx >= 20:
+    adx_min = config.INDICATOR_PARAMS.get('SCORE_ADX_MIN', 20)
+    if adx is not None and adx >= adx_min:
         s = round(0.5 * r_str, 2); score += s; details.append(f"ADX: 추세 형성 (+{s:.2f})")
         
     if vol_spike_flag or vol_trend_flag:
@@ -255,16 +263,18 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 개선 (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
-    # [수정] 시너지 보너스를 단순히 상태 유지가 아닌 '모멘텀 확산(macd_hist > prev_macd_hist)' 중일 때만 부여하여 고점 점수 인플레이션 방지
-    is_macd_expanding = (macd_hist is not None and prev_macd_hist is not None and macd_hist > 0 and macd_hist > prev_macd_hist)
+    # [수정] 시너지 보너스를 확산(macd_hist > prev_macd_hist) 조건 단독에서 완화. MACD가 시그널 위에 있고(macd_hist > 0) 심한 축소가 아닐 때 유지하여 단기 노이즈로 인한 2.0점 증발 방어
+    is_macd_expanding = False
+    if macd_hist is not None and prev_macd_hist is not None:
+        is_macd_expanding = (macd_hist > 0 and macd_hist >= prev_macd_hist * 0.8)
     
-    if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= 20):
+    if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= adx_min):
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"추세 시작: 주가>60일선+MACD확산+ADX 20↑ (+{s:.2f})")
         
     # Momentum Thrust
-    if is_macd_expanding and (rsi is not None and rsi >= 60) and obv_trend:
+    if is_macd_expanding and (rsi is not None and rsi >= score_rsi_strong) and obv_trend:
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")

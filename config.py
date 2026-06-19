@@ -266,7 +266,13 @@ class GlobalSettings(BaseModel):
         "ATR_PERIOD": 14,              # ATR 계산 기간
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
         "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
-        "VOLUME_SPIKE_RATIO": 2.0      # [추가] 거래량 폭발 기준 (200% 이상)
+        "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
+        "SCORE_RSI_MID": 50,           # 스코어링 강세 기준 RSI
+        "SCORE_RSI_STRONG": 60,        # 스코어링 모멘텀 확장 기준 RSI
+        "SCORE_RSI_REBOUND": 30,       # 스코어링 반등 기준 RSI
+        "SCORE_ADX_MIN": 20,           # 스코어링 추세 기준 ADX
+        "SCORE_CCI_STRONG": 0,         # 스코어링 추세 기준 CCI
+        "SCORE_CCI_MOMENTUM": 50       # 스코어링 모멘텀 심화 기준 CCI
     }
 
 _settings_lock = threading.RLock()
@@ -644,7 +650,9 @@ def reset_all_settings():
             "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-            "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0
+            "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
+            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_REBOUND": 30,
+            "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0, "SCORE_CCI_MOMENTUM": 50
         }
         
         import sys
@@ -753,7 +761,13 @@ CONFIG_DESCRIPTIONS = {
     "ATR_PERIOD": "ATR 계산 기간",
     "EMA_SHORT": "단기 이평선(EMA) 기간",
     "VOLUME_MA_PERIOD": "거래량 이동평균 기간",
-    "VOLUME_SPIKE_RATIO": "거래량 폭발 기준 비율"
+    "VOLUME_SPIKE_RATIO": "거래량 폭발 기준 비율",
+    "SCORE_RSI_MID": "스코어링 강세 기준 RSI",
+    "SCORE_RSI_STRONG": "스코어링 모멘텀 확장 기준 RSI",
+    "SCORE_RSI_REBOUND": "스코어링 반등 기준 RSI",
+    "SCORE_ADX_MIN": "스코어링 추세 기준 ADX",
+    "SCORE_CCI_STRONG": "스코어링 추세 기준 CCI",
+    "SCORE_CCI_MOMENTUM": "스코어링 모멘텀 심화 기준 CCI"
 }
 
 # 모듈 로드 시 자동 실행

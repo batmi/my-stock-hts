@@ -308,7 +308,8 @@ def test_modify_log_settings(mock_ask):
     mock_ask.side_effect = ["2", "DEBUG", "q"]
     with patch('config.setup_logging'):
         settings.modify_log_settings()
-        assert config.SCREEN_DEBUG_LEVEL == "DEBUG"
+        assert config.settings.SCREEN_DEBUG_LEVEL == "DEBUG"
+        config.settings.SCREEN_DEBUG_LEVEL = "ERROR" # Reset to default
 
 # --- modules/db_manager.py coverage ---
 def test_db_update_highest_price_lock():
@@ -335,7 +336,7 @@ def test_db_update_highest_price_lock():
 def test_db_check_trade_exists_debug():
     """check_trade_exists 디버그 로그 테스트"""
     db = db_manager.DBManager()
-    config.SCREEN_DEBUG_LEVEL = "DEBUG"
+    config.settings.SCREEN_DEBUG_LEVEL = "DEBUG"
     
     try:
         with patch.object(db, '_get_conn') as mock_conn:
@@ -348,7 +349,7 @@ def test_db_check_trade_exists_debug():
                 assert exists is True
                 assert mock_print.called
     finally:
-        config.SCREEN_DEBUG_LEVEL = "OFF"
+        config.settings.SCREEN_DEBUG_LEVEL = "ERROR"
         try:
             db.close_connection()
         except:
