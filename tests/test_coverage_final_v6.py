@@ -335,7 +335,9 @@ def test_db_update_highest_price_lock():
 
 def test_db_check_trade_exists_debug():
     """check_trade_exists 디버그 로그 테스트"""
-    db = db_manager.DBManager()
+    with patch('sqlite3.connect'):
+        db = db_manager.DBManager()
+    
     config.settings.SCREEN_DEBUG_LEVEL = "DEBUG"
     
     try:

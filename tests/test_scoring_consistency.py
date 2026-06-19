@@ -91,14 +91,16 @@ def test_trading_send_order_score_params(mock_sm, mock_db_rule, mock_chart, mock
     
     # Case 1: No custom rule
     mock_db_rule.return_value = None
+    expected_weights = {"TEST_WEIGHT": 1.0}
     with patch('modules.trading.analysis.calculate_score') as mock_calc_score, \
          patch('rich.prompt.Prompt.ask', side_effect=mock_ask_side_effect), \
-         patch('api.get_stock_name_by_code', return_value="삼성전자"):
+         patch('api.get_stock_name_by_code', return_value="삼성전자"), \
+         patch('config.SCORING_WEIGHTS', expected_weights):
         trading.send_order('buy')
     
     mock_calc_score.assert_called()
     _, kwargs = mock_calc_score.call_args
-    assert kwargs.get('weights') == config.SCORING_WEIGHTS
+    assert kwargs.get('weights') == expected_weights
     assert kwargs.get('smart_money') is True
 
     # Case 2: With custom rule
