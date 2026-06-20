@@ -87,7 +87,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
 def get_backtest_data(code, is_overseas, days):
     # 1. yfinance 시도 (장기간 데이터 확보 유리)
     try:
-        start_dt = datetime.now() - timedelta(days=days + 120) # 지표 계산용 여유 기간 포함
+        start_dt = datetime.now() - timedelta(days=days + 400) # 지표 계산용 여유 기간 포함 (52주 윈도우 충족 위해 약 1년 워밍업)
         start_str = start_dt.strftime("%Y-%m-%d")
         
         tickers = []
@@ -173,7 +173,42 @@ def _append_smart_money_signal(df, code, is_overseas):
         df['smart_money'] = False
         return df
 
-def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas, 
+def compute_price_indicators(df):
+    """가격(OHLCV) 기반 보조지표를 일괄 계산하여 df에 채운다.
+    ※ smart_money 등 가격과 무관한 사전 병합 컬럼은 건드리지 않는다.
+    ※ 단일 백테스트와 Monte Carlo(노이즈 주입 후 재계산)가 동일 로직을 쓰도록 공유한다.
+    """
+    df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
+    df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
+    df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
+    df['SAR'] = indicators.get_psar_full_series(df)
+    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = indicators.get_adx_full_series(df)
+    df['RSI'] = indicators.get_rsi_full_series(df)
+    df['CCI'] = indicators.get_cci_full_series(df)
+    df['OBV'] = indicators.get_obv_full_series(df)
+    df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
+    df['ATR'] = indicators.get_atr_full_series(df)
+
+    macd_res = indicators.get_macd_full_series(df)
+    if len(macd_res) == 3:
+        df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = macd_res
+    else:
+        df['MACD'], df['MACD_Signal'] = macd_res
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+    df['VOL_MA20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+    df['VOL_MA5'] = df['volume'].rolling(window=5, min_periods=1).mean()
+    df['VOL_TREND'] = df['VOL_MA5'] > df['VOL_MA20']
+    df['VOL_SPIKE'] = (df['volume'] > df['VOL_MA20'] * 2.0) & (df['close'] > df['open'])
+
+    # 52주 위치는 워밍업 구간을 포함한 전체 df 기준으로 계산
+    df['roll_high_250'] = df['high'].rolling(250, min_periods=1).max()
+    df['roll_low_250'] = df['low'].rolling(250, min_periods=1).min()
+    df['w52_pos'] = ((df['close'] - df['roll_low_250']) / (df['roll_high_250'] - df['roll_low_250']) * 100).fillna(0)
+    return df
+
+def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
                       stop_loss_rate=None, take_profit_rate=None, 
                       take_profit_rsi=None, sell_score=None, 
                       ts_activation_rate=None, ts_callback_rate=None, 
@@ -231,10 +266,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     last_valid_price = 0 # [추가] 마지막 유효 가격 추적용
     
     # [추가] 52주 고점/저점 및 위치 사전 계산 (벡터화 처리)
-    sim_df['roll_high_250'] = sim_df['high'].rolling(250, min_periods=1).max()
-    sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
-    sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
-    sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
+    # [Fix] 호출부(run_backtest)에서 워밍업 구간 포함 전체 df로 w52_pos를 미리 계산해 두면 그대로 사용한다.
+    #       (sim_df만으로 rolling(250)을 하면 분석 시작 시점의 52주 윈도우가 비어 w52_pos가 왜곡됨)
+    if 'w52_pos' not in sim_df.columns:
+        sim_df['roll_high_250'] = sim_df['high'].rolling(250, min_periods=1).max()
+        sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
+        sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
+        sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
     
     # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
     # ※ 백테스팅은 사용자가 설정한 기준 점수 검증이 목적이므로, 
@@ -286,7 +324,14 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         
         if raw_score > max_score_observed: max_score_observed = raw_score
         if raw_score >= buy_score_limit: score_8_count += 1
-        
+
+        # [Fix] 슈퍼 모멘텀 판정을 매도 로직 이전으로 이동
+        #  (매도 측 'RSI과열' 기준과 매수 측 'RSI 상한 완화'가 동일 변수를 참조하므로 루프 상단에서 1회 계산)
+        use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
+        super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
+        is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
+
         # 매매 로직 (매도 우선)
         if position['qty'] > 0:
             # [Fix: Point 4] 가중 평균 ATR 손절률 계산
@@ -380,7 +425,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
             # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
             actual_tp_rsi = take_profit_rsi_limit
-            if use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52:
+            if is_super:
                 actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
             
             if not sell_signal and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
@@ -451,11 +496,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         is_score_ok = raw_score >= buy_score_limit
         is_mr_buy = (state == "역매수")
         
-        # 슈퍼 모멘텀 로직 (시뮬레이션 임계값 반영)
-        use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-        super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
-        super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-        is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
+        # 슈퍼 모멘텀 시 RSI 상한 완화 (use_super/is_super는 매도 로직 이전에 계산됨)
         actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
         is_rsi_ok = row['RSI'] < actual_buy_rsi
         
@@ -565,13 +606,20 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "missed_trades": missed_trades
     }
 
-def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
                                weights=None, name="Unknown", code="Unknown", days=0):
-    """Monte Carlo 시뮬레이션 실행 (10,000회 반복)"""
+    """Monte Carlo 시뮬레이션 실행 (10,000회 반복)
+
+    각 시행마다 (워밍업 포함) 전체 가격 시계열에 노이즈를 주입한 뒤 보조지표를 재계산하므로,
+    체결 노이즈뿐 아니라 매매 시그널(점수/상태) 자체의 견고성까지 검증한다.
+    """
     config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (10,000 runs) ━━━[/]")
-    config.console.print("[dim]가격 데이터 노이즈(±1%) 및 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략의 견고성을 검증합니다.[/dim]\n")
+    config.console.print("[dim]가격 데이터 노이즈(±1%) 주입 후 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]\n")
+
+    # 날짜/표시는 노이즈와 무관하므로 깨끗한 원본 슬라이스를 참조용으로 보관
+    sim_df = full_df.iloc[start_idx:]
     
     # 결과 저장용 리스트
     returns = []
@@ -609,16 +657,19 @@ def run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score
         task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=10000)
         
         for _ in range(10000):
-            # 1. 데이터 노이즈 주입 (복사본 사용)
-            noisy_df = sim_df.copy()
-            # 정규분포 노이즈 (평균 0, 표준편차 1%)
-            noise = np.random.normal(0, 0.01, len(noisy_df))
-            
-            # 가격 데이터에 노이즈 적용
+            # 1. (워밍업 포함) 전체 시계열에 노이즈 주입 후 지표 재계산
+            noisy_full = full_df.copy()
+            # 정규분포 노이즈 (평균 0, 표준편차 1%) — 동일 봉의 OHLC는 같은 비율로 이동시켜 봉 구조 보존
+            noise = np.random.normal(0, 0.01, len(noisy_full))
             for col in ['close', 'open', 'high', 'low']:
-                if col in noisy_df.columns:
-                    noisy_df[col] = noisy_df[col] * (1 + noise)
-            
+                if col in noisy_full.columns:
+                    noisy_full[col] = noisy_full[col] * (1 + noise)
+
+            # 노이즈가 반영된 가격으로 보조지표 재계산 후 분석 구간만 슬라이스
+            noisy_full = compute_price_indicators(noisy_full)
+            noisy_df = noisy_full.iloc[start_idx:].copy()
+            prev_row_init = noisy_full.iloc[start_idx - 1] if start_idx > 0 else None
+
             # 2. 시뮬레이션 실행 (체결 노이즈 ON)
             res = simulate_strategy(noisy_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas,
                                     stop_loss_rate=stop_loss, take_profit_rate=take_profit,
@@ -1222,7 +1273,7 @@ def run_backtest():
             progress.add_task(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]", total=None)
             # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
             original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
-            needed_days = days + 120 
+            needed_days = days + 400 # 52주 윈도우 충족 위해 약 1년 워밍업 확보
             if needed_days > original_lookback:
                 config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = needed_days
                 
@@ -1240,30 +1291,8 @@ def run_backtest():
             # [추가] 스마트머니(수급) 시그널 사전 병합
             df = _append_smart_money_signal(df, code, is_overseas)
 
-            # 지표 계산
-            df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
-            df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
-            df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
-            df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
-            df['SAR'] = indicators.get_psar_full_series(df)
-            df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = indicators.get_adx_full_series(df)
-            df['RSI'] = indicators.get_rsi_full_series(df)
-            df['CCI'] = indicators.get_cci_full_series(df)
-            df['OBV'] = indicators.get_obv_full_series(df)
-            df['OBV_MA'] = df['OBV'].ewm(span=config.INDICATOR_PARAMS["OBV_MA_PERIOD"], adjust=False).mean()
-            df['ATR'] = indicators.get_atr_full_series(df) # [추가] ATR 계산
-            
-            macd_res = indicators.get_macd_full_series(df)
-            if len(macd_res) == 3:
-                df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = macd_res
-            else:
-                df['MACD'], df['MACD_Signal'] = macd_res
-                df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-                
-            df['VOL_MA20'] = df['volume'].rolling(window=20, min_periods=1).mean()
-            df['VOL_MA5'] = df['volume'].rolling(window=5, min_periods=1).mean()
-            df['VOL_TREND'] = df['VOL_MA5'] > df['VOL_MA20']
-            df['VOL_SPIKE'] = (df['volume'] > df['VOL_MA20'] * 2.0) & (df['close'] > df['open'])
+            # 지표 계산 (워밍업 포함 전체 df 기준)
+            df = compute_price_indicators(df)
 
             # 분석 기간 필터링
             # [수정] 행 개수 기준이 아닌 날짜 기준으로 필터링
@@ -1285,7 +1314,7 @@ def run_backtest():
                     config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
 
         if mode_choice == "2":
-            run_monte_carlo_simulation(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+            run_monte_carlo_simulation(df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                        time_stop_days, use_atr_stop, atr_mult, half_tp_use,
                                        weights=weights, name=name, code=code, days=days)

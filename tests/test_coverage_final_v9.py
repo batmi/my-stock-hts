@@ -143,7 +143,7 @@ def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, mock_ask, sample
     mock_sim.return_value = mock_res
     
     backtest.run_monte_carlo_simulation(
-        sample_df, sample_df.iloc[0], 10000000, 
+        sample_df, 0, 10000000,
         8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0, False
     )
     

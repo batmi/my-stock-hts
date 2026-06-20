@@ -169,7 +169,11 @@ def test_manage_view_watchlist():
 @patch('rich.prompt.Prompt.ask', return_value='n')
 def test_run_monte_carlo_simulation(mock_ask, mock_sim):
     """몬테카를로 백테스팅 래퍼 로직 및 통계 출력 검증"""
-    df = pd.DataFrame({'date': ['20231010', '20231011'], 'close': [100, 105]})
+    df = pd.DataFrame({
+        'date': ['20231010', '20231011'],
+        'close': [100, 105], 'open': [99, 101], 'high': [106, 107], 'low': [98, 100],
+        'volume': [1000, 1200]
+    })
     
     mock_sim.return_value = {
         'trades': [], 'final_asset': 1050000, 'total_return': 5.0, 'mdd': -1.5,
@@ -180,7 +184,7 @@ def test_run_monte_carlo_simulation(mock_ask, mock_sim):
     
     with patch('config.console.print'):
         # Exception이나 에러 없이 정상적으로 1000번 루프를 생성하고 통계를 내는지 확인
-        backtest.run_monte_carlo_simulation(df, None, 1000000, 7.5, 65, False, -7.0, 20.0, 75.0, 5.0, 10.0, 3.0, 10, True, 2.0, True)
+        backtest.run_monte_carlo_simulation(df, 0, 1000000, 7.5, 65, False, -7.0, 20.0, 75.0, 5.0, 10.0, 3.0, 10, True, 2.0, True)
 
 # ---------------------------------------------------------
 # 6. auto_trade.py 커버리지 보완 (RiskManager, Monitor)

@@ -35,9 +35,9 @@ def sample_backtest_df():
 def test_run_monte_carlo_simulation(mock_print, mock_ask, sample_backtest_df):
     """몬테카를로 시뮬레이션 실행 테스트"""
     backtest.run_monte_carlo_simulation(
-        sample_backtest_df, 
-        sample_backtest_df.iloc[0], 
-        10000000, 
+        sample_backtest_df,
+        0,
+        10000000,
         8.0, 70, False, 
         -7.0, 30.0, 75, 5.0, 10.0, 3.0,
         5, True, 2.0, False, name="TestStock", code="005930", days=100
