@@ -41,18 +41,18 @@ def test_classify_stock_state_with_is_yangbong():
         "MR_RSI_MAX": 40.0,
         "MR_DISPARITY_MAX": 90.0
     }
-    # Common args
+    # Common args — obv_trend=True: 역매수 수급 확인 조건 충족
     common_args = {
         "price": 8500, "ema20": 10000, "ema60": 11000, "ema120": 12000,
         "sar": 9000, "rsi": 35.0, "prev_rsi": 30.0, "adx": 20, "cci": -120,
-        "obv_trend": False, "thresholds": thresholds
+        "obv_trend": True, "thresholds": thresholds
     }
-    
-    # Case 1: Yangbong -> 역매수
+
+    # Case 1: Yangbong + OBV 상승 -> 역매수
     state_yang, _, _ = analysis.classify_stock_state(**common_args, is_yangbong=True)
     assert state_yang == "역매수"
-    
-    # Case 2: Not Yangbong -> Not 역매수
+
+    # Case 2: Not Yangbong -> Not 역매수 (양봉 조건 미충족)
     state_eum, _, _ = analysis.classify_stock_state(**common_args, is_yangbong=False)
     assert state_eum != "역매수"
 

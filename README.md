@@ -92,7 +92,7 @@
 
 *   **스코어링 모델 (총 10점)**:
     *   **추세 (Trend)**: 이동평균 정배열, MACD 골든크로스, 파라볼릭 SAR 상승
-    *   **모멘텀 (Momentum)**: RSI 강세 구간(50~75), CCI 상승
+    *   **모멘텀 (Momentum)**: RSI 강세 구간(50+) 및 상승 여력 구간(40~50), CCI 상승
     *   **강도 (Strength)**: ADX 추세 강도(20 이상), OBV 수급 상승, 스마트머니(외인/기관 턴어라운드)
     *   **가산점 (Bonus)**: 지표 간 동조화(Synergy) 발생 시 추가 점수 부여
 
@@ -101,7 +101,8 @@
     *   종합 점수가 미달하더라도 다음 조건을 모두 만족하면 **'역매수(🟣)'**로 진입합니다.
         *   **조건 1**: 20일선 대비 이격도가 매우 낮음 (기본 `90%` 이하)
         *   **조건 2**: RSI가 과매도 도달 후 상승세로 전환 및 **당일 양봉 마감** (기본 `40` 이하 & 전일 대비 상승 & 현재가 > 시가)
-        *   **조건 3**: 바닥권 매수세(스마트머니) 유입 확인 (체결강도 `120%` 이상)
+        *   **조건 3**: OBV 상승 또는 스마트머니(외인/기관) 유입 확인 (누적 매수세 검증)
+        *   **조건 4**: 자동매매 실행 시 체결강도 `120%` 이상 (실시간 매수세 재확인)
         *   *(단, ADX 45 이상의 초강력 투매 패닉 구간에서는 휩쏘(가짜 반등) 방지를 위해 진입이 차단됩니다.)*
 
 *   **주도주 추종: 슈퍼 모멘텀 (Super Momentum)**:
@@ -134,7 +135,7 @@
     *   **SAR**: 주가 > SAR (상승 추세 +0.5)
 
 2.  **Momentum Factor (모멘텀 팩터) [기본 2.5점]**
-    *   **RSI**: 50 ≤ RSI ≤ 75 강세 구간(+0.5), 30 ≤ RSI < 50 하단 반등 시도(+0.5)
+    *   **RSI**: RSI ≥ 50 강세 구간(+0.5), RSI ≥ 60 모멘텀 확장(+추가 0.5), 40 ≤ RSI < 50 상승 여력 구간(+0.5)
     *   **CCI**: CCI > 0 상승 추세(+0.5), CCI > -100 과매도권 탈출(+0.5)
     *   **DMI**: +DI > -DI 교차(+0.5)
 
@@ -290,6 +291,7 @@
 my-stock-hts/
 ├── run.sh                # [Mac/Linux] 실행 스크립트
 ├── run.bat               # [Windows] 실행 스크립트
+├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── config.py             # 설정, 환경변수, 데이터 로드
 ├── api.py                # KIS API 통신 및 데이터 조회
 ├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
@@ -297,7 +299,9 @@ my-stock-hts/
 ├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
 ├── session.py            # 세션 및 토큰 관리
 ├── context.py            # 스레드 전역 상태 및 락(Lock) 관리
-├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
+├── requirements.txt      # Python 의존성 패키지 목록
+├── pytest.ini            # Pytest 테스트 설정 파일
+├── .env.example          # 환경 변수 설정 예시 파일
 ├── LICENSE.md            # 라이선스 파일
 ├── db/                   # [자동 생성] SQLite DB 파일 저장소
 ├── json/                 # [자동 생성] 동적 설정 및 상태/캐시 파일 저장소
@@ -308,8 +312,21 @@ my-stock-hts/
 ├── logs/                 # [자동 생성] 로그 파일 저장소
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
-├── tools/                # 각종 진단 및 유틸리티 도구 (DB 초기화, 스레드 성능 시뮬레이션 등)
-├── tests/                # Pytest 단위/통합 테스트 코드
+├── tools/                # 각종 진단 및 유틸리티 도구
+│   ├── stock-hts               # [Linux 서버용] tmux 세션 자동 구성 스크립트
+│   ├── get_telegram_chat_id.py # 텔레그램 Chat ID 확인 도구
+│   ├── clear_trade_history.py  # 거래 내역 및 DB 초기화 도구
+│   ├── check_execution.py      # 체결 내역 확인 도구
+│   ├── check_unfilled_orders.py# 미체결 주문 확인 도구
+│   ├── check_deposit_apis.py   # 입금 관련 API 확인 도구
+│   ├── check_simulation_balance.py  # 모의투자 잔고 확인 도구
+│   ├── benchmark_api_tps.py    # API TPS(초당 호출) 벤치마크 도구
+│   ├── simulate_thread_workers.py   # 스레드 워커 성능 시뮬레이션
+│   ├── verify_autotrader_cancel.py  # 자동매매 취소 로직 검증 도구
+│   ├── search_indices_yfinance.py   # yfinance 기반 해외 지수 검색 도구
+│   ├── gemini_tool.py          # Gemini AI 기능 직접 테스트 도구
+│   └── get_google_genai.py     # Google GenAI SDK 연결 확인 도구
+├── tests/                # Pytest 단위/통합 테스트 코드 (130개+)
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
@@ -330,7 +347,7 @@ my-stock-hts/
     └── account.py        # [9] 자산 및 잔고 관리
 ```
 
-## 8. 📝 필수 준비 사항 (Prerequisites)
+## 9. 📝 필수 준비 사항 (Prerequisites)
 이 프로그램은 **한국투자증권(Korea Investment & Securities)**의 Open API를 기반으로 동작합니다.
 따라서 프로그램을 정상적으로 실행하기 위해서는 반드시 한국투자증권의 계좌와 API 접근 키가 필요합니다.
 
@@ -341,7 +358,7 @@ my-stock-hts/
 4.  **API Key 발급**: 마이페이지 > 내 서비스 > 발급받기 (실전/모의 각각 발급 가능)
 5.  **환경 변수 등록**: 발급받은 Key와 계좌번호를 시스템 환경 변수로 등록 (아래 설치 방법 참고)
 
-## 9. 💻 설치 및 실행 가이드 (Installation & Execution)
+## 10. 💻 설치 및 실행 가이드 (Installation & Execution)
 
 ### 1. 소스 코드 다운로드 (선택사항)
 ```bash
@@ -403,7 +420,7 @@ chmod +x run.sh
 # 자동매매 모드로 바로 시작 (예: 모의투자)
 ./run.sh --mode 1 --auto
 ```
-## 10. 📱 텔레그램 알림 및 제어 설정 (Telegram Bot)
+## 11. 📱 텔레그램 알림 및 제어 설정 (Telegram Bot)
 
 시스템 트레이딩의 매매 내역 알림을 받고 원격으로 제어하기 위해 텔레그램 봇 연동을 권장합니다.
 
@@ -433,6 +450,6 @@ chmod +x run.sh
 *   **설정**: `/config` (전략설정), `/preset [국면]` (프리셋 적용), `/rules [종목]` (개별룰), `/stocks` (감시종목)
 
 
-## 11. 📄 라이선스 (License)
+## 12. 📄 라이선스 (License)
 
 이 프로젝트는 Apache License 2.0 하에 배포됩니다.

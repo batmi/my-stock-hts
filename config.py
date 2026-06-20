@@ -269,7 +269,7 @@ class GlobalSettings(BaseModel):
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
         "SCORE_RSI_MID": 50,           # 스코어링 강세 기준 RSI
         "SCORE_RSI_STRONG": 60,        # 스코어링 모멘텀 확장 기준 RSI
-        "SCORE_RSI_REBOUND": 30,       # 스코어링 반등 기준 RSI
+        "SCORE_RSI_REBOUND": 40,       # 스코어링 상승 여력 구간 하한 RSI (MR_RSI_MAX=40과 동일 경계: 40 이상이면 여력 점수, 40 미만은 역매수 영역)
         "SCORE_ADX_MIN": 20,           # 스코어링 추세 기준 ADX
         "SCORE_CCI_STRONG": 0,         # 스코어링 추세 기준 CCI
         "SCORE_CCI_MOMENTUM": 50       # 스코어링 모멘텀 심화 기준 CCI
@@ -651,7 +651,7 @@ def reset_all_settings():
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
             "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
-            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_REBOUND": 30,
+            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_REBOUND": 40,
             "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0, "SCORE_CCI_MOMENTUM": 50
         }
         
@@ -764,7 +764,7 @@ CONFIG_DESCRIPTIONS = {
     "VOLUME_SPIKE_RATIO": "거래량 폭발 기준 비율",
     "SCORE_RSI_MID": "스코어링 강세 기준 RSI",
     "SCORE_RSI_STRONG": "스코어링 모멘텀 확장 기준 RSI",
-    "SCORE_RSI_REBOUND": "스코어링 반등 기준 RSI",
+    "SCORE_RSI_REBOUND": "스코어링 상승 여력 구간 하한 RSI (초기 매수 진입 여지 구간)",
     "SCORE_ADX_MIN": "스코어링 추세 기준 ADX",
     "SCORE_CCI_STRONG": "스코어링 추세 기준 CCI",
     "SCORE_CCI_MOMENTUM": "스코어링 모멘텀 심화 기준 CCI"

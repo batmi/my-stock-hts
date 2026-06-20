@@ -96,52 +96,70 @@ def test_reserved_order_expire(mock_api, mock_db):
 def test_reserved_order_trailing_buy(mock_get_price, mock_db):
     """ReservedOrderMonitor: 트레일링 매수 조건(TRAILING_BUY) 테스트"""
     monitor = ReservedOrderMonitor()
-    
+
     # 바닥 대비 3% 반등을 기다리는 트레일링 매수 주문
     mock_db.get_pending_reserved_orders.return_value = [
         {'id': 2, 'code': '005930', 'name': '삼성전자', 'condition_type': 'TRAILING_BUY', 'target_price': 3.0, 'order_type': 'buy', 'market': 'KR', 'lowest_price': 10000, 'qty': 10, 'order_price': 0}
     ]
-    
+
+    def _mock_strftime(fmt):
+        if fmt == '%H%M': return '1000'
+        if fmt == '%Y%m%d%H%M': return '209912311000'
+        return '20991231'
+
     # Case 1: 가격이 더 내려갔을 때 (최저가 10,000 -> 9,000원 갱신)
     mock_get_price.return_value = 9000
-    monitor._check_orders()
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = _mock_strftime
+        monitor._check_orders()
     mock_db.update_reserved_order_lowest.assert_called_with(2, 9000)
-    
+
     # Case 2: 가격이 바닥에서 3% 이상 반등했을 때 (9,000원에서 9,300원으로 반등)
     mock_db.get_pending_reserved_orders.return_value = [
         {'id': 2, 'code': '005930', 'name': '삼성전자', 'condition_type': 'TRAILING_BUY', 'target_price': 3.0, 'order_type': 'buy', 'market': 'KR', 'lowest_price': 9000, 'qty': 10, 'order_price': 0}
     ]
     mock_get_price.return_value = 9300
-    
-    with patch.object(monitor, '_execute_order') as mock_exec:
-        monitor._check_orders()
-        mock_exec.assert_called_once()
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = _mock_strftime
+        with patch.object(monitor, '_execute_order') as mock_exec:
+            monitor._check_orders()
+            mock_exec.assert_called_once()
 
 @patch('modules.reserved_order_monitor.db_manager.db')
 @patch('modules.reserved_order_monitor.api.get_current_price')
 def test_reserved_order_trailing_sell(mock_get_price, mock_db):
     """ReservedOrderMonitor: 트레일링 매도 조건(TRAILING_SELL) 테스트"""
     monitor = ReservedOrderMonitor()
-    
+
     # 고점 대비 5% 하락을 기다리는 트레일링 매도 주문
     mock_db.get_pending_reserved_orders.return_value = [
         {'id': 3, 'code': '005930', 'name': '삼성전자', 'condition_type': 'TRAILING_SELL', 'target_price': 5.0, 'order_type': 'sell', 'market': 'KR', 'highest_price': 10000, 'qty': 10, 'order_price': 0}
     ]
-    
+
+    def _mock_strftime(fmt):
+        if fmt == '%H%M': return '1000'
+        if fmt == '%Y%m%d%H%M': return '209912311000'
+        return '20991231'
+
     # Case 1: 가격이 올랐을 때 (최고가 10,000 -> 11,000원 갱신)
     mock_get_price.return_value = 11000
-    monitor._check_orders()
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = _mock_strftime
+        monitor._check_orders()
     mock_db.update_reserved_order_highest.assert_called_with(3, 11000)
-    
+
     # Case 2: 가격이 고점에서 5% 이상 하락했을 때 (11,000원에서 10,400원으로 하락)
     mock_db.get_pending_reserved_orders.return_value = [
         {'id': 3, 'code': '005930', 'name': '삼성전자', 'condition_type': 'TRAILING_SELL', 'target_price': 5.0, 'order_type': 'sell', 'market': 'KR', 'highest_price': 11000, 'qty': 10, 'order_price': 0}
     ]
     mock_get_price.return_value = 10400
-    
-    with patch.object(monitor, '_execute_order') as mock_exec:
-        monitor._check_orders()
-        mock_exec.assert_called_once()
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = _mock_strftime
+        with patch.object(monitor, '_execute_order') as mock_exec:
+            monitor._check_orders()
+            mock_exec.assert_called_once()
 
 @patch('modules.auto_trade.api.get_domestic_balance')
 @patch('modules.auto_trade.db_manager.db')

@@ -186,7 +186,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 vol_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
                 vol = df['volume'].iloc[-1]
                 opn = df['open'].iloc[-1]
-                if vol_ma20 > 0 and vol >= (vol_ma20 * vol_ratio) and price > opn:
+                if price is not None and vol_ma20 > 0 and vol >= (vol_ma20 * vol_ratio) and price > opn:
                     vol_spike_flag = True
                 
     if price is None:
@@ -222,7 +222,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     # 2. Momentum Factor (2.5점)
     score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
     score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
-    score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 30)
+    score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 40)
 
     if rsi is not None:
         # [Fix] RSI 상단 제한(75) 해제하여 과열 구간에서도 모멘텀 점수 유지 (스코어 클리프 방지)
@@ -231,7 +231,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
             if rsi >= score_rsi_strong:
                 s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
         elif score_rsi_rebound <= rsi < score_rsi_mid:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 반등 시도 (+{s:.2f})")
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 상승 여력 구간 (+{s:.2f})")
             
     cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
     cci_strong = config.INDICATOR_PARAMS.get('SCORE_CCI_STRONG', 0)
@@ -446,9 +446,10 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         if df is not None and not df.empty:
             is_yangbong_flag = df.iloc[-1]['close'] > df.iloc[-1]['open']
             
-        # [수정] 단순 RSI 반등이 아닌 '양봉(종가>시가)' 마감 여부를 추가하여 확실한 턴어라운드만 포착
-        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong_flag:
-            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 출현)"
+        # [수정] RSI 반등 + 양봉 + 수급 확인(OBV 상승 또는 스마트머니 유입)을 모두 만족해야 역매수 발동
+        # OBV 또는 SM 조건 미충족 시 단순 기술적 반등(데드캣)으로 간주하여 진입 보류
+        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong_flag and (obv_trend or smart_money):
+            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 + 수급 확인)"
 
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
