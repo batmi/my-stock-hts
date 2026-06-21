@@ -1310,6 +1310,127 @@ def _analyze_stock_ui():
     except Exception as e:
         config.console.print(f"[red]진단 중 오류 발생: {e}[/red]")
 
+# ==========================================================
+# [공용] TradingView 스크리너 - 단일 관리 지점 (Single Source of Truth)
+# ----------------------------------------------------------
+# 메뉴6(종목 트렌드 분석)과 텔레그램봇 양쪽에서 동일하게 사용한다.
+# 프리셋 조건/유동성 필터/정렬/리밋/후처리를 이 한 곳에서만 정의한다.
+# ==========================================================
+SCREENER_SELECT_COLS = [
+    'name', 'description', 'sector', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'SMA200',
+    'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio',
+    'return_on_equity', 'debt_to_equity', 'price_52_week_high', 'price_52_week_low',
+    'dividend_yield_recent', 'relative_volume_10d_calc', 'market_cap_basic', 'Recommend.All'
+]
+
+# 프리셋 메타데이터 (정식 ID -> 표시명/전략설명/리밋)
+SCREENER_PRESETS = {
+    "gainers":  {"name": "당일 급상승 상위 15종목", "limit": 15,  "desc": None},
+    "losers":   {"name": "당일 급하락 상위 15종목", "limit": 15,  "desc": None},
+    "breakout": {"name": "신고가 돌파 주도주",      "limit": 200, "desc": "강세장에서 시장을 주도하며 전고점을 뚫고 날아가는 가장 강한 주식을 잡을 때 사용합니다."},
+    "pullback": {"name": "정배열 눌림목",           "limit": 20,  "desc": "완벽한 우상향 추세에 있는 주식이 일시적인 조정(과매도)을 받을 때 안전하게 진입하는 스윙 전략입니다."},
+    "volume":   {"name": "폭발적 수급 유입",        "limit": 20,  "desc": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다."},
+    "oversold": {"name": "낙폭과대 바닥 탈출",      "limit": 20,  "desc": "급락장이나 악재로 과도하게 떨어진 주식이 바닥을 다지고 기술적 반등을 시작하는 정확한 타점을 잡습니다."},
+    "value":    {"name": "저평가 우량주 턴어라운드", "limit": 20,  "desc": "실적과 가치는 우수하지만 소외되었던 주식이 20일선을 타며 추세가 호전되기 시작하는 중장기 스윙용입니다."},
+    "dividend": {"name": "고배당 상승 추세",        "limit": 20,  "desc": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다."},
+    "reversal": {"name": "상승 추세 전환",          "limit": 200, "desc": "오랜 하락이나 횡보를 끝내고 본격적인 상승 추세로 진입하는 초기(무릎) 타점을 잡아내는 가장 신뢰도 높은 스윙 전략입니다."},
+}
+
+# UI 메뉴 순번("1".."9") <-> 정식 프리셋 ID 매핑
+SCREENER_MENU_TO_ID = {
+    "1": "gainers", "2": "losers", "3": "breakout", "4": "pullback", "5": "volume",
+    "6": "oversold", "7": "value", "8": "dividend", "9": "reversal"
+}
+
+def screener_liquidity_filters(market):
+    """시장별 공통 유동성/규모 필터 (나노캡·동전주·관리종목 노이즈 제거).
+
+    market_cap_basic 단위가 한국=KRW, 미국=USD로 다르므로 임계값을 시장별로 분기한다.
+    반환: (필터 리스트, 사람이 읽는 라벨 문자열)
+    """
+    from tradingview_screener import Column
+    if market == "korea":
+        return [Column('market_cap_basic') > 1e11, Column('volume') > 50000], "시총 1,000억↑ · 거래량 5만주↑"
+    return [Column('market_cap_basic') > 3e8, Column('close') >= 1.0, Column('volume') > 100000], "시총 $300M↑ · $1↑ · 거래량 10만주↑"
+
+def screener_condition_str(market, preset_id):
+    """프리셋별 조건 요약 문자열 (화면/텔레그램 공통 표기)."""
+    _, lab = screener_liquidity_filters(market)
+    return {
+        "gainers":  f"({lab} + 당일 거래량 평균 이상)",
+        "losers":   f"({lab} + 당일 거래량 평균 이상)",
+        "breakout": "(완전정배열 20>50>200 + 52주고점 95%↑ + 종가>20일선 + RSI>65 + ADX>25 + MACD골든·0선위)",
+        "pullback": "(완전정배열 20>50>200 + 종가가 50일선 위·20일선 아래 + RSI 35~50 + MACD>0 + ADX>20)",
+        "volume":   "(평균 거래량 3배↑ 폭증 + 당일 5%↑ 급등 + 종가>20일선 + MACD골든 + RSI<80 과열제외)",
+        "oversold": "(RSI<40 + 주가<20일선 + MACD골든 + 당일 2%↑ 반등 + 거래량 평균 이상)",
+        "value":    "(PER 1~12 + PBR<1.5 + ROE>15% + 부채비율<150% + 20·50일선 위 + MACD골든)",
+        "dividend": "(배당률 5~15% + PER 1~15 + 종가>200일선 장기상승추세)",
+        "reversal": "(20일<50일 역배열에서 50일선 강세돌파 + MACD골든 + RSI>50 + 거래량 1.5배↑ + 52주 중간값 이하)",
+    }.get(preset_id, "")
+
+def _screener_post_breakout(df):
+    return df[df['close'] >= df['price_52_week_high'] * 0.95].head(20)
+
+def _screener_post_reversal(df):
+    return df[df['close'] <= (df['price_52_week_high'] + df['price_52_week_low']) / 2].head(20)
+
+def build_screener_query(market, preset_id):
+    """정식 프리셋 ID로 TradingView 쿼리를 생성한다 (단일 관리 지점).
+
+    반환: (query, post_filter) — post_filter는 get_scanner_data 결과 df에 적용할 후처리 함수(없으면 None).
+    """
+    from tradingview_screener import Query, Column
+    liq, _ = screener_liquidity_filters(market)
+    q = Query().set_markets(market).select(*SCREENER_SELECT_COLS)
+    post = None
+
+    if preset_id == "gainers":
+        # 급상승: 당일 거래량이 평소(10일 평균) 이상 동반된 실질 상승만
+        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0).order_by('change', ascending=False)
+    elif preset_id == "losers":
+        # 급하락: 거래량 동반 투매
+        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0).order_by('change', ascending=True)
+    elif preset_id == "breakout":
+        # 신고가 돌파 주도주: 완전정배열(20>50>200) + 종가>20일선 + 추세확립(MACD 0선 위)
+        q = q.where(*liq, Column('SMA20') > Column('SMA50'), Column('SMA50') > Column('SMA200'),
+                    Column('close') > Column('SMA20'), Column('RSI') > 65, Column('ADX') > 25,
+                    Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') > 0).order_by('Recommend.All', ascending=False)
+        post = _screener_post_breakout
+    elif preset_id == "pullback":
+        # 정배열 눌림목: 완전정배열 + 추세강도(ADX>20) 유지 중 단기 조정
+        q = q.where(*liq, Column('SMA20') > Column('SMA50'), Column('SMA50') > Column('SMA200'),
+                    Column('close') > Column('SMA50'), Column('close') < Column('SMA20'),
+                    Column('RSI').between(35, 50), Column('MACD.macd') > 0, Column('ADX') > 20).order_by('Recommend.All', ascending=False)
+    elif preset_id == "volume":
+        # 폭발적 수급: 거래량 3배 폭증 + 급등 + MACD골든, 과열(RSI≥80) 분출후반 제외
+        q = q.where(*liq, Column('relative_volume_10d_calc') > 3.0, Column('change') > 5.0,
+                    Column('close') > Column('SMA20'), Column('MACD.macd') > Column('MACD.signal'),
+                    Column('RSI') < 80).order_by('relative_volume_10d_calc', ascending=False)
+    elif preset_id == "oversold":
+        # 낙폭과대 바닥탈출: 과매도 반등에 거래량(평균 이상) 동반(데드캣 방어)
+        q = q.where(*liq, Column('RSI') < 40, Column('close') < Column('SMA20'),
+                    Column('MACD.macd') > Column('MACD.signal'), Column('change') > 2.0,
+                    Column('relative_volume_10d_calc') > 1.0).order_by('Recommend.All', ascending=False)
+    elif preset_id == "value":
+        # 저평가 우량 턴어라운드: 가치+수익성+재무안정(부채비율<150%) + 20·50일선 위 추세 호전
+        q = q.where(*liq, Column('price_earnings_ttm').between(1, 12), Column('price_book_ratio') < 1.5,
+                    Column('return_on_equity') > 15, Column('debt_to_equity') < 1.5,
+                    Column('close') > Column('SMA20'), Column('close') > Column('SMA50'),
+                    Column('MACD.macd') > Column('MACD.signal')).order_by('Recommend.All', ascending=False)
+    elif preset_id == "dividend":
+        # 고배당 상승추세: 배당 5~15%(배당함정 제외) + 저PER + 종가>200일선(장기 우상향)
+        q = q.where(*liq, Column('dividend_yield_recent').between(5, 15), Column('price_earnings_ttm').between(1, 15),
+                    Column('close') > Column('SMA200')).order_by('dividend_yield_recent', ascending=False)
+    elif preset_id == "reversal":
+        # 상승추세 전환: 역배열에서 50일선 강세돌파 + 모멘텀 전환(RSI>50) + 거래량 1.5배 동반
+        q = q.where(*liq, Column('SMA20') < Column('SMA50'), Column('close') > Column('SMA50'),
+                    Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0, Column('RSI') > 50,
+                    Column('relative_volume_10d_calc') > 1.5).order_by('Recommend.All', ascending=False)
+        post = _screener_post_reversal
+
+    q = q.limit(SCREENER_PRESETS[preset_id]["limit"])
+    return q, post
+
 def _run_tradingview_screener():
     """트레이딩뷰 스크리너 기반 조건 검색 및 종목 발굴"""
     try:
@@ -1332,8 +1453,7 @@ def _run_tradingview_screener():
     context.USER_ACTION_BREADCRUMB.append(f"[{market_choice}] {market_map.get(market_choice, '')}")
     
     market = "korea" if market_choice == "1" else "america"
-    vol_cond_str = "거래량 10만, 1달러 이상" if market == "america" else "거래량 10만 이상"
-    
+
     preset_items = [
         ("0", "전체 프리셋 순차 스캔", "All Presets"),
         ("1", "당일 급상승 상위 15종목", "Top Gainers"),
@@ -1353,27 +1473,9 @@ def _run_tradingview_screener():
     preset_name = preset_map.get(preset_choice, '')
     context.USER_ACTION_BREADCRUMB.append(f"[{preset_choice}] {preset_name}")
     
-    preset_conditions = {
-        "1": f"({vol_cond_str})",
-        "2": f"({vol_cond_str})",
-        "3": "(52주 고점 95%↑ + 정배열 + RSI>65 + ADX>25 + MACD골든)",
-        "4": "(정배열 + 종가가 20일선 아래 & 50일선 위 지지 + RSI 35~50)",
-        "5": "(평균 거래량 3배 이상 폭증 + 당일 5% 이상 급등 + 종가>20일선)",
-        "6": "(RSI<40 + 주가<20일선 + MACD골든 + 당일 2%↑ 반등)",
-        "7": "(PER 1~12 + PBR<1.5 + ROE>15% + 20일선 돌파 + MACD골든)",
-        "8": "(배당률>5% + PER 1~15 + 정배열 + RSI>50)",
-        "9": "(20일<50일 역배열 상태에서 주가가 50일선 강하게 돌파 + MACD골든)"
-    }
-
-    preset_desc = {
-        "3": "강세장에서 시장을 주도하며 전고점을 뚫고 날아가는 가장 강한 주식을 잡을 때 사용합니다.",
-        "4": "완벽한 우상향 추세에 있는 주식이 일시적인 조정(과매도)을 받을 때 안전하게 진입하는 스윙 전략입니다.",
-        "5": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다.",
-        "6": "급락장이나 악재로 과도하게 떨어진 주식이 바닥을 다지고 기술적 반등을 시작하는 정확한 타점을 잡습니다.",
-        "7": "실적과 가치는 우수하지만 소외되었던 주식이 20일선을 타며 추세가 호전되기 시작하는 중장기 스윙용입니다.",
-        "8": "하락장이나 횡보장에서 하방 경직성이 강하고 안전하게 배당을 받으며 느긋하게 투자할 종목을 찾습니다.",
-        "9": "오랜 하락이나 횡보를 끝내고 본격적인 상승 추세로 진입하는 초기(무릎) 타점을 잡아내는 가장 신뢰도 높은 스윙 전략입니다."
-    }
+    # 프리셋 조건/설명 문자열은 공용 정의(SCREENER_*)에서 파생 (단일 관리 지점)
+    preset_conditions = {mk: screener_condition_str(market, cid) for mk, cid in SCREENER_MENU_TO_ID.items()}
+    preset_desc = {mk: SCREENER_PRESETS[cid]["desc"] for mk, cid in SCREENER_MENU_TO_ID.items() if SCREENER_PRESETS[cid]["desc"]}
 
     try:
         target_choices = [str(i) for i in range(1, 10)] if preset_choice == "0" else [preset_choice]
@@ -1402,41 +1504,9 @@ def _run_tradingview_screener():
                 else:
                     task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
                 
-                select_cols = ['name', 'description', 'sector', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio', 'return_on_equity', 'price_52_week_high', 'price_52_week_low', 'dividend_yield_recent', 'relative_volume_10d_calc']
-                query = Query().set_markets(market).select(*select_cols)
-                
-                if p_choice == "1":
-                    if market == "america":
-                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=False)
-                    else:
-                        query = query.where(Column('volume') > 100000).order_by('change', ascending=False)
-                elif p_choice == "2":
-                    if market == "america":
-                        query = query.where(Column('volume') > 100000, Column('close') >= 1.0).order_by('change', ascending=True)
-                    else:
-                        query = query.where(Column('volume') > 100000).order_by('change', ascending=True)
-                elif p_choice == "3":
-                    query = query.where(Column('SMA20') > Column('SMA50'), Column('RSI') > 65, Column('ADX') > 25, Column('MACD.macd') > Column('MACD.signal')).order_by('volume', ascending=False)
-                elif p_choice == "4":
-                    query = query.where(Column('SMA20') > Column('SMA50'), Column('close') > Column('SMA50'), Column('close') < Column('SMA20'), Column('RSI').between(35, 50), Column('MACD.macd') > 0).order_by('volume', ascending=False)
-                elif p_choice == "5":
-                    query = query.where(Column('relative_volume_10d_calc') > 3.0, Column('change') > 5.0, Column('close') > Column('SMA20')).order_by('relative_volume_10d_calc', ascending=False)
-                elif p_choice == "6":
-                    query = query.where(Column('RSI') < 40, Column('close') < Column('SMA20'), Column('MACD.macd') > Column('MACD.signal'), Column('change') > 2.0).order_by('volume', ascending=False)
-                elif p_choice == "7":
-                    query = query.where(Column('price_earnings_ttm').between(1, 12), Column('price_book_ratio') < 1.5, Column('return_on_equity') > 15, Column('close') > Column('SMA20'), Column('MACD.macd') > Column('MACD.signal')).order_by('volume', ascending=False)
-                elif p_choice == "8":
-                    query = query.where(Column('dividend_yield_recent') >= 5, Column('price_earnings_ttm').between(1, 15), Column('SMA20') > Column('SMA50'), Column('RSI') > 50).order_by('dividend_yield_recent', ascending=False)
-                elif p_choice == "9":
-                    query = query.where(Column('SMA20') < Column('SMA50'), Column('close') > Column('SMA50'), Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0).order_by('volume', ascending=False)
-                    
-                if p_choice in ["1", "2"]:
-                    query = query.limit(15)
-                elif p_choice in ["3", "9"]:
-                    query = query.limit(200)
-                else:
-                    query = query.limit(20)
-            
+                # [단일 관리 지점] 프리셋 쿼리/후처리는 build_screener_query()에서 생성 (telegram봇과 공유)
+                query, post_fn = build_screener_query(market, SCREENER_MENU_TO_ID[p_choice])
+
                 count, df = 0, None
                 for attempt in range(3):
                     try:
@@ -1450,14 +1520,9 @@ def _run_tradingview_screener():
                                 config.console.print(f"\n[yellow]⚠️ TradingView 서버 응답 지연 (Timeout). '{p_name}' 검색을 건너뜁니다.[/yellow]")
                         else:
                             raise e
-                
-                if df is not None and not df.empty:
-                    if p_choice == "3":
-                        df = df[df['close'] >= df['price_52_week_high'] * 0.95]
-                        df = df.head(20)
-                    elif p_choice == "9":
-                        df = df[df['close'] <= (df['price_52_week_high'] + df['price_52_week_low']) / 2]
-                        df = df.head(20)
+
+                if df is not None and not df.empty and post_fn is not None:
+                    df = post_fn(df)
 
                 if df is not None and not df.empty:
                     if is_single:
