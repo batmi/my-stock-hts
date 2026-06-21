@@ -37,15 +37,16 @@ def test_modify_risk_portfolio_settings(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_scoring_weights(mock_ask):
     """스코어링 가중치 설정 변경 테스트"""
-    # a(전체수정) -> 2.0 -> 2.0 -> 3.0 -> 3.0 (합계 10.0) -> q
-    mock_ask.side_effect = ["a", "2.0", "2.0", "3.0", "3.0", "q"]
-    
+    # a(전체수정) -> TREND 2.0 -> MOMENTUM 2.0 -> STRENGTH 2.0 -> SYNERGY 3.0 -> MOMENTUM_PRICE 1.0 (합계 10.0) -> q
+    mock_ask.side_effect = ["a", "2.0", "2.0", "2.0", "3.0", "1.0", "q"]
+
     original_weights = config.SCORING_WEIGHTS.copy()
     try:
         settings.modify_scoring_weights()
         assert config.SCORING_WEIGHTS["TREND"] == 2.0
         assert config.SCORING_WEIGHTS["MOMENTUM"] == 2.0
-        assert config.SCORING_WEIGHTS["STRENGTH"] == 3.0
+        assert config.SCORING_WEIGHTS["STRENGTH"] == 2.0
         assert config.SCORING_WEIGHTS["SYNERGY"] == 3.0
+        assert config.SCORING_WEIGHTS["MOMENTUM_PRICE"] == 1.0
     finally:
         config.SCORING_WEIGHTS = original_weights

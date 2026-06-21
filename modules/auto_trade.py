@@ -1755,7 +1755,17 @@ class RiskManager:
         self.trader = trader
 
     def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
-        """자산 배분 계산"""
+        """자산 배분 계산
+
+        3개 레이어가 순차 적용된다. ATR(변동성)이 2~3번에 모두 관여하지만 '목적'이 서로 달라
+        의도된 중첩이다(이중 안전장치). 변경 시 아래 의도를 유지할 것:
+          1) 기초 비중(invest_ratio): 종목당 명목 상한 (집중 방지). SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하 권장.
+          2) 리스크 기반(SYSTEM_RISK_PER_TRADE): '손절 시 계좌 손실액'을 일정 이하로 고정 → 꼬리위험(tail loss) 상한.
+             손절폭(ATR 손절이면 ATR 반영)이 넓을수록 비중을 줄인다. min()으로 1)과 결합.
+          3) 변동성 타겟팅(TARGET_VOLATILITY): 종목의 연환산 변동성을 목표치로 정규화 → 포트폴리오 변동성 균질화.
+             2)가 '최악 손실액'을 막는다면 3)은 '평상시 변동성'을 맞춘다. scale 배수로 곱셈 결합.
+        즉 2)는 손실액 캡, 3)은 변동성 정규화로 서로 다른 위험을 통제하므로 단순 중복이 아니다.
+        """
         if self.trader.initial_asset > 0:
             target_invest_amt = int(self.trader.initial_asset * invest_ratio)
         else:

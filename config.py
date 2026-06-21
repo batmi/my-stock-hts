@@ -62,11 +62,14 @@ class GlobalSettings(BaseModel):
     SYSTEM_TRADING_INTERVAL: int = Field(default=180, gt=0)
 
     # [종목당 최대 투자 비중]
-    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.3 = 30%)
+    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.2 = 20%)
+    # - [정합성] SYSTEM_MAX_HOLDINGS(기본 5종목)와 곱했을 때 1.0(100%)을 넘지 않도록 0.2로 설정합니다.
+    #   (0.3 × 5 = 1.5 → 앞순위 종목이 현금을 과다 소진해 뒷순위 슬롯이 굶는 문제를 방지하기 위함)
+    #   균등비중 운용을 원하면 (1.0 / SYSTEM_MAX_HOLDINGS) 값으로 맞추세요.
     # - 리스크 기반 포지션 사이징(SYSTEM_RISK_PER_TRADE)과 함께 사용될 경우,
     #   두 방식 중 '더 적은 금액'이 최종 투자 금액으로 결정됩니다. (이중 안전장치: 몰빵 방지 + 리스크 관리)
     # - 만약 리스크 기반 사이징만 전적으로 따르고 싶다면 이 값을 1.0(100%)으로 설정하세요.
-    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.3, gt=0.0, le=1.0)
+    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.2, gt=0.0, le=1.0)
 
     # [최대 보유 종목 수]
     # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 5)
@@ -154,8 +157,9 @@ class GlobalSettings(BaseModel):
         
         # [RSI 과열 기준]
         # 매수 점수를 충족하더라도, RSI가 이 값 이상이면 '과열'로 판단하여 매수 추천에서 제외합니다.
-        # (기본값: 65 - 상승 여력이 남아있는 구간에서만 진입하기 위함)
-        "BUY_RSI_MAX": 65,
+        # (기본값: 70 - 추세추종 기조상 강한 추세는 RSI가 오래 과매수에 머무르므로 65→70으로 완화.
+        #  과도한 고점매수는 슈퍼모멘텀 게이팅[SUPER_BUY_RSI_MAX 75]과 추세악화 감점으로 별도 방어)
+        "BUY_RSI_MAX": 70,
         
         # [체결강도 기준]
         # 매수 시점의 체결강도가 이 값 이상이어야 진입합니다. (기본값: 100.0)
@@ -174,7 +178,9 @@ class GlobalSettings(BaseModel):
 
         # [추가] 역추세 (낙폭과대) 매수 설정 (Mean Reversion)
         # 하락장이나 급락 구간에서 지표가 과매도에 도달한 후 반등하는 시점을 포착합니다.
-        "USE_MEAN_REVERSION": True,      # 역추세 매수 사용 여부
+        # [기조] 역추세는 추세추종과 상반된 엣지이므로 성과 귀인을 명확히 하기 위해 기본 비활성화합니다.
+        #        (별도 sleeve로 분리 검증하거나, 추세추종 검증 완료 후 설정에서 다시 켤 수 있습니다.)
+        "USE_MEAN_REVERSION": False,     # 역추세 매수 사용 여부 (기본 비활성)
         "MR_RSI_MAX": 40.0,              # 진입 허용 최대 RSI (과매도 기준)
         "MR_DISPARITY_MAX": 90.0,        # 20일선 대비 이격도 (90% 이하일 때만 진입)
     "MR_VOL_STRENGTH": 120.0,        # 바닥권 매수세 확인을 위한 높은 체결강도 기준 (투매 방어)
@@ -200,10 +206,11 @@ class GlobalSettings(BaseModel):
     #         값을 변경하면 평가 항목 수가 바뀌는 것이 아니라,
     #         각 세부 항목의 배점이 비율에 맞춰 자동으로 스케일링됩니다.
     SCORING_WEIGHTS: dict = {
-        "TREND": 4.0,       # 추세 팩터 (이평선, MACD, SAR)
-        "MOMENTUM": 2.5,    # 모멘텀 팩터 (RSI, CCI)
-        "STRENGTH": 1.5,    # 강도/수급 팩터 (ADX, OBV)
-        "SYNERGY": 2.0      # 시너지 가산점 (지표 간 동조화)
+        "TREND": 3.0,        # 추세 팩터 (이평선, MACD, SAR) - 가격모멘텀 팩터 신설로 4.0→3.0 재배분
+        "MOMENTUM": 2.5,     # 모멘텀 팩터 (RSI, CCI)
+        "STRENGTH": 1.5,     # 강도/수급 팩터 (ADX, OBV)
+        "SYNERGY": 2.0,      # 시너지 가산점 (지표 간 동조화)
+        "MOMENTUM_PRICE": 1.0 # [추가] 가격 모멘텀 팩터 (52주 신고가 근접도 + 절대 모멘텀/수익률) - 추세추종 핵심
     }
 
     # ==========================================================
@@ -223,8 +230,10 @@ class GlobalSettings(BaseModel):
     # [설정] 매도 전략 임계값 (Backtest & Trading)
     # ==========================================================
     SELL_STRATEGY: dict = {
-        "TAKE_PROFIT_RATE": 30.0,           # [익절 기준] 진입가 대비 이 값 이상 도달 시 즉시 매도
-        "HALF_TAKE_PROFIT_USE": True,       # [반익절] 목표 익절률의 절반에 도달하면 50% 분할 매도 여부
+        # [추세추종 기조] 청산의 주(主) 수단은 '트레일링 스탑'입니다. 고정 익절은 추세추종에서
+        # 수익의 fat-tail(드물게 나오는 +100%~ 종목)을 잘라내므로, 보조적 상한선 역할로만 둡니다.
+        "TAKE_PROFIT_RATE": 50.0,           # [익절 기준] 진입가 대비 이 값 이상 도달 시 즉시 매도 (상한선 역할로 상향, 0이면 미사용)
+        "HALF_TAKE_PROFIT_USE": True,       # [반익절] 목표 익절률의 절반(=25%)에 도달하면 50% 분할 매도 여부
         "DEFENSIVE_HALF_SELL_USE": True,    # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
         "STOP_LOSS_RATE": -7.0,             # [손절 기준] 진입가 대비 이 값 이하로 하락 시 즉시 매도
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
@@ -233,13 +242,13 @@ class GlobalSettings(BaseModel):
         "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면 손절선 상향 (ATR 사용 시 동적 연동)
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
         "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
-        "TIME_STOP_DAYS": 10,               # 보유 제한 기간 (일)
+        "TIME_STOP_DAYS": 20,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 10→20 완화)
         "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
         "MR_GRACE_LOSS_RATE": -7.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
         "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
         "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
         "SUPER_TAKE_PROFIT_RSI": 90.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI (추세 장기 추종)
-        "TRAILING_STOP_ACTIVATION_RATE": 15.0, # [트레일링 스탑] 감시 시작 수익률
+        "TRAILING_STOP_ACTIVATION_RATE": 10.0, # [트레일링 스탑] 감시 시작 수익률 (주청산 수단으로 일찍 활성화: 15→10)
         "TRAILING_STOP_CALLBACK_RATE": 4.0     # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
     }
 
@@ -265,6 +274,8 @@ class GlobalSettings(BaseModel):
         "RSI_MID": 50,                 # RSI 중간 기준선
         "RSI_LOWER": 30,               # RSI 과매도 기준선
         "ATR_PERIOD": 14,              # ATR 계산 기간
+        "MOMENTUM_LOOKBACK": 126,      # [추가] 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일)
+        "MOMENTUM_W52_NEAR": 80,       # [추가] 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도)
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
         "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
@@ -631,22 +642,22 @@ def reset_all_settings():
         # [추가] 파이썬 클래스 딕셔너리의 메모리 참조 오염을 방지하기 위해 
         # 초기화 시 하드코딩된 순수 기본값으로 강제 복원
         settings.ANALYSIS_THRESHOLDS = {
-            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 65, "BUY_VOL_STRENGTH": 100.0,
-            "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True,
+            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 70, "BUY_VOL_STRENGTH": 100.0,
+            "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False,
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
             "SUPER_MOMENTUM_SCORE": 8.5, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
         }
         settings.SELL_STRATEGY = {
-            "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
+            "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
             "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
             "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
-            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
+            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
-            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
+            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         }
         settings.SCORING_WEIGHTS = {
-            "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
+            "TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0
         }
         settings.MARKET_REGIME_PARAMS = {
             "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,

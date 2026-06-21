@@ -74,7 +74,8 @@ def calculate_daily_status(row, prev_row, thresholds=None):
         price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal,
         ema_5=ema_5, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
         weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
-        macd_hist=macd_hist, prev_macd_hist=prev_macd_hist
+        macd_hist=macd_hist, prev_macd_hist=prev_macd_hist,
+        w52_pos=w52_pos, mom_ret=row.get('MOM_RET')  # [추가] 가격 모멘텀 팩터 (라이브와 동기화)
     )
     raw_score = round(raw_score, 1) # [Fix] 부동소수점 오차 제거 (예: 6.9999 -> 7.0)
     
@@ -206,6 +207,10 @@ def compute_price_indicators(df):
     df['roll_high_250'] = df['high'].rolling(250, min_periods=1).max()
     df['roll_low_250'] = df['low'].rolling(250, min_periods=1).min()
     df['w52_pos'] = ((df['close'] - df['roll_low_250']) / (df['roll_high_250'] - df['roll_low_250']) * 100).fillna(0)
+
+    # [추가] 가격 모멘텀(절대 모멘텀): 라이브(calculate_score 내부 df 계산)와 동일 정의로 사전계산
+    mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+    df['MOM_RET'] = df['close'].pct_change(periods=mom_lb, fill_method=None) * 100
     return df
 
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
@@ -273,6 +278,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
         sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
         sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
+
+    # [추가] 가격 모멘텀 컬럼 사전계산 (전체 df 사전계산을 거치지 않은 경로 대비 안전장치)
+    if 'MOM_RET' not in sim_df.columns:
+        mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+        sim_df['MOM_RET'] = sim_df['close'].pct_change(periods=mom_lb, fill_method=None) * 100
     
     # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
     # ※ 백테스팅은 사용자가 설정한 기준 점수 검증이 목적이므로, 
@@ -947,7 +957,166 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
                 config.console.print(Padding(panel, (0, 4)))
         else:
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
-            
+
+
+def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_params,
+                     name="", code="", days=365, n_splits=4):
+    """Walk-Forward 검증 (과최적화 진단)
+
+    전체 분석 구간을 n_splits개의 연속된 OOS(Out-of-Sample) 폴드로 나눈다.
+    각 폴드 직전까지의 데이터를 IS(In-Sample)로 삼아 후보 가중치 세트 중
+    'IS에서 가장 성과가 좋은' 세트를 고른 뒤, 그 세트를 한 번도 학습에 쓰지 않은
+    OOS 구간에 그대로 적용해 평가한다. IS 대비 OOS 성과 저하율로 과최적화(curve fitting)를 진단한다.
+
+    ※ 매도/리스크 파라미터는 base_params(사용자 설정)로 고정하고, 가중치(스코어링 팩터 배분)만
+       IS에서 선택하여 검증한다. (자유도가 큰 가중치의 과최적화 여부를 집중 점검)
+    """
+    n = len(full_df)
+    analysis_len = n - start_idx
+    # 워밍업/최소 길이 가드: 초기 IS 40% + 폴드별 최소 약 30거래일 필요
+    if analysis_len < 150 or analysis_len < n_splits * 30 + 60:
+        config.console.print(f"[yellow]Walk-Forward 검증을 위한 데이터가 부족합니다. (분석 구간 {analysis_len}행) 더 긴 기간으로 시도하세요.[/yellow]")
+        return
+
+    # 후보 가중치 세트 (총점 10점 유지)
+    candidate_weights = [
+        {"DESC": "기본(추세추종)",   "TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
+        {"DESC": "추세 중시",        "TREND": 4.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
+        {"DESC": "모멘텀 중시",      "TREND": 2.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
+        {"DESC": "가격모멘텀 중시",  "TREND": 2.0, "MOMENTUM": 2.0, "STRENGTH": 2.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 2.0},
+        {"DESC": "수급/강도 중시",   "TREND": 2.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
+    ]
+
+    def _run(seg_start, seg_end, w):
+        seg_df = full_df.iloc[seg_start:seg_end].copy()
+        prev_row = full_df.iloc[seg_start - 1] if seg_start > 0 else None
+        return simulate_strategy(
+            seg_df, prev_row, initial_capital, base_params['buy_score'], base_params['buy_rsi'], is_overseas,
+            stop_loss_rate=base_params['stop_loss'], take_profit_rate=base_params['take_profit'],
+            take_profit_rsi=base_params['take_profit_rsi'], sell_score=base_params['sell_score'],
+            ts_activation_rate=base_params['ts_activation'], ts_callback_rate=base_params['ts_callback'],
+            time_stop_days_limit=base_params['time_stop_days'],
+            use_atr_stop_limit=base_params['use_atr_stop'], atr_stop_multiplier_limit=base_params['atr_mult'],
+            half_tp_use_limit=base_params['half_tp_use'], weights={k: v for k, v in w.items() if k != "DESC"}
+        )
+
+    def _sharpe(res):
+        da = res.get('daily_assets', [])
+        if len(da) > 1:
+            r = pd.Series(da).pct_change().dropna()
+            if len(r) > 0 and r.std() > 0:
+                return (r.mean() / r.std()) * np.sqrt(252)
+        return 0.0
+
+    def _date_str(idx):
+        try:
+            d = str(full_df.iloc[idx]['date'])
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        except Exception:
+            return "-"
+
+    # 초기 40%는 학습 전용, 이후 구간을 n_splits개의 OOS 폴드로 분할 (Anchored/Expanding IS)
+    oos_region_start = start_idx + int(analysis_len * 0.4)
+    fold_size = (n - oos_region_start) // n_splits
+
+    config.console.print(f"\n[bold magenta]━━━ Walk-Forward 검증 ({name}) ━━━[/]")
+    config.console.print(f"[dim]분석 {analysis_len}행 | 초기 학습 40% | OOS {n_splits}폴드 | 후보 가중치 {len(candidate_weights)}종 (매도/리스크 파라미터는 입력값 고정)[/dim]\n")
+
+    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("폴드", justify="center")
+    table.add_column("OOS 기간", justify="center")
+    table.add_column("선택 가중치(IS 최적)", justify="left")
+    table.add_column("IS 수익률", justify="right")
+    table.add_column("OOS 수익률", justify="right")
+    table.add_column("OOS 승률", justify="right")
+    table.add_column("OOS MDD", justify="right")
+
+    oos_equity = 1.0       # OOS 폴드 수익률 복리 누적
+    is_returns, oos_returns, oos_winrates = [], [], []
+
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  BarColumn(), console=config.console, transient=True) as progress:
+        progress.add_task("[cyan]Walk-Forward 시뮬레이션 진행 중...[/cyan]", total=None)
+
+        for i in range(n_splits):
+            oos_start = oos_region_start + i * fold_size
+            oos_end = n if i == n_splits - 1 else oos_start + fold_size
+            if oos_end - oos_start < 20:
+                continue
+
+            # 1) IS(expanding): 분석 시작 ~ OOS 직전. IS에서 최적 가중치 선택
+            best_w, best_is_ret, best_is_res = None, -1e9, None
+            for w in candidate_weights:
+                is_res = _run(start_idx, oos_start, w)
+                if is_res['total_return'] > best_is_ret:
+                    best_is_ret = is_res['total_return']
+                    best_w = w
+                    best_is_res = is_res
+
+            # 2) OOS: 선택된 가중치를 미학습 구간에 적용
+            oos_res = _run(oos_start, oos_end, best_w)
+            oos_ret = oos_res['total_return']
+            sells = oos_res['win_trades'] + oos_res['loss_trades']
+            oos_wr = (oos_res['win_trades'] / sells * 100) if sells > 0 else 0.0
+
+            is_returns.append(best_is_ret)
+            oos_returns.append(oos_ret)
+            oos_winrates.append(oos_wr)
+            oos_equity *= (1 + oos_ret / 100.0)
+
+            oc = "[red]" if oos_ret >= 0 else "[blue]"
+            table.add_row(
+                f"{i+1}",
+                f"{_date_str(oos_start)}~{_date_str(oos_end-1)}",
+                best_w["DESC"],
+                f"{best_is_ret:+.1f}%",
+                f"{oc}{oos_ret:+.1f}%[/]",
+                f"{oos_wr:.0f}%",
+                f"{oos_res['mdd']:.1f}%",
+            )
+
+    config.console.print(table)
+
+    if not oos_returns:
+        config.console.print("[yellow]유효한 OOS 폴드가 없어 검증을 종료합니다.[/yellow]")
+        return
+
+    avg_is = sum(is_returns) / len(is_returns)
+    avg_oos = sum(oos_returns) / len(oos_returns)
+    total_oos_ret = (oos_equity - 1) * 100.0
+    avg_oos_wr = sum(oos_winrates) / len(oos_winrates)
+    pos_folds = sum(1 for r in oos_returns if r > 0)
+
+    # 과최적화 진단: OOS가 IS 대비 얼마나 무너지는가
+    if avg_is != 0:
+        retention = (avg_oos / avg_is) * 100 if avg_is > 0 else (0.0 if avg_oos <= 0 else 100.0)
+    else:
+        retention = 0.0
+
+    summary = Table(title=f"\nWalk-Forward 종합 ({name})", box=box.HORIZONTALS, show_header=False, border_style="dim")
+    summary.add_column("항목", style="dim")
+    summary.add_column("값", justify="right")
+    summary.add_row("OOS 누적 수익률 (복리)", f"{'[red]' if total_oos_ret>=0 else '[blue]'}{total_oos_ret:+.2f}%[/]")
+    summary.add_row("폴드 평균 IS 수익률", f"{avg_is:+.2f}%")
+    summary.add_row("폴드 평균 OOS 수익률", f"{avg_oos:+.2f}%")
+    summary.add_row("OOS 성과 유지율 (OOS/IS)", f"{retention:.0f}%")
+    summary.add_row("수익 폴드 비율", f"{pos_folds}/{len(oos_returns)}")
+    summary.add_row("OOS 평균 승률", f"{avg_oos_wr:.1f}%")
+    config.console.print(summary)
+
+    # 진단 메시지
+    if avg_oos <= 0:
+        verdict = "[bold blue]⚠ 과최적화 의심[/]: OOS 평균 수익이 음수입니다. IS 성과가 미래로 이어지지 않습니다."
+    elif retention < 40:
+        verdict = "[bold yellow]주의[/]: OOS 유지율이 낮습니다(<40%). 파라미터가 과거에 과적합되었을 가능성이 있습니다."
+    elif retention < 70:
+        verdict = "[green]양호[/]: 일부 성과 저하가 있으나 OOS에서도 수익 추세를 유지합니다."
+    else:
+        verdict = "[bold green]견고[/]: OOS 성과가 IS와 유사하게 유지됩니다. 강건한(robust) 파라미터로 판단됩니다."
+    config.console.print(f"\n{verdict}")
+    config.console.print("[dim]※ 단일 종목·단일 구간 검증은 표본이 작습니다. 여러 종목·기간으로 반복해 일관성을 확인하세요.[/dim]")
+
+
 def run_backtest():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "1"
@@ -1101,17 +1270,17 @@ def run_backtest():
             msg_preset = "횡보장 (박스권 단기 스윙)"
         elif preset_choice == "0":
             buy_score = 7.5
-            buy_rsi = 65
+            buy_rsi = 70
             sell_score = 5.0
-            take_profit = 30.0
-            take_profit_rsi = 75.0
+            take_profit = 50.0
+            take_profit_rsi = 85.0
             stop_loss = -7.0
-            ts_activation = 15.0
+            ts_activation = 10.0
             ts_callback = 4.0
-            time_stop_days = 10
+            time_stop_days = 20
             atr_mult = 2.0
-            weights = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
-            msg_preset = "기본설정 (시스템 권장 설정)"
+            weights = {"TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0}
+            msg_preset = "기본설정 (시스템 권장: 추세추종 + 트레일링 주청산)"
 
         if change_settings == "y":
             config.console.print()
@@ -1255,7 +1424,7 @@ def run_backtest():
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
         # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
-        mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim")]
+        mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim"), ("3", "Walk-Forward 검증 (과최적화 진단)", "Walk-Forward Validation")]
         mode_choice = utils.show_menu("실행 모드를 선택하세요", mode_items, default_choice="1", text_before=msg)
 
         if mode_choice.lower() in ['b', 'q']: continue
@@ -1318,6 +1487,19 @@ def run_backtest():
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                        time_stop_days, use_atr_stop, atr_mult, half_tp_use,
                                        weights=weights, name=name, code=code, days=days)
+            last_choice = sub_choice
+            utils.pause()
+            continue
+
+        if mode_choice == "3":
+            base_params = {
+                "buy_score": buy_score, "buy_rsi": buy_rsi, "sell_score": sell_score,
+                "stop_loss": stop_loss, "take_profit": take_profit, "take_profit_rsi": take_profit_rsi,
+                "ts_activation": ts_activation, "ts_callback": ts_callback, "time_stop_days": time_stop_days,
+                "use_atr_stop": use_atr_stop, "atr_mult": atr_mult, "half_tp_use": half_tp_use,
+            }
+            run_walk_forward(df, start_idx, initial_capital, is_overseas, base_params,
+                             name=name, code=code, days=days)
             last_choice = sub_choice
             utils.pause()
             continue
@@ -1941,30 +2123,32 @@ def run_backtest():
         
         # 테스트할 가중치 조합 생성 (Grid Search)
         scenarios = [
-            {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "기본값"},
-            {"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "DESC": "추세 중시"},
-            {"TREND": 3.0, "MOMENTUM": 3.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "모멘텀 중시"},
-            {"TREND": 3.0, "MOMENTUM": 2.0, "STRENGTH": 3.0, "SYNERGY": 2.0, "DESC": "수급/강도 중시"},
-            {"TREND": 2.5, "MOMENTUM": 2.5, "STRENGTH": 2.5, "SYNERGY": 2.5, "DESC": "균등 배분"}
+            {"TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "기본값(추세추종)"},
+            {"TREND": 4.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "추세 중시"},
+            {"TREND": 2.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "모멘텀 중시"},
+            {"TREND": 2.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "수급/강도 중시"},
+            {"TREND": 2.0, "MOMENTUM": 2.0, "STRENGTH": 2.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 2.0, "DESC": "가격모멘텀 중시"}
         ]
-        
+
         if use_random:
             for i in range(10):
-                t = random.uniform(1.0, 6.0)
-                m = random.uniform(1.0, 5.0)
-                s = random.uniform(0.5, 4.0)
-                syn = random.uniform(0.5, 4.0)
-                
-                total = t + m + s + syn
+                t = random.uniform(1.0, 5.0)
+                m = random.uniform(1.0, 4.0)
+                s = random.uniform(0.5, 3.0)
+                syn = random.uniform(0.5, 3.0)
+                mp = random.uniform(0.5, 2.5)
+
+                total = t + m + s + syn + mp
                 factor = 10.0 / total
-                
+
                 t = round(t * factor, 1)
                 m = round(m * factor, 1)
                 s = round(s * factor, 1)
-                syn = round(10.0 - (t + m + s), 1)
-                
+                mp = round(mp * factor, 1)
+                syn = round(10.0 - (t + m + s + mp), 1)
+
                 scenarios.append({
-                    "TREND": t, "MOMENTUM": m, "STRENGTH": s, "SYNERGY": syn,
+                    "TREND": t, "MOMENTUM": m, "STRENGTH": s, "SYNERGY": syn, "MOMENTUM_PRICE": mp,
                     "DESC": f"랜덤 조합 {i+1}"
                 })
         
@@ -1974,7 +2158,7 @@ def run_backtest():
         opt_table.add_column("MDD", justify="right")
         opt_table.add_column("승률", justify="right")
         opt_table.add_column("매매횟수", justify="right")
-        opt_table.add_column("가중치 (T/M/S/Syn)", justify="right", style="dim")
+        opt_table.add_column("가중치 (T/M/S/Syn/MP)", justify="right", style="dim")
         
         best_opt_return = -999.0
         best_opt_scenario = None
@@ -2007,7 +2191,7 @@ def run_backtest():
                     best_opt_scenario = sc
 
                 r_color = "[red]" if res_opt['total_return'] > 0 else "[blue]"
-                w_str = f"{weights_opt['TREND']:.1f}/{weights_opt['MOMENTUM']:.1f}/{weights_opt['STRENGTH']:.1f}/{weights_opt['SYNERGY']:.1f}"
+                w_str = f"{weights_opt['TREND']:.1f}/{weights_opt['MOMENTUM']:.1f}/{weights_opt['STRENGTH']:.1f}/{weights_opt['SYNERGY']:.1f}/{weights_opt.get('MOMENTUM_PRICE', 0.0):.1f}"
                 
                 opt_table.add_row(
                     sc["DESC"],

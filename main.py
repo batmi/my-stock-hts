@@ -598,6 +598,7 @@ def show_help():
     r_mom = weights.get("MOMENTUM", 2.5) / 2.5
     r_str = weights.get("STRENGTH", 1.5) / 1.5
     r_syn = weights.get("SYNERGY", 2.0) / 2.0
+    r_mp = weights.get("MOMENTUM_PRICE", 0.0) / 1.0
 
     regime = config.MARKET_REGIME_PARAMS
     ma_p = regime.get('REGIME_MA_PERIOD', 60)
@@ -652,7 +653,7 @@ def show_help():
 
     # 1. Trend Factor
     score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
-    score_table.add_row("(추세 4.0)", "EMA 5일선 > 20일선", f"+{0.5 * r_trend:.1f}", "5일선이 20일선 상회 (단기 추세 전환)")
+    score_table.add_row("(추세 3.0)", "EMA 5일선 > 20일선", f"+{0.5 * r_trend:.1f}", "5일선이 20일선 상회 (단기 추세 전환)")
     score_table.add_row("", "20/60/120선 정배열", f"+{1.0 * r_trend:.1f}", "중장기 이평선 정배열 (0.5+0.5)")
     score_table.add_row("", "주가 > 60선 돌파 or 단기급등", f"+{0.5 * r_trend:.1f}", "역배열 초기 돌파 또는 주가>5>20>60 정배열 급등")
     score_table.add_row("", "MACD > Signal", f"+{0.5 * r_trend:.1f}", "골든크로스")
@@ -677,6 +678,11 @@ def show_help():
     # 4. Synergy Bonus
     score_table.add_row("Synergy Bonus", "주가>60선 + MACD골든 + ADX≥15", f"+{1.0 * r_syn:.1f}", "추세 시작 시너지")
     score_table.add_row("(가산점 2.0)", "MACD골든 + RSI강세 + OBV", f"+{1.0 * r_syn:.1f}", "모멘텀 폭발 (Thrust)")
+    score_table.add_section()
+
+    # 5. Price Momentum Factor (추세추종 핵심)
+    score_table.add_row("Price Momentum", "52주 신고가 근접(≥80%)", f"+{0.5 * r_mp:.1f}", "신고가권 추세 주도주")
+    score_table.add_row("(가격모멘텀 1.0)", "중기(약 6개월) 수익률 > 0", f"+{0.5 * r_mp:.1f}", "절대(시계열) 모멘텀 양호")
 
    # [병합] 점수대별 의미
     score_table.add_section()
