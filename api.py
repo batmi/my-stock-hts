@@ -2765,3 +2765,189 @@ def send_telegram_photo(file_path, caption=None):
             time.sleep(2 ** attempt)
             
     return False
+
+
+# ==========================================================
+# [추가] OpenDART (전자공시) 연동 - 국내 배당/실적 조회
+# ==========================================================
+DART_BASE_URL = "https://opendart.fss.or.kr/api"
+_dart_corp_map_cache = None  # 프로세스 메모리 캐시
+
+
+def call_dart(endpoint, params, timeout=10):
+    """OpenDART OpenAPI 공통 호출 래퍼.
+
+    반환: 성공 시 응답 JSON의 'list'(없으면 dict 전체), 실패/데이터없음 시 None.
+    status: 000=정상, 013=데이터없음, 020/021=한도초과/오류.
+    """
+    if not config.DART_API_KEY:
+        return None
+    try:
+        p = dict(params)
+        p["crtfc_key"] = config.DART_API_KEY
+        res = requests.get(f"{DART_BASE_URL}/{endpoint}", params=p, timeout=timeout)
+        data = res.json()
+        status = data.get("status")
+        if status == "000":
+            return data.get("list", data)
+        if status == "013":  # 조회된 데이터 없음 (정상 케이스)
+            return None
+        logger.warning(f"[DART] {endpoint} 응답 코드 {status}: {data.get('message')}")
+        return None
+    except Exception as e:
+        logger.error(f"[DART] {endpoint} 호출 오류: {e}")
+        return None
+
+
+def get_dart_corp_map(force_refresh=False):
+    """종목코드(6자리) -> DART 고유번호(corp_code, 8자리) 매핑.
+
+    corpCode.xml(ZIP) 1회 다운로드 후 json 파일로 캐시(30일 TTL).
+    """
+    global _dart_corp_map_cache
+    if _dart_corp_map_cache is not None and not force_refresh:
+        return _dart_corp_map_cache
+
+    if not config.DART_API_KEY:
+        return {}
+
+    cache_path = os.path.join(config.JSON_DIR, "dart_corp_map.json")
+
+    # 파일 캐시 확인 (30일 이내면 재사용)
+    if not force_refresh and os.path.exists(cache_path):
+        try:
+            age_days = (time.time() - os.path.getmtime(cache_path)) / 86400.0
+            if age_days < 30:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    _dart_corp_map_cache = json.load(f)
+                return _dart_corp_map_cache
+        except Exception:
+            pass
+
+    # 신규 다운로드 (ZIP 안에 CORPCODE.xml)
+    try:
+        import zipfile, io
+        import xml.etree.ElementTree as ET
+        res = requests.get(f"{DART_BASE_URL}/corpCode.xml",
+                           params={"crtfc_key": config.DART_API_KEY}, timeout=20)
+        zf = zipfile.ZipFile(io.BytesIO(res.content))
+        root = ET.fromstring(zf.read(zf.namelist()[0]))
+
+        corp_map = {}
+        for item in root.iter("list"):
+            stock_code = (item.findtext("stock_code") or "").strip()
+            corp_code = (item.findtext("corp_code") or "").strip()
+            if stock_code and corp_code:  # 상장사만 (비상장은 stock_code 공란)
+                corp_map[stock_code] = corp_code
+
+        if corp_map:
+            _dart_corp_map_cache = corp_map
+            try:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(corp_map, f)
+            except Exception as e:
+                logger.warning(f"[DART] corp_map 캐시 저장 실패: {e}")
+            return corp_map
+    except Exception as e:
+        logger.error(f"[DART] corp_map 다운로드 오류: {e}")
+
+    return _dart_corp_map_cache or {}
+
+
+def get_dart_dividend(stock_code, year=None, reprt_code="11011"):
+    """국내 종목의 '배당에 관한 사항' 조회 (정기보고서 기준).
+
+    반환: {'주당배당금': float, '시가배당률': float, '결산월': str, 'year': str} 또는 None.
+    reprt_code: 11011=사업보고서(연간), 11012=반기, 11013=1분기, 11014=3분기.
+    """
+    if year is None:
+        # 사업보고서는 다음 해 3월경 공시되므로 직전 회계연도를 우선 조회
+        year = datetime.now().year - 1
+
+    corp = get_dart_corp_map().get(stock_code)
+    if not corp:
+        return None
+
+    rows = call_dart("alotMatter.json", {
+        "corp_code": corp, "bsns_year": str(year), "reprt_code": reprt_code
+    })
+    if not rows or not isinstance(rows, list):
+        return None
+
+    def _to_num(s):
+        try:
+            return float(str(s).replace(",", "").strip())
+        except Exception:
+            return 0.0
+
+    result = {"year": str(year), "주당배당금": 0.0, "시가배당률": 0.0}
+    for row in rows:
+        se = (row.get("se") or "").strip()          # 항목명
+        val = row.get("thstrm")                       # 당기 값
+        # 주당 현금배당금(원) / 현금배당수익률(%) 추출 (보통주 기준)
+        if "주당 현금배당금" in se or ("주당배당금" in se and "현금" in se):
+            num = _to_num(val)
+            if num > result["주당배당금"]:
+                result["주당배당금"] = num
+        elif "현금배당수익률" in se or "시가배당" in se:
+            num = _to_num(val)
+            if num > result["시가배당률"]:
+                result["시가배당률"] = num
+
+    if result["주당배당금"] <= 0 and result["시가배당률"] <= 0:
+        return None
+    return result
+
+
+_dart_acc_month_cache = {}  # 종목코드 -> 결산월
+
+
+def get_dart_acc_month(stock_code):
+    """종목의 결산월('12' 등) 조회 (company.json). 프로세스 메모리 캐시."""
+    if stock_code in _dart_acc_month_cache:
+        return _dart_acc_month_cache[stock_code]
+
+    acc = None
+    corp = get_dart_corp_map().get(stock_code)
+    if corp:
+        data = call_dart("company.json", {"corp_code": corp})
+        if isinstance(data, dict):
+            acc = (data.get("acc_mt") or "").strip() or None
+    _dart_acc_month_cache[stock_code] = acc
+    return acc
+
+
+def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
+    """종목의 최근 공시 목록 조회 (list.json).
+
+    반환: [{rcept_no, report_nm, flr_nm, rcept_dt, rm, corp_name}, ...] (최신순). 실패 시 [].
+    pblntf_ty: 공시유형 코드(A정기/B주요사항/C발행/D지분 등). None이면 전체.
+    """
+    corp = get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    end = datetime.now()
+    bgn = end - timedelta(days=int(days))
+    params = {
+        "corp_code": corp,
+        "bgn_de": bgn.strftime("%Y%m%d"),
+        "end_de": end.strftime("%Y%m%d"),
+        "page_count": str(page_count),
+        "sort": "date", "sort_mth": "desc",
+    }
+    if pblntf_ty:
+        params["pblntf_ty"] = pblntf_ty
+    rows = call_dart("list.json", params)
+    if not rows or not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "rcept_no": r.get("rcept_no", ""),
+            "report_nm": (r.get("report_nm") or "").strip(),
+            "flr_nm": (r.get("flr_nm") or "").strip(),
+            "rcept_dt": (r.get("rcept_dt") or "").strip(),
+            "rm": (r.get("rm") or "").strip(),
+            "corp_name": (r.get("corp_name") or "").strip(),
+        })
+    return out

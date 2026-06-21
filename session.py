@@ -84,6 +84,11 @@ class SessionManager:
         tg_inst = os.environ.get("TELEGRAM_INSTANCE_NAME")
         if tg_inst: config.TELEGRAM_INSTANCE_NAME = tg_inst
 
+        # OpenDART(전자공시) 설정 - KIS/텔레그램 키와 동일하게 런타임 환경변수에서 로드
+        # (config.py import 시점뿐 아니라 세션 초기화 시점에도 재로딩하여 일관성 확보)
+        dart_key = os.environ.get("DART_API_KEY")
+        if dart_key: config.DART_API_KEY = dart_key
+
         # 2. 모드 설정 (CLI 인자 -> 사용자 입력)
         if mode is None:
             config.console.print("\n접속할 서버를 선택하세요:")

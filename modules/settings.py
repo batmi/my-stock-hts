@@ -40,6 +40,7 @@ def _save_dynamic_config():
         "TELEGRAM_POLLING_TIMEOUT": getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10),
         "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
         "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
+        "AUTO_DISCLOSURE_ALERT_USE": getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True),
         "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),
         "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),

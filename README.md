@@ -27,7 +27,8 @@
 9. [📝 필수 준비 사항 (Prerequisites)](#9--필수-준비-사항-prerequisites)
 10. [💻 설치 및 실행 가이드 (Installation & Execution)](#10--설치-및-실행-가이드-installation--execution)
 11. [📱 텔레그램 알림 및 제어 설정 (Telegram Bot)](#11--텔레그램-알림-및-제어-설정-telegram-bot)
-12. [📄 라이선스 (License)](#12--라이선스-license)
+12. [📰 OpenDART (전자공시) 연동 설정 (Disclosure Integration)](#12--opendart-전자공시-연동-설정-disclosure-integration)
+13. [📄 라이선스 (License)](#13--라이선스-license)
 
 ---
 
@@ -43,6 +44,7 @@
 *   **개별 종목 전략 설정:** 종목별로 다른 매수/매도 기준(점수, RSI)과 익절/손절/트레일링 스탑 비율을 개별적으로 설정 가능
 *   **개별 지수 심층 분석:** 코스피, 나스닥 등 시장 지수에 대한 상세 차트 제공 및 매크로 환경을 결합한 AI 심층 리포트 지원
 *   **AI 투자 어시스턴트:** Google Gemini LLM을 활용한 종목 심층 진단, 시장 주도 테마 분석, 대화형 Q&A 및 장전 시황 브리핑 제공
+*   **전자공시(DART) 연동:** OpenDART API를 활용한 관심종목 **공시 모니터링**(중요도 분류 + AI 호재/악재 해석), **배당·실적 캘린더**(배당 주기별 배당락일·실적 제출기한), **중대 공시 텔레그램 실시간 알림**(유상증자·감자·자기주식·관리종목 등) 제공
 *   **시장 지수 필터링:** KOSPI/KOSDAQ 지수의 추세를 분석하여 하락장에서는 자동으로 매수를 보류하는 리스크 관리 기능
 *   **포트폴리오 동조화 방지 (상관계수 필터링):** 보유 중인 종목과 주가 흐름이 유사한(상관계수 0.7 이상) 종목의 중복 매수를 차단하여 포트폴리오 다각화 유도
 *   **실시간 설정 변경:** 시스템 트레이딩 실행 중 매수/매도 조건 및 투자 비중을 즉시 변경하고 영구 반영하는 기능
@@ -293,7 +295,7 @@ my-stock-hts/
 ├── run.bat               # [Windows] 실행 스크립트
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── config.py             # 설정, 환경변수, 데이터 로드
-├── api.py                # KIS API 통신 및 데이터 조회
+├── api.py                # KIS API 통신, yfinance, OpenDART(전자공시) 연동 및 데이터 조회
 ├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
 ├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
 ├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
@@ -308,7 +310,8 @@ my-stock-hts/
 │   ├── stock.json              # 관심/감시 종목 리스트
 │   ├── restricted_stocks.json  # 트레이딩 제한 종목 리스트
 │   ├── daily_asset_state.json  # 당일 최초 시작 자산 기록 (일일 손실 제한용)
-│   └── dynamic_config.json     # 프로그램 실행 중 변경된 시스템 설정 백업
+│   ├── dynamic_config.json     # 프로그램 실행 중 변경된 시스템 설정 백업
+│   └── dart_corp_map.json      # [자동 생성] DART 종목코드↔고유번호(corp_code) 매핑 캐시
 ├── logs/                 # [자동 생성] 로그 파일 저장소
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
@@ -326,7 +329,7 @@ my-stock-hts/
 │   ├── search_indices_yfinance.py   # yfinance 기반 해외 지수 검색 도구
 │   ├── gemini_tool.py          # Gemini AI 기능 직접 테스트 도구
 │   └── get_google_genai.py     # Google GenAI SDK 연결 확인 도구
-├── tests/                # Pytest 단위/통합 테스트 코드 (130개+)
+├── tests/                # Pytest 단위/통합 테스트 코드 (750개+)
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
@@ -340,8 +343,10 @@ my-stock-hts/
     ├── chart.py          # [3] 차트 시각화 및 분석
     ├── backtest.py       # [4] 전략 백테스팅
     ├── auto_trade.py     # [5] 시스템 트레이딩 (자동매매)
-    ├── theme_analysis.py # [6] 종목 트랜드 분석
+    ├── theme_analysis.py # [6] 종목 트랜드 분석 + AI(Gemini) 분석/공시 요약
     ├── manage.py         # [7] 관심 종목 관리
+    ├── calendar_events.py# [7-6] 배당·실적 캘린더 (DART + yfinance)
+    ├── disclosure.py     # [7-7/7-8] 공시 모니터링·실적 추적 + 공시 텔레그램 알림 (DART)
     ├── trading.py        # [8] 종목 주문 관리 (매수/매도/정정/취소)
     ├── reserved_order_monitor.py # 백그라운드 예약 주문(스탑로스, 트레일링 등) 감시 스레드
     └── account.py        # [9] 자산 및 잔고 관리
@@ -403,6 +408,7 @@ pip install -r requirements.txt
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: 텔레그램 알림 설정
 *   `GEMINI_API_KEY`: (선택) 테마 분석용 Google Gemini API Key (발급받기)
 *   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-3.1-flash-lite`)
+*   `DART_API_KEY`: (선택) 국내 공시·배당·실적 조회용 OpenDART API Key ([발급 안내](#12--opendart-전자공시-연동-설정-disclosure-integration))
 
 *또는 `config.py` 파일을 직접 수정하여 기본 설정을 변경할 수 있습니다.*
 
@@ -450,6 +456,31 @@ chmod +x run.sh
 *   **설정**: `/config` (전략설정), `/preset [국면]` (프리셋 적용), `/rules [종목]` (개별룰), `/stocks` (감시종목)
 
 
-## 12. 📄 라이선스 (License)
+## 12. 📰 OpenDART (전자공시) 연동 설정 (Disclosure Integration)
+
+금융감독원 **전자공시시스템(DART)**의 OpenAPI를 연동하면 관심종목의 **공시 모니터링**, **배당·실적 캘린더**, **중대 공시 텔레그램 실시간 알림** 기능을 사용할 수 있습니다. (메인 메뉴 `[7] 관심 종목 관리` 하위)
+> DART API Key는 **선택 사항**입니다. 미설정 시 국내 공시/배당 기능만 비활성화되며, 그 외 모든 기능은 정상 동작합니다. (해외 종목 배당·실적은 yfinance로 키 없이 조회됩니다.)
+
+### 1. API Key 발급 (무료)
+1. [OpenDART 홈페이지](https://opendart.fss.or.kr) 접속 → 우측 상단 **인증키 신청/관리** > **오픈API 이용신청**
+2. 이메일 등 기본 정보 입력 후 신청 (가입 즉시 발급, 무료)
+3. 메일로 전달된 **40자리 인증키** 확인 (또는 **인증키 신청/관리 > 오픈API 인증키**에서 확인)
+4. 일일 호출 한도는 20,000건이며, 본 프로그램은 관심종목만 하루 단위로 조회하므로 한도 내에서 충분합니다.
+
+### 2. 환경 변수 등록
+KIS/Gemini Key와 동일하게 **환경 변수**로 등록합니다. (셸 환경변수 `export` 또는 `.env` 파일)
+*   `DART_API_KEY`: 발급받은 40자리 OpenDART 인증키
+
+> ⚠️ 셸 설정 파일(`~/.htsrc`, `~/.zshrc`, `~/.bashrc` 등)에 등록할 때는 **반드시 `export`** 를 붙이고(`export DART_API_KEY=발급키`), **터미널과 프로그램을 재시작**해야 적용됩니다. (실행 중인 프로세스는 이후 추가된 환경 변수를 인식하지 못합니다.)
+
+### 3. 제공 기능 (메뉴 `[7]` 관심 종목 관리)
+*   **`[6] 배당·실적 캘린더`**: 국내(DART 확정 배당금/시가배당률) + 해외(yfinance) 통합. 종목별 배당 주기(분기/반기/연)를 자동 판정해 **다음 예상 배당락일**을 표시 (※ 거래 규칙 기반 추정치)
+*   **`[7] 공시 모니터링`**: 관심종목 최근 공시를 중요도(🔴중대/🟡관심)로 분류해 표시하고, Gemini AI로 **호재/악재 해석** 요약
+*   **`[8] 실적 발표 추적`**: 정기보고서 제출 공시 + 법정 제출기한(분기 +45일, 사업 +90일) 기반 **다음 실적 발표 예상 시한**
+*   **공시 텔레그램 알림** (기본 ON): 백그라운드 스케줄러가 평일 주기적으로 관심종목의 **중대 공시**(유상증자·감자·자기주식·관리종목 지정·횡령배임 등) 발생 시 텔레그램으로 즉시 푸시 (중복 발송 방지). 비활성화는 `[0] 시스템 설정`의 `AUTO_DISCLOSURE_ALERT_USE`에서 가능
+
+> ℹ️ 최초 1회 실행 시 종목코드↔DART 고유번호(corp_code) 매핑 파일을 내려받아 `json/dart_corp_map.json`에 캐시합니다(월 1회 자동 갱신).
+
+## 13. 📄 라이선스 (License)
 
 이 프로젝트는 Apache License 2.0 하에 배포됩니다.

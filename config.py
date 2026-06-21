@@ -49,6 +49,7 @@ class GlobalSettings(BaseModel):
     ENABLE_TELEGRAM: bool = True
     AUTO_MORNING_BRIEFING_USE: bool = False
     AUTO_MORNING_BRIEFING_TIME: str = "0830"
+    AUTO_DISCLOSURE_ALERT_USE: bool = True  # 관심종목 중대 공시 텔레그램 알림 (기본 ON)
     TELEGRAM_INSTANCE_NAME: str = "HTS"
     TELEGRAM_POLLING_TIMEOUT: int = Field(default=10, gt=0)
 
@@ -291,6 +292,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능한 버전: v1beta, v1
+
+# ==========================================================
+# [설정] OpenDART (전자공시) API 설정 - 국내 배당/실적 조회용
+# ==========================================================
+DART_API_KEY = os.getenv("DART_API_KEY", "")  # https://opendart.fss.or.kr 발급 (무료, 40자리)
 
 # ==========================================================
 # [설정] 시장 지수 그룹 (Market Index Groups)

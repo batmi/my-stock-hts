@@ -872,6 +872,42 @@ def ask_gemini(question):
         else:
             return f"⚠️ [red]AI 답변 생성 중 오류 발생: {error_msg}[/red]"
 
+def summarize_disclosures_with_gemini(items_text):
+    """관심종목 공시 목록을 받아 호재/악재로 분류·요약."""
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = (
+        f"당신은 한국 주식 애널리스트입니다. 현재시각 {now}.\n"
+        "아래는 관심종목들의 최근 공시 목록입니다. 투자자 관점에서 분석해 주세요.\n\n"
+        f"{items_text}\n\n"
+        "요구사항:\n"
+        "1) 주가에 영향이 큰 공시를 '호재 🔼 / 악재 🔽 / 중립 ▶' 로 분류해 종목별로 간단히 정리\n"
+        "2) 특히 주의가 필요한 공시(유상증자·감자·횡령배임·관리종목·불성실공시 등)를 강조\n"
+        "3) 마지막에 한 줄 총평\n"
+        "한국어로, 마크다운 불릿으로 간결하게 작성하세요."
+    )
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096},
+        )
+        future = ai_executor.submit(model.generate_content, prompt)
+        try:
+            res = future.result(timeout=60.0)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"Gemini Disclosure Summary Error: {e}")
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]"
+        return f"⚠️ [red]공시 분석 중 오류 발생: {error_msg}[/red]"
+
 def get_latest_news_with_gemini(keyword, code=None):
     """특정 종목의 최신 중요 뉴스 5개 검색 (링크 포함)"""
     if genai is None or not config.GEMINI_API_KEY:

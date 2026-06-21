@@ -1037,10 +1037,13 @@ def manage_stock_menu():
         
         menu_items = [
             ("1", "관심 종목 전체 조회", "View Watchlist"),
-            ("2", "관심 종목 추가", "Add Stock"), 
-            ("3", "관심 종목 삭제", "Delete Stock"), 
-            ("4", "관심 종목 정보 변경", "Modify Stock Info"), 
-            ("5", "관심 종목 메모 관리", "Manage Memo")
+            ("2", "관심 종목 추가", "Add Stock"),
+            ("3", "관심 종목 삭제", "Delete Stock"),
+            ("4", "관심 종목 정보 변경", "Modify Stock Info"),
+            ("5", "관심 종목 메모 관리", "Manage Memo"),
+            ("6", "배당 · 실적 캘린더", "Dividend & Earnings Calendar"),
+            ("7", "공시 모니터링", "Disclosure Monitoring"),
+            ("8", "실적 발표 추적", "Earnings Tracking")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -1067,7 +1070,19 @@ def manage_stock_menu():
         elif choice == "5":
             manage_stock_memos_by_mode('view')
             is_success = True
-            
+        elif choice == "6":
+            from modules import calendar_events
+            calendar_events.show_calendar()
+            is_success = True
+        elif choice == "7":
+            from modules import disclosure
+            disclosure.show_disclosures()
+            is_success = True
+        elif choice == "8":
+            from modules import disclosure
+            disclosure.show_earnings()
+            is_success = True
+
         if is_success:
             last_choice = choice
             utils.pause()

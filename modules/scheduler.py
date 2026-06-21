@@ -52,12 +52,29 @@ class SystemScheduler:
                 self._check_holiday_notification()
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
                     self._check_morning_briefing()
+                if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', False):
+                    self._check_disclosure_alerts()
                 self._check_heartbeat()
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
-            
+
             time.sleep(10) # 10초 주기 체크
-            
+
+    def _check_disclosure_alerts(self):
+        """관심종목 중대 공시 텔레그램 알림 (평일, 30분 간격 폴링)."""
+        now = datetime.now()
+        last = getattr(self, 'last_disclosure_check', None)
+        if last and (now - last).total_seconds() < 1800:
+            return
+        self.last_disclosure_check = now
+        if now.weekday() >= 5:
+            return
+        try:
+            from modules import disclosure
+            threading.Thread(target=disclosure.check_and_alert_disclosures, daemon=True).start()
+        except Exception as e:
+            logger.error(f"[Scheduler] 공시 알림 체크 오류: {e}")
+
     def _check_holiday_notification(self):
         """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러"""
         now = datetime.now()

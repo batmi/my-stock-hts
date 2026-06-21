@@ -119,6 +119,14 @@ class DBManager:
                         PRIMARY KEY (date, account)
                     )
                 ''')
+
+                # [추가] 공시 알림 중복방지 테이블 (접수번호 기준)
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS notified_disclosures (
+                        rcept_no TEXT PRIMARY KEY,
+                        notified_at TEXT
+                    )
+                ''')
                 
                 # [추가] 예약 주문 테이블 생성
                 cursor.execute('''
@@ -560,6 +568,29 @@ class DBManager:
             cursor.execute("SELECT code FROM half_tp_status")
             return set(row[0] for row in cursor.fetchall())
         except: return set()
+
+    def is_disclosure_notified(self, rcept_no):
+        """공시 접수번호가 이미 알림 발송됐는지 확인"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM notified_disclosures WHERE rcept_no = ?", (rcept_no,))
+            return cursor.fetchone() is not None
+        except: return False
+
+    def mark_disclosure_notified(self, rcept_no):
+        """공시 접수번호를 알림 발송됨으로 기록"""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("INSERT OR REPLACE INTO notified_disclosures (rcept_no, notified_at) VALUES (?, ?)", (rcept_no, now_str))
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError: time.sleep(0.5); continue
+                except: break
 
     def save_stock_strategy(self, code, name, strategy):
         """종목별 매매 전략 저장"""
