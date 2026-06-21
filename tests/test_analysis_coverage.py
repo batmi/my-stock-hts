@@ -69,4 +69,7 @@ def test_calculate_score_perfect_10_points():
     )
     
     assert score == 10.0
-    assert len(details) == 17 # 각 가산점에 대한 상세 내역 개수 확인
+    # [개선 #2] TREND 재구성으로 상세 내역 구성 변경:
+    #   MA 5줄 + 상한적용 1줄 + MACD 0선 1줄 + MACD 확산 1줄 + SAR 1줄
+    #   + MOMENTUM 5줄 + STRENGTH 3줄 + SYNERGY 2줄 = 19줄 (감점 없음)
+    assert len(details) == 19 # 각 가산점에 대한 상세 내역 개수 확인

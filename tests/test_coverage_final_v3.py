@@ -44,11 +44,12 @@ def test_calculate_score_weights():
     # 기본 점수 계산
     score_def, _ = analysis.calculate_score(10000, 9000, 8000, 7000, 9000, 60, 30, 100, True, 50, 40)
     
-    # 가중치 변경 (추세 비중 0)
-    weights = {"TREND": 0.0, "MOMENTUM": 5.0, "STRENGTH": 3.0, "SYNERGY": 2.0}
+    # 가중치 변경 (추세 비중 0 → 추세 점수가 모두 제거되어 총점이 낮아져야 함)
+    # 다른 팩터는 기본값 유지하여 '추세 비중' 변화 효과만 검증 (보정 상쇄로 인한 우연한 동점 방지)
+    weights = {"TREND": 0.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
     score_custom, _ = analysis.calculate_score(10000, 9000, 8000, 7000, 9000, 60, 30, 100, True, 50, 40, weights=weights)
-    
-    assert score_def != score_custom
+
+    assert score_custom < score_def
 
 @patch('modules.analysis._load_analysis_result')
 @patch('rich.prompt.Prompt.ask')

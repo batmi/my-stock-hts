@@ -238,7 +238,7 @@ class GlobalSettings(BaseModel):
         "MR_GRACE_LOSS_RATE": -7.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
         "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
         "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
-        "SUPER_TAKE_PROFIT_RSI": 85.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI
+        "SUPER_TAKE_PROFIT_RSI": 90.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI (추세 장기 추종)
         "TRAILING_STOP_ACTIVATION_RATE": 15.0, # [트레일링 스탑] 감시 시작 수익률
         "TRAILING_STOP_CALLBACK_RATE": 4.0     # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
     }
@@ -270,6 +270,7 @@ class GlobalSettings(BaseModel):
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
         "SCORE_RSI_MID": 50,           # 스코어링 강세 기준 RSI
         "SCORE_RSI_STRONG": 60,        # 스코어링 모멘텀 확장 기준 RSI
+        "SCORE_RSI_OVERHEAT": 80,      # [추가] 모멘텀 확장 가점 동결 기준 RSI (과열 구간 고점매수 방지)
         "SCORE_RSI_REBOUND": 40,       # 스코어링 상승 여력 구간 하한 RSI (MR_RSI_MAX=40과 동일 경계: 40 이상이면 여력 점수, 40 미만은 역매수 영역)
         "SCORE_ADX_MIN": 20,           # 스코어링 추세 기준 ADX
         "SCORE_CCI_STRONG": 0,         # 스코어링 추세 기준 CCI
@@ -642,7 +643,7 @@ def reset_all_settings():
             "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 10, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
-            "SUPER_TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
+            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 15.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         }
         settings.SCORING_WEIGHTS = {
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
@@ -657,7 +658,7 @@ def reset_all_settings():
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
             "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
-            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_REBOUND": 40,
+            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
             "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0, "SCORE_CCI_MOMENTUM": 50
         }
         

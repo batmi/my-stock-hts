@@ -193,21 +193,38 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         return 0.0, details
 
     # 1. Trend Factor (4.0점)
+    # [개선 #2] 이동평균선(EMA) 기반 신호들은 상호 상관(collinearity)이 매우 높아
+    #          정배열 상승장에서 동시 충족되며 추세추종으로 점수가 편향됨.
+    #          → MA 포지션 점수 합계를 상한(2.5점)으로 제한하고, 나머지 1.5점은
+    #            상대적으로 독립적인 확인 신호(MACD 0선/추세확산, SAR)로 채워
+    #            'MA 군집 단독'으로는 TREND 만점을 받지 못하도록 재구성.
+    ma_trend_score = 0.0
+    ma_details = []
     if ema20 is not None and price > ema20:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
     if ema20 is not None and ema60 is not None and ema120 is not None and ema20 > ema60 and ema60 > ema120:
-        s = round(1.0 * r_trend, 2); score += s; details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
+        s = round(1.0 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
     if ema20 is not None and ema_5 is not None and ema_5 > ema20:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 5일선 > 20일선 (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 5일선 > 20일선 (+{s:.2f})")
     if ema20 is not None and ema60 is not None:
         if ema20 <= ema60 and price > ema60:
-            s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
+            s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
         elif ema_5 is not None and price > ema_5 and ema_5 > ema20 and ema20 > ema60:
-            s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 단기 급등 추세 (+{s:.2f})")
-    
-    # [추가] 장기 추세 지지 확인 (누락된 0.5점 보완으로 Trend 4.0 만점 완성)
+            s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 단기 급등 추세 (+{s:.2f})")
     if ema120 is not None and price > ema120:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"EMA: 장기 지지(현재가>120일선) (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 장기 지지(현재가>120일선) (+{s:.2f})")
+
+    # [개선 #2] MA 포지션 점수 상한 적용 (상관 신호의 과대 가점 방지)
+    ma_cap = round(2.5 * r_trend, 2)
+    details.extend(ma_details)
+    if ma_trend_score > ma_cap:
+        details.append(f"[상한] EMA 군집 신호 상한 적용 ({ma_cap:.2f})")
+        ma_trend_score = ma_cap
+    score += ma_trend_score
+
+    # [개선 #2] MACD 0선 위(추세 확립): MA 포지션과 독립적인 추세 확인 신호
+    if macd is not None and macd > 0:
+        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 0선 위 (추세 확립) (+{s:.2f})")
 
     # [수정] 단순 MACD > Signal 상태 유지가 아닌, 신규 골든크로스 또는 0선 위 확산 추세일 때만 점수 부여 (인플레이션 방지)
     if macd_hist is not None and prev_macd_hist is not None:
@@ -222,13 +239,16 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     # 2. Momentum Factor (2.5점)
     score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
     score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
+    score_rsi_overheat = config.INDICATOR_PARAMS.get('SCORE_RSI_OVERHEAT', 80)
     score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 40)
 
     if rsi is not None:
-        # [Fix] RSI 상단 제한(75) 해제하여 과열 구간에서도 모멘텀 점수 유지 (스코어 클리프 방지)
+        # [Fix] RSI 상단 제한(75) 해제로 과열 구간에서도 기본 강세 점수는 유지 (스코어 클리프 방지)
         if rsi >= score_rsi_mid:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 강세 구간 (+{s:.2f})")
-            if rsi >= score_rsi_strong:
+            # [개선 #6] 과열 구간(>=80)에서는 추가 '모멘텀 확장' 가점을 동결하여
+            #          이미 과열된 종목에 고점매수 신호가 강화되는 것을 방지.
+            if score_rsi_strong <= rsi < score_rsi_overheat:
                 s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
         elif score_rsi_rebound <= rsi < score_rsi_mid:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 상승 여력 구간 (+{s:.2f})")
@@ -278,6 +298,22 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")
+
+    # 5. 추세 악화 감점 (Deterioration Penalty)
+    # [개선 #1] 기존 스코어는 '가산 전용'이라 추세가 꺾여도 후행 지표(EMA 정배열 등)가
+    #          점수를 떠받쳐 매도 신호(SELL_SCORE 미달)가 지연되는 구조적 약점이 있음.
+    #          명확한 하락 반전 신호에 대해 감점을 부여하여 점수가 악화를 적시 반영하도록 보정.
+    penalty = 0.0
+    if macd is not None and macd_signal is not None and macd < macd_signal:
+        p = round(0.5 * r_trend, 2); penalty -= p; details.append(f"감점: MACD 데드크로스 (-{p:.2f})")
+    if macd_hist is not None and prev_macd_hist is not None and macd_hist < 0 and macd_hist < prev_macd_hist:
+        p = round(0.5 * r_mom, 2); penalty -= p; details.append(f"감점: MACD 하락 가속(0선 이하 확대) (-{p:.2f})")
+    if plus_di is not None and minus_di is not None and minus_di > plus_di:
+        p = round(0.5 * r_str, 2); penalty -= p; details.append(f"감점: -DI 우위(매도세 강화) (-{p:.2f})")
+
+    score += penalty
+    if score < 0:
+        score = 0.0
 
     return round(score, 2), details
 
@@ -445,11 +481,25 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         is_yangbong_flag = is_yangbong
         if df is not None and not df.empty:
             is_yangbong_flag = df.iloc[-1]['close'] > df.iloc[-1]['open']
-            
-        # [수정] RSI 반등 + 양봉 + 수급 확인(OBV 상승 또는 스마트머니 유입)을 모두 만족해야 역매수 발동
-        # OBV 또는 SM 조건 미충족 시 단순 기술적 반등(데드캣)으로 간주하여 진입 보류
-        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong_flag and (obv_trend or smart_money):
-            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 + 수급 확인)"
+
+        # [개선 #3] 떨어지는 칼날(데드캣) 방어 강화 — 하락 가속도 둔화 확인.
+        #          기존 조건(RSI 반등+양봉+수급)만으로는 ADX<45 의 추세적 하락 중에도
+        #          역매수가 발동될 수 있어 방어가 얇음. df가 있을 때, 당일 저가가
+        #          직전 5거래일 저점을 추가로 경신(=신저가 갱신, 낙하 지속)하면 진입 보류.
+        mr_decel_ok = True
+        if df is not None and not df.empty and len(df) >= 6:
+            try:
+                prior_low = df['low'].iloc[-6:-1].min()
+                today_low = df['low'].iloc[-1]
+                if today_low < prior_low:
+                    mr_decel_ok = False
+            except Exception:
+                pass
+
+        # [수정] RSI 반등 + 양봉 + 수급 확인(OBV 상승 또는 스마트머니 유입) + 하락 둔화를 모두 만족해야 역매수 발동
+        # 조건 미충족 시 단순 기술적 반등(데드캣)으로 간주하여 진입 보류
+        if rsi <= mr_rsi and rsi > prev_rsi and disparity <= mr_disp and is_yangbong_flag and (obv_trend or smart_money) and mr_decel_ok:
+            return "역매수", "[magenta]", "낙폭과대 (역매수 반등 신호 + 양봉 + 수급 확인 + 하락 둔화)"
 
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None

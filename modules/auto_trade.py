@@ -1280,7 +1280,10 @@ class DefaultStrategy:
                     reason = f"RSI과열(기준:{actual_tp_rsi})"
             
             # [추가] 매도 최적화 3번: 방어적 반매도 (하락 반전 신호 발생 시 절반 덜어내기)
-            if not reason and defensive_half_tp and not already_half_sold:
+            # [개선 #7] 이미 추세가 '매도'로 확정 붕괴된 경우에는 절반만 덜어내지 않고
+            #          아래 추세이탈 로직에서 전량 청산하도록 방어적 반매도를 건너뜀
+            #          (잔여 물량이 갭하락으로 손실 전환되는 것을 방지).
+            if not reason and defensive_half_tp and not already_half_sold and state != "매도":
                 if ind.get('psar') is not None and ind.get('ema_5') is not None:
                     # [엣지 케이스 방어] 손실 구간에서의 조기 손절(반손절)을 방지하고 '수익 보전' 목적에 맞게,
                     # 최소한의 의미 있는 수익(time_stop_min_profit, 기본 3.0%) 이상일 때만 발동하도록 안전장치 추가
