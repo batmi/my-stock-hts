@@ -187,6 +187,9 @@ def sync_today_trades():
                                                 elif 'EMA' in c_type: res_reason += f" (EMA {int(tp_val)} {'돌파' if 'UP' in c_type else '이탈'})"
                                                 elif c_type == 'TRAILING_BUY': res_reason += f" (바닥반등 {tp_val}%)"
                                                 elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
+                                                elif c_type == 'SMART_MONEY': res_reason += " (수급 턴어라운드)"
+                                                elif c_type.startswith('STATE_'): res_reason += f" (상태진입: { {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(c_type, c_type)})"
+                                                elif c_type == 'COMPOSITE': res_reason += " (복합조건)"
                                                 else: res_reason += f" (목표가 {tp_val})"
                                                 reason_to_save = f"체결 확인 ({res_reason})"
                                         except Exception as e:
@@ -1100,6 +1103,9 @@ def view_trade_history():
                 elif 'RSI' in c_type: reason += f" (목표RSI: {r['target_price']})"
                 elif c_type == 'TRAILING_BUY': reason += f" (바닥 반등: {r['target_price']}%)"
                 elif c_type == 'TRAILING_SELL': reason += f" (고점 하락: {r['target_price']}%)"
+                elif c_type == 'SMART_MONEY': reason += " (수급 턴어라운드)"
+                elif c_type.startswith('STATE_'): reason += f" (상태진입: { {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(c_type, c_type)})"
+                elif c_type == 'COMPOSITE': reason += " (복합조건)"
                 else: reason += f" ({r['target_price']})"
                     
                 status_str = r['status']

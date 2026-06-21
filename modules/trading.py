@@ -1508,6 +1508,151 @@ def modify_order():
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
+def _prompt_sub_condition(choice, base_price, is_overseas):
+    """복합 조건의 서브 조건 1개를 대화형으로 입력받아 {type, value, _label} 반환 (취소 시 None)."""
+    if choice == "1":  # SCORE
+        s = Prompt.ask("목표 퀀트 점수 (예: 8.0)")
+        if not s or s.lower() in ['b', 'q']: return None
+        try: v = float(s.replace('점', '').strip())
+        except ValueError:
+            config.console.print("[red]점수는 숫자만 입력 가능합니다.[/red]"); return None
+        ud = Prompt.ask("1: 점수 이상, 2: 점수 이하", choices=["1", "2"], default="1")
+        t = "SCORE_UP" if ud == "1" else "SCORE_DOWN"
+        return {"type": t, "value": v, "_label": f"점수{'≥' if ud=='1' else '≤'}{v}"}
+    if choice == "2":  # RSI
+        s = Prompt.ask("목표 RSI (예: 35 또는 70)")
+        if not s or s.lower() in ['b', 'q']: return None
+        try: v = float(s.strip())
+        except ValueError:
+            config.console.print("[red]RSI는 숫자만 입력 가능합니다.[/red]"); return None
+        ud = Prompt.ask("1: RSI 이상, 2: RSI 이하", choices=["1", "2"], default="2")
+        t = "RSI_UP" if ud == "1" else "RSI_DOWN"
+        return {"type": t, "value": v, "_label": f"RSI{'≥' if ud=='1' else '≤'}{v}"}
+    if choice == "3":  # EMA 위치
+        p = Prompt.ask("이동평균선 (5, 20, 60, 120)", choices=["5", "20", "60", "120"], default="20")
+        ud = Prompt.ask("1: 현재가가 이평선 위(상회), 2: 아래(하회)", choices=["1", "2"], default="1")
+        t = "EMA_UP" if ud == "1" else "EMA_DOWN"
+        return {"type": t, "value": float(p), "_label": f"{int(p)}일선{'상회' if ud=='1' else '하회'}"}
+    if choice == "4":  # SMART_MONEY
+        return {"type": "SMART_MONEY", "value": None, "_label": "수급전환"}
+    if choice == "5":  # STATE
+        st = Prompt.ask("1: 강매수, 2: 매수, 3: 역매수", choices=["1", "2", "3"], default="1")
+        sv = {"1": "강매수", "2": "매수", "3": "역매수"}[st]
+        return {"type": "STATE", "value": sv, "_label": f"상태={sv}"}
+    if choice == "6":  # PRICE
+        config.console.print("[dim]  - 절대가: 50000 / 기준가 대비 %: +5%, -3%[/dim]")
+        s = Prompt.ask("목표가 입력")
+        if not s or s.lower() in ['b', 'q']: return None
+        try:
+            if '%' in s:
+                pct = float(s.replace('%', '').strip())
+                v = base_price * (1 + pct / 100.0)
+                if not is_overseas: v = int(v)
+            else:
+                v = float(s.replace(',', '').replace('$', '').replace('원', '').strip())
+        except ValueError:
+            config.console.print("[red]목표가는 숫자만 입력 가능합니다.[/red]"); return None
+        ud = Prompt.ask("1: 현재가가 목표가 이상, 2: 이하", choices=["1", "2"], default="1")
+        t = "PRICE_UP" if ud == "1" else "PRICE_DOWN"
+        return {"type": t, "value": v, "_label": f"가격{'≥' if ud=='1' else '≤'}{int(v) if not is_overseas else v}"}
+    if choice == "7":  # TIME (지정 시각 이후)
+        config.console.print("[dim]  - HHMM 형식 (예: 1500 → 15:00 이후)[/dim]")
+        s = Prompt.ask("발동 기준 시각 입력 (HHMM)")
+        if not s or s.lower() in ['b', 'q']: return None
+        digits = "".join(filter(str.isdigit, s))[:4]
+        if len(digits) != 4:
+            config.console.print("[red]시각은 HHMM 4자리로 입력하세요.[/red]"); return None
+        return {"type": "TIME_AFTER", "value": digits, "_label": f"시각≥{digits[:2]}:{digits[2:]}"}
+    if choice == "8":  # NEW_HIGH
+        nh = Prompt.ask("기준 (1: 52주 신고가, 2: 사상 최고가)", choices=["1", "2"], default="1")
+        v = 250 if nh == "1" else 0
+        return {"type": "NEW_HIGH", "value": v, "_label": "52주신고가" if v else "사상최고가"}
+    return None
+
+def _render_composite_box(subs):
+    """복합 조건 구성 현황을 박스(Panel+Table) 형태로 출력하여 시인성을 높인다."""
+    if not subs:
+        config.console.print(Panel(
+            "[dim]아직 추가된 조건이 없습니다. 최소 2개를 추가하세요.[/dim]",
+            title="🧩 현재 복합 조건 구성", border_style="cyan", expand=False
+        ))
+        return
+    t = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="dim", border_style="dim", expand=False)
+    t.add_column("#", justify="center", style="cyan", width=3)
+    t.add_column("연결", justify="center", style="bold yellow", width=5)
+    t.add_column("조건", justify="left")
+    for i, s in enumerate(subs):
+        t.add_row(str(i + 1), "" if i == 0 else "AND", s['_label'])
+    config.console.print(Panel(
+        t,
+        title=f"🧩 현재 복합 조건 구성 ({len(subs)}개)",
+        border_style="cyan", expand=False
+    ))
+    config.console.print("[dim]   └ 위 조건을 모두 충족(AND)하면 발동합니다.[/dim]")
+
+def _build_composite_conditions(base_price, is_overseas):
+    """복합(AND) 조건을 대화형으로 구성하여 서브조건 리스트 반환 (취소 시 None).
+
+    일반 HTS에 없는 다중조건 결합 기능. 최소 2개 ~ 최대 5개.
+    """
+    subs = []
+    type_menu = [
+        ("0", "조건 구성 완료 (등록 진행)", "최소 2개 이상 선택 시 가능"),
+        ("1", "퀀트 점수 (SCORE)", "시스템 종합 점수"),
+        ("2", "RSI 지표", "RSI 수치"),
+        ("3", "이평선 위치 (EMA)", "현재가의 N일선 상회/하회"),
+        ("4", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환"),
+        ("5", "시스템 상태 (STATE)", "강매수/매수/역매수 진입"),
+        ("6", "지정가/가격 도달 (LIMIT)", "절대가 또는 기준가 대비 % (이상/이하)"),
+        ("7", "특정 시간 도달 (TIME)", "지정 시각(HHMM) 이후"),
+        ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신"),
+    ]
+    config.console.print("\n[bold cyan]◆ 복합 조건 구성 (모든 조건 동시 충족 시 발동 — AND)[/bold cyan]")
+    config.console.print("[dim]※ 일반 HTS에 없는 다중조건 결합 기능입니다. 최소 2개 ~ 최대 5개.[/dim]")
+    while len(subs) < 5:
+        config.console.print()
+        _render_composite_box(subs)
+        c = utils.show_menu(f"추가할 조건 ({len(subs)}개 선택됨)", type_menu, default_choice="0" if len(subs) >= 2 else "1")
+        if c.lower() == 'q':
+            return None
+        if c.lower() == 'b':
+            if subs:
+                removed = subs.pop()
+                config.console.print(f"[yellow]마지막 조건({removed['_label']}) 제거됨[/yellow]")
+                continue
+            return None
+        if c == "0":
+            if len(subs) >= 2:
+                break
+            config.console.print("[yellow]복합 조건은 최소 2개가 필요합니다.[/yellow]")
+            continue
+        sub = _prompt_sub_condition(c, base_price, is_overseas)
+        if sub:
+            subs.append(sub)
+    return subs
+
+def _composite_summary(raw):
+    """복합 조건 JSON을 사람이 읽는 'A AND B AND C' 요약 문자열로 변환 (목록 표시용)."""
+    if not raw:
+        return "복합조건"
+    try:
+        subs = json.loads(raw)
+    except Exception:
+        return "복합조건"
+    labels = []
+    for s in subs:
+        t, v = s.get('type'), s.get('value')
+        labels.append({
+            'SMART_MONEY': '수급전환', 'STATE': f"상태={v}",
+            'SCORE_UP': f"점수≥{v}", 'SCORE_DOWN': f"점수≤{v}",
+            'RSI_UP': f"RSI≥{v}", 'RSI_DOWN': f"RSI≤{v}",
+            'EMA_UP': f"{int(v) if v is not None else ''}일선상회", 'EMA_DOWN': f"{int(v) if v is not None else ''}일선하회",
+            'PRICE_UP': f"가격≥{v}", 'PRICE_DOWN': f"가격≤{v}",
+            'TIME_AFTER': f"시각≥{str(v)[:2]}:{str(v)[2:]}" if v else "시각",
+            'NEW_HIGH': "52주신고가" if v else "사상최고가",
+        }.get(t, str(t)))
+    return " AND ".join(labels)
+
 def register_reserved_order():
     """예약 주문 등록 메뉴"""
     config.console.print("\n[bold yellow]예약 주문 등록 (Reserve Order)[/bold yellow]")
@@ -1566,92 +1711,46 @@ def register_reserved_order():
     config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결되면 해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
     config.console.print()
     
+    # [정리] 단순 조건(지정가/특정시간/퀀트점수/RSI)은 단독 슬롯에서 제외하고 복합 조건(AND) 안으로 편입.
+    #        단독 메뉴는 '가격 추세형'과 '시스템 고유/복합'만 노출하여 차별화 강화.
     cond_items = [
         ("1", "스탑로스/하향이탈 (STOP)", "현재가가 목표가 이하로 하락 시"),
         ("2", "돌파/상향이탈 (BREAKOUT)", "현재가가 목표가 이상으로 상승 시"),
-        ("3", "지정가 도달 (LIMIT)", "현재가가 목표가와 일치 시 (터치 기준)"),
-        ("4", "특정 시간 (TIME)", "지정된 시간에 무조건 주문"),
-        ("5", "퀀트 점수 (SCORE)", "시스템 종합 점수 조건 충족 시"),
-        ("6", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
-        ("7", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
-        ("8", "RSI 지표 (RSI)", "RSI 수치 조건 충족 시"),
-        ("9", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시")
+        ("3", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
+        ("4", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
+        ("5", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시"),
+        ("6", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환 시 (매수 전용)"),
+        ("7", "상태 진입 (STATE)", "강매수/매수/역매수 상태 진입 시 (매수 전용)"),
+        ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신 시 (추세추종 강세 진입)"),
+        ("9", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND) 시 다중조건 결합")
     ]
     cond_choice = utils.show_menu("예약 발동 조건", cond_items)
     if cond_choice.lower() in ['b', 'q']:
         config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
         return None
-    
-    if order_type == 'sell' and cond_choice == '6':
-        config.console.print("[red]트레일링 매수(6번) 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
+
+    if order_type == 'sell' and cond_choice == '3':
+        config.console.print("[red]트레일링 매수 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
         return None
-        
-    if order_type == 'buy' and cond_choice == '7':
-        config.console.print("[red]트레일링 매도(7번) 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
+
+    if order_type == 'buy' and cond_choice == '4':
+        config.console.print("[red]트레일링 매도 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
         return None
-    
-    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "LIMIT", "4": "TIME", "5": "SCORE", "6": "TRAILING_BUY", "7": "TRAILING_SELL", "8": "RSI", "9": "EMA"}
+
+    if order_type == 'sell' and cond_choice in ('6', '7'):
+        config.console.print("[red]수급 턴어라운드/상태 진입 조건은 '예약 매수'에서만 사용할 수 있습니다.\n(매도 신호 결합은 9번 복합 조건을 활용하세요.)[/red]")
+        return None
+
+    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "TRAILING_BUY", "4": "TRAILING_SELL", "5": "EMA", "6": "SMART_MONEY", "7": "STATE", "8": "NEW_HIGH", "9": "COMPOSITE"}
     condition_type = condition_map[cond_choice]
-    
+
     target_price = 0.0
     target_time = ""
+    composite_json = None  # [추가] 복합 조건용
     
-    if condition_type == "TIME":
-        config.console.print(f"\n[cyan]◆ 발동 시간 설정[/cyan]")
-        config.console.print(f"[dim]  - 1: 당일 장 마감 무렵 (15:20)[/dim]")
-        config.console.print(f"[dim]  - 2: 다음 영업일 개장 시 (09:00)[/dim]")
-        config.console.print(f"[dim]  - 직접 입력: YYYYMMDDHHMM 또는 HHMM (예: 1510, 202606011510)[/dim]")
-        raw_time = Prompt.ask("발동 시간 선택 또는 입력")
-        
-        if not raw_time or raw_time.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        
-        if raw_time == "1":
-            target_time = datetime.now().strftime("%Y%m%d") + "1520"
-        elif raw_time == "2":
-            next_day = datetime.now() + timedelta(days=1)
-            if next_day.weekday() == 5: next_day += timedelta(days=2) # 토요일이면 월요일로
-            elif next_day.weekday() == 6: next_day += timedelta(days=1) # 일요일이면 월요일로
-            target_time = next_day.strftime("%Y%m%d") + "0900"
-        else:
-            target_time = "".join(filter(str.isdigit, raw_time))
-            
-    elif condition_type == "SCORE":
-        config.console.print(f"\n[cyan]◆ 발동 목표 점수 설정[/cyan]")
-        target_price_str = Prompt.ask("목표 점수 입력 (예: 7.5)")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        try:
-            target_price = float(target_price_str.replace(',', '').replace('점', '').strip())
-        except ValueError:
-            config.console.print("\n[red]점수는 숫자만 입력 가능합니다.[/red]")
-            return None
-        updown = Prompt.ask("발동 방향 (1: 점수 이상 돌파 시, 2: 점수 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1")
-        if updown.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        condition_type = "SCORE_UP" if updown == "1" else "SCORE_DOWN"
-        
-    elif condition_type == "RSI":
-        config.console.print(f"\n[cyan]◆ 발동 목표 RSI 수치 설정[/cyan]")
-        target_price_str = Prompt.ask("목표 RSI 입력 (예: 30 또는 75)")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        try:
-            target_price = float(target_price_str.replace(',', '').strip())
-        except ValueError:
-            config.console.print("\n[red]RSI는 숫자만 입력 가능합니다.[/red]")
-            return None
-        updown = Prompt.ask("발동 방향 (1: RSI 이상 돌파 시, 2: RSI 이하 하락 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="2")
-        if updown.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        condition_type = "RSI_UP" if updown == "1" else "RSI_DOWN"
-        
-    elif condition_type == "EMA":
+    # ※ 단순 조건(특정시간 TIME / 퀀트점수 SCORE / RSI / 지정가 LIMIT)은 단독 슬롯에서 제외되어
+    #    복합 조건(COMPOSITE) 안의 서브 조건으로 편입되었습니다. (감시기는 레거시 단독 주문도 계속 지원)
+    if condition_type == "EMA":
         config.console.print(f"\n[cyan]◆ 발동 목표 이동평균선(EMA) 선택[/cyan]")
         target_price_str = Prompt.ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
         if not target_price_str or target_price_str.lower() in ['b', 'q']:
@@ -1688,6 +1787,34 @@ def register_reserved_order():
         except ValueError:
             config.console.print("\n[red]하락 폭은 숫자만 입력 가능합니다.[/red]")
             return None
+    elif condition_type == "SMART_MONEY":
+        config.console.print(f"\n[cyan]◆ 수급 턴어라운드 감지[/cyan]")
+        config.console.print("[dim]※ 외국인/기관 수급이 순매수로 전환되는 신호를 포착하면 발동합니다. 별도 입력값이 없습니다.[/dim]")
+        target_price = 0.0
+    elif condition_type == "STATE":
+        config.console.print(f"\n[cyan]◆ 진입을 감지할 시스템 상태 선택[/cyan]")
+        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건 / 역매수: 낙폭과대 반등[/dim]")
+        st = Prompt.ask("상태 선택 (1: 강매수, 2: 매수, 3: 역매수)", choices=["1", "2", "3", "b", "q"], default="1")
+        if st.lower() in ['b', 'q']:
+            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+            return None
+        condition_type = {"1": "STATE_STRONGBUY", "2": "STATE_BUY", "3": "STATE_MR"}[st]
+        target_price = 0.0
+    elif condition_type == "NEW_HIGH":
+        config.console.print(f"\n[cyan]◆ 신고가 돌파 기준 선택[/cyan]")
+        config.console.print("[dim]  - 직전 구간 최고가를 현재가가 경신하면 발동합니다. (목표가 입력 불필요, 자동 감지)[/dim]")
+        nh = Prompt.ask("기준 (1: 52주 신고가, 2: 사상 최고가)", choices=["1", "2", "b", "q"], default="1")
+        if nh.lower() in ['b', 'q']:
+            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+            return None
+        target_price = 250.0 if nh == "1" else 0.0  # 0=전체기간(사상), 그 외=거래일 룩백
+    elif condition_type == "COMPOSITE":
+        composite_subs = _build_composite_conditions(base_price, is_overseas)
+        if not composite_subs:
+            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+            return None
+        composite_json = json.dumps([{"type": s["type"], "value": s.get("value")} for s in composite_subs], ensure_ascii=False)
+        target_price = 0.0
     else:
         config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력[/cyan]")
         config.console.print(f"[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
@@ -1816,6 +1943,15 @@ def register_reserved_order():
         cond_str = f"최저점 대비 {target_price}% 반등 시"
     elif condition_type == 'TRAILING_SELL':
         cond_str = f"최고점 대비 {target_price}% 하락 시"
+    elif condition_type == 'SMART_MONEY':
+        cond_str = "수급 턴어라운드(외국인/기관 순매수 전환)"
+    elif condition_type == 'NEW_HIGH':
+        cond_str = ("사상 최고가 경신 시" if target_price == 0 else f"{int(target_price)}거래일(52주) 신고가 경신 시")
+    elif condition_type.startswith('STATE_'):
+        sv = {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(condition_type, condition_type)
+        cond_str = f"시스템 상태 '{sv}' 진입"
+    elif condition_type == 'COMPOSITE':
+        cond_str = "복합(AND): " + " AND ".join(s['_label'] for s in composite_subs)
     else:
         if is_overseas:
             cond_str = f"목표가 ${target_price:,.2f}"
@@ -1848,7 +1984,8 @@ def register_reserved_order():
             cano=target_cano, acnt=target_acnt, market=market,
             order_type=order_type, code=stock_code, name=stock_name,
             qty=qty, order_price=order_price,
-            condition_type=condition_type, target_price=target_price, target_time=target_time, expire_dt=expire_dt
+            condition_type=condition_type, target_price=target_price, target_time=target_time, expire_dt=expire_dt,
+            composite_json=composite_json
         )
         config.console.print()
         config.console.print("[bold green]예약 주문이 성공적으로 등록되었습니다.[/bold green]")
@@ -1911,6 +2048,14 @@ def _print_reserved_orders_table():
                 t_str = f"바닥 대비 {o['target_price']}% 반등"
             elif o['condition_type'] == 'TRAILING_SELL':
                 t_str = f"고점 대비 {o['target_price']}% 하락"
+            elif o['condition_type'] == 'SMART_MONEY':
+                t_str = "외국인/기관 순매수 전환"
+            elif o['condition_type'] == 'NEW_HIGH':
+                t_str = "사상 최고가 경신" if o['target_price'] == 0 else "52주 신고가 경신"
+            elif o['condition_type'].startswith('STATE_'):
+                t_str = {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입', 'STATE_MR': '역매수 진입'}.get(o['condition_type'], o['condition_type'])
+            elif o['condition_type'] == 'COMPOSITE':
+                t_str = _composite_summary(o.get('composite_json'))
             else:
                 if is_ovs:
                     t_str = f"${o['target_price']:,.2f}"
@@ -2032,6 +2177,14 @@ def get_reserved_orders_summary():
                 t_str = f"바닥 대비 {o['target_price']}% 반등"
             elif o['condition_type'] == 'TRAILING_SELL':
                 t_str = f"고점 대비 {o['target_price']}% 하락"
+            elif o['condition_type'] == 'SMART_MONEY':
+                t_str = "외국인/기관 순매수 전환"
+            elif o['condition_type'] == 'NEW_HIGH':
+                t_str = "사상 최고가 경신" if o['target_price'] == 0 else "52주 신고가 경신"
+            elif o['condition_type'].startswith('STATE_'):
+                t_str = {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입', 'STATE_MR': '역매수 진입'}.get(o['condition_type'], o['condition_type'])
+            elif o['condition_type'] == 'COMPOSITE':
+                t_str = _composite_summary(o.get('composite_json'))
             else:
                 if is_ovs:
                     t_str = f"${o['target_price']:,.2f}"

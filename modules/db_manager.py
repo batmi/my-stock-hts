@@ -141,6 +141,7 @@ class DBManager:
                         expire_dt TEXT,
                         lowest_price REAL DEFAULT 0.0,
                         highest_price REAL DEFAULT 0.0,
+                        composite_json TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
@@ -220,6 +221,15 @@ class DBManager:
                             config.console.print("[dim green][DB] reserved_orders 테이블에 highest_price 컬럼 추가 완료[/dim green]")
                     except Exception as e:
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(highest_price): {e}[/red]")
+
+                # [추가] 복합(AND) 조건 예약 주문용 컬럼 (서브 조건 리스트를 JSON으로 저장)
+                if "composite_json" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN composite_json TEXT")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 composite_json 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(composite_json): {e}[/red]")
 
                 conn.commit()
                 conn.close()
@@ -724,14 +734,14 @@ class DBManager:
         except:
             return None
             
-    def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None):
+    def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None, composite_json=None):
         with self.lock:
             conn = self._get_conn()
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO reserved_orders (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt))
+                INSERT INTO reserved_orders (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt, composite_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt, composite_json))
             conn.commit()
 
     def get_pending_reserved_orders(self):

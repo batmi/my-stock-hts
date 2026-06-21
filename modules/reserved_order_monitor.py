@@ -59,7 +59,8 @@ class ReservedOrderMonitor:
         # 차트 조회가 필요한 종목 식별 (RATE LIMIT 방어용 캐시 예열)
         chart_required_codes = set()
         for order in pending_orders:
-            if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
+            if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN',
+                                           'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE']:
                 code = order['code']
                 now_ts = time.time()
                 # 캐시가 1시간 지났거나 없으면 업데이트
@@ -161,7 +162,27 @@ class ReservedOrderMonitor:
                                     trigger, reason = True, f"EMA {int(target_price)}선 상향돌파 (현재가: {curr_price:,.2f})"
                                 elif condition_type == 'EMA_DOWN' and curr_price <= ema_val:
                                     trigger, reason = True, f"EMA {int(target_price)}선 하향이탈 (현재가: {curr_price:,.2f})"
-                                    
+
+                elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE'):
+                    # [차별화 조건] 우리 시스템 고유 엔진(수급/상태/신고가/복합)을 트리거로 활용
+                    df, ind = self._get_indicators_for(code, curr_price)  # SMART_MONEY는 ind 불필요
+                    ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
+                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short}
+
+                    if condition_type == 'SMART_MONEY':
+                        if self._eval_atomic('SMART_MONEY', None, ctx):
+                            trigger, reason = True, "스마트머니(외국인/기관) 순매수 전환 포착"
+                    elif condition_type.startswith('STATE_'):
+                        target_state = {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}[condition_type]
+                        if self._eval_atomic('STATE', target_state, ctx):
+                            trigger, reason = True, f"시스템 상태 '{target_state}' 진입"
+                    elif condition_type == 'NEW_HIGH':
+                        if self._eval_atomic('NEW_HIGH', target_price, ctx):
+                            hi_label = "사상 최고가" if target_price == 0 else "52주 신고가"
+                            trigger, reason = True, f"{hi_label} 경신 (현재가: {curr_price:,.2f})"
+                    elif condition_type == 'COMPOSITE':
+                        trigger, reason = self._eval_composite(order, ctx)
+
                 elif condition_type == 'TRAILING_BUY':
                     lowest = float(order.get('lowest_price', 0.0))
                     if lowest <= 0.0 or curr_price < lowest:
@@ -199,6 +220,143 @@ class ReservedOrderMonitor:
                 logger.info(f"[Reserve] 예약 발동: {order['name']} - {reason}")
                 self._execute_order(order, reason)
                 
+    def _get_indicators_for(self, code, curr_price):
+        """캐시된 차트에 현재가를 반영하여 지표 계산. (df, ind) 반환 — 캐시 없으면 (None, None)."""
+        cached = self.chart_cache.get(code)
+        if not cached:
+            return None, None
+        df = cached['df'].copy()
+        df.iloc[-1, df.columns.get_loc('close')] = curr_price
+        ind = indicators.calculate_indicators(df)
+        return df, ind
+
+    def _compute_score(self, ctx):
+        """ctx 기준 퀀트 점수 계산 (개별 룰 가중치/스마트머니 반영)."""
+        code = ctx['code']
+        custom_rule = db_manager.db.get_stock_strategy(code)
+        weights = config.SCORING_WEIGHTS
+        if custom_rule and custom_rule.get('weights'):
+            try:
+                w = custom_rule['weights']
+                weights = json.loads(w) if isinstance(w, str) else (w if isinstance(w, dict) else weights)
+            except Exception:
+                pass
+        if '_sm' not in ctx:
+            ctx['_sm'], _ = analysis.check_smart_money_turnaround(code, is_overseas=ctx['is_overseas'])
+        score, _ = analysis.calculate_score(df=ctx['df'], ind=ctx['ind'], weights=weights, smart_money=ctx['_sm'])
+        return round(score, 1)
+
+    def _compute_state(self, ctx):
+        """ctx 기준 시스템 상태(강매수/매수/역매수/...) 분류."""
+        code = ctx['code']
+        df = ctx['df']
+        if '_sm' not in ctx:
+            ctx['_sm'], _ = analysis.check_smart_money_turnaround(code, is_overseas=ctx['is_overseas'])
+        prev_rsi = None
+        try:
+            if len(df) >= 16:
+                delta = df['close'].diff()
+                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
+                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
+                prev_rsi = (100 - (100 / (1 + gain / loss))).iloc[-2]
+        except Exception:
+            pass
+        w52_pos = 0.0
+        try:
+            recent = df.tail(250)
+            h52, l52 = recent['high'].max(), recent['low'].min()
+            if h52 > l52:
+                w52_pos = (ctx['curr_price'] - l52) / (h52 - l52) * 100
+        except Exception:
+            pass
+        state, _, _ = analysis.classify_stock_state(
+            df=df, ind=ctx['ind'], prev_rsi=prev_rsi, w52_pos=w52_pos, smart_money=ctx['_sm']
+        )
+        return state
+
+    def _eval_atomic(self, ctype, value, ctx):
+        """원자 조건 1개 평가 → bool. 신규 단일조건과 복합(COMPOSITE) 서브조건이 공유한다."""
+        cp = ctx['curr_price']
+        ind = ctx.get('ind')
+
+        if ctype == 'SMART_MONEY':
+            if '_sm' not in ctx:
+                ctx['_sm'], _ = analysis.check_smart_money_turnaround(ctx['code'], is_overseas=ctx['is_overseas'])
+            return bool(ctx['_sm'])
+        if ctype in ('PRICE_UP', 'PRICE_DOWN'):
+            return cp >= value if ctype == 'PRICE_UP' else cp <= value
+        if ctype == 'TIME_AFTER':
+            now_hhmm = ctx.get('now_hhmm')
+            return now_hhmm is not None and value is not None and now_hhmm >= str(value)
+        if ctype == 'NEW_HIGH':
+            df = ctx.get('df')
+            if df is None or 'high' not in df.columns or len(df) < 20:
+                return False
+            # value(거래일 룩백)>0 이면 직전 N거래일, 아니면 전체기간(사상) 기준. 오늘 봉은 제외하고 직전 최고가와 비교.
+            lookback = int(value) if value else len(df)
+            prior = df['high'].iloc[-(lookback + 1):-1]
+            if prior.empty:
+                return False
+            prior_high = prior.max()
+            return prior_high > 0 and cp >= prior_high
+
+        # 이하 조건은 지표(차트) 필요
+        if ind is None:
+            return False
+        if ctype == 'STATE':
+            if '_state' not in ctx:
+                ctx['_state'] = self._compute_state(ctx)
+            return ctx['_state'] == value
+        if ctype in ('SCORE_UP', 'SCORE_DOWN'):
+            if '_score' not in ctx:
+                ctx['_score'] = self._compute_score(ctx)
+            s = ctx['_score']
+            return s >= value if ctype == 'SCORE_UP' else s <= value
+        if ctype in ('RSI_UP', 'RSI_DOWN'):
+            r = ind.get('rsi')
+            if r is None:
+                return False
+            return r >= value if ctype == 'RSI_UP' else r <= value
+        if ctype in ('EMA_UP', 'EMA_DOWN'):
+            ev = ind.get(f'ema_{int(value)}')
+            if ev is None:
+                return False
+            return cp >= ev if ctype == 'EMA_UP' else cp <= ev
+        return False
+
+    def _atomic_label(self, st, sv):
+        """복합조건 발동 사유 표기용 라벨."""
+        return {
+            'SMART_MONEY': '수급전환',
+            'STATE': f"상태={sv}",
+            'SCORE_UP': f"점수≥{sv}", 'SCORE_DOWN': f"점수≤{sv}",
+            'RSI_UP': f"RSI≥{sv}", 'RSI_DOWN': f"RSI≤{sv}",
+            'EMA_UP': f"{int(sv) if sv is not None else ''}일선상회", 'EMA_DOWN': f"{int(sv) if sv is not None else ''}일선하회",
+            'PRICE_UP': f"가격≥{sv}", 'PRICE_DOWN': f"가격≤{sv}",
+            'TIME_AFTER': f"시각≥{str(sv)[:2]}:{str(sv)[2:]}" if sv else "시각",
+            'NEW_HIGH': "사상최고가경신" if not sv else "52주신고가경신",
+        }.get(st, st)
+
+    def _eval_composite(self, order, ctx):
+        """복합(AND) 조건 평가. 모든 서브조건 충족 시 (True, 사유) 반환."""
+        raw = order.get('composite_json')
+        if not raw:
+            return False, ""
+        try:
+            subs = json.loads(raw)
+        except Exception:
+            return False, ""
+        if not subs:
+            return False, ""
+        labels = []
+        for sub in subs:
+            st = sub.get('type')
+            sv = sub.get('value')
+            if not self._eval_atomic(st, sv, ctx):
+                return False, ""
+            labels.append(self._atomic_label(st, sv))
+        return True, "복합조건 충족: " + " AND ".join(labels)
+
     def _execute_order(self, order, reason):
         db_manager.db.update_reserved_order_status(order['id'], 'PROCESSING')
         market_str = "domestic" if order['market'] == 'KR' else "overseas"
