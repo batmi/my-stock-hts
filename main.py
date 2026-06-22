@@ -928,26 +928,38 @@ def main():
                 except Exception as _e:
                     logging.debug(f"[Warmup] {_m_type} 국면 캐시 워밍업 실패: {_e}")
 
-        auto_trade.ConclusionMonitor().start()
+        # [수정] 텔레그램 봇은 KIS 2 TPS와 무관(텔레그램 서버 폴링)하므로 즉시 시작
         telegram_cmd = telegram_bot.TelegramCommander()
         telegram_cmd.start()
-        ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"
-    
+
     # [추가] 전역 도움말 함수 맵핑 (서브메뉴 호출용)
     utils.show_help = show_help
-    
+
+    # [수정] KIS API를 폴링하는 모니터(체결감시·예약감시)는 자동매매 초기화(잔고/예수금 조회)와
+    # 모의투자 2 TPS를 두고 경합해 초기화가 지연/실패하던 문제가 있었다.
+    # 초기화가 TPS를 선점하도록 모니터 시작을 '초기화 이후'로 미룬다.
+    def _start_kis_monitors():
+        auto_trade.ConclusionMonitor().start()
+        ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
+
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
-        # 비대화형 모드로 트레이딩 시작
+        # 비대화형 모드로 트레이딩 시작 (잔고/예수금 초기화가 TPS를 선점하도록 모니터보다 먼저 수행)
         trader.start(interactive=False)
-        
+
+        # [수정] 초기화 완료 후 KIS 폴링 모니터 시작 (TPS 경합 해소)
+        _start_kis_monitors()
+
         # 로그 뷰어 실행 (메인 스레드 블로킹 유지)
         time.sleep(1)
         trader.view_log_file()
+    else:
+        # [수정] 대화형 모드는 기동 시 자동매매 초기화가 없으므로 모니터를 바로 시작
+        _start_kis_monitors()
     
     try:
         while True:
