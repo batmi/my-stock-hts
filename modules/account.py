@@ -170,11 +170,9 @@ def sync_today_trades():
                                     else:
                                         reason_to_save = "체결 확인"
                                         # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
+                                        # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
                                         try:
-                                            conn = db_manager.db._get_conn()
-                                            cursor = conn.cursor()
-                                            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
-                                            r_row = cursor.fetchone()
+                                            r_row = db_manager.db.get_reserved_order_by_odno(odno)
                                             if r_row:
                                                 t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
                                                 type_str = f"{t_type}(예약)"

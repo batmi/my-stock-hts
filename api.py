@@ -1023,11 +1023,15 @@ class ThrottledSession(requests.Session):
 
 session = ThrottledSession()
 
-# [수정] 연결 끊김(RemoteDisconnected) 등 네트워크 레벨 에러 자동 재시도 설정
+# [수정] 연결 끊김(RemoteDisconnected) 등 '네트워크 레벨' 에러만 어댑터에서 자동 재시도.
+# [중요] HTTP 5xx(특히 EGW00201/EGW00215는 Status 500으로 내려옴)는 어댑터 재시도 대상에서 제외한다.
+#  - 어댑터 레벨 재시도는 ThrottledSession의 TPS 게이트를 거치지 않고 super().request() 내부에서
+#    연사되므로, 모의투자(2 TPS) 서버에서는 재시도 자체가 초당 거래건수 초과(EGW00201)를 유발한다.
+#  - 5xx/Rate-Limit 재시도는 TPS 게이트 + 지수 백오프를 갖춘 앱 레벨(ThrottledSession)에서만 처리한다.
 retry_strategy = Retry(
-    total=3,
+    total=2,
     backoff_factor=0.5,
-    status_forcelist=[500, 502, 503, 504],
+    status_forcelist=[],
     allowed_methods=["GET", "POST"],
     raise_on_status=False
 )

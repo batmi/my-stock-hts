@@ -349,8 +349,27 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 
     return round(score, 2), details
 
-def get_domestic_index_data(market_type):
-    """국내 지수 데이터 조회 (KIS API -> yfinance Fallback)"""
+# [추가] 시장 지수 데이터 공유 캐시
+# get_market_regime은 자동매매/체결감시/예약감시/텔레그램 등 여러 스레드에서 동시에 호출되며,
+# 매 호출마다 2년치 지수차트(inquire-daily-indexchartprice)를 재조회하면 모의투자(2 TPS) 서버에
+# 요청 폭주가 발생한다. 동일 지수는 짧은 TTL 동안 캐시를 공유하여 중복 API 호출을 제거한다.
+_INDEX_DATA_CACHE = {}          # {market_type: {'df': df, 'time': ts}}
+_INDEX_DATA_CACHE_LOCK = threading.Lock()
+_INDEX_DATA_CACHE_TTL = 300     # 5분 (장중 국면 판단에는 충분히 신선함)
+
+def _index_cache_enabled():
+    """테스트(pytest) 환경에서는 모킹된 지수 데이터가 캐시에 고착되지 않도록 캐시를 비활성화한다."""
+    return "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ
+
+def get_domestic_index_data(market_type, force_refresh=False):
+    """국내 지수 데이터 조회 (KIS API -> yfinance Fallback, 공유 캐시 적용)"""
+    # 1. 캐시 조회 (TTL 이내면 재사용)
+    if not force_refresh and _index_cache_enabled():
+        with _INDEX_DATA_CACHE_LOCK:
+            cached = _INDEX_DATA_CACHE.get(market_type)
+            if cached and (time.time() - cached['time']) < _INDEX_DATA_CACHE_TTL:
+                return cached['df']
+
     kis_code = "0001"
     yf_ticker = "^KS11"
     
@@ -398,6 +417,7 @@ def get_domestic_index_data(market_type):
         # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정하므로 Fallback을 수행하지 않음
         if market_type == "KOSDAQ150":
             logger.warning(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 불안정).")
+            _store_index_cache(market_type, df)
             return df
 
         try:
@@ -406,8 +426,17 @@ def get_domestic_index_data(market_type):
                 df.attrs['source'] = 'YFINANCE' # [추가] 데이터 소스 명시
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance Fallback 실패: {e}")
-        
+
+    _store_index_cache(market_type, df)
     return df
+
+def _store_index_cache(market_type, df):
+    """유효한 지수 데이터만 공유 캐시에 저장한다."""
+    if not _index_cache_enabled():
+        return
+    if df is not None and not df.empty:
+        with _INDEX_DATA_CACHE_LOCK:
+            _INDEX_DATA_CACHE[market_type] = {'df': df, 'time': time.time()}
 
 def get_market_regime(market_type="KOSPI"):
     """시장 국면 판단 (Bull/Bear/Sideways)"""

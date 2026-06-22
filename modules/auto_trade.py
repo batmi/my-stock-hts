@@ -503,13 +503,10 @@ class ConclusionMonitor:
                                 db_type_name = db_type_name or ""
                                 
                                 # 수동 취소 또는 시스템(타임아웃) 등 이미 알림/저장된 이력인지 확인
+                                # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
                                 is_external_cancel = True
                                 try:
-                                    conn = db_manager.db._get_conn()
-                                    cursor = conn.cursor()
-                                    cursor.execute("SELECT id, reason FROM trades WHERE org_odno = ? AND order_status IN ('취소', '취소(추정)') ORDER BY id DESC LIMIT 1", (odno,))
-                                    cancel_record = cursor.fetchone()
-                                    
+                                    cancel_record = db_manager.db.get_cancel_record_by_org_odno(odno)
                                     if cancel_record:
                                         rec_reason = cancel_record['reason']
                                         if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
@@ -580,11 +577,9 @@ class ConclusionMonitor:
                                             trade_time_str = origin_trade['time']
                                     else:
                                         # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
+                                        # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
                                         try:
-                                            conn = db_manager.db._get_conn()
-                                            cursor = conn.cursor()
-                                            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
-                                            r_row = cursor.fetchone()
+                                            r_row = db_manager.db.get_reserved_order_by_odno(odno)
                                             if r_row:
                                                 t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
                                                 db_type_name = f"{t_type}(예약)"

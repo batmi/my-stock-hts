@@ -916,6 +916,18 @@ def main():
         
         # 6. 백그라운드 서비스 시작
         api.prefetch_watchlists_async()
+
+        # [추가] 시장 국면 캐시 워밍업 (순차 1회 선행)
+        # 백그라운드 모니터들이 동시에 지수차트(inquire-daily-indexchartprice)를 조회하면
+        # 모의투자(2 TPS) 서버에서 요청 폭주(EGW00201)가 발생한다. 모니터 기동 전에 TPS 게이트를
+        # 통과하는 순차 호출로 공유 캐시를 미리 채워, 초기 동시 폭주를 원천 차단한다.
+        if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+            for _m_type in ("KOSPI", "KOSDAQ"):
+                try:
+                    analysis.get_domestic_index_data(_m_type)
+                except Exception as _e:
+                    logging.debug(f"[Warmup] {_m_type} 국면 캐시 워밍업 실패: {_e}")
+
         auto_trade.ConclusionMonitor().start()
         telegram_cmd = telegram_bot.TelegramCommander()
         telegram_cmd.start()

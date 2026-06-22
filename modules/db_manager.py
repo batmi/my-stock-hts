@@ -421,6 +421,29 @@ class DBManager:
             return dict(row) if row else None
         except: return None
 
+    def get_cancel_record_by_org_odno(self, odno):
+        """원주문번호(org_odno)로 가장 최근 취소 이력 1건 조회 (외부/사후 취소 중복 판별용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, reason FROM trades WHERE org_odno = ? AND order_status IN ('취소', '취소(추정)') ORDER BY id DESC LIMIT 1",
+                (odno,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except: return None
+
+    def get_reserved_order_by_odno(self, odno):
+        """주문번호(odno)로 발동된 예약 주문 1건 조회"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except: return None
+
     def get_buy_trades_for_current_holding(self, code):
         """
         현재 보유 수량에 해당하는 매수 거래 내역들을 조회합니다.
