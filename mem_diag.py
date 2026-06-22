@@ -36,6 +36,14 @@ def is_enabled():
     return os.environ.get("HTS_MEM_DIAG", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def arm_stack_dumper():
+    """[중요] 무거운 라이브러리 import 이후, 의심 구간(자동매매 초기화) 직전에 호출해야 한다.
+    import 도중 faulthandler가 C 확장 초기화 중 스택을 덤프하면 세그폴트가 날 수 있다."""
+    if not is_enabled():
+        return
+    _start_faulthandler()
+
+
 def _start_faulthandler():
     """faulthandler로 모든 스레드 스택을 주기적으로 파일에 덤프한다.
     C 레벨에서 동작하므로 GIL이 잡혀 파이썬이 얼어붙어도(메모리 폭증/CPU 폭주) 그 순간
@@ -282,8 +290,8 @@ def start(interval=1.0, top_every=5):
     _started = True
     _running = True
     _last_dump_rss = 0
-
-    _start_faulthandler()  # [진단] C 레벨 스레드 스택 주기 덤프 (얼어붙어도 포착)
+    # [중요] faulthandler 무장은 여기서 하지 않는다. import 도중 C 확장 초기화 중에 스택을
+    # 덤프하면 세그폴트가 난다. 무거운 import 이후 main에서 arm_stack_dumper()로 무장한다.
 
     sysm = _read_sys_mem()
     hdr = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
