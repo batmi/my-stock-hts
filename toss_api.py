@@ -16,6 +16,7 @@ import json
 import time
 import logging
 import threading
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
 import requests
@@ -29,9 +30,39 @@ _BASE = config.TOSS_URL
 # 토큰 메모리 캐시 (디스크 IO 절감용; 영속 캐시는 config.session 토큰 캐시 재사용)
 _token_lock = threading.Lock()
 
-# 그룹별 호출 간 최소 간격 제어용
+# -------------------------------------------------------------------------
+# 그룹별 Rate Limit 제어
+#  - 토스는 Rate Limit을 그룹(AUTH/MARKET_DATA/MARKET_DATA_CHART/...)별로 분리 관리한다.
+#  - 그룹마다 슬라이딩 윈도우(1초) 토큰버킷 + 최소 간격으로 제어하고,
+#    429 발생 시 해당 그룹에만 쿨다운(Retry-After)을 적용해 다른 그룹을 막지 않는다.
+#  - 전 종목 스캔(캔들 다량 호출) 시 MARKET_DATA_CHART 그룹을 별도로 보수적 제한한다.
+# -------------------------------------------------------------------------
+_GROUP_RPS = {
+    "AUTH": 2,
+    "MARKET_DATA": 8,
+    "MARKET_DATA_CHART": 6,   # 캔들: 호출 부하가 커 별도 보수적 제한
+    "STOCK": 5,
+    "MARKET_INFO": 5,
+    "ACCOUNT": 5,
+    "ASSET": 5,
+    "ORDER": 5,
+    "ORDER_HISTORY": 5,
+    "ORDER_INFO": 5,
+}
+
 _rate_lock = threading.Lock()
-_last_call_ts = {}
+_group_hist = defaultdict(deque)       # group -> 최근 1초 요청 타임스탬프
+_group_cooldown = defaultdict(float)   # group -> 이 시각까지 추가 대기 (429 백오프)
+
+
+def _group_rps(group):
+    return _GROUP_RPS.get(group, max(config.TOSS_TX_PER_SECOND, 1))
+
+
+def _note_rate_limited(group, retry_after):
+    """429 발생 시 해당 그룹에 쿨다운을 설정한다."""
+    with _rate_lock:
+        _group_cooldown[group] = time.time() + max(float(retry_after or 0), 1.0)
 
 
 class TossApiError(Exception):
@@ -109,17 +140,29 @@ def get_access_token(force_refresh=False):
 # 공통 요청 처리
 # =========================================================================
 def _throttle(group):
-    """그룹별 최소 호출 간격을 보장한다."""
-    min_interval = 1.0 / max(config.TOSS_TX_PER_SECOND, 1)
+    """그룹별 슬라이딩 윈도우(1초) + 최소 간격 + 429 쿨다운을 적용한다."""
+    rps = _group_rps(group)
+    window = 1.0
+    min_interval = window / rps
     while True:
         with _rate_lock:
             now = time.time()
-            last = _last_call_ts.get(group, 0.0)
-            wait = min_interval - (now - last)
+            hist = _group_hist[group]
+            # 윈도우(1초) 밖의 기록 제거
+            while hist and hist[0] <= now - window:
+                hist.popleft()
+
+            cooldown = _group_cooldown.get(group, 0.0)
+            wait_cd = cooldown - now                       # 429 쿨다운 잔여
+            last = hist[-1] if hist else 0.0
+            wait_int = min_interval - (now - last)         # 최소 간격
+            wait_win = (hist[0] + window - now) if len(hist) >= rps else 0.0  # 윈도우 한도
+
+            wait = max(wait_cd, wait_int, wait_win)
             if wait <= 0:
-                _last_call_ts[group] = now
+                hist.append(now)
                 return
-        time.sleep(wait)
+        time.sleep(min(wait, 1.0) if wait > 0 else 0.02)
 
 
 def _request(method, path, group, params=None, json_body=None, account=True, retries=2):
@@ -163,8 +206,10 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
 
         # Rate limit
         if res.status_code == 429:
-            retry_after = res.headers.get("Retry-After")
-            wait = float(retry_after) if (retry_after and retry_after.isdigit()) else 1.0
+            retry_after = res.headers.get("Retry-After") or res.headers.get("X-RateLimit-Reset")
+            wait = float(retry_after) if (retry_after and str(retry_after).isdigit()) else 1.0
+            # 해당 그룹에 쿨다운을 적용해 후속 호출이 자동으로 양보하도록 한다.
+            _note_rate_limited(group, wait)
             if attempt < retries:
                 time.sleep(wait)
                 continue

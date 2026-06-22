@@ -1488,6 +1488,12 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
     기술적 분석을 위한 차트 데이터를 조회합니다.
     period_type: 'daily' (일봉), 'hourly' (시봉), 'intraday' (분봉)
     """
+    # [추가] 토스: yfinance 대상(지수/원자재/환율 등)이 아닌 개별 종목은 토스 캔들로 조회
+    _yf_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
+                 or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
+    if config.session.is_toss and not _yf_index:
+        return _toss_chart_data(code, period_type, is_overseas)
+
     if period_type == 'intraday':
         return _get_intraday_chart_data(code, is_overseas)
     
@@ -1841,6 +1847,8 @@ def get_domestic_index_price(code):
     return res
 
 def get_current_price_data(code, is_overseas):
+    if config.session.is_toss:
+        return _toss_current_price_data(code, is_overseas)
     cache_key = f"cp_{code}_{is_overseas}"
     cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 실시간 시세 반영을 위해 캐시 유지 시간을 3초로 단축
     if cached: return cached
@@ -1936,6 +1944,8 @@ def get_current_price(code, is_overseas):
 
 def get_order_book(code, is_overseas=False):
     """호가창 데이터 조회 (최대 10호가)"""
+    if config.session.is_toss:
+        return _toss_order_book(code)
     cache_key = f"ob_{code}_{is_overseas}"
     cached = _get_micro_cache(cache_key, ttl=2.0)
     if cached: return cached
@@ -1967,6 +1977,9 @@ def get_order_book(code, is_overseas=False):
         return {'rt_cd': '9999'}
 
 def get_investor_trend(code, market_div="J"):
+    # [추가] 토스 미제공: 투자자 매매동향 없음
+    if config.session.is_toss:
+        return []
     cache_key = f"inv_{code}_{market_div}"
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 수급 정보 유지 시간 연장
     if cached is not None: return cached
@@ -2028,6 +2041,9 @@ def get_investor_trend(code, market_div="J"):
 
 def get_daily_foreign_rate(code):
     """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
+    # [추가] 토스 미제공: 외국인 소진율 없음 (KIS로 누수되지 않도록 차단)
+    if config.session.is_toss:
+        return []
     url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["DAILY_PRICE"]
     params = {
         "FID_COND_MRKT_DIV_CODE": "J",
@@ -2041,6 +2057,8 @@ def get_daily_foreign_rate(code):
     return []
 
 def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
+    # [추가] 토스 미제공: 체결강도 없음
+    if config.session.is_toss: return None
     if is_overseas: return None
 
     cache_key = f"vol_{code}"
@@ -2096,6 +2114,10 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     return None
 
 def fetch_overseas_detail_price(code, excd):
+    # [추가] 토스 미제공: 해외 상세(PER/PBR/시가총액 등). KIS로 누수되지 않도록 차단.
+    # (52주 위치는 가격 기반이라 토스 캔들로 별도 산출한다)
+    if config.session.is_toss:
+        return None
     cache_key = f"detail_{code}"
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 상세 정보 유지 시간 연장
     if cached is not None: return cached
@@ -2368,6 +2390,107 @@ def _toss_overseas_balance():
             '_exchange': it.get('market', 'NASD'),
         })
     return out
+
+
+def _toss_chart_data(code, period_type='daily', is_overseas=False):
+    """토스 캔들 → KIS get_chart_data 형태의 DataFrame.
+    columns=['date','open','high','low','close','volume'] (date=YYYYMMDD, 오름차순).
+
+    일봉은 52주 위치/EMA120 정확도를 위해 nextBefore 커서로 ~250개 이상 모은다
+    (토스 캔들은 호출당 최대 200개). 분봉은 단일 호출(200개).
+    """
+    if period_type == 'hourly':
+        # 토스는 1분/일봉만 제공 → 시봉 미지원
+        return pd.DataFrame()
+    interval = '1m' if period_type == 'intraday' else '1d'
+    target = 260 if interval == '1d' else 200  # 일봉은 52주(≈250거래일) 확보
+    max_pages = 4 if interval == '1d' else 1
+
+    candles = []
+    before = None
+    try:
+        for _ in range(max_pages):
+            res = toss_api.get_candles(code, interval=interval, count=200, before=before)
+            batch = (res or {}).get('candles', []) or []
+            if not batch:
+                break
+            candles.extend(batch)
+            before = (res or {}).get('nextBefore')
+            if not before or len(candles) >= target:
+                break
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 캔들 조회 실패({code}): {e}")
+        if not candles:
+            return pd.DataFrame()
+
+    if not candles:
+        return pd.DataFrame()
+    rows = []
+    for c in candles:
+        ts = str(c.get('timestamp', ''))
+        if interval == '1d':
+            date = ts[:10].replace('-', '')
+        else:
+            # 분봉: 정렬 가능한 키 (YYYYMMDDHHMM)
+            date = ts[:16].replace('-', '').replace('T', '').replace(':', '')
+        rows.append({
+            'date': date,
+            'open': _toss_float(c.get('openPrice')),
+            'high': _toss_float(c.get('highPrice')),
+            'low': _toss_float(c.get('lowPrice')),
+            'close': _toss_float(c.get('closePrice')),
+            'volume': _toss_float(c.get('volume')),
+        })
+    df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
+    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+
+
+def _toss_current_price_data(code, is_overseas):
+    """토스 현재가 → KIS get_current_price_data 형태({rt_cd,output})."""
+    try:
+        row = toss_api.get_price(code)
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 현재가 조회 실패({code}): {e}")
+        return {'rt_cd': '9999'}
+    if not row:
+        return {'rt_cd': '9999'}
+    price = row.get('lastPrice', '0')
+    # 국내(stck_prpr)/해외(last) 양쪽 경로를 모두 채운다. 등락/외인비율 등은 토스 미제공.
+    output = {
+        'stck_prpr': str(_toss_int(price)),
+        'last': str(_toss_float(price)),
+    }
+    return {'rt_cd': '0', 'output': output}
+
+
+def _toss_order_book(code):
+    """토스 호가 → KIS get_order_book 형태({rt_cd,output1})."""
+    try:
+        ob = toss_api.get_orderbook(code)
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 호가 조회 실패({code}): {e}")
+        return {'rt_cd': '9999'}
+    if not ob:
+        return {'rt_cd': '9999'}
+    asks = ob.get('asks', []) or []   # 낮은 가격순(최우선 매도호가가 [0])
+    bids = ob.get('bids', []) or []   # 높은 가격순(최우선 매수호가가 [0])
+    out1 = {}
+    total_ask = 0
+    total_bid = 0
+    for i in range(10):
+        a = asks[i] if i < len(asks) else {}
+        b = bids[i] if i < len(bids) else {}
+        av = _toss_int(a.get('volume'))
+        bv = _toss_int(b.get('volume'))
+        total_ask += av
+        total_bid += bv
+        out1[f'askp{i+1}'] = str(_toss_int(a.get('price')))
+        out1[f'bidp{i+1}'] = str(_toss_int(b.get('price')))
+        out1[f'askp_rsqn{i+1}'] = str(av)
+        out1[f'bidp_rsqn{i+1}'] = str(bv)
+    out1['total_askp_rsqn'] = str(total_ask)
+    out1['total_bidp_rsqn'] = str(total_bid)
+    return {'rt_cd': '0', 'output1': out1}
 
 
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):

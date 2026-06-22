@@ -3,6 +3,7 @@
 네트워크를 타지 않도록 requests 및 토큰 캐시를 모킹한다.
 """
 import json
+import time
 from unittest.mock import patch, MagicMock
 
 import config
@@ -172,6 +173,234 @@ def test_deposit_balance_adapter():
     assert res["deposit"] == 1234567
     assert res["order_possible"] == 1234567
     assert res["foreign_deposit"] == 0
+
+
+def test_chart_data_adapter_daily():
+    import api
+    res = {
+        "candles": [
+            {"timestamp": "2026-03-25T09:00:00+09:00", "openPrice": "71600", "highPrice": "72300",
+             "lowPrice": "71500", "closePrice": "72000", "volume": "3521000", "currency": "KRW"},
+            {"timestamp": "2026-03-24T09:00:00+09:00", "openPrice": "71200", "highPrice": "71800",
+             "lowPrice": "71000", "closePrice": "71600", "volume": "2984000", "currency": "KRW"},
+        ],
+        "nextBefore": None,
+    }
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", return_value=res):
+            df = api.get_chart_data("005930", is_overseas=False, period_type='daily')
+    finally:
+        config.session.is_toss = False
+    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
+    # 오름차순 정렬: 마지막 행이 최신(03-25)
+    assert df.iloc[-1]['date'] == '20260325'
+    assert df.iloc[-1]['close'] == 72000.0
+
+
+def test_chart_data_adapter_daily_paginates_to_250():
+    """일봉은 nextBefore 커서로 250개 이상 모으는지 검증 (52주/EMA 정확도)."""
+    import api
+
+    from datetime import datetime as _dt, timedelta as _td
+    _base = _dt(2026, 6, 1)
+
+    def make_page(start_idx):
+        candles = []
+        for i in range(start_idx, start_idx + 200):
+            # i가 클수록 과거 날짜(고유)
+            ts = (_base - _td(days=i)).strftime("%Y-%m-%dT09:00:00+09:00")
+            candles.append({
+                "timestamp": ts,
+                "openPrice": "100", "highPrice": "110", "lowPrice": "90",
+                "closePrice": str(100 + i), "volume": "1000",
+            })
+        return candles
+
+    pages = [
+        {"candles": make_page(0), "nextBefore": "P2"},
+        {"candles": make_page(200), "nextBefore": "P3"},
+    ]
+    calls = {"n": 0}
+
+    def fake_candles(code, interval="1d", count=100, before=None, adjusted=True):
+        idx = calls["n"]
+        calls["n"] += 1
+        return pages[idx] if idx < len(pages) else {"candles": [], "nextBefore": None}
+
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", side_effect=fake_candles):
+            df = api.get_chart_data("005930", period_type='daily')
+    finally:
+        config.session.is_toss = False
+
+    # 2페이지(>=260) 확보 후 중단, tail(250) 적용
+    assert calls["n"] == 2
+    assert len(df) == 250
+
+
+def test_chart_data_adapter_hourly_unsupported():
+    import api
+    config.session.is_toss = True
+    try:
+        df = api.get_chart_data("005930", period_type='hourly')
+    finally:
+        config.session.is_toss = False
+    assert df.empty
+
+
+def test_current_price_data_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_price", return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}):
+            res = api.get_current_price_data("005930", False)
+            price = api.get_current_price("005930", False)
+    finally:
+        config.session.is_toss = False
+    assert res['rt_cd'] == '0'
+    assert res['output']['stck_prpr'] == '72000'
+    assert price == 72000
+
+
+def test_order_book_adapter_totals():
+    import api
+    ob = {
+        "currency": "KRW",
+        "asks": [{"price": "72300", "volume": "1200"}, {"price": "72200", "volume": "3400"}],
+        "bids": [{"price": "72000", "volume": "5200"}, {"price": "71900", "volume": "4100"}],
+    }
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_orderbook", return_value=ob):
+            res = api.get_order_book("005930", False)
+    finally:
+        config.session.is_toss = False
+    assert res['rt_cd'] == '0'
+    out1 = res['output1']
+    assert out1['askp1'] == '72300'
+    assert out1['bidp1'] == '72000'
+    assert out1['total_askp_rsqn'] == '4600'   # 1200+3400
+    assert out1['total_bidp_rsqn'] == '9300'   # 5200+4100
+
+
+def test_investor_and_vol_strength_na_for_toss():
+    import api
+    config.session.is_toss = True
+    try:
+        assert api.get_investor_trend("005930") == []
+        assert api.get_realtime_vol_strength("005930") is None
+        # 외국인 소진율(외인률)도 토스에선 KIS로 누수되지 않고 빈 값
+        assert api.get_daily_foreign_rate("005930") == []
+    finally:
+        config.session.is_toss = False
+
+
+def test_print_table_worker_toss_enriches_change_and_52w():
+    """토스 모드: 일괄 분석 표에서 등락/52주가 차트로 보강되는지 검증."""
+    import pandas as pd
+    from modules import analysis
+    import api
+
+    n = 250
+    closes = [50000 + i * 100 for i in range(n)]  # 오름차순(마지막이 최고가권)
+    df = pd.DataFrame({
+        'date': [f"2025{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': [float(c) for c in closes],
+        'high': [c * 1.01 for c in closes],
+        'low': [c * 0.99 for c in closes],
+        'close': [float(c) for c in closes],
+        'volume': [1000.0 + i for i in range(n)],
+    })
+    curr = {'rt_cd': '0', 'output': {'stck_prpr': str(closes[-1])}}
+
+    config.session.is_toss = True
+    try:
+        with patch("api.get_current_price_data", return_value=curr), \
+             patch("api.get_chart_data", return_value=df.copy()), \
+             patch("api.get_investor_trend", return_value=[]), \
+             patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")):
+            result = analysis._print_table_worker(
+                ("삼성전자", "005930"), "국내 주식 기술적 분석",
+                False, True, set(), {}, {}, set(), set())
+    finally:
+        config.session.is_toss = False
+
+    row = result[0]
+    rate_str = row[4]   # 등락폭 (등락률)
+    w52_str = row[5]    # 52주 위치
+    assert "+0 (+0.00%)" not in rate_str   # 등락이 0이 아니라 차트로 계산됨
+    assert "%" in w52_str and "dim]-" not in w52_str  # 52주 위치 표시됨
+
+
+def test_print_table_worker_toss_us_52w_from_chart_perpbr_na():
+    """토스 단독: 미국 종목 52주는 차트로 유지, PER/PBR은 N/A."""
+    import pandas as pd
+    from modules import analysis
+
+    n = 250
+    closes = [100.0 + i * 0.5 for i in range(n)]  # 오름차순
+    df = pd.DataFrame({
+        'date': [f"2025{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': closes, 'high': [c * 1.01 for c in closes], 'low': [c * 0.99 for c in closes],
+        'close': closes, 'volume': [1000.0 + i for i in range(n)],
+    })
+    curr = {'rt_cd': '0', 'output': {'last': str(closes[-1])}}
+
+    config.session.is_toss = True
+    try:
+        with patch("api.get_current_price_data", return_value=curr), \
+             patch("api.get_chart_data", return_value=df.copy()), \
+             patch("api.fetch_overseas_detail_price", return_value=None), \
+             patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")):
+            result = analysis._print_table_worker(
+                ("Apple Inc.", "AAPL"), "미국 주식 기술적 분석",
+                True, False, set(), {}, {}, set(), set())
+    finally:
+        config.session.is_toss = False
+
+    row = result[0]
+    assert "%" in row[5] and "dim]-" not in row[5]   # 52주 위치 차트로 표시됨
+    # PER/PBR(마지막 두 컬럼)은 토스 미제공 → N/A
+    assert row[-1] == "[dim]-[/dim]" and row[-2] == "[dim]-[/dim]"
+
+
+def test_overseas_detail_na_for_toss():
+    import api
+    config.session.is_toss = True
+    try:
+        assert api.fetch_overseas_detail_price("AAPL", "NAS") is None
+    finally:
+        config.session.is_toss = False
+
+
+def test_rate_limit_group_rps_and_cooldown():
+    """그룹별 RPS 설정 및 429 쿨다운 동작."""
+    assert toss_api._group_rps("MARKET_DATA_CHART") == 6
+    assert toss_api._group_rps("AUTH") == 2
+    # 미정의 그룹은 기본값(config.TOSS_TX_PER_SECOND)
+    import config as _cfg
+    assert toss_api._group_rps("UNKNOWN_GROUP") == max(_cfg.TOSS_TX_PER_SECOND, 1)
+
+    toss_api._group_cooldown.clear()
+    toss_api._note_rate_limited("MARKET_DATA", 2)
+    assert toss_api._group_cooldown["MARKET_DATA"] > time.time()
+
+
+def test_rate_limit_smooths_calls_within_window():
+    """그룹 호출이 최소 간격으로 분산되어 즉시 폭주하지 않는다."""
+    g = "MARKET_DATA_CHART"  # rps=6 → 최소 간격 ≈ 0.167s
+    toss_api._group_hist[g].clear()
+    toss_api._group_cooldown.clear()
+
+    t0 = time.time()
+    for _ in range(6):
+        toss_api._throttle(g)
+    elapsed = time.time() - t0
+    # 즉시(0초)가 아니라 분산되어야 함 (5구간 × 0.167 ≈ 0.83s)
+    assert elapsed >= 0.4
+    assert len(toss_api._group_hist[g]) == 6
 
 
 def test_create_order_builds_body():

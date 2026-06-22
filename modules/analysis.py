@@ -2409,9 +2409,14 @@ def analyze_market_stocks(market_type):
             config.console.print(f"[dim]이름 기반 ETF/ETN 등 1차 제외 완료: {original_len}개 -> {len(stock_list)}개[/dim]\n")
             
         # [수정] 매수 체결강도 사용 여부 확인 프롬프트 간결화 및 기본값(n) 변경
-        use_vol_choice = Prompt.ask("매수 체결강도(수급) 조건을 사용하여 분석하시겠습니까? [dim](y: 사용, n: 미사용, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
-        if use_vol_choice in ['b', 'q']: return False
-        use_vol = (use_vol_choice == 'y')
+        # [추가] 토스증권은 체결강도(수급)를 제공하지 않으므로 프롬프트 없이 무조건 미사용 처리
+        if config.session.is_toss:
+            config.console.print("[dim]토스증권은 체결강도(수급)를 제공하지 않아 해당 조건을 미사용합니다.[/dim]")
+            use_vol = False
+        else:
+            use_vol_choice = Prompt.ask("매수 체결강도(수급) 조건을 사용하여 분석하시겠습니까? [dim](y: 사용, n: 미사용, 이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+            if use_vol_choice in ['b', 'q']: return False
+            use_vol = (use_vol_choice == 'y')
             
         config.console.print()
             
@@ -3043,6 +3048,32 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 if rt_price > chart_df.iloc[-1]['high']: chart_df.iloc[-1, chart_df.columns.get_loc('high')] = float(rt_price)
                 if rt_price < chart_df.iloc[-1]['low']: chart_df.iloc[-1, chart_df.columns.get_loc('low')] = float(rt_price)
         except: pass
+
+        # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.
+        # (이 함수는 이미 chart_df를 확보하므로 추가 API 호출 없이 out에 주입한다)
+        if config.session.is_toss and curr_data and curr_data.get('rt_cd') == '0' \
+           and chart_df is not None and not chart_df.empty:
+            _o = curr_data['output']
+            try:
+                _h52 = float(chart_df['high'].max()); _l52 = float(chart_df['low'].min())
+                _cur = float(chart_df['close'].iloc[-1])
+                _prev = float(chart_df['close'].iloc[-2]) if len(chart_df) >= 2 else _cur
+                if is_overseas:
+                    # 52주 위치는 가격 기반이므로 차트로 산출(detail 경로 유지),
+                    # PER/PBR/시가총액은 토스 미제공이라 N/A로 둔다.
+                    if not detail:
+                        detail = {}
+                    detail.setdefault('h52p', _h52)
+                    detail.setdefault('l52p', _l52)
+                    detail.setdefault('last', _cur)
+                    if _prev > 0:
+                        _o['diff'] = _cur - _prev
+                        _o['rate'] = (_cur - _prev) / _prev * 100
+                else:
+                    _o['w52_hgpr'] = str(_h52); _o['w52_lwpr'] = str(_l52)
+                    if _prev > 0:
+                        _o['stck_sdpr'] = str(int(_prev))  # 기준가(전일종가) → diff = 현재가 - 기준가
+            except Exception: pass
 
         ind = indicators.calculate_indicators(chart_df)
 

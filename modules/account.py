@@ -497,7 +497,7 @@ def get_account_balance():
 
     for i, (cano, acnt, label) in enumerate(accounts):
         if i > 0: config.console.print("\n")
-        config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}-{acnt})[/]")
+        config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}{'-' + acnt if acnt else ''})[/]")
         _display_balance_details(cano, acnt)
 
 def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
@@ -793,7 +793,7 @@ def get_deposit_balance():
             accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
 
     for cano, acnt, label in accounts:
-        config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}-{acnt})[/]")
+        config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}{'-' + acnt if acnt else ''})[/]")
         _display_asset_status(cano, acnt)
         
 def export_trade_history_to_excel():
