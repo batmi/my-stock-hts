@@ -1127,7 +1127,7 @@ def main():
                             logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                             
                             menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
-                            c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
+                            c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="1")
                             
                             if c_type.lower() not in ['b', 'q']:
                                 type_map = dict((k, v) for k, v, _ in menu_items_type)

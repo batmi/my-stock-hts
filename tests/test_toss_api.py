@@ -240,6 +240,173 @@ def test_chart_data_adapter_daily_paginates_to_250():
     assert len(df) == 250
 
 
+def test_chart_data_adapter_intraday_session_window():
+    """분봉은 nextBefore로 페이징하여 최신 거래일의 09:00~15:30(정규장)만 표시(KIS와 동일)."""
+    import api
+
+    from datetime import datetime as _dt, timedelta as _td
+    _base = _dt(2026, 6, 23, 15, 30)  # 정규장 마감 시각 기준 과거로 분 단위 캔들 생성
+
+    def make_page(start_idx):
+        candles = []
+        for i in range(start_idx, start_idx + 200):
+            ts = (_base - _td(minutes=i)).strftime("%Y-%m-%dT%H:%M:00+09:00")
+            candles.append({
+                "timestamp": ts,
+                "openPrice": "100", "highPrice": "110", "lowPrice": "90",
+                "closePrice": str(100 + i), "volume": "1000",
+            })
+        return candles
+
+    # 0~389분 전(=당일 09:01~15:30) + 그 이전(장전/전일, 윈도우 밖)
+    pages = [
+        {"candles": make_page(0), "nextBefore": "P2"},
+        {"candles": make_page(200), "nextBefore": "P3"},
+        {"candles": make_page(400), "nextBefore": "P4"},
+    ]
+    calls = {"n": 0}
+
+    def fake_candles(code, interval="1d", count=100, before=None, adjusted=True):
+        assert interval == "1m"
+        idx = calls["n"]
+        calls["n"] += 1
+        return pages[idx] if idx < len(pages) else {"candles": [], "nextBefore": None}
+
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", side_effect=fake_candles):
+            df = api.get_chart_data("005930", period_type='intraday')
+    finally:
+        config.session.is_toss = False
+
+    # 모든 행이 당일 09:00~15:30 구간 내
+    assert (df['date'].dt.hour >= 9).all()
+    assert ((df['date'].dt.hour < 15) | ((df['date'].dt.hour == 15) & (df['date'].dt.minute <= 30))).all()
+    assert df['date'].dt.normalize().nunique() == 1  # 단일 거래일
+    # 경계 확인 (15:30 포함, 09:00 이전 제외)
+    assert df.iloc[-1]['date'].strftime("%H:%M") == "15:30"
+    assert df['date'].dt.hour.min() == 9
+
+
+def test_chart_data_adapter_intraday_paginates_when_nextbefore_missing():
+    """분봉에서 nextBefore가 없어도 가장 오래된 timestamp를 before 커서로 폴백해 09:00까지 확보."""
+    import api
+
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    _kst = _tz(_td(hours=9))
+    _base = _dt(2026, 6, 23, 15, 30, tzinfo=_kst)
+
+    def page_before(before):
+        # before(가장 오래된 timestamp ISO) 이전 200개를 생성. before=None이면 최신부터.
+        if before is None:
+            start = 0
+        else:
+            bt = _dt.fromisoformat(before)
+            start = int((_base - bt).total_seconds() // 60) + 1
+        candles = []
+        for i in range(start, start + 200):
+            ts = (_base - _td(minutes=i)).strftime("%Y-%m-%dT%H:%M:00+09:00")
+            candles.append({
+                "timestamp": ts,
+                "openPrice": "100", "highPrice": "110", "lowPrice": "90",
+                "closePrice": str(100 + i), "volume": "1000",
+            })
+        # nextBefore는 항상 None → 폴백(oldest timestamp) 경로를 강제
+        return {"candles": candles, "nextBefore": None}
+
+    calls = {"n": 0}
+
+    def fake_candles(code, interval="1d", count=100, before=None, adjusted=True):
+        assert interval == "1m"
+        calls["n"] += 1
+        return page_before(before)
+
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", side_effect=fake_candles):
+            df = api.get_chart_data("005930", period_type='intraday')
+    finally:
+        config.session.is_toss = False
+
+    # nextBefore가 None이어도 2페이지 이상 페이징하여 09:00을 확보해야 한다
+    assert calls["n"] >= 2
+    assert df['date'].dt.hour.min() == 9
+    assert df.iloc[-1]['date'].strftime("%H:%M") == "15:30"
+
+
+def test_chart_data_adapter_intraday_today_session_only():
+    """KIS 당일분봉과 동일: 당일(최근 거래일) 정규장(09:00~15:30)만 표시.
+    시간외(NXT)·전일 캔들은 제외. 장전이면 당일 정규장 데이터가 없어 빈 값(→ 장전 안내)."""
+    import api
+
+    def C(ts):
+        return {"timestamp": ts, "openPrice": "100", "highPrice": "110",
+                "lowPrice": "90", "closePrice": "105", "volume": "1000"}
+
+    # 당일(23일): 장전 NXT(08:30) + 정규장(09:00/12:00/15:30) + 시간외 NXT(18:00)
+    # 전일(22일): 정규장(15:00) → 당일이 아니므로 제외
+    one_page = {
+        "candles": [
+            C("2026-06-23T18:00:00+09:00"),   # 당일 시간외(NXT) → 제외
+            C("2026-06-23T15:30:00+09:00"),
+            C("2026-06-23T12:00:00+09:00"),
+            C("2026-06-23T09:00:00+09:00"),
+            C("2026-06-23T08:30:00+09:00"),   # 당일 장전(NXT) → 제외
+            C("2026-06-22T15:00:00+09:00"),   # 전일 → 제외
+        ],
+        "nextBefore": None,
+    }
+
+    def fake_candles(code, interval="1d", count=100, before=None, adjusted=True):
+        return one_page if before is None else {"candles": [], "nextBefore": None}
+
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", side_effect=fake_candles):
+            df = api.get_chart_data("005930", period_type='intraday')
+    finally:
+        config.session.is_toss = False
+
+    # 당일(23일) 정규장 09:00~15:30만 (08:30/18:00/전일 제외)
+    assert df['date'].dt.normalize().nunique() == 1
+    assert df['date'].dt.day.unique().tolist() == [23]
+    assert df.iloc[0]['date'].strftime("%H:%M") == "09:00"
+    assert df.iloc[-1]['date'].strftime("%H:%M") == "15:30"
+    assert len(df) == 3  # 09:00, 12:00, 15:30
+
+
+def test_chart_data_adapter_intraday_premarket_returns_empty():
+    """장전 조회: 당일(최근 거래일)에 정규장 데이터가 없으면 빈 값을 반환(전일로 폴백하지 않음)."""
+    import api
+
+    def C(ts):
+        return {"timestamp": ts, "openPrice": "100", "highPrice": "110",
+                "lowPrice": "90", "closePrice": "105", "volume": "1000"}
+
+    # 당일(23일) 장전 NXT만 존재 + 전일(22일) 정규장 → 당일 정규장이 없으므로 빈 값
+    one_page = {
+        "candles": [
+            C("2026-06-23T08:22:00+09:00"),
+            C("2026-06-23T08:00:00+09:00"),
+            C("2026-06-22T15:30:00+09:00"),
+            C("2026-06-22T09:00:00+09:00"),
+        ],
+        "nextBefore": None,
+    }
+
+    def fake_candles(code, interval="1d", count=100, before=None, adjusted=True):
+        return one_page if before is None else {"candles": [], "nextBefore": None}
+
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", side_effect=fake_candles):
+            df = api.get_chart_data("005930", period_type='intraday')
+    finally:
+        config.session.is_toss = False
+
+    assert df.empty  # 당일 정규장 없음 → 빈 값(호출부에서 장전 안내)
+
+
 def test_chart_data_adapter_hourly_unsupported():
     import api
     config.session.is_toss = True
@@ -248,6 +415,34 @@ def test_chart_data_adapter_hourly_unsupported():
     finally:
         config.session.is_toss = False
     assert df.empty
+
+
+def test_chart_data_adapter_intraday_date_is_timestamp():
+    """분봉 date는 KIS와 동일하게 Timestamp여야 차트 X축 라벨('MM-DD HH:MM')이 동일 출력된다."""
+    import api
+    import pandas as pd
+    res = {
+        "candles": [
+            {"timestamp": "2026-06-23T09:31:00+09:00", "openPrice": "72000", "highPrice": "72100",
+             "lowPrice": "71900", "closePrice": "72050", "volume": "12000", "currency": "KRW"},
+            {"timestamp": "2026-06-23T09:30:00+09:00", "openPrice": "71900", "highPrice": "72000",
+             "lowPrice": "71800", "closePrice": "71950", "volume": "15000", "currency": "KRW"},
+        ],
+        "nextBefore": None,
+    }
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_candles", return_value=res):
+            df = api.get_chart_data("005930", is_overseas=False, period_type='intraday')
+    finally:
+        config.session.is_toss = False
+    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
+    # date는 문자열이 아닌 datetime64(Timestamp) → strftime 경로로 KIS와 동일 라벨
+    assert pd.api.types.is_datetime64_any_dtype(df['date'])
+    # 오름차순: 마지막 행이 최신(09:31), tz는 제거된 naive KST
+    last = df.iloc[-1]['date']
+    assert last.strftime("%m-%d %H:%M") == "06-23 09:31"
+    assert last.tzinfo is None
 
 
 def test_current_price_data_adapter():

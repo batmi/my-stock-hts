@@ -48,7 +48,19 @@ def setup_korean_font():
     except: pass
     plt.rcParams['axes.unicode_minus'] = False
 
+def _is_before_krx_open():
+    """현재(KST 로컬 시각)가 KRX 정규장 시작(09:00) 이전인지 여부."""
+    now = datetime.now()
+    return (now.hour, now.minute) < (9, 0)
+
 def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily'):
+    # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
+    # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
+    if period_type == 'hourly' and config.session.is_toss:
+        if not quiet:
+            config.console.print("[yellow]토스증권은 시봉(시간봉) 차트를 제공하지 않습니다. 일봉 또는 분봉을 이용해주세요.[/yellow]")
+        return
+
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
@@ -77,7 +89,11 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
                 config.console.print(f"[dim red][TRACE] 차트 데이터 수신 실패 (Empty)[/dim red]")
             else:
                 logging.error(f"[Chart] {name}({code}) 데이터 수신 실패 (Empty DataFrame). Period: {period_type}")
-            config.console.print(f"[red]{name} 데이터를 불러올 수 없습니다.[/]")
+            # 국내 분봉은 KRX 정규장 데이터만 제공 → 장 시작 전이면 안내 메시지로 구분
+            if period_type == 'intraday' and not is_overseas and _is_before_krx_open():
+                config.console.print("[yellow]분봉 차트는 KRX 장 시작(09:00) 이후에 확인할 수 있습니다.[/yellow]")
+            else:
+                config.console.print(f"[red]{name} 데이터를 불러올 수 없습니다.[/]")
             return
         
         # [로그] 데이터 수신 확인

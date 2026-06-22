@@ -68,6 +68,40 @@ def test_generate_visual_chart_no_data(mock_plt, mock_get_data):
     assert not mock_plt.figure.called
     assert not mock_plt.savefig.called
 
+@patch('modules.chart._is_before_krx_open', return_value=True)
+@patch('modules.chart.config.console.print')
+@patch('modules.chart.plt')
+@patch('modules.chart.api.get_chart_data')
+def test_generate_visual_chart_intraday_premarket_message(mock_get_data, mock_plt, mock_print, mock_pre):
+    """국내 분봉 + 장전(빈 데이터): '장 시작 후 확인' 안내(일반 실패 메시지 아님)."""
+    mock_get_data.return_value = pd.DataFrame()
+    chart.generate_visual_chart("005930", "삼성전자", False, period_type='intraday')
+    printed = " ".join(str(c) for c in mock_print.call_args_list)
+    assert "장 시작" in printed and "09:00" in printed
+    assert "데이터를 불러올 수 없습니다" not in printed
+
+@patch('modules.chart._is_before_krx_open', return_value=False)
+@patch('modules.chart.config.console.print')
+@patch('modules.chart.plt')
+@patch('modules.chart.api.get_chart_data')
+def test_generate_visual_chart_intraday_empty_after_open_generic(mock_get_data, mock_plt, mock_print, mock_pre):
+    """장 시작 후 분봉이 비면 일반 실패 메시지(장전 안내 아님)."""
+    mock_get_data.return_value = pd.DataFrame()
+    chart.generate_visual_chart("005930", "삼성전자", False, period_type='intraday')
+    printed = " ".join(str(c) for c in mock_print.call_args_list)
+    assert "데이터를 불러올 수 없습니다" in printed
+
+@patch('modules.chart.api.get_chart_data')
+def test_generate_visual_chart_toss_hourly_blocked(mock_get_data):
+    """토스 모드 + 시봉: 데이터 조회 없이 안내 후 종료(미제공 명시)."""
+    config.session.is_toss = True
+    try:
+        chart.generate_visual_chart("005930", "삼성전자", False, period_type='hourly')
+    finally:
+        config.session.is_toss = False
+    # 데이터 조회 자체를 시도하지 않아야 함 (matplotlib 적재도 회피)
+    assert not mock_get_data.called
+
 @patch('modules.chart.plt')
 @patch('modules.chart.api.get_chart_data')
 def test_generate_visual_chart_exception(mock_get_data, mock_plt):

@@ -2289,8 +2289,9 @@ class AutoTrader:
 
         if use_status:
             console.print("\n[red]자동매매 시스템이 중단되었습니다.[/red]")
-            if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
-                console.print("[bold red][ERROR] 시스템 트레이딩 정지 완료[/bold red]")
+            # 정상 정지 완료는 ERROR가 아님 → 진단(TRACE/DEBUG)에서만 중립 색으로 표기
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                console.print("[dim]시스템 트레이딩 정지 완료[/dim]")
             
         self.log("시스템 중단")
         

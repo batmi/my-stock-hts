@@ -235,6 +235,17 @@ def test_api_get_intraday_domestic_loop_escape(mock_call):
     assert len(df) == 1
     assert 'date' in df.columns
 
+@patch('api._get_intraday_yfinance')
+@patch('api.call_api')
+def test_api_get_intraday_domestic_premarket_empty(mock_call, mock_yf):
+    """장 시작 전 등으로 KIS 당일분봉이 비면 빈 값을 반환(yfinance 폴백 없음)."""
+    mock_call.return_value = {'rt_cd': '0', 'output2': []}  # 당일 데이터 없음
+
+    df = api._get_intraday_chart_data("005930", is_overseas=False)
+
+    assert df.empty
+    mock_yf.assert_not_called()  # 국내 장전엔 yfinance로 폴백하지 않음(원복)
+
 @patch('rich.prompt.Prompt.ask')
 @patch('api.get_current_price_data', return_value={'rt_cd': '0', 'output': {'last': '150.50'}})
 def test_utils_validate_confirm_stock_overseas(mock_cp_data, mock_ask):

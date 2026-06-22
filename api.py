@@ -1617,9 +1617,73 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
                 return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
         return None
 
+def _get_intraday_yfinance(code, is_overseas):
+    """yfinance 1분봉 폴백. 해외/지수, 또는 국내라도 장전 등으로 KIS 당일분봉이 빌 때 사용.
+    5일치를 받아 최근 390개(≈정규장 1세션)만 유지 → 장전이면 직전 거래일 세션이 된다."""
+    try:
+        # 국내 종목이 폴백을 탈 경우를 대비해 stock.json을 참조해 정확한 티커(.KS / .KQ) 생성
+        target_ticker = code
+        if not is_overseas and not code.startswith('^'):
+            market_suffix = None
+            for key in ["stocks_kr", "etfs_kr"]:
+                for item in config.session.stock_data.get(key, []):
+                    if item.get('code') == code and "exchange" in item:
+                        if item['exchange'].upper() == "KOSDAQ":
+                            market_suffix = ".KQ"
+                        elif item['exchange'].upper() == "KOSPI":
+                            market_suffix = ".KS"
+                        break
+                if market_suffix: break
+
+            if market_suffix:
+                target_ticker = f"{code}{market_suffix}"
+            else:
+                target_ticker = f"{code}.KS" # 기본값 코스피
+
+        logger.info(f"[API] '{target_ticker}' yfinance 분봉 조회 시도 (Fallback)...")
+        # yfinance는 1분봉 최대 7일, 5분봉 최대 60일 지원
+        df = fetch_yfinance_data(target_ticker, period="5d", interval="1m")
+        if df is not None and not df.empty:
+            # 1. 컬럼 평탄화 및 튜플 방어
+            flat_cols = []
+            for col in df.columns:
+                if isinstance(col, tuple):
+                    flat_cols.append(str(col[0]).lower())
+                else:
+                    flat_cols.append(str(col).lower())
+            df.columns = flat_cols
+
+            df.reset_index(inplace=True)
+
+            # 2. 소문자 변환
+            df.columns = [str(c).lower() for c in df.columns]
+            df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
+            if 'datetime' in df.columns: df.rename(columns={'datetime': 'date'}, inplace=True)
+
+            # [추가] yfinance 시간대 변환 (UTC/현지시간 -> 한국 시간 KST)
+            if 'date' in df.columns and pd.api.types.is_datetime64_any_dtype(df['date']):
+                if df['date'].dt.tz is not None:
+                    df['date'] = df['date'].dt.tz_convert('Asia/Seoul')
+
+            cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+            for c in cols:
+                if c not in df.columns: df[c] = 0
+
+            df = df[cols].copy().sort_values('date', ascending=True)
+
+            # 최근 390개 (약 6시간 30분 = 1일 장 운영 시간) 데이터만 유지
+            if len(df) > 390:
+                df = df.iloc[-390:]
+
+            return df.reset_index(drop=True)
+    except Exception as e:
+        logger.error(f"[API] yfinance 분봉 조회 실패: {e}")
+    return pd.DataFrame()
+
+
 def _get_intraday_chart_data(code, is_overseas):
     """분봉(1분) 데이터 조회 (KIS API 사용, 해외/지수는 yfinance Fallback)"""
-    
+
     # 1. KIS API 미지원 대상 확인 (해외주식, 지수 등)
     use_fallback = is_overseas
     if code.startswith('^') or (code.startswith('0001') and len(code) == 4):
@@ -1627,70 +1691,8 @@ def _get_intraday_chart_data(code, is_overseas):
 
     # Fallback 로직 (yfinance)
     if use_fallback:
-        try:
-            # [수정] 국내 종목이 Fallback을 탈 경우를 대비하여 stock.json을 참조해 정확한 티커(.KS / .KQ) 생성
-            target_ticker = code
-            if not is_overseas and not code.startswith('^'):
-                market_suffix = None
-                for key in ["stocks_kr", "etfs_kr"]:
-                    for item in config.session.stock_data.get(key, []):
-                        if item.get('code') == code and "exchange" in item:
-                            if item['exchange'].upper() == "KOSDAQ":
-                                market_suffix = ".KQ"
-                            elif item['exchange'].upper() == "KOSPI":
-                                market_suffix = ".KS"
-                            break
-                    if market_suffix: break
-                
-                if market_suffix:
-                    target_ticker = f"{code}{market_suffix}"
-                else:
-                    target_ticker = f"{code}.KS" # 기본값 코스피
+        return _get_intraday_yfinance(code, is_overseas)
 
-            logger.info(f"[API] '{target_ticker}' yfinance 분봉 조회 시도 (Fallback)...")
-            # yfinance는 1분봉 최대 7일, 5분봉 최대 60일 지원
-            # [수정] 5일치를 가져와서 최근 390개(약 1일 거래시간)만 추출하여 차트 여백 최소화
-            df = fetch_yfinance_data(target_ticker, period="5d", interval="1m")
-            if df is not None and not df.empty:
-                # 1. 컬럼 평탄화 및 튜플 방어
-                flat_cols = []
-                for col in df.columns:
-                    if isinstance(col, tuple):
-                        flat_cols.append(str(col[0]).lower())
-                    else:
-                        flat_cols.append(str(col).lower())
-                df.columns = flat_cols
-                
-                df.reset_index(inplace=True)
-                
-                # 2. 소문자 변환
-                df.columns = [str(c).lower() for c in df.columns]
-                df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
-                if 'datetime' in df.columns: df.rename(columns={'datetime': 'date'}, inplace=True)
-
-                # [추가] yfinance 시간대 변환 (UTC/현지시간 -> 한국 시간 KST)
-                if 'date' in df.columns and pd.api.types.is_datetime64_any_dtype(df['date']):
-                    if df['date'].dt.tz is not None:
-                        df['date'] = df['date'].dt.tz_convert('Asia/Seoul')
-                    else:
-                        pass
-
-                cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-                for c in cols:
-                    if c not in df.columns: df[c] = 0
-                    
-                df = df[cols].copy().sort_values('date', ascending=True)
-                
-                # 최근 390개 (약 6시간 30분 = 1일 장 운영 시간) 데이터만 유지
-                if len(df) > 390:
-                    df = df.iloc[-390:]
-                
-                return df.reset_index(drop=True)
-                return df
-        except Exception as e:
-            logger.error(f"[API] yfinance 분봉 조회 실패: {e}")
-        return pd.DataFrame()
-    
     # 국내 주식 KIS API 1분봉 조회
     # URL: /uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice
     # TR_ID: FHKST03010200
@@ -1739,10 +1741,11 @@ def _get_intraday_chart_data(code, is_overseas):
         time.sleep(0.1) # Rate Limit
     
     if not all_items:
+        # 장 시작 전/휴장 등으로 당일 분봉이 없으면 빈 값 반환 (호출부에서 장전 안내 처리)
         return pd.DataFrame()
-        
+
     df = pd.DataFrame(all_items)
-    
+
     # 컬럼 매핑 및 정제
     # stck_bsop_date: 일자, stck_cntg_hour: 시간
     # stck_prpr: 현재가, stck_oprc: 시가, stck_hgpr: 고가, stck_lwpr: 저가, cntg_vol: 체결량
@@ -2451,25 +2454,52 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
         # 토스는 1분/일봉만 제공 → 시봉 미지원
         return pd.DataFrame()
     interval = '1m' if period_type == 'intraday' else '1d'
-    target = 260 if interval == '1d' else 200  # 일봉은 52주(≈250거래일) 확보
-    max_pages = 4 if interval == '1d' else 1
+    # 일봉: 52주(≈250거래일) 확보.
+    # 분봉: KIS와 동일하게 "당일 정규장(09:00~15:30)"만 표시한다. 토스 1분봉은 NXT(대체거래소)
+    # 연장시간(08:00~20:00)까지 포함하므로, 장후(NXT 20:00)에 조회해도 당일 09:00까지 닿도록
+    # 하루 분량(≈720)을 커서로 모은다. (토스 count 최대 200 → 400은 [400] invalid-request)
+    target = 260 if interval == '1d' else 720
+    max_pages = 4 if interval == '1d' else 5
+    per_call = 200
 
     candles = []
     before = None
+    prev_cursor = None
+    page_log = []  # [진단] 분봉 페이징 추적
     try:
         for _ in range(max_pages):
-            res = toss_api.get_candles(code, interval=interval, count=200, before=before)
+            res = toss_api.get_candles(code, interval=interval, count=per_call, before=before)
             batch = (res or {}).get('candles', []) or []
+            nb = (res or {}).get('nextBefore')
+            if interval == '1m':
+                _tsb = [str(c.get('timestamp', '')) for c in batch if c.get('timestamp')]
+                page_log.append(
+                    f"before={before} → {len(batch)}건"
+                    f"[{min(_tsb) if _tsb else '-'}~{max(_tsb) if _tsb else '-'}] nextBefore={nb}")
             if not batch:
                 break
             candles.extend(batch)
-            before = (res or {}).get('nextBefore')
-            if not before or len(candles) >= target:
+            if len(candles) >= target:
                 break
+            # 다음 페이지 커서: nextBefore 우선, 없으면 이번 배치의 가장 오래된 timestamp로 폴백.
+            # (분봉은 nextBefore가 1페이지 후 끊기는 경우가 있어 09:00까지 못 가는 문제를 보완)
+            oldest_ts = min((str(c.get('timestamp', '')) for c in batch if c.get('timestamp')),
+                            default=None)
+            before = nb or oldest_ts
+            if not before or before == prev_cursor:  # 커서가 더 진행 못하면 중단(무한루프 방지)
+                break
+            prev_cursor = before
     except toss_api.TossApiError as e:
+        cand_err = e
         logger.debug(f"[Toss] 캔들 조회 실패({code}): {e}")
-        if not candles:
-            return pd.DataFrame()
+    else:
+        cand_err = None
+
+    if interval == '1m' and (config.FILE_DEBUG_LEVEL == "DEBUG" or cand_err):
+        # [진단] 페이지별 건수/시간범위/커서 + 에러를 1줄로 남긴다(에러는 항상 기록).
+        logger.warning(f"[Toss] 분봉({code}) 페이징 {len(page_log)}회: "
+                       + (" || ".join(page_log) if page_log else "(요청 결과 없음)")
+                       + (f" | ERROR={cand_err}" if cand_err else ""))
 
     if not candles:
         return pd.DataFrame()
@@ -2477,10 +2507,14 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     for c in candles:
         ts = str(c.get('timestamp', ''))
         if interval == '1d':
-            date = ts[:10].replace('-', '')
+            date = ts[:10].replace('-', '')  # YYYYMMDD 문자열 (KIS 일봉과 동일)
         else:
-            # 분봉: 정렬 가능한 키 (YYYYMMDDHHMM)
-            date = ts[:16].replace('-', '').replace('T', '').replace(':', '')
+            # 분봉: KIS(_get_intraday_chart_data)와 동일하게 Timestamp로 보관해야
+            # chart.format_date가 strftime 경로를 타 'MM-DD HH:MM' 라벨을 동일하게 출력한다.
+            # (12자리 문자열로 두면 format_date 어느 분기에도 안 걸려 raw 숫자가 X축에 찍힘)
+            date = pd.to_datetime(ts, errors='coerce')
+            if pd.notna(date) and getattr(date, 'tzinfo', None) is not None:
+                date = date.tz_convert('Asia/Seoul').tz_localize(None)
         rows.append({
             'date': date,
             'open': _toss_float(c.get('openPrice')),
@@ -2490,7 +2524,18 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
             'volume': _toss_float(c.get('volume')),
         })
     df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
-    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+    df = df.sort_values('date', ascending=True).reset_index(drop=True)
+    if interval == '1d':
+        return df.tail(250)
+
+    # 분봉: KIS 당일분봉과 동일하게 "당일(가장 최근 거래일)의 정규장(09:00~15:30)"만 표시.
+    # 토스의 시간외/NXT 연장(08:00~/~20:00) 캔들과 날짜 교차를 모두 제거한다.
+    # 장전에 조회하면 당일 정규장 데이터가 없어 빈 값이 되고(→ 호출부에서 장전 안내),
+    # 장중이면 09:00~현재, 장후면 09:00~15:30 전체가 된다.
+    last_day = df['date'].dt.normalize().max()
+    hh, mm = df['date'].dt.hour, df['date'].dt.minute
+    in_session = (hh >= 9) & ((hh < 15) | ((hh == 15) & (mm <= 30)))
+    return df[(df['date'].dt.normalize() == last_day) & in_session].reset_index(drop=True)
 
 
 def _toss_current_price_data(code, is_overseas):
