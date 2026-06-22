@@ -2811,6 +2811,7 @@ def send_telegram_photo(file_path, caption=None):
 # ==========================================================
 DART_BASE_URL = "https://opendart.fss.or.kr/api"
 _dart_corp_map_cache = None  # 프로세스 메모리 캐시
+_dart_corp_map_lock = threading.Lock()  # [중요] 동시 다운로드 방지용 락
 
 
 def call_dart(endpoint, params, timeout=10):
@@ -2850,6 +2851,20 @@ def get_dart_corp_map(force_refresh=False):
     if not config.DART_API_KEY:
         return {}
 
+    # [중요] 동시 다운로드 방지: 여러 워커 스레드(공시 수집 등)가 동시에 진입하면
+    # 각자 DART 기업코드 ZIP(수십 MB XML+10만건 dict)을 중복 다운로드/파싱해 메모리가
+    # 수배로 폭증(OOM)한다. 락으로 직렬화하여 한 스레드만 받고 나머지는 캐시를 재사용한다.
+    with _dart_corp_map_lock:
+        # 락 획득 후 재확인 (대기 중 다른 스레드가 이미 채웠을 수 있음)
+        if _dart_corp_map_cache is not None and not force_refresh:
+            return _dart_corp_map_cache
+
+        return _load_dart_corp_map_locked(force_refresh)
+
+
+def _load_dart_corp_map_locked(force_refresh):
+    """락 보유 상태에서 DART 기업코드 맵을 파일캐시/다운로드로 로드한다."""
+    global _dart_corp_map_cache
     cache_path = os.path.join(config.JSON_DIR, "dart_corp_map.json")
 
     # 파일 캐시 확인 (30일 이내면 재사용)
@@ -2869,15 +2884,20 @@ def get_dart_corp_map(force_refresh=False):
         import xml.etree.ElementTree as ET
         res = requests.get(f"{DART_BASE_URL}/corpCode.xml",
                            params={"crtfc_key": config.DART_API_KEY}, timeout=20)
-        zf = zipfile.ZipFile(io.BytesIO(res.content))
-        root = ET.fromstring(zf.read(zf.namelist()[0]))
 
+        # [메모리 최적화] 전체 XML(수십 MB)을 트리로 올리지 않고 스트리밍 파싱(iterparse)으로
+        # <list> 요소를 하나씩 처리 후 즉시 비워(clear) 메모리 피크를 최소화한다. (저사양 보호)
         corp_map = {}
-        for item in root.iter("list"):
-            stock_code = (item.findtext("stock_code") or "").strip()
-            corp_code = (item.findtext("corp_code") or "").strip()
-            if stock_code and corp_code:  # 상장사만 (비상장은 stock_code 공란)
-                corp_map[stock_code] = corp_code
+        with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+            with zf.open(zf.namelist()[0]) as xmlf:
+                for _evt, item in ET.iterparse(xmlf, events=("end",)):
+                    if item.tag != "list":
+                        continue
+                    stock_code = (item.findtext("stock_code") or "").strip()
+                    corp_code = (item.findtext("corp_code") or "").strip()
+                    if stock_code and corp_code:  # 상장사만 (비상장은 stock_code 공란)
+                        corp_map[stock_code] = corp_code
+                    item.clear()  # 처리한 요소 즉시 해제
 
         if corp_map:
             _dart_corp_map_cache = corp_map
