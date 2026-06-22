@@ -24,6 +24,7 @@ from modules import db_manager # [추가] DB 매니저
 from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
+import mem_diag  # [진단] 메모리 추적 (HTS_MEM_DIAG=1 일 때만 동작)
 
 console = config.console
 
@@ -1955,6 +1956,7 @@ class AutoTrader:
         if self.initialized:
             return True
 
+        mem_diag.log_event("init:enter")
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1998,6 +2000,7 @@ class AutoTrader:
                         key, value = future.result()
                         results[key] = value
 
+                mem_diag.log_event("init:after-balance-executor")
                 # 결과 처리
                 holdings, summary = results.get("balance", (None, None))
                 deposit_res = results.get("deposit")
@@ -2012,7 +2015,9 @@ class AutoTrader:
                 self.initial_summary = summary
                 
                 # [수정] 해외 자산 누락 방지를 위해 account 모듈의 통합 자산 조회 활용
+                mem_diag.log_event("init:before-asset-status")
                 asset_data = account.get_asset_status_data(target_cano, acnt)
+                mem_diag.log_event("init:after-asset-status")
                 if asset_data and asset_data.get('tot_asset', 0) > 0:
                     account_key = f"{target_cano}-{acnt}"
                     saved_initial = load_daily_initial_asset(account_key)
@@ -2064,6 +2069,7 @@ class AutoTrader:
                             console.print("[bold red][ERROR] 시스템 초기화 실패[/bold red]")
                     return
 
+            mem_diag.log_event("start:after-initialize")
             self.is_running = True
             self.start_time = datetime.now()
             self.consecutive_errors = 0
@@ -2071,9 +2077,10 @@ class AutoTrader:
             self._first_loop_flag = True
             self.market_status_notified = {}
             context.SYSTEM_LOGGER = self.log
-            
+
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
+            mem_diag.log_event("start:run-loop-thread-spawned")
 
             if api._is_screen_output_allowed():
                 console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
@@ -4192,9 +4199,13 @@ class AutoTrader:
                         status_msg = "RUNNING"
                         self.log(f"시스템 상태: {status_msg}")
                         
+                        if getattr(self, '_first_loop_flag', False) or not getattr(self, '_diag_first_done', False):
+                            mem_diag.log_event("runloop:first-iter-running")
                         # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
                         if getattr(config, 'USE_MARKET_FILTER', True):
                             self._update_market_indices_status()
+                        if not getattr(self, '_diag_first_done', False):
+                            mem_diag.log_event("runloop:after-update-indices")
                             
                         # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
                         # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
@@ -4232,10 +4243,17 @@ class AutoTrader:
                         time.sleep(0.2)
 
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
+                        if not getattr(self, '_diag_first_done', False):
+                            mem_diag.log_event("runloop:before-sell-check")
                         # 1. 매도 조건 점검 (리스크 관리)
                         self._check_sell_conditions(holdings, current_market_status)
+                        if not getattr(self, '_diag_first_done', False):
+                            mem_diag.log_event("runloop:before-buy-check")
                         # 2. 매수 조건 점검
                         self._check_buy_conditions(holdings, deposit_res, current_market_status)
+                        if not getattr(self, '_diag_first_done', False):
+                            mem_diag.log_event("runloop:after-buy-check")
+                            self._diag_first_done = True
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
                         

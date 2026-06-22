@@ -340,25 +340,6 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 JSON_DIR = os.path.join(BASE_DIR, "json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
-# [추가] 저사양(라즈베리파이 등) 메모리 보호 설정
-#  - CPU 코어 4개 이하면 자동으로 저사양 모드. 환경변수 HTS_LOW_SPEC=1로 강제 지정 가능.
-#  - HTS_LOW_SPEC=0 으로 강제 해제도 가능.
-def _detect_low_spec():
-    _env = os.environ.get("HTS_LOW_SPEC", "").strip().lower()
-    if _env in ("1", "true", "yes", "on"): return True
-    if _env in ("0", "false", "no", "off"): return False
-    return (os.cpu_count() or 1) <= 4
-
-LOW_SPEC_MODE = _detect_low_spec()
-
-# 차트 메모리 캐시(_CHART_CACHE) 최대 보관 종목 수 (0 = 무제한).
-# 저사양은 제한하여 OHLCV DataFrame 누적에 의한 RSS 폭증을 막는다.
-CHART_CACHE_MAX_ENTRIES = 60 if LOW_SPEC_MODE else 0
-
-# 기동 시 관심종목 차트 '전체 예열' 여부. 저사양은 끄고 필요할 때 온디맨드로 조회(메모리 절약).
-# (예열을 꺼도 차트는 사용 시점에 캐시되므로 기능 손실은 없고, 첫 스캔만 약간 느려진다.)
-PREFETCH_WATCHLIST_CHARTS = not LOW_SPEC_MODE
-
 # 디렉토리 자동 생성
 for d in [DB_DIR, CHART_DIR, DATA_DIR, JSON_DIR, LOG_DIR]:
     if not os.path.exists(d):
