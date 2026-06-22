@@ -958,6 +958,8 @@ def main():
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
+        # [진단] 무거운 import가 모두 끝난 지금부터 tracemalloc 추적 시작 (HTS_MEM_TRACE=1 시)
+        mem_diag.enable_trace()
         mem_diag.log_event("before-trader-init")
         # 비대화형 모드로 트레이딩 시작 (잔고/예수금 초기화가 TPS를 선점하도록 모니터보다 먼저 수행)
         trader.start(interactive=False)

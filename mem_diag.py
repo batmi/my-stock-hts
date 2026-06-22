@@ -39,6 +39,23 @@ def is_trace_enabled():
     return os.environ.get("HTS_MEM_TRACE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def enable_trace():
+    """tracemalloc 추적을 '이 시점부터' 시작한다.
+    [중요] 무거운 라이브러리 import 이후, 의심 구간(자동매매 초기화) 직전에 호출해야 한다.
+    import 시점에 켜면 pandas/numpy 등의 대량 할당까지 추적해 저사양 CPU에서 극도로 느려진다.
+    """
+    global _trace_on
+    if not _started or _trace_on or not is_trace_enabled():
+        return
+    try:
+        import tracemalloc
+        tracemalloc.start(4)  # 4 프레임까지 추적 (오버헤드 절감)
+        _trace_on = True
+        log_event("trace-enabled")
+    except Exception:
+        _trace_on = False
+
+
 def _dump_top_allocations(tag=""):
     """현재 메모리를 가장 많이 점유한 할당 위치(파일:라인) 상위 10개를 기록한다."""
     if not _trace_on:
@@ -201,19 +218,11 @@ def _sampler(interval, top_every):
 
 def start(interval=1.0, top_every=5):
     """진단 로거 시작. HTS_MEM_DIAG 미설정 시 아무 동작도 하지 않는다."""
-    global _thread, _running, _started, _trace_on, _last_dump_rss
+    global _thread, _running, _started, _last_dump_rss
     if not is_enabled() or _started:
         return False
     _started = True
     _running = True
-
-    _trace_on = is_trace_enabled()
-    if _trace_on:
-        try:
-            import tracemalloc
-            tracemalloc.start(8)  # 8 프레임까지 추적
-        except Exception:
-            _trace_on = False
     _last_dump_rss = 0
 
     sysm = _read_sys_mem()
