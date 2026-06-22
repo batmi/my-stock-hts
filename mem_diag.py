@@ -28,10 +28,30 @@ _running = False
 _started = False
 _trace_on = False
 _last_dump_rss = 0
+_fault_fh = None
+_STACKS_PATH = os.path.join(_ROOT, "logs", "mem_diag_stacks.log")
 
 
 def is_enabled():
     return os.environ.get("HTS_MEM_DIAG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _start_faulthandler():
+    """faulthandler로 모든 스레드 스택을 주기적으로 파일에 덤프한다.
+    C 레벨에서 동작하므로 GIL이 잡혀 파이썬이 얼어붙어도(메모리 폭증/CPU 폭주) 그 순간
+    '어느 함수가 실행 중인지'를 포착할 수 있다. → logs/mem_diag_stacks.log"""
+    global _fault_fh
+    try:
+        import faulthandler
+        os.makedirs(os.path.dirname(_STACKS_PATH), exist_ok=True)
+        _fault_fh = open(_STACKS_PATH, "a", buffering=1)
+        _fault_fh.write(f"\n===== faulthandler armed {datetime.now()} pid={os.getpid()} =====\n")
+        _fault_fh.flush()
+        os.fsync(_fault_fh.fileno())
+        # 3초마다 모든 스레드 스택 덤프 (반복)
+        faulthandler.dump_traceback_later(3, repeat=True, file=_fault_fh)
+    except Exception:
+        pass
 
 
 def is_trace_enabled():
@@ -262,6 +282,8 @@ def start(interval=1.0, top_every=5):
     _started = True
     _running = True
     _last_dump_rss = 0
+
+    _start_faulthandler()  # [진단] C 레벨 스레드 스택 주기 덤프 (얼어붙어도 포착)
 
     sysm = _read_sys_mem()
     hdr = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
