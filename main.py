@@ -31,6 +31,7 @@ import context # [추가]
 config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중...")
 
 import api
+import toss_api  # [추가] 토스증권 클라이언트 (mode 3)
 import utils
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
@@ -198,7 +199,13 @@ def preflight_check():
     checks_ok = True
     
     # 1. API 키 점검
-    if config.session.is_simulation:
+    if config.session.is_toss:
+        if not config.session.toss_app_key or not config.session.toss_app_secret:
+            config.console.print("  - [bold red]실패[/]: 토스 API Key/Secret(TOSS_APP_KEY)이 설정되지 않았습니다.")
+            checks_ok = False
+        else:
+            config.console.print("  - 성공: 토스 API Key/Secret 확인 완료.")
+    elif config.session.is_simulation:
         if not config.session.app_key or not config.session.app_secret:
             config.console.print("  - [bold red]실패[/]: 모의투자 API Key/Secret이 설정되지 않았습니다.")
             checks_ok = False
@@ -226,12 +233,25 @@ def preflight_check():
         transient=True
     ) as progress:
         progress.add_task("[cyan]  - API 토큰 발급 테스트 중...[/cyan]", total=None)
-        token = api.get_access_token(force_refresh=True) if config.session.is_simulation else api.get_real_access_token(force_refresh=True)
+        if config.session.is_toss:
+            token = toss_api.get_access_token(force_refresh=True)
+        elif config.session.is_simulation:
+            token = api.get_access_token(force_refresh=True)
+        else:
+            token = api.get_real_access_token(force_refresh=True)
         if token:
             token_ok = True
-    
+            # [추가] 토스: 토큰 발급 후 accountSeq 해석(계좌 매칭)
+            if config.session.is_toss:
+                seq = toss_api.resolve_account_seq(force=True)
+                if seq is None:
+                    token_ok = False
+                    config.console.print("  - [bold red]실패[/]: 토스 계좌(accountSeq)를 확인하지 못했습니다.")
+
     if token_ok:
         config.console.print("  - 성공: API 토큰 발급 테스트 완료.")
+        if config.session.is_toss and config.session.toss_account_seq is not None:
+            config.console.print(f"  - 성공: 토스 계좌 확인 (seq={config.session.toss_account_seq}).")
     else:
         config.console.print("  - [bold red]실패[/]: API 토큰 발급에 실패했습니다. (서버 점검 또는 Key 오류)")
         checks_ok = False
@@ -849,9 +869,12 @@ def main():
 
   3. 실전투자 모드로 바로 시작 (텔레그램 봇 수신 비활성화):
      ./run.sh --mode 2 --no-bot  (또는 run.bat ...)
+
+  4. 토스증권 모드로 실행:
+     ./run.sh --mode 3
 """
     )
-    parser.add_argument('--mode', choices=['1', '2'], help='투자 모드 선택 (1: 모의투자, 2: 실전투자)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
+    parser.add_argument('--mode', choices=['1', '2', '3'], help='투자 모드 선택 (1: 모의투자, 2: 실전투자, 3: 토스증권)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
     parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
     parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
     args = parser.parse_args()

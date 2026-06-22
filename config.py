@@ -328,6 +328,10 @@ INDICES_GROUPS = {
 SIM_TX_PER_SECOND = 2     # 모의투자 서버 최대 TPS: 2
 REAL_TX_PER_SECOND = 20   # 실전투자 서버 최대 TPS: 20
 
+# [추가] 토스증권 Open API 기본 호출 한도 (그룹별 토큰버킷이나, 보수적 단일 간격으로 운영)
+# 예시 burst가 10/s 이므로 안전하게 8/s 수준으로 제한한다.
+TOSS_TX_PER_SECOND = 8
+
 # ==========================================================
 # [설정] 파일 경로 관리
 # ==========================================================
@@ -402,6 +406,9 @@ session = SessionManager()
 # 서버 URL 상수 정의
 SIM_URL = "https://openapivts.koreainvestment.com:29443"
 REAL_URL = "https://openapi.koreainvestment.com:9443"
+
+# [추가] 토스증권 Open API 서버 URL
+TOSS_URL = "https://openapi.tossinvest.com"
 
 # [추가] 로그 파일명 변경을 위한 Namer 함수
 def _log_namer(name):

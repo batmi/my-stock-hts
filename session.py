@@ -8,6 +8,7 @@ import config
 class SessionManager:
     def __init__(self):
         self.is_simulation = False
+        self.is_toss = False  # [추가] 토스증권 모드 여부
         self.url_base = ""
         
         # 현재 활성 계좌 정보 (모드에 따라 변경됨)
@@ -30,6 +31,12 @@ class SessionManager:
         self.auto_cano = ""
         self.auto_acnt_prdt_cd = ""
         
+        # [추가] 토스증권 (TOSS_) 정보
+        self.toss_app_key = ""
+        self.toss_app_secret = ""
+        self.toss_acc_num = ""
+        self.toss_account_seq = None  # /accounts 조회로 해석되는 accountSeq
+
         # 토큰 관리 (API 모듈에서 사용)
         self.sim_access_token = ""
         self.real_access_token = ""
@@ -59,6 +66,11 @@ class SessionManager:
         # 자동투자 (AUTO_)
         self.auto_app_key = os.environ.get("AUTO_APP_KEY", "")
         self.auto_app_secret = os.environ.get("AUTO_APP_SECRET", "")
+
+        # [추가] 토스증권 (TOSS_)
+        self.toss_app_key = os.environ.get("TOSS_APP_KEY", "")
+        self.toss_app_secret = os.environ.get("TOSS_APP_SECRET", "")
+        self.toss_acc_num = os.environ.get("TOSS_ACC_NUM", "").strip()
         
         # 계좌번호 (ACC_NUM)
         sim_acc_str = os.environ.get("SIM_ACC_NUM", "")
@@ -94,7 +106,8 @@ class SessionManager:
             config.console.print("\n접속할 서버를 선택하세요:")
             config.console.print("[1] 모의투자 (Simulation)")
             config.console.print("[2] 실전투자 (Real Trading)")
-            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "q"], default="1")
+            config.console.print("[3] 토스증권 (Toss, 실전)")
+            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "q"], default="1")
             if mode == 'q': sys.exit()
 
         if mode == '1':
@@ -122,6 +135,20 @@ class SessionManager:
             # [추가] 모의투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
                 config.console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
+        elif mode == '3':
+            # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.
+            self.is_simulation = False
+            self.is_toss = True
+            self.url_base = config.TOSS_URL
+
+            # 화면 표시용 계좌번호 (accountSeq는 preflight에서 토큰 발급 후 /accounts로 해석)
+            self.cano = self.toss_acc_num
+            self.acnt_prdt_cd = ""
+
+            config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
+
+            if not self.toss_app_key or not self.toss_app_secret:
+                config.console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
         else:
             self.is_simulation = False
             self.url_base = config.REAL_URL
@@ -141,14 +168,22 @@ class SessionManager:
             if not self.app_key or not self.app_secret:
                 config.console.print("[bold red]⚠️ 경고: 실전투자용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
             
+        # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
+        if self.is_toss:
+            key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
+            config.console.print(f"\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
+            config.console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
+            config.console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
+            return
+
         # [추가] 계좌 정보 누락 시 사용자 입력 요청
         if not self.cano:
             config.console.print("\n[bold yellow]⚠️ 계좌번호(CANO)가 설정되지 않았습니다.[/bold yellow]")
             self.cano = Prompt.ask("계좌번호 앞 8자리 입력")
-            
+
         if not self.acnt_prdt_cd and self.cano:
             self.acnt_prdt_cd = Prompt.ask("계좌 상품코드(2자리) 입력", default="01")
-            
+
         # [추가] 로드된 설정 정보 확인 메시지 출력
         key_status = "OK" if self.app_key and self.app_secret else "MISSING"
         env_label = "모의투자" if self.is_simulation else "실전투자"
