@@ -1966,7 +1966,9 @@ class AutoTrader:
             transient=True,
             disable=not api._is_screen_output_allowed() # [추가] 텔레그램 스레드 등 백그라운드에서는 상태바 숨김
         ) as progress:
-            task = progress.add_task("[cyan]자동매매 세션 초기화 중...[/cyan]", total=3)
+            # [수정] 모의투자는 예수금을 잔고 summary에서 유도하므로 작업 2개(잔고/DB), 실전은 3개(+예수금)
+            _init_total = 2 if config.session.is_simulation else 3
+            task = progress.add_task("[cyan]자동매매 세션 초기화 중...[/cyan]", total=_init_total)
             
             target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -2002,7 +2004,12 @@ class AutoTrader:
                     return "caches", (ts_cache, half_cache)
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                    futures = [executor.submit(_fetch_balance), executor.submit(_fetch_deposit), executor.submit(_load_db_caches)]
+                    # [수정] 모의투자는 잔고 summary에 예수금이 포함되어 있어 별도 예수금 API 호출이 불필요.
+                    # 초기화 시 중복 잔고조회(get_domestic_balance)+예수금조회가 2-TPS 경합으로 재시도
+                    # 폭주를 일으켜 메모리가 폭증하던 문제를 제거한다. (실전만 별도 예수금 조회 수행)
+                    futures = [executor.submit(_fetch_balance), executor.submit(_load_db_caches)]
+                    if not config.session.is_simulation:
+                        futures.append(executor.submit(_fetch_deposit))
                     for future in concurrent.futures.as_completed(futures):
                         key, value = future.result()
                         results[key] = value
@@ -2010,8 +2017,17 @@ class AutoTrader:
                 mem_diag.log_event("init:after-balance-executor")
                 # 결과 처리
                 holdings, summary = results.get("balance", (None, None))
-                deposit_res = results.get("deposit")
                 ts_cache, half_cache = results.get("caches", ({}, set()))
+
+                if config.session.is_simulation:
+                    # [수정] 모의투자: 잔고 summary에서 예수금 유도 (_run_loop와 동일 방식)
+                    deposit_res = None
+                    if summary:
+                        dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                        d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                        deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
+                else:
+                    deposit_res = results.get("deposit")
 
                 if holdings is None or deposit_res is None:
                     raise Exception("자산/예수금 조회 실패 (API 응답 없음)")
