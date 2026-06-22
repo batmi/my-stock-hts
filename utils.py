@@ -225,8 +225,12 @@ def print_breadcrumb():
         # 1-Depth 메뉴일 때만 박스형 헤더 적용, 그 이상은 심플하게 표시
         if len(context.USER_ACTION_BREADCRUMB) == 1:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-            env_color = "green" if config.session.is_simulation else "bold red"
+            if config.session.is_toss:
+                env_str = "[토스증권]"; env_color = "magenta"
+            elif config.session.is_simulation:
+                env_str = "[모의투자]"; env_color = "green"
+            else:
+                env_str = "[실전투자]"; env_color = "bold red"
             
             print("\n" + "─"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")

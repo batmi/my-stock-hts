@@ -485,14 +485,16 @@ def get_account_balance():
     time.sleep(0.5)
     
     accounts = []
-    if config.session.is_simulation:
+    if config.session.is_toss:
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
+    elif config.session.is_simulation:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
         if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
            (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
             accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
-    
+
     for i, (cano, acnt, label) in enumerate(accounts):
         if i > 0: config.console.print("\n")
         config.console.print(f"\n[bold cyan]{label} 계좌 잔고 ({cano}-{acnt})[/]")
@@ -780,14 +782,16 @@ def get_deposit_balance():
     time.sleep(0.5)
     
     accounts = []
-    if config.session.is_simulation:
+    if config.session.is_toss:
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
+    elif config.session.is_simulation:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
         if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
            (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
             accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
-            
+
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}-{acnt})[/]")
         _display_asset_status(cano, acnt)

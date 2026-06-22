@@ -145,6 +145,13 @@ class SessionManager:
             self.cano = self.toss_acc_num
             self.acnt_prdt_cd = ""
 
+            # [중요] 토스는 단일 주식계좌만 제공한다. 시스템 트레이딩용 '자동' 계좌 개념이
+            # 없으므로, KIS용 AUTO_* 설정을 비워 자산/잔고 화면에 중복 계좌가 뜨지 않게 한다.
+            self.auto_cano = ""
+            self.auto_acnt_prdt_cd = ""
+            self.auto_app_key = ""
+            self.auto_app_secret = ""
+
             config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
 
             if not self.toss_app_key or not self.toss_app_secret:

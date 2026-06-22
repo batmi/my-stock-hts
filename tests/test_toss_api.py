@@ -102,6 +102,78 @@ def test_request_error_envelope_raises():
             assert e.status == 404
 
 
+def test_domestic_balance_adapter_kr_shape():
+    """토스 holdings → KIS get_domestic_balance(output1/output2) 변환 검증."""
+    import api
+    holdings = {
+        "items": [
+            {"symbol": "005930", "name": "삼성전자", "marketCountry": "KR", "currency": "KRW",
+             "quantity": "10", "lastPrice": "72000", "averagePurchasePrice": "65000",
+             "marketValue": {"amount": "720000"},
+             "profitLoss": {"amount": "70000", "rate": "0.1077"}},
+            {"symbol": "AAPL", "name": "Apple", "marketCountry": "US", "currency": "USD",
+             "quantity": "5", "lastPrice": "180", "averagePurchasePrice": "150",
+             "marketValue": {"amount": "900"}, "profitLoss": {"amount": "150", "rate": "0.2"}},
+        ]
+    }
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_holdings", return_value=holdings), \
+             patch("toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "5000000"}):
+            output1, output2 = api.get_domestic_balance()
+    finally:
+        config.session.is_toss = False
+
+    # KR 종목만 output1 에 포함
+    assert len(output1) == 1
+    row = output1[0]
+    assert row["pdno"] == "005930"
+    assert row["hldg_qty"] == "10"
+    assert row["evlu_amt"] == "720000"
+    assert row["evlu_pfls_rt"] == "10.77"  # 0.1077 → 10.77%
+    # 예수금/요약
+    summary = output2[0]
+    assert summary["dnca_tot_amt"] == "5000000"
+    assert summary["scts_evlu_amt"] == "720000"
+
+
+def test_overseas_balance_adapter_us_only():
+    import api
+    holdings = {
+        "items": [
+            {"symbol": "005930", "name": "삼성전자", "marketCountry": "KR",
+             "quantity": "10", "averagePurchasePrice": "65000",
+             "marketValue": {"amount": "720000"}, "profitLoss": {"amount": "70000", "rate": "0.1"}},
+            {"symbol": "AAPL", "name": "Apple", "marketCountry": "US", "market": "NASDAQ",
+             "quantity": "5", "lastPrice": "180", "averagePurchasePrice": "150",
+             "profitLoss": {"amount": "150", "rate": "0.2"}},
+        ]
+    }
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_holdings", return_value=holdings):
+            out = api.get_overseas_balance()
+    finally:
+        config.session.is_toss = False
+    assert len(out) == 1
+    assert out[0]["ovrs_pdno"] == "AAPL"
+    assert out[0]["ord_psbl_qty"] == "5.0"
+    assert out[0]["evlu_pfls_rt"] == "20.0"
+
+
+def test_deposit_balance_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "1234567"}):
+            res = api.get_deposit_balance()
+    finally:
+        config.session.is_toss = False
+    assert res["deposit"] == 1234567
+    assert res["order_possible"] == 1234567
+    assert res["foreign_deposit"] == 0
+
+
 def test_create_order_builds_body():
     config.session.toss_account_seq = 1
     captured = {}

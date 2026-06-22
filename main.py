@@ -169,8 +169,12 @@ def _get_preset_emoji():
 def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    env_str = "[모의투자]" if config.session.is_simulation else "[실전투자]"
-    env_color = "bold yellow" if config.session.is_simulation else "bold red"
+    if config.session.is_toss:
+        env_str = "[토스증권]"; env_color = "bold magenta"
+    elif config.session.is_simulation:
+        env_str = "[모의투자]"; env_color = "bold yellow"
+    else:
+        env_str = "[실전투자]"; env_color = "bold red"
     emoji = _get_preset_emoji()
     
     config.console.print("\n[dim]" + "─"*50 + "[/dim]")

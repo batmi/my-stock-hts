@@ -21,6 +21,7 @@ from collections import deque
 import config
 import context # [추가] 상태 관리 모듈
 import constants
+import toss_api  # [추가] 토스증권(mode 3) 클라이언트
 from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
@@ -2265,8 +2266,114 @@ def _prepare_account_params(cano, acnt_prdt_cd):
         
     return cano, acnt_prdt_cd
 
+# =========================================================================
+# [추가] 토스증권(mode 3) 어댑터
+#   토스 응답을 KIS 화면 코드가 기대하는 형태(output1/output2 등)로 변환한다.
+#   토스가 제공하지 않는 필드는 0/공란으로 채운다.
+# =========================================================================
+def _toss_int(v, default=0):
+    try:
+        if v is None: return default
+        return int(float(str(v).replace(',', '')))
+    except Exception:
+        return default
+
+
+def _toss_float(v, default=0.0):
+    try:
+        if v is None: return default
+        return float(str(v).replace(',', ''))
+    except Exception:
+        return default
+
+
+def _toss_krw_deposit():
+    """토스 매수 가능 금액(KRW, 현금)을 예수금 근사치로 사용한다."""
+    try:
+        bp = toss_api.get_buying_power("KRW")
+        return _toss_int(bp.get('cashBuyingPower')) if bp else 0
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] buying-power 조회 실패: {e}")
+        return 0
+
+
+def _toss_domestic_balance():
+    """토스 보유주식(KR) → KIS get_domestic_balance (output1, output2) 형태."""
+    try:
+        ov = toss_api.get_holdings()
+    except toss_api.TossApiError as e:
+        logger.error(f"[Toss] 보유주식 조회 실패: {e}")
+        return None, None
+
+    items = (ov or {}).get('items', []) or []
+    output1 = []
+    tot_eval = 0
+    for it in items:
+        if it.get('marketCountry') != 'KR':
+            continue
+        mv = it.get('marketValue', {}) or {}
+        pl = it.get('profitLoss', {}) or {}
+        evlu_amt = _toss_int(mv.get('amount'))
+        tot_eval += evlu_amt
+        output1.append({
+            'pdno': it.get('symbol', ''),
+            'prdt_name': it.get('name', ''),
+            'hldg_qty': str(_toss_int(it.get('quantity'))),
+            'pchs_avg_pric': str(_toss_float(it.get('averagePurchasePrice'))),
+            'evlu_amt': str(evlu_amt),
+            'evlu_pfls_amt': str(_toss_int(pl.get('amount'))),
+            'evlu_pfls_rt': str(round(_toss_float(pl.get('rate')) * 100, 2)),
+            'prpr': str(_toss_int(it.get('lastPrice'))),
+        })
+
+    deposit = _toss_krw_deposit()
+    summary = {
+        'tot_evlu_amt': str(tot_eval + deposit),
+        'scts_evlu_amt': str(tot_eval),
+        'dnca_tot_amt': str(deposit),
+        'nxdy_excc_amt': str(deposit),
+        'prvs_rcdl_excc_amt': str(deposit),
+        'bfdy_sll_amt': '0', 'bfdy_buy_amt': '0',
+        'bfdy_tlex_amt': '0', 'thdt_tlex_amt': '0',
+    }
+    logger.info(f"[Toss] 잔고 조회 결과: 종목수={len(output1)}, 총평가금(주식)={tot_eval:,}원")
+    return output1, [summary]
+
+
+def _toss_overseas_balance():
+    """토스 보유주식(US) → KIS get_overseas_balance 형태(list)."""
+    try:
+        ov = toss_api.get_holdings()
+    except toss_api.TossApiError as e:
+        logger.error(f"[Toss] 해외 보유주식 조회 실패: {e}")
+        return []
+
+    items = (ov or {}).get('items', []) or []
+    out = []
+    for it in items:
+        if it.get('marketCountry') != 'US':
+            continue
+        pl = it.get('profitLoss', {}) or {}
+        qty = _toss_float(it.get('quantity'))
+        out.append({
+            'ovrs_pdno': it.get('symbol', ''),
+            'ovrs_item_name': it.get('name', ''),
+            'prdt_name': it.get('name', ''),
+            'ovrs_cblc_qty': str(qty),
+            'ord_psbl_qty': str(qty),
+            'pchs_avg_pric': str(_toss_float(it.get('averagePurchasePrice'))),
+            'frcr_evlu_pfls_amt': str(_toss_float(pl.get('amount'))),
+            'evlu_pfls_rt': str(round(_toss_float(pl.get('rate')) * 100, 2)),
+            'now_pric2': str(_toss_float(it.get('lastPrice'))),
+            '_exchange': it.get('market', 'NASD'),
+        })
+    return out
+
+
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
+    if config.session.is_toss:
+        return _toss_domestic_balance()
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     
     # [수정] 조회 구분: 모의투자는 '02'(종목별), 실전투자는 '01'(대출일별 - API 제한 대응)
@@ -2300,6 +2407,8 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
 
 def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """해외 주식 잔고 조회"""
+    if config.session.is_toss:
+        return _toss_overseas_balance()
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     target_exchanges = ["NASD", "NYSE", "AMEX"]
     all_holdings = []
@@ -2323,6 +2432,9 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
 
 def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
     """금일 투자 손익 요약 조회"""
+    # [추가] 토스: 금일 손익 요약 미제공 → 빈 값
+    if config.session.is_toss:
+        return {'rt_cd': '0', 'output2': []}
     # [수정] 모의투자 서버는 기간별 손익 조회(TTTC8494R/VTTC8494R)를 지원하지 않음 (OPSQ0002 에러 발생)
     # 따라서 모의투자일 경우 API 호출을 생략하고 빈 값 반환하여 에러 로그 방지
     if config.session.is_simulation:
@@ -2343,6 +2455,9 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
 
 def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 체결 내역 조회"""
+    # [추가] 토스: 당일 체결 이력 조회 경로 미지원 → 빈 값
+    if config.session.is_toss:
+        return {'rt_cd': '0', 'output1': []}
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     
@@ -2372,6 +2487,9 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 해외주식 체결 내역 조회"""
+    # [추가] 토스: 당일 체결 이력 조회 경로 미지원 → 빈 값
+    if config.session.is_toss:
+        return {'rt_cd': '0', 'output': []}
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     
@@ -2598,7 +2716,13 @@ def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     return call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["DEPOSIT"], "domestic", "inquiry", "deposit", params=params, retries=retries)
 
 def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, retries=None):
-    """예수금 및 자산 현황 조회 (모의/실전 자동 분기)"""
+    """예수금 및 자산 현황 조회 (모의/실전/토스 자동 분기)"""
+    # [추가] 토스: 매수가능금액(현금)을 예수금으로 사용. D+1/D+2 구분은 제공되지 않음.
+    if config.session.is_toss:
+        dep = _toss_krw_deposit()
+        return {"deposit": dep, "foreign_deposit": 0, "withdraw": dep,
+                "d2_deposit": dep, "order_possible": dep, "d2_real": dep}
+
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0, "order_possible": 0, "d2_real": 0}
     success = False # [추가] 조회 성공 여부 플래그
