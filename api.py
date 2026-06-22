@@ -746,6 +746,11 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
 
 def prefetch_watchlists_async():
     """백그라운드에서 관심 종목의 차트 데이터를 캐싱(Warming)합니다."""
+    # [진단] HTS_NO_PREFETCH=1 이면 예열을 통째로 건너뛴다 (메모리 폭증 원인 A/B 테스트용)
+    if os.environ.get("HTS_NO_PREFETCH", "").strip().lower() in ("1", "true", "yes", "on"):
+        logger.info("[Cache] HTS_NO_PREFETCH=1: 관심종목 예열을 건너뜁니다.")
+        return None
+
     def worker():
         try:
             # [수정] 1. 글로벌 지수 데이터 백그라운드 예열 (로직 개선)
@@ -2606,8 +2611,14 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
     if config.session.is_simulation:
         # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
         # skip_balance_check가 True이면(이미 외부에서 조회했다면) 건너뜀
+        try:
+            import mem_diag; mem_diag.log_event("deposit:before-balance-call")
+        except Exception: pass
         holdings, summary_list = ([], []) if skip_balance_check else get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
-        
+        try:
+            import mem_diag; mem_diag.log_event("deposit:after-balance-call")
+        except Exception: pass
+
         if summary_list and len(summary_list) > 0:
             summary = summary_list[0]
             res['deposit'] = int(float(summary.get('dnca_tot_amt', 0)))
@@ -2624,7 +2635,13 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
             success = True
         
         # [수정] 모의투자도 주문가능금액 상세 조회 (VTTC8908R) 수행하여 정확한 값(nrcvb_buy_amt) 확인
+        try:
+            import mem_diag; mem_diag.log_event("deposit:before-get_deposit-call")
+        except Exception: pass
         data_order = get_deposit(cano, acnt_prdt_cd, retries=retries)
+        try:
+            import mem_diag; mem_diag.log_event("deposit:after-get_deposit-call")
+        except Exception: pass
         if data_order.get('rt_cd') == '0':
             output = data_order.get('output', {})
             # 모의투자는 nrcvb_buy_amt(미수없는매수금액) 필드가 실질적인 주문가능금액
