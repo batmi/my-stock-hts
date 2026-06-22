@@ -890,8 +890,26 @@ class ThrottledSession(requests.Session):
             try:
                 if 'timeout' not in kwargs:
                     kwargs['timeout'] = config.DEFAULT_TIMEOUT
-                
+
+                # [진단] KIS 요청 직전 마커 (재시도/거대응답으로 인한 메모리 폭증 위치 특정)
+                if (is_real_server or is_sim_server):
+                    try:
+                        import mem_diag
+                        if mem_diag.is_enabled():
+                            mem_diag.log_event(f"http:req attempt={attempt} {url.split('/')[-1].split('?')[0][:40]}")
+                    except Exception: pass
+
                 response = super().request(method, url, *args, **kwargs)
+
+                # [진단] 응답 직후: 비정상적으로 큰 응답(>3MB) 기록 (거대/스트리밍 응답 탐지)
+                if (is_real_server or is_sim_server):
+                    try:
+                        import mem_diag
+                        if mem_diag.is_enabled():
+                            _clen = len(response.content) if response is not None else 0
+                            if _clen > 3 * 1024 * 1024:
+                                mem_diag.log_event(f"http:HUGE-RESP {_clen//1048576}MB attempt={attempt} {url.split('/')[-1].split('?')[0][:40]}")
+                    except Exception: pass
 
                 if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
                     rt_cd = "-"

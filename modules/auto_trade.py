@@ -2037,14 +2037,24 @@ class AutoTrader:
                 self.initial_holdings = holdings
                 self.initial_summary = summary
                 
-                # [수정] 해외 자산 누락 방지를 위해 account 모듈의 통합 자산 조회 활용
+                # [수정] 초기 총자산 산출.
+                # 기존에는 get_asset_status_data를 재호출했으나, 이는 startup 직후 잔고조회를
+                # 또 수행(+해외잔고/체결내역)하여 짧은 시간에 KIS 호출이 몰리고, 그 중 일부가
+                # 재시도(타임아웃/EGW00201) 경로로 빠지며 네이티브 메모리가 폭증(OOM)하는 원인이었다.
+                # 모의투자는 이미 조회한 잔고 summary의 총평가금(tot_evlu_amt)으로 유도하여
+                # 추가 KIS 호출을 제거한다. (실전만 해외자산 포함 통합 조회 유지)
                 mem_diag.log_event("init:before-asset-status")
-                asset_data = account.get_asset_status_data(target_cano, acnt)
+                if config.session.is_simulation:
+                    tot_asset = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
+                else:
+                    asset_data = account.get_asset_status_data(target_cano, acnt)
+                    tot_asset = asset_data.get('tot_asset', 0) if asset_data else 0
                 mem_diag.log_event("init:after-asset-status")
-                if asset_data and asset_data.get('tot_asset', 0) > 0:
+
+                if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
                     saved_initial = load_daily_initial_asset(account_key)
-                    self.initial_asset = saved_initial if saved_initial > 0 else asset_data['tot_asset']
+                    self.initial_asset = saved_initial if saved_initial > 0 else tot_asset
                     if saved_initial <= 0:
                         save_daily_initial_asset(account_key, self.initial_asset)
                         db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
