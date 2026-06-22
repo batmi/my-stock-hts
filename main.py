@@ -11,6 +11,11 @@ try:
 except ImportError:
     pass
 
+# [추가] 메모리 진단 로거 (HTS_MEM_DIAG=1 일 때만 동작) - 무거운 라이브러리 import 이전부터 추적
+import mem_diag
+mem_diag.start()
+mem_diag.log_event("main-import-start")
+
 # [추가] 프로그램 실행 직후 지연 체감을 줄이기 위한 초기 프로그래스 출력
 print("  - 필수 데이터 분석 라이브러리(pandas, yfinance 등) 로딩 중...", flush=True)
 
@@ -26,15 +31,17 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRe
 import argparse
 import config
 import context # [추가]
+mem_diag.log_event("after-config-import")
 
 # [추가] config(rich.console) 로드 후 추가 진행 상태 출력
 config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중...")
 
 import api
-import utils  
+import utils
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
+mem_diag.log_event("after-heavy-imports")
 
 config.console.print("  - 모듈 로딩 완료. 시스템 사전 점검을 준비합니다.\n")
 
@@ -886,6 +893,7 @@ def main():
         config.console.print("\n[bold red]시스템 사전 점검에 최종 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
         config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
         sys.exit(1)
+    mem_diag.log_event("preflight-passed")
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
     with Progress(
@@ -915,6 +923,7 @@ def main():
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         
         # 6. 백그라운드 서비스 시작
+        mem_diag.log_event("before-bg-services")
         api.prefetch_watchlists_async()
 
         # [추가] 시장 국면 캐시 워밍업 (순차 1회 선행)
@@ -927,6 +936,7 @@ def main():
                     analysis.get_domestic_index_data(_m_type)
                 except Exception as _e:
                     logging.debug(f"[Warmup] {_m_type} 국면 캐시 워밍업 실패: {_e}")
+        mem_diag.log_event("after-warmup")
 
         # [수정] 텔레그램 봇은 KIS 2 TPS와 무관(텔레그램 서버 폴링)하므로 즉시 시작
         telegram_cmd = telegram_bot.TelegramCommander()
@@ -948,11 +958,14 @@ def main():
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
+        mem_diag.log_event("before-trader-init")
         # 비대화형 모드로 트레이딩 시작 (잔고/예수금 초기화가 TPS를 선점하도록 모니터보다 먼저 수행)
         trader.start(interactive=False)
+        mem_diag.log_event("after-trader-init")
 
         # [수정] 초기화 완료 후 KIS 폴링 모니터 시작 (TPS 경합 해소)
         _start_kis_monitors()
+        mem_diag.log_event("monitors-started")
 
         # 로그 뷰어 실행 (메인 스레드 블로킹 유지)
         time.sleep(1)
