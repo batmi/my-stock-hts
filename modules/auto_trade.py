@@ -1976,21 +1976,28 @@ class AutoTrader:
                 results = {}
 
                 def _fetch_balance():
+                    mem_diag.log_event("task:balance-start")
                     progress.update(task, description="[cyan]잔고/평가금 조회...[/cyan]")
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
+                    mem_diag.log_event("task:balance-done")
                     progress.advance(task)
                     return "balance", (holdings, summary)
-                
+
                 def _fetch_deposit():
+                    mem_diag.log_event("task:deposit-start")
                     progress.update(task, description="[cyan]예수금 상세 조회...[/cyan]")
                     deposit_res = api.get_deposit_balance(target_cano, acnt)
+                    mem_diag.log_event("task:deposit-done")
                     progress.advance(task)
                     return "deposit", deposit_res
-                
+
                 def _load_db_caches():
+                    mem_diag.log_event("task:dbcache-start")
                     progress.update(task, description="[cyan]DB 캐시 로드...[/cyan]")
                     ts_cache = db_manager.db.get_all_trailing_stops()
+                    mem_diag.log_event("task:dbcache-after-trailing")
                     half_cache = db_manager.db.get_all_half_tp()
+                    mem_diag.log_event("task:dbcache-done")
                     progress.advance(task)
                     return "caches", (ts_cache, half_cache)
 

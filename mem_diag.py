@@ -26,10 +26,34 @@ _fh = None
 _thread = None
 _running = False
 _started = False
+_trace_on = False
+_last_dump_rss = 0
 
 
 def is_enabled():
     return os.environ.get("HTS_MEM_DIAG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def is_trace_enabled():
+    # tracemalloc 기반 '할당 위치 추적'. 오버헤드가 크므로 별도 env로 opt-in.
+    return os.environ.get("HTS_MEM_TRACE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _dump_top_allocations(tag=""):
+    """현재 메모리를 가장 많이 점유한 할당 위치(파일:라인) 상위 10개를 기록한다."""
+    if not _trace_on:
+        return
+    try:
+        import tracemalloc
+        snap = tracemalloc.take_snapshot()
+        stats = snap.statistics("lineno")[:10]
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        _write(f"{ts} | TRACE-TOP ({tag}) | 상위 할당 위치:")
+        for i, st in enumerate(stats, 1):
+            fr = st.traceback[0]
+            _write(f"    #{i} {st.size/1024/1024:.1f}MB  {fr.filename}:{fr.lineno}  (count={st.count})")
+    except Exception as e:
+        _write(f"  (tracemalloc dump 실패: {e})")
 
 
 def _read_self_mem():
@@ -146,6 +170,7 @@ def log_event(stage=""):
 
 
 def _sampler(interval, top_every):
+    global _last_dump_rss
     tick = 0
     while _running:
         try:
@@ -164,6 +189,10 @@ def _sampler(interval, top_every):
                 tops = _top_processes(8)
                 if tops:
                     _write(f"{ts} | TOP | " + " | ".join(tops))
+            # [할당 추적] RSS가 직전 덤프 대비 30MB 이상 급증하면 상위 할당 위치를 기록
+            if _trace_on and (rss - _last_dump_rss) >= 30 * 1024:
+                _dump_top_allocations(tag=f"rss={_mb(rss)}")
+                _last_dump_rss = rss
             tick += 1
         except Exception:
             pass
@@ -172,11 +201,20 @@ def _sampler(interval, top_every):
 
 def start(interval=1.0, top_every=5):
     """진단 로거 시작. HTS_MEM_DIAG 미설정 시 아무 동작도 하지 않는다."""
-    global _thread, _running, _started
+    global _thread, _running, _started, _trace_on, _last_dump_rss
     if not is_enabled() or _started:
         return False
     _started = True
     _running = True
+
+    _trace_on = is_trace_enabled()
+    if _trace_on:
+        try:
+            import tracemalloc
+            tracemalloc.start(8)  # 8 프레임까지 추적
+        except Exception:
+            _trace_on = False
+    _last_dump_rss = 0
 
     sysm = _read_sys_mem()
     hdr = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
