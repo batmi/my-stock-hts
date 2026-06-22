@@ -2173,6 +2173,8 @@ def fetch_overseas_period_price(code, excd):
     return None
 
 def fetch_buyable_quantity(stock_code, price):
+    if config.session.is_toss:
+        return _toss_buyable_qty(stock_code, price, "KRW")
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
@@ -2192,6 +2194,8 @@ def fetch_buyable_quantity(stock_code, price):
     return 0
 
 def fetch_sellable_quantity(stock_code):
+    if config.session.is_toss:
+        return _toss_sellable_qty(stock_code)
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
@@ -2207,6 +2211,8 @@ def fetch_sellable_quantity(stock_code):
     return 0
 
 def fetch_overseas_buyable_quantity(stock_code, price, excd):
+    if config.session.is_toss:
+        return _toss_buyable_qty(stock_code, price, "USD")
     trade_excd = excd
     if excd == "NAS": trade_excd = "NASD"
     elif excd == "NYS": trade_excd = "NYSE"
@@ -2227,6 +2233,8 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
     return 0
 
 def fetch_overseas_sellable_quantity(stock_code, excd):
+    if config.session.is_toss:
+        return _toss_sellable_qty(stock_code)
     trade_excds = []
     primary_excd = excd
     if excd == "NAS": primary_excd = "NASD"
@@ -2257,6 +2265,9 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
     return 0
 
 def find_best_exchange_code(stock_code):
+    # [추가] 토스: 주문 시 거래소 코드가 불필요(토스 내부 라우팅). 기본값 반환.
+    if config.session.is_toss:
+        return "NAS"
     token_to_use = get_current_token()
     cached = config.session.exchange_cache.get(stock_code)
     if cached: return cached
@@ -2493,6 +2504,155 @@ def _toss_order_book(code):
     return {'rt_cd': '0', 'output1': out1}
 
 
+# -------------------------------------------------------------------------
+# [추가] 토스 주문(메뉴 8) 어댑터: 미체결 조회 / 주문 / 정정·취소 / 주문가능수량
+# -------------------------------------------------------------------------
+def _toss_name_map(symbols):
+    """심볼 목록 → {symbol: name} (종목명 표시용). 실패 시 빈 dict."""
+    syms = [s for s in dict.fromkeys(symbols) if s]
+    if not syms:
+        return {}
+    try:
+        rows = toss_api.get_stocks(syms)
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 종목명 조회 실패: {e}")
+        return {}
+    return {r.get('symbol'): r.get('name', '') for r in (rows or []) if r.get('symbol')}
+
+
+def _toss_open_orders(market):
+    """토스 미체결(OPEN) 주문 → KIS 미체결 형태.
+    market: 'domestic'(KRW) | 'overseas'(USD)."""
+    try:
+        res = toss_api.get_orders(status="OPEN")
+    except toss_api.TossApiError as e:
+        logger.error(f"[Toss] 미체결 조회 실패: {e}")
+        return []
+
+    orders = (res or {}).get('orders', []) or []
+    want_krw = (market == 'domestic')
+    picked = []
+    for o in orders:
+        is_krw = (o.get('currency') == 'KRW')
+        if is_krw != want_krw:
+            continue
+        picked.append(o)
+
+    name_map = _toss_name_map([o.get('symbol') for o in picked])
+    out = []
+    for o in picked:
+        symbol = o.get('symbol', '')
+        side = o.get('side')  # BUY / SELL
+        sll_buy_cd = '02' if side == 'BUY' else '01'  # KIS: 01=매도, 02=매수
+        sll_buy_name = '매수' if side == 'BUY' else '매도'
+        qty = _toss_int(o.get('quantity'))
+        filled = _toss_int((o.get('execution') or {}).get('filledQuantity'))
+        rmn = max(qty - filled, 0)
+        # orderedAt: '2026-03-29T09:30:00+09:00' → ord_dt(YYYYMMDD) / ord_tmd(HHMMSS)
+        ts = str(o.get('orderedAt', ''))
+        ord_dt = ts[:10].replace('-', '') if len(ts) >= 10 else ''
+        ord_tmd = ts[11:19].replace(':', '') if len(ts) >= 19 else ''
+        name = name_map.get(symbol) or symbol
+
+        if want_krw:
+            out.append({
+                'odno': o.get('orderId', ''),
+                'pdno': symbol,
+                'prdt_name': name,
+                'sll_buy_dvsn_cd': sll_buy_cd,
+                'sll_buy_dvsn_cd_name': sll_buy_name,
+                'ord_qty': str(qty),
+                'ord_unpr': str(_toss_int(o.get('price'))),
+                'rmn_qty': str(rmn),
+                'ord_tmd': ord_tmd,
+                '_toss_order_type': o.get('orderType', 'LIMIT'),
+            })
+        else:
+            out.append({
+                'odno': o.get('orderId', ''),
+                'pdno': symbol,
+                'prdt_name': name,
+                'sll_buy_dvsn_cd': sll_buy_cd,
+                'ft_ord_qty': str(qty),
+                'nccs_qty': str(rmn),
+                'ft_ord_unpr3': str(_toss_float(o.get('price'))),
+                'ord_unpr': str(_toss_float(o.get('price'))),
+                'ord_dt': ord_dt,
+                'ord_tmd': ord_tmd,
+                'ovrs_excg_cd': o.get('_market', 'NASD'),
+                '_toss_order_type': o.get('orderType', 'LIMIT'),
+            })
+    logger.info(f"[Toss] 미체결({market}) 조회 결과: {len(out)}건")
+    return out
+
+
+def _toss_place_order(market, action, code, qty, price, ord_dvsn):
+    """토스 주문 생성 → KIS place_order 형태({rt_cd,msg1,output:{ODNO}})."""
+    side = 'BUY' if action == 'buy' else 'SELL'
+    # KIS ord_dvsn: '01'=국내 시장가 → 토스 MARKET, 그 외 지정가
+    is_market = (market == 'domestic' and str(ord_dvsn) == '01')
+    order_type = 'MARKET' if is_market else 'LIMIT'
+    order_price = None if is_market else price
+    try:
+        r = toss_api.create_order(
+            symbol=code, side=side, order_type=order_type,
+            quantity=qty, price=order_price,
+        )
+        odno = (r or {}).get('orderId', '')
+        logger.info(f"[Toss] 주문 접수: {side} {code} {qty}주 @{order_price} ({order_type}) → {odno}")
+        return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': '주문 접수 완료',
+                'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': '', 'ORD_TMD': ''}}
+    except toss_api.TossApiError as e:
+        logger.error(f"[Toss] 주문 실패: {e}")
+        return {'rt_cd': '1', 'msg_cd': str(e.code or ''), 'msg1': str(e.message or e), 'output': {}}
+
+
+def _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn):
+    """토스 정정/취소 → KIS revise_cancel_order 형태({rt_cd,msg1,output:{ODNO}})."""
+    try:
+        if action == 'cancel':
+            r = toss_api.cancel_order(org_no)
+        else:  # modify (정정)
+            is_market = (market == 'domestic' and str(ord_dvsn) == '01')
+            order_type = 'MARKET' if is_market else 'LIMIT'
+            # KIS는 0=전량정정. 토스는 수량 명시 필요 → 0이면 수량 미지정(가격만 정정)
+            mod_qty = qty if (qty and int(qty) > 0) else None
+            r = toss_api.modify_order(
+                org_no, order_type=order_type,
+                quantity=mod_qty, price=(None if is_market else price),
+            )
+        odno = (r or {}).get('orderId', '')
+        logger.info(f"[Toss] {action} 완료: 원주문={org_no} → 신규={odno}")
+        return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': f'{action} 완료',
+                'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': ''}}
+    except toss_api.TossApiError as e:
+        logger.error(f"[Toss] {action} 실패: {e}")
+        return {'rt_cd': '1', 'msg_cd': str(e.code or ''), 'msg1': str(e.message or e), 'output': {}}
+
+
+def _toss_buyable_qty(code, price, currency="KRW"):
+    """토스 매수가능수량 = 매수가능현금 / 단가."""
+    try:
+        bp = toss_api.get_buying_power(currency)
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 매수가능금액 조회 실패({code}): {e}")
+        return 0
+    cash = _toss_float((bp or {}).get('cashBuyingPower'))
+    if price and float(price) > 0:
+        return int(cash / float(price))
+    return 0
+
+
+def _toss_sellable_qty(code):
+    """토스 매도가능수량."""
+    try:
+        sq = toss_api.get_sellable_quantity(code)
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] 매도가능수량 조회 실패({code}): {e}")
+        return 0
+    return _toss_int((sq or {}).get('sellableQuantity'))
+
+
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
     if config.session.is_toss:
@@ -2657,7 +2817,9 @@ def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     return get_domestic_open_orders(cano, acnt_prdt_cd)
 
 def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
-    """국내주식 미체결 내역 조회 (모의/실전 분기 처리)"""
+    """국내주식 미체결 내역 조회 (모의/실전/토스 분기 처리)"""
+    if config.session.is_toss:
+        return _toss_open_orders('domestic')
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     
     if config.session.is_simulation:
@@ -2718,6 +2880,8 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
 
 def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     """해외주식 미체결 내역 조회"""
+    if config.session.is_toss:
+        return _toss_open_orders('overseas')
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     all_orders = []
     # [수정] 실전 투자 시에도 모든 거래소 조회 (NYSE, AMEX 누락 방지)
@@ -2748,6 +2912,8 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     market: "domestic" or "overseas"
     action: "buy" or "sell"
     """
+    if config.session.is_toss:
+        return _toss_place_order(market, action, code, qty, price, ord_dvsn)
     cano, acnt = _prepare_account_params(None, None)
     
     if market == "domestic":
@@ -2787,6 +2953,8 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     action: "modify" (정정) or "cancel" (취소)
     type_cd: "01"(정정), "02"(취소) - API 스펙상 구분 코드
     """
+    if config.session.is_toss:
+        return _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn)
     cano, acnt = _prepare_account_params(None, None)
     
     if market == "domestic":

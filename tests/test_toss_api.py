@@ -421,3 +421,183 @@ def test_create_order_builds_body():
     assert captured["body"]["symbol"] == "005930"
     assert captured["body"]["quantity"] == "10"
     assert captured["body"]["price"] == "70000"
+
+
+# =========================================================================
+# 메뉴 8: 주문/미체결/정정·취소 어댑터
+# =========================================================================
+def _orders_envelope():
+    """토스 OPEN 주문 응답(국내 1건 + 해외 1건)."""
+    return {
+        "orders": [
+            {"orderId": "KR1", "symbol": "005930", "side": "BUY", "orderType": "LIMIT",
+             "status": "PENDING", "price": "70000", "quantity": "10", "currency": "KRW",
+             "orderedAt": "2026-03-29T09:30:00+09:00",
+             "execution": {"filledQuantity": "3"}},
+            {"orderId": "US1", "symbol": "AAPL", "side": "SELL", "orderType": "LIMIT",
+             "status": "PENDING", "price": "185.5", "quantity": "5", "currency": "USD",
+             "orderedAt": "2026-03-29T22:00:00+09:00",
+             "execution": {"filledQuantity": "0"}},
+        ],
+        "nextCursor": None, "hasNext": False,
+    }
+
+
+def test_open_orders_domestic_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_orders", return_value=_orders_envelope()), \
+             patch("toss_api.get_stocks", return_value=[{"symbol": "005930", "name": "삼성전자"}]):
+            out = api.get_domestic_open_orders()
+    finally:
+        config.session.is_toss = False
+    assert len(out) == 1  # KRW 종목만
+    o = out[0]
+    assert o["odno"] == "KR1"
+    assert o["pdno"] == "005930"
+    assert o["prdt_name"] == "삼성전자"
+    assert o["sll_buy_dvsn_cd"] == "02"  # BUY
+    assert o["ord_qty"] == "10"
+    assert o["rmn_qty"] == "7"           # 10 - 3 체결
+    assert o["ord_unpr"] == "70000"
+    assert o["ord_tmd"] == "093000"
+
+
+def test_open_orders_overseas_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_orders", return_value=_orders_envelope()), \
+             patch("toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
+            out = api.get_overseas_open_orders()
+    finally:
+        config.session.is_toss = False
+    assert len(out) == 1  # USD 종목만
+    o = out[0]
+    assert o["odno"] == "US1"
+    assert o["pdno"] == "AAPL"
+    assert o["sll_buy_dvsn_cd"] == "01"  # SELL
+    assert o["ft_ord_qty"] == "5"
+    assert o["nccs_qty"] == "5"
+    assert float(o["ft_ord_unpr3"]) == 185.5
+
+
+def test_place_order_limit_adapter():
+    import api
+    config.session.is_toss = True
+    captured = {}
+
+    def fake_create(symbol, side, order_type="LIMIT", quantity=None, price=None, **kw):
+        captured.update(symbol=symbol, side=side, order_type=order_type,
+                        quantity=quantity, price=price)
+        return {"orderId": "NEWID"}
+
+    try:
+        with patch("toss_api.create_order", side_effect=fake_create):
+            res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert res["output"]["ODNO"] == "NEWID"
+    assert captured["side"] == "BUY"
+    assert captured["order_type"] == "LIMIT"
+    assert captured["price"] == 70000
+
+
+def test_place_order_market_adapter():
+    """국내 시장가(ord_dvsn='01') → 토스 MARKET, price 미전달."""
+    import api
+    config.session.is_toss = True
+    captured = {}
+
+    def fake_create(symbol, side, order_type="LIMIT", quantity=None, price=None, **kw):
+        captured.update(order_type=order_type, price=price)
+        return {"orderId": "MKT"}
+
+    try:
+        with patch("toss_api.create_order", side_effect=fake_create):
+            res = api.place_order("domestic", "sell", "005930", 3, 0, "01")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert captured["order_type"] == "MARKET"
+    assert captured["price"] is None
+
+
+def test_place_order_error_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.create_order",
+                   side_effect=toss_api.TossApiError("INSUFFICIENT_CASH", "잔액부족", status=400)):
+            res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "1"
+    assert "잔액부족" in res["msg1"]
+    assert res["output"] == {}
+
+
+def test_cancel_order_adapter():
+    import api
+    config.session.is_toss = True
+    captured = {}
+
+    def fake_cancel(oid):
+        captured["oid"] = oid
+        return {"orderId": "CXL"}
+
+    try:
+        with patch("toss_api.cancel_order", side_effect=fake_cancel):
+            res = api.revise_cancel_order("domestic", "cancel", "KR1", "005930", 0, "0", "02", "00")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert res["output"]["ODNO"] == "CXL"
+    assert captured["oid"] == "KR1"
+
+
+def test_modify_order_adapter():
+    """정정(전량, req_qty=0) → 수량 미지정/가격만 정정."""
+    import api
+    config.session.is_toss = True
+    captured = {}
+
+    def fake_modify(order_id, order_type="LIMIT", quantity=None, price=None, **kw):
+        captured.update(order_id=order_id, quantity=quantity, price=price)
+        return {"orderId": "MOD"}
+
+    try:
+        with patch("toss_api.modify_order", side_effect=fake_modify):
+            res = api.revise_cancel_order("domestic", "revise", "KR1", "005930", 0, 71000, "01", "00")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert res["output"]["ODNO"] == "MOD"
+    assert captured["order_id"] == "KR1"
+    assert captured["quantity"] is None   # 0 → 전량(미지정)
+    assert captured["price"] == 71000
+
+
+def test_buyable_quantity_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_buying_power",
+                   return_value={"currency": "KRW", "cashBuyingPower": "1000000"}):
+            qty = api.fetch_buyable_quantity("005930", 70000)
+    finally:
+        config.session.is_toss = False
+    assert qty == 14  # 1,000,000 / 70,000
+
+
+def test_sellable_quantity_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_sellable_quantity", return_value={"sellableQuantity": "8"}):
+            qty = api.fetch_sellable_quantity("005930")
+    finally:
+        config.session.is_toss = False
+    assert qty == 8
