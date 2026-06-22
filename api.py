@@ -664,6 +664,13 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
     df = fetch_func()
     if df is not None and not df.empty:
         with _CHART_CACHE_LOCK:
+            # [메모리 최적화] 캐시 보관 종목 수 상한 적용 (저사양 환경 RSS 폭증 방지).
+            # 신규 적재 전, 한도를 넘었으면 가장 오래된 항목부터 제거(LRU 근사).
+            max_entries = getattr(config, 'CHART_CACHE_MAX_ENTRIES', 0)
+            if max_entries and len(_CHART_CACHE) >= max_entries and cache_key not in _CHART_CACHE:
+                # timestamp 기준 오래된 순으로 정리하여 (현재 개수 - 한도 + 1)개 제거
+                for old_key in sorted(_CHART_CACHE, key=lambda k: _CHART_CACHE[k]['timestamp'])[:len(_CHART_CACHE) - max_entries + 1]:
+                    del _CHART_CACHE[old_key]
             _CHART_CACHE[cache_key] = {
                 'df': df.copy(),
                 'timestamp': now,
@@ -772,10 +779,17 @@ def prefetch_watchlists_async():
                 concurrent.futures.wait(futures)
 
             import config
+            # [메모리 최적화] 저사양 환경에서는 관심종목 차트 '전체 예열'을 건너뛴다.
+            # 예열은 수십~수백 종목의 OHLCV DataFrame을 동시에 메모리에 적재해 RSS를 크게 키운다.
+            # 차트는 실제 분석/매매 시점에 온디맨드로 조회·캐시되므로 기능 손실은 없다(첫 스캔만 약간 느림).
+            if not getattr(config, 'PREFETCH_WATCHLIST_CHARTS', True):
+                logger.info("[Cache] 저사양 모드: 관심종목 차트 전체 예열 생략 (온디맨드 조회)")
+                return
+
             stocks = []
             for key in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]:
                 stocks.extend([(s['code'], 'us' in key) for s in config.session.stock_data.get(key, [])])
-            
+
             if not stocks: return
             
             # 중복 제거
