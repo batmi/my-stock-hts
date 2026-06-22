@@ -601,3 +601,74 @@ def test_sellable_quantity_adapter():
     finally:
         config.session.is_toss = False
     assert qty == 8
+
+
+# =========================================================================
+# 메뉴 1(시장 지수): 토스 모드는 KIS 미사용, yfinance 폴백
+# =========================================================================
+def test_index_chart_toss_uses_yfinance_not_kis():
+    """토스 모드: 국내 지수 차트가 KIS 대신 yfinance(get_chart_data)로 라우팅."""
+    import api
+    import pandas as pd
+    captured = {}
+
+    def fake_chart(code, is_overseas=False, period_type='daily'):
+        captured["ticker"] = code
+        captured["is_overseas"] = is_overseas
+        return pd.DataFrame({"date": ["20260101"], "close": [2500.0]})
+
+    config.session.is_toss = True
+    try:
+        with patch("api.get_chart_data", side_effect=fake_chart), \
+             patch("api.call_api") as mock_call:
+            df = api.get_domestic_index_chart("0001")  # KOSPI
+    finally:
+        config.session.is_toss = False
+    assert captured["ticker"] == "^KS11"
+    assert captured["is_overseas"] is True
+    assert not df.empty
+    mock_call.assert_not_called()  # KIS 미호출
+
+
+def test_index_price_toss_uses_fast_info():
+    """토스 모드: 국내 지수 현재가가 KIS 대신 yfinance fast_info → KIS 형태 반환."""
+    import api
+    config.session.is_toss = True
+    try:
+        with patch("api.get_yf_fast_info",
+                   return_value={"last_price": 850.5, "regular_market_previous_close": 845.0}), \
+             patch("api.call_api") as mock_call:
+            res = api.get_domestic_index_price("1001")  # KOSDAQ
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert res["output"]["bstp_nmix_prpr"] == "850.5"
+    assert res["output"]["bstp_nmix_prdy_clpr"] == "845.0"
+    mock_call.assert_not_called()
+
+
+def test_index_price_toss_unknown_code():
+    import api
+    config.session.is_toss = True
+    try:
+        res = api.get_domestic_index_price("9999")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "9999"
+
+
+def test_kosdaq150_skipped_in_toss():
+    """토스 모드: 코스닥150은 KIS/yfinance 모두 미사용 → 데이터 없음(None/empty)."""
+    import api
+    import modules.analysis as analysis
+    config.session.is_toss = True
+    try:
+        # 토스 모드면 KIS(get_domestic_index_chart)도, yfinance(get_chart_data)도 호출되면 안 됨
+        with patch("api.get_domestic_index_chart") as mock_kis, \
+             patch("api.get_chart_data") as mock_yf:
+            df = analysis.get_domestic_index_data("KOSDAQ150", force_refresh=True)
+    finally:
+        config.session.is_toss = False
+    assert df is None or df.empty
+    mock_kis.assert_not_called()   # KIS 미호출
+    mock_yf.assert_not_called()    # yfinance(^KQ150)도 미호출 (스킵)

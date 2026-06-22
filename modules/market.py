@@ -88,6 +88,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif name == "코스닥150": m_type = "KOSDAQ150"
             
             df_fallback = analysis.get_domestic_index_data(m_type)
+            # [추가] 토스 모드: 코스닥150은 KIS/yfinance 모두 데이터가 없어 스킵 → '-' 표시
+            if config.session.is_toss and m_type == "KOSDAQ150" and (df_fallback is None or df_fallback.empty):
+                return {'status': 'skipped', 'name': name}
             if df_fallback is not None and not df_fallback.empty:
                 df_daily = df_fallback
                 df_daily.columns = [c.lower() for c in df_daily.columns]
@@ -912,6 +915,9 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('missing_name'): missing_tickers.append(res['missing_name'])
                         if res.get('mismatch_msg'): mismatch_tickers.append(res['mismatch_msg'])
                         if res.get('is_delayed'): delayed_tickers.append(name)
+                    elif res['status'] == 'skipped':
+                        # [추가] 토스 모드 코스닥150 등 미지원 지수: 재시도 없이 '-'만 표시
+                        table.add_row(name, "[dim]-[/dim]", "[dim]미지원[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                     elif res['status'] == 'failed':
                         table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                         failed_tickers.append(name)

@@ -1774,8 +1774,24 @@ def _get_intraday_chart_data(code, is_overseas):
     return df.sort_values('date', ascending=True).reset_index(drop=True)
 
 
+# KIS 지수 코드 → yfinance 티커 (토스 모드 폴백용)
+_INDEX_KIS_TO_YF = {"0001": "^KS11", "1001": "^KQ11", "2001": "^KS200", "2203": "^KQ150"}
+
+
 def get_domestic_index_chart(code):
-    """업종/지수 기간별 시세(일봉) 조회 (KIS API)"""
+    """업종/지수 기간별 시세(일봉) 조회 (KIS API, 토스 모드는 yfinance 폴백)"""
+    # [추가] 토스: KIS 미사용. 지수 KIS 코드를 yfinance 티커로 매핑하여 조회.
+    if config.session.is_toss:
+        yf_ticker = _INDEX_KIS_TO_YF.get(str(code))
+        if not yf_ticker:
+            return pd.DataFrame()
+        try:
+            df = get_chart_data(yf_ticker, is_overseas=True)
+            return df if df is not None else pd.DataFrame()
+        except Exception as e:
+            logger.debug(f"[Toss] 지수 차트 yfinance 조회 실패({code}): {e}")
+            return pd.DataFrame()
+
     def fetch_func():
         # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
         url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_CHART"]
@@ -1831,7 +1847,28 @@ def get_domestic_index_chart(code):
     return _get_cached_chart(code, is_overseas=False, is_index=True, fetch_func=fetch_func)
 
 def get_domestic_index_price(code):
-    """업종/지수 현재가 조회 (KIS API)"""
+    """업종/지수 현재가 조회 (KIS API, 토스 모드는 yfinance 폴백)"""
+    # [추가] 토스: KIS 미사용. yfinance fast_info로 현재가/전일종가 조회 후 KIS 형태로 반환.
+    if config.session.is_toss:
+        yf_ticker = _INDEX_KIS_TO_YF.get(str(code))
+        if not yf_ticker:
+            return {'rt_cd': '9999'}
+        try:
+            fi = get_yf_fast_info(yf_ticker)
+            if not fi:
+                return {'rt_cd': '9999'}
+            curr = fi.get('last_price')
+            prev = fi.get('regular_market_previous_close')
+            if curr is None:
+                return {'rt_cd': '9999'}
+            return {'rt_cd': '0', 'output': {
+                'bstp_nmix_prpr': str(curr),
+                'bstp_nmix_prdy_clpr': str(prev if prev is not None else curr),
+            }}
+        except Exception as e:
+            logger.debug(f"[Toss] 지수 현재가 yfinance 조회 실패({code}): {e}")
+            return {'rt_cd': '9999'}
+
     cache_key = f"idx_price_{code}"
     cached = _get_micro_cache(cache_key)
     if cached: return cached

@@ -385,9 +385,12 @@ def get_domestic_index_data(market_type, force_refresh=False):
         
     df = None
     try:
-        # 1. KIS API 조회
-        df = api.get_domestic_index_chart(kis_code)
-        
+        # 1. KIS API 조회 (토스 모드에서는 KIS를 사용하지 않고 yfinance Fallback 사용)
+        if config.session.is_toss:
+            df = None
+        else:
+            df = api.get_domestic_index_chart(kis_code)
+
         # [Fix] KIS API 컬럼명 표준화 및 타입 변환
         if df is not None and not df.empty:
             rename_map = {
@@ -414,7 +417,8 @@ def get_domestic_index_data(market_type, force_refresh=False):
     
     if df is None or df.empty or len(df) < ma_period:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
-        # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정하므로 Fallback을 수행하지 않음
+        # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정/미지원이므로 Fallback을 수행하지 않음
+        #   (토스 모드는 KIS 대안이 없어 데이터 없음 → 화면에서 '-' 처리)
         if market_type == "KOSDAQ150":
             logger.warning(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 불안정).")
             _store_index_cache(market_type, df)
