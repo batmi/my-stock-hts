@@ -15,6 +15,16 @@ OS_NAME=$(uname -s)
 # [추가] macOS/Linux 환경에서 'Too many open files' (Errno 24) 네트워크 에러 방지를 위해 파일 개수 한도 증가
 ulimit -n 4096 2>/dev/null
 
+# [추가] (Linux/라즈베리파이) 메모리 절약: glibc malloc 아레나 수 제한
+#  - 다중 스레드 Python은 (CPU 코어 수 x 8)개까지 malloc 아레나를 생성하여, 실제 데이터가 적어도
+#    RSS가 수백 MB까지 부풀어 오른다. RAM 1GB인 라즈베리파이3에서는 OOM(Killed)의 주요 원인이다.
+#  - 아레나를 2개로 제한하고, 해제된 메모리를 OS로 적극 반환하도록 trim 임계값을 낮춘다.
+#  - (macOS는 glibc가 아니므로 적용하지 않는다.)
+if [ "$OS_NAME" = "Linux" ]; then
+    export MALLOC_ARENA_MAX=2
+    export MALLOC_TRIM_THRESHOLD_=131072
+fi
+
 # 3. 실행할 파이썬 및 핍(PIP) 경로 찾기
 if [ -d "./.venv" ]; then
     PYTHON_PATH="./.venv/bin/python"

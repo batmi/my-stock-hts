@@ -1,14 +1,8 @@
 # modules/chart.py
-import matplotlib
-matplotlib.use('Agg') # [추가] GUI 백엔드 미사용 (스레드 안전성 확보)
-import matplotlib.pyplot as plt
-import numpy as np
 import logging
-from matplotlib import rc
 import platform
 import os
 import re
-from matplotlib.ticker import MaxNLocator
 import config
 import api
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
@@ -16,7 +10,36 @@ import indicators
 from datetime import datetime
 from contextlib import nullcontext
 
+# [메모리 최적화] matplotlib/numpy 지연 로딩
+# matplotlib+numpy는 import만으로도 RSS를 수십~100MB 이상 점유한다. 차트는 자동매매 중
+# 텔레그램 전송 등 '실제로 그릴 때'만 필요하므로, 모듈 import 시점이 아니라 호출 시점에 적재한다.
+# (RAM이 작은 라즈베리파이에서 시작 피크 메모리를 크게 낮춰 OOM(Killed)을 방지)
+plt = None
+np = None
+rc = None
+MaxNLocator = None
+_matplotlib_ready = False
+
+def _ensure_matplotlib():
+    """matplotlib/numpy를 최초 사용 시점에 1회만 로드한다 (Agg 백엔드, 스레드 안전)."""
+    global plt, np, rc, MaxNLocator, _matplotlib_ready
+    if _matplotlib_ready:
+        return
+    import matplotlib
+    matplotlib.use('Agg')  # GUI 백엔드 미사용 (스레드 안전성 확보)
+    import matplotlib.pyplot as _plt
+    import numpy as _np
+    from matplotlib import rc as _rc
+    from matplotlib.ticker import MaxNLocator as _MaxNLocator
+    # 이미 설정된 전역(예: 테스트의 mock 패치)은 덮어쓰지 않는다.
+    if plt is None: plt = _plt
+    if np is None: np = _np
+    if rc is None: rc = _rc
+    if MaxNLocator is None: MaxNLocator = _MaxNLocator
+    _matplotlib_ready = True
+
 def setup_korean_font():
+    _ensure_matplotlib()  # [메모리 최적화] 차트 진입점에서 matplotlib 지연 로드
     current_os = platform.system()
     try:
         if current_os == "Windows": rc('font', family='Malgun Gothic')
