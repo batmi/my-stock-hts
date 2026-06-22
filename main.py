@@ -923,8 +923,10 @@ def main():
         # (종목 데이터 로드 로직은 사전 점검 단계로 이동됨)
         
         # 6. 백그라운드 서비스 시작
+        # [수정] 관심종목 예열(prefetch)은 자동매매 초기화(잔고 조회)와 2-TPS를 경합하면
+        # EGW00201 재시도를 유발해 메모리가 폭증한다. 예열도 '초기화 이후'로 미룬다
+        # (아래 _start_deferred_services 에서 시작).
         mem_diag.log_event("before-bg-services")
-        api.prefetch_watchlists_async()
 
         # [추가] 시장 국면 캐시 워밍업 (순차 1회 선행)
         # 백그라운드 모니터들이 동시에 지수차트(inquire-daily-indexchartprice)를 조회하면
@@ -948,12 +950,13 @@ def main():
     # [추가] 전역 도움말 함수 맵핑 (서브메뉴 호출용)
     utils.show_help = show_help
 
-    # [수정] KIS API를 폴링하는 모니터(체결감시·예약감시)는 자동매매 초기화(잔고/예수금 조회)와
-    # 모의투자 2 TPS를 두고 경합해 초기화가 지연/실패하던 문제가 있었다.
-    # 초기화가 TPS를 선점하도록 모니터 시작을 '초기화 이후'로 미룬다.
+    # [수정] KIS API를 쓰는 백그라운드 작업(체결감시·예약감시 모니터 + 관심종목 예열)은
+    # 자동매매 초기화(잔고 조회)와 모의투자 2 TPS를 두고 경합하면 EGW00201 재시도 폭주로
+    # 초기화가 지연되고 메모리가 폭증한다. 초기화가 TPS를 선점하도록 '초기화 이후'에 시작한다.
     def _start_kis_monitors():
         auto_trade.ConclusionMonitor().start()
         ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
+        api.prefetch_watchlists_async() # [수정] 관심종목 예열도 초기화 이후로 지연
 
     # [추가] 자동 시작 모드 처리
     if args.auto:
