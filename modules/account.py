@@ -515,10 +515,6 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         "api_tot_asset": 0   # [추가] API 제공 총 평가금액 (검증용)
     }
     
-    try:
-        import mem_diag; mem_diag.log_event("asset:enter")
-    except Exception: pass
-
     # 1. 금일 데이터 조회
     if progress: progress.update(task, description="[cyan]금일 매매 손익 조회 중...[/cyan]")
     try:
@@ -531,13 +527,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
 
         # [수정] 기간별 손익 API가 매매금액을 0으로 반환하는 경우가 많으므로
         # 체결 내역(fetch_today_history)을 조회하여 값이 더 크다면(누락된 경우) 덮어쓰기 수행
-        try:
-            import mem_diag; mem_diag.log_event("asset:before-today-history")
-        except Exception: pass
         backup_data = fetch_today_history(cano, acnt_prdt_cd)
-        try:
-            import mem_diag; mem_diag.log_event("asset:after-today-history")
-        except Exception: pass
         if backup_data['buy_total'] > summary_data['buy_today']:
             summary_data['buy_today'] = backup_data['buy_total']
         if backup_data['sell_total'] > summary_data['sell_today']:
@@ -589,15 +579,9 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     # 2. 국내 주식 잔고 및 자산
     if progress: progress.update(task, description="[cyan]국내 주식 잔고 및 평가금 조회 중...[/cyan]")
     try:
-        try:
-            import mem_diag; mem_diag.log_event("asset:before-domestic-balance")
-        except Exception: pass
         # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
         output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
-        try:
-            import mem_diag; mem_diag.log_event("asset:after-domestic-balance")
-        except Exception: pass
-        
+
         if output1 is not None:
             # [수정] 보유 중인 종목만 필터링
             holdings = [h for h in output1 if int(h.get('hldg_qty', 0)) > 0]
@@ -645,13 +629,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     # [추가] 해외 주식 잔고 합산 (원화 환산)
     if progress: progress.update(task, description="[cyan]해외 주식 잔고 및 환산액 계산 중...[/cyan]")
     try:
-        try:
-            import mem_diag; mem_diag.log_event("asset:before-overseas-balance")
-        except Exception: pass
         ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
-        try:
-            import mem_diag; mem_diag.log_event("asset:after-overseas-balance")
-        except Exception: pass
         ovrs_buy_usd = 0.0
         ovrs_eval_usd = 0.0
         ovrs_pl_usd = 0.0
@@ -668,13 +646,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 ovrs_eval_usd += eval_amt
                 ovrs_pl_usd += profit
         
-        try:
-            import mem_diag; mem_diag.log_event("asset:before-fx-rate")
-        except Exception: pass
         exchange_rate = utils.get_exchange_rate()
-        try:
-            import mem_diag; mem_diag.log_event("asset:after-fx-rate")
-        except Exception: pass
 
         ovrs_eval_krw = int(ovrs_eval_usd * exchange_rate)
         summary_data['ovrs_eval_krw'] = ovrs_eval_krw

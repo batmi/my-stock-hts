@@ -24,7 +24,6 @@ from modules import db_manager # [추가] DB 매니저
 from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
-import mem_diag  # [진단] 메모리 추적 (HTS_MEM_DIAG=1 일 때만 동작)
 
 console = config.console
 
@@ -1956,7 +1955,6 @@ class AutoTrader:
         if self.initialized:
             return True
 
-        mem_diag.log_event("init:enter")
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1978,28 +1976,21 @@ class AutoTrader:
                 results = {}
 
                 def _fetch_balance():
-                    mem_diag.log_event("task:balance-start")
                     progress.update(task, description="[cyan]잔고/평가금 조회...[/cyan]")
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                    mem_diag.log_event("task:balance-done")
                     progress.advance(task)
                     return "balance", (holdings, summary)
 
                 def _fetch_deposit():
-                    mem_diag.log_event("task:deposit-start")
                     progress.update(task, description="[cyan]예수금 상세 조회...[/cyan]")
                     deposit_res = api.get_deposit_balance(target_cano, acnt)
-                    mem_diag.log_event("task:deposit-done")
                     progress.advance(task)
                     return "deposit", deposit_res
 
                 def _load_db_caches():
-                    mem_diag.log_event("task:dbcache-start")
                     progress.update(task, description="[cyan]DB 캐시 로드...[/cyan]")
                     ts_cache = db_manager.db.get_all_trailing_stops()
-                    mem_diag.log_event("task:dbcache-after-trailing")
                     half_cache = db_manager.db.get_all_half_tp()
-                    mem_diag.log_event("task:dbcache-done")
                     progress.advance(task)
                     return "caches", (ts_cache, half_cache)
 
@@ -2014,7 +2005,6 @@ class AutoTrader:
                         key, value = future.result()
                         results[key] = value
 
-                mem_diag.log_event("init:after-balance-executor")
                 # 결과 처리
                 holdings, summary = results.get("balance", (None, None))
                 ts_cache, half_cache = results.get("caches", ({}, set()))
@@ -2043,13 +2033,11 @@ class AutoTrader:
                 # 재시도(타임아웃/EGW00201) 경로로 빠지며 네이티브 메모리가 폭증(OOM)하는 원인이었다.
                 # 모의투자는 이미 조회한 잔고 summary의 총평가금(tot_evlu_amt)으로 유도하여
                 # 추가 KIS 호출을 제거한다. (실전만 해외자산 포함 통합 조회 유지)
-                mem_diag.log_event("init:before-asset-status")
                 if config.session.is_simulation:
                     tot_asset = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
                 else:
                     asset_data = account.get_asset_status_data(target_cano, acnt)
                     tot_asset = asset_data.get('tot_asset', 0) if asset_data else 0
-                mem_diag.log_event("init:after-asset-status")
 
                 if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
@@ -2102,7 +2090,6 @@ class AutoTrader:
                             console.print("[bold red][ERROR] 시스템 초기화 실패[/bold red]")
                     return
 
-            mem_diag.log_event("start:after-initialize")
             self.is_running = True
             self.start_time = datetime.now()
             self.consecutive_errors = 0
@@ -2113,7 +2100,6 @@ class AutoTrader:
 
             self.thread = threading.Thread(target=self._run_loop, daemon=True, name="AutoTrader")
             self.thread.start()
-            mem_diag.log_event("start:run-loop-thread-spawned")
 
             if api._is_screen_output_allowed():
                 console.print("\n[green]자동매매 시스템이 시작되었습니다. (백그라운드)[/green]")
@@ -4232,14 +4218,10 @@ class AutoTrader:
                         status_msg = "RUNNING"
                         self.log(f"시스템 상태: {status_msg}")
                         
-                        if getattr(self, '_first_loop_flag', False) or not getattr(self, '_diag_first_done', False):
-                            mem_diag.log_event("runloop:first-iter-running")
                         # [추가] 시장 지수 상태 업데이트 (KOSPI/KOSDAQ)
                         if getattr(config, 'USE_MARKET_FILTER', True):
                             self._update_market_indices_status()
-                        if not getattr(self, '_diag_first_done', False):
-                            mem_diag.log_event("runloop:after-update-indices")
-                            
+
                         # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
                         # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
                         acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -4276,17 +4258,10 @@ class AutoTrader:
                         time.sleep(0.2)
 
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
-                        if not getattr(self, '_diag_first_done', False):
-                            mem_diag.log_event("runloop:before-sell-check")
                         # 1. 매도 조건 점검 (리스크 관리)
                         self._check_sell_conditions(holdings, current_market_status)
-                        if not getattr(self, '_diag_first_done', False):
-                            mem_diag.log_event("runloop:before-buy-check")
                         # 2. 매수 조건 점검
                         self._check_buy_conditions(holdings, deposit_res, current_market_status)
-                        if not getattr(self, '_diag_first_done', False):
-                            mem_diag.log_event("runloop:after-buy-check")
-                            self._diag_first_done = True
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
                         

@@ -11,11 +11,6 @@ try:
 except ImportError:
     pass
 
-# [추가] 메모리 진단 로거 (HTS_MEM_DIAG=1 일 때만 동작) - 무거운 라이브러리 import 이전부터 추적
-import mem_diag
-mem_diag.start()
-mem_diag.log_event("main-import-start")
-
 # [추가] 프로그램 실행 직후 지연 체감을 줄이기 위한 초기 프로그래스 출력
 print("  - 필수 데이터 분석 라이브러리(pandas, yfinance 등) 로딩 중...", flush=True)
 
@@ -31,7 +26,6 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRe
 import argparse
 import config
 import context # [추가]
-mem_diag.log_event("after-config-import")
 
 # [추가] config(rich.console) 로드 후 추가 진행 상태 출력
 config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중...")
@@ -41,7 +35,6 @@ import utils
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
-mem_diag.log_event("after-heavy-imports")
 
 config.console.print("  - 모듈 로딩 완료. 시스템 사전 점검을 준비합니다.\n")
 
@@ -893,7 +886,6 @@ def main():
         config.console.print("\n[bold red]시스템 사전 점검에 최종 실패하여 프로그램을 시작할 수 없습니다.[/bold red]")
         config.console.print("[dim]API Key 설정 및 네트워크 연결을 확인해주세요.[/dim]")
         sys.exit(1)
-    mem_diag.log_event("preflight-passed")
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
     with Progress(
@@ -926,7 +918,6 @@ def main():
         # [수정] 관심종목 예열(prefetch)은 자동매매 초기화(잔고 조회)와 2-TPS를 경합하면
         # EGW00201 재시도를 유발해 메모리가 폭증한다. 예열도 '초기화 이후'로 미룬다
         # (아래 _start_deferred_services 에서 시작).
-        mem_diag.log_event("before-bg-services")
 
         # [추가] 시장 국면 캐시 워밍업 (순차 1회 선행)
         # 백그라운드 모니터들이 동시에 지수차트(inquire-daily-indexchartprice)를 조회하면
@@ -938,7 +929,6 @@ def main():
                     analysis.get_domestic_index_data(_m_type)
                 except Exception as _e:
                     logging.debug(f"[Warmup] {_m_type} 국면 캐시 워밍업 실패: {_e}")
-        mem_diag.log_event("after-warmup")
 
         # [수정] 텔레그램 봇은 KIS 2 TPS와 무관(텔레그램 서버 폴링)하므로 즉시 시작
         telegram_cmd = telegram_bot.TelegramCommander()
@@ -961,19 +951,11 @@ def main():
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")
-        # [진단] 무거운 import가 모두 끝난 지금부터 추적 시작
-        #  - tracemalloc(HTS_MEM_TRACE=1 시) / faulthandler 스택 덤프(HTS_MEM_DIAG)
-        #  - import 도중 켜면 C 확장 초기화와 충돌해 세그폴트가 나므로 반드시 import 이후에 무장
-        mem_diag.enable_trace()
-        mem_diag.arm_stack_dumper()
-        mem_diag.log_event("before-trader-init")
         # 비대화형 모드로 트레이딩 시작 (잔고/예수금 초기화가 TPS를 선점하도록 모니터보다 먼저 수행)
         trader.start(interactive=False)
-        mem_diag.log_event("after-trader-init")
 
         # [수정] 초기화 완료 후 KIS 폴링 모니터 시작 (TPS 경합 해소)
         _start_kis_monitors()
-        mem_diag.log_event("monitors-started")
 
         # 로그 뷰어 실행 (메인 스레드 블로킹 유지)
         time.sleep(1)
