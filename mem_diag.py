@@ -40,37 +40,75 @@ def is_trace_enabled():
 
 
 def enable_trace():
-    """tracemalloc 추적을 '이 시점부터' 시작한다.
-    [중요] 무거운 라이브러리 import 이후, 의심 구간(자동매매 초기화) 직전에 호출해야 한다.
-    import 시점에 켜면 pandas/numpy 등의 대량 할당까지 추적해 저사양 CPU에서 극도로 느려진다.
-    """
+    """객체 메모리 스캔(gc 기반)을 활성화한다. tracemalloc과 달리 상시 오버헤드가 없고,
+    RSS 급증 시에만 1회 스캔하므로 저사양 CPU에서도 안전하다(전류 스파이크 유발 X)."""
     global _trace_on
     if not _started or _trace_on or not is_trace_enabled():
         return
-    try:
-        import tracemalloc
-        tracemalloc.start(4)  # 4 프레임까지 추적 (오버헤드 절감)
-        _trace_on = True
-        log_event("trace-enabled")
-    except Exception:
-        _trace_on = False
+    _trace_on = True
+    log_event("trace-enabled")
 
 
-def _dump_top_allocations(tag=""):
-    """현재 메모리를 가장 많이 점유한 할당 위치(파일:라인) 상위 10개를 기록한다."""
+_last_dump_time = 0.0
+
+
+def _dump_big_objects(tag=""):
+    """현재 살아있는 파이썬 객체 중 메모리를 많이 점유한 '타입'과 '대형 객체'를 기록한다.
+    (tracemalloc 대신 gc 스냅샷을 1회 스캔 — 상시 오버헤드 없음)"""
     if not _trace_on:
         return
+    global _last_dump_time
+    now = time.time()
+    if now - _last_dump_time < 2.0:  # 최소 2초 간격 (폭증 중 과도한 스캔 방지)
+        return
+    _last_dump_time = now
     try:
-        import tracemalloc
-        snap = tracemalloc.take_snapshot()
-        stats = snap.statistics("lineno")[:10]
+        import gc
+        import sys
+        try:
+            import pandas as _pd
+        except Exception:
+            _pd = None
+        try:
+            import numpy as _np
+        except Exception:
+            _np = None
+
+        agg = {}       # 타입명 -> [총바이트, 개수]
+        biggest = []   # (바이트, 타입명)
+        for obj in gc.get_objects():
+            try:
+                tn = type(obj).__name__
+                if _pd is not None and isinstance(obj, _pd.DataFrame):
+                    sz = int(obj.memory_usage(deep=True).sum()); tn = "DataFrame"
+                elif _pd is not None and isinstance(obj, _pd.Series):
+                    sz = int(obj.memory_usage(deep=True)); tn = "Series"
+                elif _np is not None and isinstance(obj, _np.ndarray):
+                    sz = int(obj.nbytes); tn = "ndarray"
+                elif tn in ("list", "dict", "set", "tuple", "bytes", "bytearray", "str"):
+                    sz = sys.getsizeof(obj)
+                else:
+                    continue
+            except Exception:
+                continue
+            a = agg.get(tn)
+            if a is None:
+                agg[tn] = [sz, 1]
+            else:
+                a[0] += sz; a[1] += 1
+            if sz >= 5 * 1024 * 1024:
+                biggest.append((sz, tn))
+
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        _write(f"{ts} | TRACE-TOP ({tag}) | 상위 할당 위치:")
-        for i, st in enumerate(stats, 1):
-            fr = st.traceback[0]
-            _write(f"    #{i} {st.size/1024/1024:.1f}MB  {fr.filename}:{fr.lineno}  (count={st.count})")
+        top_types = sorted(agg.items(), key=lambda kv: kv[1][0], reverse=True)[:8]
+        _write(f"{ts} | OBJ-TOP ({tag}) | 타입별 총 메모리 상위:")
+        for tn, (sz, cnt) in top_types:
+            _write(f"    {tn}: {sz/1024/1024:.1f}MB (count={cnt})")
+        biggest.sort(reverse=True)
+        for sz, tn in biggest[:8]:
+            _write(f"    BIG {tn}: {sz/1024/1024:.1f}MB")
     except Exception as e:
-        _write(f"  (tracemalloc dump 실패: {e})")
+        _write(f"  (obj dump 실패: {e})")
 
 
 def _read_self_mem():
@@ -206,9 +244,9 @@ def _sampler(interval, top_every):
                 tops = _top_processes(8)
                 if tops:
                     _write(f"{ts} | TOP | " + " | ".join(tops))
-            # [할당 추적] RSS가 직전 덤프 대비 30MB 이상 급증하면 상위 할당 위치를 기록
-            if _trace_on and (rss - _last_dump_rss) >= 30 * 1024:
-                _dump_top_allocations(tag=f"rss={_mb(rss)}")
+            # [객체 추적] RSS가 직전 덤프 대비 25MB 이상 급증하면 대형 객체 스냅샷을 기록
+            if _trace_on and (rss - _last_dump_rss) >= 25 * 1024:
+                _dump_big_objects(tag=f"rss={_mb(rss)}")
                 _last_dump_rss = rss
             tick += 1
         except Exception:
