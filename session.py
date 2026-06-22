@@ -146,9 +146,12 @@ class SessionManager:
             self.acnt_prdt_cd = ""
 
             # [중요] 토스는 단일 주식계좌만 제공한다. 시스템 트레이딩용 '자동' 계좌 개념이
-            # 없으므로, KIS용 AUTO_* 설정을 비워 자산/잔고 화면에 중복 계좌가 뜨지 않게 한다.
-            self.auto_cano = ""
-            self.auto_acnt_prdt_cd = ""
+            # 없으므로, 시스템 트레이딩(메뉴 5) 계좌를 거래 계좌와 동일하게 동기화한다.
+            #   - auto_cano 기반 분기(target = auto_cano if not is_simulation ...)가 토스 계좌를 가리키게 함
+            #   - auto_cano == cano 이므로 자산/잔고/미체결 화면의 중복 계좌 표시(auto_cano != cano 조건)는 발생하지 않음
+            # (모의투자 모드와 동일한 단일계좌 동기화 방식)
+            self.auto_cano = self.cano
+            self.auto_acnt_prdt_cd = self.acnt_prdt_cd
             self.auto_app_key = ""
             self.auto_app_secret = ""
 

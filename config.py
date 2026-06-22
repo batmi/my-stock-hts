@@ -206,11 +206,10 @@ class GlobalSettings(BaseModel):
     #         값을 변경하면 평가 항목 수가 바뀌는 것이 아니라,
     #         각 세부 항목의 배점이 비율에 맞춰 자동으로 스케일링됩니다.
     SCORING_WEIGHTS: dict = {
-        "TREND": 3.0,        # 추세 팩터 (이평선, MACD, SAR) - 가격모멘텀 팩터 신설로 4.0→3.0 재배분
+        "TREND": 4.0,        # 추세 팩터 (이평선, MACD, SAR)
         "MOMENTUM": 2.5,     # 모멘텀 팩터 (RSI, CCI)
         "STRENGTH": 1.5,     # 강도/수급 팩터 (ADX, OBV)
         "SYNERGY": 2.0,      # 시너지 가산점 (지표 간 동조화)
-        "MOMENTUM_PRICE": 1.0 # [추가] 가격 모멘텀 팩터 (52주 신고가 근접도 + 절대 모멘텀/수익률) - 추세추종 핵심
     }
 
     # ==========================================================
@@ -575,7 +574,13 @@ def load_dynamic_config():
                     if key in data:
                         current_dict[key].update(data[key])
                         del data[key]
-                
+
+                # [마이그레이션] 구버전 가격모멘텀(MOMENTUM_PRICE) 가중치는 제거하고 추세(TREND)로 흡수
+                #   (총점 10점 유지: 추세4/모멘텀2.5/강도1.5/시너지2.0 체계로 복귀)
+                sw = current_dict.get("SCORING_WEIGHTS", {})
+                if "MOMENTUM_PRICE" in sw:
+                    sw["TREND"] = round(sw.get("TREND", 4.0) + sw.pop("MOMENTUM_PRICE", 0.0), 2)
+
                 current_dict.update(data)
                 settings = GlobalSettings(**current_dict)
         except Exception as e:
@@ -664,7 +669,7 @@ def reset_all_settings():
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
         }
         settings.SCORING_WEIGHTS = {
-            "TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0
+            "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
         }
         settings.MARKET_REGIME_PARAMS = {
             "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,

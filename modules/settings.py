@@ -168,7 +168,6 @@ def view_system_config():
     table.add_row("모멘텀 팩터\n[dim]RSI, CCI[/dim]", "SCORING_WEIGHTS['MOMENTUM']", f"{weights.get('MOMENTUM')}")
     table.add_row("강도/수급 팩터\n[dim]ADX, OBV[/dim]", "SCORING_WEIGHTS['STRENGTH']", f"{weights.get('STRENGTH')}")
     table.add_row("시너지 가산점\n[dim]지표 동조화 보너스[/dim]", "SCORING_WEIGHTS['SYNERGY']", f"{weights.get('SYNERGY')}")
-    table.add_row("가격모멘텀 팩터\n[dim]52주 신고가 근접 + 절대 모멘텀[/dim]", "SCORING_WEIGHTS['MOMENTUM_PRICE']", f"{weights.get('MOMENTUM_PRICE', 1.0)}")
 
     table.add_section()
     table.add_row("[bold dim]  2-2. 적응형 임계값 (시장국면)[/]", "", "")
@@ -460,6 +459,11 @@ def modify_analysis_thresholds():
         {"desc": "슈퍼 모멘텀 매수 RSI", "help": "발동 시 완화되는 진입 허용 RSI (예: 75.0)", "name": "SUPER_BUY_RSI_MAX", "type": "float",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_BUY_RSI_MAX": v})}
     ]
+    # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목은 편집 목록에서 숨김(미사용 유지)
+    #   수급 확인은 매도잔량비(BUY_ASK_BID_RATIO)로 수행하므로 해당 항목은 유지한다.
+    if config.session.is_toss:
+        _toss_hidden = {"BUY_VOL_STRENGTH", "AUTO_ADJUST_ASK_BID_RATIO", "MR_VOL_STRENGTH"}
+        items = [it for it in items if it["name"] not in _toss_hidden]
     return _edit_config_table("매수/분석 임계값 설정 (ANALYSIS_THRESHOLDS)", items)
 
 def modify_sell_strategy():
@@ -599,7 +603,7 @@ def modify_log_settings():
 
 def modify_scoring_weights():
     # 기본값 정의
-    defaults = {"TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0}
+    defaults = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
     action_taken = False
 
     while True:
@@ -619,8 +623,7 @@ def modify_scoring_weights():
             ("TREND", "추세 (TREND)", "이평선, MACD, SAR"),
             ("MOMENTUM", "모멘텀 (MOMENTUM)", "RSI, CCI"),
             ("STRENGTH", "강도 (STRENGTH)", "ADX, OBV"),
-            ("SYNERGY", "시너지 (SYNERGY)", "지표 동조화 보너스"),
-            ("MOMENTUM_PRICE", "가격모멘텀 (MOMENTUM_PRICE)", "52주 신고가 근접 + 절대 모멘텀")
+            ("SYNERGY", "시너지 (SYNERGY)", "지표 동조화 보너스")
         ]
 
         for key, label, detail in items_info:
@@ -653,13 +656,14 @@ def modify_scoring_weights():
                         raise ValueError("canceled")
                     new_weights[key] = float(val)
                 
-                new_total = sum(new_weights.values())
-                
+                new_total = round(sum(new_weights.values()), 2)
+
+                # 합계는 정확히 10.0점이어야 한다(자동 재계산하지 않음). 미달/초과 시 재입력 안내.
                 if abs(new_total - 10.0) > 0.01:
                     console.print(f"\n[bold red]경고: 입력한 값의 합계가 {new_total:.1f}점입니다.[/bold red]")
-                    console.print("[yellow]가중치의 합은 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
+                    console.print("[yellow]가중치의 합은 정확히 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
                     continue
-                
+
                 config.SCORING_WEIGHTS.update(new_weights)
                 
                 config.settings.ACTIVE_PRESET = "custom"
@@ -787,25 +791,25 @@ DEFAULT_PRESETS = {
     "bull": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 75.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 60.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 25, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
-        "TREND": 3.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0,
+        "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
         "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 20.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0,
-        "TREND": 2.0, "MOMENTUM": 3.0, "STRENGTH": 2.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0,
+        "TREND": 3.0, "MOMENTUM": 3.0, "STRENGTH": 2.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
     },
     "sideways": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0,
-        "TREND": 2.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0,
+        "TREND": 3.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
         "BUY_SCORE": 7.5, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
-        "TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0,
+        "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 30
     }
 }
@@ -911,12 +915,12 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
         "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"]
     })
+    config.SCORING_WEIGHTS.pop("MOMENTUM_PRICE", None)  # 구버전 잔여 키 제거
     config.SCORING_WEIGHTS.update({
         "TREND": vals["TREND"],
         "MOMENTUM": vals["MOMENTUM"],
         "STRENGTH": vals["STRENGTH"],
         "SYNERGY": vals["SYNERGY"],
-        "MOMENTUM_PRICE": vals.get("MOMENTUM_PRICE", 1.0)
     })
     config.settings.SYSTEM_INVEST_PER_STOCK = vals["SYSTEM_INVEST_PER_STOCK"]
     config.settings.SYSTEM_DAILY_LOSS_LIMIT = vals["SYSTEM_DAILY_LOSS_LIMIT"]
@@ -948,7 +952,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("본전 청산 (방어)", f"수익 +{config.SELL_STRATEGY.get('BREAK_EVEN_PROFIT_RATE', 7.0)}% 도달 시 손절선 +{config.SELL_STRATEGY.get('BREAK_EVEN_STOP_RATE', 0.5)}%로 상향"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 20))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
-        ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']} / 가격모멘텀 {config.SCORING_WEIGHTS.get('MOMENTUM_PRICE', 1.0)}"),
+        ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']}"),
         ("종목당 투자 비중", f"{config.settings.SYSTEM_INVEST_PER_STOCK * 100:.0f}%")
     ]
     
@@ -1029,14 +1033,18 @@ def _edit_single_preset(preset_type):
             {"desc": "모멘텀 가중치", "help": "Momentum", "name": "MOMENTUM", "type": "float", "section": "Weights", "get": make_getter("MOMENTUM"), "set": make_setter("MOMENTUM", 'float')},
             {"desc": "강도 가중치", "help": "Strength", "name": "STRENGTH", "type": "float", "section": "Weights", "get": make_getter("STRENGTH"), "set": make_setter("STRENGTH", 'float')},
             {"desc": "시너지 가중치", "help": "Synergy", "name": "SYNERGY", "type": "float", "section": "Weights", "get": make_getter("SYNERGY"), "set": make_setter("SYNERGY", 'float')},
-            {"desc": "가격모멘텀 가중치", "help": "Price Momentum (52주 신고가+절대모멘텀)", "name": "MOMENTUM_PRICE", "type": "float", "section": "Weights", "get": make_getter("MOMENTUM_PRICE"), "set": make_setter("MOMENTUM_PRICE", 'float')},
 
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk", "get": make_getter("USE_MARKET_FILTER"), "set": make_setter("USE_MARKET_FILTER", 'bool')},
             {"desc": "시장 필터 SMA(일)", "help": "필터 감지 이평선 주기", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk", "get": make_getter("MARKET_FILTER_MA"), "set": make_setter("MARKET_FILTER_MA", 'int')},
             {"desc": "일일 손실 제한(%)", "help": "비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_DAILY_LOSS_LIMIT"), "set": make_setter("SYSTEM_DAILY_LOSS_LIMIT", 'float')},
             {"desc": "종목당 투자 비중", "help": "0.1 ~ 1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float')}
         ]
-        
+
+        # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목 편집 숨김(매도잔량비는 유지)
+        if config.session.is_toss:
+            _toss_hidden = {"BUY_VOL_STRENGTH", "AUTO_ADJUST_ASK_BID_RATIO", "MR_VOL_STRENGTH"}
+            items = [it for it in items if it["name"] not in _toss_hidden]
+
         acted = _edit_config_table(title, items, check_preset=False)
         if not acted: break
 

@@ -980,11 +980,10 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
 
     # 후보 가중치 세트 (총점 10점 유지)
     candidate_weights = [
-        {"DESC": "기본(추세추종)",   "TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
-        {"DESC": "추세 중시",        "TREND": 4.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
-        {"DESC": "모멘텀 중시",      "TREND": 2.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
-        {"DESC": "가격모멘텀 중시",  "TREND": 2.0, "MOMENTUM": 2.0, "STRENGTH": 2.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 2.0},
-        {"DESC": "수급/강도 중시",   "TREND": 2.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0},
+        {"DESC": "기본(추세추종)",   "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0},
+        {"DESC": "추세 중시",        "TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0},
+        {"DESC": "모멘텀 중시",      "TREND": 3.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0},
+        {"DESC": "수급/강도 중시",   "TREND": 3.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0},
     ]
 
     def _run(seg_start, seg_end, w):
@@ -1279,7 +1278,7 @@ def run_backtest():
             ts_callback = 4.0
             time_stop_days = 20
             atr_mult = 2.0
-            weights = {"TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0}
+            weights = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
             msg_preset = "기본설정 (시스템 권장: 추세추종 + 트레일링 주청산)"
 
         if change_settings == "y":
@@ -2123,11 +2122,10 @@ def run_backtest():
         
         # 테스트할 가중치 조합 생성 (Grid Search)
         scenarios = [
-            {"TREND": 3.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "기본값(추세추종)"},
-            {"TREND": 4.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "추세 중시"},
-            {"TREND": 2.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "모멘텀 중시"},
-            {"TREND": 2.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0, "MOMENTUM_PRICE": 1.0, "DESC": "수급/강도 중시"},
-            {"TREND": 2.0, "MOMENTUM": 2.0, "STRENGTH": 2.0, "SYNERGY": 2.0, "MOMENTUM_PRICE": 2.0, "DESC": "가격모멘텀 중시"}
+            {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "기본값(추세추종)"},
+            {"TREND": 5.0, "MOMENTUM": 2.0, "STRENGTH": 1.0, "SYNERGY": 2.0, "DESC": "추세 중시"},
+            {"TREND": 3.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0, "DESC": "모멘텀 중시"},
+            {"TREND": 3.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0, "DESC": "수급/강도 중시"},
         ]
 
         if use_random:
@@ -2136,19 +2134,17 @@ def run_backtest():
                 m = random.uniform(1.0, 4.0)
                 s = random.uniform(0.5, 3.0)
                 syn = random.uniform(0.5, 3.0)
-                mp = random.uniform(0.5, 2.5)
 
-                total = t + m + s + syn + mp
+                total = t + m + s + syn
                 factor = 10.0 / total
 
                 t = round(t * factor, 1)
                 m = round(m * factor, 1)
                 s = round(s * factor, 1)
-                mp = round(mp * factor, 1)
-                syn = round(10.0 - (t + m + s + mp), 1)
+                syn = round(10.0 - (t + m + s), 1)
 
                 scenarios.append({
-                    "TREND": t, "MOMENTUM": m, "STRENGTH": s, "SYNERGY": syn, "MOMENTUM_PRICE": mp,
+                    "TREND": t, "MOMENTUM": m, "STRENGTH": s, "SYNERGY": syn,
                     "DESC": f"랜덤 조합 {i+1}"
                 })
         
@@ -2158,7 +2154,7 @@ def run_backtest():
         opt_table.add_column("MDD", justify="right")
         opt_table.add_column("승률", justify="right")
         opt_table.add_column("매매횟수", justify="right")
-        opt_table.add_column("가중치 (T/M/S/Syn/MP)", justify="right", style="dim")
+        opt_table.add_column("가중치 (T/M/S/Syn)", justify="right", style="dim")
         
         best_opt_return = -999.0
         best_opt_scenario = None
@@ -2191,7 +2187,7 @@ def run_backtest():
                     best_opt_scenario = sc
 
                 r_color = "[red]" if res_opt['total_return'] > 0 else "[blue]"
-                w_str = f"{weights_opt['TREND']:.1f}/{weights_opt['MOMENTUM']:.1f}/{weights_opt['STRENGTH']:.1f}/{weights_opt['SYNERGY']:.1f}/{weights_opt.get('MOMENTUM_PRICE', 0.0):.1f}"
+                w_str = f"{weights_opt['TREND']:.1f}/{weights_opt['MOMENTUM']:.1f}/{weights_opt['STRENGTH']:.1f}/{weights_opt['SYNERGY']:.1f}"
                 
                 opt_table.add_row(
                     sc["DESC"],

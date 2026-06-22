@@ -1107,6 +1107,12 @@ class DefaultStrategy:
                 if ask_bid_ratio < min_ask_bid_ratio:
                     is_vol_ok = False
                     vol_reject_reason = f"매도잔량비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
+        elif config.session.is_toss:
+            # [추가] 토스: 체결강도 미제공 → 호가창 매도잔량비(ask_bid_ratio)만으로 수급 게이트 대체
+            #   호가 조회가 실패해 ratio가 없으면 상태(state) 게이트만으로 진입(거래 중단 방지)
+            if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
+                is_vol_ok = False
+                vol_reject_reason = f"매도잔량비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}(체결강도대체)"
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',
@@ -1123,6 +1129,7 @@ class DefaultStrategy:
             'obv_trend': ind.get('obv_trend'),
             'vol_strength': vol_strength,
             'ask_bid_ratio': ask_bid_ratio,
+            'min_ask_bid_ratio': min_ask_bid_ratio,  # [추가] 재진입 허들 등에서 재사용
             'vol_reject_reason': vol_reject_reason,
             'smart_money': sm_flag
         }
@@ -2061,13 +2068,31 @@ class AutoTrader:
         
         self.log("━━━ 자동매매 시스템 시작 프로세스 진입 ━━━")
         
-        if not config.session.is_simulation:
+        if config.session.is_toss:
+            # [추가] 토스: 단일 계좌 + 토스 API 사용. 별도 KIS AUTO 계좌가 필요 없다.
+            if not config.session.toss_app_key or not config.session.toss_app_secret or not config.session.cano:
+                if api._is_screen_output_allowed():
+                    console.print("[bold red]오류: 토스 시스템 트레이딩을 실행하려면 토스 API 설정이 필요합니다.[/bold red]")
+                    console.print("[dim]환경 변수 TOSS_APP_KEY, TOSS_APP_SECRET, TOSS_ACC_NUM을 설정해주세요.[/dim]")
+                return
+
+            if interactive:
+                console.print("\n[bold magenta]!!! 경고: 토스증권 실계좌에서 시스템 트레이딩을 시작합니다 !!![/bold magenta]")
+                console.print(f"운용 계좌: [bold yellow]{config.session.cano}[/bold yellow] (토스증권, 실제 자산 거래)")
+                utils.print_breadcrumb()
+                if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                    console.print("[yellow]시작을 취소했습니다.[/yellow]")
+                    return
+            else:
+                if api._is_screen_output_allowed():
+                    console.print("[bold cyan][시스템 명령] 토스증권 자동매매를 시작합니다.[/bold cyan]")
+        elif not config.session.is_simulation:
             if not config.session.auto_app_key or not config.session.auto_cano:
                 if api._is_screen_output_allowed():
                     console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
                     console.print("[dim]환경 변수 AUTO_APP_KEY, AUTO_APP_SECRET, AUTO_ACC_NUM을 설정해주세요.[/dim]")
                 return
-            
+
             if interactive:
                 console.print("\n[bold red]!!! 경고: 실전 투자 모드에서 시스템 트레이딩을 시작합니다 !!![/bold red]")
                 console.print(f"운용 계좌: [bold yellow]{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}[/bold yellow] (시스템 트레이딩 전용)")
@@ -2165,7 +2190,12 @@ class AutoTrader:
             time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
 
             msg += "\n\n⚙️ [적용 전략]"
-            msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
+            if config.session.is_toss:
+                # 토스는 체결강도 미제공 → 매도잔량비 게이트로 대체
+                buy_abr = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
+                msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 매도잔량비 {buy_abr}배↑ [dim](체결강도 대체)[/dim]"
+            else:
+                msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
             msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
             
             tp_str = f"+{tp}%"
@@ -3082,7 +3112,10 @@ class AutoTrader:
         buy_vol = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
         buy_ask_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
         auto_adj = "ON" if config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True) else "OFF"
-        table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑ / 비대칭 {buy_ask_ratio}배↑ (자동연동: {auto_adj})")
+        if config.session.is_toss:
+            table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 매도잔량비 {buy_ask_ratio}배↑ (체결강도 미제공→매도잔량비 대체)")
+        else:
+            table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑ / 비대칭 {buy_ask_ratio}배↑ (자동연동: {auto_adj})")
 
         # [추가] 역추세 매수 표시
         use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
@@ -5205,7 +5238,16 @@ class AutoTrader:
                 if code in reentry_hurdles:
                     req_vol = reentry_hurdles[code]
                     vol_strength_val = result.get('vol_strength')
-                    if vol_strength_val is None or vol_strength_val <= req_vol:
+                    if config.session.is_toss:
+                        # [추가] 토스: 체결강도 미제공 → 매도잔량비(ask_bid_ratio)로 당일 재진입 판단
+                        abr = result.get('ask_bid_ratio')
+                        min_abr = result.get('min_ask_bid_ratio', 0) or 0
+                        if abr is None or (min_abr > 0 and abr < min_abr):
+                            log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (매도잔량비 {abr if abr is not None else 0:.2f} < {min_abr:.2f})"
+                            return {'type': 'log_only', 'log': log_msg}
+                        else:
+                            reentry_msg = f"당일 재진입(매도잔량비 {abr:.2f})"
+                    elif vol_strength_val is None or vol_strength_val <= req_vol:
                         log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (체결강도 {vol_strength_val if vol_strength_val else 0:.1f}% <= 기존매수 {req_vol:.1f}%)"
                         return {'type': 'log_only', 'log': log_msg}
                     else:
@@ -5214,6 +5256,7 @@ class AutoTrader:
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
+                    'ask_bid_ratio': result.get('ask_bid_ratio'),  # [추가] 토스 수급 지표(체결강도 대체)
                     'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state'],
                     'state_reason': result.get('state_reason', ''),
                     'reentry_msg': reentry_msg
@@ -5447,7 +5490,13 @@ class AutoTrader:
             if cand.get('is_custom_rule'):
                 reason += " [개별 룰 적용]"
             
-            reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
+            # [수정] 토스는 체결강도 미제공 → 매도잔량비로 표기(재진입 허들 파싱과 무관)
+            if config.session.is_toss:
+                abr = cand.get('ask_bid_ratio')
+                abr_val = f"{abr:.2f}" if abr is not None else "-"
+                reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 매도잔량비:{abr_val}]"
+            else:
+                reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
             
             atr_msg = ""
             if atr_val > 0 and price_val > 0:
@@ -5723,31 +5772,39 @@ def _input_and_save_rule(code, name):
 
     try:
         console.print("\n[bold]1. 기본 매수 타점 설정[/bold]")
-        new_strategy['buy_score'] = ask_val('buy_score', "매수 기준 점수 (기본: 7.5점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
-        new_strategy['buy_rsi'] = ask_val('buy_rsi', "매수 허용 RSI 상한 (기본: 65)", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
-        new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
-        
-        curr_auto = "y" if current.get('auto_adjust_ask_bid_ratio', defaults['auto_adjust_ask_bid_ratio']) else "n"
-        val_auto = Prompt.ask(f"매도잔량비 자동 연동 (y: 사용 / n: 미사용) [dim](현재: {curr_auto})\n[dim]체결강도 설정값에 비례하여 최저 1.0배 자동 조정[/dim]", choices=["y", "n", "b", "q"], default=curr_auto)
-        if val_auto.lower() in ['b', 'q']: raise QuitInput()
-        new_strategy['auto_adjust_ask_bid_ratio'] = 1 if val_auto.lower() == 'y' else 0
-        
+        new_strategy['buy_score'] = ask_val('buy_score', f"매수 기준 점수 (기본: {defaults['buy_score']}점)", "이 점수 이상일 때 매수 진입 (지표 종합 점수)", float)
+        new_strategy['buy_rsi'] = ask_val('buy_rsi', f"매수 허용 RSI 상한 (기본: {defaults['buy_rsi']})", "RSI가 이 값보다 낮아야 매수 (과열 방지)", float)
+        if config.session.is_toss:
+            # [추가] 토스: 체결강도 미제공 → 체결강도/자동연동은 미사용 고정(프롬프트 생략).
+            #   수급 확인은 매도잔량비(ask_bid_ratio) 게이트로만 수행한다.
+            new_strategy['buy_vol_strength'] = 0.0
+            new_strategy['auto_adjust_ask_bid_ratio'] = 0
+            console.print("[dim]토스증권: 체결강도 미제공 → 체결강도/자동연동 미사용(0). 수급은 매도잔량비로 판단합니다.[/dim]")
+        else:
+            new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
+
+            curr_auto = "y" if current.get('auto_adjust_ask_bid_ratio', defaults['auto_adjust_ask_bid_ratio']) else "n"
+            val_auto = Prompt.ask(f"매도잔량비 자동 연동 (y: 사용 / n: 미사용) [dim](현재: {curr_auto})\n[dim]체결강도 설정값에 비례하여 최저 1.0배 자동 조정[/dim]", choices=["y", "n", "b", "q"], default=curr_auto)
+            if val_auto.lower() in ['b', 'q']: raise QuitInput()
+            new_strategy['auto_adjust_ask_bid_ratio'] = 1 if val_auto.lower() == 'y' else 0
+
         default_ratio = config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)
-        new_strategy['buy_ask_bid_ratio'] = ask_val('buy_ask_bid_ratio', f"매도잔량 비대칭성 기준 (기본: {default_ratio}배, 0: 미사용)", "가짜 체결강도 방어 (체결강도 100% 기준 매도/매수잔량 비율)", float)
+        ratio_help = "수급 확인: 매도잔량/매수잔량 비율(이 값 이상이어야 매수)" if config.session.is_toss else "가짜 체결강도 방어 (체결강도 100% 기준 매도/매수잔량 비율)"
+        new_strategy['buy_ask_bid_ratio'] = ask_val('buy_ask_bid_ratio', f"매수 매도잔량비 기준 (기본: {default_ratio}배, 0: 미사용)", ratio_help, float)
 
         console.print("\n[bold]2. 기본 청산 타점 설정[/bold]")
-        new_strategy['take_profit'] = ask_val('take_profit', "익절 수익률(%) (기본: 30.0%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
+        new_strategy['take_profit'] = ask_val('take_profit', f"익절 수익률(%) (기본: {defaults['take_profit']}%)", "수익이 이 비율에 도달하면 이익 실현 (0: 미사용)", float)
         
         curr_half_tp = "y" if current.get('half_take_profit_use', defaults['half_take_profit_use']) else "n"
         val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) [dim](현재: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "b", "q"], default=curr_half_tp)
         if val.lower() in ['b', 'q']: raise QuitInput()
         new_strategy['half_take_profit_use'] = 1 if val.lower() == 'y' else 0
         
-        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', "익절 RSI 기준 (기본: 75)", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
-        new_strategy['sell_score'] = ask_val('sell_score', "매도(추세이탈) 기준 점수 (기본: 5.0점)", "점수가 이 값 미만으로 떨어지면 매도", float)
-        new_strategy['ts_activation'] = ask_val('ts_activation', "트레일링 스탑 발동 수익률(%) (기본: 15.0%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
-        new_strategy['ts_callback'] = ask_val('ts_callback', "트레일링 스탑 하락 감지율(%) (기본: 4.0%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
-        new_strategy['time_stop_days'] = ask_val('time_stop_days', "시간 청산 기한(일) (기본: 10일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
+        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', f"익절 RSI 기준 (기본: {defaults['take_profit_rsi']})", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
+        new_strategy['sell_score'] = ask_val('sell_score', f"매도(추세이탈) 기준 점수 (기본: {defaults['sell_score']}점)", "점수가 이 값 미만으로 떨어지면 매도", float)
+        new_strategy['ts_activation'] = ask_val('ts_activation', f"트레일링 스탑 발동 수익률(%) (기본: {defaults['ts_activation']}%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
+        new_strategy['ts_callback'] = ask_val('ts_callback', f"트레일링 스탑 하락 감지율(%) (기본: {defaults['ts_callback']}%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
+        new_strategy['time_stop_days'] = ask_val('time_stop_days', f"시간 청산 기한(일) (기본: {defaults['time_stop_days']}일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
             
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
         curr_ratio_pct = current.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100
@@ -5772,37 +5829,41 @@ def _input_and_save_rule(code, name):
         console.print("\n[bold]4. 스코어링 가중치 설정[/bold]")
         curr_weights = current.get('weights')
         
+        # 4개 팩터(추세4/모멘텀2.5/강도1.5/시너지2.0=10) 입력. 합계는 정확히 10.0점이어야 한다.
+        WEIGHT_FACTORS = [
+            ("TREND", "추세 (TREND)"),
+            ("MOMENTUM", "모멘텀 (MOMENTUM)"),
+            ("STRENGTH", "강도 (STRENGTH)"),
+            ("SYNERGY", "시너지 (SYNERGY)"),
+        ]
         while True:
             # 현재 설정값 또는 전역 설정값 로드
             temp_weights = curr_weights.copy() if curr_weights else config.SCORING_WEIGHTS.copy()
-            
-            console.print("[dim]순서: 추세 / 모멘텀 / 강도 / 시너지 (합계 10.0점 설정)[/dim]")
+
+            console.print("[dim]각 팩터의 가중치를 입력하세요. 합계가 정확히 10.0점이 되어야 합니다.[/dim]")
             console.print()
-            
+
             def ask_weight(key, desc, default_val):
                 v = Prompt.ask(f"{desc} [dim](현재: {default_val})[/dim]", default=str(default_val))
                 if v.lower() in ['b', 'q']: raise QuitInput()
                 return float(v)
 
             try:
-                w_trend = ask_weight("TREND", "추세 (TREND)", temp_weights.get('TREND', 4.0))
-                w_mom = ask_weight("MOMENTUM", "모멘텀 (MOMENTUM)", temp_weights.get('MOMENTUM', 2.5))
-                w_str = ask_weight("STRENGTH", "강도 (STRENGTH)", temp_weights.get('STRENGTH', 1.5))
-                w_syn = ask_weight("SYNERGY", "시너지 (SYNERGY)", temp_weights.get('SYNERGY', 2.0))
+                entered = {}
+                for key, desc in WEIGHT_FACTORS:
+                    entered[key] = ask_weight(key, desc, temp_weights.get(key, config.SCORING_WEIGHTS.get(key, 0.0)))
             except ValueError:
                 console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
                 continue
 
-            total_score = w_trend + w_mom + w_str + w_syn
-            
+            total_score = round(sum(entered.values()), 2)
             if abs(total_score - 10.0) > 0.01:
                 console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (합계 10.0점)[/bold red]")
-                console.print("[yellow]합계가 10점이 되도록 다시 입력해주세요.[/yellow]")
-                # 입력한 값으로 임시 가중치 업데이트하여 재입력 시 보여줌
-                curr_weights = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+                console.print("[yellow]합계가 정확히 10.0점이 되도록 다시 입력해주세요.[/yellow]")
+                curr_weights = entered  # 입력값 유지하여 재입력 시 보여줌
                 continue
-            
-            new_strategy['weights'] = {"TREND": w_trend, "MOMENTUM": w_mom, "STRENGTH": w_str, "SYNERGY": w_syn}
+
+            new_strategy['weights'] = entered
             break
 
         # [추가] 메모 입력
@@ -5845,8 +5906,8 @@ def _input_and_save_rule(code, name):
         w_disp = "기본 설정"
         if new_strategy.get('weights'):
             w = new_strategy['weights']
-            w_disp = f"{w['TREND']:.1f}/{w['MOMENTUM']:.1f}/{w['STRENGTH']:.1f}/{w['SYNERGY']:.1f}"
-        table.add_row("가중치", w_disp)
+            w_disp = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
+        table.add_row("가중치 (추세/모멘텀/강도/시너지)", w_disp)
         table.add_row("메모", new_strategy['memo'])
         
         console.print(table)

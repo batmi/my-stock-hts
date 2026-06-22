@@ -98,15 +98,12 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 
     # r_* 는 '각 팩터의 세부 항목 기본배점 합(=설계상 만점)' 대비 사용자 가중치의 스케일 배수다.
     # 분모는 세부항목 기본배점 합(고정값)이며 분자만 가중치로 바뀐다.
-    #   예) TREND 세부항목 기본합=4.0. 가중치 3.0이면 r_trend=0.75 → 추세 팩터가 3.0점으로 축소.
-    # [개선] 기본 가중치를 TREND 4.0→3.0으로 줄이고 가격 모멘텀(MOMENTUM_PRICE 1.0)을 신설해 총점 10점 유지.
+    #   예) TREND 세부항목 기본합=4.0. 가중치 4.0이면 r_trend=1.0 → 추세 팩터가 4.0점 만점.
+    # 4개 팩터 기본배점: 추세4.0 + 모멘텀2.5 + 강도1.5 + 시너지2.0 = 10.0 (총점 10점)
     r_trend = weights.get("TREND", 4.0) / 4.0
     r_mom = weights.get("MOMENTUM", 2.5) / 2.5
     r_str = weights.get("STRENGTH", 1.5) / 1.5
     r_syn = weights.get("SYNERGY", 2.0) / 2.0
-    # [추가] 가격 모멘텀 팩터 배수. 세부항목 기본합=1.0(0.5+0.5). 키가 없으면(구버전 프리셋/룰) 0.0으로
-    #        비활성화하여 기존 점수 체계(BUY_SCORE 등 임계값)에 회귀가 발생하지 않도록 함.
-    r_mp = weights.get("MOMENTUM_PRICE", 0.0) / 1.0
 
     score = 0
     details = []
@@ -288,31 +285,6 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         
     if obv_trend or smart_money:
         s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 개선 (+{s:.2f})")
-
-    # 3.5 Price Momentum Factor (MOMENTUM_PRICE, 기본 1.0점)
-    # [추세추종 핵심] 후행적 기술지표가 아닌 '실제 가격 추세 강도'를 직접 점수화한다.
-    #   (1) 52주 신고가 근접도(w52_pos): 강한 추세주는 신고가권에 오래 머무름
-    #   (2) 절대 모멘텀(중기 수익률 > 0): 시계열 모멘텀(time-series momentum)
-    # df가 있으면 직접 계산(라이브), 없으면 인자로 전달받은 값 사용(백테스트 row 기반).
-    if r_mp > 0:
-        if df is not None and not df.empty:
-            if w52_pos is None and 'high' in df.columns and 'low' in df.columns:
-                recent_df = df.tail(250)
-                h52 = recent_df['high'].max(); l52 = recent_df['low'].min()
-                if pd.notna(h52) and pd.notna(l52) and h52 > l52 and price is not None:
-                    w52_pos = (price - l52) / (h52 - l52) * 100
-            if mom_ret is None and 'close' in df.columns:
-                mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
-                if len(df) > mom_lb:
-                    past_price = df['close'].iloc[-1 - mom_lb]
-                    if past_price and past_price > 0 and price is not None:
-                        mom_ret = (price / past_price - 1) * 100
-
-        w52_near = config.INDICATOR_PARAMS.get('MOMENTUM_W52_NEAR', 80)
-        if w52_pos is not None and w52_pos >= w52_near:
-            s = round(0.5 * r_mp, 2); score += s; details.append(f"가격모멘텀: 52주 신고가 근접({w52_pos:.0f}%) (+{s:.2f})")
-        if mom_ret is not None and mom_ret > 0:
-            s = round(0.5 * r_mp, 2); score += s; details.append(f"가격모멘텀: 중기 추세 양호(+{mom_ret:.0f}%) (+{s:.2f})")
 
     # 4. Synergy Bonus (2.0점)
     # [수정] 시너지 보너스를 확산(macd_hist > prev_macd_hist) 조건 단독에서 완화. MACD가 시그널 위에 있고(macd_hist > 0) 심한 축소가 아닐 때 유지하여 단기 노이즈로 인한 2.0점 증발 방어
@@ -820,10 +792,17 @@ def _get_master_stock_list(market_type):
 
 # [추가] 마스터 코드 기반 시장 구분 캐시
 _MASTER_KOSDAQ_CODES = None
+_MASTER_KOSPI_CODES = None
 
 def _get_market_type_by_master(code):
-    """마스터 파일을 참조하여 종목의 시장 구분(KOSPI/KOSDAQ)을 정확히 반환합니다."""
-    global _MASTER_KOSDAQ_CODES
+    """마스터 파일(KOSPI/KOSDAQ)을 참조하여 종목의 시장 구분을 정확히 반환합니다.
+
+    KOSDAQ/KOSPI 마스터 양쪽을 모두 조회한다.
+      - KOSDAQ 마스터에 있으면 'KOSDAQ'
+      - KOSPI 마스터에 있으면 'KOSPI'
+      - 둘 다 없으면(신규상장/누락 등) 보수적으로 'KOSPI'로 폴백
+    """
+    global _MASTER_KOSDAQ_CODES, _MASTER_KOSPI_CODES
     if _MASTER_KOSDAQ_CODES is None:
         try:
             k_list = _get_master_stock_list("KOSDAQ")
@@ -831,7 +810,21 @@ def _get_market_type_by_master(code):
         except Exception as e:
             logger.debug(f"KOSDAQ 마스터 목록 로드 실패: {e}")
             _MASTER_KOSDAQ_CODES = set()
-    return "KOSDAQ" if code in _MASTER_KOSDAQ_CODES else "KOSPI"
+    if _MASTER_KOSPI_CODES is None:
+        try:
+            p_list = _get_master_stock_list("KOSPI")
+            _MASTER_KOSPI_CODES = set(s['code'] for s in p_list)
+        except Exception as e:
+            logger.debug(f"KOSPI 마스터 목록 로드 실패: {e}")
+            _MASTER_KOSPI_CODES = set()
+
+    if code in _MASTER_KOSDAQ_CODES:
+        return "KOSDAQ"
+    if code in _MASTER_KOSPI_CODES:
+        return "KOSPI"
+    # 어느 마스터에도 없으면(신규상장 등) 보수적 폴백
+    logger.debug(f"마스터 미발견 종목({code}) → KOSPI로 폴백 처리")
+    return "KOSPI"
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""

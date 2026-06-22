@@ -2623,6 +2623,117 @@ def _toss_open_orders(market):
     return out
 
 
+def _toss_today_closed_orders():
+    """오늘(KST) 종료된(CLOSED) 토스 주문 목록(페이지네이션). 2초 마이크로 캐시.
+    체결 감시(ConclusionMonitor)가 국내/해외 두 번 호출하므로 캐시로 중복 호출을 줄인다."""
+    cache_key = "toss_closed_today"
+    cached = _get_micro_cache(cache_key, ttl=2.0)
+    if cached is not None:
+        return cached
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    def _fetch(use_range):
+        out = []
+        cursor = None
+        for _ in range(10):  # 최대 10페이지(=1000건) 방어
+            kwargs = {"status": "CLOSED", "limit": 100}
+            if cursor:
+                kwargs["cursor"] = cursor
+            if use_range:
+                kwargs["from_date"] = today
+                kwargs["to_date"] = today
+            res = toss_api.get_orders(**kwargs)
+            out.extend((res or {}).get('orders', []) or [])
+            if not (res or {}).get('hasNext'):
+                break
+            cursor = (res or {}).get('nextCursor')
+            if not cursor:
+                break
+        return out
+
+    orders = []
+    try:
+        orders = _fetch(use_range=True)
+    except toss_api.TossApiError as e:
+        # from/to 형식 등으로 실패하면 기간 없이 재조회 후 클라이언트 필터에 의존
+        logger.debug(f"[Toss] 체결이력 기간조회 실패, 전체조회로 폴백: {e}")
+        try:
+            orders = _fetch(use_range=False)
+        except toss_api.TossApiError as e2:
+            logger.error(f"[Toss] 당일 체결이력 조회 실패: {e2}")
+            orders = []
+
+    # 오늘(KST) filledAt(없으면 orderedAt) 기준으로 한 번 더 필터(방어)
+    todays = []
+    for o in orders:
+        ts = str((o.get('execution') or {}).get('filledAt') or o.get('orderedAt') or '')
+        if ts[:10] == today:
+            todays.append(o)
+    _set_micro_cache(cache_key, todays)
+    return todays
+
+
+def _toss_history_item(o, overseas, name_map):
+    """토스 CLOSED 주문 1건 → KIS 당일 체결이력 항목."""
+    symbol = o.get('symbol', '')
+    side = o.get('side')
+    sll_buy_cd = '02' if side == 'BUY' else '01'
+    sll_buy_name = '매수' if side == 'BUY' else '매도'
+    qty = _toss_int(o.get('quantity'))
+    ex = o.get('execution') or {}
+    filled = _toss_int(ex.get('filledQuantity'))
+    status = str(o.get('status', ''))
+    is_canceled = bool(o.get('canceledAt')) or status in ('CANCELED', 'EXPIRED', 'REJECTED')
+    cncl = max(qty - filled, 0) if is_canceled else 0
+    avg = _toss_float(ex.get('averageFilledPrice'))
+    ts = str(ex.get('filledAt') or o.get('orderedAt') or '')
+    ord_dt = ts[:10].replace('-', '') if len(ts) >= 10 else ''
+    ord_tmd = ts[11:19].replace(':', '') if len(ts) >= 19 else ''
+    name = name_map.get(symbol) or symbol
+
+    item = {
+        'odno': o.get('orderId', ''),
+        'pdno': symbol,
+        'prdt_name': name,
+        'sll_buy_dvsn_cd': sll_buy_cd,
+        'sll_buy_dvsn_cd_name': sll_buy_name,
+        'ord_dt': ord_dt,
+        'ord_tmd': ord_tmd,
+        'cncl_cfrm_qty': str(cncl),
+    }
+    if overseas:
+        # 해외는 ft_* 필드 존재로 판별되므로 국내 항목에는 절대 넣지 않는다.
+        item.update({
+            'ovrs_item_name': name,
+            'ft_ord_qty': str(qty),
+            'ft_ccld_qty': str(filled),
+            'nccs_qty': '0',  # CLOSED 주문은 잔량 0
+            'ft_ccld_unpr3': str(avg),
+        })
+    else:
+        item.update({
+            'ord_qty': str(qty),
+            'tot_ccld_qty': str(filled),
+            'rmn_qty': '0',
+            'avg_prvs': str(avg),
+        })
+    return item
+
+
+def _toss_today_history(overseas):
+    """KIS get_today_history / get_overseas_today_history 토스 어댑터."""
+    orders = _toss_today_closed_orders()
+    want_krw = not overseas
+    picked = [o for o in orders if (o.get('currency') == 'KRW') == want_krw]
+    name_map = _toss_name_map([o.get('symbol') for o in picked])
+    items = [_toss_history_item(o, overseas, name_map) for o in picked]
+    logger.info(f"[Toss] 당일 체결이력({'해외' if overseas else '국내'}) 조회 결과: {len(items)}건")
+    if overseas:
+        return {'rt_cd': '0', 'output': items}
+    return {'rt_cd': '0', 'output1': items}
+
+
 def _toss_place_order(market, action, code, qty, price, ord_dvsn):
     """토스 주문 생성 → KIS place_order 형태({rt_cd,msg1,output:{ODNO}})."""
     side = 'BUY' if action == 'buy' else 'SELL'
@@ -2775,9 +2886,9 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
 
 def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 체결 내역 조회"""
-    # [추가] 토스: 당일 체결 이력 조회 경로 미지원 → 빈 값
+    # [추가] 토스: CLOSED 주문 이력에서 당일 국내 체결을 KIS 형태로 변환
     if config.session.is_toss:
-        return {'rt_cd': '0', 'output1': []}
+        return _toss_today_history(overseas=False)
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     
@@ -2807,9 +2918,9 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 해외주식 체결 내역 조회"""
-    # [추가] 토스: 당일 체결 이력 조회 경로 미지원 → 빈 값
+    # [추가] 토스: CLOSED 주문 이력에서 당일 해외 체결을 KIS 형태로 변환
     if config.session.is_toss:
-        return {'rt_cd': '0', 'output': []}
+        return _toss_today_history(overseas=True)
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     

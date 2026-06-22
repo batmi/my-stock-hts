@@ -657,6 +657,181 @@ def test_index_price_toss_unknown_code():
     assert res["rt_cd"] == "9999"
 
 
+def _buy_df():
+    import pandas as pd
+    rows = []
+    base = 10000
+    for i in range(30):
+        p = base + i * 100
+        rows.append({'date': f'2026040{i % 9 + 1}', 'open': p, 'high': p + 50,
+                     'low': p - 50, 'close': p, 'volume': 1000})
+    return pd.DataFrame(rows)
+
+
+def _strategy_buy_patches(state="매수"):
+    return [
+        patch("modules.auto_trade.indicators.calculate_indicators", return_value={
+            'rsi': 55.0, 'adx': 25.0, 'cci': 50.0, 'atr': 100.0, 'psar': 9000.0,
+            'macd': 1.0, 'macd_signal': 0.5, 'obv_trend': True}),
+        patch("modules.auto_trade.analysis.classify_stock_state", return_value=(state, None, "사유")),
+        patch("modules.auto_trade.analysis.calculate_score", return_value=(8.5, None)),
+        patch("modules.auto_trade.analysis.check_smart_money_turnaround", return_value=(False, "")),
+    ]
+
+
+def test_toss_buy_gate_uses_ask_bid_ratio():
+    """토스: 체결강도 None → 매도잔량비(ask_bid_ratio) 게이트로 매수 판정."""
+    import contextlib
+    from modules.auto_trade import DefaultStrategy
+    strat = DefaultStrategy()
+    df = _buy_df()
+    th = {"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True}
+    config.session.is_toss = True
+    try:
+        with contextlib.ExitStack() as es:
+            for p in _strategy_buy_patches("매수"):
+                es.enter_context(p)
+            r_ok = strat.analyze_buy("005930", "삼성", df, 13000, vol_strength=None, thresholds=th, ask_bid_ratio=1.5)
+            r_no = strat.analyze_buy("005930", "삼성", df, 13000, vol_strength=None, thresholds=th, ask_bid_ratio=0.5)
+            r_none = strat.analyze_buy("005930", "삼성", df, 13000, vol_strength=None, thresholds=th, ask_bid_ratio=None)
+    finally:
+        config.session.is_toss = False
+    assert r_ok['action'] == 'buy'        # 매도잔량비 1.5 >= 1.0 → 통과
+    assert r_no['action'] == 'wait'        # 0.5 < 1.0 → 거부
+    assert '체결강도대체' in r_no['vol_reject_reason']
+    assert r_none['action'] == 'buy'       # 호가 없음 → 상태 게이트만으로 진입(거래중단 방지)
+
+
+def test_non_toss_buy_gate_unchanged():
+    """비토스: 기존 체결강도 게이트 동작 유지(회귀 방지)."""
+    import contextlib
+    from modules.auto_trade import DefaultStrategy
+    strat = DefaultStrategy()
+    df = _buy_df()
+    th = {"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True}
+    config.session.is_toss = False
+    with contextlib.ExitStack() as es:
+        for p in _strategy_buy_patches("매수"):
+            es.enter_context(p)
+        r_low = strat.analyze_buy("005930", "삼성", df, 13000, vol_strength=50.0, thresholds=th, ask_bid_ratio=2.0)
+        r_ok = strat.analyze_buy("005930", "삼성", df, 13000, vol_strength=150.0, thresholds=th, ask_bid_ratio=2.0)
+    assert r_low['action'] == 'wait'       # 체결강도 50 < 100 → 거부
+    assert '체결:' in r_low['vol_reject_reason']
+    assert r_ok['action'] == 'buy'
+
+
+def test_toss_mode_syncs_auto_account():
+    """토스 모드: 시스템 트레이딩 계좌(auto_cano)가 거래 계좌(cano)와 동기화된다."""
+    import os
+    from session import SessionManager
+    sm = SessionManager()
+    with patch.dict(os.environ, {"TOSS_ACC_NUM": "18901501685",
+                                 "TOSS_APP_KEY": "k", "TOSS_APP_SECRET": "s"}):
+        sm.initialize(mode='3')
+    try:
+        assert sm.is_toss is True
+        assert sm.cano == "18901501685"
+        # auto_cano == cano 여야 auto_cano 기반 자동매매 분기가 토스 계좌를 가리킨다
+        assert sm.auto_cano == sm.cano
+        assert sm.auto_acnt_prdt_cd == sm.acnt_prdt_cd
+    finally:
+        sm.is_toss = False
+
+
+def _closed_orders_today():
+    """오늘 날짜의 CLOSED 주문(국내 체결 1 + 해외 체결 1 + 국내 취소 1)."""
+    import api
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    return {
+        "orders": [
+            {"orderId": "F_KR", "symbol": "005930", "side": "BUY", "status": "FILLED",
+             "price": "70000", "quantity": "10", "currency": "KRW",
+             "orderedAt": f"{today}T09:30:00+09:00",
+             "execution": {"filledQuantity": "10", "averageFilledPrice": "69950",
+                           "filledAt": f"{today}T09:31:05+09:00"}},
+            {"orderId": "F_US", "symbol": "AAPL", "side": "SELL", "status": "FILLED",
+             "price": "185.5", "quantity": "5", "currency": "USD",
+             "orderedAt": f"{today}T22:30:00+09:00",
+             "execution": {"filledQuantity": "5", "averageFilledPrice": "185.6",
+                           "filledAt": f"{today}T22:31:00+09:00"}},
+            {"orderId": "C_KR", "symbol": "000660", "side": "BUY", "status": "CANCELED",
+             "price": "150000", "quantity": "4", "currency": "KRW",
+             "orderedAt": f"{today}T10:00:00+09:00", "canceledAt": f"{today}T10:05:00+09:00",
+             "execution": {"filledQuantity": "1", "averageFilledPrice": "150000",
+                           "filledAt": f"{today}T10:01:00+09:00"}},
+        ],
+        "hasNext": False, "nextCursor": None,
+    }
+
+
+def test_today_history_domestic_adapter():
+    """토스 CLOSED → KIS get_today_history(output1) 변환(국내만, 체결/취소 필드)."""
+    import api
+    config.session.is_toss = True
+    try:
+        api._MICRO_CACHE.clear()
+        with patch("toss_api.get_orders", return_value=_closed_orders_today()), \
+             patch("toss_api.get_stocks", return_value=[
+                 {"symbol": "005930", "name": "삼성전자"},
+                 {"symbol": "000660", "name": "SK하이닉스"}]):
+            res = api.get_today_history()
+    finally:
+        config.session.is_toss = False
+    out1 = res["output1"]
+    assert res["rt_cd"] == "0"
+    assert len(out1) == 2  # KRW 2건(해외 제외)
+    filled = next(o for o in out1 if o["odno"] == "F_KR")
+    assert filled["tot_ccld_qty"] == "10"
+    assert filled["ord_qty"] == "10"
+    assert filled["avg_prvs"] == "69950.0"
+    assert filled["sll_buy_dvsn_cd"] == "02"
+    assert filled["cncl_cfrm_qty"] == "0"
+    assert "ft_ord_qty" not in filled  # 국내 항목엔 해외 필드 없어야 함(판별 오류 방지)
+    canceled = next(o for o in out1 if o["odno"] == "C_KR")
+    assert canceled["tot_ccld_qty"] == "1"        # 부분 체결
+    assert canceled["cncl_cfrm_qty"] == "3"        # 4 - 1 취소
+
+
+def test_today_history_overseas_adapter():
+    import api
+    config.session.is_toss = True
+    try:
+        api._MICRO_CACHE.clear()
+        with patch("toss_api.get_orders", return_value=_closed_orders_today()), \
+             patch("toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
+            res = api.get_overseas_today_history()
+    finally:
+        config.session.is_toss = False
+    out = res["output"]
+    assert len(out) == 1  # USD 1건
+    o = out[0]
+    assert o["odno"] == "F_US"
+    assert o["ft_ccld_qty"] == "5"
+    assert float(o["ft_ccld_unpr3"]) == 185.6
+    assert o["sll_buy_dvsn_cd"] == "01"  # SELL
+
+
+def test_today_history_filters_other_days():
+    """오늘이 아닌 체결은 제외된다."""
+    import api
+    config.session.is_toss = True
+    env = {"orders": [
+        {"orderId": "OLD", "symbol": "005930", "side": "BUY", "status": "FILLED",
+         "price": "70000", "quantity": "10", "currency": "KRW",
+         "orderedAt": "2020-01-02T09:30:00+09:00",
+         "execution": {"filledQuantity": "10", "filledAt": "2020-01-02T09:31:00+09:00"}},
+    ], "hasNext": False}
+    try:
+        api._MICRO_CACHE.clear()
+        with patch("toss_api.get_orders", return_value=env), \
+             patch("toss_api.get_stocks", return_value=[]):
+            res = api.get_today_history()
+    finally:
+        config.session.is_toss = False
+    assert res["output1"] == []
+
+
 def test_kosdaq150_skipped_in_toss():
     """토스 모드: 코스닥150은 KIS/yfinance 모두 미사용 → 데이터 없음(None/empty)."""
     import api
