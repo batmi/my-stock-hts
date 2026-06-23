@@ -1149,8 +1149,9 @@ def main():
                     try:
                         action_taken = account.asset_management_menu()
                     except Exception as e:
+                        import traceback
                         config.console.print(f"[bold red]⚠️ 자산 관리 메뉴 실행 중 오류 발생: {e}[/bold red]")
-                        logging.error(f"자산 관리 메뉴 오류: {e}")
+                        logging.error(f"자산 관리 메뉴 오류: {e}\n{traceback.format_exc()}")
                         action_taken = None
                 
                 if action_taken is not False:

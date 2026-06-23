@@ -1836,11 +1836,9 @@ class RiskManager:
             self.trader.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
             self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
             
-            # [추가] 화면에 붉은색 경고 출력
+            # [추가] 화면에 붉은색 경고 출력 (안내 메시지로 충분하므로 중복 [ERROR] 출력 제거)
             console.print(f"\n[bold red]🛑 [비상 정지] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n[dim]자산 보호를 위해 시스템을 정지했습니다.[/dim]\n")
-            if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
-                console.print(f"[bold red][ERROR] 일일 손실 한도({-loss_limit_pct}%) 초과로 인해 시스템이 강제 정지되었습니다.[/bold red]")
-            
+
             msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
             
             # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
@@ -4551,7 +4549,22 @@ class AutoTrader:
                         
                         if is_asset_broken:
                             self.log(f"⚠️ 통합 자산 조회 이상 감지 (API 지연 추정). 안전을 위해 이전 자산({current_total:,}원)으로 대체합니다.")
-                    
+
+                    # [Fix] 토스: 미체결 매수 주문에 묶인 현금을 자산에 보정한다.
+                    # (매수가능금액은 예약 현금을 제외하므로, 주문 접수/취소 시 자산이 출렁여
+                    #  '가짜 입금' 자동 감지 및 손실률 왜곡을 유발한다.)
+                    # 조회 실패 시 보정값을 신뢰할 수 없으므로, 이번 주기의 입금 자동 감지는 건너뛴다.
+                    toss_cash_reliable = True
+                    if config.session.is_toss and current_total > 0:
+                        try:
+                            reserved_buy_cash = self._get_toss_open_buy_reserved(target_cano, acnt_cd)
+                            if reserved_buy_cash > 0:
+                                current_total += reserved_buy_cash
+                                self.log(f"[토스 자산 보정] 미체결 매수 예약 현금 {reserved_buy_cash:,}원을 자산에 합산했습니다. (보정 후 총자산: {current_total:,}원)")
+                        except Exception as e:
+                            toss_cash_reliable = False
+                            logger.debug(f"[Toss] 미체결 매수 예약 현금 조회 실패(입금 감지 스킵): {e}")
+
                     # [추가] 일일 손실 제한 체크
                     if current_total > 0:
                         is_first_init = False
@@ -4612,9 +4625,9 @@ class AutoTrader:
                         current_cash = current_total - total_eval
                         current_principal = current_cash + tot_pchs - realized_profit
                         
-                        if not is_first_init:
+                        if not is_first_init and toss_cash_reliable:
                             transfer_amt = current_principal - self.initial_asset
-                            
+
                             # [Fix] 5만원 이상 원금 변동 발생 시 입출금으로 간주하되, 주문 체결 중 API 데이터 불일치(Lag)로 인한
                             # 오작동을 방지하기 위해 3회 연속(약 30초) 동일한 변동이 감지될 때만 실제 입출금으로 확정합니다.
                             if abs(transfer_amt) >= 50000 and self.initial_asset > 0:
@@ -4665,6 +4678,27 @@ class AutoTrader:
                         self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
         except Exception: pass
+
+    def _get_toss_open_buy_reserved(self, cano=None, acnt=None):
+        """[토스 전용] 미체결 매수 주문에 묶인 현금(KRW)을 합산한다.
+
+        토스의 '매수가능금액(cashBuyingPower)'은 미체결 매수 주문에 예약된 현금을
+        제외한 값이라, 주문 접수/취소에 따라 변동한다. 이를 보정하지 않으면 자산/원금
+        계산이 흔들려 입금 자동 감지가 오작동(가짜 입금)하고 손실률이 왜곡된다.
+        반환값을 current_total에 더하면 '매수가능금액 + 예약현금 = 실제 현금'이 되어
+        주문 상태와 무관하게 안정적인 값이 된다.
+        """
+        reserved = 0
+        open_orders = api.get_domestic_open_orders(cano, acnt) or []
+        for o in open_orders:
+            # KIS 형식: 02=매수, 01=매도
+            if o.get('sll_buy_dvsn_cd') != '02':
+                continue
+            rmn = api.safe_int(o.get('rmn_qty')) or api.safe_int(o.get('ord_qty'))
+            price = float(o.get('ord_unpr') or 0)
+            if rmn > 0 and price > 0:
+                reserved += int(rmn * price)
+        return reserved
 
     def _get_total_estimated_asset(self):
         """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
