@@ -1437,7 +1437,7 @@ def view_trade_history():
 
             table.add_row(
                 t['time'][5:19], # MM-DD HH:MM:SS
-                t['odno'],
+                utils.format_order_no(t['odno']),  # 표시만 토스 뒤 10자리(DB엔 원본 저장)
                 type_str,
                 status_str,
                 f"{t['name']}\n({t['code']})",

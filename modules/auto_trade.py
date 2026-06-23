@@ -374,7 +374,9 @@ class ConclusionMonitor:
             accounts_to_check = []
             
             # 1. 메인 계좌 (수동 매매용)
-            if config.session.cano and config.session.acnt_prdt_cd:
+            # [수정] 토스는 상품코드(acnt_prdt_cd)가 빈 값이므로 acnt 조건을 토스에서 면제
+            #        (가드에 막혀 토스 체결이 전혀 기록되지 않던 문제 해결)
+            if config.session.cano and (config.session.acnt_prdt_cd or config.session.is_toss):
                 accounts_to_check.append({
                     "cano": config.session.cano,
                     "acnt": config.session.acnt_prdt_cd,
@@ -523,7 +525,7 @@ class ConclusionMonitor:
                                         cancel_title = "부분 취소" if (rmn_qty > 0 or tot_ccld_qty > 0) else "전량 취소"
                                         t_type = "매수" if "buy" in db_type_name.lower() or "매수" in db_type_name else ("매도" if "sell" in db_type_name.lower() or "매도" in db_type_name else "주문")
                                         
-                                        msg = f"⚠️ [{t_type} {cancel_title} 감지] {name}({code})\n취소 수량: {new_cncl_qty}주 / 단가: {price_str}\n주문번호: {odno}\n사유: 앱(MTS)/HTS 외부 취소 또는 사후 강제 취소"
+                                        msg = f"⚠️ [{t_type} {cancel_title} 감지] {name}({code})\n취소 수량: {new_cncl_qty}주 / 단가: {price_str}\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 외부 취소 또는 사후 강제 취소"
                                         with utils.AccountContext(cano):
                                             api.send_telegram_message(msg)
                                             
@@ -747,7 +749,7 @@ class ConclusionMonitor:
                                         price_str = f"{avg_price:,.0f}원"
                                         amt_str = f"{int(exec_amt):,}원"
 
-                                    msg = f"✅ {title_tag} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {odno}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                    msg = f"✅ {title_tag} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {utils.format_order_no(odno)}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
                                     with utils.AccountContext(cano):
                                         api.send_telegram_message(msg)
                                     
@@ -999,7 +1001,7 @@ class ConclusionMonitor:
                         if p_amt is not None and p_rate is not None:
                             profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                             
-                    msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                    msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
                 except Exception as e:
@@ -1106,13 +1108,13 @@ class DefaultStrategy:
                 # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
                 if ask_bid_ratio < min_ask_bid_ratio:
                     is_vol_ok = False
-                    vol_reject_reason = f"매도잔량비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
+                    vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
         elif config.session.is_toss:
             # [추가] 토스: 체결강도 미제공 → 호가창 매도잔량비(ask_bid_ratio)만으로 수급 게이트 대체
             #   호가 조회가 실패해 ratio가 없으면 상태(state) 게이트만으로 진입(거래 중단 방지)
             if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
                 is_vol_ok = False
-                vol_reject_reason = f"매도잔량비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}(체결강도대체)"
+                vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',
@@ -1364,7 +1366,7 @@ class OrderManager:
                                     price_str = f"${price:,.2f}" if is_overseas else f"{price:,.0f}원"
                                     if price <= 0: price_str = "시장가"
                                     
-                                    msg = f"🚫 [{t_type} 사후 거부] {name}({code})\n수량: {qty}주 / 단가: {price_str}\n주문번호: {odno}\n사유: 사후 주문 거부 (상세 사유는 HTS/MTS 확인)"
+                                    msg = f"🚫 [{t_type} 사후 거부] {name}({code})\n수량: {qty}주 / 단가: {price_str}\n주문번호: {utils.format_order_no(odno)}\n사유: 사후 주문 거부 (상세 사유는 HTS/MTS 확인)"
                                     api.send_telegram_message(msg)
                             except Exception as e:
                                 self.trader.log(f"REJECTED 알림 전송 실패: {e}")
@@ -1415,7 +1417,7 @@ class OrderManager:
                     self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
 
                 self.trader.trade_history.append(success_msg)
-                self.trader.log(f"결과: 성공 (주문번호: {odno})")
+                self.trader.log(f"결과: 성공 (주문번호: {utils.format_order_no(odno)})")
                 stock_display = f"{name}({code})" if name else code
                 
                 t_type = "매수" if type_str == 'buy' else "매도"
@@ -1430,7 +1432,7 @@ class OrderManager:
                 if type_str.lower() == 'sell':
                     msg += f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
                     
-                msg += f"\n주문번호: {odno}"
+                msg += f"\n주문번호: {utils.format_order_no(odno)}"
                 if reason:
                     msg += f"\n사유: {reason}"
                 
@@ -1550,7 +1552,7 @@ class OrderManager:
                             self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
                             
                         self.trader.log(f"[외부 주문 감지] {name}({code}) {sll_buy_name} {qty}주 (No.{odno})")
-                        msg = f"📡 [{sll_buy_name} 외부접수] {name}({code})\n수량: {qty}주\n단가: {int(price):,}원\n주문번호: {odno}\n사유: 앱(MTS)/HTS 등 외부 주문 감지"
+                        msg = f"📡 [{sll_buy_name} 외부접수] {name}({code})\n수량: {qty}주\n단가: {int(price):,}원\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 등 외부 주문 감지"
                         api.send_telegram_message(msg)
                         
                         trade = db_manager.db.get_trade_by_odno(odno)
@@ -1728,7 +1730,7 @@ class OrderManager:
                                                                     profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                                                                     
                                                             original_reason = trade.get('reason', '잔고 확인')
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                                             api.send_telegram_message(msg)
                                                             
                                                             # [추가] 매도 체결(추정) 시 AI 매매 복기 실행 (모의투자용)
@@ -3291,8 +3293,16 @@ class AutoTrader:
                 days = None # 전체 내역
                 context.USER_ACTION_BREADCRUMB.append("[전체]")
 
+        # [추가] 토스 등 체결감시 미가동 상태에서도 평가 전에 당일 체결을 DB에 동기화한다.
+        # (토스 CLOSED 주문 = 체결 데이터. 수동 주문 체결이 누락되어 리포트가 비던 문제 해결)
+        if config.session.is_toss:
+            try:
+                ConclusionMonitor()._check_conclusions()
+            except Exception as e:
+                logger.debug(f"[Report] 토스 체결 동기화 실패: {e}")
+
         self._load_trade_records(days=days, target_account=target_account)
-        
+
         if not self.trade_records:
             console.print("\n[yellow]선택한 기간에 해당하는 매매 기록이 없습니다.[/yellow]")
             return
@@ -3318,7 +3328,8 @@ class AutoTrader:
                 start_dt = self.trade_records[0]['time'][:10] if self.trade_records else end_dt
                 
             if target_account:
-                target_cano, acnt = target_account.split('-')
+                # 토스 계좌번호엔 '-'가 여러 개라(예: 189-01-501685-) 마지막 '-' 기준으로 분리
+                target_cano, acnt = target_account.rsplit('-', 1)
             else:
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -5230,7 +5241,7 @@ class AutoTrader:
             if result.get('vol_reject_reason'):
                 vol_reject_msg = f" [{result['vol_reject_reason']}]"
             elif result.get('ask_bid_ratio') is not None:
-                vol_reject_msg = f" [매도잔량비:{result['ask_bid_ratio']:.2f}]"
+                vol_reject_msg = f" [매도비:{result['ask_bid_ratio']:.2f}]"
             
             log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}"
             
@@ -5244,10 +5255,10 @@ class AutoTrader:
                         abr = result.get('ask_bid_ratio')
                         min_abr = result.get('min_ask_bid_ratio', 0) or 0
                         if abr is None or (min_abr > 0 and abr < min_abr):
-                            log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (매도잔량비 {abr if abr is not None else 0:.2f} < {min_abr:.2f})"
+                            log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (매도비 {abr if abr is not None else 0:.2f} < {min_abr:.2f})"
                             return {'type': 'log_only', 'log': log_msg}
                         else:
-                            reentry_msg = f"당일 재진입(매도잔량비 {abr:.2f})"
+                            reentry_msg = f"당일 재진입(매도비 {abr:.2f})"
                     elif vol_strength_val is None or vol_strength_val <= req_vol:
                         log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (체결강도 {vol_strength_val if vol_strength_val else 0:.1f}% <= 기존매수 {req_vol:.1f}%)"
                         return {'type': 'log_only', 'log': log_msg}
@@ -5495,7 +5506,7 @@ class AutoTrader:
             if config.session.is_toss:
                 abr = cand.get('ask_bid_ratio')
                 abr_val = f"{abr:.2f}" if abr is not None else "-"
-                reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 매도잔량비:{abr_val}]"
+                reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 매도비:{abr_val}]"
             else:
                 reason += f" [점수:{cand['score']}, RSI:{rsi_val}, 체결강도:{vol_val}]"
             

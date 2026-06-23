@@ -37,17 +37,20 @@ _token_lock = threading.Lock()
 #    429 발생 시 해당 그룹에만 쿨다운(Retry-After)을 적용해 다른 그룹을 막지 않는다.
 #  - 전 종목 스캔(캔들 다량 호출) 시 MARKET_DATA_CHART 그룹을 별도로 보수적 제한한다.
 # -------------------------------------------------------------------------
+# 토스 API 한도(10/s)에 맞춰 전 그룹을 최대치(10 TPS)로 운영한다.
+# (AUTH는 토큰 발급용이라 굳이 높일 필요가 없어 보수적으로 둔다)
+_TOSS_MAX_RPS = 10
 _GROUP_RPS = {
     "AUTH": 2,
-    "MARKET_DATA": 8,
-    "MARKET_DATA_CHART": 6,   # 캔들: 호출 부하가 커 별도 보수적 제한
-    "STOCK": 5,
-    "MARKET_INFO": 5,
-    "ACCOUNT": 5,
-    "ASSET": 5,
-    "ORDER": 5,
-    "ORDER_HISTORY": 5,
-    "ORDER_INFO": 5,
+    "MARKET_DATA": _TOSS_MAX_RPS,
+    "MARKET_DATA_CHART": _TOSS_MAX_RPS,
+    "STOCK": _TOSS_MAX_RPS,
+    "MARKET_INFO": _TOSS_MAX_RPS,
+    "ACCOUNT": _TOSS_MAX_RPS,
+    "ASSET": _TOSS_MAX_RPS,
+    "ORDER": _TOSS_MAX_RPS,
+    "ORDER_HISTORY": _TOSS_MAX_RPS,
+    "ORDER_INFO": _TOSS_MAX_RPS,
 }
 
 _rate_lock = threading.Lock()

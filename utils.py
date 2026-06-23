@@ -302,13 +302,21 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
     config.console.print()
     return choice
 
-def search_stock_in_list(stock_list, title="종목 선택", display_func=None, hide_list=False):
-    """리스트에서 종목을 번호, 이름, 코드로 검색하여 선택하는 통합 헬퍼 함수"""
+def format_order_no(odno):
+    """주문번호 표시 정규화. 토스 주문번호는 매우 길어 뒤 10자리만, KIS는 그대로 표시한다."""
+    s = str(odno or "")
+    if config.session.is_toss:
+        return s[-10:]
+    return s
+
+def search_stock_in_list(stock_list, title="종목 선택", display_func=None, hide_list=False, number_only=False):
+    """리스트에서 종목을 번호, 이름, 코드로 검색하여 선택하는 통합 헬퍼 함수.
+    number_only=True 이면 검색 없이 번호 선택만 허용한다(정정/취소 주문 선택 등)."""
     current_list = stock_list
     while True:
         if title and not hide_list:
             config.console.print(f"[bold]{title}[/bold]")
-        
+
         if not hide_list:
             for i, s in enumerate(current_list):
                 if display_func:
@@ -318,23 +326,28 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None, h
                     code = s.get('code', 'Unknown')
                     config.console.print(f"[{i+1}] {name} ({code})")
             config.console.print()
-            
-        sel = Prompt.ask("번호, 주문번호, 종목명 또는 코드 검색 [dim](이전: b, 메인: q)[/dim]" if hide_list else "번호, 종목명 또는 코드 검색 [dim](이전: b, 메인: q)[/dim]")
+
+        prompt_msg = ("번호 선택 [dim](이전: b, 메인: q)[/dim]" if number_only
+                      else "번호 선택 (또는 종목명·코드 검색) [dim](이전: b, 메인: q)[/dim]")
+        sel = Prompt.ask(prompt_msg)
         config.console.print()
-        
+
         if sel.lower() in ['b', 'q']: return None, None
-        
-        if sel.isdigit():
+
+        # 목록 범위 안의 숫자만 '번호 선택'으로 처리한다.
+        # (042660 등 6자리 종목코드가 행 번호로 오인되지 않도록 → 범위 밖이면 검색으로 넘어감)
+        if sel.isdigit() and 1 <= int(sel) <= len(current_list):
             idx = int(sel) - 1
-            if 0 <= idx < len(current_list):
-                selected_item = current_list[idx]
-                try: original_idx = stock_list.index(selected_item)
-                except ValueError: original_idx = idx
-                return original_idx, selected_item
-            else:
-                config.console.print("[red]잘못된 번호입니다.[/red]\n")
-                continue
-        
+            selected_item = current_list[idx]
+            try: original_idx = stock_list.index(selected_item)
+            except ValueError: original_idx = idx
+            return original_idx, selected_item
+
+        # 번호 전용 모드: 검색하지 않고 재입력 요구
+        if number_only:
+            config.console.print("[red]올바른 번호를 입력해주세요.[/red]\n")
+            continue
+
         # 검색 로직
         filtered = []
         for s in stock_list:
@@ -342,11 +355,9 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None, h
             code = s.get('code', '')
             alt_name = s.get('prdt_name', '')
             alt_code = s.get('pdno', '')
-            odno = str(s.get('odno', ''))
-            
-            if (sel.lower() in name.lower() or sel.upper() in code.upper() or 
-                sel.lower() in alt_name.lower() or sel.upper() in alt_code.upper() or
-                sel in odno):
+
+            if (sel.lower() in name.lower() or sel.upper() in code.upper() or
+                sel.lower() in alt_name.lower() or sel.upper() in alt_code.upper()):
                 filtered.append(s)
                 
         if not filtered:

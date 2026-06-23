@@ -1597,13 +1597,15 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         
         table_logic.add_row("보유 판단", sell_result, sell_reason)
         
-        vol_str = "-"
-        vol_eval = ""
-        if vol_strength is not None:
-            v_color = "[red]" if is_buy_vol else "[blue]"
-            vol_str = f"{v_color}{vol_strength:.1f}%[/]"
-            vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
-        table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
+        # [토스] 체결강도 미제공 → '체결강도' 행을 숨기고 아래 '매도잔량 비율'을 수급 지표로 사용
+        if not config.session.is_toss:
+            vol_str = "-"
+            vol_eval = ""
+            if vol_strength is not None:
+                v_color = "[red]" if is_buy_vol else "[blue]"
+                vol_str = f"{v_color}{vol_strength:.1f}%[/]"
+                vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
+            table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
 
         if not is_overseas and not is_index:
             ask_bid_str = "-"
@@ -3000,6 +3002,7 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         inv_str = "[dim]-[/dim]"
         cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
         strength_display = ""
+        ask_bid_ratio = None  # [토스] 체결강도 미제공 → 매도잔량비로 대체 표시
 
         # [수정] 타이틀 기반으로 주식/ETF 컨텍스트 정확히 구분 (데이터 처리 및 컬럼 매칭용)
         # 기존: 코드 형태(숫자 여부)로만 판단하여 ETF(QQQ 등)를 주식으로 오인하는 문제 해결
@@ -3015,13 +3018,25 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex) if not is_overseas and not use_investor_data else None
                 fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
-                
+                # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
+                fut_ob = ex.submit(api.get_order_book, code, False) if (config.session.is_toss and not is_overseas) else None
+
                 curr_data = fut_curr.result()
                 chart_df = fut_chart.result()
                 inv_list = fut_inv.result() if fut_inv else None
                 rt_strength = None
                 if fut_vol:
                     try: rt_strength = fut_vol.result()
+                    except: pass
+                if fut_ob:
+                    try:
+                        ob = fut_ob.result()
+                        if ob and ob.get('rt_cd') == '0':
+                            o1 = ob.get('output1', {})
+                            ta = api.safe_int(o1.get('total_askp_rsqn'))
+                            tb = api.safe_int(o1.get('total_bidp_rsqn'))
+                            if tb > 0: ask_bid_ratio = ta / tb
+                            elif ta > 0: ask_bid_ratio = 99.9
                     except: pass
                 detail = fut_detail.result() if fut_detail else None
             
@@ -3089,7 +3104,20 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                     return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
                 inv_str = f"{fmt_inv(p)} {fmt_inv(f)} {fmt_inv(i)}"
             if not use_investor_data:
-                if rt_strength is not None:
+                if config.session.is_toss:
+                    # 토스: 체결강도 미제공 → 매도잔량비(매도/매수 총잔량)로 대체 표시(숫자만)
+                    # 색상: 기준 1.0배 중심 5단계(체결강도 100% 밴딩과 동일 방향, 높을수록 빨강 계열)
+                    if ask_bid_ratio is not None:
+                        if ask_bid_ratio >= 2.0: ab_color = "[magenta]"
+                        elif ask_bid_ratio >= 1.5: ab_color = "[red]"
+                        elif ask_bid_ratio > 1.0: ab_color = "[orange3]"
+                        elif ask_bid_ratio == 1.0: ab_color = "[white]"
+                        elif ask_bid_ratio >= 0.7: ab_color = "[yellow]"
+                        else: ab_color = "[blue]"
+                        strength_display = f" {ab_color}[{ask_bid_ratio:.2f}][/]"
+                    else:
+                        strength_display = " [dim][-][/dim]"
+                elif rt_strength is not None:
                     if rt_strength >= 150: s_color = "[magenta]"
                     elif rt_strength >= 120: s_color = "[red]"
                     elif rt_strength > 100: s_color = "[orange3]"
@@ -3423,7 +3451,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     table.add_column("분류", justify="center") 
     table.add_column("현재가", justify="right")
     col_header = "등락폭 (등락률)"
-    if not is_overseas and not use_investor_data: col_header += " [강도]"
+    if not is_overseas and not use_investor_data:
+        col_header += " [매도비]" if config.session.is_toss else " [강도]"
     table.add_column(col_header, justify="right")
     table.add_column("52주", justify="right")
     table.add_column("EMA(5)", justify="right")

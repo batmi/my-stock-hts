@@ -49,6 +49,14 @@ def select_account(title="주문을 수행할 계좌를 선택하세요"):
 
     return target_cano, target_acnt, acc_label
 
+def _fmt_account(cano, acnt):
+    """계좌 표시 문자열. 토스 등 상품코드(acnt)가 없으면 끝의 '-'를 제거한다."""
+    return f"{cano}-{acnt or ''}".rstrip('-')
+
+def _fmt_odno(odno):
+    """주문번호 표시(토스는 뒤 10자리, KIS는 그대로) - utils.format_order_no 위임."""
+    return utils.format_order_no(odno)
+
 def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     """
     매도 시 보유 잔고에서 종목을 선택하는 함수
@@ -542,7 +550,7 @@ def show_open_orders():
                                         profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                                         
                                 db_odno = db_order.get('odno', '')
-                                msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {db_odno}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                                msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(db_odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
                                 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
@@ -691,11 +699,11 @@ def show_open_orders():
                     ord_time = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}" if len(ord_tmd) == 6 else "-"
                     
                     # [추가] DB 데이터 표시
-                    odno_disp = str(order.get('odno'))
+                    odno_disp = _fmt_odno(order.get('odno'))
                     if order.get('_is_db_fallback'):
                         odno_disp += " [dim](DB)[/dim]"
 
-                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold]국내[/]", ord_time, odno_disp, display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), _fmt_account(cano, acnt), acc_disp, "[bold]국내[/]", ord_time, odno_disp, display_name, sll_buy_colored, order.get('ord_qty'), f"{api.safe_int(order.get('ord_unpr')):,.0f}", cur_price_str, rmn_qty)
                     idx += 1
 
                 # [B] 해외 주문
@@ -731,7 +739,7 @@ def show_open_orders():
                         t_str = f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
                         ord_time = f"{ord_dt[4:6]}/{ord_dt[6:]} {t_str}" if len(ord_dt) == 8 else t_str
 
-                    table.add_row(str(idx), f"{cano}-{acnt}", acc_disp, "[bold magenta]해외[/]", ord_time, order.get('odno'), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
+                    table.add_row(str(idx), _fmt_account(cano, acnt), acc_disp, "[bold magenta]해외[/]", ord_time, _fmt_odno(order.get('odno')), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
                     idx += 1
 
     if not selectable_orders:
@@ -753,7 +761,7 @@ def send_order(order_type):
     title_text = "매수" if order_type == 'buy' else "매도"
     config.console.print()
     config.console.print(f"[bold]주식 {title_text} 주문 (Order)[/bold]")
-    config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
+    config.console.print(f"주문 계좌: [bold]{_fmt_account(target_cano, target_acnt)}[/bold] ({acc_label})")
     
     # 컨텍스트 적용 (이후 모든 API 호출은 이 계좌 기준)
     with utils.AccountContext(target_cano):
@@ -1174,7 +1182,7 @@ def send_order(order_type):
                             config.console.print(f"\n[bold magenta]💡 안내: 잔고 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
                             msg += f"\n🗑 [예약취소] 잔고 매도로 매도 예약 {canceled_cnt}건 자동 취소"
                     
-                msg += f"\n주문번호: {odno}"
+                msg += f"\n주문번호: {utils.format_order_no(odno)}"
                 
                 if order_type == 'buy':
                     # [추가] 매수 시 기존 예약 매수 주문 자동 취소 (비중 중복 방어)
@@ -1240,13 +1248,13 @@ def modify_order():
         code = o.get('pdno')
         origin = o.get('_origin')
         qty = o.get('ord_qty') if origin == 'KR' else o.get('ft_ord_qty')
-        odno = o.get('odno')
-        return f"[{i+1}] {name}({code}) | 수량: {qty} | 주문번호: {odno}"
-        
-    idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func, hide_list=True)
+        return f"[{i+1}] {name}({code}) | 수량: {qty}"
+
+    idx, target_order = utils.search_stock_in_list(selectable_orders, title="정정/취소할 주문 선택", display_func=disp_func, hide_list=True, number_only=True)
     if not target_order: return False
-    
-    context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {target_order.get('odno')}") # [추가]
+
+    # [수정] 주문선택 표시를 긴 주문번호 대신 종목명(코드)로
+    context.USER_ACTION_BREADCRUMB.append(f"[주문선택] {target_order.get('prdt_name')} ({target_order.get('pdno')})")
     origin = target_order['_origin']
     
     # [추가] 선택된 주문의 계좌 정보 추출
@@ -1255,7 +1263,7 @@ def modify_order():
     target_acnt = acc_info.get('acnt') or config.session.acnt_prdt_cd
     acc_label = acc_info.get('label', '메인')
     
-    config.console.print(f"주문 계좌: [bold]{target_cano}-{target_acnt}[/bold] ({acc_label})")
+    config.console.print(f"주문 계좌: [bold]{_fmt_account(target_cano, target_acnt)}[/bold] ({acc_label})")
     
     config.console.print(f"\n[bold cyan]선택된 주문: {target_order.get('prdt_name')} ({origin})[/bold cyan]")
     menu_items = [("1", "정정", "Modify"), ("2", "취소", "Cancel")]
@@ -1405,7 +1413,12 @@ def modify_order():
         else:
             ord_dvsn = "00"
             
-        req_qty = 0 if qty == "0" or qty == target_rmn else int(final_qty)
+        # KIS는 0=전량정정 sentinel을 쓰지만, 토스 정정은 수량 필수(0/None이면 '수량 유효하지 않음' 오류)
+        # → 토스는 항상 실제 수량(final_qty)을 명시한다.
+        if config.session.is_toss:
+            req_qty = int(final_qty)
+        else:
+            req_qty = 0 if qty == "0" or qty == target_rmn else int(final_qty)
 
     if config.FILE_DEBUG_LEVEL == "DEBUG":
         logger.debug(f"REQ (Modify-{origin}) | {action_name}")
@@ -1466,7 +1479,7 @@ def modify_order():
                             if is_overseas: msg += f"\n금액: ${t_amt:,.2f}"
                             else: msg += f"\n금액: {int(t_amt):,}원"
                     except: pass
-                msg += f"\n주문번호: {odno}"
+                msg += f"\n주문번호: {utils.format_order_no(odno)}"
 
                 # 매도 정정일 경우 새로운 가격으로 예상 손익 재계산 시도
                 if "매도" in full_action_name and action == "1":

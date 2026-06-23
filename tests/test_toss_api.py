@@ -529,6 +529,44 @@ def test_print_table_worker_toss_enriches_change_and_52w():
     assert "%" in w52_str and "dim]-" not in w52_str  # 52주 위치 표시됨
 
 
+def test_print_table_worker_toss_shows_ask_bid_ratio():
+    """토스 모드: 일괄 분석 표에서 체결강도([0%]) 대신 매도잔량비(N.NN배)를 표시한다."""
+    import pandas as pd
+    from modules import analysis
+
+    n = 250
+    closes = [50000 + i * 100 for i in range(n)]
+    df = pd.DataFrame({
+        'date': [f"2025{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': [float(c) for c in closes],
+        'high': [c * 1.01 for c in closes],
+        'low': [c * 0.99 for c in closes],
+        'close': [float(c) for c in closes],
+        'volume': [1000.0 + i for i in range(n)],
+    })
+    curr = {'rt_cd': '0', 'output': {'stck_prpr': str(closes[-1])}}
+    ob = {'rt_cd': '0', 'output1': {'total_askp_rsqn': '2000', 'total_bidp_rsqn': '1000'}}  # 2.00배
+
+    config.session.is_toss = True
+    try:
+        with patch("api.get_current_price_data", return_value=curr), \
+             patch("api.get_chart_data", return_value=df.copy()), \
+             patch("api.get_investor_trend", return_value=[]), \
+             patch("api.get_order_book", return_value=ob), \
+             patch("api.get_realtime_vol_strength", return_value=None), \
+             patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")):
+            result = analysis._print_table_worker(
+                ("삼성전자", "005930"), "국내 주식 기술적 분석",
+                False, False, set(), {}, {}, set(), set())
+    finally:
+        config.session.is_toss = False
+
+    rate_str = result[0][4]  # 등락폭 (등락률) [매도비] 셀
+    assert "2.00" in rate_str     # 매도잔량비 숫자만 표시
+    assert "배" not in rate_str    # '배' 단위 제거
+    assert "[0%]" not in rate_str  # 체결강도(강도) 형식 아님
+
+
 def test_print_table_worker_toss_us_52w_from_chart_perpbr_na():
     """토스 단독: 미국 종목 52주는 차트로 유지, PER/PBR은 N/A."""
     import pandas as pd
@@ -572,8 +610,10 @@ def test_overseas_detail_na_for_toss():
 
 def test_rate_limit_group_rps_and_cooldown():
     """그룹별 RPS 설정 및 429 쿨다운 동작."""
-    assert toss_api._group_rps("MARKET_DATA_CHART") == 6
-    assert toss_api._group_rps("AUTH") == 2
+    assert toss_api._group_rps("MARKET_DATA_CHART") == 10  # 토스 최대치(10 TPS)
+    assert toss_api._group_rps("MARKET_DATA") == 10
+    assert toss_api._group_rps("ORDER") == 10
+    assert toss_api._group_rps("AUTH") == 2  # 토큰 발급은 보수적 유지
     # 미정의 그룹은 기본값(config.TOSS_TX_PER_SECOND)
     import config as _cfg
     assert toss_api._group_rps("UNKNOWN_GROUP") == max(_cfg.TOSS_TX_PER_SECOND, 1)
@@ -585,7 +625,7 @@ def test_rate_limit_group_rps_and_cooldown():
 
 def test_rate_limit_smooths_calls_within_window():
     """그룹 호출이 최소 간격으로 분산되어 즉시 폭주하지 않는다."""
-    g = "MARKET_DATA_CHART"  # rps=6 → 최소 간격 ≈ 0.167s
+    g = "MARKET_DATA_CHART"  # rps=10 → 최소 간격 0.1s
     toss_api._group_hist[g].clear()
     toss_api._group_cooldown.clear()
 
@@ -593,7 +633,7 @@ def test_rate_limit_smooths_calls_within_window():
     for _ in range(6):
         toss_api._throttle(g)
     elapsed = time.time() - t0
-    # 즉시(0초)가 아니라 분산되어야 함 (5구간 × 0.167 ≈ 0.83s)
+    # 즉시(0초)가 아니라 분산되어야 함 (5구간 × 0.1 ≈ 0.5s)
     assert elapsed >= 0.4
     assert len(toss_api._group_hist[g]) == 6
 
@@ -754,7 +794,7 @@ def test_cancel_order_adapter():
 
 
 def test_modify_order_adapter():
-    """정정(전량, req_qty=0) → 수량 미지정/가격만 정정."""
+    """정정(전량, req_qty=0) → 토스는 수량 필수이므로 미체결 잔량을 조회해 명시."""
     import api
     config.session.is_toss = True
     captured = {}
@@ -763,15 +803,39 @@ def test_modify_order_adapter():
         captured.update(order_id=order_id, quantity=quantity, price=price)
         return {"orderId": "MOD"}
 
+    # 전량(0) 요청 → get_order로 잔량(총 5 - 체결 2 = 3) 조회하여 수량 명시
+    order_detail = {"quantity": "5", "execution": {"filledQuantity": "2"}}
+
     try:
-        with patch("toss_api.modify_order", side_effect=fake_modify):
+        with patch("toss_api.modify_order", side_effect=fake_modify), \
+             patch("toss_api.get_order", return_value=order_detail):
             res = api.revise_cancel_order("domestic", "revise", "KR1", "005930", 0, 71000, "01", "00")
     finally:
         config.session.is_toss = False
     assert res["rt_cd"] == "0"
     assert res["output"]["ODNO"] == "MOD"
     assert captured["order_id"] == "KR1"
-    assert captured["quantity"] is None   # 0 → 전량(미지정)
+    assert captured["quantity"] == 3   # 0 → 미체결 잔량(3)으로 명시
+    assert captured["price"] == 71000
+
+
+def test_modify_order_adapter_explicit_qty():
+    """정정에 수량을 명시(2)하면 잔량 조회 없이 그대로 전달."""
+    import api
+    config.session.is_toss = True
+    captured = {}
+
+    def fake_modify(order_id, order_type="LIMIT", quantity=None, price=None, **kw):
+        captured.update(quantity=quantity, price=price)
+        return {"orderId": "MOD"}
+
+    try:
+        with patch("toss_api.modify_order", side_effect=fake_modify):
+            res = api.revise_cancel_order("domestic", "revise", "KR1", "005930", 2, 71000, "01", "00")
+    finally:
+        config.session.is_toss = False
+    assert res["rt_cd"] == "0"
+    assert captured["quantity"] == 2
     assert captured["price"] == 71000
 
 
@@ -893,7 +957,8 @@ def test_toss_buy_gate_uses_ask_bid_ratio():
         config.session.is_toss = False
     assert r_ok['action'] == 'buy'        # 매도잔량비 1.5 >= 1.0 → 통과
     assert r_no['action'] == 'wait'        # 0.5 < 1.0 → 거부
-    assert '체결강도대체' in r_no['vol_reject_reason']
+    assert '매도비' in r_no['vol_reject_reason']
+    assert '체결강도대체' not in r_no['vol_reject_reason']
     assert r_none['action'] == 'buy'       # 호가 없음 → 상태 게이트만으로 진입(거래중단 방지)
 
 
@@ -1042,3 +1107,21 @@ def test_kosdaq150_skipped_in_toss():
     assert df is None or df.empty
     mock_kis.assert_not_called()   # KIS 미호출
     mock_yf.assert_not_called()    # yfinance(^KQ150)도 미호출 (스킵)
+
+
+def test_format_order_no_toss_last_10():
+    """토스 모드: 긴 주문번호는 뒤 10자리만. 비토스(KIS): 그대로."""
+    import utils
+    long_odno = "mJerK-dVKoU-sVb1D84BERbn9k-APR21uQi9Jj3JFBl70_mMjmGvqAANmrmhQdxQ9XgMjhiEsudGuoGZZUGf4g"
+
+    config.session.is_toss = True
+    try:
+        assert utils.format_order_no(long_odno) == long_odno[-10:]
+        assert len(utils.format_order_no(long_odno)) == 10
+        assert utils.format_order_no(None) == ""
+    finally:
+        config.session.is_toss = False
+
+    # 비토스(KIS)는 절단하지 않고 그대로
+    assert utils.format_order_no("0001234567") == "0001234567"
+    assert utils.format_order_no(long_odno) == long_odno

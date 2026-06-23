@@ -917,7 +917,7 @@ def _show_market_indices_core(target_indices=None):
                         if res.get('is_delayed'): delayed_tickers.append(name)
                     elif res['status'] == 'skipped':
                         # [추가] 토스 모드 코스닥150 등 미지원 지수: 재시도 없이 '-'만 표시
-                        table.add_row(name, "[dim]-[/dim]", "[dim]미지원[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
+                        table.add_row(name, "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                     elif res['status'] == 'failed':
                         table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                         failed_tickers.append(name)

@@ -2808,8 +2808,17 @@ def _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn):
         else:  # modify (정정)
             is_market = (market == 'domestic' and str(ord_dvsn) == '01')
             order_type = 'MARKET' if is_market else 'LIMIT'
-            # KIS는 0=전량정정. 토스는 수량 명시 필요 → 0이면 수량 미지정(가격만 정정)
+            # 토스 정정은 수량이 필수(누락 시 '주문 수량이 유효하지 않습니다' 오류).
+            # KIS의 0=전량정정 sentinel이 들어오면 미체결 잔량을 조회해 실제 수량으로 명시한다.
             mod_qty = qty if (qty and int(qty) > 0) else None
+            if mod_qty is None:
+                try:
+                    od = toss_api.get_order(org_no) or {}
+                    rem = _toss_int(od.get('quantity')) - _toss_int((od.get('execution') or {}).get('filledQuantity'))
+                    if rem > 0:
+                        mod_qty = rem
+                except toss_api.TossApiError as e:
+                    logger.debug(f"[Toss] 정정 잔량 조회 실패({org_no}): {e}")
             r = toss_api.modify_order(
                 org_no, order_type=order_type,
                 quantity=mod_qty, price=(None if is_market else price),
