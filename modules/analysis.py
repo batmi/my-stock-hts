@@ -391,8 +391,10 @@ def get_domestic_index_data(market_type, force_refresh=False):
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
         # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정/미지원이므로 Fallback을 수행하지 않음
         #   (토스 모드는 KIS 대안이 없어 데이터 없음 → 화면에서 '-' 처리)
+        # [수정] 이는 오류가 아닌 '예상된 정상 스킵'(특히 토스는 데이터원 자체가 없음)이므로
+        #   매 호출마다 WARNING으로 로그를 채우지 않도록 debug 레벨로 낮춘다.
         if market_type == "KOSDAQ150":
-            logger.warning(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 불안정).")
+            logger.debug(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 불안정).")
             _store_index_cache(market_type, df)
             return df
 
