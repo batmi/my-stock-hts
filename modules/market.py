@@ -291,6 +291,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         val_psar, val_rsi, val_adx, val_cci, val_macd, val_macd_sig = None, None, None, None, None, None
         val_plus_di, val_minus_di = None, None
         df_calc = pd.DataFrame()
+        ind = {}
 
         if not df_daily.empty and 'close' in df_daily.columns and len(df_daily) > 10:
             df_calc = df_daily[['open', 'high', 'low', 'close', 'volume']].copy()
