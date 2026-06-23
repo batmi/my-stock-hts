@@ -238,7 +238,7 @@ class GlobalSettings(BaseModel):
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
         "ATR_STOP_MULTIPLIER": 2.0,         # ATR 기반 손절 적용 배수
         "MAX_ATR_STOP_LOSS_RATE": -15.0,    # 동적 손절의 최대 한계선
-        "BREAK_EVEN_PROFIT_RATE": 7.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면 손절선 상향 (ATR 사용 시 동적 연동)
+        "BREAK_EVEN_PROFIT_RATE": 5.0,      # [본전 청산] 최고 수익률이 이 값에 도달하면 손절선 상향 (ATR 사용 시 동적 연동)
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
         "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
         "TIME_STOP_DAYS": 20,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 10→20 완화)
@@ -663,7 +663,7 @@ def reset_all_settings():
         settings.SELL_STRATEGY = {
             "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
             "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
-            "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5,
+            "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0

@@ -113,8 +113,22 @@ def is_holiday_today():
         _HOLIDAY_CACHE[today_str] = True
         return True
         
+    # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
+    if config.session.is_toss:
+        import toss_api
+        try:
+            today_formatted = datetime.now().strftime("%Y-%m-%d")
+            res = toss_api.get_market_calendar("KR", today_formatted)
+            if res and res.get('today'):
+                is_holiday = not bool(res['today'].get('integrated'))
+                _HOLIDAY_CACHE[today_str] = is_holiday
+                return is_holiday
+        except Exception as e:
+            logger.debug(f"Toss market-calendar error: {e}")
+            pass
+            
     # 실전투자 모드일 경우에만 API 우선 조회 시도
-    if not config.session.is_simulation:
+    if not config.session.is_simulation and not config.session.is_toss:
         res = check_holiday(today_str)
         if res is not None:
             _HOLIDAY_CACHE[today_str] = res
@@ -155,8 +169,24 @@ def is_us_holiday_today():
         _HOLIDAY_CACHE[cache_key] = True
         return True
             
+    # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
+    if config.session.is_toss:
+        import toss_api
+        try:
+            today_formatted = datetime.now().strftime("%Y-%m-%d")
+            res = toss_api.get_market_calendar("US", today_formatted)
+            if res and res.get('today'):
+                today_info = res['today']
+                has_market = any(k in today_info and today_info[k] is not None for k in ['dayMarket', 'preMarket', 'regularMarket', 'afterMarket'])
+                is_holiday = not has_market
+                _HOLIDAY_CACHE[cache_key] = is_holiday
+                return is_holiday
+        except Exception as e:
+            logger.debug(f"Toss US market-calendar error: {e}")
+            pass
+            
     # 실전투자 모드일 경우에만 API 우선 조회 시도
-    if not config.session.is_simulation:
+    if not config.session.is_simulation and not config.session.is_toss:
         res = check_us_holiday(today_str)
         if res is not None:
             _HOLIDAY_CACHE[cache_key] = res
@@ -1092,7 +1122,12 @@ def check_and_refresh_token_if_expired():
         fail_reason = "Unknown Error"
 
         try:
-            if config.session.is_simulation:
+            if config.session.is_toss:
+                import toss_api
+                if not toss_api.get_access_token(force_refresh=True):
+                    success = False
+                    fail_reason = "토스 API 토큰 발급 실패"
+            elif config.session.is_simulation:
                 if not get_access_token(force_refresh=True):
                     success = False
                     fail_reason = "모의투자 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
@@ -1336,9 +1371,9 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 
                 # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
                 if method == "GET":
-                    res = session.get(full_url, headers=headers, params=params, timeout=timeout, retries=retries)
+                    res = session.get(full_url, headers=headers, params=params, timeout=timeout)
                 else:
-                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, timeout=timeout, retries=retries)
+                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, timeout=timeout)
                 
                 return res.json()
             except Exception as e:
@@ -3327,6 +3362,16 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
 
 def check_server_health():
     """서버 상태 점검 (삼성전자 현재가 조회)"""
+    if config.session.is_toss:
+        try:
+            import toss_api
+            res = toss_api.get_price("005930")
+            if res is not None:
+                return True
+        except Exception as e:
+            logger.debug(f"check_server_health (toss) error: {e}")
+        return False
+        
     try:
         # 타임아웃 5초, 재시도 0회로 설정하여 빠르게 확인
         res = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"], "domestic", "quotations", "price", 

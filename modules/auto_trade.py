@@ -1236,11 +1236,22 @@ class DefaultStrategy:
                     ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
 
         # 2. 고정 익절/손절 및 시간 청산
-        if tp_rate > 0 and profit_rate >= tp_rate:
-            reason = f"익절({profit_rate}%)"
-        elif tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
+        if tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
             reason = f"반익절({profit_rate:.1f}%)"
             sell_ratio = 0.5
+        elif tp_rate > 0 and profit_rate >= tp_rate:
+            if use_half_tp and already_half_sold:
+                pass # [수정] 반익절 후 남은 물량은 천장을 해제하고 트레일링 스탑에 맡김 (Let profit run)
+            else:
+                reason = f"익절({profit_rate}%)"
+                
+        # [추가] 반익절 이후 Let profit run 시, 최소 수익 보존선 (Profit Lock-in)
+        # 목표가를 한 번 뚫고 내려올 경우 TS(예: 4%) 발동 전이라도 목표가-3%에서 즉시 매도하여 수익 방어
+        elif tp_rate > 0 and use_half_tp and already_half_sold and highest_price > 0:
+            max_profit_rate_so_far = ((highest_price - buy_price) / buy_price) * 100
+            profit_lock_rate = tp_rate - 3.0
+            if max_profit_rate_so_far >= tp_rate and profit_rate <= profit_lock_rate:
+                reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
         elif sl_rate != 0 and profit_rate <= sl_rate:
             if is_bep_applied:
                 reason = f"본전청산({profit_rate:.1f}%)"
