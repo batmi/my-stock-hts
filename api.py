@@ -2438,6 +2438,7 @@ def _toss_overseas_balance():
             'frcr_evlu_pfls_amt': str(_toss_float(pl.get('amount'))),
             'evlu_pfls_rt': str(round(_toss_float(pl.get('rate')) * 100, 2)),
             'now_pric2': str(_toss_float(it.get('lastPrice'))),
+            'ovrs_now_pric': str(_toss_float(it.get('lastPrice'))),  # [추가] 화면 코드가 읽는 현재가 필드 (KIS 호환)
             '_exchange': it.get('market', 'NASD'),
         })
     return out

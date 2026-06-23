@@ -1866,6 +1866,7 @@ class AutoTrader:
             cls._instance.start_time = None
             cls._instance.consecutive_errors = 0
             cls._instance.initial_asset = 0
+            cls._instance.baseline_principal = 0   # [추가] 입금 자동감지용 기준 원금(현금+매입원가-실현손익). initial_asset(총자산)과 별개.
             cls._instance.was_market_open = None
             cls._instance.trailing_stop_cache = {} # [추가] 트레일링 스탑 메모리 캐시 (DB 부하 감소용)
             cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
@@ -4188,7 +4189,8 @@ class AutoTrader:
                         self.log("━" * 80)
                         self.last_log_date = current_date
                         self.initial_asset = 0
-                        
+                        self.baseline_principal = 0  # [추가] 입금 감지 기준 원금도 당일 첫 측정 시 재산정되도록 리셋
+
                         try:
                             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                             
@@ -4624,13 +4626,21 @@ class AutoTrader:
                         # 매매 손익이 아닌 외부 현금 입출금을 스스로 포착하여 일일 손실 제한(Loss Cut) 오작동을 방지합니다.
                         current_cash = current_total - total_eval
                         current_principal = current_cash + tot_pchs - realized_profit
-                        
+
+                        # [Fix] 입금 감지 기준은 '원금(현금+매입원가-실현손익)'이어야 한다.
+                        # 원금은 입출금이 없으면 가격 변동/매매와 무관하게 불변(=시작현금+시작매입원가)이다.
+                        # 과거에는 initial_asset(=시작 총자산=현금+평가금)과 비교했는데, 보유 종목에 평가손익이
+                        # 있으면 매입원가≠평가금이라 그 차이(=시작 시점 평가손익)가 가짜 입출금으로 오인되었다.
+                        # → 보유 종목 하락만으로 '가짜 입금'이 잡혀 기준자산이 부풀고 비상정지가 오작동했다.
+                        if is_first_init or self.baseline_principal <= 0:
+                            self.baseline_principal = current_principal
+
                         if not is_first_init and toss_cash_reliable:
-                            transfer_amt = current_principal - self.initial_asset
+                            transfer_amt = current_principal - self.baseline_principal
 
                             # [Fix] 5만원 이상 원금 변동 발생 시 입출금으로 간주하되, 주문 체결 중 API 데이터 불일치(Lag)로 인한
                             # 오작동을 방지하기 위해 3회 연속(약 30초) 동일한 변동이 감지될 때만 실제 입출금으로 확정합니다.
-                            if abs(transfer_amt) >= 50000 and self.initial_asset > 0:
+                            if abs(transfer_amt) >= 50000 and self.baseline_principal > 0:
                                 if not hasattr(self, '_pending_transfer_amt'):
                                     self._pending_transfer_amt = 0
                                     self._pending_transfer_count = 0
@@ -4646,9 +4656,10 @@ class AutoTrader:
                                     action_str = "입금" if transfer_amt > 0 else "출금"
                                     self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
                                     self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
-                                    
+
                                     self.initial_asset += int(transfer_amt)
-                                    
+                                    self.baseline_principal += int(transfer_amt)  # [추가] 입금 감지 기준 원금도 함께 이동
+
                                     account_key = f"{target_cano}-{acnt_cd}"
                                     save_daily_initial_asset(account_key, self.initial_asset)
                                     try:

@@ -690,13 +690,15 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     except Exception: pass
     
     # 4. 최종 계산
-    # API 지연(Lag)에 의한 총 자산 금액의 왜곡을 방지하기 위해 
+    # API 지연(Lag)에 의한 총 자산 금액의 왜곡을 방지하기 위해
     # API가 제공하는 tot_evlu_amt 대신 개별 종목 합산 기반으로 직접 계산하여 일관성 유지
+    # [Fix] sec_eval에는 이미 해외 평가금(ovrs_eval_krw)이 합산되어 있으므로(위 2번 단계)
+    #       여기서 ovrs_eval_krw를 다시 더하면 해외 평가금이 이중 계산되어 총자산이 부풀려진다.
     real_cash = summary_data['d2_dep']
-    summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval'] + summary_data['ovrs_eval_krw']
-    
+    summary_data['tot_asset'] = real_cash + summary_data['dep_ovs'] + summary_data['sec_eval']
+
     if config.FILE_DEBUG_LEVEL == "DEBUG":
-        logger.debug(f"[ACCOUNT_DEBUG] Calculated Total Asset: {summary_data['tot_asset']:,} (D2 + Ovs + Sec)")
+        logger.debug(f"[ACCOUNT_DEBUG] Calculated Total Asset: {summary_data['tot_asset']:,} (D2 + Ovs예수금 + Sec(국내+해외))")
     
     return summary_data
 
