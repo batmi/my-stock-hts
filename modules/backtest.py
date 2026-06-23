@@ -620,12 +620,12 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
                                weights=None, name="Unknown", code="Unknown", days=0):
-    """Monte Carlo 시뮬레이션 실행 (10,000회 반복)
+    """Monte Carlo 시뮬레이션 실행 (1,000회 반복)
 
     각 시행마다 (워밍업 포함) 전체 가격 시계열에 노이즈를 주입한 뒤 보조지표를 재계산하므로,
     체결 노이즈뿐 아니라 매매 시그널(점수/상태) 자체의 견고성까지 검증한다.
     """
-    config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (10,000 runs) ━━━[/]")
+    config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (1,000 runs) ━━━[/]")
     config.console.print("[dim]가격 데이터 노이즈(±1%) 주입 후 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]\n")
 
     # 날짜/표시는 노이즈와 무관하므로 깨끗한 원본 슬라이스를 참조용으로 보관
@@ -664,9 +664,9 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=10000)
+        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=1000)
         
-        for _ in range(10000):
+        for _ in range(1000):
             # 1. (워밍업 포함) 전체 시계열에 노이즈 주입 후 지표 재계산
             noisy_full = full_df.copy()
             # 정규분포 노이즈 (평균 0, 표준편차 1%) — 동일 봉의 OHLC는 같은 비율로 이동시켜 봉 구조 보존
@@ -1115,6 +1115,56 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
     config.console.print(f"\n{verdict}")
     config.console.print("[dim]※ 단일 종목·단일 구간 검증은 표본이 작습니다. 여러 종목·기간으로 반복해 일관성을 확인하세요.[/dim]")
 
+    # [추가] AI 백테스팅 진단 (Walk-Forward)
+    config.console.print()
+    if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
+        from modules import theme_analysis
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.padding import Padding
+        
+        param_info = f"매수 {base_params['buy_score']}점/RSI{base_params['buy_rsi']}, 매도 {base_params['sell_score']}점, 익절 +{base_params['take_profit']}%/RSI{base_params['take_profit_rsi']}, 손절 {base_params['stop_loss']}%, 트레일링 +{base_params['ts_activation']}%/-{base_params['ts_callback']}%"
+        
+        clean_verdict = verdict.replace('[bold blue]', '').replace('[/]', '').replace('[bold yellow]', '').replace('[green]', '').replace('[bold green]', '')
+        
+        backtest_info = f"""
+        [시뮬레이션 요약]
+        - 종목: {name} ({code})
+        - 적용 파라미터: {param_info}
+        - OOS 누적 수익률 (복리): {total_oos_ret:+.2f}%
+        - 폴드 평균 IS 수익률: {avg_is:+.2f}%
+        - 폴드 평균 OOS 수익률: {avg_oos:+.2f}%
+        - OOS 성과 유지율: {retention:.0f}%
+        - 수익 폴드 비율: {pos_folds}/{len(oos_returns)}
+        - OOS 평균 승률: {avg_oos_wr:.1f}%
+        - 1차 시스템 진단: {clean_verdict}
+        
+        [폴드별 상세 내역]
+"""
+        for idx, (is_r, oos_r, oos_w) in enumerate(zip(is_returns, oos_returns, oos_winrates)):
+            backtest_info += f"        - 폴드 {idx+1}: IS {is_r:+.1f}% / OOS {oos_r:+.1f}% / 승률 {oos_w:.0f}%\n"
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]Google Gemini가 Walk-Forward 백테스팅 결과를 심층 분석 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+            answer = theme_analysis.evaluate_backtest_with_gemini(code, name, backtest_info, mode='walk_forward')
+            
+        if answer:
+            if answer.startswith("⚠️"):
+                config.console.print(f"\n{answer}")
+            else:
+                md = Markdown(answer)
+                panel = Panel(md, title=f"🤖 AI Walk-Forward 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
+                config.console.print()
+                config.console.print(Padding(panel, (0, 4)))
+        else:
+            config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
+
 
 def run_backtest():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
@@ -1423,7 +1473,7 @@ def run_backtest():
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
         # [이동] 실행 모드 선택 (데이터 준비 전으로 이동)
-        mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim"), ("3", "Walk-Forward 검증 (과최적화 진단)", "Walk-Forward Validation")]
+        mode_items = [("1", "단일 백테스팅", "Single Run"), ("2", "Monte Carlo 시뮬레이션", "Monte Carlo Sim"), ("3", "Walk-Forward 검증", "Walk-Forward Validation")]
         mode_choice = utils.show_menu("실행 모드를 선택하세요", mode_items, default_choice="1", text_before=msg)
 
         if mode_choice.lower() in ['b', 'q']: continue

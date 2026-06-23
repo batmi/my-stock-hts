@@ -660,6 +660,8 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     
     if mode == 'monte_carlo':
         prompt = prompts.BACKTEST_MONTE_CARLO_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
+    elif mode == 'walk_forward':
+        prompt = prompts.BACKTEST_WALK_FORWARD_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
     else:
         prompt = prompts.BACKTEST_SINGLE_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
 
