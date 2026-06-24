@@ -248,39 +248,59 @@ my-stock-hts/
 ├── main.py               # Main execution file (Menu & Routing)
 ├── config.py             # Settings, Env vars, Data load
 ├── api.py                # KIS API, yfinance, OpenDART communication
-├── constants.py          # Constant definitions
-├── indicators.py         # Technical indicators (RSI, ADX, MACD, etc.)
-├── utils.py              # Common utilities
+├── constants.py          # Constant definitions (TR ID, field mapping, etc.)
+├── indicators.py         # Technical indicators calculation (RSI, ADX, MACD, etc.)
+├── utils.py              # Common utilities (dates, formatting, etc.)
 ├── session.py            # Session & Token management
 ├── context.py            # Global thread states & Lock management
-├── requirements.txt      # Python dependencies
-├── pytest.ini            # Pytest settings
-├── .env.example          # Env var example
-├── LICENSE.md            # License
-├── db/                   # SQLite DB file storage
-├── json/                 # Dynamic settings & state caches
-├── logs/                 # Log file storage
-├── chart/                # Chart image storage
-├── data/                 # Excel/CSV exports
-├── tools/                # Diagnostics & utility tools
-├── tests/                # Pytest unit/integration tests (750+)
-└── modules/              # Feature modules
-    ├── db_manager.py     # DB connection & queries
-    ├── db_queue.py       # Single worker queue proxy
-    ├── telegram_bot.py   # Telegram integration
-    ├── scheduler.py      # Background scheduling
-    ├── executors.py      # Global Thread Pool
-    ├── prompts.py        # AI prompts
-    ├── settings.py       # [0] System Settings
-    ├── market.py         # [1] Market Indices
-    ├── analysis.py       # [2] Stock Analysis
-    ├── chart.py          # [3] Chart Visualization
+├── requirements.txt      # Python dependencies list
+├── pytest.ini            # Pytest test configuration file
+├── .env.example          # Env var setup example file
+├── LICENSE.md            # License file
+├── db/                   # [Auto-generated] SQLite DB file storage
+├── json/                 # [Auto-generated] Dynamic settings & state/cache file storage
+│   ├── stock.json              # Interest/monitoring stock list
+│   ├── restricted_stocks.json  # Trading restricted stock list
+│   ├── daily_asset_state.json  # Initial starting asset record for the day (for daily loss limit)
+│   ├── dynamic_config.json     # Backup of system settings changed during program execution
+│   └── dart_corp_map.json      # [Auto-generated] DART stock code ↔ unique number (corp_code) mapping cache
+├── logs/                 # [Auto-generated] Log file storage
+├── chart/                # [Auto-generated] Chart image storage
+├── data/                 # [Auto-generated] Excel/CSV export storage
+├── tools/                # Various diagnostics & utility tools
+│   ├── stock-hts               # [Linux server] tmux session auto-configuration script
+│   ├── get_telegram_chat_id.py # Telegram Chat ID confirmation tool
+│   ├── clear_trade_history.py  # Trading history & DB initialization tool
+│   ├── check_execution.py      # Execution history confirmation tool
+│   ├── check_unfilled_orders.py# Unfilled orders confirmation tool
+│   ├── check_deposit_apis.py   # Deposit-related API confirmation tool
+│   ├── check_simulation_balance.py  # Mock investment balance confirmation tool
+│   ├── benchmark_api_tps.py    # API TPS (calls per second) benchmark tool
+│   ├── simulate_thread_workers.py   # Thread worker performance simulation
+│   ├── verify_autotrader_cancel.py  # Auto-trading cancellation logic verification tool
+│   ├── search_indices_yfinance.py   # yfinance-based overseas index search tool
+│   ├── gemini_tool.py          # Gemini AI feature direct test tool
+│   └── get_google_genai.py     # Google GenAI SDK connection confirmation tool
+├── tests/                # Pytest unit/integration test codes (750+)
+└── modules/              # Feature-specific module folders
+    ├── db_manager.py     # DB connection & query management
+    ├── db_queue.py       # Single worker queue proxy for SQLite concurrency control
+    ├── telegram_bot.py   # Telegram bot integration & notifications
+    ├── scheduler.py      # Dedicated worker for background scheduling & timers
+    ├── executors.py      # Central management of system-wide Thread Pool
+    ├── prompts.py        # External management of prompt templates for AI assistant
+    ├── settings.py       # [0] System Settings management
+    ├── market.py         # [1] Market Indices inquiry
+    ├── analysis.py       # [2] Stock price & technical analysis
+    ├── chart.py          # [3] Chart visualization & analysis
     ├── backtest.py       # [4] Strategy Backtesting
-    ├── auto_trade.py     # [5] Auto Trading
-    ├── theme_analysis.py # [6] Theme Analysis & AI
+    ├── auto_trade.py     # [5] System Trading (Auto Trading)
+    ├── theme_analysis.py # [6] Stock trend analysis + AI (Gemini) analysis/disclosure summary
     ├── manage.py         # [7] Interest Stock Management
-    ├── trading.py        # [8] Order Management
-    ├── reserved_order_monitor.py # Background Order Monitoring
+    ├── calendar_events.py# [7-6] Dividend/Earnings Calendar (DART + yfinance)
+    ├── disclosure.py     # [7-7/7-8] Disclosure monitoring/earnings tracking + Telegram alerts (DART)
+    ├── trading.py        # [8] Stock Order Management (Buy/Sell/Modify/Cancel)
+    ├── reserved_order_monitor.py # Background reserved order (Stop loss, Trailing, etc.) monitoring thread
     └── account.py        # [9] Asset & Balance Management
 ```
 
