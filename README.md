@@ -1,5 +1,7 @@
 # MyStock HTS (Home Trading System)
 
+[🇰🇷 Korean](README.md) | [🇺🇸 English](README.en.md)
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 한국투자증권(KIS) 및 토스증권(TOSS) Open API를 활용한 파이썬 기반의 개인용 주식 자동매매 및 분석 시스템입니다.
