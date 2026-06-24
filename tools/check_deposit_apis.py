@@ -116,14 +116,14 @@ def main():
     console.print("[bold yellow]=== 예수금 관련 API 정밀 진단 도구 ===[/bold yellow]")
     console.print(f"찾는 값: [bold red]{TARGET_VALUES[0]}[/bold red]\n")
 
-    # 1. 설정 로드 (실전투자 모드 강제)
+    # 1. 설정 로드 (한투증권 모드 강제)
     config.session.initialize(mode='2') 
     config.session.load_stock_config()
     
     # 2. 토큰 발급
     console.print("\n[bold green][1] 토큰 발급[/bold green]")
     if not api.get_real_access_token():
-        console.print("[red]실전투자 토큰 발급 실패. 환경변수(REAL_APP_KEY 등)를 확인하세요.[/red]")
+        console.print("[red]한투증권 토큰 발급 실패. 환경변수(REAL_APP_KEY 등)를 확인하세요.[/red]")
         return
 
     cano = config.session.cano

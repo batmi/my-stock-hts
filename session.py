@@ -105,7 +105,7 @@ class SessionManager:
         if mode is None:
             config.console.print("\n접속할 서버를 선택하세요:")
             config.console.print("[1] 모의투자 (Simulation)")
-            config.console.print("[2] 실전투자 (Real Trading)")
+            config.console.print("[2] 한투증권 (KIS, 실전)")
             config.console.print("[3] 토스증권 (Toss, 실전)")
             mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "q"], default="1")
             if mode == 'q': sys.exit()
@@ -172,11 +172,11 @@ class SessionManager:
                 self.cano = real_cano
                 self.acnt_prdt_cd = real_acnt
                 
-            config.console.print("\n[bold red]실전투자 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
+            config.console.print("\n[bold red]한투증권 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
             
             # [추가] 실전투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
-                config.console.print("[bold red]⚠️ 경고: 실전투자용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
+                config.console.print("[bold red]⚠️ 경고: 한투증권용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
             
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
@@ -196,7 +196,7 @@ class SessionManager:
 
         # [추가] 로드된 설정 정보 확인 메시지 출력
         key_status = "OK" if self.app_key and self.app_secret else "MISSING"
-        env_label = "모의투자" if self.is_simulation else "실전투자"
+        env_label = "모의투자" if self.is_simulation else "한투증권"
         config.console.print(f"\n[dim cyan][{env_label}] 설정 로드 확인[/dim cyan]")
         config.console.print(f"[dim]   - APP_KEY 상태: {key_status}[/dim]")
         config.console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")

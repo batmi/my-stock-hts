@@ -174,7 +174,7 @@ def _custom_print_breadcrumb():
     elif config.session.is_simulation:
         env_str = "[모의투자]"; env_color = "bold yellow"
     else:
-        env_str = "[실전투자]"; env_color = "bold red"
+        env_str = "[한투증권]"; env_color = "bold red"
     emoji = _get_preset_emoji()
     
     config.console.print("\n[dim]" + "─"*50 + "[/dim]")
@@ -217,10 +217,10 @@ def preflight_check():
             config.console.print("  - 성공: 모의투자 API Key/Secret 확인 완료.")
     else: # 실전
         if not config.session.real_app_key or not config.session.real_app_secret:
-            config.console.print("  - [bold red]실패[/]: 실전투자 API Key/Secret이 설정되지 않았습니다.")
+            config.console.print("  - [bold red]실패[/]: 한투증권 API Key/Secret이 설정되지 않았습니다.")
             checks_ok = False
         else:
-            config.console.print("  - 성공: 실전투자 API Key/Secret 확인 완료.")
+            config.console.print("  - 성공: 한투증권 API Key/Secret 확인 완료.")
         
         if config.session.auto_app_key:
              config.console.print("  - 성공: 자동매매 전용 API Key 확인 완료.")
@@ -866,14 +866,14 @@ def main():
   2. 모의투자 모드로 자동매매 바로 시작:
      ./run.sh --mode 1 --auto
 
-  3. 실전투자 모드로 바로 시작 (텔레그램 봇 수신 비활성화):
+  3. 한투증권 모드로 바로 시작 (텔레그램 봇 수신 비활성화):
      ./run.sh --mode 2 --no-bot  (또는 run.bat ...)
 
   4. 토스증권 모드로 실행:
      ./run.sh --mode 3
 """
     )
-    parser.add_argument('--mode', choices=['1', '2', '3'], help='투자 모드 선택 (1: 모의투자, 2: 실전투자, 3: 토스증권)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
+    parser.add_argument('--mode', choices=['1', '2', '3'], help='투자 모드 선택 (1: 모의투자, 2: 한투증권, 3: 토스증권)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
     parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
     parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
     args = parser.parse_args()

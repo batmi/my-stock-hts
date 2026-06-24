@@ -22,14 +22,14 @@ def clear_all_trades():
     # 1. 대상 유형 선택 (모의/실전)
     console.print("[bold]초기화할 대상 유형을 선택하세요:[/bold]")
     console.print("[1] 모의투자 (Simulation)")
-    console.print("[2] 실전투자 (Real)")
+    console.print("[2] 한투증권 (Real)")
     
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="1")
     if choice.lower() == 'q':
         return
 
     is_sim = 1 if choice == "1" else 0
-    mode_label = "모의투자" if is_sim else "실전투자"
+    mode_label = "모의투자" if is_sim else "한투증권"
 
     db_path = config.DB_FILE_PATH
     if not os.path.exists(db_path):
@@ -108,12 +108,12 @@ def clear_all_trades():
         console.print(f"[bold red]DB 작업 중 오류 발생: {e}[/bold red]")
 
 def delete_individual_trade():
-    choice = Prompt.ask("\n조회할 환경을 선택하세요 [1: 모의투자, 2: 실전투자, q: 취소]", choices=["1", "2", "q"], default="1")
+    choice = Prompt.ask("\n조회할 환경을 선택하세요 [1: 모의투자, 2: 한투증권, q: 취소]", choices=["1", "2", "q"], default="1")
     if choice == 'q':
         return
         
     is_sim = True if choice == "1" else False
-    env_str = "모의투자" if is_sim else "실전투자"
+    env_str = "모의투자" if is_sim else "한투증권"
 
     # 최근 50건 조회하여 표시
     trades = db_manager.db.get_trades(limit=50, is_sim=is_sim)

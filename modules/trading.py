@@ -27,7 +27,10 @@ def select_account(title="주문을 수행할 계좌를 선택하세요"):
     """계좌를 선택합니다."""
     target_cano = config.session.cano
     target_acnt = config.session.acnt_prdt_cd
-    acc_label = "실전투자" if not config.session.is_simulation else "모의투자"
+    if config.session.is_toss:
+        acc_label = "토스증권"
+    else:
+        acc_label = "한투증권" if not config.session.is_simulation else "모의투자"
 
     # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
     if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:

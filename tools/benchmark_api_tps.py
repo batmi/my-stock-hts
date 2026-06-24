@@ -121,12 +121,12 @@ def run_benchmark():
         mode_name = "모의투자"
         num_workers = 10 # 모의서버는 부하에 약하므로 적당히
     else:
-        console.print("[dim]1. 실전투자 모드로 초기화 중...[/dim]")
+        console.print("[dim]1. 한투증권 모드로 초기화 중...[/dim]")
         config.session.initialize(mode="2")
         if not api.get_real_access_token():
-            console.print("[red]토큰 발급 실패. 실전투자 API Key 등 환경변수를 확인하세요.[/red]")
+            console.print("[red]토큰 발급 실패. 한투증권 API Key 등 환경변수를 확인하세요.[/red]")
             return
-        mode_name = "실전투자"
+        mode_name = "한투증권"
         num_workers = 30 # 실전서버는 성능이 좋으므로 높게
 
     duration = int(Prompt.ask("테스트 지속 시간(초)을 입력하세요", default="20"))

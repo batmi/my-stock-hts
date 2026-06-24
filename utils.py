@@ -230,7 +230,7 @@ def print_breadcrumb():
             elif config.session.is_simulation:
                 env_str = "[모의투자]"; env_color = "green"
             else:
-                env_str = "[실전투자]"; env_color = "bold red"
+                env_str = "[한투증권]"; env_color = "bold red"
             
             print("\n" + "─"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")

@@ -1134,7 +1134,7 @@ def check_and_refresh_token_if_expired():
             else:
                 if not get_real_access_token(force_refresh=True):
                     success = False
-                    fail_reason = "실전투자 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
+                    fail_reason = "한투증권 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
                 
                 if success and config.session.auto_app_key:
                     if not get_auto_access_token(force_refresh=True):

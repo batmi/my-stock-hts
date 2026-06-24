@@ -198,7 +198,7 @@ def sync_today_trades():
                                         tot_qty, avg_price, odno, 
                                         order_status="체결", custom_time=trade_time,
                                         reason=reason_to_save,
-                                        profit_amt=profit_amt, profit_rate=profit_rate, strategy_score=score,
+                                        profit_amt=profit_amt, profit_rate=profit_rate, score=score,
                                         stop_loss_rate=stop_loss_rate
                                     )
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
@@ -490,10 +490,10 @@ def get_account_balance():
     elif config.session.is_simulation:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
         if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
            (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
+            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
 
     for i, (cano, acnt, label) in enumerate(accounts):
         if i > 0: config.console.print("\n")
@@ -789,10 +789,10 @@ def get_deposit_balance():
     elif config.session.is_simulation:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
     else:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전투자 (수동)"))
+        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
         if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
            (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "실전투자 (자동)"))
+            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
 
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}{'-' + acnt if acnt else ''})[/]")

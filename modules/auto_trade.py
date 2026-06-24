@@ -4187,7 +4187,7 @@ class AutoTrader:
                     
                     # [추가] 현재 운용 계좌 정보 로깅
                     if target_cano and is_log_needed:
-                        acc_type = "모의투자" if config.session.is_simulation else "실전투자(자동)"
+                        acc_type = "모의투자" if config.session.is_simulation else "한투증권(자동)"
                         self.log(f"운용 계좌: {target_cano} [{acc_type}]")
                     
                     
