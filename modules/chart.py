@@ -179,13 +179,19 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
             # [추세선] 스윙 피봇 연결 (상승=저점, 하락=고점)
             trend = indicators.get_trend_lines(df)
-            for key, style in (('support', ('blue', '상승추세')), ('resistance', ('red', '하락추세'))):
+            for key, base_color in (('support', 'blue'), ('resistance', 'red')):
                 if key not in trend:
                     continue
                 slope, intercept, x_start = trend[key]
+                
+                # 기울기에 따라 실제 추세 방향 및 라벨 결정
+                trend_dir = "상승" if slope > 0 else "하락"
+                line_type = "지지선" if key == 'support' else "저항선"
+                label = f"{trend_dir} {line_type}"
+                
                 tx = np.array([x_start, x_end])
                 ty = slope * tx + intercept
-                ax1.plot(tx, ty, color=style[0], linestyle='-', linewidth=1.4, alpha=0.6, label=style[1])
+                ax1.plot(tx, ty, color=base_color, linestyle='-', linewidth=1.4, alpha=0.6, label=label)
         except Exception as e:
             if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][DEBUG] 박스권/추세선 산출 실패: {e}[/dim red]")

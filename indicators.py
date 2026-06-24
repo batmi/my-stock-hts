@@ -208,29 +208,75 @@ def get_swing_points(df, order=5):
             swing_lows.append((i, float(lows[i])))
     return swing_highs, swing_lows
 
-def detect_recent_box(df, window=20, low_pct=20, high_pct=80):
-    """최근 구간에서 가격이 실제로 머문 핵심 박스권을 종가 백분위로 산출하고
-    현재가 위치를 판정한다.
-
-    고가/저가(꼬리)가 아닌 '종가'의 백분위(low_pct~high_pct)를 쓰므로,
-    잠깐 튄 스파이크가 박스 폭을 넓히지 않는다. 현재봉(마지막 봉)은
-    돌파 판정을 위해 박스 산정에서 제외한다.
-
-    window: 박스 산정에 쓸 최근 거래일 수
-    low_pct/high_pct: 박스 하단/상단 백분위(낮을수록·높을수록 폭이 넓어짐)
-
-    반환: dict(high, low, start_idx, end_idx, last, status) 또는 None
-      status: '상단 돌파' | '하단 이탈' | '박스권 내'
+def detect_recent_box(df, window=20, value_area_pct=0.5):
+    """
+    최근 20일 기준 실제 '거래량(Volume)'이 가장 많이 몰려있는 핵심 매물대 구간을 박스로 산출합니다.
+    Mode 1/2/3 모든 API 환경에서 동작할 수 있도록 방어 코드가 포함되어 있습니다.
     """
     n = len(df)
-    end = n - 1  # 박스 산정 구간은 [s, end) — 현재봉(n-1) 제외
-    if end < 5:
+    end = n - 1  # 마지막 봉 제외
+    if end < 10:
         return None
+        
     w = min(window, end)
     s = end - w
-    closes = df['close'].values[s:end]
-    box_low = float(np.percentile(closes, low_pct))
-    box_high = float(np.percentile(closes, high_pct))
+    
+    df_w = df.iloc[s:end]
+    highs = df_w['high'].values
+    lows = df_w['low'].values
+    closes = df_w['close'].values
+    
+    # Mode 1/2/3 호환성 처리: volume 데이터가 누락되거나 NaN일 경우의 방어
+    if 'volume' in df_w.columns:
+        volumes = np.nan_to_num(df_w['volume'].values)
+    else:
+        volumes = np.ones_like(closes)
+        
+    min_val = np.min(lows)
+    max_val = np.max(highs)
+    if min_val == max_val:
+        return None
+        
+    # 매물대(Volume Profile) 계산을 위해 가격을 20개 구간(Bin)으로 분할
+    n_bins = 20
+    bins = np.linspace(min_val, max_val, n_bins + 1)
+    vol_profile = np.zeros(n_bins)
+    
+    # 각 캔들의 거래량을 해당 캔들 중심가가 속한 구간에 누적
+    for h, l, c, v in zip(highs, lows, closes, volumes):
+        typical_p = (h + l + c) / 3.0
+        idx = np.searchsorted(bins, typical_p) - 1
+        idx = max(0, min(idx, n_bins - 1))
+        vol_profile[idx] += v
+        
+    total_vol = np.sum(vol_profile)
+    if total_vol == 0:
+        return None
+        
+    # 최대 거래량 구간(Point of Control)
+    poc_idx = np.argmax(vol_profile)
+    
+    # 총 거래량의 value_area_pct(50%)가 집중된 영역(Value Area) 찾기
+    target_vol = total_vol * value_area_pct
+    current_vol = vol_profile[poc_idx]
+    
+    lower_idx = poc_idx
+    upper_idx = poc_idx
+    
+    while current_vol < target_vol and (lower_idx > 0 or upper_idx < n_bins - 1):
+        vol_down = vol_profile[lower_idx - 1] if lower_idx > 0 else -1
+        vol_up = vol_profile[upper_idx + 1] if upper_idx < n_bins - 1 else -1
+        
+        if vol_up > vol_down:
+            upper_idx += 1
+            current_vol += vol_up
+        else:
+            lower_idx -= 1
+            current_vol += vol_down
+            
+    box_low = bins[lower_idx]
+    box_high = bins[upper_idx + 1]
+    
     last = float(df['close'].iloc[-1])
     if last > box_high:
         status = '상단 돌파'
@@ -238,6 +284,7 @@ def detect_recent_box(df, window=20, low_pct=20, high_pct=80):
         status = '하단 이탈'
     else:
         status = '박스권 내'
+        
     return {'high': box_high, 'low': box_low, 'start_idx': s, 'end_idx': end - 1,
             'last': last, 'status': status}
 
