@@ -2049,7 +2049,7 @@ class TelegramCommander:
                             emoji = state_emoji_map.get(state_str, "❓")
                             state_display = f" {emoji} {state_str}"
                     
-                    msg += f"\n - {name} ({code}){state_display}\n   /signal_{code}  /analyze_{code}  /chart_h_{code}"
+                    msg += f"\n - {name} ({code}){state_display}\n   /signal_{code}  /analyze_{code}  /chart_{code}"
                 msg += "\n"
         
         if not has_stock:
