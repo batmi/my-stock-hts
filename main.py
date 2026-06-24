@@ -1136,7 +1136,18 @@ def main():
                                 p_type = 'daily'
                                 if c_type == '2': p_type = 'hourly'
                                 elif c_type == '3': p_type = 'intraday'
-                                chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type)
+
+                                # 일봉은 표시 기간 선택 (기본 6개월)
+                                c_months = 6
+                                if p_type == 'daily':
+                                    menu_items_period = [("1", "6개월", "6 Months"), ("2", "1년", "1 Year")]
+                                    c_period = utils.show_menu("표시 기간을 선택하세요", menu_items_period, default_choice="1")
+                                    if c_period.lower() in ['b', 'q']:
+                                        continue
+                                    c_months = 12 if c_period == '2' else 6
+                                    context.USER_ACTION_BREADCRUMB.append(f"[{c_period}] {'1년' if c_months == 12 else '6개월'}")
+
+                                chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type, months=c_months)
                                 last_sub_choice = sub_choice
                                 action_taken = True
                                 utils.pause()

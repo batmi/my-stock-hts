@@ -31,9 +31,9 @@ def test_generate_visual_chart_success(mock_get_data, mock_plt, sample_chart_df,
     # Mock 설정
     mock_get_data.return_value = sample_chart_df
     
-    # plt.subplots가 (fig, [ax1, ax2, ax3, ax4, ax5])를 반환하도록 설정
+    # plt.subplots가 (fig, [ax1, ax6, ax2, ax3, ax4, ax5])를 반환하도록 설정 (서브플롯 6개)
     mock_fig = MagicMock()
-    mock_axes = [MagicMock() for _ in range(5)]
+    mock_axes = [MagicMock() for _ in range(6)]
     mock_plt.subplots.return_value = (mock_fig, mock_axes)
     
     # 차트 저장 경로를 임시 디렉토리로 변경 (config.CHART_DIR 모킹)

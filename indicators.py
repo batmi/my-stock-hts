@@ -188,3 +188,71 @@ def calculate_indicators(df):
         if len(hist) > 1: indicators['prev_macd_hist'] = hist.iloc[-2]
 
     return indicators
+
+def get_swing_points(df, order=5):
+    """스윙 고점/저점(피봇) 탐색.
+    order봉 좌우를 비교해 국소 최고/최저를 찾는다.
+    반환: (swing_highs, swing_lows) — 각각 [(index, price), ...]"""
+    n = len(df)
+    if n < (order * 2 + 1):
+        return [], []
+    highs = df['high'].values
+    lows = df['low'].values
+    swing_highs, swing_lows = [], []
+    for i in range(order, n - order):
+        window_h = highs[i - order:i + order + 1]
+        if highs[i] == window_h.max():
+            swing_highs.append((i, float(highs[i])))
+        window_l = lows[i - order:i + order + 1]
+        if lows[i] == window_l.min():
+            swing_lows.append((i, float(lows[i])))
+    return swing_highs, swing_lows
+
+def detect_recent_box(df, window=20, low_pct=20, high_pct=80):
+    """최근 구간에서 가격이 실제로 머문 핵심 박스권을 종가 백분위로 산출하고
+    현재가 위치를 판정한다.
+
+    고가/저가(꼬리)가 아닌 '종가'의 백분위(low_pct~high_pct)를 쓰므로,
+    잠깐 튄 스파이크가 박스 폭을 넓히지 않는다. 현재봉(마지막 봉)은
+    돌파 판정을 위해 박스 산정에서 제외한다.
+
+    window: 박스 산정에 쓸 최근 거래일 수
+    low_pct/high_pct: 박스 하단/상단 백분위(낮을수록·높을수록 폭이 넓어짐)
+
+    반환: dict(high, low, start_idx, end_idx, last, status) 또는 None
+      status: '상단 돌파' | '하단 이탈' | '박스권 내'
+    """
+    n = len(df)
+    end = n - 1  # 박스 산정 구간은 [s, end) — 현재봉(n-1) 제외
+    if end < 5:
+        return None
+    w = min(window, end)
+    s = end - w
+    closes = df['close'].values[s:end]
+    box_low = float(np.percentile(closes, low_pct))
+    box_high = float(np.percentile(closes, high_pct))
+    last = float(df['close'].iloc[-1])
+    if last > box_high:
+        status = '상단 돌파'
+    elif last < box_low:
+        status = '하단 이탈'
+    else:
+        status = '박스권 내'
+    return {'high': box_high, 'low': box_low, 'start_idx': s, 'end_idx': end - 1,
+            'last': last, 'status': status}
+
+def get_trend_lines(df, order=5, n_recent=3):
+    """최근 스윙 저점들을 연결한 상승추세선, 고점들을 연결한 하락추세선을 회귀로 산출.
+    반환: {'support': (slope, intercept, x_start), 'resistance': (...)} (없으면 키 생략).
+    라인 y값은 slope * x + intercept (x는 df 인덱스), x_start부터 차트 끝까지 그리면 된다."""
+    sh, sl = get_swing_points(df, order)
+    result = {}
+    for key, pts in (('support', sl), ('resistance', sh)):
+        if len(pts) < 2:
+            continue
+        recent = pts[-n_recent:]
+        xs = np.array([i for i, _ in recent], dtype=float)
+        ys = np.array([p for _, p in recent], dtype=float)
+        slope, intercept = np.polyfit(xs, ys, 1)
+        result[key] = (float(slope), float(intercept), int(xs.min()))
+    return result

@@ -53,7 +53,7 @@ def _is_before_krx_open():
     now = datetime.now()
     return (now.hour, now.minute) < (9, 0)
 
-def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily'):
+def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily', months=6):
     # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
     # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
     if period_type == 'hourly' and config.session.is_toss:
@@ -124,8 +124,21 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         df['OBV'] = indicators.get_obv_full_series(df)
         df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = indicators.get_macd_full_series(df)
 
-        # [변경] 서브플롯 5개로 조정 (OBV 삭제)
-        fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(5, 1, figsize=(20, 22), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1]})
+        # [이격도] 종가 / 단순이동평균 * 100 (5/10/20/60일)
+        df['DISP5'] = df['close'] / df['close'].rolling(window=5).mean() * 100
+        df['DISP10'] = df['close'] / df['close'].rolling(window=10).mean() * 100
+        df['DISP20'] = df['close'] / df['close'].rolling(window=20).mean() * 100
+        df['DISP60'] = df['close'] / df['close'].rolling(window=60).mean() * 100
+
+        # [일봉 표시기간] 지표는 전체 데이터로 계산한 뒤 표시 구간만 잘라낸다(EMA120 등 정확도 유지).
+        # months가 지정되면 최근 N개월(거래일 ≈ 21일/월)만 표시.
+        if period_type == 'daily' and months:
+            disp_rows = int(months * 21)
+            if len(df) > disp_rows:
+                df = df.iloc[-disp_rows:].reset_index(drop=True)
+
+        # [변경] 서브플롯 6개로 조정 (이격도를 가격차트 바로 아래, MACD 위로 배치)
+        fig, (ax1, ax6, ax2, ax3, ax4, ax5) = plt.subplots(6, 1, figsize=(20, 25), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1]})
 
         # [1] Price Chart
         ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
@@ -139,10 +152,52 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         
         sar_color = np.where(df['close'] > df['SAR'], 'red', 'blue')
         ax1.scatter(df.index, df['SAR'], s=5, c=sar_color, alpha=0.4, label='SAR')
-        
+
+        # [박스권] 최근 횡보 구간을 적응적으로 탐지 + 현재가 돌파/이탈 판정
+        try:
+            x_end = len(df) - 1
+            box = indicators.detect_recent_box(df)
+            if box:
+                box_high, box_low = box['high'], box['low']
+                status = box['status']
+                # 상태별 색상: 상단돌파=빨강, 하단이탈=파랑, 박스권내=회색
+                status_color = {'상단 돌파': 'red', '하단 이탈': 'blue', '박스권 내': 'dimgray'}[status]
+                # 박스 경계선은 형성 구간부터 현재까지 연장해 현재가와의 관계를 표시
+                ax1.hlines([box_high, box_low], box['start_idx'], x_end,
+                           colors=['red', 'blue'], linestyles='--', linewidths=1.2, alpha=0.6)
+                # 박스 형성 구간만 음영
+                box_x = list(range(box['start_idx'], box['end_idx'] + 1))
+                ax1.fill_between(box_x, box_low, box_high, color='orange', alpha=0.10)
+                ax1.text(x_end, box_high, f" 박스상단 {box_high:,.0f}", color='red',
+                         fontsize=8, va='bottom', ha='left', alpha=0.85)
+                ax1.text(x_end, box_low, f" 박스하단 {box_low:,.0f}", color='blue',
+                         fontsize=8, va='top', ha='left', alpha=0.85)
+                # 현재 상태 배지 (우측 상단 — 좌측 상단 범례와 겹치지 않도록)
+                ax1.text(0.99, 0.97, f"박스권: {status}", transform=ax1.transAxes,
+                         fontsize=11, fontweight='bold', color=status_color, va='top', ha='right',
+                         bbox=dict(boxstyle='round', facecolor='white', edgecolor=status_color, alpha=0.8))
+
+            # [추세선] 스윙 피봇 연결 (상승=저점, 하락=고점)
+            trend = indicators.get_trend_lines(df)
+            for key, style in (('support', ('blue', '상승추세')), ('resistance', ('red', '하락추세'))):
+                if key not in trend:
+                    continue
+                slope, intercept, x_start = trend[key]
+                tx = np.array([x_start, x_end])
+                ty = slope * tx + intercept
+                ax1.plot(tx, ty, color=style[0], linestyle='-', linewidth=1.4, alpha=0.6, label=style[1])
+        except Exception as e:
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim red][DEBUG] 박스권/추세선 산출 실패: {e}[/dim red]")
+
         is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or 'DX-Y' in code)
         
-        period_str = "일봉 (1년)" if period_type == 'daily' else ("시봉 (3개월)" if period_type == 'hourly' else "분봉 (1분, 당일)")
+        if period_type == 'daily':
+            period_str = f"일봉 ({months}개월)" if months and months < 12 else "일봉 (1년)"
+        elif period_type == 'hourly':
+            period_str = "시봉 (3개월)"
+        else:
+            period_str = "분봉 (1분, 당일)"
         ax1.set_title(f"차트 분석 [{period_str}]: {name}", fontsize=16, pad=20)
         ax1.set_ylabel("지수" if is_index else "가격")
         ax1.legend(loc='upper left', ncol=4, fontsize=9)
@@ -227,6 +282,18 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax5.set_title("CCI (Commodity Channel Index)", fontsize=10, loc='right')
         ax5.grid(True, alpha=0.2); ax5.yaxis.tick_right(); ax5.yaxis.set_label_position("right")
 
+        # [6] 이격도 (Disparity, 5/10/20/60일)
+        ax6.plot(df.index, df['DISP5'], label='이격도 5', color='green', linewidth=1.0, alpha=0.8)
+        ax6.plot(df.index, df['DISP10'], label='이격도 10', color='blue', linewidth=1.0, alpha=0.8)
+        ax6.plot(df.index, df['DISP20'], label='이격도 20', color='red', linewidth=1.2, alpha=0.8)
+        ax6.plot(df.index, df['DISP60'], label='이격도 60', color='orange', linewidth=1.2, alpha=0.8)
+        ax6.axhline(100, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
+        for level in [95, 105]: ax6.axhline(level, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+        ax6.set_ylabel("이격도")
+        ax6.set_title("Disparity (이격도)", fontsize=10, loc='right')
+        ax6.grid(True, alpha=0.2); ax6.yaxis.tick_right(); ax6.yaxis.set_label_position("right")
+        ax6.legend(loc='upper left', ncol=4, fontsize=8)
+
         # [X축 설정]
         tick_indices = np.linspace(0, len(df) - 1, 15, dtype=int)
         
@@ -246,7 +313,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         formatted_labels = [format_date(df['date'].iloc[i]) for i in tick_indices]
         
-        for ax in [ax1, ax2, ax3, ax4, ax5]:
+        for ax in [ax1, ax2, ax3, ax4, ax5, ax6]:
             ax.set_xticks(tick_indices)
             ax.set_xticklabels(formatted_labels, rotation=0, ha='center', fontsize=9)
             # [수정] 모든 그래프의 X축 날짜 표시
