@@ -208,11 +208,14 @@ def get_swing_points(df, order=5):
             swing_lows.append((i, float(lows[i])))
     return swing_highs, swing_lows
 
-def detect_recent_box(df, window=20, value_area_pct=0.5):
+def detect_recent_box(df, window=None, value_area_pct=None):
     """
-    최근 20일 기준 실제 '거래량(Volume)'이 가장 많이 몰려있는 핵심 매물대 구간을 박스로 산출합니다.
+    지정 일수 기준 실제 '거래량(Volume)'이 가장 많이 몰려있는 핵심 매물대 구간을 박스로 산출합니다.
     Mode 1/2/3 모든 API 환경에서 동작할 수 있도록 방어 코드가 포함되어 있습니다.
     """
+    if window is None: window = config.INDICATOR_PARAMS.get("BOX_PERIOD", 20)
+    if value_area_pct is None: value_area_pct = config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0) / 100.0
+
     n = len(df)
     end = n - 1  # 마지막 봉 제외
     if end < 10:
@@ -288,10 +291,15 @@ def detect_recent_box(df, window=20, value_area_pct=0.5):
     return {'high': box_high, 'low': box_low, 'start_idx': s, 'end_idx': end - 1,
             'last': last, 'status': status}
 
-def get_trend_lines(df, order=5, n_recent=3):
+def get_trend_lines(df, order=5, period=None):
     """최근 스윙 저점들을 연결한 상승추세선, 고점들을 연결한 하락추세선을 회귀로 산출.
     반환: {'support': (slope, intercept, x_start), 'resistance': (...)} (없으면 키 생략).
     라인 y값은 slope * x + intercept (x는 df 인덱스), x_start부터 차트 끝까지 그리면 된다."""
+    if period is None: period = config.INDICATOR_PARAMS.get("TREND_PERIOD", 60)
+    
+    # 60일 기준 3개(기본값)의 스윙 포인트를 사용하도록 비례식 적용 (20일당 1개 꼴)
+    n_recent = max(2, period // 20)
+    
     sh, sl = get_swing_points(df, order)
     result = {}
     for key, pts in (('support', sl), ('resistance', sh)):

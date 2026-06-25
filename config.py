@@ -273,6 +273,9 @@ class GlobalSettings(BaseModel):
         "RSI_MID": 50,                 # RSI 중간 기준선
         "RSI_LOWER": 30,               # RSI 과매도 기준선
         "ATR_PERIOD": 14,              # ATR 계산 기간
+        "TREND_PERIOD": 60,            # [추가] 상승/하락 추세선 기간 일수
+        "BOX_PERIOD": 20,              # [추가] 박스권 설정 기간 일수
+        "BOX_VALUE_AREA_PCT": 50.0,    # [추가] 박스권 매물대 %
         "MOMENTUM_LOOKBACK": 126,      # [추가] 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일)
         "MOMENTUM_W52_NEAR": 80,       # [추가] 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도)
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
@@ -680,7 +683,7 @@ def reset_all_settings():
             "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-            "ATR_PERIOD": 14, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
+            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
             "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
             "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0, "SCORE_CCI_MOMENTUM": 50
         }
@@ -744,6 +747,9 @@ CONFIG_DESCRIPTIONS = {
     "SUPER_MOMENTUM_W52_POS": "슈퍼 모멘텀 발동 최소 52주 고점 위치",
     "SUPER_BUY_RSI_MAX": "슈퍼 모멘텀 발동 시 완화되는 매수 진입 RSI",
     "SUPER_TAKE_PROFIT_RSI": "슈퍼 모멘텀 발동 시 상향되는 매도 RSI",
+    "TREND_PERIOD": "상승/하락 추세선 기간 일수",
+    "BOX_PERIOD": "박스권 설정 기간 일수",
+    "BOX_VALUE_AREA_PCT": "박스권 매물대 % (집중도)",
     "TREND": "추세 팩터 가중치 (이평선, MACD, SAR)",
     "MOMENTUM": "모멘텀 팩터 가중치 (RSI, CCI, DMI)",
     "STRENGTH": "수급/강도 팩터 가중치 (ADX, OBV)",

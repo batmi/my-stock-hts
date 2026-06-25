@@ -225,6 +225,9 @@ def view_system_config():
     table.add_row("단기 이평선(EMA) 기간\n[dim]단기 급등 추세 판단용[/dim]", "INDICATOR_PARAMS['EMA_SHORT']", f"{ind.get('EMA_SHORT', 5)}")
     table.add_row("거래량 이동평균 기간\n[dim]수급 추세 및 폭발 판단용[/dim]", "INDICATOR_PARAMS['VOLUME_MA_PERIOD']", f"{ind.get('VOLUME_MA_PERIOD', 20)}")
     table.add_row("거래량 폭발 배수\n[dim]이동평균 대비 폭발 기준[/dim]", "INDICATOR_PARAMS['VOLUME_SPIKE_RATIO']", f"{ind.get('VOLUME_SPIKE_RATIO', 2.0)}")
+    table.add_row("상승/하락 추세선 기간\n[dim]스윙 피봇 연결을 위한 룩백 기간[/dim]", "INDICATOR_PARAMS['TREND_PERIOD']", f"{ind.get('TREND_PERIOD', 60)}일")
+    table.add_row("박스권 탐지 기간\n[dim]매물대 기반 박스권 탐지 룩백 기간[/dim]", "INDICATOR_PARAMS['BOX_PERIOD']", f"{ind.get('BOX_PERIOD', 20)}일")
+    table.add_row("박스권 매물대 %\n[dim]핵심 매물대 집중도[/dim]", "INDICATOR_PARAMS['BOX_VALUE_AREA_PCT']", f"{ind.get('BOX_VALUE_AREA_PCT', 50.0)}%")
 
     table.add_section()
 
@@ -556,7 +559,13 @@ def modify_indicator_params():
         {"desc": "거래량 이동평균 기간", "help": "단기 수급 추세 판단 (기본 20)", "name": "VOLUME_MA_PERIOD", "type": "int", "section": "Volume",
          "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_MA_PERIOD", 20), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_MA_PERIOD": v})},
         {"desc": "거래량 폭발 배수", "help": "이평선 대비 폭증 기준 (기본 2.0)", "name": "VOLUME_SPIKE_RATIO", "type": "float", "section": "Volume",
-         "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_SPIKE_RATIO", 2.0), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_SPIKE_RATIO": v})}
+         "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_SPIKE_RATIO", 2.0), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_SPIKE_RATIO": v})},
+        {"desc": "상승/하락 추세선 기간", "help": "추세선 룩백 기간 (기본 60일)", "name": "TREND_PERIOD", "type": "int", "section": "Chart",
+         "get": lambda: config.INDICATOR_PARAMS.get("TREND_PERIOD", 60), "set": lambda v: config.INDICATOR_PARAMS.update({"TREND_PERIOD": v})},
+        {"desc": "박스권 탐지 기간", "help": "매물대 기반 박스권 룩백 기간 (기본 20일)", "name": "BOX_PERIOD", "type": "int", "section": "Chart",
+         "get": lambda: config.INDICATOR_PARAMS.get("BOX_PERIOD", 20), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_PERIOD": v})},
+        {"desc": "박스권 매물대 %", "help": "핵심 매물대 집중도 (기본 50.0)", "name": "BOX_VALUE_AREA_PCT", "type": "float", "section": "Chart",
+         "get": lambda: config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_VALUE_AREA_PCT": v})}
     ]
     return _edit_config_table("기술적 지표 파라미터 (Indicators)", items)
 
@@ -1252,6 +1261,9 @@ def manage_custom_settings():
             "CLEAR_SCREEN_ON_MENU": "화면 자동 지우기",
             "SCREEN_DEBUG_LEVEL": "화면 로그 레벨",
             "FILE_DEBUG_LEVEL": "파일 로그 레벨",
+            "BOX_PERIOD": "박스권 기준 기간",
+            "BOX_VALUE_AREA_PCT": "박스권 밀집 비율",
+            "TREND_PERIOD": "추세선 룩백 기간",
         }
 
         category_map = {
@@ -1351,6 +1363,9 @@ def manage_custom_settings():
             "CLEAR_SCREEN_ON_MENU": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
             "SCREEN_DEBUG_LEVEL": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
             "FILE_DEBUG_LEVEL": ("5. 환경 및 시스템 설정", "5-3. 화면 및 로그 설정"),
+            "BOX_PERIOD": ("4. 기술적 지표 파라미터", ""),
+            "BOX_VALUE_AREA_PCT": ("4. 기술적 지표 파라미터", ""),
+            "TREND_PERIOD": ("4. 기술적 지표 파라미터", ""),
         }
         
         category_order = {
