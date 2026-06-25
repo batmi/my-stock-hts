@@ -144,7 +144,20 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
         ax1.plot(df.index, df['BB_low'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
         ax1.fill_between(df.index, df['BB_low'], df['BB_up'], color='gray', alpha=0.05)
-        ax1.plot(df.index, df['close'], label='종가', color='black', linewidth=1.5, alpha=0.5)
+        # [1] Price Chart (캔들차트)
+        up = df[df['close'] >= df['open']]
+        down = df[df['close'] < df['open']]
+        
+        # 양봉 (Red)
+        ax1.bar(up.index, up['close'] - up['open'], bottom=up['open'], color='red', edgecolor='red', width=0.6, alpha=0.8)
+        ax1.vlines(up.index, up['low'], up['high'], color='red', linewidth=1)
+        
+        # 음봉 (Blue)
+        ax1.bar(down.index, down['open'] - down['close'], bottom=down['close'], color='blue', edgecolor='blue', width=0.6, alpha=0.8)
+        ax1.vlines(down.index, down['low'], down['high'], color='blue', linewidth=1)
+        
+        # 종가선(선택적 희미한 표시)
+        ax1.plot(df.index, df['close'], label='종가', color='black', linewidth=1.0, alpha=0.3)
         ax1.plot(df.index, df['EMA5'], label='EMA 5', color='green', linewidth=1.2)
         ax1.plot(df.index, df['EMA20'], label='EMA 20', color='red', linewidth=1.2)
         ax1.plot(df.index, df['EMA60'], label='EMA 60', color='orange', linewidth=1.2)
