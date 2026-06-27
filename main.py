@@ -987,6 +987,7 @@ def main():
         _start_kis_monitors()
     
     try:
+        _eof_notified = False  # [추가] 비대화형(stdin EOF) 환경 안내를 1회만 남기기 위한 플래그
         while True:
             # [추가] 루프 시작(메인 메뉴 복귀) 시 경로 초기화 (안전한 화면 클리어를 위함)
             context.USER_ACTION_BREADCRUMB = []
@@ -1179,8 +1180,18 @@ def main():
                     config.console.print()
                     if Prompt.ask("프로그램을 종료하시겠습니까?", choices=["y", "n"], default="n") == "y":
                         break
-                except KeyboardInterrupt:
+                except (KeyboardInterrupt, EOFError):
                     break
+            except EOFError:
+                # [긴급] stdin이 없는 비대화형 환경(백그라운드/nohup 실행, SSH 세션 단절 등)에서는
+                # Prompt.ask가 즉시 EOFError를 던진다. str(EOFError())는 빈 문자열이라 기존 Exception
+                # 핸들러가 '원인 없음'으로 텔레그램 '치명적 시스템 오류'를 무한 도배했다.
+                # 입력이 불가능한 환경이므로 알림 없이 조용히 대기하여 백그라운드(자동매매 등)는 유지한다.
+                if not _eof_notified:
+                    logging.warning("stdin EOF 감지(비대화형 환경). 메인 메뉴 입력을 중단하고 백그라운드 작업만 유지합니다.")
+                    _eof_notified = True
+                time.sleep(60)  # 폭주/도배 방지 (백그라운드 스레드는 계속 동작)
+                continue
             except Exception as e:
                 config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
                 

@@ -8,7 +8,9 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
+import api # [추가] 외부 API 차단용
 from modules import db_manager # [추가] DB 매니저 임포트
+from modules import analysis # [추가] 지수 조회 차단용
 from modules.auto_trade import AutoTrader, ConclusionMonitor
 from modules.telegram_bot import TelegramCommander
 
@@ -17,6 +19,56 @@ def setup_config():
     """테스트 세션 동안 사용할 설정 초기화 (모의투자 모드 강제)"""
     # 테스트 중 실수로 실전 API가 호출되지 않도록 안전장치
     config.session.initialize(mode="1")
+
+
+@pytest.fixture(autouse=True)
+def isolate_session_state():
+    """[격리] config.session은 전역 공유 객체이므로, 개별 테스트가 모드/키를
+    바꿔도(예: is_simulation=False) 다음 테스트로 누수되지 않도록 매 테스트 후
+    상태를 원복한다.
+
+    누수를 방치하면 setup_config가 강제한 모의투자 모드가 풀려, 시세/지수 조회가
+    실전 도메인(:9443)으로 나가 EGW00304(고객식별키 무효) 등이 발생할 수 있다.
+    """
+    snapshot = dict(config.session.__dict__)
+    yield
+    config.session.__dict__.clear()
+    config.session.__dict__.update(snapshot)
+
+
+def _mock_index_chart_df(periods=60):
+    """KIS 지수 차트(get_domestic_index_chart)의 원시 응답 형태를 흉내 낸 더미 데이터.
+
+    get_domestic_index_data가 이 컬럼들을 rename/숫자변환하므로 원시 컬럼명을 유지한다.
+    충분한 길이(>= REGIME_MA_PERIOD)를 제공해 yfinance Fallback(실 네트워크)까지 차단한다.
+    """
+    dates = pd.date_range(end="2024-01-01", periods=periods).strftime("%Y%m%d")
+    base = np.linspace(2400.0, 2450.0, periods)
+    return pd.DataFrame({
+        'stck_bsop_date': dates,
+        'bstp_nmix_prpr': base,
+        'bstp_nmix_oprc': base * 0.999,
+        'bstp_nmix_hgpr': base * 1.005,
+        'bstp_nmix_lwpr': base * 0.995,
+        'acml_vol': np.random.randint(1000, 5000, periods),
+    })
+
+
+@pytest.fixture(autouse=True)
+def block_external_market_api(request, monkeypatch):
+    """[격리] 분석 워커(ThreadPoolExecutor) 등에서 지수 조회가 mock 없이 실행되면
+    실제 한투 서버로 네트워크 요청이 나간다. 하위 진입점인 get_domestic_index_chart를
+    더미 데이터로 대체해 실 호출과 yfinance Fallback을 모두 차단한다.
+
+    개별 테스트가 직접 patch하면(예: test_strategy) 그 patch가 우선 적용되고
+    종료 시 이 기본값으로 복원되므로 충돌하지 않는다.
+    단, get_domestic_index_chart 자체의 로직을 검증하는 테스트는
+    @pytest.mark.real_index_chart 로 이 mock을 비활성화한다.
+    """
+    if request.node.get_closest_marker("real_index_chart"):
+        return
+    monkeypatch.setattr(api, "get_domestic_index_chart",
+                        lambda *a, **k: _mock_index_chart_df(), raising=False)
 
 @pytest.fixture(autouse=True)
 def isolate_test_files(tmp_path, monkeypatch):

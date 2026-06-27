@@ -24,6 +24,7 @@ def test_get_stock_name_by_code_overseas(mock_ticker):
     name = api.get_stock_name_by_code("AAPL", True)
     assert name == "Apple Inc."
 
+@pytest.mark.real_index_chart
 @patch('api.call_api')
 def test_get_domestic_index_chart(mock_call):
     """국내 지수 차트 조회 테스트"""

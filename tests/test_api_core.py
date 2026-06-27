@@ -84,6 +84,7 @@ def test_call_api_token_expired(mock_get):
         assert res['rt_cd'] == '0'
         assert mock_refresh.called
 
+@pytest.mark.real_index_chart
 @patch('api.fetch_yfinance_data')
 @patch('api.call_api')
 def test_get_domestic_index_chart_fallback(mock_call, mock_yf):

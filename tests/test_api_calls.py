@@ -89,6 +89,7 @@ def test_safe_int_invalid_input():
     assert api.safe_int("abc") == 0
 
 
+@pytest.mark.real_index_chart
 def test_get_domestic_index_chart_empty_response(mock_session):
     """get_domestic_index_chart 함수가 API 응답이 비어있을 때 빈 DataFrame을 반환하는지 테스트"""
     mock_session.get.return_value = MagicMock(status_code=200)
