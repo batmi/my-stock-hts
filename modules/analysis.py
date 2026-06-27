@@ -655,7 +655,9 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         buy_score = thresholds.get("BUY_SCORE", config.ANALYSIS_THRESHOLDS["BUY_SCORE"])
         rise_score = thresholds.get("RISE_SCORE", config.ANALYSIS_THRESHOLDS["RISE_SCORE"])
         buy_rsi_max = thresholds.get("BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"])
-        
+        interest_min = thresholds.get("INTEREST_SIGNAL_MIN", config.ANALYSIS_THRESHOLDS.get("INTEREST_SIGNAL_MIN", 3))
+        interest_ma60_near = thresholds.get("INTEREST_MA60_NEAR", config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97))
+
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
         super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
         super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
@@ -665,6 +667,9 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
         buy_rsi_max = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         
+        interest_min = config.ANALYSIS_THRESHOLDS.get("INTEREST_SIGNAL_MIN", 3)
+        interest_ma60_near = config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97)
+
         use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
         super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
         super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
@@ -685,32 +690,36 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     if is_severe_danger: return "매도", "[blue]", ", ".join(reasons)
     
     is_caution = False
-    # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 중 하나라도 해당되면 '주의' (완충 구간)
-    if price < ema60: 
+    # [추가] 위험형 주의(hard): '관심(태동)'으로도 분류 불가한 명백한 하락/과열 신호.
+    #        약세형(soft: 단순 장기이평 이탈)과 분리하여, 60/120일선 아래여도
+    #        추세 전환 초기 신호가 있으면 '관심'으로 건질 수 있도록 한다.
+    hard_caution = False
+    # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 → 약세형(soft, 관심 후보 가능)
+    if price < ema60:
         is_caution = True
         reasons.append("60일선 이탈")
-    if ema120 is not None and price < ema120: 
+    if ema120 is not None and price < ema120:
         is_caution = True
         reasons.append("120일선 이탈")
-    if sar is not None and sar > price: 
-        is_caution = True
+    if sar is not None and sar > price:
+        is_caution = True; hard_caution = True
         reasons.append("SAR 매도신호")
-    if rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10): 
-        is_caution = True
+    if rsi >= (config.INDICATOR_PARAMS["RSI_UPPER"] + 10):
+        is_caution = True; hard_caution = True
         reasons.append(f"RSI 과열({rsi:.1f})")
-    elif rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]: 
-        is_caution = True
+    elif rsi <= config.INDICATOR_PARAMS["RSI_LOWER"]:
+        is_caution = True; hard_caution = True
         reasons.append(f"RSI 침체({rsi:.1f})")
-    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi: 
-        is_caution = True
+    elif adx is not None and prev_rsi is not None and adx >= 40 and rsi < prev_rsi:
+        is_caution = True; hard_caution = True
         reasons.append(f"ADX과열({adx:.1f})+RSI하락")
 
     if macd is not None and macd_signal is not None and macd < macd_signal:
-        is_caution = True
+        is_caution = True; hard_caution = True
         reasons.append("MACD 데드크로스")
     # [추가] DMI 매도세 우위 필터
     if plus_di is not None and minus_di is not None and minus_di > plus_di:
-        is_caution = True
+        is_caution = True; hard_caution = True
         reasons.append("-DI 우위(매도세 강함)")
 
     # 2순위: 얼리 스테이지 및 기본 매수 조건 (위험 필터를 모두 통과해야 함)
@@ -726,16 +735,43 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         if plus_di is not None and minus_di is not None and minus_di > plus_di: down_trend_flags.append("-DI 우위")
         
         if down_trend_flags:
-            is_caution = True
+            is_caution = True; hard_caution = True
         else:
             if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
             else: return "매수", "[red]", "매수 조건 충족 (얼리 스테이지 반등 포함)"
 
-    if is_caution: return "주의", "[yellow]", ", ".join(reasons)
-
-    elif score >= rise_score:
+    # [상승] 주의(약세+위험) 신호가 전혀 없고 점수가 양호 → 추세 정렬이 완성된 강한 상태
+    if not is_caution and score >= rise_score:
         return "상승", "[orange3]", "상승 추세 (점수 양호)"
-    else: return "관망", "[white]", "방향성 탐색 구간"
+
+    # [관심(태동)] 추세 정렬은 미완성('상승' 미달)이나, 위험형 신호가 없고
+    #   추세 전환 초기 신호가 INTEREST_SIGNAL_MIN개 이상 포착된 종목.
+    #   60/120일선 아래(약세형 주의)여도 초기 반등 여력을 빠르게 포착하기 위함.
+    #   수동 스윙 매매 모니터링 대상으로 표시한다.
+    if not hard_caution and interest_min > 0:
+        interest_signals = []
+        if ema_5 is not None and ema20 is not None and ema_5 > ema20:
+            interest_signals.append("단기 골든크로스(5>20)")
+        if macd_hist is not None and prev_macd_hist is not None and macd_hist > prev_macd_hist:
+            interest_signals.append("MACD 히스토그램 개선")
+        elif macd is not None and macd_signal is not None and macd > macd_signal:
+            interest_signals.append("MACD 골든크로스")
+        if plus_di is not None and minus_di is not None and plus_di > minus_di:
+            interest_signals.append("+DI 우위")
+        if rsi is not None and prev_rsi is not None and rsi >= config.INDICATOR_PARAMS.get("RSI_MID", 50) and rsi > prev_rsi:
+            interest_signals.append("RSI 50선 상향")
+        if cci is not None and prev_cci is not None and cci > prev_cci and cci > -100:
+            interest_signals.append("CCI 개선")
+        if vol_trend or vol_spike or obv_trend or smart_money:
+            interest_signals.append("수급 유입")
+        if price is not None and ema60 is not None and price >= ema60 * interest_ma60_near:
+            interest_signals.append("60일선 근접/돌파")
+
+        if len(interest_signals) >= interest_min:
+            return "관심", "[green]", "추세 전환 초기 신호 " + str(len(interest_signals)) + "개 (" + ", ".join(interest_signals) + ")"
+
+    if is_caution: return "주의", "[yellow]", ", ".join(reasons)
+    return "관망", "[white]", "방향성 탐색 구간"
 
 def _get_db_connection():
     return sqlite3.connect(config.DB_FILE_PATH)
@@ -2392,8 +2428,8 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             filter_mode = params.get("OUTPUT_FILTER", "BUY")
             target_states = []
             if filter_mode == "BUY": target_states = ["매수", "강매수"]
-            elif filter_mode == "RISE": target_states = ["상승"]
-            elif filter_mode == "ALL": target_states = ["매수", "강매수", "상승"]
+            elif filter_mode == "RISE": target_states = ["상승", "관심"]
+            elif filter_mode == "ALL": target_states = ["매수", "강매수", "상승", "관심"]
             if state in target_states:
                 is_target = True
         else:

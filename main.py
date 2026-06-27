@@ -485,6 +485,7 @@ def show_help():
     buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
     table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     table.add_row("", f"{rise_score} ~ {buy_score}점 미만 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
+    table.add_row("", "정렬 미완성 + 추세전환 초기신호 ≥3개 (위험신호 없음)", "[green]관심[/]", "태동 단계/수동 스윙 모니터링 (120일선 아래도 포착)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
     table.add_row("", "장기추세 붕괴 및 과열", "[blue]매도[/]", "적극 매도/손절 고려 (위험)")

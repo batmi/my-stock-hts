@@ -149,12 +149,26 @@ class GlobalSettings(BaseModel):
         # 이 점수 이상일 때 '매수' 상태로 분류합니다. (기본값: 7.5)
         # - 값을 낮추면(예: 6~7) 매수 신호가 자주 발생하지만, 속임수(False Signal) 가능성이 높아집니다.
         # - 값을 높이면(예: 9) 신호 빈도는 줄어들지만, 확실한 상승 추세에서만 진입합니다.
-        "BUY_SCORE": 7.5,
+        "BUY_SCORE": 7.0,
 
         # [상승 추세 기준 점수]
         # 매수 기준에는 미치지 못하지만, 상승 흐름이 있다고 판단하는 점수입니다. (기본값: 6)
         "RISE_SCORE": 6.0,
-        
+
+        # [관심(태동) 신호 최소 개수]
+        # '상승'(추세 정렬 완성)에는 이르지 못했으나, 추세 전환 초기 신호가 포착되어
+        # 모니터링/수동 스윙 대상으로 표시하는 '관심' 상태의 진입 조건입니다.
+        # 아래 7가지 초기 상승신호(단기 골든크로스/MACD 히스토그램 개선/+DI 우위/RSI 50상향/
+        # CCI 개선/수급 유입/60일선 근접) 중 이 개수 이상을 충족하고, 위험형 신호
+        # (SAR 매도·RSI 과열침체·MACD 데드크로스·-DI 우위 등)가 없으면 '관심'으로 분류합니다.
+        # - 값을 낮추면(예: 2) 더 이른 단계에서 많이 포착되나 속임수 신호가 늘어납니다.
+        # - 값을 높이면(예: 4~5) 신호 빈도는 줄고 신뢰도는 높아집니다. (기본값: 3 / 0이면 미사용)
+        "INTEREST_SIGNAL_MIN": 3,
+        # [관심 60일선 근접 허용 비율]
+        # 현재가가 60일선의 이 비율 이상이면(아직 60일선 아래여도) '60일선 돌파 시도'
+        # 초기신호로 인정합니다. (기본값: 0.97 = 60일선의 97% 이상 근접)
+        "INTEREST_MA60_NEAR": 0.97,
+
         # [RSI 과열 기준]
         # 매수 점수를 충족하더라도, RSI가 이 값 이상이면 '과열'로 판단하여 매수 추천에서 제외합니다.
         # (기본값: 70 - 추세추종 기조상 강한 추세는 RSI가 오래 과매수에 머무르므로 65→70으로 완화.
@@ -657,7 +671,8 @@ def reset_all_settings():
         # [추가] 파이썬 클래스 딕셔너리의 메모리 참조 오염을 방지하기 위해 
         # 초기화 시 하드코딩된 순수 기본값으로 강제 복원
         settings.ANALYSIS_THRESHOLDS = {
-            "BUY_SCORE": 7.5, "RISE_SCORE": 6.0, "BUY_RSI_MAX": 70, "BUY_VOL_STRENGTH": 100.0,
+            "BUY_SCORE": 7.0, "RISE_SCORE": 6.0, "INTEREST_SIGNAL_MIN": 3, "INTEREST_MA60_NEAR": 0.97,
+            "BUY_RSI_MAX": 70, "BUY_VOL_STRENGTH": 100.0,
             "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False,
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
@@ -732,6 +747,8 @@ CONFIG_DESCRIPTIONS = {
     "CORRELATION_THRESHOLD": "동조화 판단 상관계수 임계값",
     "BUY_SCORE": "매수 기준 종합 점수",
     "RISE_SCORE": "상승 추세 판단 기준 점수",
+    "INTEREST_SIGNAL_MIN": "관심(태동) 분류를 위한 최소 초기신호 개수",
+    "INTEREST_MA60_NEAR": "관심 60일선 근접 인정 비율(0.97=97% 근접)",
     "BUY_RSI_MAX": "매수 진입 허용 최고 RSI (과열 방지)",
     "BUY_VOL_STRENGTH": "매수 최소 체결강도 기준",
     "BUY_ASK_BID_RATIO": "매수 최소 매도잔량 비대칭성 비율",

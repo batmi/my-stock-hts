@@ -41,7 +41,7 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 *   **HTS/MTS Replacement:** Real-time quote inquiry and buy/sell/modify/cancel order execution from the terminal.
 *   **Full Support for NXT (Alternative Trading System) & SOR (Smart Order Routing):** Fully supports real-time quote integration and auto/manual/reserved trading during the regular session (KRX) as well as the Nextrade (NXT) operating hours (08:00~08:50, 15:30~20:00). (Note: Mock trading does not support this due to KIS API specs.)
 *   **Enterprise-grade Reserved Orders:** Surpasses HTS limitations by supporting 24-hour background reserved trading based on quant scores, RSI, and trailing stops.
-*   **Technical Analysis Automation:** Automates complex supplementary indicator calculations to provide intuitive investment judgment signals such as **'Buy/Rise/Watch/Caution/Sell'**.
+*   **Technical Analysis Automation:** Automates complex supplementary indicator calculations to provide intuitive investment judgment signals such as **'Buy/Rise/Interest/Watch/Caution/Sell'**.
 *   **Individual Stock Strategy Settings:** Allows setting different buy/sell criteria (score, RSI) and take-profit/stop-loss/trailing-stop ratios individually per stock.
 *   **In-depth Index Analysis:** Provides detailed charts for market indices such as KOSPI and NASDAQ, along with AI in-depth reports combined with macro environments.
 *   **AI Investment Assistant:** Utilizes Google Gemini LLM to provide in-depth stock diagnostics, analysis of market-leading themes, interactive Q&A, and pre-market briefings.
@@ -133,8 +133,9 @@ The composite score determining whether to buy is calculated based on the **Quan
 
 #### Scoring Guide
 *   **8.5 ~ 10.0 points (Strong Buy)**: All indicators point to an uptrend with perfect correlation. Good to enter with a high weight.
-*   **7.0 ~ 8.0 points (Buy)**: The trend is clear, but some secondary indicators haven't followed yet. Good for split buying.
-*   **5.5 ~ 6.5 points (Watch)**: Early stage of an uptrend or weakening trend. Watch if it goes up to the 7-point range rather than entering hastily.
+*   **7.0 ~ 8.5 points (Buy)**: The trend is clear, but some secondary indicators haven't followed yet. (Default buy threshold `BUY_SCORE` = 7.0) Good for split buying.
+*   **6.0 ~ 7.0 points (Rise)**: The trend is aligned and alive, but the score falls slightly short of the buy threshold. (`RISE_SCORE` = 6.0)
+*   **Interest / Nascent (regardless of score)**: The trend alignment is **not yet complete**, but **early trend-reversal signals** (short-term golden cross, MACD improvement, +DI dominance, RSI crossing above 50, CCI improvement, supply inflow, MA60 proximity) are detected in **3 or more** counts (`INTEREST_SIGNAL_MIN`) with no clear risk signals (MACD dead cross, -DI dominance, RSI overheating/depletion, etc.). It is **detected even below the 120-day line**, intended for **manual swing (short-term) trading monitoring** to quickly recognize whether it may develop into an actual buy stage. Note: it is not an automatic-buy target.
 *   **Below 5.0 points (Sell/Avoid)**: Downtrend or sideways market with no clear direction.
 
 ## 3. Configuration
@@ -156,8 +157,10 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **ADX (Average Directional Index)**: Period 14 days (`ADX_PERIOD`). A stable trend is considered formed when it's 20 or higher.
 
 ### 2. Buy/Analysis Thresholds (`ANALYSIS_THRESHOLDS`)
-*   **Buy Score (`BUY_SCORE`)**: Default **7.5 points**. A buy signal is generated when the composite score combining various technical indicators is equal to or higher than this value.
+*   **Buy Score (`BUY_SCORE`)**: Default **7.0 points**. A buy signal is generated when the composite score combining various technical indicators is equal to or higher than this value.
 *   **Rise Score (`RISE_SCORE`)**: Default **6 points**. It doesn't meet the buy criteria, but there is an upward flow.
+*   **Interest Signal Minimum (`INTEREST_SIGNAL_MIN`)**: Default **3**. When trend alignment is incomplete but early trend-reversal signals are detected in this many counts or more (with no risk signals), the stock is classified as **'Interest' (nascent)**. Detected even below the 120-day line, intended for manual swing-trade monitoring. (0 disables it.)
+*   **Interest MA60 Proximity Ratio (`INTEREST_MA60_NEAR`)**: Default **0.97**. If the current price is at or above this ratio of the 60-day line (e.g., 97%), it counts as an 'MA60 breakout attempt' early signal even while still below the 60-day line.
 *   **Maximum Buy Allowed RSI (`BUY_RSI_MAX`)**: Default **70**. Even if the buy score is met, we do not enter if the RSI is above this value, considering it already overheated.
 *   **Buy Volume Strength (`BUY_VOL_STRENGTH`)**: Default **100.0%**. The volume strength at the time of purchase must be at least this value (buying pressure dominance).
 *   **Mean Reversion (`USE_MEAN_REVERSION`)**: Catches the point where indicators rebound after reaching oversold in a downtrend or sudden drop.

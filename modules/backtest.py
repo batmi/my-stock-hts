@@ -1944,6 +1944,7 @@ def run_backtest():
                 state_color = "white"
                 if state in ["매수", "강매수"]: state_color = "red"
                 elif state == "상승": state_color = "orange3"
+                elif state == "관심": state_color = "green"
                 elif state == "관망": state_color = "white"
                 elif state == "주의": state_color = "yellow"
                 elif state == "매도": state_color = "blue"
