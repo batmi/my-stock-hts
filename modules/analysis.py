@@ -324,37 +324,112 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 # [추가] 시장 지수 데이터 공유 캐시
 # get_market_regime은 자동매매/체결감시/예약감시/텔레그램 등 여러 스레드에서 동시에 호출되며,
 # 매 호출마다 2년치 지수차트(inquire-daily-indexchartprice)를 재조회하면 모의투자(2 TPS) 서버에
-# 요청 폭주가 발생한다. 동일 지수는 짧은 TTL 동안 캐시를 공유하여 중복 API 호출을 제거한다.
-_INDEX_DATA_CACHE = {}          # {market_type: {'df': df, 'time': ts}}
-_INDEX_DATA_CACHE_LOCK = threading.Lock()
-_INDEX_DATA_CACHE_TTL = 300     # 5분 (장중 국면 판단에는 충분히 신선함)
+# 요청 폭주(EGW00201)가 발생한다. 이를 막기 위해 아래 3중 방어를 적용한다.
+#   1) single-flight : 동일 지수의 동시 캐시 미스 시 1개 스레드만 실제 조회(스탬피드 차단).
+#   2) negative cache: 조회 실패(빈 결과)도 짧게 기록해 폭주 중 재조회 폭발을 억제하고,
+#                      직전 정상 데이터를 stale 폴백으로 보존한다.
+#   3) stale-while-revalidate: TTL 만료 시 옛 값을 즉시 반환하고 백그라운드 1스레드로만 갱신
+#                      → 5분 주기 캐시 절벽/블로킹 제거.
+_INDEX_DATA_CACHE = {}          # {market_type: {'df': df, 'time': ts, 'fail_time': ts}}
+_INDEX_DATA_CACHE_LOCK = threading.Lock()   # 캐시 딕셔너리 보호
+_INDEX_DATA_CACHE_TTL = 300     # 정상 데이터 유효시간(5분) - 장중 국면 판단에는 충분히 신선함
+_INDEX_DATA_NEG_TTL = 30        # 실패 후 재조회 억제시간(초) - 폭주 자기증식 차단
+
+_INDEX_FETCH_LOCKS = {}         # {market_type: Lock} single-flight 동기 조회 잠금
+_INDEX_FETCH_LOCKS_GUARD = threading.Lock()
+_INDEX_REFRESH_INFLIGHT = set() # 백그라운드 재검증 진행 중인 market_type
+_INDEX_REFRESH_GUARD = threading.Lock()
 
 def _index_cache_enabled():
     """테스트(pytest) 환경에서는 모킹된 지수 데이터가 캐시에 고착되지 않도록 캐시를 비활성화한다."""
     return "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ
 
-def get_domestic_index_data(market_type, force_refresh=False):
-    """국내 지수 데이터 조회 (KIS API -> yfinance Fallback, 공유 캐시 적용)"""
-    # 1. 캐시 조회 (TTL 이내면 재사용)
-    if not force_refresh and _index_cache_enabled():
-        with _INDEX_DATA_CACHE_LOCK:
-            cached = _INDEX_DATA_CACHE.get(market_type)
-            if cached and (time.time() - cached['time']) < _INDEX_DATA_CACHE_TTL:
-                return cached['df']
+def _get_index_fetch_lock(market_type):
+    """market_type별 single-flight 잠금을 반환한다(없으면 생성)."""
+    with _INDEX_FETCH_LOCKS_GUARD:
+        lock = _INDEX_FETCH_LOCKS.get(market_type)
+        if lock is None:
+            lock = threading.Lock()
+            _INDEX_FETCH_LOCKS[market_type] = lock
+        return lock
 
+def _lookup_index_cache(market_type):
+    """캐시 상태를 (status, df)로 반환한다.
+    - 'fresh'   : TTL 이내 정상 데이터 → 즉시 반환
+    - 'suppress': 최근 실패(음성 TTL 이내) → 재조회 없이 직전 정상 데이터(또는 None) 반환
+    - 'stale'   : TTL 경과한 정상 데이터 존재 → 즉시 반환 후 백그라운드 갱신
+    - 'miss'    : 쓸만한 데이터 없음 → 동기 조회 필요
+    """
+    now = time.time()
+    with _INDEX_DATA_CACHE_LOCK:
+        entry = _INDEX_DATA_CACHE.get(market_type)
+        if not entry:
+            return 'miss', None
+        df = entry.get('df')
+        has_good = df is not None and not df.empty
+        # 최근 실패가 음성 TTL 이내면 재조회를 억제(폭주 차단)하고 가진 데이터를 반환
+        if (now - entry.get('fail_time', 0)) < _INDEX_DATA_NEG_TTL:
+            return 'suppress', df
+        if has_good:
+            if (now - entry.get('time', 0)) < _INDEX_DATA_CACHE_TTL:
+                return 'fresh', df
+            return 'stale', df
+        return 'miss', None
+
+def _store_index_cache(market_type, df):
+    """조회 결과를 캐시에 반영한다. 정상 데이터는 갱신하고, 실패(빈 결과)는
+    직전 정상 데이터를 보존한 채 실패 시각만 기록(음성 캐시)한다."""
+    if not _index_cache_enabled():
+        return
+    now = time.time()
+    with _INDEX_DATA_CACHE_LOCK:
+        entry = _INDEX_DATA_CACHE.get(market_type) or {'df': None, 'time': 0, 'fail_time': 0}
+        if df is not None and not df.empty:
+            entry['df'] = df
+            entry['time'] = now
+            entry['fail_time'] = 0
+        else:
+            # 실패: 직전 정상 df/time은 보존, 실패 시각만 갱신
+            entry['fail_time'] = now
+        _INDEX_DATA_CACHE[market_type] = entry
+
+def _trigger_async_refresh(market_type):
+    """stale 데이터 제공 후 백그라운드에서 1스레드로만 캐시를 재검증한다."""
+    if not _index_cache_enabled():
+        return
+    with _INDEX_REFRESH_GUARD:
+        if market_type in _INDEX_REFRESH_INFLIGHT:
+            return  # 이미 갱신 중 → 중복 기동 방지
+        _INDEX_REFRESH_INFLIGHT.add(market_type)
+
+    def _worker():
+        try:
+            fresh = _fetch_domestic_index_data(market_type)
+            _store_index_cache(market_type, fresh)
+        except Exception as e:
+            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} 비동기 재검증 실패: {e}")
+            _store_index_cache(market_type, None)  # 실패 기록(음성 캐시)
+        finally:
+            with _INDEX_REFRESH_GUARD:
+                _INDEX_REFRESH_INFLIGHT.discard(market_type)
+
+    threading.Thread(target=_worker, name=f"IndexRefresh-{market_type}", daemon=True).start()
+
+def _fetch_domestic_index_data(market_type):
+    """국내 지수 데이터를 실제 조회한다(캐시 미적용). KIS API -> yfinance Fallback."""
     kis_code = "0001"
     yf_ticker = "^KS11"
-    
-    if market_type == "KOSDAQ": 
+
+    if market_type == "KOSDAQ":
         kis_code = "1001"
         yf_ticker = "^KQ11"
-    elif market_type == "KOSPI200": 
+    elif market_type == "KOSPI200":
         kis_code = "2001"
         yf_ticker = "^KS200"
     elif market_type == "KOSDAQ150":
         kis_code = "2203"
         yf_ticker = "^KQ150"
-        
+
     df = None
     try:
         # 1. KIS API 조회 (토스 모드에서는 KIS를 사용하지 않고 yfinance Fallback 사용)
@@ -374,7 +449,7 @@ def get_domestic_index_data(market_type, force_refresh=False):
                 'acml_vol': 'volume'
             }
             df.rename(columns=rename_map, inplace=True)
-            
+
             for col in ['close', 'open', 'high', 'low', 'volume']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -382,11 +457,10 @@ def get_domestic_index_data(market_type, force_refresh=False):
 
     except Exception as e:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
-        pass
-    
+
     # 2. Fallback 체크
     ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
-    
+
     if df is None or df.empty or len(df) < ma_period:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
 
@@ -394,7 +468,6 @@ def get_domestic_index_data(market_type, force_refresh=False):
         #   (토스 모드는 KIS 대안이 없어 데이터 없음 → 화면에서 '-' 처리)
         if market_type == "KOSDAQ150":
             logger.debug(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 미지원).")
-            _store_index_cache(market_type, df)
             return df
 
         try:
@@ -404,16 +477,45 @@ def get_domestic_index_data(market_type, force_refresh=False):
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance Fallback 실패: {e}")
 
-    _store_index_cache(market_type, df)
     return df
 
-def _store_index_cache(market_type, df):
-    """유효한 지수 데이터만 공유 캐시에 저장한다."""
+def get_domestic_index_data(market_type, force_refresh=False):
+    """국내 지수 데이터 조회 (KIS API -> yfinance Fallback, 공유 캐시 적용)"""
+    # 테스트 환경: 캐시/스탬피드 방어 없이 매번 직접 조회(모킹 데이터 고착 방지)
     if not _index_cache_enabled():
-        return
-    if df is not None and not df.empty:
-        with _INDEX_DATA_CACHE_LOCK:
-            _INDEX_DATA_CACHE[market_type] = {'df': df, 'time': time.time()}
+        return _fetch_domestic_index_data(market_type)
+
+    # 1. 빠른 경로: 락 없이 캐시 상태만 판정
+    if not force_refresh:
+        status, df = _lookup_index_cache(market_type)
+        if status in ('fresh', 'suppress'):
+            return df
+        if status == 'stale':
+            _trigger_async_refresh(market_type)  # stale 즉시 반환 + 백그라운드 갱신
+            return df
+        # status == 'miss': 동기 조회 필요
+
+    # 2. single-flight: market_type별 1개 스레드만 실제 조회, 나머지는 대기 후 결과 공유
+    fetch_lock = _get_index_fetch_lock(market_type)
+    with fetch_lock:
+        stale_df = None
+        # 대기 중 다른 스레드가 캐시를 채웠을 수 있으니 재확인(강제 갱신 제외)
+        if not force_refresh:
+            status, df = _lookup_index_cache(market_type)
+            if status in ('fresh', 'suppress'):
+                return df
+            if status == 'stale':
+                _trigger_async_refresh(market_type)
+                return df
+            stale_df = df  # 'miss' → 폴백용(보통 None)
+
+        df = _fetch_domestic_index_data(market_type)
+        _store_index_cache(market_type, df)
+
+        # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백
+        if (df is None or df.empty) and stale_df is not None and not stale_df.empty:
+            return stale_df
+        return df
 
 def get_market_regime(market_type="KOSPI"):
     """시장 국면 판단 (Bull/Bear/Sideways)"""
