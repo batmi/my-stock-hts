@@ -287,3 +287,30 @@ def test_manual_sell_removes_only_account_restriction(mock_dependencies):
         assert saved_data['005930']['memo'] == "급등주"
         assert '12345678-01' not in saved_data['005930'].get('accounts', {})
 
+
+def test_manual_remove_unrestricts_only_selected_scope(tmp_path, monkeypatch):
+    """수동 해제(UI)가 선택한 범위만 풀고 다른 계좌/글로벌 제한은 보존해야 한다.
+
+    글로벌 사유 + 두 계좌 제한이 공존할 때, 한 계좌만 해제하면 나머지는 남고,
+    모든 범위를 해제해야 종목 자체가 목록에서 사라진다. (과다 삭제 방지)
+    """
+    restricted_file = tmp_path / "restricted_stocks.json"
+    monkeypatch.setattr(auto_trade, "RESTRICTED_FILE", str(restricted_file))
+
+    auto_trade.add_restricted_stock('005930', '삼성전자', '급등주')  # 글로벌
+    auto_trade.add_restricted_stock('005930', '삼성전자', '수동매매', cano='11111111', acnt='01')
+    auto_trade.add_restricted_stock('005930', '삼성전자', '수동매매', cano='22222222', acnt='01')
+
+    # 1) 한 계좌만 해제 → 글로벌과 다른 계좌는 유지
+    auto_trade.remove_restricted_stock('005930', cano='11111111', acnt='01')
+    data = auto_trade.load_restricted_stocks()
+    assert '005930' in data
+    assert data['005930']['memo'] == '급등주'
+    assert '11111111-01' not in data['005930']['accounts']
+    assert '22222222-01' in data['005930']['accounts']
+
+    # 2) 나머지 계좌 + 글로벌까지 해제 → 종목 자체가 사라짐
+    auto_trade.remove_restricted_stock('005930', cano='22222222', acnt='01')
+    auto_trade.remove_restricted_stock('005930')  # 글로벌 사유 제거
+    data = auto_trade.load_restricted_stocks()
+    assert '005930' not in data

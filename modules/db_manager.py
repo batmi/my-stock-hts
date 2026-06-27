@@ -484,7 +484,14 @@ class DBManager:
             if not row:
                 cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') AND (reason IS NULL OR reason NOT LIKE '체결 확인%') ORDER BY id DESC LIMIT 1", (code,))
                 row = cursor.fetchone()
-                
+
+            # [추가] 그래도 없으면, '접수' 원본 없이 '체결 확인' 레코드만 존재하는 경우
+            #        (수동/외부 매수 등)이므로 체결 확인 더미라도 조회하여
+            #        매수 시각(holding_days)·사유를 확보합니다. (시간청산 등 정상 동작 보장)
+            if not row:
+                cursor.execute("SELECT * FROM trades WHERE code = ? AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC LIMIT 1", (code,))
+                row = cursor.fetchone()
+
             return dict(row) if row else None
         except: return None
             

@@ -101,6 +101,50 @@ def test_trade_operations(db_manager):
     trades = db_manager.get_trades(limit=5)
     assert len(trades) >= 1
 
+def test_latest_buy_trade_external_only(db_manager):
+    """수동/외부 매수처럼 '체결 확인' 레코드만 존재해도 매수 시각을 조회할 수 있어야 한다.
+
+    외부(앱/HTS) 매수는 '접수' 원본 없이 체결 확인 레코드만 DB에 남는데,
+    이를 조회하지 못하면 holding_days=0이 되어 시간청산 등이 무력화된다.
+    """
+    code = "035720"
+    db_manager.insert_trade(
+        type_str="매수(외부)",
+        code=code,
+        name="카카오",
+        qty=5,
+        price=50000,
+        odno="200001",
+        order_status="체결",
+        reason="체결 확인 (앱/HTS 외부 주문)",
+        custom_time="2024-01-02 09:30:00",
+        stop_loss_rate=0.0,
+    )
+
+    latest_buy = db_manager.get_latest_buy_trade(code)
+    assert latest_buy is not None
+    assert latest_buy['time'] == "2024-01-02 09:30:00"
+
+
+def test_latest_buy_trade_prefers_original_over_confirmation(db_manager):
+    """'접수' 원본(ATR 손절률 보유)과 '체결 확인' 더미가 공존하면 원본을 우선해야 한다."""
+    code = "005930"
+    # 시스템 매수: ATR 손절률이 살아있는 '접수' 원본
+    db_manager.insert_trade(
+        type_str="buy", code=code, name="삼성전자", qty=10, price=70000,
+        odno="300001", order_status="접수", reason="전략매수", stop_loss_rate=-5.0,
+    )
+    # 체결 확인 더미 (ATR 손절률 누락)
+    db_manager.insert_trade(
+        type_str="buy", code=code, name="삼성전자", qty=10, price=70000,
+        odno="300002", order_status="체결", reason="체결 확인 (전략매수)", stop_loss_rate=0.0,
+    )
+
+    latest_buy = db_manager.get_latest_buy_trade(code)
+    assert latest_buy is not None
+    assert latest_buy['odno'] == "300001"  # ATR 손절률이 살아있는 원본
+
+
 def test_trailing_stop_operations(db_manager):
     """트레일링 스탑 최고가 관리 테스트"""
     code = "005930"

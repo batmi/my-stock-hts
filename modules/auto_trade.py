@@ -6379,11 +6379,42 @@ def _add_restricted_stock():
     _view_restricted_stocks()
 
 def _remove_restricted_stock():
-    """트레이딩 제한 종목 해제"""
+    """트레이딩 제한 종목 해제 (계좌 범위별 개별 해제)"""
     data = load_restricted_stocks()
     if not data:
         console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
         return False
+
+    # [수정] (종목 × 계좌 범위) 단위로 평탄화하여 계좌별 정밀 해제를 지원한다.
+    #        등록은 글로벌/지정계좌 스코프로 이루어지므로 해제도 같은 단위여야,
+    #        다계좌 운영 시 다른 계좌(또는 글로벌)의 제한이 함께 삭제되는 과다 삭제를 막는다.
+    entries = []  # {code, name, scope('global'|'account'), cano, acnt, type, acc_str, memo, is_overseas}
+    for code, info in data.items():
+        name = info.get('name', code)
+        is_overseas = info.get('is_overseas')
+        if is_overseas is None:
+            is_overseas = (len(code) != 6)
+
+        global_memo = info.get('memo', '')
+        if global_memo:
+            entries.append({
+                "code": code, "name": name, "scope": "global",
+                "cano": None, "acnt": None, "type": "전체", "acc_str": "-",
+                "memo": global_memo, "is_overseas": is_overseas,
+            })
+
+        for acc, acc_info in info.get('accounts', {}).items():
+            if isinstance(acc_info, str):
+                a_type, a_memo = "지정계좌", acc_info
+            else:
+                a_type, a_memo = acc_info.get("type", "지정계좌"), acc_info.get("memo", "")
+            # account_key 형식: "{cano}-{acnt}" (acnt가 빈 문자열일 수 있음)
+            cano, _, acnt = acc.partition('-')
+            entries.append({
+                "code": code, "name": name, "scope": "account",
+                "cano": cano, "acnt": acnt, "type": a_type, "acc_str": acc.rstrip('-'),
+                "memo": a_memo, "is_overseas": is_overseas,
+            })
 
     console.print()
     table = Table(title="트레이딩 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -6398,8 +6429,9 @@ def _remove_restricted_stock():
     table.add_column("메모", justify="left")
     table.add_column("등록일", justify="center", style="dim")
 
-    codes = list(data.keys())
-    
+    # [최적화] 동일 종목이 여러 범위(글로벌/계좌별)로 나뉠 수 있으므로 시세는 종목당 1회만 조회한다.
+    price_cache = {}
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -6409,109 +6441,84 @@ def _remove_restricted_stock():
         console=console,
         transient=True
     ) as progress:
-        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(codes))
+        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(entries))
 
-        for i, code in enumerate(codes):
-            info = data[code]
-            name = info.get('name', code)
-            
-            global_memo = info.get('memo', '')
-            accounts = info.get('accounts', {})
-            
-            types = []
-            accs = []
-            memos = []
-            
-            if global_memo:
-                types.append("전체")
-                accs.append("-")
-                memos.append(global_memo)
-                
-            for acc, acc_info in accounts.items():
-                if isinstance(acc_info, str):
-                    types.append("지정계좌")
-                    memos.append(acc_info)
-                else:
-                    types.append(acc_info.get("type", "지정계좌"))
-                    memos.append(acc_info.get("memo", ""))
-                accs.append(acc.rstrip('-'))
-                
-            display_type = "\n".join(types) if types else "-"
-            display_acc = "\n".join(accs) if accs else "-"
-            display_memo = "\n".join(memos) if memos else "-"
-            
-            reg_date = info.get('date', '-')
-            
-            # 데이터 조회 및 지표 계산
-            is_overseas = info.get('is_overseas')
-            if is_overseas is None:
-                is_overseas = (len(code) != 6)
-            df = api.get_chart_data(code, is_overseas)
-            
-            price_str = "-"
-            diff_str = "-"
-            w52_str = "-"
-            
-            if df is not None and not df.empty:
-                current_price = float(df.iloc[-1]['close'])
-                prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
-                diff = current_price - prev_price
-                rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
-                
-                price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
-                
-                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                if is_overseas:
-                    diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
-                else:
-                    diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
+        for i, e in enumerate(entries):
+            code = e["code"]
+            is_overseas = e["is_overseas"]
+            reg_date = data.get(code, {}).get('date', '-')
 
-                w52_pos_val = 0.0
-                recent_df = df.tail(250)
-                h52 = recent_df['high'].max()
-                l52 = recent_df['low'].min()
-                if h52 > l52:
-                    w52_pos_val = (current_price - l52) / (h52 - l52) * 100
-                
-                w_color = "[white]"
-                if w52_pos_val >= 90: w_color = "[red]"
-                elif w52_pos_val >= 80: w_color = "[orange3]"
-                elif w52_pos_val <= 20: w_color = "[blue]"
-                w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
-            
-            table.add_row(str(i+1), name, code, display_type, display_acc, price_str, diff_str, w52_str, display_memo, reg_date)
+            if code not in price_cache:
+                price_str = diff_str = w52_str = "-"
+                df = api.get_chart_data(code, is_overseas)
+                if df is not None and not df.empty:
+                    current_price = float(df.iloc[-1]['close'])
+                    prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+                    diff = current_price - prev_price
+                    rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
+
+                    price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
+
+                    c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                    if is_overseas:
+                        diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
+                    else:
+                        diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
+
+                    w52_pos_val = 0.0
+                    recent_df = df.tail(250)
+                    h52 = recent_df['high'].max()
+                    l52 = recent_df['low'].min()
+                    if h52 > l52:
+                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+
+                    w_color = "[white]"
+                    if w52_pos_val >= 90: w_color = "[red]"
+                    elif w52_pos_val >= 80: w_color = "[orange3]"
+                    elif w52_pos_val <= 20: w_color = "[blue]"
+                    w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
+                price_cache[code] = (price_str, diff_str, w52_str)
+
+            price_str, diff_str, w52_str = price_cache[code]
+
+            table.add_row(
+                str(i + 1), e["name"], code, e["type"], e["acc_str"],
+                price_str, diff_str, w52_str, e["memo"] or "-", reg_date,
+            )
             progress.advance(task)
-        
+
     console.print(table)
     console.print()
-    
+
     utils.print_breadcrumb()
     choice = Prompt.ask("해제할 번호 선택 (여러 개는 콤마로 구분) [dim](이전: b, 메인: q)[/dim]")
     if choice.lower() in ['b', 'q']: return False
-    
+
     selected_indices = []
     for part in choice.split(","):
         part = part.strip()
         if part.isdigit():
             idx = int(part)
-            if 1 <= idx <= len(codes):
+            if 1 <= idx <= len(entries):
                 selected_indices.append(idx - 1)
-                
+
     if not selected_indices:
         console.print("\n[red]유효한 번호가 없습니다.[/red]")
         return False
-        
+
     removed_names = []
-    for idx in set(selected_indices):  # 중복 제거
-        target_code = codes[idx]
-        if target_code in data:
-            target_name = data[target_code]['name']
-            removed_names.append(target_name)
-            del data[target_code]
-            
+    for idx in sorted(set(selected_indices)):  # 중복 제거
+        e = entries[idx]
+        # [수정] 선택한 범위(글로벌/지정계좌)만 정밀 해제한다.
+        #        remove_restricted_stock 내부에서 글로벌·계좌 사유가 모두 비면 종목 자체를 삭제한다.
+        if e["scope"] == "global":
+            remove_restricted_stock(e["code"])
+        else:
+            remove_restricted_stock(e["code"], cano=e["cano"], acnt=e["acnt"])
+        removed_names.append(f"{e['name']}({e['type']})")
+
     if removed_names:
         context.USER_ACTION_BREADCRUMB.append(f"[해제] {', '.join(removed_names)}")
-        save_restricted_stocks(data)
         console.print(f"\n[green]해제 완료 ({len(removed_names)}개): {', '.join(removed_names)}[/green]")
         
         console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
