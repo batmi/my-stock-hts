@@ -871,7 +871,7 @@ class TelegramCommander:
             return "📭 설정된 개별 종목 룰이 없습니다."
             
         # [추가] 제한 종목 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
 
         target = " ".join(args).strip()
         filtered_rules = []
@@ -927,8 +927,22 @@ class TelegramCommander:
         for code, info in data.items():
             name = info.get('name', code)
             
-            memo = info.get('memo', '-')
-            msg += f"\n• {name}({code})\n   메모: {memo}"
+            global_memo = info.get('memo', '')
+            accounts = info.get('accounts', {})
+            
+            memo_parts = []
+            if global_memo:
+                memo_parts.append(f"전체: {global_memo}")
+            for acc, acc_info in accounts.items():
+                if isinstance(acc_info, str):
+                    memo_parts.append(f"{acc.rstrip('-')}(지정계좌): {acc_info}")
+                else:
+                    a_type = acc_info.get("type", "지정계좌")
+                    a_memo = acc_info.get("memo", "")
+                    memo_parts.append(f"{acc.rstrip('-')}({a_type}): {a_memo}")
+                
+            display_memo = " | ".join(memo_parts) if memo_parts else "-"
+            msg += f"\n• {name}({code})\n   메모: {display_memo}"
         return msg
 
     def _cmd_addrestrict(self, args):
@@ -942,16 +956,9 @@ class TelegramCommander:
             
         memo = " ".join(args[1:]) if len(args) > 1 else "텔레그램 원격 차단"
         
-        data = auto_trade.load_restricted_stocks()
-        data[code] = {
-            "name": name,
-            "memo": memo,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "is_overseas": is_overseas
-        }
-        auto_trade.save_restricted_stocks(data)
+        auto_trade.add_restricted_stock(code, name, memo, is_overseas=is_overseas)
         
-        msg = f"🚫 [제한 종목 추가 완료]\n• 종목: {name}({code})\n• 사유: {memo}\n\n즉시 자동매매 및 매수 대상에서 차단되었습니다."
+        msg = f"🚫 [제한 종목 추가 완료]\n• 종목: {name}({code})\n• 사유: {memo}\n\n즉시 글로벌 자동매매 대상에서 차단되었습니다."
         return msg
 
     def _cmd_delrestrict(self, args):
@@ -1190,7 +1197,7 @@ class TelegramCommander:
         sell_trades = [t for t in trades if "매도" in t.get('type', '') or "sell" in t.get('type', '').lower()]
         
         # [추가] 제한 종목 및 개별 룰 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: True for r in custom_rules}
         
@@ -1395,7 +1402,7 @@ class TelegramCommander:
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
             
             # [추가] 제한 종목 및 개별 룰 로드
-            restricted_stocks = auto_trade.load_restricted_stocks()
+            restricted_stocks = auto_trade.get_restricted_stocks()
             custom_rules = db_manager.db.get_all_stock_strategies()
             rules_map = {r['code']: True for r in custom_rules}
 
@@ -1689,7 +1696,7 @@ class TelegramCommander:
         rule_tag = " [개별]" if custom_rule else ""
         
         # [추가] 제한 종목 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
         
         name_display = name
         if code in restricted_stocks: name_display += "-"
@@ -1974,7 +1981,7 @@ class TelegramCommander:
             return
             
         # [추가] 제한 종목 및 개별 룰 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
         custom_rule = db_manager.db.get_stock_strategy(code)
         
         name_display = name
@@ -2010,7 +2017,7 @@ class TelegramCommander:
         msg = "📋 [현재 감시 종목 리스트]\n"
         
         # [추가] 제한 종목 및 개별 룰 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: r for r in custom_rules}
         
@@ -2272,7 +2279,7 @@ class TelegramCommander:
             return msg + "\n\n거래 내역이 없습니다."
         
         # [추가] 제한 종목 및 개별 룰 로드
-        restricted_stocks = auto_trade.load_restricted_stocks()
+        restricted_stocks = auto_trade.get_restricted_stocks()
         custom_rules = db_manager.db.get_all_stock_strategies()
         rules_map = {r['code']: True for r in custom_rules}
         

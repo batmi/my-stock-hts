@@ -973,7 +973,7 @@ def view_watchlist():
     config.console.print("\n[bold cyan]📋 [현재 감시 중인 관심 종목][/bold cyan]\n")
     
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks()
     from modules import db_manager
     custom_rules = db_manager.db.get_all_stock_strategies()
     rules_map = {r['code']: True for r in custom_rules}

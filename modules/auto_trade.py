@@ -62,6 +62,107 @@ def save_restricted_stocks(data):
     except Exception as e:
         console.print(f"[red]저장 실패: {e}[/red]")
 
+# [추가] 계좌별 제한 종목 필터링 헬퍼 함수
+def get_restricted_stocks(cano=None, acnt=None):
+    """지정된 계좌(cano, acnt)에 적용되는 제한 종목 목록만 반환합니다."""
+    data = load_restricted_stocks()
+    if not cano:
+        # 계좌 정보가 없으면 세션 정보 시도
+        cano = getattr(config.session, 'cano', None)
+        if not acnt:
+            acnt = getattr(config.session, 'acnt_prdt_cd', "")
+    
+    account_key = None
+    if cano:
+        acnt_str = acnt if acnt is not None else ""
+        account_key = f"{cano}-{acnt_str}"
+        
+    filtered_data = {}
+    for code, info in data.items():
+        global_memo = info.get('memo', '')
+        accounts = info.get('accounts', {})
+        
+        is_restricted = False
+        effective_memo = []
+        
+        if global_memo:
+            is_restricted = True
+            effective_memo.append(global_memo)
+            
+        if account_key and account_key in accounts:
+            is_restricted = True
+            acc_info = accounts[account_key]
+            if isinstance(acc_info, str):
+                effective_memo.append(acc_info)
+            else:
+                effective_memo.append(acc_info.get("memo", ""))
+            
+        if is_restricted:
+            info_copy = info.copy()
+            info_copy['effective_memo'] = ", ".join(effective_memo)
+            filtered_data[code] = info_copy
+            
+    return filtered_data
+
+# [추가] 제한 종목 등록 헬퍼 함수 (계좌 지정 시 계좌 전용으로 등록)
+def add_restricted_stock(code, name, memo, is_overseas=False, cano=None, acnt=None, account_type=None):
+    data = load_restricted_stocks()
+    
+    if code not in data:
+        data[code] = {
+            "name": name,
+            "memo": "",
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "is_overseas": is_overseas,
+            "accounts": {}
+        }
+    else:
+        if "accounts" not in data[code]:
+            data[code]["accounts"] = {}
+            
+    if cano:
+        acnt_str = acnt if acnt is not None else ""
+        account_key = f"{cano}-{acnt_str}"
+        existing = data[code]["accounts"].get(account_key, {})
+        if isinstance(existing, str):
+            existing = {"memo": existing, "type": "지정계좌"}
+            
+        ex_memo = existing.get("memo", "")
+        if memo not in ex_memo:
+            new_memo = ex_memo + ", " + memo if ex_memo else memo
+            data[code]["accounts"][account_key] = {
+                "memo": new_memo, 
+                "type": account_type or existing.get("type", "지정계좌")
+            }
+    else:
+        existing_memo = data[code].get("memo", "")
+        if memo not in existing_memo:
+            data[code]["memo"] = existing_memo + ", " + memo if existing_memo else memo
+            
+    save_restricted_stocks(data)
+
+# [추가] 제한 종목 삭제 헬퍼 함수 (계좌 지정 시 해당 계좌 사유만 삭제)
+def remove_restricted_stock(code, cano=None, acnt=None):
+    data = load_restricted_stocks()
+    if code not in data:
+        return
+        
+    if cano:
+        acnt_str = acnt if acnt is not None else ""
+        account_key = f"{cano}-{acnt_str}"
+        accounts = data[code].get("accounts", {})
+        if account_key in accounts:
+            del accounts[account_key]
+            data[code]["accounts"] = accounts
+    else:
+        data[code]["memo"] = ""
+        
+    # 글로벌 사유도 없고, 계좌별 사유도 없으면 종목 자체를 삭제
+    if not data[code].get("memo") and not data[code].get("accounts"):
+        del data[code]
+        
+    save_restricted_stocks(data)
+
 # [추가] 일일 자산 상태 파일 경로 및 관리 함수 (재시작 시 손실 제한 기준 유지용)
 DAILY_STATE_FILE = os.path.join(config.JSON_DIR, "daily_asset_state.json")
 
@@ -760,6 +861,44 @@ class ConclusionMonitor:
                                     # [추가] 매도 체결 시 AI 매매 복기 실행
                                     if type_name == "매도" and found_record:
                                         threading.Thread(target=self._send_trading_autopsy, args=(code, name, found_record), daemon=True).start()
+                                        
+                                    # [추가] 수동 매수 체결 시 수동매매 제한 종목 계좌별 자동 등록
+                                    if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name:
+                                        try:
+                                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt)
+                                        except Exception as e:
+                                            logger.error(f"수동매매 제한 종목 등록 중 오류: {e}")
+
+                                    # [추가] 매도 체결 시 비동기로 잔고 확인 후 전량 매도 시 제한 종목 해제
+                                    if type_name and "매도" in type_name:
+                                        def _check_and_remove_restriction(t_code, t_cano, t_acnt, t_is_ovrs):
+                                            time.sleep(3)  # 증권사 API 체결 및 잔고 반영 대기
+                                            try:
+                                                if t_is_ovrs:
+                                                    bal = api.get_overseas_balance(t_cano, t_acnt)
+                                                    qty = 0
+                                                    if bal:
+                                                        for item in bal:
+                                                            if item.get('ovrs_pdno') == t_code:
+                                                                qty = int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
+                                                                break
+                                                else:
+                                                    bal, _ = api.get_domestic_balance(t_cano, t_acnt)
+                                                    qty = 0
+                                                    if bal:
+                                                        for item in bal:
+                                                            if item.get('pdno') == t_code:
+                                                                qty = int(item.get('hldg_qty', 0))
+                                                                break
+                                                
+                                                # 잔고가 0인 경우 해당 계좌의 제한 종목에서 수동매매 사유 해제
+                                                if qty == 0:
+                                                    remove_restricted_stock(t_code, cano=t_cano, acnt=t_acnt)
+                                                    logger.info(f"[Restriction] {t_code} 전량 매도 확인. 계좌({t_cano}-{t_acnt}) 제한 종목에서 해제되었습니다.")
+                                            except Exception as e:
+                                                logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
+                                                
+                                        threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True).start()
                                         
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
@@ -6042,6 +6181,8 @@ def _view_restricted_stocks():
     table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
+    table.add_column("계좌종류", justify="center")
+    table.add_column("계좌번호", justify="center")
     table.add_column("현재가", justify="right")
     table.add_column("등락률(등락폭)", justify="right")
     table.add_column("52주", justify="right")
@@ -6061,7 +6202,32 @@ def _view_restricted_stocks():
 
         for code, info in data.items():
             name = info.get('name', code)
-            memo = info.get('memo', '')
+            
+            global_memo = info.get('memo', '')
+            accounts = info.get('accounts', {})
+            
+            types = []
+            accs = []
+            memos = []
+            
+            if global_memo:
+                types.append("전체")
+                accs.append("-")
+                memos.append(global_memo)
+                
+            for acc, acc_info in accounts.items():
+                if isinstance(acc_info, str):
+                    types.append("지정계좌")
+                    memos.append(acc_info)
+                else:
+                    types.append(acc_info.get("type", "지정계좌"))
+                    memos.append(acc_info.get("memo", ""))
+                accs.append(acc.rstrip('-'))
+                
+            display_type = "\n".join(types) if types else "-"
+            display_acc = "\n".join(accs) if accs else "-"
+            display_memo = "\n".join(memos) if memos else "-"
+            
             reg_date = info.get('date', '-')
             
             # 데이터 조회 및 지표 계산
@@ -6101,7 +6267,7 @@ def _view_restricted_stocks():
                 elif w52_pos_val <= 20: w_color = "[blue]"
                 w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
             
-            table.add_row(name, code, price_str, diff_str, w52_str, memo, reg_date)
+            table.add_row(name, code, display_type, display_acc, price_str, diff_str, w52_str, display_memo, reg_date)
             progress.advance(task)
 
     console.print(table)
@@ -6119,16 +6285,42 @@ def _add_restricted_stock():
             return False
             
     utils.print_breadcrumb()
+    console.print("\n[cyan]어떤 계좌에 제한을 적용하시겠습니까?[/cyan]")
+    console.print("1. 전체 계좌 (Global)")
+    console.print("2. 현재 시스템 트레이딩 계좌")
+    console.print("3. 계좌 직접 입력")
+    choice = Prompt.ask("선택", choices=["1", "2", "3"], default="1")
+    
+    cano, acnt, account_type = None, None, None
+    if choice == "2":
+        if getattr(config.session, 'is_toss', False):
+            cano = config.session.cano
+            acnt = config.session.acnt_prdt_cd
+            account_type = "토스"
+        elif config.session.is_simulation:
+            cano = config.session.cano
+            acnt = config.session.acnt_prdt_cd
+            account_type = "모의"
+        else:
+            cano = getattr(config.session, 'auto_cano', config.session.cano)
+            acnt = getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd)
+            account_type = "한투-자동"
+    elif choice == "3":
+        account_type = Prompt.ask("계좌종류 선택", choices=["모의", "한투-자동", "토스"], default="한투-자동")
+        cano = Prompt.ask("계좌 앞 8자리")
+        acnt = Prompt.ask("계좌 뒤 2자리", default="01")
+        
+    utils.print_breadcrumb()
     memo = Prompt.ask("제한 사유(메모) 입력")
     
-    data[code] = {
-        "name": name,
-        "memo": memo,
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "is_overseas": is_overseas
-    }
-    save_restricted_stocks(data)
-    console.print(f"\n[green]'{name}' 종목이 트레이딩 제한 목록에 추가되었습니다.[/green]")
+    add_restricted_stock(code, name, memo, is_overseas=is_overseas, cano=cano, acnt=acnt, account_type=account_type)
+    
+    if cano is not None:
+        acnt_str = acnt if acnt is not None else ""
+        account_str = f"{cano}-{acnt_str}".rstrip("-")
+        console.print(f"\n[green]'{name}' 종목이 {account_str}({account_type}) 계좌 전용 제한 목록에 추가되었습니다.[/green]")
+    else:
+        console.print(f"\n[green]'{name}' 종목이 전체 계좌 트레이딩 제한 목록에 추가되었습니다.[/green]")
     
     console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
     _view_restricted_stocks()
@@ -6145,6 +6337,8 @@ def _remove_restricted_stock():
     table.add_column("No.", justify="right", style="cyan", width=4)
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
+    table.add_column("계좌종류", justify="center")
+    table.add_column("계좌번호", justify="center")
     table.add_column("현재가", justify="right")
     table.add_column("등락률(등락폭)", justify="right")
     table.add_column("52주", justify="right")
@@ -6167,7 +6361,32 @@ def _remove_restricted_stock():
         for i, code in enumerate(codes):
             info = data[code]
             name = info.get('name', code)
-            memo = info.get('memo', '')
+            
+            global_memo = info.get('memo', '')
+            accounts = info.get('accounts', {})
+            
+            types = []
+            accs = []
+            memos = []
+            
+            if global_memo:
+                types.append("전체")
+                accs.append("-")
+                memos.append(global_memo)
+                
+            for acc, acc_info in accounts.items():
+                if isinstance(acc_info, str):
+                    types.append("지정계좌")
+                    memos.append(acc_info)
+                else:
+                    types.append(acc_info.get("type", "지정계좌"))
+                    memos.append(acc_info.get("memo", ""))
+                accs.append(acc.rstrip('-'))
+                
+            display_type = "\n".join(types) if types else "-"
+            display_acc = "\n".join(accs) if accs else "-"
+            display_memo = "\n".join(memos) if memos else "-"
+            
             reg_date = info.get('date', '-')
             
             # 데이터 조회 및 지표 계산
@@ -6207,23 +6426,40 @@ def _remove_restricted_stock():
                 elif w52_pos_val <= 20: w_color = "[blue]"
                 w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
             
-            table.add_row(str(i+1), name, code, price_str, diff_str, w52_str, memo, reg_date)
+            table.add_row(str(i+1), name, code, display_type, display_acc, price_str, diff_str, w52_str, display_memo, reg_date)
             progress.advance(task)
         
     console.print(table)
     console.print()
     
     utils.print_breadcrumb()
-    choice = Prompt.ask("해제할 번호 선택 [dim](이전: b, 메인: q)[/dim]")
+    choice = Prompt.ask("해제할 번호 선택 (여러 개는 콤마로 구분) [dim](이전: b, 메인: q)[/dim]")
     if choice.lower() in ['b', 'q']: return False
     
-    if choice.isdigit() and 1 <= int(choice) <= len(codes):
-        target_code = codes[int(choice)-1]
-        target_name = data[target_code]['name']
-        context.USER_ACTION_BREADCRUMB.append(f"[해제] {target_name}")
-        del data[target_code]
+    selected_indices = []
+    for part in choice.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part)
+            if 1 <= idx <= len(codes):
+                selected_indices.append(idx - 1)
+                
+    if not selected_indices:
+        console.print("\n[red]유효한 번호가 없습니다.[/red]")
+        return False
+        
+    removed_names = []
+    for idx in set(selected_indices):  # 중복 제거
+        target_code = codes[idx]
+        if target_code in data:
+            target_name = data[target_code]['name']
+            removed_names.append(target_name)
+            del data[target_code]
+            
+    if removed_names:
+        context.USER_ACTION_BREADCRUMB.append(f"[해제] {', '.join(removed_names)}")
         save_restricted_stocks(data)
-        console.print(f"\n[green]'{target_name}' 종목이 제한 목록에서 해제되었습니다.[/green]")
+        console.print(f"\n[green]해제 완료 ({len(removed_names)}개): {', '.join(removed_names)}[/green]")
         
         console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
         _view_restricted_stocks()

@@ -1981,7 +1981,7 @@ def diagnose_group_stocks(market_filter=None):
 
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks()
     any_restricted = False
     
     # [추가] 예약 매매 및 메모 마커 조회
@@ -2337,7 +2337,7 @@ def analyze_market_stocks(market_type):
     
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks()
     
     if cached_data:
         updated_at = cached_data['updated_at']
@@ -2776,7 +2776,7 @@ def save_all_market_analysis():
 
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks()
 
     markets = ["KOSPI", "KOSDAQ"]
     results = {} # market -> list of dict
@@ -3481,7 +3481,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     
     # [추가] 트레이딩 제한 종목 로드
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks()
     any_restricted = False
     
     # [추가] 예약 매매 및 메모 마커 조회

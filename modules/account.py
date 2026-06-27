@@ -229,7 +229,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
         
     # [추가] 제한 종목 및 개별 룰 로드
     from modules import auto_trade
-    restricted_stocks = auto_trade.load_restricted_stocks()
+    restricted_stocks = auto_trade.get_restricted_stocks(cano, acnt_prdt_cd)
     custom_rules = db_manager.db.get_all_stock_strategies()
     rules_map = {r['code']: True for r in custom_rules}
 
