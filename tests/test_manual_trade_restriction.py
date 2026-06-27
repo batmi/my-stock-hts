@@ -3,6 +3,7 @@ import threading
 import time
 from unittest.mock import patch, MagicMock
 from modules.auto_trade import ConclusionMonitor
+import modules.auto_trade as auto_trade
 
 # We need to test the logic embedded in ConclusionMonitor._check_conclusions()
 # We will mock the necessary dependencies.
@@ -82,6 +83,64 @@ def test_manual_buy_adds_restriction_to_account(mock_dependencies):
     assert '005930' in saved_data
     assert saved_data['005930']['accounts']['12345678-01']['memo'] == "수동매매"
     assert saved_data['005930']['name'] == "삼성전자"
+
+def test_system_order_is_not_restricted(mock_dependencies):
+    """시스템(자동매매)이 낸 주문번호는 외부 주문으로 오판되어도 제한 등록되지 않아야 한다."""
+    mock_api, mock_db, mock_config, mock_load, mock_save = mock_dependencies
+
+    mock_load.return_value = {}
+    mock_api.get_today_history.return_value = {
+        'rt_cd': '0',
+        'output1': [{
+            'odno': 'SYS999',
+            'ord_qty': '10',
+            'tot_ccld_qty': '10',
+            'cncl_cfrm_qty': '0',
+            'rmn_qty': '0',
+            'avg_prvs': '50000',
+            'sll_buy_dvsn_cd_name': '매수',
+            'pdno': '005930',
+            'prdt_name': '삼성전자'
+        }]
+    }
+    mock_api.get_overseas_today_history.return_value = {'rt_cd': '0', 'output': []}
+    mock_api.get_current_price_data.return_value = {'rt_cd': 'E'}
+
+    # 시스템이 발주한 주문번호로 등록
+    auto_trade.register_system_odno('SYS999')
+    try:
+        monitor = ConclusionMonitor()
+        monitor.initialized = True
+        monitor._check_conclusions(initial=False)
+
+        # 시스템 주문이므로 제한 등록(save) 호출되지 않아야 함
+        mock_save.assert_not_called()
+    finally:
+        auto_trade._SYSTEM_ODNOS.discard('SYS999')
+
+
+def test_get_restricted_stocks_is_account_scoped():
+    """계좌 전용 제한은 해당 계좌로 조회할 때만 노출되어야 한다."""
+    data = {
+        '005930': {
+            'name': '삼성전자', 'memo': '',
+            'accounts': {'11111111-01': {'memo': '수동매매', 'type': '한투-자동'}}
+        },
+        '000660': {  # 전역 제한
+            'name': 'SK하이닉스', 'memo': '급등주', 'accounts': {}
+        }
+    }
+    with patch('modules.auto_trade.load_restricted_stocks', return_value=data):
+        # 제한이 걸린 계좌: 계좌 전용 + 전역 모두 노출
+        scoped = auto_trade.get_restricted_stocks('11111111', '01')
+        assert '005930' in scoped
+        assert '000660' in scoped
+
+        # 다른 계좌: 계좌 전용은 숨고 전역만 노출
+        other = auto_trade.get_restricted_stocks('22222222', '01')
+        assert '005930' not in other
+        assert '000660' in other
+
 
 def test_manual_sell_removes_restriction_from_account(mock_dependencies):
     mock_api, mock_db, mock_config, mock_load, mock_save = mock_dependencies
