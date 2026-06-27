@@ -30,8 +30,7 @@ def test_call_api_success(mock_session):
             ANY,
             headers=ANY,
             params=None,
-            timeout=config.DEFAULT_TIMEOUT,
-            retries=config.MAX_RETRIES
+            timeout=config.DEFAULT_TIMEOUT
         )
         # URL 확인
         args, _ = mock_session.get.call_args
@@ -151,9 +150,8 @@ def test_call_api_args(mock_get):
         )
         
         mock_get.assert_called_once_with(
-            expected_url, 
-            headers=expected_headers, 
-            params={"param1": "value1"}, 
-            timeout=config.DEFAULT_TIMEOUT, 
-            retries=config.MAX_RETRIES
+            expected_url,
+            headers=expected_headers,
+            params={"param1": "value1"},
+            timeout=config.DEFAULT_TIMEOUT
         )

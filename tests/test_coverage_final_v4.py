@@ -66,6 +66,9 @@ def test_check_buy_conditions_max_holdings():
     trader.consecutive_errors = 0 # [Fix] 상태 초기화 (로그 출력 조건 만족을 위해)
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
     
+    # _check_buy_conditions는 config.settings.SYSTEM_MAX_HOLDINGS를 참조한다.
+    # (이 값을 설정해야 최대 보유 도달로 즉시 매수 스킵되어 실제 주문 API 호출을 막는다)
+    config.settings.SYSTEM_MAX_HOLDINGS = 5
     config.SYSTEM_MAX_HOLDINGS = 5
     # 보유 종목 5개 (최대치)
     holdings = [{'pdno': str(i), 'prdt_name': f'Stock{i}', 'hldg_qty': '10'} for i in range(5)]

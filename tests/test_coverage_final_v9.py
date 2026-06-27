@@ -61,7 +61,8 @@ def test_simulate_strategy_atr_stop(sample_df):
     # Price 10000 -> Stop Price 9800
     # 9700 < 9800 -> Sell
     
-    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False}):
+    # 본전청산(BEP)이 ATR손절보다 먼저 발동하지 않도록 BEP 활성화 기준을 높여 ATR손절을 격리 검증
+    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False, "BREAK_EVEN_PROFIT_RATE": 999.0}):
         res = backtest.simulate_strategy(
             sample_df, sample_df.iloc[0], 10000000, 
             buy_score_limit=6.0, buy_rsi_limit=70, is_overseas=False
@@ -147,7 +148,7 @@ def test_run_monte_carlo_simulation_logic(mock_print, mock_sim, mock_ask, sample
         8.0, 70, False, -7.0, 30.0, 75, 5.0, 10.0, 3.0, 5, True, 2.0, False
     )
     
-    assert mock_sim.call_count == 10000
+    assert mock_sim.call_count == 1000
     assert mock_print.call_count > 0
 
 @patch('modules.backtest.utils.validate_and_confirm_stock', return_value=True)

@@ -42,8 +42,9 @@ def test_main_menu_exit(mock_exit, mock_ask):
          patch('main.api'), \
          patch('main.auto_trade'), \
          patch('main.telegram_bot'), \
+         patch('main.preflight_check', return_value=True), \
          patch('modules.db_queue.install_proxy'):
-        
+
         with patch.object(sys, 'argv', ['main.py']):
              main.main()
     

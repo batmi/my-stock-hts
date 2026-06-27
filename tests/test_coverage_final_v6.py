@@ -338,20 +338,22 @@ def test_db_check_trade_exists_debug():
     with patch('sqlite3.connect'):
         db = db_manager.DBManager()
     
-    config.settings.SCREEN_DEBUG_LEVEL = "DEBUG"
-    
+    # check_trade_exists는 config.SCREEN_DEBUG_LEVEL과 _is_screen_output_allowed()를 참조한다
+    config.SCREEN_DEBUG_LEVEL = "DEBUG"
+
     try:
-        with patch.object(db, '_get_conn') as mock_conn:
+        with patch.object(db, '_get_conn') as mock_conn, \
+             patch.object(db, '_is_screen_output_allowed', return_value=True):
             mock_cursor = MagicMock()
             mock_conn.return_value.cursor.return_value = mock_cursor
             mock_cursor.fetchone.return_value = [1] # Exists
-            
+
             with patch('config.console.print') as mock_print:
                 exists = db.check_trade_exists("123", "체결")
                 assert exists is True
                 assert mock_print.called
     finally:
-        config.settings.SCREEN_DEBUG_LEVEL = "ERROR"
+        config.SCREEN_DEBUG_LEVEL = "ERROR"
         try:
             db.close_connection()
         except:

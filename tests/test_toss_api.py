@@ -4,6 +4,7 @@
 """
 import json
 import time
+import pytest
 from unittest.mock import patch, MagicMock
 
 import config
@@ -865,6 +866,7 @@ def test_sellable_quantity_adapter():
 # =========================================================================
 # 메뉴 1(시장 지수): 토스 모드는 KIS 미사용, yfinance 폴백
 # =========================================================================
+@pytest.mark.real_index_chart  # get_domestic_index_chart 자체 로직 검증 → 지수 조회 자동 mock 비활성화
 def test_index_chart_toss_uses_yfinance_not_kis():
     """토스 모드: 국내 지수 차트가 KIS 대신 yfinance(get_chart_data)로 라우팅."""
     import api

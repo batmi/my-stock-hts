@@ -121,7 +121,8 @@ def test_get_telegram_footer_auto():
     context.trade_context.use_auto_account = True
     config.session.auto_cano = "9999"
     config.TELEGRAM_INSTANCE_NAME = "TEST"
-    
+    config.TELEGRAM_BOT_TOKEN = "test_token"  # footer는 토큰이 있어야 생성됨(테스트 자립성 확보)
+
     footer = api._get_telegram_footer()
     assert "자동 9999" in footer
 

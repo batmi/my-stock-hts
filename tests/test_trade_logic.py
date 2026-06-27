@@ -68,12 +68,14 @@ def test_trailing_stop(strategy):
     config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = False
     config.SELL_STRATEGY["USE_ATR_STOP"] = False # 고정 비율 사용 테스트
     
+    # 고정 익절이 먼저 발동하지 않도록 목표 익절률을 높게 설정하여 트레일링 스탑을 격리 검증
     result = strategy.analyze_sell(
-        code="005930", name="삼성전자", df=None, 
-        current_price=11500, buy_price=10000, 
-        profit_rate=15.0, highest_price=12500 # 25% 상승 후 11500(-8%) 하락
+        code="005930", name="삼성전자", df=None,
+        current_price=11500, buy_price=10000,
+        profit_rate=15.0, highest_price=12500, # 25% 상승 후 11500(-8%) 하락
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -7.0}
     )
-    
+
     assert result['action'] == 'sell'
     assert "트레일링스탑" in result['reason']
 

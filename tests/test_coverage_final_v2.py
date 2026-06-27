@@ -13,7 +13,12 @@ def test_analyze_candidates_restricted():
     
     targets = [{'code': '005930', 'name': 'Samsung'}]
     
+    # 제한 종목도 워커 진입 전 prefetch 대상이 되므로, 실제 시세/지수 API 호출을 모두 차단해
+    # 병렬 부하 시의 Rate Limit/스레드 lock 플래키를 방지한다.
     with patch('modules.auto_trade.load_restricted_stocks', return_value={'005930': {}}), \
+         patch('modules.auto_trade.api.prefetch_multiple_current_prices'), \
+         patch('modules.auto_trade.analysis.get_market_regime', return_value=("Sideways", 0.0)), \
+         patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[]), \
          patch('time.sleep'):
         candidates = trader._analyze_candidates(targets, set(), {}, {}, {}, {})
         assert len(candidates) == 0

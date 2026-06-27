@@ -116,6 +116,11 @@ def isolate_test_files(tmp_path, monkeypatch):
 
     # [추가] 테스트 중 실제 텔레그램 메시지 발송 원천 차단
     monkeypatch.setattr(config, "ENABLE_TELEGRAM", False)
+    # [추가] send_telegram_message()는 ENABLE_TELEGRAM을 보지 않고 토큰/챗ID 유무만 확인하므로,
+    #        운영 .htsrc의 토큰이 환경변수로 설정돼 있으면 테스트가 실제 텔레그램으로 전송하며
+    #        네트워크 타임아웃 hang을 유발한다. 토큰을 비워 early-return 시킨다.
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "", raising=False)
+    monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "", raising=False)
 
 @pytest.fixture(autouse=True)
 def cleanup_global_db_connection():

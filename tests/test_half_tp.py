@@ -66,18 +66,22 @@ def test_half_tp_disabled(strategy):
     assert result['action'] == 'hold'
 
 def test_full_tp_after_half_tp(strategy):
-    """4. 최종 익절 연계: 반익절을 완료한 후 최종 목표 수익률에 도달하면 남은 물량 전량 매도"""
+    """4. 최종 익절 연계: 반익절 후에는 목표 도달만으로 전량매도하지 않고 'Let profit run'으로
+    트레일링/수익보존에 위임한다. 목표가(+30%)를 돌파했다가 수익보존선(목표-3%=+27%) 아래로
+    하락하면 남은 물량을 전량 매도한다."""
     config.SELL_STRATEGY["HALF_TAKE_PROFIT_USE"] = True
     thresholds = {"TAKE_PROFIT_RATE": 30.0, "STOP_LOSS_RATE": -7.0}
-    
+
+    # 고점에서 목표(+30%)를 돌파(13000) 후 현재 +26%로 하락 → 수익보존선(+27%) 이탈
     result = strategy.analyze_sell(
         code="005930", name="삼성전자", df=None,
-        current_price=13000, buy_price=10000,
-        profit_rate=30.0, thresholds=thresholds,
-        already_half_sold=True # 이미 절반을 판 상태
+        current_price=12600, buy_price=10000,
+        profit_rate=26.0, thresholds=thresholds,
+        already_half_sold=True, # 이미 절반을 판 상태
+        highest_price=13000     # 목표가 돌파 후 하락
     )
-    
+
     assert result['action'] == 'sell'
     assert result['sell_ratio'] == 1.0 # 남은 물량 전량 매도
-    assert "익절" in result['reason']
+    assert "수익보존" in result['reason']
     assert "반익절" not in result['reason']

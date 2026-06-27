@@ -46,7 +46,9 @@ def test_run_monte_carlo_simulation(mock_print, mock_ask, sample_backtest_df):
     # 결과 출력 확인
     assert mock_print.call_count > 0
     # 히스토그램 생성 확인 (파일 저장)
-    with patch('modules.chart.plt.savefig') as mock_savefig:
+    # chart.plt는 lazy-init(기본 None)이므로 'modules.chart.plt.savefig'를 직접 patch할 수 없다.
+    # 실제 matplotlib.pyplot.savefig를 patch한다(lazy-init 시 plt = matplotlib.pyplot).
+    with patch('matplotlib.pyplot.savefig') as mock_savefig:
         chart.generate_monte_carlo_histogram([0.1, 0.2, -0.1], "Test", "005930", open_file=False) # [수정] chart 모듈 함수 호출
         assert mock_savefig.called
 

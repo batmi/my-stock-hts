@@ -988,6 +988,8 @@ def main():
     
     try:
         _eof_notified = False  # [추가] 비대화형(stdin EOF) 환경 안내를 1회만 남기기 위한 플래그
+        _last_fatal_ts = 0.0   # [추가] 치명 오류 회로차단기: 마지막 발생 시각
+        _fatal_burst = 0       # [추가] 치명 오류 회로차단기: 짧은 시간 내 연속 발생 횟수
         while True:
             # [추가] 루프 시작(메인 메뉴 복귀) 시 경로 초기화 (안전한 화면 클리어를 위함)
             context.USER_ACTION_BREADCRUMB = []
@@ -1193,15 +1195,37 @@ def main():
                 time.sleep(60)  # 폭주/도배 방지 (백그라운드 스레드는 계속 동작)
                 continue
             except Exception as e:
-                config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(str(e))}[/bold red]")
-                
-                # [추가] 치명적 오류 발생 시 텔레그램 긴급 알림 및 로그 전송
-                try:
-                    from modules.auto_trade import get_mystock_log_tail
-                    log_tail = get_mystock_log_tail(20)
-                    msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {e}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
-                    api.send_telegram_message(msg)
-                except: pass
+                err_text = str(e).strip()
+
+                # [방어] 원인 메시지가 비어있는 예외(EOFError 등 비대화형 stdin 문제로 인한 변종 포함)는
+                # 무한 도배의 주범이므로 EOF와 동일하게 알림 없이 조용히 대기한다.
+                if not err_text:
+                    if not _eof_notified:
+                        logging.warning(f"원인 불명(빈 메시지) 예외 감지({type(e).__name__}). 비대화형 환경으로 간주하여 메인 메뉴 입력을 중단합니다.")
+                        _eof_notified = True
+                    time.sleep(60)
+                    continue
+
+                config.console.print(f"\n[bold red]치명적인 오류 발생: {escape(err_text)}[/bold red]")
+
+                # [방어] 회로차단기: 짧은 시간(10초) 내 반복되는 치명 오류는 텔레그램 알림을
+                # 억제하고 대기하여 도배 및 CPU 폭주를 막는다.
+                now = time.time()
+                _fatal_burst = _fatal_burst + 1 if (now - _last_fatal_ts <= 10) else 0
+                _last_fatal_ts = now
+
+                if _fatal_burst < 3:
+                    # [추가] 치명적 오류 발생 시 텔레그램 긴급 알림 및 로그 전송
+                    try:
+                        from modules.auto_trade import get_mystock_log_tail
+                        log_tail = get_mystock_log_tail(20)
+                        msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {err_text}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                        api.send_telegram_message(msg)
+                    except: pass
+                else:
+                    if _fatal_burst == 3:
+                        logging.error("치명 오류 반복 폭주 감지: 텔레그램 알림을 억제하고 대기합니다.")
+                    time.sleep(30)
     finally:
         config.console.print()
         with Progress(

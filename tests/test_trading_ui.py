@@ -16,7 +16,7 @@ def test_select_account_main(mock_ask):
     
     cano, acnt, label = trading.select_account()
     assert cano == "1111"
-    assert "실전" in label
+    assert "한투증권" in label
 
 @patch('rich.prompt.Prompt.ask')
 def test_select_account_auto(mock_ask):

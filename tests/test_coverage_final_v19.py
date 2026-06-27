@@ -55,7 +55,8 @@ def test_run_tradingview_screener_presets():
     mock_query_cls = MagicMock()
     mock_query_cls.return_value.set_markets.return_value.select.return_value = mock_query_inst
 
-    with patch.dict('sys.modules', {'tradingview_screener': MagicMock(Query=mock_query_cls, Column=MagicMock())}):
+    with patch.dict('sys.modules', {'tradingview_screener': MagicMock(Query=mock_query_cls, Column=MagicMock())}), \
+         patch('modules.theme_analysis.screener_liquidity_filters', return_value=([], "테스트필터")):
         with patch('config.console.print'):
             # 프리셋 4번 (거래량 급증)
             with patch('rich.prompt.Prompt.ask', side_effect=["1", "4", "n"]):

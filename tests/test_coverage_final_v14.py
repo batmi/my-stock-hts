@@ -114,7 +114,10 @@ def test_run_tradingview_screener_market_choice(mock_ask):
     })
     mock_query.get_scanner_data.return_value = (1, df_mock)
     
+    # tradingview_screener 전체를 MagicMock으로 대체하면 Column(...) > 1e11 비교가 TypeError를
+    # 내므로, 유동성 필터 함수를 mock하여 실제 Column 비교를 우회한다.
     with patch.dict('sys.modules', {'tradingview_screener': MagicMock(Query=MagicMock(return_value=mock_query))}), \
+         patch('modules.theme_analysis.screener_liquidity_filters', return_value=([], "테스트필터")), \
          patch('config.console.print'):
         theme_analysis._run_tradingview_screener()
         mock_query.set_markets.assert_called_with('america')

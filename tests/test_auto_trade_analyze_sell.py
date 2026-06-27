@@ -1,0 +1,264 @@
+"""DefaultStrategy.analyze_sell 의 매도 판정 분기 커버리지 테스트.
+
+기존 테스트는 df=None 으로만 호출해 df 블록(지표 기반 분기)이 미커버였다.
+실제 df + 지표/상태 mock으로 추세이탈·RSI과열·방어적반매도·시간청산 경로를 검증한다.
+"""
+import pytest
+from unittest.mock import patch
+import numpy as np
+import pandas as pd
+
+from modules.auto_trade import DefaultStrategy
+import config
+
+
+@pytest.fixture
+def strategy():
+    return DefaultStrategy()
+
+
+@pytest.fixture
+def df_up():
+    """우상향 60일 차트(지표 계산용)."""
+    n = 60
+    close = np.linspace(9000, 11000, n)
+    return pd.DataFrame({
+        'date': pd.date_range('2024-01-01', periods=n),
+        'open': close * 0.99,
+        'high': close * 1.02,
+        'low': close * 0.98,
+        'close': close,
+        'volume': np.random.randint(1000, 5000, n),
+    })
+
+
+# analyze_sell이 ind.get(...)으로 참조하는 키들의 기본 지표값
+def _ind(**over):
+    base = {'rsi': 50.0, 'adx': 30.0, 'cci': 0.0, 'psar': 9000.0,
+            'ema_5': 9500.0, 'ema_20': 9800.0, 'atr': 100.0}
+    base.update(over)
+    return base
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_trend_break_state(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """추세 붕괴(state='매도') 시 '매도진입' 사유로 전량 매도한다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매도", "", "추세붕괴")
+    mock_score.return_value = (2.0, [])
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0},
+    )
+    assert res['action'] == 'sell'
+    assert '매도진입' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_trend_break_score(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """상태는 보유이나 점수가 매도 기준 미만이면 '추세이탈'로 매도한다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("보유", "", "")
+    mock_score.return_value = (2.0, [])  # SELL_SCORE(3.0) 미만
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0},
+    )
+    assert res['action'] == 'sell'
+    assert '추세이탈' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_rsi_overheated(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """RSI가 과열 기준을 초과하면 'RSI과열'로 익절 매도한다."""
+    mock_ind.return_value = _ind(rsi=90.0)
+    mock_cls.return_value = ("보유", "", "")
+    mock_score.return_value = (9.0, [])  # 추세이탈/방어 회피용 고점수
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0,
+                    "TAKE_PROFIT_RSI": 75.0, "SELL_SCORE": 3.0},
+    )
+    assert res['action'] == 'sell'
+    assert 'RSI과열' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_defensive_half(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """수익 구간에서 하락 반전(PSAR·EMA5 이탈) 시 방어적 반매도(50%)한다."""
+    config.SELL_STRATEGY["DEFENSIVE_HALF_SELL_USE"] = True
+    # 현재가가 psar/ema_5보다 낮아 하락 반전으로 판정되도록 지표 설정
+    mock_ind.return_value = _ind(rsi=50.0, psar=11000.0, ema_5=11000.0)
+    mock_cls.return_value = ("보유", "", "")
+    mock_score.return_value = (9.0, [])
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=9500, profit_rate=5.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0},
+        already_half_sold=False,
+    )
+    assert res['action'] == 'sell'
+    assert res['sell_ratio'] == 0.5
+    assert '하락반전' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_time_stop(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """보유 기간 초과 + 수익 미달 시 '시간청산'으로 매도한다."""
+    config.SELL_STRATEGY["TIME_STOP_USE"] = True
+    config.SELL_STRATEGY["TIME_STOP_MIN_PROFIT_RATE"] = 3.0
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("보유", "", "")  # 매수 상태가 아니어야 유예 없이 청산
+    mock_score.return_value = (9.0, [])
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0,
+                    "SELL_SCORE": 3.0, "TIME_STOP_DAYS": 10},
+        holding_days=15,
+    )
+    assert res['action'] == 'sell'
+    assert '시간청산' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_break_even(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """고점에서 BEP 활성화 기준을 넘긴 뒤 본전 부근으로 밀리면 '본전청산'한다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("보유", "", "")
+    mock_score.return_value = (9.0, [])
+
+    # 고점(highest)에서 +8% 도달(BEP 활성), 현재가는 본전(+0%) → 본전청산
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0,
+                    "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5},
+        highest_price=10800,
+    )
+    assert res['action'] == 'sell'
+    assert '본전청산' in res['reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_sell_time_stop_grace(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """매수 상태 + 상방 모멘텀 유지 시 시간청산을 유예(보유)한다."""
+    config.SELL_STRATEGY["TIME_STOP_USE"] = True
+    config.SELL_STRATEGY["TIME_STOP_MIN_PROFIT_RATE"] = 3.0
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "")  # 매수 상태 → 모멘텀 체크 후 유예 가능
+    mock_score.return_value = (9.0, [])
+
+    # df_up은 우상향이라 최근 5일 고점 >= 최근 10일 고점 → 상방 모멘텀 유지 → 유예
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0,
+                    "SELL_SCORE": 3.0, "TIME_STOP_DAYS": 10},
+        holding_days=15,
+    )
+    assert res['action'] == 'hold'
+
+
+# ==========================================================
+# analyze_buy 매수 판정 분기
+# ==========================================================
+def test_analyze_buy_none_df(strategy):
+    """df가 없으면 None을 반환한다."""
+    assert strategy.analyze_buy("005930", "삼성전자", None, 10000) is None
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_signal(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """매수 상태 + 체결강도/호가비 충족 시 'buy'."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=150.0, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+    assert res['action'] == 'buy'
+    assert res['state'] == "매수"
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_weak_volume(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """체결강도 미달 시 'wait'(사유 기록)."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=50.0, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+    assert res['action'] == 'wait'
+    assert "체결" in res['vol_reject_reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_ask_bid_reject(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """체결강도는 충분하나 호가 매도비 미달(가짜 체결강도) 시 'wait'."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+
+    # auto_adjust: min_ask_bid = 1.0 * (150/100) = 1.5 → ask_bid_ratio 0.5는 미달
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=150.0, ask_bid_ratio=0.5,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0,
+                    "AUTO_ADJUST_ASK_BID_RATIO": True},
+    )
+    assert res['action'] == 'wait'
+    assert "매도비" in res['vol_reject_reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_mean_reversion(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """역매수 상태는 별도 체결강도 기준(MR_VOL_STRENGTH)을 충족하면 'buy'."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("역매수", "", "역추세 반등")
+    mock_score.return_value = (7.0, [])
+
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=150.0, ask_bid_ratio=3.0,
+        thresholds={"MR_VOL_STRENGTH": 120.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+    assert res['action'] == 'buy'
+    assert res['state'] == "역매수"
