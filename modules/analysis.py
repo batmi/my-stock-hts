@@ -7,6 +7,7 @@ import config
 import context
 import api
 import logging
+import contextlib
 import indicators
 import utils
 import time
@@ -773,8 +774,20 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     if is_caution: return "주의", "[yellow]", ", ".join(reasons)
     return "관망", "[white]", "방향성 탐색 구간"
 
+@contextlib.contextmanager
 def _get_db_connection():
-    return sqlite3.connect(config.DB_FILE_PATH)
+    """SQLite 연결 컨텍스트 매니저.
+
+    sqlite3의 기본 `with conn:` 구문은 트랜잭션(commit/rollback)만 관리하고
+    연결 자체는 닫지 않아 ResourceWarning(unclosed database)이 발생한다.
+    이 컨텍스트 매니저로 감싸 `with _get_db_connection() as conn:` 종료 시
+    연결을 확실히 닫는다.
+    """
+    conn = sqlite3.connect(config.DB_FILE_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def _init_analysis_db_logic():
     try:

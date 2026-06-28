@@ -23,7 +23,7 @@ _matplotlib_ready = False
 def _ensure_matplotlib():
     """matplotlib/numpy를 최초 사용 시점에 1회만 로드한다 (Agg 백엔드, 스레드 안전)."""
     global plt, np, rc, MaxNLocator, _matplotlib_ready
-    if _matplotlib_ready:
+    if _matplotlib_ready and plt is not None and np is not None and rc is not None:
         return
     import matplotlib
     matplotlib.use('Agg')  # GUI 백엔드 미사용 (스레드 안전성 확보)

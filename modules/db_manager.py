@@ -14,13 +14,19 @@ class DBManager:
         self.db_path = config.DB_FILE_PATH
         self.lock = threading.RLock() # 스레드 간 동기화를 위한 락 (RLock으로 변경)
         self.local = threading.local() # 스레드별 로컬 저장소
+        # [추가] 전체 스레드 연결 추적 레지스트리 {thread_id: connection}.
+        #  스레드 로컬 연결은 그 스레드가 직접 닫지 않으면 메인에서 정리할 수 없어
+        #  ResourceWarning(unclosed database)을 남긴다. 모든 연결을 추적해
+        #  close_all_connections()로 일괄 정리할 수 있게 한다.
+        #  (sqlite3.Connection은 weakref 불가하므로 thread_id 키의 일반 dict 사용)
+        self._all_conns = {}
+        self._all_conns_lock = threading.Lock()
         self._init_db()
 
     def __del__(self):
-        """객체 소멸 시 연결 종료"""
+        """객체 소멸 시 모든 연결 종료"""
         try:
-            if hasattr(self.local, 'conn') and self.local.conn:
-                self.local.conn.close()
+            self.close_all_connections()
         except: pass
 
     def close_connection(self):
@@ -29,14 +35,45 @@ class DBManager:
             if hasattr(self.local, 'conn') and self.local.conn:
                 self.local.conn.close()
                 self.local.conn = None
+                with self._all_conns_lock:
+                    self._all_conns.pop(threading.get_ident(), None)
         except: pass
+
+    def close_all_connections(self):
+        """모든 스레드에서 생성된 DB 연결을 닫는다.
+
+        백그라운드 워커 스레드가 직접 close_connection()을 호출하지 못한 채
+        종료되면 그 스레드 로컬 연결이 GC 시점까지 열린 채로 남아
+        ResourceWarning을 유발한다. 테스트 정리(conftest) 및 프로그램 종료 시
+        호출하여 모든 추적 연결을 일괄 정리한다.
+        (check_same_thread=False로 생성하므로 다른 스레드에서 close 가능)
+        """
+        with self._all_conns_lock:
+            conns = list(self._all_conns.values())
+            self._all_conns.clear()
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+        try:
+            if hasattr(self.local, 'conn'):
+                self.local.conn = None
+        except Exception:
+            pass
 
     def _get_conn(self):
         """스레드별 DB 연결 객체 반환 (없으면 생성)"""
         if not hasattr(self.local, 'conn') or self.local.conn is None:
-            self.local.conn = sqlite3.connect(self.db_path, timeout=60)
-            self.local.conn.execute("PRAGMA journal_mode=WAL;") # WAL 모드 설정
-            self.local.conn.row_factory = sqlite3.Row
+            # [수정] check_same_thread=False: 스레드 로컬 구조상 연결은 한 스레드만
+            #  사용하므로 동시성 위험은 없으며, 정리(close)를 메인/정리 스레드에서
+            #  수행할 수 있도록 스레드 검사를 끈다.
+            conn = sqlite3.connect(self.db_path, timeout=60, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL;") # WAL 모드 설정
+            conn.row_factory = sqlite3.Row
+            self.local.conn = conn
+            with self._all_conns_lock:
+                self._all_conns[threading.get_ident()] = conn
         return self.local.conn
 
     def _is_screen_output_allowed(self):
@@ -45,6 +82,7 @@ class DBManager:
     def _init_db(self):
         """DB 초기화 (테이블 생성 등) - 메인 스레드에서 한 번만 실행"""
         with self.lock:
+            conn = None
             try:
                 conn = sqlite3.connect(self.db_path, timeout=60)
                 conn.execute("PRAGMA journal_mode=WAL;")
@@ -232,10 +270,13 @@ class DBManager:
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(composite_json): {e}[/red]")
 
                 conn.commit()
-                conn.close()
             except Exception as e:
                 if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                     config.console.print(f"[red][DB] Init Error: {e}[/red]")
+            finally:
+                # [수정] 예외 발생 시에도 연결을 확실히 닫아 ResourceWarning(unclosed database) 방지
+                if conn is not None:
+                    conn.close()
 
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
         """거래 내역 및 스냅샷 저장"""

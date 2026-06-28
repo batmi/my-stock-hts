@@ -1241,6 +1241,18 @@ def _fetch_and_set_token(token_type, force_refresh=False):
             return token
         logger.info(f"[Token] 유효한 {token_type} 토큰이 없어 신규 발급을 진행합니다.")
 
+    # [추가] EGW00133(토큰 발급 1분당 1회 제한) 예방.
+    #  KIS는 같은 AppKey로 1분 내 재발급을 거부하므로, force_refresh로 강제 갱신을
+    #  요청하더라도 최근 1분 내 발급된 '유효' 토큰이 있으면 어차피 재발급이 불가하다.
+    #  이 경우 불필요한 발급 시도/EGW00133 로그를 피하기 위해 기존 토큰을 재사용한다.
+    #  (만료 임박/만료 토큰은 get_valid_token이 None을 반환하므로 정상적으로 재발급되어
+    #   force_refresh 본래 목적은 유지된다. 시작 시 여러 경로의 동시 강제 갱신 경합 차단)
+    if config.session.is_token_recently_issued(token_type, seconds=60):
+        cached = config.session.get_valid_token(token_type, force_disk_reload=True)
+        if cached:
+            logger.debug(f"{token_type} 최근(1분 내) 발급 토큰 재사용 — 재발급 생략 (EGW00133 예방)")
+            return cached
+
     if token_type == "SIMULATION":
         app_key = config.session.app_key
         app_secret = config.session.app_secret

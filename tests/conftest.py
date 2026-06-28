@@ -125,20 +125,18 @@ def isolate_test_files(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def cleanup_global_db_connection():
     """
-    각 테스트 실행 후 전역 DBManager의 스레드 로컬 연결을 닫습니다.
-    ResourceWarning: unclosed database 방지
+    각 테스트 실행 후 전역 DBManager가 생성한 '모든 스레드'의 연결을 닫습니다.
+    백그라운드 워커 스레드가 만든 thread-local 연결까지 정리하여
+    ResourceWarning: unclosed database 를 방지합니다.
     """
     yield
-    
-    # 테스트 종료 후 정리
+
+    # 테스트 종료 후 정리 (전체 스레드 연결 일괄 종료)
     real_db = getattr(db_manager.db, '_real_db', db_manager.db)
-    if hasattr(real_db, 'local') and hasattr(real_db.local, 'conn'):
-        if real_db.local.conn:
-            try:
-                real_db.local.conn.close()
-            except Exception:
-                pass
-            real_db.local.conn = None
+    try:
+        real_db.close_all_connections()
+    except Exception:
+        pass
 
 @pytest.fixture(autouse=True)
 def reset_all_singletons():

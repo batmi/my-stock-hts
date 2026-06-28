@@ -8,6 +8,7 @@ import api
 import constants
 from modules import market # [추가] 통합 지수 리스트 참조용
 import math
+from contextlib import closing
 from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
@@ -88,7 +89,7 @@ def get_exchange_rate():
 # ==========================================================
 def init_memo_db():
     try:
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS stock_memo_entries (
@@ -117,7 +118,7 @@ def init_memo_db():
 def get_stock_memos(code):
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, memo, updated_at FROM stock_memo_entries WHERE code = ? ORDER BY updated_at DESC", (code,))
@@ -130,7 +131,7 @@ def get_stock_memos(code):
 def get_all_stock_memos():
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT id, code, name, memo, updated_at FROM stock_memo_entries ORDER BY updated_at DESC")
@@ -143,7 +144,7 @@ def get_all_stock_memos():
 def add_stock_memo(code, name, memo_text):
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("INSERT INTO stock_memo_entries (code, name, memo, updated_at) VALUES (?, ?, ?, ?)", (code, name, memo_text, now_str))
@@ -156,7 +157,7 @@ def add_stock_memo(code, name, memo_text):
 def update_stock_memo(memo_id, memo_text):
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("UPDATE stock_memo_entries SET memo = ?, updated_at = ? WHERE id = ?", (memo_text, now_str, memo_id))
@@ -169,7 +170,7 @@ def update_stock_memo(memo_id, memo_text):
 def delete_stock_memo_by_id(memo_id):
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM stock_memo_entries WHERE id = ?", (memo_id,))
             conn.commit()
@@ -181,7 +182,7 @@ def delete_stock_memo_by_id(memo_id):
 def delete_all_stock_memos(code):
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM stock_memo_entries WHERE code = ?", (code,))
             conn.commit()
@@ -194,7 +195,7 @@ def get_memo_codes():
     """메모가 존재하는 종목 코드 목록 반환 (마킹용)"""
     try:
         init_memo_db()
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("SELECT DISTINCT code FROM stock_memo_entries")
             return set(row[0] for row in cursor.fetchall())

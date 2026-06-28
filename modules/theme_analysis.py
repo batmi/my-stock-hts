@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 def _init_theme_db():
     try:
         # [수정] 스레드 안전성을 위해 매번 새로운 연결 생성
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("""
                     CREATE TABLE IF NOT EXISTS theme_analysis_cache (
@@ -53,7 +53,7 @@ def _save_theme_analysis(result):
     try:
         _init_theme_db()
         # [수정] 스레드 안전성을 위해 매번 새로운 연결 생성
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
@@ -68,7 +68,7 @@ def _load_theme_analysis():
     try:
         _init_theme_db()
         # [수정] 스레드 안전성을 위해 매번 새로운 연결 생성
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("SELECT updated_at, data FROM theme_analysis_cache WHERE key = ?", ("GEMINI_MARKET_TREND",))
             row = cursor.fetchone()
@@ -724,7 +724,7 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
 def _get_today_trades_str():
     """DB에서 당일 매매 내역을 조회하여 문자열로 반환"""
     try:
-        with sqlite3.connect(config.DB_FILE_PATH) as conn:
+        with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             today_str = datetime.now().strftime("%Y-%m-%d")
             cursor.execute("SELECT time, type, code, name, qty, price, profit_rate, reason FROM trades WHERE time LIKE ?", (f"{today_str}%",))

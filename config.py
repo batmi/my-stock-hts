@@ -553,8 +553,14 @@ def get_autotrade_logger():
     logger = logging.getLogger("autotrade")
     
     # [수정] 기존 핸들러가 있다면 모두 제거하고 새로 설정 (파일 생성 보장 및 중복 방지)
+    # [수정] removeHandler만 하면 FileHandler가 파일을 연 채 분리되어 ResourceWarning
+    #        (unclosed file)이 발생하므로, 제거 전에 close()로 파일 핸들을 확실히 닫는다.
     if logger.hasHandlers():
         for h in list(logger.handlers):
+            try:
+                h.close()
+            except Exception:
+                pass
             logger.removeHandler(h)
         
     logger.setLevel(logging.INFO)

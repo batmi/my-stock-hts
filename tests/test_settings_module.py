@@ -20,8 +20,8 @@ def test_modify_analysis_thresholds(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_analysis_thresholds_new_items(mock_ask):
     """새로 추가된 분석 임계값 설정 변경 테스트 (비대칭성, 역추세 RSI)"""
-    # 6번 항목(비대칭성) -> 1.8 -> 10번 항목(역추세 RSI) -> 35.0 -> 종료(q)
-    mock_ask.side_effect = ["6", "1.8", "10", "35.0", "q"]
+    # 8번 항목(비대칭성) -> 1.8 -> 12번 항목(역추세 RSI) -> 35.0 -> 종료(q)
+    mock_ask.side_effect = ["8", "1.8", "12", "35.0", "q"]
     
     orig_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
     orig_mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
