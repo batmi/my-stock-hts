@@ -2121,11 +2121,18 @@ class AutoTrader:
                 key = f"NO_ODNO_{r.get('time', '')}_{r.get('code', '')}_{r.get('type', '')}_{len(unique_records)}"
                 unique_records[key] = r
                 continue
-                
-            if odno not in unique_records:
-                unique_records[odno] = dict(r) # 복사본 저장
+
+            # [수정] KIS 주문번호(odno)는 영업일 단위로 채번되어 날짜가 다르면 재사용된다.
+            #  키를 odno만 쓰면 서로 다른 날짜의 거래가 같은 odno로 병합되어 한쪽이
+            #  소실(누락)되므로, (거래일 + odno)를 키로 사용해 날짜 충돌을 막는다.
+            #  (같은 날의 접수→체결 병합은 그대로 유지된다)
+            date_key = str(r.get('time', ''))[:10]
+            key = f"{date_key}_{odno}"
+
+            if key not in unique_records:
+                unique_records[key] = dict(r) # 복사본 저장
             else:
-                existing = unique_records[odno]
+                existing = unique_records[key]
                 
                 # 새 레코드(r)가 더 최신 정보(체결 등)를 담고 있을 때 병합
                 if float(r.get('price', 0)) > 0 and float(existing.get('price', 0)) <= 0:

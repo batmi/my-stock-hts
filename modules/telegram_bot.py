@@ -2341,6 +2341,12 @@ class TelegramCommander:
                 status = "🚫 주문거부"
             elif "체결" in status:
                 status = f"✅ {status}"
+            elif "접수" in status:
+                status = f"📥 {status}"
+            elif "정정" in status:
+                status = f"🔧 {status}"
+            elif "취소" in status:
+                status = f"🗑️ {status}"
             
             reason = t.get('reason') or ""
             
