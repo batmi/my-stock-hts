@@ -2274,10 +2274,14 @@ class TelegramCommander:
                 period_msg = "전체"
 
         msg = f"📜 [거래 내역 ({period_str}) - {len(trades)}건]\n기간: {period_msg}"
-        
+
         if not trades:
             return msg + "\n\n거래 내역이 없습니다."
-        
+
+        # [추가] 정제(중복 제거) 안내: 같은 주문의 접수→체결은 1건으로 병합되므로
+        #  원본(메뉴) 거래 히스토리와 건수가 다를 수 있음을 알린다.
+        msg += "\n💡 동일 주문의 접수→체결은 1건으로 합산 표시됩니다."
+
         # [추가] 제한 종목 및 개별 룰 로드
         restricted_stocks = auto_trade.get_restricted_stocks()
         custom_rules = db_manager.db.get_all_stock_strategies()
