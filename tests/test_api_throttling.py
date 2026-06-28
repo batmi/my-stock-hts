@@ -19,9 +19,11 @@ class TestThrottledSession(unittest.TestCase):
         # 테스트용 TPS 설정 (계산 검증을 위해 명확한 값 사용)
         self.original_sim_tps = config.SIM_TX_PER_SECOND
         self.original_real_tps = config.REAL_TX_PER_SECOND
-        
-        config.SIM_TX_PER_SECOND = 2.0   # 0.5초 간격 (실제로는 1.05배 안전계수 적용 -> 0.525초)
-        config.REAL_TX_PER_SECOND = 10.0 # 0.1초 간격 (0.105초)
+        self.original_real_safety = getattr(config, 'REAL_TPS_SAFETY', 0.9)
+
+        config.SIM_TX_PER_SECOND = 2.0   # 0.5초 간격 (실제로는 1.2배 안전계수 적용 -> 0.6초)
+        config.REAL_TX_PER_SECOND = 10.0 # 실효 한도 = 10 * REAL_TPS_SAFETY(0.9) = 9 TPS -> 1/9초 간격
+        config.REAL_TPS_SAFETY = 0.9     # 실전 내부 안전계수 명시 고정
         
         # requests.Session.request 모킹 (실제 네트워크 요청 방지)
         self.patcher_request = patch('requests.Session.request')
@@ -43,10 +45,12 @@ class TestThrottledSession(unittest.TestCase):
                 self.ctx = ctx
                 self.called = False
                 self.call_args = None
-            
+                self.max_wait = 0.0  # [추가] 호출된 대기시간 중 최대값 (부동소수 잔여 sleep에 견고)
+
             def __call__(self, seconds):
                 self.called = True
                 self.call_args = ((seconds,), {})
+                self.max_wait = max(self.max_wait, seconds)
                 # 무한 루프 방지: sleep 시간이 0이어도 최소 0.001초는 흐르도록 강제 전진
                 self.ctx.current_time += max(seconds, 0.001)
             
@@ -62,6 +66,7 @@ class TestThrottledSession(unittest.TestCase):
         """테스트 환경 복구"""
         config.SIM_TX_PER_SECOND = self.original_sim_tps
         config.REAL_TX_PER_SECOND = self.original_real_tps
+        config.REAL_TPS_SAFETY = self.original_real_safety
         
         for patcher in [self.patcher_request, self.patcher_time, self.patcher_sleep]:
             try:
@@ -96,15 +101,19 @@ class TestThrottledSession(unittest.TestCase):
         self.current_time = 2000.0
         self.session.request('GET', url)
         self.session.request('GET', url)
-            
-        # 실전투자 예상 대기 시간 계산: (1.0 / 10.0) * 1.05 = 0.105초
-        expected_wait = 0.105
+
+        # 실전투자 예상 대기 시간: 실효 한도 = REAL_TX_PER_SECOND * REAL_TPS_SAFETY = 9 TPS
+        #   -> min_interval = 1.0 / 9 ≈ 0.1111초
+        # (1/9는 무한소수이므로 부동소수 누적으로 마지막 sleep이 미세값(~0)이 될 수 있어
+        #  '마지막 호출'이 아닌 '최대 대기값'으로 검증한다.)
+        effective_limit = config.REAL_TX_PER_SECOND * config.REAL_TPS_SAFETY
+        expected_wait = 1.0 / effective_limit
         self.assertTrue(self.mock_sleep.called)
-        args, _ = self.mock_sleep.call_args
-        self.assertAlmostEqual(args[0], expected_wait, places=5)
-        
-        # 실전투자 상태 변수가 갱신되었는지 확인
-        self.assertAlmostEqual(self.session.request_history_real[-1], 2000.105, places=3)
+        self.assertAlmostEqual(self.mock_sleep.max_wait, expected_wait, places=4)
+
+        # 실전투자 상태 변수가 두 번째 요청 통과 시점(≈ 2000 + min_interval)으로 갱신되었는지 확인
+        # (무한루프 방지용 sleep 최소 전진(0.001)으로 한 틱 밀릴 수 있어 places=2로 검증)
+        self.assertAlmostEqual(self.session.request_history_real[-1], 2000.0 + expected_wait, places=2)
 
     def test_reserve_then_wait_concurrency(self):
         """선예약 후대기(Reserve-then-Wait) 로직의 동시성 처리 확인"""

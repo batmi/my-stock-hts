@@ -878,25 +878,33 @@ class ThrottledSession(requests.Session):
                         server_type = "REAL" if is_real_server else "SIMULATION"
                         
                         if target_limit > 0:
+                            # [수정] 명목 한도(target_limit)에 내부 안전계수를 곱해 '실효 한도'로 운행한다.
+                            #  - 명목 한도에 정확히 붙이면 클라이언트 윈도우와 KIS 서버 1초 카운터의
+                            #    경계가 충돌해 EGW00201이 상시 발생하므로, 약간의 마진을 둔다.
+                            #  - config 설정값(REAL_TX_PER_SECOND 등)은 그대로 두고 로직 내부에서만 보정.
+                            if is_sim_server:
+                                effective_limit = target_limit  # 모의(2 TPS)는 기존 동작 유지
+                                min_interval = (1.0 / target_limit) * 1.2
+                            else:
+                                safety = getattr(config, 'REAL_TPS_SAFETY', 0.9)
+                                effective_limit = max(1.0, target_limit * safety)  # 예: 20 * 0.9 = 18
+                                min_interval = 1.0 / effective_limit
+
                             # 1. 윈도우 기반 한도 체크 (Burst 방어)
                             window_size = 1.5 if is_sim_server else 1.1
-                            
+
                             while history and history[0] <= now - window_size:
                                 history.popleft()
-                                
-                            # 2. 최소 간격 체크 (고르게 분산)
-                            min_interval = (1.0 / target_limit)
-                            if is_sim_server: min_interval *= 1.2
-                            else: min_interval *= 1.05
 
+                            # 2. 최소 간격 체크 (고르게 분산)
                             time_since_last = now - history[-1] if history else float('inf')
 
-                            if len(history) < target_limit and time_since_last >= min_interval:
+                            if len(history) < effective_limit and time_since_last >= min_interval:
                                 history.append(now)
                                 current_tps = len(history)
                                 break # 락 해제 후 전송 진행
                             else:
-                                wait_from_window = (history[0] + window_size) - now if len(history) >= target_limit else 0
+                                wait_from_window = (history[0] + window_size) - now if len(history) >= effective_limit else 0
                                 wait_from_interval = min_interval - time_since_last
                                 wait_time = max(wait_from_window, wait_from_interval)
                                 if wait_time <= 0: wait_time = 0.05
@@ -948,7 +956,14 @@ class ThrottledSession(requests.Session):
                 if response.status_code != 200:
                     # [수정] HTTP 에러는 재시도하지 않고 로그만 기록 (연결 끊김은 except 블록에서 처리됨)
                     try:
-                        logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {response.text[:500]}")
+                        body_preview = response.text[:500]
+                        # [수정] EGW00201/EGW00215(초당 거래건수 초과)는 스로틀 백오프로
+                        #        재시도되어 정상 복구되는 흐름이므로 ERROR가 아닌 DEBUG로 강등.
+                        #        (Status 500으로 내려오지만 실제 장애가 아니라 Rate Limit임)
+                        if 'EGW00201' in body_preview or 'EGW00215' in body_preview:
+                            logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
+                        else:
+                            logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {body_preview}")
                     except: pass
                 
                 # 2. API 응답 코드 확인
@@ -1036,7 +1051,12 @@ class ThrottledSession(requests.Session):
                     wait_time = (base_delay * (2 ** attempt)) + jitter
                     
                     msg = f"⚠️ API 요청 실패. {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
-                    logger.warning(msg)
+                    # [수정] Rate Limit(EGW00201/EGW00215)은 정상적인 백오프 재시도 흐름이므로
+                    #        DEBUG로 강등하여 로그 노이즈를 줄인다. (진짜 오류만 WARNING 유지)
+                    if 'EGW00201' in str(e) or 'EGW00215' in str(e):
+                        logger.debug(msg)
+                    else:
+                        logger.warning(msg)
                     
                     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim yellow][TRACE] {msg}[/dim yellow]")
