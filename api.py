@@ -26,6 +26,22 @@ from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
 
+# [추가] yfinance 호출 직렬화용 전역 락.
+#  yfinance는 종목 timezone을 ~/.cache(또는 ~/Library/Caches)/py-yfinance 아래 SQLite에
+#  캐싱하는데, 여러 스레드가 동시에 yfinance를 호출하면 이 캐시 DB에 동시 쓰기가 발생해
+#  OperationalError('database is locked')로 다운로드가 실패한다(특히 모의투자처럼 해외 지수
+#  fallback 의존도가 높을 때 빈번). 해외 yfinance 진입점을 이 락으로 직렬화해 경합을 차단한다.
+#  (국내 지수의 KIS 조회는 락 대상이 아니므로 병렬성은 유지된다)
+_YF_LOCK = threading.Lock()
+
+# [추가] yfinance 자체 ERROR 로그('Failed download' 등)는 락 직렬화로 빈도가 급감하며,
+#  남는 일시적 실패는 우리 쪽에서 빈 DataFrame 감지 후 재시도/폴백으로 처리하므로
+#  라이브러리 로그 레벨을 CRITICAL로 올려 노이즈를 억제한다.
+try:
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+except Exception:
+    pass
+
 # [추가] 대체거래소(NXT) 관련 마스터 파일 캐시
 _NXT_TRADEABLE_CACHE = set()
 _NXT_MASTER_LOADED = False
@@ -251,18 +267,35 @@ def clear_yfinance_cache():
     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
         config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
 
-def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column'):
-    """yfinance 데이터 조회 통합 함수 (DB Lock 발생 시 자동 캐시 정리 후 재시도)"""
+def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False):
+    """yfinance 데이터 조회 통합 함수.
+
+    [DB Lock 대응]
+    - 전역 _YF_LOCK으로 호출을 직렬화하여 tz 캐시(SQLite) 동시 접근 경합을 차단한다.
+    - 최신 yfinance는 'database is locked'를 예외로 던지지 않고 내부에서 삼킨 뒤
+      빈 DataFrame을 반환하므로(예외 핸들러 우회), 결과가 비어 있으면 캐시를 정리하고
+      1회 재시도한다. (_retried 플래그로 무한 재귀 방지)
+    """
     try:
-        return yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
+        with _YF_LOCK:
+            df = yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
+
+        # [추가] 빈 결과(= tz 캐시 lock 등으로 인한 조용한 실패 가능성) → 캐시 정리 후 1회 재시도
+        if not _retried and (df is None or getattr(df, 'empty', True)):
+            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim yellow]yfinance 빈 응답({tickers}). 캐시 정리 후 1회 재시도합니다.[/dim yellow]")
+            clear_yfinance_cache()
+            time.sleep(0.5)  # 파일 잠금 해제 대기
+            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True)
+        return df
     except Exception as e:
         err_msg = str(e).lower()
-        if "database" in err_msg or "lock" in err_msg:
+        if not _retried and ("database" in err_msg or "lock" in err_msg):
             if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim yellow]yfinance DB Lock 감지: {e}. 캐시 정리 후 재시도합니다.[/dim yellow]")
             clear_yfinance_cache()
             time.sleep(0.5) # 파일 잠금 해제 대기
-            return fetch_yfinance_data(tickers, period, start, end, interval, group_by)
+            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True)
         raise e
 
 class TLSAdapter(HTTPAdapter):
@@ -551,8 +584,9 @@ def get_yf_fast_info(code, ttl=60.0):
 
     # 2. yfinance Fallback
     try:
-        time.sleep(0.05) # 야후 API 동시 호출 차단 완화용 미세 지연
-        fi = yf.Ticker(code).fast_info
+        # [수정] tz 캐시(SQLite) 동시 접근 경합 방지를 위해 yfinance 호출을 전역 락으로 직렬화
+        with _YF_LOCK:
+            fi = yf.Ticker(code).fast_info
             
         # [수정] regular_market_previous_close가 없는 지수(달러인덱스 등)를 위한 Fallback
         prev_close = getattr(fi, 'regular_market_previous_close', None)
