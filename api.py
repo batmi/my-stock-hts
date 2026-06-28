@@ -1388,6 +1388,11 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
 
     try:
         if timeout is None: timeout = config.DEFAULT_TIMEOUT
+        # [추가] 모의투자 서버는 응답이 느려 짧은 timeout에서 ReadTimeout이 빈발하므로,
+        #  모의투자일 때는 최소 timeout을 보장한다. (DEFAULT_TIMEOUT보다 크게 늘리지는 않음)
+        if config.session.is_simulation:
+            sim_min = getattr(config, 'SIM_MIN_QUOTE_TIMEOUT', 5)
+            if timeout < sim_min: timeout = sim_min
         if retries is None: retries = config.MAX_RETRIES
         
         # [추가] 토큰 만료 시 재시도를 위한 루프 (최대 1회 재시도)
@@ -2017,16 +2022,19 @@ def get_current_price_data(code, is_overseas):
                 logger.debug(f"[API] 52주 고가 보정 중 오류: {e}")
 
             # [추가] NXT(대체거래소) 시세 조회 및 병합 (NX 코드 사용)
+            # [수정] 모의투자(VTS)는 NXT를 지원하지 않아 NX 조회가 매번 ReadTimeout을
+            #  유발하므로 모의투자에서는 조회를 건너뛴다.
             out = res.get('output', {})
-            try:
-                nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
-                nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
-                if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
-                    nxt_price = nxt_res['output'].get('stck_prpr')
-                    if nxt_price and safe_int(nxt_price) > 0:
-                        out['ats_prpr'] = str(nxt_price)
-            except Exception as e:
-                logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
+            if not config.session.is_simulation:
+                try:
+                    nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
+                    nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
+                    if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
+                        nxt_price = nxt_res['output'].get('stck_prpr')
+                        if nxt_price and safe_int(nxt_price) > 0:
+                            out['ats_prpr'] = str(nxt_price)
+                except Exception as e:
+                    logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
 
             _set_micro_cache(cache_key, res)
         return res
@@ -2235,16 +2243,18 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
             break
             
     # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
+    # [수정] 모의투자(VTS)는 NXT 미지원 → NX 조회 스킵 (불필요한 ReadTimeout 방지)
     try:
-        nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
-        if nxt_data and nxt_data.get('rt_cd') == '0':
-            nxt_items = nxt_data.get('output', [])
-            if nxt_items:
-                nxt_tday_rltv = nxt_items[0].get('tday_rltv')
-                if nxt_tday_rltv and str(nxt_tday_rltv).strip():
-                    nxt_vol = float(str(nxt_tday_rltv).replace(',', ''))
-                    if nxt_vol > 0:
-                        final_vol = nxt_vol
+        if not config.session.is_simulation:
+            nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
+            if nxt_data and nxt_data.get('rt_cd') == '0':
+                nxt_items = nxt_data.get('output', [])
+                if nxt_items:
+                    nxt_tday_rltv = nxt_items[0].get('tday_rltv')
+                    if nxt_tday_rltv and str(nxt_tday_rltv).strip():
+                        nxt_vol = float(str(nxt_tday_rltv).replace(',', ''))
+                        if nxt_vol > 0:
+                            final_vol = nxt_vol
     except Exception as e:
         logger.debug(f"[API] NXT(대체거래소) 체결강도 조회 오류 (NX 코드 시도): {e}")
 
