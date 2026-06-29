@@ -1280,7 +1280,7 @@ def view_trade_history():
             try:
                 p_val = float(t['price'])
                 code = str(t.get('code', ''))
-                is_domestic = code.isdigit() and len(code) == 6
+                is_domestic = (len(code) == 6 and code[0].isdigit() and code.isalnum())
 
                 if p_val > 0:
                     if is_domestic:
@@ -1302,7 +1302,7 @@ def view_trade_history():
                 if p_val > 0 and q_val > 0:
                     tot = p_val * q_val
                     code = str(t.get('code', ''))
-                    is_domestic = code.isdigit() and len(code) == 6
+                    is_domestic = (len(code) == 6 and code[0].isdigit() and code.isalnum())
                     if is_domestic:
                         total_amt_display = f"{int(tot):,}"
                     else:

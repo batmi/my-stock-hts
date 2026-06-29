@@ -477,7 +477,7 @@ def show_open_orders():
                                 qty = int(float(db_order.get('qty', 0)))
                                 price = fill_price if fill_price > 0 else float(db_order.get('price', 0))
                                 
-                                is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                                is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
                                 if price <= 0:
                                     try:
                                         cp = api.get_current_price(code, is_overseas=is_overseas)
@@ -555,9 +555,19 @@ def show_open_orders():
                                 db_odno = db_order.get('odno', '')
                                 msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(db_odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                                 api.send_telegram_message(msg)
-                                
+
+                                # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
+                                #  프로그램 수동 주문은 시스템 ODNO로 등록되어 auto_trade의
+                                #  외부주문 감지 경로(앱/HTS)를 타지 않으므로 여기서 직접 등록한다.
+                                #  (자동매매가 해당 종목을 건드리지 않도록 보호)
+                                if type_name == "매수":
+                                    try:
+                                        auto_trade.add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=cano, acnt=acnt)
+                                    except Exception as e:
+                                        logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
+
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
-                                    
+
                             except: pass
 
                         for db_o in db_orders:

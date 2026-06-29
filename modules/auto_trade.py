@@ -1381,7 +1381,7 @@ class DefaultStrategy:
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
             
-            is_overseas = not (code.isdigit() and len(code) == 6)
+            is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
             state, _, state_reason = analysis.classify_stock_state(
@@ -1859,7 +1859,7 @@ class OrderManager:
                                                         self.trader.log(f"-> 체결/잔고 확인됨. '체결(추정)'으로 기록합니다.")
                                                         
                                                         fill_price = float(trade['price'])
-                                                        is_overseas = not (code.isdigit() and len(code) == 6) if code else False
+                                                        is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
                                                         if fill_price <= 0:
                                                             try:
                                                                 cp = api.get_current_price(code, is_overseas=is_overseas)
@@ -5008,7 +5008,17 @@ class AutoTrader:
                 if is_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
                     self.set_stock_state(code, None)
                     return
-            
+
+            # [추가] ETF 포함 여부가 False면 보유 ETF는 자동 매도 대상에서도 제외한다.
+            #  (SYSTEM_INCLUDE_ETF는 매수 필터이지만, 사용자 요청에 따라 매도도 제외하여
+            #   ETF는 전적으로 수동 관리하도록 한다. 단 시스템이 손절하지 않으므로 주의)
+            if not is_overseas_stock and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+                if any(e['code'] == code for e in config.session.stock_data.get('etfs_kr', [])):
+                    self.set_stock_state(code, None)
+                    if config.FILE_DEBUG_LEVEL == "DEBUG":
+                        self.log(f"[매도스킵] {name}({code}): ETF 포함 설정(False)으로 자동 매도 제외")
+                    return
+
             qty = api.safe_int(item.get('ord_psbl_qty'))
             profit_rate = float(item['evlu_pfls_rt'])
             current_price = float(item['prpr'])
@@ -5566,7 +5576,7 @@ class AutoTrader:
         use_corr_filter = getattr(config, 'USE_CORRELATION_FILTER', True)
         if use_corr_filter and holding_codes:
             for code in holding_codes:
-                is_overseas = not (code.isdigit() and len(code) == 6)
+                is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
                 df = api.get_chart_data(code, is_overseas)
                 if df is not None and not df.empty:
                     name = holding_names_map.get(code, code)
@@ -5972,7 +5982,7 @@ def _input_and_save_rule(code, name):
     console.print(f"[bold green]선택 종목: {name} ({code})[/bold green]")
     
     # [추가] 현재가 조회 (예상 가격 계산용)
-    is_overseas = not (code.isdigit() and len(code) == 6)
+    is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
     current_price = 0
     # [수정] 단순 조회이므로 status 사용
     with Progress(
