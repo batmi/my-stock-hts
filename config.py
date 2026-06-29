@@ -50,6 +50,11 @@ class GlobalSettings(BaseModel):
     AUTO_MORNING_BRIEFING_USE: bool = False
     AUTO_MORNING_BRIEFING_TIME: str = "0830"
     AUTO_DISCLOSURE_ALERT_USE: bool = True  # 관심종목 중대 공시 텔레그램 알림 (기본 ON)
+    # [추가] 시장정지 알림: KIS는 서킷브레이커(CB)+VI, 토스는 VI만 (사이드카는 REST 미지원으로 제외)
+    MARKET_HALT_ALERT_USE: bool = True      # 서킷브레이커/VI 시장정지 텔레그램 알림 (기본 ON)
+    MARKET_HALT_CB_INTERVAL: int = 20       # CB 점검 주기(초) - KIS 전용
+    MARKET_HALT_VI_INTERVAL: int = 60       # VI 점검 주기(초) - 보유+관심종목
+    MARKET_HALT_VI_MAX_CODES: int = 40      # VI 점검 종목 수 상한 (라즈베리파이 부하 방어)
     TELEGRAM_INSTANCE_NAME: str = "HTS"
     TELEGRAM_POLLING_TIMEOUT: int = Field(default=10, gt=0)
 
@@ -739,6 +744,10 @@ CONFIG_DESCRIPTIONS = {
     "ENABLE_TELEGRAM": "텔레그램 알림 기능 활성화 여부",
     "AUTO_MORNING_BRIEFING_USE": "매일 글로벌 매크로 시황 전송 여부",
     "AUTO_MORNING_BRIEFING_TIME": "장전 AI 브리핑 발송 시각",
+    "MARKET_HALT_ALERT_USE": "서킷브레이커/VI 시장정지 알림 여부 (KIS:CB+VI, 토스:VI)",
+    "MARKET_HALT_CB_INTERVAL": "서킷브레이커 점검 주기(초)",
+    "MARKET_HALT_VI_INTERVAL": "VI 점검 주기(초)",
+    "MARKET_HALT_VI_MAX_CODES": "VI 점검 종목 수 상한",
     "TELEGRAM_INSTANCE_NAME": "알림 메시지 머리말 (인스턴스 식별)",
     "TELEGRAM_POLLING_TIMEOUT": "봇 명령어 수신 대기 시간",
     "SYSTEM_TRADING_INTERVAL": "자동매매 루프 실행 간격 (초)",

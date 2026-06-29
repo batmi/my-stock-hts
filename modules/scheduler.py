@@ -54,6 +54,8 @@ class SystemScheduler:
                     self._check_morning_briefing()
                 if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', False):
                     self._check_disclosure_alerts()
+                if getattr(config, 'MARKET_HALT_ALERT_USE', True):
+                    self._check_market_halt()
                 self._check_heartbeat()
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
@@ -74,6 +76,14 @@ class SystemScheduler:
             threading.Thread(target=disclosure.check_and_alert_disclosures, daemon=True).start()
         except Exception as e:
             logger.error(f"[Scheduler] 공시 알림 체크 오류: {e}")
+
+    def _check_market_halt(self):
+        """서킷브레이커(CB)/VI 시장정지 감지 및 알림 (KIS:CB+VI, 토스:VI)."""
+        try:
+            from modules.market_halt import MarketHaltMonitor
+            MarketHaltMonitor().check()
+        except Exception as e:
+            logger.error(f"[Scheduler] 시장정지 점검 오류: {e}")
 
     def _check_holiday_notification(self):
         """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러"""

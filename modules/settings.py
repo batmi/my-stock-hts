@@ -41,6 +41,7 @@ def _save_dynamic_config():
         "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
         "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
         "AUTO_DISCLOSURE_ALERT_USE": getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True),
+        "MARKET_HALT_ALERT_USE": getattr(config.settings, 'MARKET_HALT_ALERT_USE', True),
         "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),
         "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
@@ -254,6 +255,7 @@ def view_system_config():
     table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
     table.add_row("장전 AI 브리핑\n[dim]매일 글로벌 매크로 시황 전송[/dim]", "AUTO_MORNING_BRIEFING_USE", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False)}")
     table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
+    table.add_row("시장정지 알림\n[dim]서킷브레이커/VI (KIS:CB+VI, 토스:VI)[/dim]", "MARKET_HALT_ALERT_USE", f"{getattr(config.settings, 'MARKET_HALT_ALERT_USE', True)}")
 
     table.add_section()
     table.add_row("[bold dim]  5-3. 화면 및 로그 설정[/]", "", "")
@@ -600,7 +602,9 @@ def modify_telegram_settings():
         {"desc": "장전 AI 브리핑 사용", "help": "매일 지정된 시간에 글로벌 매크로 시황 알림", "name": "AUTO_MORNING_BRIEFING_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', v)},
         {"desc": "장전 AI 브리핑 시간", "help": "발송 시각 (예: 0830)", "name": "AUTO_MORNING_BRIEFING_TIME", "type": "time",
-         "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', v)}
+         "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', v)},
+        {"desc": "시장정지 알림 사용", "help": "서킷브레이커/VI 알림 (KIS:CB+VI, 토스:VI / 사이드카 미지원)", "name": "MARKET_HALT_ALERT_USE", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: getattr(config.settings, 'MARKET_HALT_ALERT_USE', True), "set": lambda v: setattr(config.settings, 'MARKET_HALT_ALERT_USE', v)}
     ]
     return _edit_config_table("텔레그램 설정 (Telegram)", items)
 
