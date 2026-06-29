@@ -71,6 +71,14 @@ def is_system_odno(odno):
     with _SYSTEM_ODNOS_LOCK:
         return str(odno) in _SYSTEM_ODNOS
 
+def _current_account_type():
+    """현재 세션 기준 제한 종목 계좌종류 라벨을 반환한다. (모의/토스/한투-자동)"""
+    if getattr(config.session, 'is_toss', False):
+        return "토스"
+    if config.session.is_simulation:
+        return "모의"
+    return "한투-자동"
+
 def _get_trade_account():
     """현재 시스템 트레이딩이 실제 매매하는 계좌(cano, acnt)를 반환한다.
     실전은 자동매매 전용 계좌(auto_cano), 모의/토스는 세션 계좌를 사용한다."""
@@ -201,6 +209,59 @@ def remove_restricted_stock(code, cano=None, acnt=None):
             del data[code]
 
         save_restricted_stocks(data)
+
+# [추가] 수동 매수 '발주 시점' 제한 등록의 사후 정리.
+#  발주 즉시 제한에 넣어 타이밍 윈도우를 막되, 그 매수가 끝내 체결되지
+#  못한 경우(취소/거부/미체결)에는 제한을 자동 해제하여 잔여물을 남기지 않는다.
+def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False):
+    """비동기로 체결 여부를 추적하여 미체결 매수의 제한을 정리한다.
+    - 잔고가 잡히면(체결) 제한을 유지하고 종료.
+    - 진행 중 주문이 남아 있으면(지정가 대기 등) 계속 대기.
+    - 잔고 0 + 진행 중 주문 없음 → 취소/거부로 보고 제한 해제.
+    - 늦게 체결되는 주문은 체결 시점 등록 로직이 다시 제한을 넣으므로 안전."""
+    def _get_qty():
+        if is_overseas:
+            bal = api.get_overseas_balance(cano, acnt)
+            if bal is None:
+                return None
+            for item in bal:
+                if item.get('ovrs_pdno') == code:
+                    return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
+            return 0
+        bal, _ = api.get_domestic_balance(cano, acnt)
+        if bal is None:
+            return None
+        for item in bal:
+            if item.get('pdno') == code:
+                return int(item.get('hldg_qty', 0))
+        return 0
+
+    def _worker():
+        try:
+            trader = AutoTrader()
+            om = getattr(trader, 'order_manager', None)
+        except Exception:
+            om = None
+        for _ in range(40):  # 최대 약 10분 추적 (15초 * 40)
+            time.sleep(15)
+            try:
+                qty = _get_qty()
+                if qty is None:
+                    continue  # 조회 실패 → 재시도
+                if qty > 0:
+                    return  # 체결 확인 → 제한 유지
+                # 잔고 0: 아직 진행 중인 주문이 있으면 계속 대기
+                if om is not None and om.is_pending(code):
+                    continue
+                # 잔고 0 + 진행 중 주문 없음 → 미체결(취소/거부)로 판단 → 해제
+                remove_restricted_stock(code, cano=cano, acnt=acnt)
+                logger.info(f"[Restriction] {code} 수동 매수 미체결(취소/거부) 확인 → 계좌({cano}-{acnt}) 제한 해제")
+                return
+            except Exception as e:
+                logger.error(f"수동 매수 제한 정리 검사 중 오류: {e}")
+        logger.debug(f"[Restriction] {code} 매수 제한 정리 추적 시간 초과(보수적 유지)")
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 # [추가] 일일 자산 상태 파일 경로 및 관리 함수 (재시작 시 손실 제한 기준 유지용)
 DAILY_STATE_FILE = os.path.join(config.JSON_DIR, "daily_asset_state.json")
@@ -911,7 +972,7 @@ class ConclusionMonitor:
                                 if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name \
                                         and not is_system_odno(odno):
                                     try:
-                                        add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt)
+                                        add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type())
                                     except Exception as e:
                                         logger.error(f"수동매매 제한 종목 등록 중 오류: {e}")
 
@@ -1200,7 +1261,7 @@ class ConclusionMonitor:
                     if type_name == "매수" and not is_system_odno(odno):
                         try:
                             r_cano, r_acnt = _get_trade_account()
-                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt)
+                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt, account_type=_current_account_type())
                         except Exception as e:
                             logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
                 except Exception as e:

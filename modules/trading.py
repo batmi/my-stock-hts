@@ -562,7 +562,7 @@ def show_open_orders():
                                 #  (자동매매가 해당 종목을 건드리지 않도록 보호)
                                 if type_name == "매수" and not auto_trade.is_system_odno(db_odno):
                                     try:
-                                        auto_trade.add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=cano, acnt=acnt)
+                                        auto_trade.add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=cano, acnt=acnt, account_type=auto_trade._current_account_type())
                                     except Exception as e:
                                         logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
 
@@ -1198,6 +1198,18 @@ def send_order(order_type):
                 msg += f"\n주문번호: {utils.format_order_no(odno)}"
                 
                 if order_type == 'buy':
+                    # [추가] 수동 매수는 '발주 즉시' 제한 종목으로 등록한다.
+                    #  체결 감지는 모니터 주기(잔고 확인)에 의존해 지연이 있어,
+                    #  그 사이 시스템 트레이딩이 해당 종목을 매도하는 타이밍 윈도우가
+                    #  생긴다. 발주 시점에 등록하면 이 윈도우를 제거할 수 있다.
+                    #  (미체결/취소 시에는 전량 매도 확인 로직이 제한을 자동 해제)
+                    try:
+                        auto_trade.add_restricted_stock(stock_code, stock_name, "수동매매", is_overseas=is_overseas, cano=target_cano, acnt=target_acnt, account_type=auto_trade._current_account_type())
+                        # [추가] 미체결(취소/거부) 시 제한을 자동 정리하는 사후 추적 시작
+                        auto_trade.schedule_buy_restriction_cleanup(stock_code, target_cano, target_acnt, is_overseas=is_overseas)
+                    except Exception as e:
+                        logger.error(f"수동 매수 제한 종목 등록 오류(발주): {e}")
+
                     # [추가] 매수 시 기존 예약 매수 주문 자동 취소 (비중 중복 방어)
                     canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, stock_code)
                     if canceled_cnt > 0:
