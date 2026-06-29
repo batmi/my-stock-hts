@@ -1192,6 +1192,17 @@ class ConclusionMonitor:
                     msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
                     logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
+
+                    # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
+                    #  트레이딩 RUNNING 중 사용자가 수동 매수하면 이 백그라운드
+                    #  모니터가 체결을 먼저 잡으므로 여기서도 등록해야 한다.
+                    #  시스템(자동매매) 주문은 register_system_odno로 표시되므로 제외.
+                    if type_name == "매수" and not is_system_odno(odno):
+                        try:
+                            r_cano, r_acnt = _get_trade_account()
+                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt)
+                        except Exception as e:
+                            logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
                 except Exception as e:
                     logger.error(f"알림 전송 실패: {e}")
             else:
@@ -5003,21 +5014,22 @@ class AutoTrader:
             is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
+            # [수정] ETF 판정을 관심목록뿐 아니라 종목명 휴리스틱까지 포함하도록 일원화
+            #  (보유만 하고 관심목록에 없는 ETF/ETN도 식별)
+            is_domestic_etf = (not is_overseas_stock) and api.is_domestic_etf_etn(code, name)
+
             if is_nxt_market and not is_overseas_stock:
-                is_etf = any(e['code'] == code for e in config.session.stock_data.get('etfs_kr', []))
-                if is_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
+                if is_domestic_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
                     self.set_stock_state(code, None)
                     return
 
             # [추가] ETF 포함 여부가 False면 보유 ETF는 자동 매도 대상에서도 제외한다.
             #  (SYSTEM_INCLUDE_ETF는 매수 필터이지만, 사용자 요청에 따라 매도도 제외하여
             #   ETF는 전적으로 수동 관리하도록 한다. 단 시스템이 손절하지 않으므로 주의)
-            if not is_overseas_stock and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
-                if any(e['code'] == code for e in config.session.stock_data.get('etfs_kr', [])):
-                    self.set_stock_state(code, None)
-                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                        self.log(f"[매도스킵] {name}({code}): ETF 포함 설정(False)으로 자동 매도 제외")
-                    return
+            if is_domestic_etf and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+                self.set_stock_state(code, None)
+                self.log(f"[매도스킵] {name}({code}): ETF 포함 설정(False)으로 자동 매도 제외")
+                return
 
             qty = api.safe_int(item.get('ord_psbl_qty'))
             profit_rate = float(item['evlu_pfls_rt'])

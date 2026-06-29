@@ -98,6 +98,46 @@ def is_nxt_tradeable(code):
     # 안전장치로 일단 일반 주식은 모두 통과시킵니다 (오류로 매매 못하는 것 방지)
     return True
 
+# [추가] 국내 ETF/ETN 판정용 캐시 및 브랜드/키워드 목록
+#  - 관심목록(etfs_kr)에 없더라도 보유 중인 ETF/ETN을 식별하기 위함.
+#  - 1GB 라즈베리파이 운영 및 모의투자 API 한계를 고려해 매 주기 API 호출 대신
+#    관심목록 + 종목명 브랜드/키워드 휴리스틱으로 판정하고 코드 단위로 캐시한다.
+_ETF_ETN_CACHE = {}
+_KR_ETF_BRANDS = (
+    "KODEX", "TIGER", "KBSTAR", "ARIRANG", "KOSEF", "HANARO", "ACE", "SOL",
+    "PLUS", "RISE", "TIMEFOLIO", "KOACT", "WOORI", "BNK", "FOCUS", "TREX",
+    "KCGI", "VITA", "KINDEX", "에셋플러스", "마이다스", "히어로즈", "마이티",
+)
+_KR_ETF_ETN_KEYWORDS = ("레버리지", "인버스", "ETN", "ETF", "선물")
+
+def is_domestic_etf_etn(code, name=""):
+    """국내 보유/관심 종목이 ETF/ETN인지 판정한다.
+    1) 관심목록(etfs_kr) 등록 여부, 2) 종목명 브랜드 프리픽스/키워드 휴리스틱.
+    결과는 코드 단위로 캐시한다. (해외 종목은 호출 측에서 사전 제외)"""
+    if not code:
+        return False
+    if code in _ETF_ETN_CACHE:
+        return _ETF_ETN_CACHE[code]
+
+    result = False
+    try:
+        # 1) 관심목록(국내 ETF)에 등록된 경우
+        sd = getattr(config.session, 'stock_data', None) if config.session else None
+        etfs = sd.get('etfs_kr', []) if sd else []
+        if any(e.get('code') == code for e in etfs):
+            result = True
+        else:
+            # 2) 종목명 기반 휴리스틱 (브랜드 프리픽스 또는 ETF/ETN/레버리지 등 키워드)
+            nm = (name or "").upper().replace(" ", "")
+            if nm and (any(nm.startswith(b) for b in _KR_ETF_BRANDS)
+                       or any(k in nm for k in _KR_ETF_ETN_KEYWORDS)):
+                result = True
+    except Exception:
+        result = False
+
+    _ETF_ETN_CACHE[code] = result
+    return result
+
 # [추가] 휴장일 캐시
 _HOLIDAY_CACHE = {}
 
