@@ -3176,36 +3176,20 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
         # [최적화] 필요한 다수의 API를 병렬(Fan-out)로 일제히 호출하여 체감 속도 극대화
         for attempt in range(2):
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-                # [최적화] 개요 테이블은 NXT(대체거래소) 보조 호출을 생략하고, 백그라운드 예열 데이터를
-                # 재사용(cache_ttl 확대)하여 종목당 KIS 호출 수를 줄인다.
-                # [실시간] 현재가·체결강도 모두 KRX/NXT 시간대 무관하게 매 실행마다 새로 조회한다.
-                # (cache_ttl=0 → 예열 캐시를 재사용하지 않는 라이브 호출. 25초 예열 재사용은 폐지)
-                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, False, 0)
+                # [실시간/통합] 현재가·체결강도를 KRX/NXT 한 번의 호출로 통합 조회한다(include_nxt=True).
+                # cache_ttl=0 → 예열 캐시를 재사용하지 않는 라이브 호출(25초 예열 폐지). 시스템 트레이딩과
+                # 동일 캐시 키(cp_{code}_J / vol_{code})를 공유해 동시 조회 시 중복 호출이 합쳐진다.
+                # (모의투자(VTS)는 NXT 미지원이라 내부에서 NX 조회를 건너뛴다 → 정규장 시세만 표시)
+                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0)
                 # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
-                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, False, 0) if not is_overseas and not use_investor_data else None
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, True, 0) if not is_overseas and not use_investor_data else None
                 fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
                 # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
                 fut_ob = ex.submit(api.get_order_book, code, False) if (config.session.is_toss and not is_overseas) else None
-                # [복원] 개요 테이블도 NXT(대체거래소) 현재가를 반영한다. base 현재가는 예열 캐시
-                # (include_nxt=False)를 그대로 재사용하고, NXT 시세만 단독으로 1콜 병렬 조회해
-                # 병합한다. (종목당 추가 호출 최소화 + KRX/NXT 시간대 무관 동일 동작)
-                fut_nxt = ex.submit(api.fetch_nxt_price, code) \
-                    if (not is_overseas and not config.session.is_simulation and not config.session.is_toss) else None
 
                 curr_data = fut_curr.result()
-                # NXT 현재가를 병합한다. 예열 캐시 객체를 직접 변형하면 다른 경로로 ats_prpr이
-                # 새므로, output을 얕게 복제해 주입한다.
-                if fut_nxt is not None and curr_data and curr_data.get('rt_cd') == '0':
-                    try:
-                        _nxt_p = fut_nxt.result()
-                        if _nxt_p > 0:
-                            _out = dict(curr_data.get('output') or {})
-                            _out['ats_prpr'] = str(_nxt_p)
-                            curr_data = {**curr_data, 'output': _out}
-                    except Exception:
-                        pass
                 if fut_chart is not None:
                     chart_df = fut_chart.result()
                 inv_list = fut_inv.result() if fut_inv else None
