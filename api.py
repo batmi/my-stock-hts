@@ -11,6 +11,9 @@ import re
 import os
 import threading
 import concurrent.futures
+import sqlite3
+import pickle
+from contextlib import closing
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
@@ -666,6 +669,54 @@ _CHART_CACHE_LOCK = threading.RLock()
 # [메모리] 차트 캐시는 DataFrame을 보관해 항목당 비용이 크다. 라즈베리파이 OOM 방어를 위해
 # 항목 수를 제한하고, 초과 시 가장 오래된 항목부터 제거한다. (전체 시장 스캔 시 무제한 누적 방지)
 _CHART_CACHE_MAX = 600
+
+# [영속] 일봉 차트 디스크 캐시(SQLite). 일봉은 하루 1회만 바뀌므로, 같은 거래일 동안은
+# 재시작 후에도 네트워크 재조회 없이 디스크에서 즉시 복원한다(시작 버스트·반복 조회 절감).
+# 메모리 캐시(_CHART_CACHE) 미스 시 디스크를 확인하고, 과거일자 항목은 자동 정리해 크기를 제한한다.
+_CHART_DISK_LOCK = threading.RLock()
+_chart_disk_pruned_date = None
+
+def _chart_disk_path():
+    base = getattr(config, 'DATA_DIR', None) or getattr(config, 'JSON_DIR', '.')
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(base, 'chart_cache.db')
+
+def _chart_disk_get(cache_key, today_str):
+    """디스크 일봉 캐시에서 '오늘자' DataFrame을 복원한다(없거나 비활성/오류 시 None)."""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return None
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
+            row = conn.execute("SELECT df_blob FROM chart_cache WHERE cache_key=? AND trade_date=?", (cache_key, today_str)).fetchone()
+            if row and row[0]:
+                df = pickle.loads(row[0])
+                if df is not None and not df.empty:
+                    return df
+    except Exception as e:
+        logger.debug(f"[ChartDisk] get 실패({cache_key}): {e}")
+    return None
+
+def _chart_disk_set(cache_key, df, today_str):
+    """디스크 일봉 캐시에 '오늘자' DataFrame을 저장하고, 과거일자 항목은 하루 1회 정리한다."""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return
+    global _chart_disk_pruned_date
+    try:
+        blob = pickle.dumps(df)
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
+            conn.execute("INSERT OR REPLACE INTO chart_cache (cache_key, trade_date, df_blob, ts) VALUES (?,?,?,?)",
+                         (cache_key, today_str, blob, time.time()))
+            # 거래일이 바뀌면 과거일자 항목 일괄 정리(디스크 무제한 누적 방지)
+            if _chart_disk_pruned_date != today_str:
+                conn.execute("DELETE FROM chart_cache WHERE trade_date != ?", (today_str,))
+                _chart_disk_pruned_date = today_str
+    except Exception as e:
+        logger.debug(f"[ChartDisk] set 실패({cache_key}): {e}")
 # [추가] 캐시 오버레이(get_current_price_data) 재진입 방지용 가드.
 # 액면분할 보정 경로(get_current_price_data → get_chart_data → 오버레이 → get_current_price_data)에서
 # 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
@@ -704,6 +755,15 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             elif (now - cached['timestamp']).total_seconds() > (ttl_minutes * 60):
                 del _CHART_CACHE[cache_key]
                 cached = None
+
+    # [영속] 메모리 미스 시 디스크(오늘자) 캐시를 확인해 네트워크 재조회를 피한다(재시작 내성).
+    if cached is None and not is_index:
+        disk_df = _chart_disk_get(cache_key, today_str)
+        if disk_df is not None:
+            cached = {'df': disk_df, 'timestamp': now, 'date': today_str}
+            with _CHART_CACHE_LOCK:
+                _CHART_CACHE[cache_key] = cached
+                _evict_oldest(_CHART_CACHE, _CHART_CACHE_MAX, 'timestamp')
 
     if cached:
         df = cached['df'].copy()
@@ -808,6 +868,9 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                 'date': today_str
             }
             _evict_oldest(_CHART_CACHE, _CHART_CACHE_MAX, 'timestamp')
+        # [영속] 일봉(비지수)만 디스크에 저장해 재시작/반복 조회 시 네트워크 호출을 줄인다.
+        if not is_index:
+            _chart_disk_set(cache_key, df, today_str)
     return df
 
 def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None):
@@ -1016,6 +1079,32 @@ class ThrottledSession(requests.Session):
         self.request_history_sim = deque()
         self.request_history_real = deque()
         self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
+        # [#7] 실전 실효 TPS를 적응형으로 운행한다(AIMD).
+        #  - 시작값: 명목 한도 × REAL_TPS_SAFETY(=0.9 마진). 성공이 누적되면 마진을 조금씩 줄여(가산 증가)
+        #    실효 TPS를 점진 상향하고, EGW00201(초당 거래건수 초과)이 나면 곱셈 감소로 즉시 물러난다.
+        #  - [REAL_TPS_SAFETY_MIN, REAL_TPS_SAFETY_MAX] 범위 내에서 적정 TPS로 자가 수렴한다.
+        self.adaptive_limit_real = None
+
+    def _real_tps_bounds(self):
+        nominal = config.REAL_TX_PER_SECOND
+        lo = nominal * getattr(config, 'REAL_TPS_SAFETY_MIN', 0.85)
+        hi = nominal * getattr(config, 'REAL_TPS_SAFETY_MAX', 0.98)
+        start = nominal * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+        return lo, hi, start
+
+    def _tps_on_success_real(self):
+        """실전 성공(레이트리밋 아님) 시 실효 TPS를 가산 증가(마진 축소)시킨다."""
+        with self.lock:
+            lo, hi, start = self._real_tps_bounds()
+            cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
+            self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
+
+    def _tps_on_rate_limit_real(self):
+        """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소(마진 확대)시킨다."""
+        with self.lock:
+            lo, hi, start = self._real_tps_bounds()
+            cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
+            self.adaptive_limit_real = max(lo, cur * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
@@ -1057,8 +1146,10 @@ class ThrottledSession(requests.Session):
                                 effective_limit = target_limit  # 모의(2 TPS)는 기존 동작 유지
                                 min_interval = (1.0 / target_limit) * 1.2
                             else:
-                                safety = getattr(config, 'REAL_TPS_SAFETY', 0.9)
-                                effective_limit = max(1.0, target_limit * safety)  # 예: 20 * 0.9 = 18
+                                # [#7] 적응형 실효 한도(AIMD). 미초기화 시 시작 마진(REAL_TPS_SAFETY)으로 출발.
+                                if self.adaptive_limit_real is None:
+                                    self.adaptive_limit_real = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+                                effective_limit = max(1.0, self.adaptive_limit_real)
                                 min_interval = 1.0 / effective_limit
 
                             # 1. 윈도우 기반 한도 체크 (Burst 방어)
@@ -1133,6 +1224,8 @@ class ThrottledSession(requests.Session):
                         #        (Status 500으로 내려오지만 실제 장애가 아니라 Rate Limit임)
                         if 'EGW00201' in body_preview or 'EGW00215' in body_preview:
                             logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
+                            if is_real_server:
+                                self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
                         else:
                             logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {body_preview}")
                     except Exception: pass
@@ -1148,6 +1241,10 @@ class ThrottledSession(requests.Session):
                             rt_cd = res_json.get('rt_cd')
                             msg_cd = res_json.get('msg_cd')
                             msg1 = res_json.get('msg1', '')
+
+                            # [#7] 실전 정상 응답이면 실효 TPS를 가산 증가(마진 축소)시킨다.
+                            if is_real_server and rt_cd == '0':
+                                self._tps_on_success_real()
 
                             # [추가] 지수 조회 API(실전)의 빈 응답 이슈 예외 처리
                             # 실전투자 서버에서 지수 조회 시 rt_cd가 없거나 빈 값으로 오는 경우가 있음 -> 에러 로그 제외하고 Fallback 유도
@@ -1172,6 +1269,8 @@ class ThrottledSession(requests.Session):
                                 if msg_cd == 'EGW00201' or (msg_cd == 'EGW00215' and 'inquire' in url):
                                     should_retry = True
                                     retry_reason = f"Rate Limit Exceeded ({msg_cd}): {msg1_disp}"
+                                    if is_real_server:
+                                        self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
                                 elif msg_cd == 'EGW00215' and 'inquire' not in url:
                                     # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
                                     req_body = kwargs.get('data', '')
@@ -2137,6 +2236,22 @@ def get_domestic_index_price(code):
         _set_micro_cache(cache_key, res)
     return res
 
+def _nxt_quote_window():
+    """NXT(대체거래소) 보조 시세 조회가 의미있는 시간대인지 판단한다(TPS 절감용 시간대 게이트).
+
+    정규장(09:00~15:30)에는 KRX가 대표가이고 NXT와 사실상 동일하므로, 종목당 NXT 보조
+    호출을 생략해 전역 TPS 부담을 줄인다(분석 속도 개선). KRX가 닫혀 NXT 시세가 유일하게
+    유효한 NXT 단독 거래시간(프리 08:00~09:00, 애프터 15:30~20:00)에만 조회한다.
+    그 외 시간(야간)·휴장일은 NXT가 닫혀 빈 응답이므로 생략한다.
+    """
+    try:
+        if is_holiday_today():
+            return False
+    except Exception:
+        pass
+    now = datetime.now().strftime("%H%M")
+    return ("0800" <= now < "0900") or ("1530" <= now <= "2000")
+
 def fetch_nxt_price(code):
     """NXT(대체거래소) 현재가만 단독 조회한다. (모의투자/오류/미체결 시 0 반환)
 
@@ -2191,10 +2306,11 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
                 logger.debug(f"[API] 52주 고가 보정 중 오류: {e}")
 
             # [추가] NXT(대체거래소) 시세 조회 및 병합 (NX 코드 사용)
-            # [수정] 모의투자(VTS)는 NXT를 지원하지 않아 NX 조회가 매번 ReadTimeout을
-            #  유발하므로 모의투자에서는 조회를 건너뛴다.
+            # [수정] 모의투자(VTS)는 NXT 미지원이라 fetch_nxt_price가 0을 반환한다.
+            # [최적화] 정규장(09:00~15:30)엔 KRX가 대표가이므로 NXT 보조호출을 생략(_nxt_quote_window)해
+            #  종목당 호출을 절반으로 줄인다. NXT 단독시간(프리/애프터)에만 NXT를 조회한다.
             out = res.get('output', {})
-            if include_nxt:
+            if include_nxt and _nxt_quote_window():
                 nxt_price = fetch_nxt_price(code)
                 if nxt_price > 0:
                     out['ats_prpr'] = str(nxt_price)
@@ -2409,7 +2525,8 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
     # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
     # [수정] 모의투자(VTS)는 NXT 미지원 → NX 조회 스킵 (불필요한 ReadTimeout 방지)
     try:
-        if include_nxt and not config.session.is_simulation:
+        # [최적화] 정규장엔 NXT 보조호출 생략(_nxt_quote_window), NXT 단독시간에만 조회 → TPS 절감
+        if include_nxt and not config.session.is_simulation and _nxt_quote_window():
             nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
             if nxt_data and nxt_data.get('rt_cd') == '0':
                 nxt_items = nxt_data.get('output', [])

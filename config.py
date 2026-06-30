@@ -357,7 +357,31 @@ REAL_TX_PER_SECOND = 20   # 실전투자 서버 최대 TPS: 20 (KIS 명목 한�
 #       상시 발생한다. 약 10% 마진(실효 18 TPS)이면 20건이 ~1.06초에 분산되어
 #       서버 1초 윈도우 기준 한도 미만으로 유지되며, 재시도 폭주가 사라져
 #       오히려 실효 처리량이 안정된다. (1.0 = 마진 없음 / 값을 낮출수록 보수적)
-REAL_TPS_SAFETY = 0.9     # 실전투자 실효 한도 = 20 * 0.9 = 18 TPS
+REAL_TPS_SAFETY = 0.9     # 실전투자 실효 한도 '시작값' = 20 * 0.9 = 18 TPS (#7 적응형의 출발점)
+
+# [#7] 적응형 동적 TPS 마진 (AIMD: 가산 증가·곱셈 감소)
+# - 시작은 REAL_TPS_SAFETY(0.9 마진=18 TPS). 성공이 누적되면 마진을 조금씩 줄여 실효 TPS를 점진
+#   상향(MAX까지)하고, EGW00201(초과)이 나면 즉시 곱셈 감소로 물러나 적정 TPS로 자가 수렴한다.
+REAL_TPS_SAFETY_MIN = 0.85   # 백오프 하한 (= 20 * 0.85 = 17 TPS). 과도한 하강 방지
+REAL_TPS_SAFETY_MAX = 0.98   # 상향 상한 (= 20 * 0.98 = 19.6 TPS). 명목 한도 직전까지만 도전
+TPS_ADAPT_STEP = 0.05        # 성공 1건당 실효 TPS 가산 증가폭 (TPS). 작게 둬 완만히 상승
+TPS_ADAPT_BACKOFF = 0.9      # EGW00201 발생 시 실효 TPS 곱셈 감소율 (×0.9)
+
+def analysis_max_workers():
+    """[#9] 종목 단위 외부 병렬 분석(KIS 경로)의 워커 수를 TPS에 정합시킨다.
+
+    게이트(실효 TPS)보다 훨씬 많은 워커는 게이트 앞에서 대기만 하며 라즈베리파이 메모리를
+    낭비한다. 동시에 in-flight 시킬 종목 수를 TPS에 비례해 제한한다.
+    (모의 2 TPS→2, 실전 20 TPS→약 5). 토스는 별도 한도라 보수적으로 4를 쓴다.
+    """
+    try:
+        if session.is_toss:
+            return 4
+        if session.is_simulation:
+            return 2
+        return max(3, min(6, int(REAL_TX_PER_SECOND / 4)))
+    except Exception:
+        return 4
 
 # [추가] 토스증권 Open API 기본 호출 한도 (그룹별 토큰버킷이나, 보수적 단일 간격으로 운영)
 # 토스 한도는 10/s → 최대치(10)로 운영한다.

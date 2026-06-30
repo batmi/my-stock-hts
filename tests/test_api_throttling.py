@@ -24,6 +24,10 @@ class TestThrottledSession(unittest.TestCase):
         config.SIM_TX_PER_SECOND = 2.0   # 0.5초 간격 (실제로는 1.2배 안전계수 적용 -> 0.6초)
         config.REAL_TX_PER_SECOND = 10.0 # 실효 한도 = 10 * REAL_TPS_SAFETY(0.9) = 9 TPS -> 1/9초 간격
         config.REAL_TPS_SAFETY = 0.9     # 실전 내부 안전계수 명시 고정
+        # [#7] 적응형 TPS를 비활성(step=0)으로 고정해 게이트 간격 검증을 결정적으로 만든다.
+        # (성공 시 실효 TPS가 미세 상향되면 두 번째 요청 간격이 1/9에서 어긋나 검증이 흔들린다)
+        self.original_tps_adapt_step = getattr(config, 'TPS_ADAPT_STEP', 0.05)
+        config.TPS_ADAPT_STEP = 0.0
         
         # requests.Session.request 모킹 (실제 네트워크 요청 방지)
         self.patcher_request = patch('requests.Session.request')
@@ -67,6 +71,7 @@ class TestThrottledSession(unittest.TestCase):
         config.SIM_TX_PER_SECOND = self.original_sim_tps
         config.REAL_TX_PER_SECOND = self.original_real_tps
         config.REAL_TPS_SAFETY = self.original_real_safety
+        config.TPS_ADAPT_STEP = self.original_tps_adapt_step
         
         for patcher in [self.patcher_request, self.patcher_time, self.patcher_sleep]:
             try:

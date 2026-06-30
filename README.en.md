@@ -248,6 +248,13 @@ This system applies a robust backend architecture to solve concurrency issues an
     *   For long-running operation on constrained devices (e.g., Raspberry Pi 1GB), the quote micro-cache and chart cache enforce a **maximum item count** and evict the oldest entries when exceeded, so memory does not grow unbounded even during full-market scans.
 *   **Interrupt-safe Exceptions**: 
     *   Bare `except:` clauses were normalized to `except Exception:` so that `KeyboardInterrupt`/`SystemExit` propagate correctly (preserving Ctrl+C responsiveness and clean shutdown).
+*   **API Call Efficiency & Speed (TPS Optimization)**:
+    *   KIS/Toss OpenAPIs enforce a per-second transaction (TPS) limit, and every quote/order call passes serially through a single global TPS gate. Analysis time is therefore "total calls ÷ TPS", so the following improvements target both factors.
+    *   **Adaptive Dynamic TPS (AIMD)**: Instead of a fixed margin (effective 18 TPS), the effective TPS starts from a margin and is additively raised as successes accumulate, then multiplicatively backed off the moment `EGW00201` (rate exceeded) occurs — **self-converging to the optimal TPS** for current server/network conditions.
+    *   **NXT Time-window Gating**: During the regular session (09:00–15:30) KRX is the representative price, so the auxiliary NXT (alternative exchange) quote call is skipped and only fetched during NXT-only sessions (pre/after market), **roughly halving per-stock calls during regular hours**.
+    *   **Persistent Daily-chart Cache**: Daily candles change once per day, so they are persisted to disk (SQLite) per trading day. After a restart they are restored instantly **without re-fetching over the network for the same trading day** (eliminating startup bursts); stale-date entries are auto-pruned.
+    *   **Skip Unneeded Order-book Calls**: The order book (ask/bid ratio) is fetched only for stocks whose buy supply/demand gate is active, removing order-book calls for stocks with the gate disabled.
+    *   **TPS-aligned Worker Pools**: Per-stock parallel analysis worker counts are aligned to TPS, preventing excess threads that merely wait at the gate (wasting memory).
 
 ## 5. Project Structure
 

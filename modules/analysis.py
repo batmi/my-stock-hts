@@ -2153,7 +2153,7 @@ def diagnose_group_stocks(market_filter=None):
         task = progress.add_task(f"[cyan]등록된 종목 병렬 분석 중{title_suffix}...[/cyan]", total=len(targets))
         
         # [최적화] ThrottledSession 제어 기반으로 모의투자(2) / 실전(4) 통합 병렬 처리 허용
-        max_w = 2 if config.session.is_simulation else 4
+        max_w = config.analysis_max_workers()
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(_diagnose_group_stock_worker, item, market_filter, restricted_stocks, rules_map, reserved_codes, m_codes) for item in targets]
             for future in concurrent.futures.as_completed(futures):
@@ -2649,7 +2649,7 @@ def analyze_market_stocks(market_type):
                         progress.console.print(f"[dim red][{completed_count}/{len(stock_list)}] [실패] {stock_info['name']}({stock_info['code']}) - {err_msg}[/dim red]")
 
                 # [최적화] 전체 종목 분석 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
-                max_w = 2 if config.session.is_simulation else 4
+                max_w = config.analysis_max_workers()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                     futures = {executor.submit(_analyze_stock_worker, stock, params, restricted_stocks, rules_map, reserved_codes, m_codes): stock for stock in stock_list}
                     for future in concurrent.futures.as_completed(futures):
@@ -2702,7 +2702,7 @@ def analyze_market_stocks(market_type):
                 return '-'
 
             # [최적화] 업종 정보 조회 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
-            max_w_sec = 2 if config.session.is_simulation else 4
+            max_w_sec = config.analysis_max_workers()
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w_sec) as executor:
                 future_to_idx = {executor.submit(fetch_sector, item): i for i, item in enumerate(buy_candidates)}
                 for future in concurrent.futures.as_completed(future_to_idx):
@@ -2946,8 +2946,8 @@ def save_all_market_analysis():
                 analyzed_data = []
                 task = progress.add_task(f"[cyan]{market_type} 기술적 분석 중...[/cyan]", total=len(stock_list))
 
-                max_w = 4 if config.session.is_simulation else 5
-                
+                max_w = config.analysis_max_workers()
+
                 # 1. 기술적 분석 병렬 처리
                 with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                     futures = {executor.submit(_analyze_stock_worker, stock, None, restricted_stocks, rules_map, reserved_codes, m_codes): stock for stock in stock_list}

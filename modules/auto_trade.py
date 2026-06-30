@@ -5473,11 +5473,19 @@ class AutoTrader:
             
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
+            # [최적화/#6] 호가창(order_book)은 ask_bid_ratio 수급 게이트에만 쓰인다. 이 종목의 유효
+            # 임계값(BUY_ASK_BID_RATIO; 개별 룰 우선)이 0이면 게이트가 꺼져 있어 호가 조회가 무의미하므로
+            # 생략한다. 토스는 체결강도 미제공으로 호가비가 유일한 수급지표이므로 항상 조회한다.
+            _ab_rule = rules_map.get(code)
+            _ab_thr = (_ab_rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
+                       if _ab_rule else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
+            _need_ob = config.session.is_toss or (_ab_thr or 0) > 0
+
             # 5. [최적화] 차트, 체결강도, 호가창 데이터 병렬(동시) 조회
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
-                fut_ob = ex.submit(api.get_order_book, code, is_overseas_stock)
+                fut_ob = ex.submit(api.get_order_book, code, is_overseas_stock) if _need_ob else None
                 
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result() if fut_vol else None
