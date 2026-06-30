@@ -604,24 +604,32 @@ def show_open_orders():
                             if "매도" in sll_buy_name:
                                 code = db_o.get('code')
                                 cur_qty = holdings_map.get(code, 0)
-                                if cur_qty == 0:
+                                # [수정] 발주 직전 보유수량 대비 감소분으로 체결 판정 (부분매도 대응)
+                                #  pre_qty 미보유 시 기존 전량매도(잔고 0) 가정으로 폴백
+                                order_qty = int(float(db_o.get('qty', 0)))
+                                trader_om = auto_trade.AutoTrader().order_manager
+                                pre_qty = trader_om.sell_pre_qty.get(str(db_odno))
+                                is_delta_fill = pre_qty is not None and (pre_qty - cur_qty) >= order_qty
+                                is_sell_filled = is_delta_fill or cur_qty == 0
+                                if is_sell_filled:
+                                    fill_reason = "잔고 감소 확인" if is_delta_fill and cur_qty != 0 else "잔고 0 확인"
                                     cm = auto_trade.ConclusionMonitor()
                                     with cm._lock:
                                         if db_odno in cm.processed_sim_fills: continue
                                         cm.processed_sim_fills.add(db_odno)
-                                        
+
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 0 확인 -> 체결 처리 시작")
+                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) {fill_reason} -> 체결 처리 시작")
                                     # 원본 업데이트 제거 (접수 기록 보존)
-                                    
+
                                     # [추가] 체결 히스토리 생성
-                                    fill_price = _create_fill_history(db_o, "잔고 0 확인")
+                                    fill_price = _create_fill_history(db_o, fill_reason)
 
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 체결 처리 완료 (알림 전송 예정)")
 
                                     # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매도", db_o, "잔고 0 확인", fill_price)
+                                    _send_sim_alert("매도", db_o, fill_reason, fill_price)
                                     
                                     # [추가] AutoTrader 상태도 업데이트하여 중복 처리 방지
                                     trader = auto_trade.AutoTrader()
@@ -1176,7 +1184,10 @@ def send_order(order_type):
                 trader = auto_trade.AutoTrader()
                 # [수정] OrderManager를 통해 등록 (리팩토링 대응)
                 if hasattr(trader, 'order_manager'):
-                    trader.order_manager.register_manual_order(stock_code, odno)
+                    # [추가] 매도는 발주 직전 보유수량(max_qty=매도가능수량)을 함께 등록하여
+                    #  모의투자에서 부분매도 체결을 잔고 감소분으로 즉시 감지하게 한다.
+                    sell_pre_qty = int(max_qty) if order_type == 'sell' and max_qty > 0 else None
+                    trader.order_manager.register_manual_order(stock_code, odno, pre_qty=sell_pre_qty)
                 
                 # 텔레그램 알림
                 msg = f"🚀 [수동 주문] {t_type} {stock_name} ({stock_code})\n수량: {qty}주\n단가: {display_price}"

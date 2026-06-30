@@ -1091,10 +1091,15 @@ class ConclusionMonitor:
                                 is_filled = True
                                 reason = "잔고 입고 확인"
                         
-                        # 매도 주문: 잔고가 0이면 체결로 간주 (전량 매도 가정)
+                        # 매도 주문: 발주 직전 보유수량 대비 감소분이 주문수량 이상이면 체결로 간주
+                        #  (부분매도 대응. pre_qty 미보유 시 전량매도 가정으로 폴백)
                         elif "sell" in type_str.lower() or "매도" in type_str:
                             current_qty = holdings_map.get(code, 0)
-                            if current_qty == 0:
+                            pre_qty = trader.order_manager.sell_pre_qty.get(str(odno))
+                            if pre_qty is not None and (pre_qty - current_qty) >= qty:
+                                is_filled = True
+                                reason = "잔고 감소 확인"
+                            elif current_qty == 0:
                                 is_filled = True
                                 reason = "잔고 0 확인"
                         
@@ -1595,6 +1600,10 @@ class OrderManager:
     def __init__(self, trader):
         self.trader = trader
         self.pending_orders = {}
+        # [추가] 매도 발주 직전 보유수량 {odno: qty} - 모의투자 부분매도 체결 감지용
+        #  잔고가 0이 되어야만 체결로 보던 기존 방식은 부분매도를 감지하지 못해
+        #  (실시간 감지 실패 → 미체결 타임아웃 우회 경로로 수 분 지연 발생) 보강한다.
+        self.sell_pre_qty = {}
         self._lock = threading.RLock()
 
     def is_pending(self, code):
@@ -1613,6 +1622,7 @@ class OrderManager:
                         del self.pending_orders[code][odno]
                         if not self.pending_orders[code]:
                             del self.pending_orders[code]
+                        self.sell_pre_qty.pop(str(odno), None)
                         self.trader.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
                         
                         # 체결 완료 시 지연 후 보유 종목 리스트 갱신 출력
@@ -1644,12 +1654,18 @@ class OrderManager:
                     else:
                         self.trader.log(f"[OrderState] 상태 변경: {code} (No.{odno}) {current_status} -> {status}")
 
-    def register_manual_order(self, code, odno):
-        """수동 주문 발생 시 상태 추적 등록 (외부 호출용)"""
+    def register_manual_order(self, code, odno, pre_qty=None):
+        """수동 주문 발생 시 상태 추적 등록 (외부 호출용)
+
+        pre_qty: 매도 주문의 경우 발주 직전 보유수량. 모의투자에서 부분매도
+                 체결을 잔고 감소분으로 감지하기 위해 사용한다.
+        """
         with self._lock:
             if code not in self.pending_orders:
                 self.pending_orders[code] = {}
             self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+            if pre_qty is not None:
+                self.sell_pre_qty[str(odno)] = int(pre_qty)
 
     def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
         """주문 전송 및 상태 등록"""
