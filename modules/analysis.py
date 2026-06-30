@@ -3145,38 +3145,53 @@ def save_all_market_analysis():
     except Exception as e:
         config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
 
-def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes):
-    """(내부함수) print_table용 단일 종목 데이터 조회 및 가공 워커"""
+def _fetch_chart_data(item, is_overseas):
+    """(내부함수) print_table 1단계: 과거(전체) 일봉 차트 데이터 수신.
+
+    캐시 적중(6시간 이내·당일) 시 즉시 반환되고, 캐시 미스 때만 실제 250봉 다운로드가 발생한다.
+    → '데이터 수신' 프로그래스 바는 실제 전체 데이터를 받아오는 동안에만 길어진다.
+    """
+    name, code = item
     try:
-        name, code = item
-        w52_pos_str, per_str, pbr_str, shar_str = "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]"
-        foreign_rate_str = "[dim]-[/dim]"
-        inv_str = "[dim]-[/dim]"
+        return api.get_chart_data(code, is_overseas, 'daily', False)
+    except Exception as e:
+        logger.error(f"[{code}] 차트 데이터 수신 오류: {e}")
+        return None
+
+def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=None):
+    """(내부함수) print_table 2단계 전반부: 당일 실시간 데이터(현재가/체결강도/수급/상세) 수신.
+
+    chart_df가 주어지면(1단계에서 수신) 차트는 재수신하지 않는다. 실제 지표 분석/행 포맷은
+    _analyze_table_row가 담당한다. (메뉴1처럼 '데이터 수신' / '실시간 데이터 수신 및 분석' 단계 분리)
+    """
+    name, code = item
+    bundle = {'curr_data': None, 'chart_df': chart_df, 'inv_list': None,
+              'rt_strength': None, 'ask_bid_ratio': None, 'detail': None}
+    try:
         cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
-        strength_display = ""
+        curr_data = inv_list = detail = None
+        rt_strength = None
         ask_bid_ratio = None  # [토스] 체결강도 미제공 → 매도잔량비로 대체 표시
 
-        # [수정] 타이틀 기반으로 주식/ETF 컨텍스트 정확히 구분 (데이터 처리 및 컬럼 매칭용)
-        # 기존: 코드 형태(숫자 여부)로만 판단하여 ETF(QQQ 등)를 주식으로 오인하는 문제 해결
-        is_us_stock_context = is_overseas and ("주식" in title)
-        is_us_etf_context = is_overseas and ("ETF" in title)
-
         # [최적화] 필요한 다수의 API를 병렬(Fan-out)로 일제히 호출하여 체감 속도 극대화
-        # [수정] KIS API 등 동시 다발적 요청 시 발생하는 Rate Limit / Timeout 누락 방지 (재시도 로직 추가)
         for attempt in range(2):
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas)
-                fut_chart = ex.submit(api.get_chart_data, code, is_overseas)
+                # [최적화] 개요 테이블은 NXT(대체거래소) 보조 호출을 생략하고, 백그라운드 예열 데이터를
+                # 재사용(cache_ttl 확대)하여 종목당 KIS 호출 수를 줄인다.
+                _ov_ttl = getattr(config, 'OVERVIEW_PRICE_TTL_SEC', 25)
+                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, False, _ov_ttl)
+                # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
+                fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
-                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex) if not is_overseas and not use_investor_data else None
+                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, False, _ov_ttl) if not is_overseas and not use_investor_data else None
                 fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
                 # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
                 fut_ob = ex.submit(api.get_order_book, code, False) if (config.session.is_toss and not is_overseas) else None
 
                 curr_data = fut_curr.result()
-                chart_df = fut_chart.result()
+                if fut_chart is not None:
+                    chart_df = fut_chart.result()
                 inv_list = fut_inv.result() if fut_inv else None
-                rt_strength = None
                 if fut_vol:
                     try: rt_strength = fut_vol.result()
                     except: pass
@@ -3191,10 +3206,40 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
                             elif ta > 0: ask_bid_ratio = 99.9
                     except: pass
                 detail = fut_detail.result() if fut_detail else None
-            
+
             if curr_data and curr_data.get('rt_cd') == '0' and chart_df is not None and not chart_df.empty:
                 break
             time.sleep(0.5)
+
+        bundle.update({'curr_data': curr_data, 'chart_df': chart_df, 'inv_list': inv_list,
+                       'rt_strength': rt_strength, 'ask_bid_ratio': ask_bid_ratio, 'detail': detail})
+    except Exception as e:
+        logger.error(f"[{code}] 데이터 수집 오류: {e}")
+    return bundle
+
+def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, bundle):
+    """(내부함수) print_table 2단계: 수집된 데이터(bundle)로 지표 분석 및 행 포맷."""
+    try:
+        name, code = item
+        w52_pos_str, per_str, pbr_str, shar_str = "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]"
+        foreign_rate_str = "[dim]-[/dim]"
+        inv_str = "[dim]-[/dim]"
+        cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
+        strength_display = ""
+        ask_bid_ratio = None  # [토스] 체결강도 미제공 → 매도잔량비로 대체 표시
+
+        # [수정] 타이틀 기반으로 주식/ETF 컨텍스트 정확히 구분 (데이터 처리 및 컬럼 매칭용)
+        # 기존: 코드 형태(숫자 여부)로만 판단하여 ETF(QQQ 등)를 주식으로 오인하는 문제 해결
+        is_us_stock_context = is_overseas and ("주식" in title)
+        is_us_etf_context = is_overseas and ("ETF" in title)
+
+        # [최적화] 1단계(_collect_table_data)에서 수집한 원천 데이터를 사용한다.
+        curr_data = bundle.get('curr_data')
+        chart_df = bundle.get('chart_df')
+        inv_list = bundle.get('inv_list')
+        rt_strength = bundle.get('rt_strength')
+        ask_bid_ratio = bundle.get('ask_bid_ratio')
+        detail = bundle.get('detail')
 
         # [추가] 차트 데이터 당일 종가/고가/저가 실시간 갱신 (점수 0.5점 오차 방지)
         try:
@@ -3552,6 +3597,21 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
         logger.error(f"[{code}] 분석 오류: {e}")
         return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
 
+def _realtime_and_analyze(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, chart_df):
+    """(내부함수) print_table 2단계: 당일 실시간 데이터 수신 + 지표 분석.
+
+    1단계에서 받은 과거 차트(chart_df)를 받아 현재가/체결강도/수급을 수신하고 지표를 계산한다.
+    """
+    bundle = _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=chart_df)
+    return _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks,
+                              rules_map, market_regime_adj, reserved_codes, m_codes, bundle)
+
+def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes):
+    """(호환용) 단일 종목 수집+분석을 한 번에 수행한다. (수집/분석 단계 분리 이전 호출부·테스트 호환)"""
+    bundle = _collect_table_data(item, title, is_overseas, use_investor_data)
+    return _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks,
+                              rules_map, market_regime_adj, reserved_codes, m_codes, bundle)
+
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
@@ -3653,14 +3713,33 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
+    # [최적화] 해외 그룹은 TradingView 일괄 조회(HTTP 1회)로 fast_info 마이크로 캐시를 사전 예열한다.
+    # → 워커별 개별 yfinance 단건 호출(_YF_LOCK 직렬화)을 캐시 적중으로 대체하여 체감 속도를 높인다.
+    if is_overseas and data_list:
+        try:
+            ovs_codes = [c for _, c in data_list]
+            api.prefetch_multiple_current_prices(ovs_codes, is_overseas=True)
+        except Exception as e:
+            logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
+
     # [최적화] 통신+연산 통합 처리를 위한 스레드 수 안정화
     if is_overseas:
         max_w = 4 if config.session.is_simulation else 5 # 야후 API 동시 호출 차단 방지
     else:
         # KIS API 동시 호출 제한(TPS) 방지를 위해 실전투자 시 5로 하향
         max_w = 4 if config.session.is_simulation else 5
+    # [수정] 메뉴1처럼 진행 상태를 '데이터 수집'과 '지표 분석' 2단계로 분리하여 운영자 인지성을 높인다.
+    _fail_cols = 14 if not is_overseas else (12 if is_us_stock else 11)
+    def _fail_row(idx):
+        name, code = data_list[idx]
+        return ([name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * _fail_cols], False, False, False, False)
+
     try:
         used_marks = set()
+        charts = [None] * len(data_list)
+        results = [None] * len(data_list)
+
+        # 1단계: 데이터 수신 (과거 전체 일봉). 캐시 적중 시 즉시 통과, 캐시 미스 때만 실제 다운로드.
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -3670,59 +3749,69 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             console=config.console,
             transient=True
         ) as progress:
-            # [수정] 통신과 연산 시간 편차로 인한 점프 현상을 해결하고 일괄 처리함을 안내
-            task = progress.add_task(f"[cyan]{title} (수집 및 분석 중)[/cyan]", total=len(data_list))
-            results = [None] * len(data_list)
-
+            task_d = progress.add_task(f"[cyan]{title} (데이터 수신)[/cyan]", total=len(data_list))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                futures = [
+                fut_map = {
+                    executor.submit(_fetch_chart_data, item, is_overseas): i
+                    for i, item in enumerate(data_list)
+                }
+                for future in concurrent.futures.as_completed(fut_map):
+                    idx = fut_map[future]
+                    try:
+                        charts[idx] = future.result()
+                    except Exception as e:
+                        logger.error(f"Chart fetch error: {e}")
+                        charts[idx] = None
+                    progress.advance(task_d)
+
+        # 2단계: 실시간 데이터 수신 및 분석 (당일 현재가/체결강도/수급 수신 + 지표 연산)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task_a = progress.add_task(f"[cyan]{title} (실시간 데이터 수신 및 분석)[/cyan]", total=len(data_list))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                fut_map = {
                     executor.submit(
-                        _print_table_worker, 
-                        item, 
-                        title,
-                        is_overseas, 
-                        use_investor_data, 
-                        restricted_stocks, 
-                        rules_map, 
-                        market_regime_adj,
-                        reserved_codes,
-                        m_codes
-                    ) for item in data_list
-                ]
-                
-                future_to_idx = {f: i for i, f in enumerate(futures)}
-                
-                for future in concurrent.futures.as_completed(futures):
-                    idx = future_to_idx[future]
+                        _realtime_and_analyze, item, title, is_overseas, use_investor_data,
+                        restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, charts[i]
+                    ): i
+                    for i, item in enumerate(data_list)
+                }
+                for future in concurrent.futures.as_completed(fut_map):
+                    idx = fut_map[future]
                     try:
                         results[idx] = future.result()
                     except Exception as e:
-                        logger.error(f"Print table worker error: {e}")
-                        name, code = data_list[idx]
-                        results[idx] = ([name, code, "-", "실패", *["-"] * (14 if not is_overseas else (12 if is_us_stock else 11))], False, False)
-                    
-                    progress.advance(task)
-            
-            # 결과 테이블 추가
-            for idx, result_item in enumerate(results):
-                if not result_item:
-                    failed_list.append(data_list[idx])
-                    continue
-                
-                row_data, is_res, is_cust, is_mem, is_rsv = result_item
-                
-                if is_res: used_marks.add('-')
-                if is_cust: used_marks.add('+')
-                if is_mem: used_marks.add('=')
-                if is_rsv: used_marks.add('*')
-                
-                if len(row_data) > 3 and (row_data[3] == "실패" or "Error" in str(row_data[2])):
-                    failed_list.append(data_list[idx])
-                
-                table.add_row(*row_data)
-                if table.row_count % 5 == 0 and table.row_count < len(data_list):
-                    table.add_section()
-                    
+                        logger.error(f"Analyze worker error: {e}")
+                        results[idx] = _fail_row(idx)
+                    progress.advance(task_a)
+
+        # 결과 테이블 추가
+        for idx, result_item in enumerate(results):
+            if not result_item:
+                failed_list.append(data_list[idx])
+                continue
+
+            row_data, is_res, is_cust, is_mem, is_rsv = result_item
+
+            if is_res: used_marks.add('-')
+            if is_cust: used_marks.add('+')
+            if is_mem: used_marks.add('=')
+            if is_rsv: used_marks.add('*')
+
+            if len(row_data) > 3 and (row_data[3] == "실패" or "Error" in str(row_data[2])):
+                failed_list.append(data_list[idx])
+
+            table.add_row(*row_data)
+            if table.row_count % 5 == 0 and table.row_count < len(data_list):
+                table.add_section()
+
     except Exception as e:
         logger.error(f"데이터 분석 중 오류: {e}")
 

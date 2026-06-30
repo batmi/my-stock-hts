@@ -158,29 +158,39 @@ def test_cache_hit_overseas_fast_info(mock_ticker):
     assert len(df_stitched) == 3
     assert df_stitched.iloc[-1]['close'] == 1050.0
 
+@patch('modules.market.api.get_yf_fast_info')
 @patch('modules.market.api.fetch_yfinance_data')
-def test_market_yf_cache_hit(mock_fetch):
+def test_market_yf_cache_hit(mock_fetch, mock_fast_info):
     """6. market.py의 다중 티커 조회 전용 캐시(_MARKET_YF_CACHE)가 정상 작동하는가?"""
     import modules.market as market
     market.clear_market_yf_cache()
-    
+
+    # [변경] 분봉(5m) bulk 다운로드를 제거하고 fast_info 실패 시에만 단건 지연조회하도록 최적화됨.
+    # 따라서 fast_info가 성공하는 정상 경로에서는 일봉(1y) bulk 1회만 호출되어야 한다.
+    mock_fast_info.return_value = {
+        'last_price': 105.0,
+        'regular_market_previous_close': 100.0,
+        'last_volume': 1000,
+        'year_high': 120.0,
+    }
+
     today_str = datetime.now().strftime("%Y%m%d")
     d_df = create_dummy_df(today_str)
     # yfinance가 반환하는 원본 데이터 형식(첫 글자 대문자)에 맞춰 컬럼명 변환
     d_df.rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
     mock_fetch.return_value = d_df # 단일 티커 형태 반환 모킹
-    
+
     # 1. 초기 시장 지수 조회 (나스닥 1개만 타겟)
     market._show_market_indices_core(["나스닥"])
-    
-    # 검증: daily와 intraday 조회를 위해 yfinance가 2번 호출되어야 함
+
+    # 검증: 일봉(1y) bulk 다운로드를 위해 yfinance가 최소 1회 호출되어야 함
     initial_call_count = mock_fetch.call_count
-    assert initial_call_count >= 2
+    assert initial_call_count >= 1
     assert "^IXIC" in market._MARKET_YF_CACHE
-    
+
     # 2. 두 번째 조회 (캐시 히트)
     mock_fetch.reset_mock()
     market._show_market_indices_core(["나스닥"])
-    
+
     # 검증: 메모리에 데이터가 있으므로 네트워크 다운로드 스레드가 전혀 실행되지 않아야 함
     assert mock_fetch.call_count == 0

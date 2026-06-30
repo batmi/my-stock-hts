@@ -142,9 +142,11 @@ def test_utils_search_stock_in_list_pagination(mock_ask):
 # ==========================================================
 # 5. modules/market.py 커버리지 (지수 상태별 색상 렌더링)
 # ==========================================================
+@patch('modules.market.api.fetch_yfinance_data', return_value=pd.DataFrame())
 @patch('modules.market.api.get_yf_fast_info', return_value=None)
-def test_market_index_specific_rendering(mock_fast_info):
+def test_market_index_specific_rendering(mock_fast_info, mock_fetch):
     """특정 지수(VIX, WTI 원유 등)의 조건별 색상 렌더링 분기 커버리지"""
+    # fast_info 실패 시 분봉(5m)을 단건 지연조회하므로, 네트워크 격리를 위해 빈 분봉을 반환하도록 모킹
     df = pd.DataFrame({
         'close': [45.0] * 20, 'open': [45.0]*20, 'high': [45.0]*20, 'low': [45.0]*20, 'volume': [100]*20,
         'date': pd.date_range('2023-01-01', periods=20)

@@ -205,7 +205,26 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
             if df_daily.empty:
                 return {'status': 'failed', 'name': name}
-            
+
+            # [최적화] 분봉(5m)은 fast_info 실패(지연) 시에만 단건 지연조회한다.
+            # (평상시 불필요한 bulk 5m 다운로드를 제거하여 콜드스타트 지연을 줄임)
+            if df_intraday.empty and not is_domestic_index:
+                try:
+                    i_raw = api.fetch_yfinance_data(ticker, period="5d", interval="5m", group_by='ticker')
+                    if i_raw is not None and not i_raw.empty:
+                        if isinstance(i_raw.columns, pd.MultiIndex):
+                            if ticker in i_raw.columns.get_level_values(0):
+                                i_raw = i_raw[ticker].copy()
+                            else:
+                                i_raw = pd.DataFrame()
+                        if not i_raw.empty:
+                            df_intraday = i_raw
+                            df_intraday.columns = [str(c).lower() for c in df_intraday.columns]
+                            for c in ['open', 'high', 'low', 'close', 'volume']:
+                                if c not in df_intraday.columns: df_intraday[c] = 0.0
+                except Exception:
+                    pass
+
             daily_last_date = df_daily.index[-1].date()
             today = datetime.now().date()
             
@@ -663,9 +682,10 @@ def _show_market_indices_core(target_indices=None):
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
         config.console.print("[dim][TRACE] show_market_indices() 호출[/dim]")
 
-    # [추가] 지수 조회 시에도 100% 실시간 최신 가격을 가져오도록 마이크로 캐시 강제 초기화
-    if hasattr(api, 'clear_micro_cache'):
-        api.clear_micro_cache()
+    # [최적화] 과거에는 매 조회마다 마이크로 캐시를 강제 초기화해 100% 실시간 가격을 받았으나,
+    # 이로 인해 fast_info(단건 시세)를 ~47개 지수마다 매번 재요청(yfinance 폴백은 _YF_LOCK 직렬화)하여
+    # 결과 출력이 크게 지연되었다. 이제 fast_info의 짧은 TTL(기본 60초) 캐시를 그대로 활용한다.
+    # (실시간성은 최대 TTL 만큼만 지연되며, 반복(@) 조회 시 체감 속도가 크게 향상된다.)
 
     indices_map = INDICES_MAP.copy()
     if target_indices:
@@ -763,10 +783,11 @@ def _show_market_indices_core(target_indices=None):
                         
                         def _fetch_worker():
                             try:
+                                # [최적화] 분봉(5m) bulk 다운로드 제거. 평상시 fast_info가 성공하면 분봉은 쓰이지 않으므로,
+                                # 일봉(1y)만 받고 분봉은 fast_info 실패(지연) 종목에 한해 워커에서 단건 지연조회한다.
                                 d = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
-                                i = api.fetch_yfinance_data(tickers_str, period="5d", interval="5m", group_by='ticker')
                                 result_container['daily'] = d
-                                result_container['intra'] = i
+                                result_container['intra'] = pd.DataFrame()
                             except Exception as e:
                                 result_container['error'] = e
 

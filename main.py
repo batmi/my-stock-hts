@@ -970,6 +970,7 @@ def main():
         auto_trade.ConclusionMonitor().start()
         ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
         api.prefetch_watchlists_async() # [수정] 관심종목 예열도 초기화 이후로 지연
+        api.start_overview_warmer() # [추가] 개요 화면(시세/지수) 상시 백그라운드 예열 (실전 계좌)
 
     # [추가] 자동 시작 모드 처리
     if args.auto:

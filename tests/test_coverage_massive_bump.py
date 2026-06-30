@@ -48,9 +48,11 @@ def test_market_process_index_worker_gap_patching(mock_fast_info):
     # 분봉 데이터로 패치되었으므로 patched_name이 기록되어야 함
     assert res.get('patched_name') == "S&P500"
 
+@patch('modules.market.api.fetch_yfinance_data', return_value=pd.DataFrame())
 @patch('modules.market.api.get_yf_fast_info', return_value=None)
-def test_market_process_index_worker_adaptive_colors(mock_fast_info):
+def test_market_process_index_worker_adaptive_colors(mock_fast_info, mock_fetch):
     """시장 지수별 특수 조건(미국채 10년, SOX, 달러인덱스 등) 색상 렌더링 분기 커버리지"""
+    # fast_info 실패 시 분봉(5m)을 단건 지연조회하므로, 네트워크 격리를 위해 빈 분봉을 반환하도록 모킹
     df_base = pd.DataFrame({
         'close': [100.0]*20, 'open': [100.0]*20, 'high': [100.0]*20, 'low': [100.0]*20, 'volume': [1000]*20
     }, index=pd.date_range('2023-01-01', periods=20))

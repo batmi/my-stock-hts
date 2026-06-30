@@ -650,6 +650,10 @@ def get_yf_fast_info(code, ttl=60.0):
 # ==========================================================
 _CHART_CACHE = {}
 _CHART_CACHE_LOCK = threading.RLock()
+# [추가] 캐시 오버레이(get_current_price_data) 재진입 방지용 가드.
+# 액면분할 보정 경로(get_current_price_data → get_chart_data → 오버레이 → get_current_price_data)에서
+# 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
+_OVERLAY_GUARD = threading.local()
 
 def clear_chart_cache():
     """모든 차트 데이터 캐시 초기화 (수동 갱신용)"""
@@ -659,8 +663,12 @@ def clear_chart_cache():
         config.console.print("[bold green]차트 데이터 캐시(메모리)가 전체 초기화되었습니다.[/bold green]")
     logger.info("[Cache] 차트 데이터 캐시 수동 초기화")
 
-def _get_cached_chart(code, is_overseas, is_index, fetch_func):
-    """캐시된 차트를 반환하되, 당일 최신 캔들은 실시간 현재가로 덮어씌워 반환합니다."""
+def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=True):
+    """캐시된 차트를 반환하되, 당일 최신 캔들은 실시간 현재가로 덮어씌워 반환합니다.
+
+    realtime_overlay=False면 캐시 적중 시 현재가 API 오버레이를 생략하고 과거봉 캐시를 그대로 반환한다.
+    (호출자가 자체적으로 당일 캔들을 실시간 갱신하는 경우, 중복 현재가 호출을 막아 TPS 부담을 줄인다.)
+    """
     ttl_minutes = getattr(config, 'CHART_CACHE_TTL_MINUTES', 60)
     if ttl_minutes <= 0:
         return fetch_func()
@@ -683,6 +691,13 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
 
     if cached:
         df = cached['df'].copy()
+        # [추가] 오버레이 불필요(호출자 자체 갱신) 시 과거봉 캐시만 즉시 반환 → 중복 현재가 호출 제거
+        if not realtime_overlay:
+            return df
+        # [추가] 재진입(분할보정 경로 등) 감지 시 오버레이/재조회 없이 과거봉 캐시만 반환 → 무한재귀 차단
+        if getattr(_OVERLAY_GUARD, 'active', False):
+            return df
+        _OVERLAY_GUARD.active = True
         try:
             today_ymd = now.strftime("%Y%m%d")
             last_date = str(df.iloc[-1]['date'])
@@ -765,7 +780,9 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func):
         except Exception as e:
             logger.debug(f"[Cache] Update failed for {code}: {e}")
             pass # 실패 시 그냥 원본 받아옴
-            
+        finally:
+            _OVERLAY_GUARD.active = False
+
     df = fetch_func()
     if df is not None and not df.empty:
         with _CHART_CACHE_LOCK:
@@ -912,6 +929,93 @@ def prefetch_watchlists_async():
     t = threading.Thread(target=worker, daemon=True, name="CacheWarmer")
     t.start()
     return t # [수정] 테스트 코드에서 제어할 수 있도록 스레드 객체 반환
+
+_OVERVIEW_WARMER_STARTED = False
+
+def start_overview_warmer():
+    """[최적화] 관심종목 현재가/체결강도를 백그라운드에서 주기적으로 마이크로 캐시에 예열한다.
+
+    '시장 지수 조회'/'종목 시세 분석' 개요 화면이 임계경로에서 API를 호출하지 않고
+    예열된 캐시(OVERVIEW_PRICE_TTL_SEC 동안 유효)를 즉시 읽도록 하여 체감 지연을 없앤다.
+    모의투자(2 TPS)는 시스템 트레이딩과 TPS를 다투므로 기본 비활성화한다.
+    """
+    global _OVERVIEW_WARMER_STARTED
+    if _OVERVIEW_WARMER_STARTED:
+        return None
+    if not getattr(config, 'OVERVIEW_WARM_ENABLED', True):
+        return None
+    if config.session.is_toss:
+        return None  # 토스 모드는 별도 캐시 경로 사용
+    if config.session.is_simulation and not getattr(config, 'OVERVIEW_WARM_ON_SIMULATION', False):
+        logger.info("[Warm] 모의투자: 개요 백그라운드 예열 비활성(시스템 트레이딩 TPS 보호)")
+        return None
+
+    interval = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15)))
+
+    def _domestic_session_active():
+        # 국내 개요 예열은 장 시간대(대략 08:00~16:30)에만 수행하여 불필요한 호출을 줄인다.
+        try:
+            if is_holiday_today():
+                return False
+        except Exception:
+            pass
+        hhmm = datetime.now().strftime("%H%M")
+        return "0800" <= hhmm <= "1630"
+
+    def worker():
+        logger.info(f"[Warm] 개요 백그라운드 예열 시작 (주기 {interval}s)")
+        while True:
+            try:
+                stock_data = config.session.stock_data or {}
+                dom_codes, ovs_codes = [], []
+                seen = set()
+                for key in ["stocks_kr", "etfs_kr"]:
+                    for s in stock_data.get(key, []):
+                        c = s.get('code')
+                        if c and c not in seen:
+                            seen.add(c); dom_codes.append(c)
+                for key in ["stocks_us", "etfs_us"]:
+                    for s in stock_data.get(key, []):
+                        c = s.get('code')
+                        if c and c not in seen:
+                            seen.add(c); ovs_codes.append(c)
+
+                # 해외: TradingView 일괄(HTTP 1회, TPS 무관) 예열은 저비용이므로 항상 수행
+                if ovs_codes:
+                    try:
+                        prefetch_multiple_current_prices(ovs_codes, is_overseas=True)
+                    except Exception as e:
+                        logger.debug(f"[Warm] 해외 예열 오류: {e}")
+
+                # 시장 지수(메뉴1): 해외/지표 지수의 fast_info 예열. 60초 TTL이 네트워크를 자체 제한하므로
+                # 매 사이클 호출해도 대부분 캐시 적중이라 저비용이다. (국내 지수는 KIS 경로라 제외)
+                try:
+                    from modules import market as _market
+                    _domestic = {"코스피", "코스닥", "코스피200", "코스닥150"}
+                    idx_tickers = [tk for nm, tk in _market.ALL_INDICES if nm not in _domestic]
+                    if idx_tickers:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _ex:
+                            list(_ex.map(lambda tk: get_yf_fast_info(tk), idx_tickers))
+                except Exception as e:
+                    logger.debug(f"[Warm] 지수 예열 오류: {e}")
+
+                # 국내: KIS 호출(TPS 게이트 공유)은 장 시간대에만, NXT 생략하여 종목당 2콜로 예열
+                if dom_codes and _domestic_session_active():
+                    for c in dom_codes:
+                        try:
+                            get_current_price_data(c, False, include_nxt=False)
+                            get_realtime_vol_strength(c, include_nxt=False)
+                        except Exception as e:
+                            logger.debug(f"[Warm] 국내 예열 오류({c}): {e}")
+                        time.sleep(0.05)  # 버스트 완화(전송 페이싱은 TPS 게이트가 담당)
+            except Exception as e:
+                logger.error(f"[Warm] 개요 예열 루프 오류: {e}")
+            time.sleep(interval)
+
+    t = threading.Thread(target=worker, daemon=True, name="OverviewWarmer")
+    t.start()
+    _OVERVIEW_WARMER_STARTED = True
+    return t
 
 class ThrottledSession(requests.Session):
     def __init__(self):
@@ -1629,10 +1733,11 @@ def _get_hourly_chart_data(code, is_overseas):
             
     return pd.DataFrame()
 
-def get_chart_data(code, is_overseas=False, period_type='daily'):
+def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     """
     기술적 분석을 위한 차트 데이터를 조회합니다.
     period_type: 'daily' (일봉), 'hourly' (시봉), 'intraday' (분봉)
+    realtime=False: 일봉 캐시 적중 시 현재가 오버레이를 생략한다(호출자가 직접 당일 캔들을 갱신하는 대량 조회용).
     """
     # [추가] 토스: yfinance 대상(지수/원자재/환율 등)이 아닌 개별 종목은 토스 캔들로 조회
     _yf_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
@@ -1681,87 +1786,94 @@ def get_chart_data(code, is_overseas=False, period_type='daily'):
             return pd.DataFrame()
 
     if not is_overseas:
-        url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"]
-        all_items = []
-        current_end_date = today
-        current_start_date = start_date_origin
-        
-        retry_count = 0
-        while len(all_items) < 250 and retry_count < 10:
-            params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
-            data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
-            if data.get('rt_cd') == '0':
-                items = data.get('output2')
-                if items:
-                    all_items.extend(items)
-                    temp_dates = sorted([x['stck_bsop_date'] for x in items])
-                    current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-                else:
-                    break
-                retry_count += 1
-            elif data.get('msg_cd') == 'EGW00201': 
-                time.sleep(0.5)
-                retry_count += 1
-            else: 
-                time.sleep(0.2)
-                break
-            
-        if not all_items: return pd.DataFrame()
-        df = pd.DataFrame(all_items).drop_duplicates(subset=['stck_bsop_date'])
-        df = df[df['stck_bsop_date'] >= start_date_origin]
-        df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
-        df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
-        df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-        
-        return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
-    
-    else:
-        cached_ex = config.session.exchange_cache.get(code)
-        exchanges = []
-        if cached_ex: exchanges.append(cached_ex)
-        for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
-            if e not in exchanges: exchanges.append(e)
-            
-        url_path = constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"]
-        
-        for excd in exchanges:
+        # [최적화] 일봉 과거 데이터는 불변이므로 _get_cached_chart로 캐싱(당일 봉만 실시간 오버레이).
+        # 반복 조회(메뉴2 등) 시 250봉 페이지네이션(~3콜/종목)을 제거한다.
+        def _fetch_domestic_daily():
+            url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"]
             all_items = []
-            next_bymd = today
-            
+            current_end_date = today
+            current_start_date = start_date_origin
+
             retry_count = 0
             while len(all_items) < 250 and retry_count < 10:
-                params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "0", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
-                data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
+                params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
+                data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
                 if data.get('rt_cd') == '0':
                     items = data.get('output2')
                     if items:
-                        if not all_items: 
-                            if cached_ex != excd: config.session.update_cache_and_save(code, excd)
                         all_items.extend(items)
-                        last = items[-1]['xymd']
-                        next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        temp_dates = sorted([x['stck_bsop_date'] for x in items])
+                        current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
                     else:
                         break
                     retry_count += 1
-                elif data.get('msg_cd') == 'EGW00201': 
+                elif data.get('msg_cd') == 'EGW00201':
                     time.sleep(0.5)
                     retry_count += 1
-                else: 
-                    time.sleep(0.1)
+                else:
+                    time.sleep(0.2)
                     break
-            
-            if all_items:
-                df = pd.DataFrame(all_items).drop_duplicates(subset=['xymd'])
-                df.rename(columns={'xymd': 'date', 'clos': 'close', 'open': 'open', 'high': 'high', 'low': 'low'}, inplace=True)
-                if 'tvol' in df.columns: df['volume'] = df['tvol']
-                elif 'tovol' in df.columns: df['volume'] = df['tovol']
-                elif 'vol' in df.columns: df['volume'] = df['vol']
-                else: df['volume'] = 0
-                df = df[df['date'] >= start_date_origin]
-                numeric_cols = ['close', 'open', 'high', 'low', 'volume']
-                for c in numeric_cols: df[c] = df[c].astype(float)
-                return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
-        return None
+
+            if not all_items: return pd.DataFrame()
+            df = pd.DataFrame(all_items).drop_duplicates(subset=['stck_bsop_date'])
+            df = df[df['stck_bsop_date'] >= start_date_origin]
+            df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
+            df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
+            df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+
+        return _get_cached_chart(code, is_overseas=False, is_index=False, fetch_func=_fetch_domestic_daily, realtime_overlay=realtime)
+
+    else:
+        def _fetch_overseas_daily():
+            cached_ex = config.session.exchange_cache.get(code)
+            exchanges = []
+            if cached_ex: exchanges.append(cached_ex)
+            for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
+                if e not in exchanges: exchanges.append(e)
+
+            url_path = constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"]
+
+            for excd in exchanges:
+                all_items = []
+                next_bymd = today
+
+                retry_count = 0
+                while len(all_items) < 250 and retry_count < 10:
+                    params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "0", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
+                    data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
+                    if data.get('rt_cd') == '0':
+                        items = data.get('output2')
+                        if items:
+                            if not all_items:
+                                if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                            all_items.extend(items)
+                            last = items[-1]['xymd']
+                            next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        else:
+                            break
+                        retry_count += 1
+                    elif data.get('msg_cd') == 'EGW00201':
+                        time.sleep(0.5)
+                        retry_count += 1
+                    else:
+                        time.sleep(0.1)
+                        break
+
+                if all_items:
+                    df = pd.DataFrame(all_items).drop_duplicates(subset=['xymd'])
+                    df.rename(columns={'xymd': 'date', 'clos': 'close', 'open': 'open', 'high': 'high', 'low': 'low'}, inplace=True)
+                    if 'tvol' in df.columns: df['volume'] = df['tvol']
+                    elif 'tovol' in df.columns: df['volume'] = df['tovol']
+                    elif 'vol' in df.columns: df['volume'] = df['vol']
+                    else: df['volume'] = 0
+                    df = df[df['date'] >= start_date_origin]
+                    numeric_cols = ['close', 'open', 'high', 'low', 'volume']
+                    for c in numeric_cols: df[c] = df[c].astype(float)
+                    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+            return pd.DataFrame()
+
+        return _get_cached_chart(code, is_overseas=True, is_index=False, fetch_func=_fetch_overseas_daily, realtime_overlay=realtime)
 
 def _get_intraday_yfinance(code, is_overseas):
     """yfinance 1분봉 폴백. 해외/지수, 또는 국내라도 장전 등으로 KIS 당일분봉이 빌 때 사용.
@@ -2032,11 +2144,16 @@ def get_domestic_index_price(code):
         _set_micro_cache(cache_key, res)
     return res
 
-def get_current_price_data(code, is_overseas):
+def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
+    """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
+    (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
+    cache_ttl: 캐시 재사용 허용 시간(초). 개요/예열 경로는 더 큰 값으로 백그라운드 예열 데이터를 재사용한다.
+    """
     if config.session.is_toss:
         return _toss_current_price_data(code, is_overseas)
-    cache_key = f"cp_{code}_{is_overseas}"
-    cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 실시간 시세 반영을 위해 캐시 유지 시간을 3초로 단축
+    # NXT 포함 여부에 따라 캐시를 분리하여 주문 경로(NXT 포함)와 개요 경로(NXT 미포함)가 섞이지 않게 한다.
+    cache_key = f"cp_{code}_{is_overseas}" if include_nxt else f"cp_{code}_{is_overseas}_nonxt"
+    cached = _get_micro_cache(cache_key, ttl=cache_ttl) # [수정] 실시간 시세 반영을 위해 캐시 유지 시간을 3초로 단축
     if cached: return cached
 
     if not is_overseas:
@@ -2065,7 +2182,7 @@ def get_current_price_data(code, is_overseas):
             # [수정] 모의투자(VTS)는 NXT를 지원하지 않아 NX 조회가 매번 ReadTimeout을
             #  유발하므로 모의투자에서는 조회를 건너뛴다.
             out = res.get('output', {})
-            if not config.session.is_simulation:
+            if include_nxt and not config.session.is_simulation:
                 try:
                     nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
                     nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
@@ -2245,13 +2362,14 @@ def get_daily_foreign_rate(code):
         return data.get('output', [])
     return []
 
-def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
+def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, include_nxt=True, cache_ttl=3.0):
     # [추가] 토스 미제공: 체결강도 없음
     if config.session.is_toss: return None
     if is_overseas: return None
 
-    cache_key = f"vol_{code}"
-    cached = _get_micro_cache(cache_key, ttl=3.0) # [수정] 체결강도의 실시간성 확보를 위해 캐시 유지 시간을 3초로 단축
+    # NXT 포함 여부에 따라 캐시 분리 (대량 개요 조회는 NXT 생략하여 종목당 1콜 절감)
+    cache_key = f"vol_{code}" if include_nxt else f"vol_{code}_nonxt"
+    cached = _get_micro_cache(cache_key, ttl=cache_ttl) # [수정] 체결강도의 실시간성 확보를 위해 캐시 유지 시간을 3초로 단축
     if cached is not None: return cached
     
     final_vol = None
@@ -2285,7 +2403,7 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None):
     # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
     # [수정] 모의투자(VTS)는 NXT 미지원 → NX 조회 스킵 (불필요한 ReadTimeout 방지)
     try:
-        if not config.session.is_simulation:
+        if include_nxt and not config.session.is_simulation:
             nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
             if nxt_data and nxt_data.get('rt_cd') == '0':
                 nxt_items = nxt_data.get('output', [])
