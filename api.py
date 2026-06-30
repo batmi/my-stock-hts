@@ -933,10 +933,11 @@ def prefetch_watchlists_async():
 _OVERVIEW_WARMER_STARTED = False
 
 def start_overview_warmer():
-    """[최적화] 관심종목 현재가/체결강도를 백그라운드에서 주기적으로 마이크로 캐시에 예열한다.
+    """[최적화] 해외 종목 시세/시장 지수를 백그라운드에서 주기적으로 마이크로 캐시에 예열한다.
 
-    '시장 지수 조회'/'종목 시세 분석' 개요 화면이 임계경로에서 API를 호출하지 않고
-    예열된 캐시(OVERVIEW_PRICE_TTL_SEC 동안 유효)를 즉시 읽도록 하여 체감 지연을 없앤다.
+    '시장 지수 조회'/'종목 시세 분석'(해외) 개요 화면이 임계경로에서 무거운 조회 없이
+    예열된 캐시를 즉시 읽도록 하여 체감 지연을 줄인다. (국내 종목 현재가·체결강도는 KRX/NXT
+    시간대 무관하게 매 실행마다 라이브로 조회하므로 예열하지 않는다.)
     모의투자(2 TPS)는 시스템 트레이딩과 TPS를 다투므로 기본 비활성화한다.
     """
     global _OVERVIEW_WARMER_STARTED
@@ -952,28 +953,13 @@ def start_overview_warmer():
 
     interval = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15)))
 
-    def _domestic_session_active():
-        # 국내 개요 예열은 장 시간대(대략 08:00~16:30)에만 수행하여 불필요한 호출을 줄인다.
-        try:
-            if is_holiday_today():
-                return False
-        except Exception:
-            pass
-        hhmm = datetime.now().strftime("%H%M")
-        return "0800" <= hhmm <= "1630"
-
     def worker():
         logger.info(f"[Warm] 개요 백그라운드 예열 시작 (주기 {interval}s)")
         while True:
             try:
                 stock_data = config.session.stock_data or {}
-                dom_codes, ovs_codes = [], []
+                ovs_codes = []
                 seen = set()
-                for key in ["stocks_kr", "etfs_kr"]:
-                    for s in stock_data.get(key, []):
-                        c = s.get('code')
-                        if c and c not in seen:
-                            seen.add(c); dom_codes.append(c)
                 for key in ["stocks_us", "etfs_us"]:
                     for s in stock_data.get(key, []):
                         c = s.get('code')
@@ -998,16 +984,6 @@ def start_overview_warmer():
                             list(_ex.map(lambda tk: get_yf_fast_info(tk), idx_tickers))
                 except Exception as e:
                     logger.debug(f"[Warm] 지수 예열 오류: {e}")
-
-                # 국내: KIS 호출(TPS 게이트 공유)은 장 시간대에만, NXT 생략하여 종목당 2콜로 예열
-                if dom_codes and _domestic_session_active():
-                    for c in dom_codes:
-                        try:
-                            get_current_price_data(c, False, include_nxt=False)
-                            get_realtime_vol_strength(c, include_nxt=False)
-                        except Exception as e:
-                            logger.debug(f"[Warm] 국내 예열 오류({c}): {e}")
-                        time.sleep(0.05)  # 버스트 완화(전송 페이싱은 TPS 게이트가 담당)
             except Exception as e:
                 logger.error(f"[Warm] 개요 예열 루프 오류: {e}")
             time.sleep(interval)
@@ -2144,6 +2120,25 @@ def get_domestic_index_price(code):
         _set_micro_cache(cache_key, res)
     return res
 
+def fetch_nxt_price(code):
+    """NXT(대체거래소) 현재가만 단독 조회한다. (모의투자/오류/미체결 시 0 반환)
+
+    base 현재가를 이미 확보한 경로(개요 테이블 등)에서 NXT 시세만 추가로 병합할 때
+    사용한다. 모의투자(VTS)는 NXT 미지원이라 ReadTimeout 방지를 위해 조회를 건너뛴다.
+    """
+    if config.session.is_simulation:
+        return 0
+    try:
+        nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
+        nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
+        if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
+            nxt_price = nxt_res['output'].get('stck_prpr')
+            if nxt_price and safe_int(nxt_price) > 0:
+                return safe_int(nxt_price)
+    except Exception as e:
+        logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
+    return 0
+
 def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
     (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
@@ -2182,16 +2177,10 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
             # [수정] 모의투자(VTS)는 NXT를 지원하지 않아 NX 조회가 매번 ReadTimeout을
             #  유발하므로 모의투자에서는 조회를 건너뛴다.
             out = res.get('output', {})
-            if include_nxt and not config.session.is_simulation:
-                try:
-                    nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
-                    nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
-                    if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
-                        nxt_price = nxt_res['output'].get('stck_prpr')
-                        if nxt_price and safe_int(nxt_price) > 0:
-                            out['ats_prpr'] = str(nxt_price)
-                except Exception as e:
-                    logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
+            if include_nxt:
+                nxt_price = fetch_nxt_price(code)
+                if nxt_price > 0:
+                    out['ats_prpr'] = str(nxt_price)
 
             _set_micro_cache(cache_key, res)
         return res
