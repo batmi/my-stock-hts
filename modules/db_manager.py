@@ -27,7 +27,7 @@ class DBManager:
         """객체 소멸 시 모든 연결 종료"""
         try:
             self.close_all_connections()
-        except: pass
+        except Exception: pass
 
     def close_connection(self):
         """현재 스레드의 DB 연결을 명시적으로 종료"""
@@ -37,7 +37,7 @@ class DBManager:
                 self.local.conn = None
                 with self._all_conns_lock:
                     self._all_conns.pop(threading.get_ident(), None)
-        except: pass
+        except Exception: pass
 
     def close_all_connections(self):
         """모든 스레드에서 생성된 DB 연결을 닫는다.
@@ -438,7 +438,7 @@ class DBManager:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and cnt > 0:
                 config.console.print(f"[dim yellow][DB] check_trade_exists: {odno} ({order_status}) -> 존재함[/dim yellow]")
             return cnt > 0
-        except: return False
+        except Exception: return False
             
     def get_original_order_type(self, odno):
         """주문번호로 원 주문(접수 상태)의 유형 조회"""
@@ -449,7 +449,7 @@ class DBManager:
             cursor.execute("SELECT type FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
             row = cursor.fetchone()
             return row[0] if row else None
-        except: return None
+        except Exception: return None
 
     def get_trade_by_odno(self, odno):
         """주문번호로 원 주문(접수) 내역 조회"""
@@ -460,7 +460,7 @@ class DBManager:
             cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
             row = cursor.fetchone()
             return dict(row) if row else None
-        except: return None
+        except Exception: return None
 
     def get_cancel_record_by_org_odno(self, odno):
         """원주문번호(org_odno)로 가장 최근 취소 이력 1건 조회 (외부/사후 취소 중복 판별용)"""
@@ -473,7 +473,7 @@ class DBManager:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
-        except: return None
+        except Exception: return None
 
     def get_reserved_order_by_odno(self, odno):
         """주문번호(odno)로 발동된 예약 주문 1건 조회"""
@@ -483,7 +483,7 @@ class DBManager:
             cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
             row = cursor.fetchone()
             return dict(row) if row else None
-        except: return None
+        except Exception: return None
 
     def get_buy_trades_for_current_holding(self, code):
         """
@@ -509,7 +509,7 @@ class DBManager:
             cursor.execute(query, params)
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
-        except:
+        except Exception:
             return []
 
     def get_latest_buy_trade(self, code):
@@ -534,7 +534,7 @@ class DBManager:
                 row = cursor.fetchone()
 
             return dict(row) if row else None
-        except: return None
+        except Exception: return None
             
     def update_highest_price(self, code, price):
         """트레일링 스탑용 최고가 갱신"""
@@ -583,7 +583,7 @@ class DBManager:
             cursor.execute("SELECT highest_price FROM trailing_stops WHERE code = ?", (code,))
             row = cursor.fetchone()
             return row[0] if row else None
-        except: return None
+        except Exception: return None
 
     def get_all_trailing_stops(self):
         """모든 종목의 트레일링 스탑 기준가 조회 (시스템 시작 시 캐시 로드용)"""
@@ -592,7 +592,7 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute("SELECT code, highest_price FROM trailing_stops")
             return {row[0]: row[1] for row in cursor.fetchall()}
-        except: return {}
+        except Exception: return {}
 
     def delete_trailing_stop(self, code):
         """매도 후 트레일링 스탑 정보 삭제"""
@@ -609,7 +609,7 @@ class DBManager:
                         time.sleep(0.5)
                         continue
                     break
-                except: break
+                except Exception: break
 
     def insert_half_tp(self, code):
         """반익절 상태 저장"""
@@ -626,7 +626,7 @@ class DBManager:
                     conn.commit()
                     break
                 except sqlite3.OperationalError: time.sleep(0.5); continue
-                except: break
+                except Exception: break
 
     def delete_half_tp(self, code):
         """반익절 상태 삭제"""
@@ -639,7 +639,7 @@ class DBManager:
                     conn.commit()
                     break
                 except sqlite3.OperationalError: time.sleep(0.5); continue
-                except: break
+                except Exception: break
 
     def get_all_half_tp(self):
         """모든 반익절 상태 종목 조회 (시스템 시작 시 캐시 로드용)"""
@@ -648,7 +648,7 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute("SELECT code FROM half_tp_status")
             return set(row[0] for row in cursor.fetchall())
-        except: return set()
+        except Exception: return set()
 
     def is_disclosure_notified(self, rcept_no):
         """공시 접수번호가 이미 알림 발송됐는지 확인"""
@@ -657,7 +657,7 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute("SELECT 1 FROM notified_disclosures WHERE rcept_no = ?", (rcept_no,))
             return cursor.fetchone() is not None
-        except: return False
+        except Exception: return False
 
     def mark_disclosure_notified(self, rcept_no):
         """공시 접수번호를 알림 발송됨으로 기록"""
@@ -671,7 +671,7 @@ class DBManager:
                     conn.commit()
                     break
                 except sqlite3.OperationalError: time.sleep(0.5); continue
-                except: break
+                except Exception: break
 
     def save_stock_strategy(self, code, name, strategy):
         """종목별 매매 전략 저장"""
@@ -710,7 +710,7 @@ class DBManager:
             cursor.execute("SELECT * FROM stock_strategies WHERE code = ?", (code,))
             row = cursor.fetchone()
             return dict(row) if row else None
-        except: return None
+        except Exception: return None
 
     def get_all_stock_strategies(self):
         """모든 종목별 매매 전략 조회"""
@@ -720,7 +720,7 @@ class DBManager:
             cursor.execute("SELECT * FROM stock_strategies ORDER BY updated_at DESC")
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
-        except: return []
+        except Exception: return []
 
     def delete_stock_strategy(self, code):
         """종목별 매매 전략 삭제"""
@@ -802,7 +802,7 @@ class DBManager:
             cursor.execute("SELECT asset FROM daily_asset_history WHERE account = ? AND date >= ? ORDER BY date ASC LIMIT 1", (account, start_date))
             row = cursor.fetchone()
             return row[0] if row else None
-        except:
+        except Exception:
             return None
             
     def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None, composite_json=None):
@@ -821,7 +821,7 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM reserved_orders WHERE status = 'PENDING'")
             return [dict(row) for row in cursor.fetchall()]
-        except: return []
+        except Exception: return []
 
     def get_completed_reserved_orders(self, start_date=None, keyword=None):
         """발동 완료되거나 취소된 예약 주문 내역 조회 (히스토리용)"""
@@ -841,7 +841,7 @@ class DBManager:
                 
             cursor.execute(q, params)
             return [dict(row) for row in cursor.fetchall()]
-        except: return []
+        except Exception: return []
 
     def update_reserved_order_status(self, order_id, status, odno=None, fail_reason=None):
         with self.lock:
@@ -906,7 +906,7 @@ class DBManager:
                     conn.commit()
                     return updated
                 except sqlite3.OperationalError: time.sleep(0.5); continue
-                except: break
+                except Exception: break
             return 0
 
     def cancel_other_reserved_orders(self, triggered_id, cano, acnt, code):

@@ -535,6 +535,9 @@ _last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
 # ==========================================================
 _MICRO_CACHE = {}
 _MICRO_CACHE_LOCK = threading.RLock()
+# [메모리] 항목 상한(라즈베리파이 OOM 방어). 초과 시 가장 오래된 항목부터 제거한다.
+# 전체 종목(코스피+코스닥 ~2800)을 스캔해도 종목당 cp_/vol_/ob_/yf_fi_ 정도라 여유 있게 잡는다.
+_MICRO_CACHE_MAX = 6000
 
 def _get_micro_cache(key, ttl=60.0): # [수정] 잦은 중복 호출 방지를 위해 기본 TTL 상향
     with _MICRO_CACHE_LOCK:
@@ -543,9 +546,19 @@ def _get_micro_cache(key, ttl=60.0): # [수정] 잦은 중복 호출 방지를 �
             return item['data']
     return None
 
+def _evict_oldest(cache, max_size, time_key):
+    """딕셔너리 캐시가 상한을 넘으면 가장 오래된 항목들을 제거해 90% 수준으로 낮춘다.
+    (eviction 빈도를 줄이기 위해 한 번에 여유분까지 비운다. 호출자가 락을 보유한 상태여야 한다)"""
+    if len(cache) <= max_size:
+        return
+    drop = len(cache) - int(max_size * 0.9)
+    for k in sorted(cache, key=lambda k: cache[k].get(time_key, 0))[:drop]:
+        cache.pop(k, None)
+
 def _set_micro_cache(key, data):
     with _MICRO_CACHE_LOCK:
         _MICRO_CACHE[key] = {'time': time.time(), 'data': data}
+        _evict_oldest(_MICRO_CACHE, _MICRO_CACHE_MAX, 'time')
 
 # [추가] yfinance 특수 티커를 TradingView 티커로 완벽히 1:1 매핑
 YF_TO_TV_EXACT = {
@@ -650,6 +663,9 @@ def get_yf_fast_info(code, ttl=60.0):
 # ==========================================================
 _CHART_CACHE = {}
 _CHART_CACHE_LOCK = threading.RLock()
+# [메모리] 차트 캐시는 DataFrame을 보관해 항목당 비용이 크다. 라즈베리파이 OOM 방어를 위해
+# 항목 수를 제한하고, 초과 시 가장 오래된 항목부터 제거한다. (전체 시장 스캔 시 무제한 누적 방지)
+_CHART_CACHE_MAX = 600
 # [추가] 캐시 오버레이(get_current_price_data) 재진입 방지용 가드.
 # 액면분할 보정 경로(get_current_price_data → get_chart_data → 오버레이 → get_current_price_data)에서
 # 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
@@ -709,7 +725,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                 s = str(val).strip().replace(',', '')
                 if not s: return 0.0
                 try: return float(s)
-                except: return 0.0
+                except Exception: return 0.0
 
             # 1. 가장 가벼운 현재가 API로 오늘 데이터만 가져오기
             if is_index and not is_overseas:
@@ -791,6 +807,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                 'timestamp': now,
                 'date': today_str
             }
+            _evict_oldest(_CHART_CACHE, _CHART_CACHE_MAX, 'timestamp')
     return df
 
 def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None):
@@ -853,12 +870,12 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
     else:
         def fetch_worker(code):
             try: get_current_price_data(code, False)
-            except: pass
+            except Exception: pass
             if include_investor:
                 try: get_investor_trend(code)
-                except: pass
+                except Exception: pass
             try: get_realtime_vol_strength(code)
-            except: pass
+            except Exception: pass
             
         max_w = 4 if config.session.is_simulation else 10
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
@@ -1118,7 +1135,7 @@ class ThrottledSession(requests.Session):
                             logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
                         else:
                             logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {body_preview}")
-                    except: pass
+                    except Exception: pass
                 
                 # 2. API 응답 코드 확인
                 if not should_retry:
@@ -1341,7 +1358,7 @@ def check_and_refresh_token_if_expired():
                 try:
                     send_telegram_message(f"🚨 [시스템 경고] API 토큰 갱신 지연\n\n사유: {str(e)}\n\n(한국투자증권 서버 정기 점검 시간일 수 있습니다. 시스템은 멈추지 않고 1분 간격으로 토큰 발급을 계속 재시도합니다.)")
                     context.LAST_TOKEN_REFRESH_ALERT = now
-                except: pass
+                except Exception: pass
 
 def _fetch_and_set_token(token_type, force_refresh=False):
     """

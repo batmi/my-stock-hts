@@ -31,7 +31,7 @@ def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
                 summary['sell_amt'] = api.safe_int(summary_data.get('thdt_sll_amt'))
                 summary['total_cost'] = api.safe_int(summary_data.get('thdt_tlex_amt'))
                 summary['realized_pl'] = api.safe_int(summary_data.get('rlzt_pfls'))
-    except: pass
+    except Exception: pass
     return summary
 
 def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
@@ -46,7 +46,7 @@ def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
                     type_cd = item.get('sll_buy_dvsn_cd')
                     if type_cd == '01': summary['sell_total'] += amt
                     elif type_cd == '02': summary['buy_total'] += amt
-    except: pass
+    except Exception: pass
     return summary
 
 def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
@@ -209,7 +209,7 @@ def sync_today_trades():
                                 else:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})")
-                except: pass
+                except Exception: pass
                 progress.advance(task)
         finally:
             context.trade_context.use_auto_account = original_context
@@ -576,7 +576,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             except Exception as e:
                 logger.debug(f"DB 금일 데이터 조회 실패: {e}")
 
-    except: pass
+    except Exception: pass
 
     # 2. 국내 주식 잔고 및 자산
     if progress: progress.update(task, description="[cyan]국내 주식 잔고 및 평가금 조회 중...[/cyan]")
@@ -819,7 +819,7 @@ def export_trade_history_to_excel():
                     if len(code) == 6 and code[0].isdigit() and code.isalnum():
                         return int(val)
                     return val
-                except: return row['price']
+                except Exception: return row['price']
             df['price'] = df.apply(_format_price, axis=1)
 
         # [추가] 수익률 및 손익금 포맷팅 (+/- 기호 추가)
@@ -829,7 +829,7 @@ def export_trade_history_to_excel():
                     if val is None or val == '': return "0.00"
                     f = float(val)
                     return f"{f:+.2f}"
-                except: return val
+                except Exception: return val
             df['profit_rate'] = df['profit_rate'].apply(_format_rate)
 
         if 'profit_amt' in df.columns and 'code' in df.columns:
@@ -844,7 +844,7 @@ def export_trade_history_to_excel():
                         return f"{int(f):+,}"
                     # 해외 주식
                     return f"{f:+,.2f}"
-                except: return val
+                except Exception: return val
             df['profit_amt'] = df.apply(_format_amt, axis=1)
 
         if 'snapshot' in df.columns:
@@ -857,14 +857,14 @@ def export_trade_history_to_excel():
                 if score is not None and score != '':
                     try:
                         data['score'] = float(score)
-                    except: pass
+                    except Exception: pass
 
                 try:
                     if val:
                         loaded = json.loads(val)
                         if isinstance(loaded, dict):
                             data.update(loaded)
-                except: pass
+                except Exception: pass
 
                 if not data: return val
             
@@ -1292,7 +1292,7 @@ def view_trade_history():
                         price_display = "-"
                     else:
                         price_display = "시장가"
-            except: pass
+            except Exception: pass
             
             # [추가] 체결금액 계산 (단가 * 수량)
             total_amt_display = "-"
@@ -1307,7 +1307,7 @@ def view_trade_history():
                         total_amt_display = f"{int(tot):,}"
                     else:
                         total_amt_display = f"{tot:,.2f}"
-            except: pass
+            except Exception: pass
             
             # 손익 정보
             profit_display = "-"
@@ -1320,7 +1320,7 @@ def view_trade_history():
                         if int(amt) != 0 or float(rate) != 0.0:
                             color = "red" if int(amt) > 0 else ("blue" if int(amt) < 0 else "white")
                             profit_display = f"[{color}]{int(amt):+,}원 ({float(rate):+.2f}%)[/]"
-                    except: pass
+                    except Exception: pass
 
             # [추가] 사유 상세화: 스냅샷 정보를 활용하여 지표 정보 보강
             reason_display = t.get('reason') or "-"
@@ -1343,7 +1343,7 @@ def view_trade_history():
                         if ind.get('cci') is not None: add_info.append(f"CCI:{ind['cci']:.1f}")
                         if add_info:
                             reason_display += f" [{', '.join(add_info)}]"
-                except: pass
+                except Exception: pass
 
             # [추가] 매수 사유 분류 커스텀 태그 적용
             if is_buy and reason_display != "-":

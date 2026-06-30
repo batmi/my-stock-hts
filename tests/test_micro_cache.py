@@ -38,21 +38,24 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
     """2. get_current_price_data API가 마이크로 캐시를 정상적으로 활용하는지 검증"""
     # API 응답 모킹
     mock_call_api.return_value = {"rt_cd": "0", "output": {"stck_prpr": "50000"}}
-    
-    # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (정규장 1회 + NXT장 1회 = 총 2회)
-    res1 = api.get_current_price_data("005930", is_overseas=False)
-    assert res1["output"]["stck_prpr"] == "50000"
-    assert mock_call_api.call_count == 2
-    
-    # 두 번째 호출: 캐시가 존재하므로 call_api가 호출되지 않아야 함 (중복 방지 성공)
-    res2 = api.get_current_price_data("005930", is_overseas=False)
-    assert res2["output"]["stck_prpr"] == "50000"
-    assert mock_call_api.call_count == 2  # 호출 횟수가 증가하지 않음!
-    
-    # 시간 경과 시뮬레이션 (TTL 만료 시 재호출 여부 확인)
-    with patch('time.time', return_value=time.time() + 65.0): # 기본 TTL 60초 초과
-        res3 = api.get_current_price_data("005930", is_overseas=False)
-        assert mock_call_api.call_count == 4  # 캐시 만료로 다시 API가 호출되어야 함 (총 4회)
+
+    # NXT(대체거래소) 보조 호출까지 검증하므로 실전 모드를 가정한다.
+    # (모의투자 환경에서는 NXT 조회를 스킵해 호출이 1회로 줄어 환경 의존이 생기므로 명시 고정)
+    with patch.object(api.config.session, 'is_simulation', False):
+        # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (정규장 1회 + NXT장 1회 = 총 2회)
+        res1 = api.get_current_price_data("005930", is_overseas=False)
+        assert res1["output"]["stck_prpr"] == "50000"
+        assert mock_call_api.call_count == 2
+
+        # 두 번째 호출: 캐시가 존재하므로 call_api가 호출되지 않아야 함 (중복 방지 성공)
+        res2 = api.get_current_price_data("005930", is_overseas=False)
+        assert res2["output"]["stck_prpr"] == "50000"
+        assert mock_call_api.call_count == 2  # 호출 횟수가 증가하지 않음!
+
+        # 시간 경과 시뮬레이션 (TTL 만료 시 재호출 여부 확인)
+        with patch('time.time', return_value=time.time() + 65.0): # 기본 TTL 60초 초과
+            res3 = api.get_current_price_data("005930", is_overseas=False)
+            assert mock_call_api.call_count == 4  # 캐시 만료로 다시 API가 호출되어야 함 (총 4회)
 
 @patch('tradingview_screener.Query')
 @patch('api.yf.Ticker')

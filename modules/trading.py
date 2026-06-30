@@ -266,13 +266,13 @@ def _create_fill_history(db_order, reason_msg):
                                 price = float(cp_data['output'].get('last', 0))
                             else:
                                 price = float(cp_data['output'].get('stck_prpr', 0))
-                except: pass
+                except Exception: pass
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
             try: profit_amt = int(float(db_order.get('profit_amt') or 0))
-            except: profit_amt = 0
+            except Exception: profit_amt = 0
             try: profit_rate = float(db_order.get('profit_rate') or 0.0)
-            except: profit_rate = 0.0
+            except Exception: profit_rate = 0.0
             
             # [추가] snapshot 데이터 타입 안전 처리
             snapshot_data = db_order.get('snapshot')
@@ -458,7 +458,7 @@ def show_open_orders():
                             if h_list:
                                 for h in h_list:
                                     holdings_map[h['pdno']] = int(h['hldg_qty'])
-                        except: pass
+                        except Exception: pass
                         
                         # [DEBUG] 잔고 상태 로깅
                         if config.FILE_DEBUG_LEVEL == "DEBUG":
@@ -490,7 +490,7 @@ def show_open_orders():
                                                     price = float(cp_data['output'].get('last', 0))
                                                 else:
                                                     price = float(cp_data['output'].get('stck_prpr', 0))
-                                    except: pass
+                                    except Exception: pass
                                 
                                 custom_rules = db_manager.db.get_all_stock_strategies()
                                 rules_map = {r['code']: r for r in custom_rules}
@@ -518,7 +518,7 @@ def show_open_orders():
                                             rate = float(cp_data['output']['prdy_ctrt'])
                                             icon = "🔺" if rate > 0 else ("🔽" if rate < 0 else "➖")
                                             cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                except: pass
+                                except Exception: pass
                                 
                                 strategy_info = ""
                                 if db_order.get('snapshot'):
@@ -531,7 +531,7 @@ def show_open_orders():
                                             adx_str = f"{ind.get('adx', 0):.1f}"
                                             cci_str = f"{ind.get('cci', 0):.1f}"
                                             strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                                    except: pass
+                                    except Exception: pass
                                     
                                 if strategy_info:
                                     strategy_info += cur_info
@@ -568,7 +568,7 @@ def show_open_orders():
 
                                 # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
 
-                            except: pass
+                            except Exception: pass
 
                         for db_o in db_orders:
                             # 계좌 일치 확인
@@ -1074,11 +1074,8 @@ def send_order(order_type):
                 df = api.get_chart_data(stock_code, is_overseas)
                 if df is not None and not df.empty:
                     # [추가] 주문 단가(시장가인 경우 현재가)를 바탕으로 차트 갱신
-                    if calc_price > 0:
-                        df.iloc[-1, df.columns.get_loc('close')] = float(calc_price)
-                        if calc_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(calc_price)
-                        if calc_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(calc_price)
-                        
+                    indicators.apply_realtime_price(df, calc_price)
+
                     ind = indicators.calculate_indicators(df)
                     indicator_info = ind
                     
@@ -1090,7 +1087,7 @@ def send_order(order_type):
                             w_data = custom_rule['weights']
                             if isinstance(w_data, str): weights = json.loads(w_data)
                             elif isinstance(w_data, dict): weights = w_data
-                        except: pass
+                        except Exception: pass
                     sm_flag, _ = analysis.check_smart_money_turnaround(stock_code, is_overseas)
                     score, _ = analysis.calculate_score(
                         df=df, ind=ind, weights=weights, smart_money=sm_flag
@@ -1118,7 +1115,7 @@ def send_order(order_type):
                     sl_p_str = f"{int(sl_price):,}원"
                     
                 sl_msg = f"\n 예상 손절: [bold blue]{sl_p_str}[/bold blue] ({final_sl_rate:.2f}%, {label})"
-            except: pass
+            except Exception: pass
 
         confirm_msg = (
             f"\n[bold white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
@@ -1172,7 +1169,7 @@ def send_order(order_type):
                             est_buy_amt = float(qty) * buy_price
                             profit_amt = int(est_sell_amt - est_buy_amt)
                             profit_rate = ((calc_price - buy_price) / buy_price) * 100
-                    except: pass
+                    except Exception: pass
                 
                 t_type = "매수" if order_type == 'buy' else "매도"
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
@@ -1396,7 +1393,7 @@ def modify_order():
                 try:
                     p = api.get_current_price(pdno, is_overseas)
                     if p > 0: calc_price = float(p)
-                except: pass
+                except Exception: pass
             
             if calc_price > 0:
                 total_amt = float(final_qty) * calc_price
@@ -1408,7 +1405,7 @@ def modify_order():
                     amt_str = f"{int(total_amt):,}원{est_tag}"
                     
                 amt_msg = f" 총액: [bold]{amt_str}[/bold]\n"
-        except: pass
+        except Exception: pass
 
     nation_str = "해외" if is_overseas else "국내"
     excd_info = f" (거래소: {target_excd})" if is_overseas and target_excd else ""
@@ -1442,7 +1439,7 @@ def modify_order():
                 try:
                     p = api.get_current_price(pdno, is_overseas=False)
                     if p > 0: price = str(int(p))
-                except: pass
+                except Exception: pass
                 config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
             else:
                 ord_dvsn = "01"
@@ -1514,7 +1511,7 @@ def modify_order():
                             t_amt = float(final_qty) * c_price
                             if is_overseas: msg += f"\n금액: ${t_amt:,.2f}"
                             else: msg += f"\n금액: {int(t_amt):,}원"
-                    except: pass
+                    except Exception: pass
                 msg += f"\n주문번호: {utils.format_order_no(odno)}"
 
                 # 매도 정정일 경우 새로운 가격으로 예상 손익 재계산 시도
@@ -1537,7 +1534,7 @@ def modify_order():
                                 # [추가] 재계산된 손익을 DB에 업데이트
                                 db_manager.db.update_trade(odno, profit_amt=profit_amt, profit_rate=profit_rate)
                                 msg += f"\n예상손익: {int(profit_amt):+,}원 ({profit_rate:+.2f}%)"
-                    except: pass
+                    except Exception: pass
 
                 api.send_telegram_message(msg)
                 

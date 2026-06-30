@@ -167,7 +167,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 if atr_val == 0 or np.isnan(atr_val): atr_val = 1.0 # 0 나누기 방어
                 plus_di = 100 * pd.Series(pos_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
                 minus_di = 100 * pd.Series(neg_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
-            except: pass
+            except Exception: pass
 
         if prev_cci is None and len(df) > 20:
             try:
@@ -177,7 +177,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 mad = tp.rolling(window=window).apply(lambda x: np.abs(x - x.mean()).mean(), raw=False)
                 cci_series = (tp - sma_tp) / (0.015 * mad)
                 if len(cci_series) > 1: prev_cci = cci_series.iloc[-2]
-            except: pass
+            except Exception: pass
 
         vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
         if len(df) >= vol_ma_period:
@@ -601,7 +601,7 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
                 if atr_val == 0 or np.isnan(atr_val): atr_val = 1.0 # 0 나누기 방어
                 plus_di = 100 * pd.Series(pos_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
                 minus_di = 100 * pd.Series(neg_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
-            except: pass
+            except Exception: pass
             
     if price is None or ema60 is None or sar is None or rsi is None:
         return "-", "[dim]", "데이터 부족"
@@ -1087,7 +1087,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     w_data = custom_rule['weights']
                     if isinstance(w_data, str): weights = json.loads(w_data)
                     elif isinstance(w_data, dict): weights = w_data
-                except: pass
+                except Exception: pass
             if custom_rule.get('buy_vol_strength'):
                 buy_vol = custom_rule['buy_vol_strength']
 
@@ -1130,7 +1130,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         regime, score_adj = get_market_regime(market_type)
                         if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                             buy_score += score_adj
-            except: pass
+            except Exception: pass
         elif is_domestic_index:
             market_type = "KOSDAQ" if "KOSDAQ" in code else "KOSPI"
             market_str = code
@@ -1139,7 +1139,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     regime, score_adj = get_market_regime(market_type)
                     if score_adj != 0 and not rule_applied:
                         buy_score += score_adj
-                except: pass
+                except Exception: pass
         else:
             if not std_market:
                 cached_ex = config.session.exchange_cache.get(code)
@@ -1213,11 +1213,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         # [추가] 실시간 현재가 조회 및 차트 데이터 최신화 (점수 불일치 방지)
         try:
             rt_price = api.get_current_price(code, is_overseas=is_overseas)
-            if rt_price > 0:
-                df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
-                if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
-                if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
-        except: pass
+            indicators.apply_realtime_price(df, rt_price)
+        except Exception: pass
 
         # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
         ask_bid_ratio = None
@@ -1241,7 +1238,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except: pass
+            except Exception: pass
             
         current_price = float(df.iloc[-1]['close'])
         prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
@@ -1313,7 +1310,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             div_val = tv_df.iloc[0].get('dividend_yield_recent')
             if pd.notna(div_val) and div_val > 0:
                 div_yield_str = f"{div_val:.2f}%"
-    except: pass
+    except Exception: pass
 
     # [테이블 1] 기술적 지표 분석
     tech_title = f"기술적 지표 분석: {name} ({code})"
@@ -1548,7 +1545,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             ema120_series = df['close'].ewm(span=120, adjust=False).mean()
             if ema120_series.iloc[-1] > ema120_series.iloc[-2]: c120 = "[red]"
             else: c120 = "[blue]"
-        except: pass
+        except Exception: pass
     elif v120 is not None:
         c120 = "[blue]"
         
@@ -1912,7 +1909,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                                 ema120_color = "[red]"
                             else:
                                 ema120_color = "[blue]"
-                        except: pass
+                        except Exception: pass
                     
                     t_sar = "[dim]-[/dim]"
                     if ind.get('psar') is not None:
@@ -2014,7 +2011,7 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
                 cp_data = fut_cp.result() if fut_cp else None
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result()
-                except: vol_strength = None
+                except Exception: vol_strength = None
             
             is_cp_valid = True if not market_filter else (cp_data and cp_data.get('rt_cd') == '0')
             if is_cp_valid and df is not None and not df.empty:
@@ -2041,11 +2038,8 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             else:
                 rt_price = api.get_current_price(code, is_overseas=False)
                 
-            if rt_price > 0:
-                df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
-                if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
-                if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
-        except: pass
+            indicators.apply_realtime_price(df, rt_price)
+        except Exception: pass
         
         ind = indicators.calculate_indicators(df)
         current_price = float(df.iloc[-1]['close'])
@@ -2057,7 +2051,7 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except: pass
+            except Exception: pass
             
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
@@ -2127,7 +2121,7 @@ def diagnose_group_stocks(market_filter=None):
         r_dict = dict(r)
         if r_dict.get('weights') and isinstance(r_dict['weights'], str):
             try: r_dict['weights'] = json.loads(r_dict['weights'])
-            except: r_dict['weights'] = None
+            except Exception: r_dict['weights'] = None
         rules_map[r_dict['code']] = r_dict
 
     # [추가] 트레이딩 제한 종목 로드
@@ -2139,7 +2133,7 @@ def diagnose_group_stocks(market_filter=None):
     try:
         pending_reserves = db_manager.db.get_pending_reserved_orders()
         reserved_codes = set(o['code'] for o in pending_reserves)
-    except:
+    except Exception:
         reserved_codes = set()
     m_codes = utils.get_memo_codes()
 
@@ -2260,7 +2254,7 @@ def get_analysis_params(use_vol=True):
     val = Prompt.ask(f"매수 기준 점수 (기본: {params['BUY_SCORE']}점)\n[dim]이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(params['BUY_SCORE']))
     if val.lower() in ['b', 'q']: return None
     try: params['BUY_SCORE'] = float(val)
-    except: pass
+    except Exception: pass
     
     val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {params['BUY_RSI_MAX']})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(params['BUY_RSI_MAX']))
     if val.lower() in ['b', 'q']: return None
@@ -2271,7 +2265,7 @@ def get_analysis_params(use_vol=True):
         val = Prompt.ask(f"매수 체결강도 기준(%) (기본: {current_vol}, 0: 미사용)\n[dim]수급 확인 (이 값 이상이어야 매수)[/dim]", default=str(current_vol))
         if val.lower() in ['b', 'q']: return None
         try: params['BUY_VOL_STRENGTH'] = float(val)
-        except: params['BUY_VOL_STRENGTH'] = current_vol
+        except Exception: params['BUY_VOL_STRENGTH'] = current_vol
     else:
         params['BUY_VOL_STRENGTH'] = 0.0
 
@@ -2279,7 +2273,7 @@ def get_analysis_params(use_vol=True):
     val = Prompt.ask(f"상승 추세 기준 점수 (기본: {params['RISE_SCORE']}점)\n[dim]매수에는 미달하지만 관망/상승으로 판단할 점수 기준[/dim]", default=str(params['RISE_SCORE']))
     if val.lower() in ['b', 'q']: return None
     try: params['RISE_SCORE'] = float(val)
-    except: pass
+    except Exception: pass
 
     config.console.print("\n[bold]3. 스코어링 가중치 설정[/bold]")
     curr_weights = params['WEIGHTS'].copy()
@@ -2360,7 +2354,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except: pass
+            except Exception: pass
             
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
@@ -2410,7 +2404,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
                 try:
                     vol_strength = api.get_realtime_vol_strength(code)
                     if vol_strength is not None: break
-                except: time.sleep(0.1)
+                except Exception: time.sleep(0.1)
 
         # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 엄격히 체크 (필터링)
         if state in ["매수", "강매수", "역매수", "상승"]:
@@ -2433,7 +2427,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
                         state = "관망"
                         state_color = "[white]"
                         state_reason = f"체결강도 미달({vol_strength:.1f}% < {min_vol}%)"
-            except: pass
+            except Exception: pass
 
         # 필터링 조건 확인
         is_target = False
@@ -2704,7 +2698,7 @@ def analyze_market_stocks(market_type):
                     res = api.get_current_price_data(item['code'], is_overseas=False)
                     if res.get('rt_cd') == '0':
                         return res['output'].get('bstp_kor_isnm', '-')
-                except: pass
+                except Exception: pass
                 return '-'
 
             # [최적화] 업종 정보 조회 시 모의투자(2) / 실전투자(4) 통합 멀티스레드 적용
@@ -2745,7 +2739,7 @@ def analyze_market_stocks(market_type):
         terminal_lines = shutil.get_terminal_size().lines
         # 테이블 헤더, 타이틀, 여백, 프롬프트 공간 등을 고려하여 제외 (약 13줄)
         page_size = max(5, terminal_lines - 13)
-    except:
+    except Exception:
         page_size = 15
 
     total_items = len(buy_candidates)
@@ -2914,7 +2908,7 @@ def save_all_market_analysis():
         r_dict = dict(r)
         if r_dict.get('weights') and isinstance(r_dict['weights'], str):
             try: r_dict['weights'] = json.loads(r_dict['weights'])
-            except: r_dict['weights'] = None
+            except Exception: r_dict['weights'] = None
         rules_map[r_dict['code']] = r_dict
     
     # [추가] 예약 매매 및 메모 마커 조회
@@ -2922,7 +2916,7 @@ def save_all_market_analysis():
     try:
         pending_reserves = db_manager.db.get_pending_reserved_orders()
         reserved_codes = set(o['code'] for o in pending_reserves)
-    except: pass
+    except Exception: pass
     m_codes = utils.get_memo_codes()
 
     # [추가] 트레이딩 제한 종목 로드
@@ -2974,7 +2968,7 @@ def save_all_market_analysis():
                             res = api.get_current_price_data(item['code'], is_overseas=False)
                             if res.get('rt_cd') == '0':
                                 sector = res['output'].get('bstp_kor_isnm', '-')
-                        except: pass
+                        except Exception: pass
                         
                         # 데이터 포맷팅 (소수점 1자리, 정수 등)
                         rsi = round(item['rsi'], 1) if item['rsi'] is not None else None
@@ -3195,7 +3189,7 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 inv_list = fut_inv.result() if fut_inv else None
                 if fut_vol:
                     try: rt_strength = fut_vol.result()
-                    except: pass
+                    except Exception: pass
                 if fut_ob:
                     try:
                         ob = fut_ob.result()
@@ -3205,7 +3199,7 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                             tb = api.safe_int(o1.get('total_bidp_rsqn'))
                             if tb > 0: ask_bid_ratio = ta / tb
                             elif ta > 0: ask_bid_ratio = 99.9
-                    except: pass
+                    except Exception: pass
                 detail = fut_detail.result() if fut_detail else None
 
             if curr_data and curr_data.get('rt_cd') == '0' and chart_df is not None and not chart_df.empty:
@@ -3253,11 +3247,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     krx_price = float(curr_data['output'].get('stck_prpr', 0) or 0)
                     rt_price = nxt_price if nxt_price > 0 else krx_price
                 
-            if rt_price > 0 and chart_df is not None and not chart_df.empty:
-                chart_df.iloc[-1, chart_df.columns.get_loc('close')] = float(rt_price)
-                if rt_price > chart_df.iloc[-1]['high']: chart_df.iloc[-1, chart_df.columns.get_loc('high')] = float(rt_price)
-                if rt_price < chart_df.iloc[-1]['low']: chart_df.iloc[-1, chart_df.columns.get_loc('low')] = float(rt_price)
-        except: pass
+            indicators.apply_realtime_price(chart_df, rt_price)
+        except Exception: pass
 
         # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.
         # (이 함수는 이미 chart_df를 확보하므로 추가 API 호출 없이 out에 주입한다)
@@ -3337,7 +3328,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         elif pos <= 50: w_color = "[yellow]"
                         else: w_color = "[white]"
                         w52_pos_str = f"{w_color}{pos:.1f}%[/]"
-                except: pass
+                except Exception: pass
         else:
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ANALYSIS_DEBUG] {code} Detail: {detail} | StockCtx:{is_us_stock_context} EtfCtx:{is_us_etf_context}")
@@ -3350,7 +3341,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     try:
                         shar_val = float(detail.get('shar', 0))
                         shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
-                    except: pass
+                    except Exception: pass
                 try:
                     h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
                     if h52 > l52:
@@ -3361,7 +3352,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         elif pos <= 50: w_color = "[yellow]"
                         else: w_color = "[white]"
                         w52_pos_str = f"{w_color}{pos:.1f}%[/]"
-                except: pass
+                except Exception: pass
 
         if curr_data and curr_data.get('rt_cd') == '0':
             out = curr_data['output']
@@ -3383,9 +3374,9 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     rate = (diff / base_price) * 100
                 else:
                     try: rate = float(out.get('prdy_ctrt', 0))
-                    except: rate = 0.0
+                    except Exception: rate = 0.0
                     try: diff = int(out.get('prdy_vrss', 0))
-                    except: diff = 0
+                    except Exception: diff = 0
                     
                 curr_fmt = f"{curr:,}"
                 diff_str = f"{diff:+}"
@@ -3399,7 +3390,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                 try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
+                except Exception: pass
 
             # 적응형 임계값 적용
             thresholds = None
@@ -3435,13 +3426,13 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 try:
                     h52, l52, c = float(curr_data['output'].get('w52_hgpr', 0)), float(curr_data['output'].get('w52_lwpr', 0)), float(curr_data['output'].get('stck_prpr', 0))
                     if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
-                except: pass
+                except Exception: pass
             else:
                 try:
                     if detail:
                         h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
                         if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
-                except: pass
+                except Exception: pass
 
             sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
             class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val, smart_money=sm_flag)
@@ -3478,7 +3469,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         ema120_color = "[red]"
                     else:
                         ema120_color = "[blue]"
-                except: pass
+                except Exception: pass
 
             ema_5_str = f"{ema5_color}{fmt_idx(ind.get('ema_5'))}[/]"
             ema_20_str = f"{ema20_color}{fmt_idx(ind.get('ema_20'))}[/]"
@@ -3649,7 +3640,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                     _, kosdaq_adj = get_market_regime("KOSDAQ")
                     market_regime_adj["KOSPI"] = kospi_adj
                     market_regime_adj["KOSDAQ"] = kosdaq_adj
-            except:
+            except Exception:
                 use_adaptive = False
         elif not market_regime_adj:
             use_adaptive = False
@@ -3687,7 +3678,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         r_dict = dict(r)
         if r_dict.get('weights') and isinstance(r_dict['weights'], str):
             try: r_dict['weights'] = json.loads(r_dict['weights'])
-            except: r_dict['weights'] = None
+            except Exception: r_dict['weights'] = None
         rules_map[r_dict['code']] = r_dict
     any_custom_rule = False
     
@@ -3701,7 +3692,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     try:
         pending_reserves = db_manager.db.get_pending_reserved_orders()
         reserved_codes = set(o['code'] for o in pending_reserves)
-    except: pass
+    except Exception: pass
     m_codes = utils.get_memo_codes()
     
     if not is_overseas:
@@ -3963,7 +3954,7 @@ def show_stock_analysis():
                             _, q_adj = get_market_regime("KOSDAQ")
                             shared_regime_adj["KOSPI"] = k_adj
                             shared_regime_adj["KOSDAQ"] = q_adj
-                    except:
+                    except Exception:
                         pass
 
                 failed_targets = []
@@ -4097,7 +4088,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
                             frgn_rates_map[d_key] = (current_hldn / lstn_stcn) * 100
                             f_net = api.safe_int(investor_map[d_key].get('frgn_ntby_qty'))
                             current_hldn -= f_net
-            except: pass
+            except Exception: pass
 
     if df is None or df.empty: return
 
@@ -4234,7 +4225,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
                     f_rate = item.get('hts_frgn_ehrt')
                     if f_rate is not None and str(f_rate).strip():
                         try: foreign_rate_str = f"{float(f_rate):.2f}%"
-                        except: pass
+                        except Exception: pass
 
                 def _fmt_i(val):
                     if val == 0: return "[dim]-[/dim]"

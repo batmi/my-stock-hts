@@ -241,6 +241,13 @@ This system applies a robust backend architecture to solve concurrency issues an
     *   Applies a `threading.RLock` mechanism to prevent crashes when trading strategy settings are changed in real-time. Validates parameters using `Pydantic`.
 *   **Order State Machine & Kill Switch**: 
     *   Strictly tracks the order lifecycle from reception to execution/cancellation. A Kill Switch pauses the system if continuous network/API errors occur.
+*   **Unified Real-time Price**: 
+    *   To ensure the analysis screens and the system trader compute indicators from the **same intraday price**, the logic that overlays the latest real-time price onto the unconfirmed daily candle (close/high/low) is unified into a single entry point (`indicators.apply_realtime_price`), structurally eliminating score mismatches between the menu analysis and auto-trading.
+    *   Domestic price/trade-strength is fetched in **a single call covering both KRX and NXT (alternative exchange)**; in real-trading mode, NXT session quotes are reflected in real time, sharing the same cache key as the system trader to cut redundant calls.
+*   **Memory Protection (Raspberry Pi OOM guard)**: 
+    *   For long-running operation on constrained devices (e.g., Raspberry Pi 1GB), the quote micro-cache and chart cache enforce a **maximum item count** and evict the oldest entries when exceeded, so memory does not grow unbounded even during full-market scans.
+*   **Interrupt-safe Exceptions**: 
+    *   Bare `except:` clauses were normalized to `except Exception:` so that `KeyboardInterrupt`/`SystemExit` propagate correctly (preserving Ctrl+C responsiveness and clean shutdown).
 
 ## 5. Project Structure
 
@@ -439,7 +446,7 @@ Background monitoring runs every 3 seconds and is persistently saved in SQLite D
 ## 12. Known Issues
 
 *   **Unfilled Order Query Error (KIS Mock)**: Due to a KIS API bug, unfilled order queries may return empty lists even if the order was successfully placed. The system handles this via local order state tracking and blind cancellations.
-*   **NXT and SOR Unsupported (KIS Mock)**: NXT real-time quotes and SOR unified orders are not supported in the KIS mock trading environment. They only work in the real investment mode.
+*   **NXT and SOR Unsupported (KIS Mock)**: NXT real-time quotes and SOR unified orders are not supported in the KIS mock trading environment; only KRX regular-session trading is available. As a result, trading attempts during the post-15:30 NXT session raise errors, and **the price on the analysis screen stays frozen at the regular-session close and does not update** (because NXT quotes cannot be retrieved). They only work in the real investment mode.
 
 ## 13. License
 

@@ -662,7 +662,7 @@ def show_help():
                             ma_val = df['close'].rolling(window=ma_period_filter).mean().iloc[-1]
                             current_idx = df['close'].iloc[-1]
                             filter_info[m_type] = current_idx >= ma_val
-                    except:
+                    except Exception:
                         pass
     except Exception:
         pass
@@ -849,7 +849,7 @@ def flush_input():
         import sys, termios
         try:
             termios.tcflush(sys.stdin, termios.TCIOFLUSH)
-        except:
+        except Exception:
             pass
 
 def main():
@@ -1223,7 +1223,7 @@ def main():
                         log_tail = get_mystock_log_tail(20)
                         msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {err_text}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
                         api.send_telegram_message(msg)
-                    except: pass
+                    except Exception: pass
                 else:
                     if _fatal_burst == 3:
                         logging.error("치명 오류 반복 폭주 감지: 텔레그램 알림을 억제하고 대기합니다.")

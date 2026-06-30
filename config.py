@@ -467,7 +467,7 @@ def _log_namer(name):
         file_name = os.path.basename(base) # mystock.log
         root, ext = os.path.splitext(file_name) # mystock, .log
         return os.path.join(dir_name, f"{root}_{date_part}{ext}")
-    except:
+    except Exception:
         return name
 
 # [추가] 커스텀 로그 핸들러 클래스 (커스텀 Namer 사용 시 자동 삭제 버그 수정)

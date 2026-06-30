@@ -106,7 +106,7 @@ def get_backtest_data(code, is_overseas, days):
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     try: df = df.xs(t, axis=1, level=1)
-                    except: pass
+                    except Exception: pass
                 
                 df.columns = [c.lower() for c in df.columns]
                 df = df.reset_index()
@@ -767,7 +767,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
             if pd.isna(val) or math.isnan(float(val)): return "-"
             if is_overseas: return f"${float(val):,.2f}"
             return f"{int(float(val)):,}원"
-        except:
+        except Exception:
             return "-"
 
     # [추가] 테이블 위 공백 라인
@@ -1277,7 +1277,7 @@ def run_backtest():
                 w_data = custom_rule['weights']
                 if isinstance(w_data, str): weights = json.loads(w_data)
                 elif isinstance(w_data, dict): weights = w_data
-            except: pass
+            except Exception: pass
 
         # 프리셋 적용 시 기본값 덮어쓰기
         if preset_choice == "1":
@@ -1338,7 +1338,7 @@ def run_backtest():
             if days_input.lower() in ['b', 'q']: continue
             try:
                 days = int(days_input)
-            except:
+            except Exception:
                 days = 365
             
             config.console.print("\n[bold]2. 기본 매수 타점 설정[/bold]")
@@ -1346,7 +1346,7 @@ def run_backtest():
             val = Prompt.ask(f"매수 기준 점수 (기본: {def_buy_score}점)\n[dim]이 점수 이상일 때 매수 진입 (지표 종합 점수)[/dim]", default=str(def_buy_score))
             if val.lower() in ['b', 'q']: continue
             try: buy_score = float(val)
-            except: buy_score = float(def_buy_score)
+            except Exception: buy_score = float(def_buy_score)
             
             def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
             val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
@@ -1373,7 +1373,7 @@ def run_backtest():
             val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
             if val.lower() in ['b', 'q']: continue
             try: sell_score = float(val)
-            except: sell_score = float(def_sell_score)
+            except Exception: sell_score = float(def_sell_score)
             
             def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
             val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
@@ -1592,7 +1592,7 @@ def run_backtest():
                 if pd.isna(val) or math.isnan(float(val)): return "-"
                 if is_overseas: return f"${float(val):,.2f}"
                 return f"{int(float(val)):,}원"
-            except:
+            except Exception:
                 return "-"
 
         # [수정] 결과 리포트를 테이블로 출력

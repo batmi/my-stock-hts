@@ -4,6 +4,27 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 import config
 
+def apply_realtime_price(df, price):
+    """차트 마지막 봉(당일 미확정 캔들)의 종가를 실시간 현재가로 덮어쓰고 고가/저가를 보정한다.
+
+    종목분석 메뉴와 시스템 트레이딩이 동일한 당일 시세로 지표를 계산하도록 통일하는 단일 진입점.
+    (과거 이 로직이 여러 곳에 복제되며 메뉴 분석↔자동매매 점수 불일치를 유발해 단일화한다.)
+    price<=0 이거나 df가 비어 있으면 아무 작업도 하지 않는다. df를 제자리에서 수정하고 반환한다.
+    """
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return df
+    if p <= 0 or df is None or len(df) == 0:
+        return df
+    ci = df.columns.get_loc('close')
+    hi = df.columns.get_loc('high')
+    lo = df.columns.get_loc('low')
+    df.iloc[-1, ci] = p
+    if p > float(df.iloc[-1, hi]): df.iloc[-1, hi] = p
+    if p < float(df.iloc[-1, lo]): df.iloc[-1, lo] = p
+    return df
+
 def get_psar_full_series(df, af_start=None, af_step=None, af_max=None):
     if af_start is None: af_start = config.INDICATOR_PARAMS["SAR_AF_START"]
     if af_step is None: af_step = config.INDICATOR_PARAMS["SAR_AF_STEP"]

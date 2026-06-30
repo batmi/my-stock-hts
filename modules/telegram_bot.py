@@ -648,11 +648,8 @@ class TelegramCommander:
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
             try:
                 rt_price = api.get_current_price(code, is_overseas=is_overseas)
-                if rt_price > 0:
-                    df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
-                    if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
-                    if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
-            except: pass
+                indicators.apply_realtime_price(df, rt_price)
+            except Exception: pass
             
             ind = indicators.calculate_indicators(df)
             current_price = float(df.iloc[-1]['close'])
@@ -664,7 +661,7 @@ class TelegramCommander:
                 gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
+                except Exception: pass
 
             w52_pos = 0.0
             if len(df) > 0:
@@ -684,7 +681,7 @@ class TelegramCommander:
                     cp = api.get_current_price_data(code, False)
                     if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
                         market_type = "KOSDAQ"
-                except: pass
+                except Exception: pass
                 _, score_adj = analysis.get_market_regime(market_type)
                 
             thresholds = {
@@ -1609,7 +1606,7 @@ class TelegramCommander:
                                             prev = current
                                             current = est_yield
                                             name = f"{name}(선물적용)"
-                    except: pass
+                    except Exception: pass
                     
                     # fast_info 실패 시에만 fallback으로 차트 조회 수행
                     if current is None:
@@ -1728,11 +1725,8 @@ class TelegramCommander:
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
             try:
                 rt_price = api.get_current_price(code, is_overseas=is_overseas)
-                if rt_price > 0:
-                    df.iloc[-1, df.columns.get_loc('close')] = float(rt_price)
-                    if rt_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(rt_price)
-                    if rt_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(rt_price)
-            except: pass
+                indicators.apply_realtime_price(df, rt_price)
+            except Exception: pass
             
             ind = indicators.calculate_indicators(df)
             current_price = float(df.iloc[-1]['close'])
@@ -1870,7 +1864,7 @@ class TelegramCommander:
                         total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
                         if total_bid > 0: ask_bid_ratio = total_ask / total_bid
                         elif total_ask > 0: ask_bid_ratio = 99.9
-                except: pass
+                except Exception: pass
             
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
@@ -2361,7 +2355,7 @@ class TelegramCommander:
                     state_val = snap_data.get('state')
                     if state_val and is_buy and state_val not in reason:
                         reason = f"[{state_val}] {reason}"
-                except: pass
+                except Exception: pass
 
             # [추가] 매수 사유 분류 커스텀 태그 적용
             if is_buy and reason:

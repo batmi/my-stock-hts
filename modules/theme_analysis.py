@@ -4,6 +4,7 @@ import sqlite3
 import concurrent.futures
 import warnings
 import math
+from contextlib import closing
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 import time
@@ -215,7 +216,7 @@ def _fetch_theme_detail(theme):
                 rate = float(rate_txt) if rate_txt else 0.0
                 
                 stocks.append({'name': name, 'code': code, 'rate': rate})
-            except: continue
+            except Exception: continue
             
         # 등락률 순 정렬 (내림차순)
         stocks.sort(key=lambda x: x['rate'], reverse=True)
@@ -1219,7 +1220,7 @@ def _analyze_stock_ui():
                 gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
                 loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
                 try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except: pass
+                except Exception: pass
 
             w52_pos = 0.0
             if len(df) > 0:
@@ -1246,7 +1247,7 @@ def _analyze_stock_ui():
                         w_data = custom_rule['weights']
                         if isinstance(w_data, str): weights = json.loads(w_data)
                         elif isinstance(w_data, dict): weights = w_data
-                    except: pass
+                    except Exception: pass
             
             score_adj = 0.0
             if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
@@ -1255,7 +1256,7 @@ def _analyze_stock_ui():
                     cp = api.get_current_price_data(code, False)
                     if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
                         market_type = "KOSDAQ"
-                except: pass
+                except Exception: pass
                 _, score_adj = analysis.get_market_regime(market_type)
                 if not custom_rule:
                     buy_score += score_adj

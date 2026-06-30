@@ -267,7 +267,7 @@ class SessionManager:
             # 만료 1분 전까지만 유효한 것으로 간주
             if datetime.now() < (expired_dt - timedelta(minutes=1)):
                 return True
-        except: return False
+        except Exception: return False
         return False
 
     def get_valid_token(self, key, force_disk_reload=False):
@@ -312,7 +312,7 @@ class SessionManager:
             issued_dt = datetime.strptime(issued_at_str, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - issued_dt).total_seconds() < seconds:
                 return True
-        except: pass
+        except Exception: pass
         return False
 
     def _update_memory_token(self, key, token):

@@ -47,9 +47,10 @@ def test_utils_show_menu(mock_ask):
 def test_utils_memo_db():
     """메모 관리 DB 로직 통합 테스트"""
     with patch('utils.sqlite3.connect') as mock_connect:
-        mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value.__enter__.return_value = mock_conn
+        # utils의 메모 DB 함수는 `with closing(sqlite3.connect()) as conn, conn:` 패턴이라
+        # conn = sqlite3.connect() 반환값(mock_connect.return_value)이다. (closing.__enter__가 원본 반환)
+        mock_conn = mock_connect.return_value
         mock_conn.cursor.return_value = mock_cursor
         
         # get_stock_memos

@@ -94,7 +94,7 @@ def load_restricted_stocks():
             try:
                 with open(RESTRICTED_FILE, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except: return {}
+            except Exception: return {}
         return {}
 
 def save_restricted_stocks(data):
@@ -277,7 +277,7 @@ def load_daily_initial_asset(account_key):
                     accounts = data.get("accounts", {})
                     if account_key in accounts and accounts[account_key] > 0:
                         return accounts[account_key]
-        except: pass
+        except Exception: pass
     return 0
 
 def save_daily_initial_asset(account_key, asset_value):
@@ -290,7 +290,7 @@ def save_daily_initial_asset(account_key, asset_value):
                 old_data = json.load(f)
                 if old_data.get("date") == today_str:
                     data["accounts"] = old_data.get("accounts", {})
-        except: pass
+        except Exception: pass
     
     data["accounts"][account_key] = asset_value
     try:
@@ -363,7 +363,7 @@ def _enrich_rules_with_weights_logic(rules):
             if row['weights']:
                 try:
                     weights_map[row['code']] = json.loads(row['weights'])
-                except: pass
+                except Exception: pass
         
         # Row 객체일 수 있으므로 dict로 변환하며 병합
         new_rules = []
@@ -486,7 +486,7 @@ class ConclusionMonitor:
                     trader = trader_cls()
                     if trader.order_manager.pending_orders:
                         has_pending_orders = True
-            except: pass
+            except Exception: pass
 
             # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
             # 단, 시스템 초기 1회 실행(초기화)은 장 마감 상태여도 무조건 수행해야 하므로 조건 추가
@@ -638,7 +638,7 @@ class ConclusionMonitor:
                                 tot_qty = int(out2.get('tot_ccld_qty', 0))
                                 if tot_qty > 0 and config.FILE_DEBUG_LEVEL == "DEBUG":
                                     logger.debug(f"[Monitor] API 데이터 불일치: 체결내역 리스트는 비어있으나 요약 수량은 {tot_qty}입니다. (Pagination 또는 필터링 문제 가능성)")
-                            except: pass
+                            except Exception: pass
 
                         for item in trades:
                             odno = item.get('odno')
@@ -715,7 +715,7 @@ class ConclusionMonitor:
                                         if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
                                             # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
                                             is_external_cancel = False
-                                except: pass
+                                except Exception: pass
                                 
                                 if not initial:
                                     if is_external_cancel:
@@ -839,7 +839,7 @@ class ConclusionMonitor:
                                                 profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
                                             if found_record.get('reason'):
                                                 reason_msg = f"\n사유: {found_record['reason']}"
-                                    except: pass
+                                    except Exception: pass
                                 
                                 # [추가] 매도 사유 조회가 안 되었거나 매수인 경우 actual_reason 활용
                                 if not reason_msg and actual_reason:
@@ -864,7 +864,7 @@ class ConclusionMonitor:
                                                 rate = float(cp_data['output']['prdy_ctrt'])
                                                 icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
                                                 cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                    except: pass
+                                    except Exception: pass
                                     
                                     # [추가] 개별 룰 조회
                                     rule = rules_map.get(code)
@@ -1140,15 +1140,15 @@ class ConclusionMonitor:
                                 price = float(cp_data['output'].get('last', 0))
                             else:
                                 price = float(cp_data['output'].get('stck_prpr', 0))
-                except: pass
+                except Exception: pass
 
             type_str = trade.get('type', '') # [수정] KeyError 방지
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
             try: profit_amt = int(float(trade.get('profit_amt') or 0))
-            except: profit_amt = 0
+            except Exception: profit_amt = 0
             try: profit_rate = float(trade.get('profit_rate') or 0.0)
-            except: profit_rate = 0.0
+            except Exception: profit_rate = 0.0
             
             # [추가] snapshot 데이터 타입 안전 처리
             snapshot_data = trade.get('snapshot')
@@ -1220,7 +1220,7 @@ class ConclusionMonitor:
                             rate = float(cp_data['output']['prdy_ctrt'])
                             icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
                             cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                    except: pass
+                    except Exception: pass
 
                     # 전략 지표 (스냅샷 활용)
                     strategy_info = ""
@@ -1234,7 +1234,7 @@ class ConclusionMonitor:
                                 adx_str = f"{ind.get('adx', 0):.1f}"
                                 cci_str = f"{ind.get('cci', 0):.1f}"
                                 strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n점수: {score}점\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                        except: pass
+                        except Exception: pass
                                 
                     if strategy_info:
                         strategy_info += cur_info
@@ -1296,7 +1296,7 @@ class ConclusionMonitor:
                 try:
                     buy_dt = datetime.strptime(buy_time, "%Y-%m-%d %H:%M:%S")
                     holding_days = (datetime.now() - buy_dt).days
-                except: pass
+                except Exception: pass
             
             from modules import theme_analysis
             autopsy = theme_analysis.generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days)
@@ -1938,7 +1938,7 @@ class OrderManager:
                                                                     if h['pdno'] == code and int(h['hldg_qty']) > 0:
                                                                         is_filled = True
                                                                         break
-                                                        except: pass
+                                                        except Exception: pass
                                                     elif "sell" in trade.get('type', '').lower() or "매도" in trade.get('type', ''):
                                                         # [추가] 매도 주문인 경우 40330000 에러는 대부분 체결 완료를 의미함
                                                         is_filled = True
@@ -1952,7 +1952,7 @@ class OrderManager:
                                                             try:
                                                                 cp = api.get_current_price(code, is_overseas=is_overseas)
                                                                 if cp > 0: fill_price = float(cp)
-                                                            except: pass
+                                                            except Exception: pass
 
                                                         # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
                                                         # 체결 내역 강제 생성 (히스토리 보정)
@@ -1991,7 +1991,7 @@ class OrderManager:
                                                                         rate = float(cp_data['output']['prdy_ctrt'])
                                                                         icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
                                                                         cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                                            except: pass
+                                                            except Exception: pass
 
                                                             # 전략 지표 (스냅샷 활용)
                                                             strategy_info = ""
@@ -2005,7 +2005,7 @@ class OrderManager:
                                                                         adx_str = f"{ind.get('adx', 0):.1f}"
                                                                         cci_str = f"{ind.get('cci', 0):.1f}"
                                                                         strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                                                                except: pass
+                                                                except Exception: pass
                                                             
                                                             exec_amt = fill_price * qty
                                                             price_fmt = f"${fill_price:,.2f}" if is_overseas else f"{fill_price:,.0f}원"
@@ -2856,7 +2856,7 @@ class AutoTrader:
                     tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
                 
                 current_asset = deposit + tot_evlu
-            except: pass
+            except Exception: pass
 
         if current_asset is not None:
             tot_profit = 0
@@ -2918,7 +2918,7 @@ class AutoTrader:
                 today_trades_refined = [r for r in today_trades_refined if not r.get('order_status') or "체결" in r.get('order_status', '')]
                 sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
                 realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
-            except: pass
+            except Exception: pass
             
             realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
             msg += f"오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
@@ -2983,7 +2983,7 @@ class AutoTrader:
                             is_healthy_q = is_healthy
                             
                     msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
-        except: pass
+        except Exception: pass
         
         if use_filter:
             skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
@@ -3120,7 +3120,7 @@ class AutoTrader:
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                 try:
                     holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                except: 
+                except Exception: 
                     holdings = []
                     summary = []
                 
@@ -3138,7 +3138,7 @@ class AutoTrader:
                         if res:
                             deposit = res.get('d2_real', 0)
                             if deposit == 0: deposit = res.get('d2_deposit', 0)
-                except: pass
+                except Exception: pass
 
                 # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
                 tot_evlu = 0
@@ -3154,7 +3154,7 @@ class AutoTrader:
                 try:
                     kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
                     kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
-                except:
+                except Exception:
                     pass
 
                 # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
@@ -3938,7 +3938,7 @@ class AutoTrader:
             code = r['code']
             try:
                 dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
-            except: continue
+            except Exception: continue
 
             if r['type'] == 'buy':
                 if code not in buy_times: buy_times[code] = []
@@ -4183,7 +4183,7 @@ class AutoTrader:
             
             try:
                 dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
-            except: dt = datetime.now()
+            except Exception: dt = datetime.now()
             
             if r['type'] == 'buy':
                 stock_stats[code]['buy'] += 1
@@ -4885,7 +4885,7 @@ class AutoTrader:
                             try:
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
-                            except: pass
+                            except Exception: pass
 
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
@@ -4961,7 +4961,7 @@ class AutoTrader:
                                     try:
                                         today_str = datetime.now().strftime("%Y-%m-%d")
                                         db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
-                                    except: pass
+                                    except Exception: pass
                                     
                                     api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
                                     
@@ -5031,7 +5031,7 @@ class AutoTrader:
             gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
             loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
             try: return (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except: pass
+            except Exception: pass
         return None
 
     def _check_sell_conditions(self, holdings, is_market_open=True):
@@ -5194,7 +5194,7 @@ class AutoTrader:
                 try:
                     buy_dt = datetime.strptime(last_buy['time'], "%Y-%m-%d %H:%M:%S")
                     holding_days = (datetime.now() - buy_dt).days
-                except: pass
+                except Exception: pass
 
             with self._lock:
                 cached_highest = self.trailing_stop_cache.get(code)
@@ -5215,10 +5215,7 @@ class AutoTrader:
             df = api.get_chart_data(code, is_overseas=is_overseas_stock)
             
             # [추가] 차트 데이터 당일 종가/고가/저가 실시간 갱신 (지표 불일치 완벽 방지)
-            if df is not None and not df.empty and current_price > 0:
-                df.iloc[-1, df.columns.get_loc('close')] = float(current_price)
-                if current_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(current_price)
-                if current_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(current_price)
+            indicators.apply_realtime_price(df, current_price)
 
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
@@ -5306,7 +5303,7 @@ class AutoTrader:
                     # [추가] 매수 로직(상관관계 분석 등)에서 이미 매도한 종목을 보유 중인 것으로 오인하지 않도록 메모리 잔고 즉시 차감
                     try:
                         item['hldg_qty'] = str(max(0, int(item.get('hldg_qty', 0)) - target_sell_qty))
-                    except: pass
+                    except Exception: pass
 
         # 병렬 처리 실행
         max_workers = 5 if not config.session.is_simulation else 1
@@ -5484,9 +5481,9 @@ class AutoTrader:
                 
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result() if fut_vol else None
-                except: vol_strength = None
+                except Exception: vol_strength = None
                 try: ob_data = fut_ob.result() if fut_ob else None
-                except: ob_data = None
+                except Exception: ob_data = None
                 
             if df is None or df.empty:
                 self.set_stock_state(code, None)
@@ -5496,11 +5493,8 @@ class AutoTrader:
             # (종목 분석 메뉴와 시스템 트레이딩 간의 지표 및 점수 불일치 원천 차단)
             try:
                 realtime_price = api.get_current_price(code, is_overseas=is_overseas_stock)
-                if realtime_price and realtime_price > 0:
-                    df.iloc[-1, df.columns.get_loc('close')] = float(realtime_price)
-                    if realtime_price > df.iloc[-1]['high']: df.iloc[-1, df.columns.get_loc('high')] = float(realtime_price)
-                    if realtime_price < df.iloc[-1]['low']: df.iloc[-1, df.columns.get_loc('low')] = float(realtime_price)
-            except: pass
+                indicators.apply_realtime_price(df, realtime_price)
+            except Exception: pass
             
             current_price = float(df.iloc[-1]['close'])
             
@@ -6043,7 +6037,7 @@ def _view_stock_rules():
             # [Fix] 가중치가 JSON 문자열인 경우 딕셔너리로 변환
             if isinstance(w, str):
                 try: w = json.loads(w)
-                except: pass
+                except Exception: pass
             
             if isinstance(w, dict):
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"

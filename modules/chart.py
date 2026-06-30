@@ -45,7 +45,7 @@ def setup_korean_font():
         if current_os == "Windows": rc('font', family='Malgun Gothic')
         elif current_os == "Darwin": rc('font', family='AppleGothic')
         else: rc('font', family='NanumGothic')
-    except: pass
+    except Exception: pass
     plt.rcParams['axes.unicode_minus'] = False
 
 def _is_before_krx_open():
@@ -351,7 +351,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             if platform.system() == "Windows": os.startfile(file_path)
             elif platform.system() == "Darwin": os.system(f"open {file_path}")
             else: os.system(f"xdg-open {file_path}")
-        except: pass
+        except Exception: pass
 
 def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     """Monte Carlo 시뮬레이션 수익률 분포 히스토그램 생성"""
@@ -392,4 +392,4 @@ def generate_monte_carlo_histogram(returns, name, code, open_file=True):
             if platform.system() == "Windows": os.startfile(file_path)
             elif platform.system() == "Darwin": os.system(f"open {file_path}")
             else: os.system(f"xdg-open {file_path}")
-        except: pass
+        except Exception: pass

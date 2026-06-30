@@ -192,7 +192,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                                     prev = current
                                     current = est_yield
                                     is_proxy_yield = True
-                    except: pass
+                    except Exception: pass
             except Exception: pass
 
         patched_name = None
@@ -252,7 +252,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                         intra_last_date = intra_last_ts.date()
                         if intra_last_date >= daily_last_date:
                             current = float(valid_intra.iloc[-1])
-                except: pass
+                except Exception: pass
 
             target_date = intra_last_date if (intra_last_date and intra_last_date >= daily_last_date) else daily_last_date
 
@@ -427,7 +427,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     ema120_color = "[red]"
                 else:
                     ema120_color = "[blue]"
-            except: pass
+            except Exception: pass
 
         sar_icon = "[dim]-[/dim]"
         if val_psar is not None:
@@ -520,7 +520,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 if regime_state == "Bull": display_name = f"[red]{name}[/]"
                 elif regime_state == "Bear": display_name = f"[blue]{name}[/]"
                 else: display_name = f"[yellow]{name}[/]"
-            except: pass
+            except Exception: pass
         elif name == "미국채 10년물 금리":
             if eval_price >= 5.10: display_name = f"[magenta]{name}[/]"
             elif 4.80 <= eval_price < 5.10: display_name = f"[red]{name}[/]"
@@ -826,7 +826,7 @@ def _show_market_indices_core(target_indices=None):
                                                 d_df = d_data[t_fetch].copy()
                                         elif 'Close' in d_data.columns: d_df = d_data.copy()
                                         elif 'close' in d_data.columns: d_df = d_data.copy()
-                                except: pass
+                                except Exception: pass
 
                                 try:
                                     if not i_data.empty:
@@ -835,7 +835,7 @@ def _show_market_indices_core(target_indices=None):
                                                 i_df = i_data[t_fetch].copy()
                                         elif 'Close' in i_data.columns: i_df = i_data.copy()
                                         elif 'close' in i_data.columns: i_df = i_data.copy()
-                                except: pass
+                                except Exception: pass
                                 
                                 # 유효성 검사: 모든 값이 NaN으로 돌아온 경우 캐시하지 않음
                                 is_valid = False
@@ -1073,7 +1073,7 @@ def show_market_indices(interval=0):
                         config.console.print("[red]선택된 그룹이 없습니다.[/red]")
                         time.sleep(1)
                         continue
-            except:
+            except Exception:
                 config.console.print("[red]잘못된 입력입니다.[/red]")
                 time.sleep(1)
                 continue

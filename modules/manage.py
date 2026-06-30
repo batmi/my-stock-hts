@@ -144,7 +144,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                             # 과거로 가면서 해당 일자의 순매수를 빼줌 (과거 보유량 = 현재 보유량 - 최근 순매수량)
                             f_net = api.safe_int(investor_map[d_key].get('frgn_ntby_qty'))
                             current_hldn -= f_net
-            except: pass
+            except Exception: pass
         
         if df is not None and not df.empty:
             # 이동평균선 계산
@@ -251,7 +251,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                         f_rate = item.get('hts_frgn_ehrt')
                         if f_rate is not None and str(f_rate).strip():
                             try: foreign_rate_str = f"{float(f_rate):.2f}%"
-                            except: pass
+                            except Exception: pass
 
                     def _fmt_i(val):
                         if val == 0: return "[dim]-[/dim]"
@@ -306,7 +306,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 try:
                     if s.replace('-','').isdigit(): return f"{int(s):,}"
                     if s.replace('.','',1).replace('-','').isdigit(): return f"{float(s):,.2f}"
-                except: pass
+                except Exception: pass
                 return s
 
             processed_keys = set()
