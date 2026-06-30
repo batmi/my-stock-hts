@@ -2271,6 +2271,105 @@ def fetch_nxt_price(code):
         logger.debug(f"[API] NXT(대체거래소) 시세 조회 오류 (NX 코드 시도): {e}")
     return 0
 
+# ==========================================================
+# NXT(대체거래소) 마지막 종가 기억 — 야간/주말/휴장 시 현재가 표시용 (실전 전용)
+#  거래시간(프리 08:00~09:00, 애프터 15:30~20:00) 동안 받은 NXT 현재가를 보관했다가,
+#  거래가 없는 시간대(야간 20:00~익일 08:00 / 주말 / 휴장일)에는 KRX 정규장 종가 대신
+#  '마지막 NXT 종가'를 현재가로 노출한다(다음 거래일 개장 전까지). 디스크에 영속하여 재시작에도 보존.
+#  모의투자(VTS)는 NXT 미지원이므로 이 경로를 타지 않는다(항상 KRX 종가).
+# ==========================================================
+_nxt_last_close = {}
+_nxt_last_close_lock = threading.RLock()
+_nxt_last_close_loaded = False
+_nxt_last_close_dirty = False
+_nxt_last_close_saved_at = 0.0
+_NXT_RECALL_MAX_AGE_DAYS = 5   # 연휴 고려: 마지막 NXT 종가를 최대 5일까지 유효로 인정
+
+def _nxt_close_file():
+    base = getattr(config, 'DATA_DIR', None) or getattr(config, 'JSON_DIR', '.')
+    return os.path.join(base, 'nxt_last_close.json')
+
+def _nxt_load_last_close():
+    global _nxt_last_close_loaded
+    if _nxt_last_close_loaded:
+        return
+    _nxt_last_close_loaded = True
+    try:
+        path = _nxt_close_file()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                with _nxt_last_close_lock:
+                    _nxt_last_close.update(data)
+    except Exception as e:
+        logger.debug(f"[NXT] 마지막 종가 캐시 로드 실패: {e}")
+
+def _nxt_save_last_close(force=False):
+    """디스크 쓰기를 60초 throttle 한다(SD카드 보호). force=True면 즉시 저장."""
+    global _nxt_last_close_dirty, _nxt_last_close_saved_at
+    if not _nxt_last_close_dirty:
+        return
+    now = time.time()
+    if not force and (now - _nxt_last_close_saved_at) < 60:
+        return
+    try:
+        with _nxt_last_close_lock:
+            snapshot = dict(_nxt_last_close)
+        with open(_nxt_close_file(), 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f)
+        _nxt_last_close_dirty = False
+        _nxt_last_close_saved_at = now
+    except Exception as e:
+        logger.debug(f"[NXT] 마지막 종가 캐시 저장 실패: {e}")
+
+def _nxt_remember_close(code, price):
+    """거래시간에 받은 NXT 현재가를 '마지막 종가'로 기억한다."""
+    global _nxt_last_close_dirty
+    try:
+        p = int(price)
+    except (TypeError, ValueError):
+        return
+    if p <= 0:
+        return
+    _nxt_load_last_close()
+    with _nxt_last_close_lock:
+        _nxt_last_close[code] = {'price': p, 'date': datetime.now().strftime('%Y%m%d')}
+    _nxt_last_close_dirty = True
+    _nxt_save_last_close()
+
+def _nxt_recalled_close(code):
+    """야간/주말/휴장 시 보여줄 NXT 마지막 종가. 너무 오래된(>5일) 값은 폐기(0 반환)."""
+    _nxt_load_last_close()
+    with _nxt_last_close_lock:
+        e = _nxt_last_close.get(code)
+    if not e:
+        return 0
+    try:
+        d = datetime.strptime(e.get('date', ''), '%Y%m%d')
+        if (datetime.now() - d).days > _NXT_RECALL_MAX_AGE_DAYS:
+            return 0
+        return int(e.get('price', 0))
+    except Exception:
+        return 0
+
+def _nxt_quote_phase():
+    """실전 NXT 시세 처리 단계를 '한 번의 휴장 판정'으로 결정한다(중복 휴장조회 방지).
+       'active'   : NXT 거래시간(프리 08:00~09:00 / 애프터 15:30~20:00) → 라이브 NXT 사용
+       'offhours' : 야간(20:00~익일 08:00)·주말·휴장 → 라이브 NXT 시도 후 없으면 마지막 종가
+       'skip'     : 정규장(09:00~15:30) 등 → KRX 대표가만 사용
+    """
+    try:
+        holiday = is_holiday_today()   # 주말·공휴일 포함
+    except Exception:
+        holiday = False
+    now = datetime.now().strftime("%H%M")
+    if not holiday and (("0800" <= now < "0900") or ("1530" <= now <= "2000")):
+        return 'active'
+    if holiday or now >= "2000" or now < "0800":
+        return 'offhours'
+    return 'skip'
+
 def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
     (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
@@ -2310,10 +2409,20 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
             # [최적화] 정규장(09:00~15:30)엔 KRX가 대표가이므로 NXT 보조호출을 생략(_nxt_quote_window)해
             #  종목당 호출을 절반으로 줄인다. NXT 단독시간(프리/애프터)에만 NXT를 조회한다.
             out = res.get('output', {})
-            if include_nxt and _nxt_quote_window():
-                nxt_price = fetch_nxt_price(code)
-                if nxt_price > 0:
-                    out['ats_prpr'] = str(nxt_price)
+            # 모의투자(VTS)는 NXT 미지원 → 항상 KRX 종가. 실전만 NXT 병합/회상.
+            if include_nxt and not config.session.is_simulation:
+                phase = _nxt_quote_phase()
+                if phase in ('active', 'offhours'):
+                    # 거래시간이든 야간이든 KIS 라이브 NXT가를 먼저 시도한다.
+                    nxt_price = fetch_nxt_price(code)
+                    if nxt_price > 0:
+                        out['ats_prpr'] = str(nxt_price)
+                        _nxt_remember_close(code, nxt_price)         # 받은 값은 항상 기억
+                    elif phase == 'offhours':
+                        # 야간에 KIS가 NXT를 안 주면 기억한 마지막 NXT 종가를 노출(다음 개장 전까지)
+                        recalled = _nxt_recalled_close(code)
+                        if recalled > 0:
+                            out['ats_prpr'] = str(recalled)
 
             _set_micro_cache(cache_key, res)
         return res
@@ -2354,6 +2463,16 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
 
 def get_current_price(code, is_overseas):
     """현재가 단일 값 조회 (실패 시 0 반환)"""
+    # [WS] 실시간 피드에 신선한 현재가가 있으면 REST 호출 없이 즉시 반환(TPS 절감).
+    #  미구독/끊김/정규장 외(KRX 정지)면 None → 아래 REST 경로로 자동 폴백한다.
+    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+        try:
+            import realtime
+            p = realtime.get_feed().get_price(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
+            if p and p > 0:
+                return p
+        except Exception:
+            pass
     data = get_current_price_data(code, is_overseas)
     if data.get('rt_cd') == '0':
         output = data.get('output', {})
@@ -2488,6 +2607,16 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
     # [추가] 토스 미제공: 체결강도 없음
     if config.session.is_toss: return None
     if is_overseas: return None
+
+    # [WS] 실시간 피드에 신선한 체결강도(H0STCNT0)가 있으면 REST 호출 없이 즉시 반환(TPS 절감).
+    if getattr(config, 'USE_WEBSOCKET', True):
+        try:
+            import realtime
+            v = realtime.get_feed().get_vol_strength(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
+            if v is not None and v > 0:
+                return v
+        except Exception:
+            pass
 
     # NXT 포함 여부에 따라 캐시 분리 (대량 개요 조회는 NXT 생략하여 종목당 1콜 절감)
     cache_key = f"vol_{code}" if include_nxt else f"vol_{code}_nonxt"

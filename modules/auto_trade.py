@@ -431,10 +431,37 @@ class ConclusionMonitor:
 
     def start(self):
         if self.is_running: return
-        
+
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="ConclusionMonitor")
         self.thread.start()
+        self._register_ws_exec_callback()
+
+    def _register_ws_exec_callback(self):
+        """[추가] 실시간 체결통보(WebSocket)를 즉시 확인 트리거로 연결한다.
+
+        체결통보가 도착하면 곧바로 check_now()로 기존 REST 체결확정 로직을 깨운다.
+        WS가 꺼져있거나/HTS ID 미설정/토스 모드면 콜백이 호출되지 않으므로,
+        기존 주기 폴링이 그대로 체결을 처리한다(완전 폴백).
+        """
+        try:
+            import realtime
+            realtime.register_exec_callback(self._on_ws_exec_notice)
+        except Exception as e:
+            logger.debug(f"[Monitor] 체결통보 콜백 등록 실패(REST 폴링 유지): {e}")
+
+    def _on_ws_exec_notice(self, notice):
+        """체결통보 수신 콜백(피드 스레드에서 호출). 즉시 체결 확인을 트리거한다.
+
+        notice의 체결 데이터를 직접 신뢰해 DB에 쓰지 않고(필드 검증 리스크 회피),
+        검증된 REST 경로(_check_conclusions)를 즉시 1회 수행하도록 깨우기만 한다.
+        """
+        try:
+            if notice.get('rejected'):
+                return  # 거부 통보는 폴링이 처리(미체결 정리 경로)
+            self.check_now()  # 집중 감시 모드 진입 + 즉시 폴링 1회
+        except Exception as e:
+            logger.debug(f"[Monitor] 체결통보 처리 오류: {e}")
 
     def stop(self):
         self.is_running = False
@@ -5035,6 +5062,20 @@ class AutoTrader:
         return None
 
     def _check_sell_conditions(self, holdings, is_market_open=True):
+        # [WS] 시스템 트레이딩 종목을 실시간 피드에 최우선으로 등록한다.
+        #  보유종목(포지션, 최우선) → 매수후보 순서로 priority. 매수후보는 국내주식 + (ETF 포함 설정 시)국내 ETF.
+        #  ETF 미포함 설정이면 ETF는 시스템 대상이 아니므로 '그 외(other) 로테이션'으로 둔다.
+        try:
+            import realtime
+            hold_codes = [h['pdno'] for h in (holdings or [])]
+            cand_codes = [s['code'] for s in config.session.stock_data.get('stocks_kr', [])]
+            etf_codes = [s['code'] for s in config.session.stock_data.get('etfs_kr', [])]
+            if getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+                realtime.update_symbols(hold_codes + cand_codes + etf_codes, [])
+            else:
+                realtime.update_symbols(hold_codes + cand_codes, etf_codes)
+        except Exception: pass
+
         # [최적화] 인자로 전달받은 holdings 사용
         if not holdings: return
 

@@ -971,6 +971,24 @@ def main():
         ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
         api.prefetch_watchlists_async() # [수정] 관심종목 예열도 초기화 이후로 지연
         api.start_overview_warmer() # [추가] 개요 화면(시세/지수) 상시 백그라운드 예열 (실전 계좌)
+        # [WS] KIS 실시간 시세 피드 시작 + 초기 구독 종목 설정.
+        #  시스템 트레이딩 대상(국내주식)을 우선순위로, 국내 ETF를 그 외로 둔다.
+        #  (보유종목은 자동매매 루프가 매 사이클 최우선으로 갱신한다.)
+        try:
+            import realtime
+            sd = config.session.stock_data or {}
+            pri = [s['code'] for s in sd.get('stocks_kr', [])]
+            etf = [s['code'] for s in sd.get('etfs_kr', [])]
+            # ETF 포함 설정 시 ETF도 시스템 트레이딩 대상(매수후보)이므로 우선순위에 포함한다.
+            if getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+                pri += etf
+                other = []
+            else:
+                other = etf
+            realtime.update_symbols(pri, other)
+            realtime.start_feed()
+        except Exception as _ws_e:
+            logging.getLogger("hts").debug(f"[WS] 실시간 피드 시작 실패(REST 폴백): {_ws_e}")
 
     # [추가] 자동 시작 모드 처리
     if args.auto:

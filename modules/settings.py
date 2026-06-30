@@ -247,7 +247,8 @@ def view_system_config():
     table.add_row("집중 감시 시간\n[dim]주문 후 집중 감시 유지 시간[/dim]", "CONCLUSION_CHECK_ACTIVE_DURATION", f"{getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)}")
     table.add_row("미체결 취소 대기\n[dim]지정가 주문 유지 시간[/dim]", "UNFILLED_ORDER_CANCEL_SECONDS", f"{getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)}")
     table.add_row("차트 캐시 시간(분)\n[dim]일봉 데이터 메모리 캐시 유지[/dim]", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 180)}")
-    
+    table.add_row("실시간 WebSocket 사용\n[dim]KIS 실시간 시세 push(끄면 REST 폴링). 토스 미지원[/dim]", "USE_WEBSOCKET", f"{getattr(config.settings, 'USE_WEBSOCKET', True)}")
+
     table.add_section()
     table.add_row("[bold dim]  5-2. 텔레그램 및 AI 브리핑[/]", "", "")
     table.add_row("사용 여부\n[dim]알림 기능 활성화 여부[/dim]", "ENABLE_TELEGRAM", f"{getattr(config.settings, 'ENABLE_TELEGRAM', True)}")
@@ -798,6 +799,9 @@ def modify_trading_cycle_settings():
              "get": lambda: getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120), "set": lambda v: setattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', v)},
             {"desc": "차트 데이터 캐시(분)", "help": "일봉 메모리 캐시 유지 시간", "name": "CHART_CACHE_TTL_MINUTES", "type": "int", "section": "Execution",
              "get": lambda: getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 180), "set": lambda v: setattr(config.settings, 'CHART_CACHE_TTL_MINUTES', v)},
+
+            {"desc": "실시간 WebSocket 사용", "help": "KIS 실시간 시세 push 사용(끄면 REST 폴링). 미구독/끊김 시 자동 REST 폴백. 토스는 미지원", "name": "USE_WEBSOCKET", "type": "bool", "choices": ["y", "n"], "section": "Execution",
+             "get": lambda: getattr(config.settings, 'USE_WEBSOCKET', True), "set": lambda v: setattr(config.settings, 'USE_WEBSOCKET', v)},
         ]
         return items
 
@@ -1263,6 +1267,7 @@ def manage_custom_settings():
             "CONCLUSION_CHECK_ACTIVE_DURATION": "집중 감시 시간(초)",
             "UNFILLED_ORDER_CANCEL_SECONDS": "미체결 취소 대기(초)",
             "CHART_CACHE_TTL_MINUTES": "차트 캐시 시간(분)",
+            "USE_WEBSOCKET": "실시간 WebSocket 사용",
             "ENABLE_TELEGRAM": "사용 여부",
             "TELEGRAM_INSTANCE_NAME": "인스턴스 이름",
             "TELEGRAM_POLLING_TIMEOUT": "폴링 타임아웃",
@@ -1365,6 +1370,7 @@ def manage_custom_settings():
             "CONCLUSION_CHECK_ACTIVE_DURATION": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
             "UNFILLED_ORDER_CANCEL_SECONDS": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
             "CHART_CACHE_TTL_MINUTES": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
+            "USE_WEBSOCKET": ("5. 환경 및 시스템 설정", "5-1. 트레이딩 시간 및 주기"),
             "ENABLE_TELEGRAM": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
             "TELEGRAM_INSTANCE_NAME": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),
             "TELEGRAM_POLLING_TIMEOUT": ("5. 환경 및 시스템 설정", "5-2. 텔레그램 및 AI 브리핑"),

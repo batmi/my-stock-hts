@@ -37,6 +37,11 @@ class SessionManager:
         self.toss_acc_num = ""
         self.toss_account_seq = None  # /accounts 조회로 해석되는 accountSeq
 
+        # [추가] 실시간 체결통보(WebSocket H0STCNI0/H0STCNI9) 구독키 = HTS 로그인 ID.
+        #   환경변수 우선순위: 모드별(REAL_HTS_ID/SIM_HTS_ID) → 공통(KIS_HTS_ID/HTS_ID).
+        #   미설정 시 체결통보 WS는 구독하지 않고 기존 REST 폴링(ConclusionMonitor)으로 폴백한다.
+        self.hts_id = ""
+
         # 토큰 관리 (API 모듈에서 사용)
         self.sim_access_token = ""
         self.real_access_token = ""
@@ -71,6 +76,11 @@ class SessionManager:
         self.toss_app_key = os.environ.get("TOSS_APP_KEY", "")
         self.toss_app_secret = os.environ.get("TOSS_APP_SECRET", "")
         self.toss_acc_num = os.environ.get("TOSS_ACC_NUM", "").strip()
+
+        # [추가] 체결통보 WebSocket 구독키(HTS ID). 모드별 우선 → 공통 폴백.
+        sim_hts = os.environ.get("SIM_HTS_ID", "")
+        real_hts = os.environ.get("REAL_HTS_ID", "")
+        common_hts = os.environ.get("KIS_HTS_ID", "") or os.environ.get("HTS_ID", "")
         
         # 계좌번호 (ACC_NUM)
         sim_acc_str = os.environ.get("SIM_ACC_NUM", "")
@@ -129,7 +139,8 @@ class SessionManager:
             self.auto_acnt_prdt_cd = self.acnt_prdt_cd
             self.auto_app_key = self.app_key
             self.auto_app_secret = self.app_secret
-                
+            self.hts_id = sim_hts or common_hts  # 체결통보 WS 구독키
+
             config.console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
             
             # [추가] 모의투자 키 누락 확인 (환경변수)
@@ -171,7 +182,9 @@ class SessionManager:
             if real_cano:
                 self.cano = real_cano
                 self.acnt_prdt_cd = real_acnt
-                
+
+            self.hts_id = real_hts or common_hts  # 체결통보 WS 구독키
+
             config.console.print("\n[bold red]한투증권 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
             
             # [추가] 실전투자 키 누락 확인 (환경변수)

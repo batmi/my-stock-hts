@@ -253,6 +253,12 @@
 *   **실시간 시세 단일 적용 (Unified Real-time Price)**:
     *   종목 분석 화면과 시스템 트레이딩이 **동일한 당일 시세로 지표를 계산**하도록, 당일 미확정 캔들의 종가/고가/저가를 실시간 현재가로 보정하는 로직을 단일 진입점(`indicators.apply_realtime_price`)으로 통합했습니다. 이를 통해 메뉴 분석과 자동매매 간의 점수 불일치를 구조적으로 차단합니다.
     *   국내 현재가/체결강도는 **KRX/NXT(대체거래소)를 한 번의 호출로 통합 조회**하며, 실전 모드에서는 NXT 장 시간대 시세까지 실시간 반영합니다. (시스템 트레이딩과 동일한 캐시 키를 공유해 중복 호출을 절감)
+    *   **NXT 장 종료 후 현재가 유지**: 실전 모드에서 거래시간(프리 08:00~09:00, 애프터 15:30~20:00)이 끝난 야간·주말·휴장 중에는, KIS가 NXT 시세를 주면 그 값을, 주지 않으면 **마지막 NXT 종가를 기억했다가 다음 거래일 개장 전까지** 현재가로 표시합니다(디스크 영속, 재시작 보존). KRX 정규장 종가(15:30)가 아닌 더 최신인 NXT 종가(20:00)를 노출합니다. (모의투자는 KIS API가 NXT를 지원하지 않아 항상 KRX 종가를 표시)
+*   **실시간 WebSocket 시세·체결통보 (Real-time WebSocket)**:
+    *   한국투자증권(실전/모의)의 **WebSocket 실시간 push**를 도입해, 보유·후보 종목의 현재가/체결강도를 REST 폴링 없이 수신합니다(`realtime.py`). 읽기 경로(`get_current_price`/체결강도)가 WS 캐시를 우선 사용하고, 미구독·끊김·비활성 시 **기존 REST로 자동 폴백**하므로 동작은 항상 보장됩니다. TPS 예산을 주문·잔고조회에 양보해 **시스템 트레이딩 처리량이 향상**됩니다.
+    *   **시스템 트레이딩 종목 최우선 구독**: KIS는 단일 연결당 41건(종목×TR) + approval_key당 동시 연결 1개로 제한됩니다. 보유종목→매수후보 순으로 **시스템 트레이딩 종목을 항상 구독**하고, 남는 슬롯에 그 외 관심종목을 로테이션합니다. 국내 ETF 시스템 트레이딩 포함 여부(`SYSTEM_INCLUDE_ETF`)도 구독 우선순위에 반영됩니다.
+    *   **실시간 체결통보(H0STCNI0/H0STCNI9)**: 주문 체결을 WebSocket으로 즉시 감지(AES256-CBC 복호화)하여, 검증된 체결 확정 로직(`ConclusionMonitor`)을 곧바로 깨웁니다. 모의투자의 체결 추정 지연(유휴 시 최대 수 분)이 **체결 즉시 수준으로 단축**됩니다. 체결통보 미수신·복호화 실패·HTS ID 미설정 시에는 **기존 주기 폴링으로 완전 폴백**합니다. (구독키로 **HTS 로그인 ID** 필요 — 아래 환경 변수 참고)
+    *   **런타임 토글**: 사용 여부(`USE_WEBSOCKET`)는 **메인 메뉴 `[0] 시스템 설정 > 5-1`** 에서 변경 가능하며, **프로그램 재시작 없이** 즉시 적용됩니다(끄면 REST 폴백, 켜면 자동 재연결). WebSocket 연결·구독·체결통보 상태는 **INFO 레벨로 파일 로그**에 기록되어 모니터링할 수 있습니다. (토스증권은 공식 WS 미지원이라 REST 폴링을 유지합니다.)
 *   **메모리 보호 (라즈베리파이 OOM 방어)**:
     *   라즈베리파이(1GB) 등 제약 환경의 장기 무중단 운영을 위해, 시세 마이크로 캐시와 차트 캐시에 **항목 수 상한**을 두고 초과 시 가장 오래된 항목부터 자동 제거(eviction)합니다. 전체 시장 스캔 시에도 메모리가 무제한으로 증가하지 않습니다.
 *   **인터럽트 안전 예외 처리 (Interrupt-safe Exceptions)**:
@@ -340,6 +346,7 @@ my-stock-hts/
 2.  **KIS Developers 서비스 신청**: 한국투자증권 KIS Developers 접속 및 서비스 신청
 3.  **모의투자 신청 (권장)**: 홈페이지/HTS에서 상시 모의투자 신청 (테스트용)
 4.  **API Key 발급**: 마이페이지 > 내 서비스 > 발급받기 (실전/모의 각각 발급 가능)
+5.  **(선택) HTS 로그인 ID 확인**: 실시간 **체결통보 WebSocket**을 사용하려면 KIS HTS 로그인 ID가 구독키로 필요합니다. (미설정 시 체결 감지는 기존 REST 폴링으로 동작)
 
 ### 토스증권(TOSS) 준비 절차
 1.  **계좌 개설**: 스마트폰 '토스(Toss)' 앱을 통해 토스증권 계좌 개설
@@ -391,12 +398,25 @@ pip install -r requirements.txt
 *   `SIM_ACC_NUM`: 한국투자증권 모의투자 계좌번호 (예: 12345678-01)
 *   `REAL_ACC_NUM`: 한국투자증권 실전투자 계좌번호
 *   `AUTO_ACC_NUM`: (선택) 한국투자증권 자동매매 전용 계좌번호
+*   `REAL_HTS_ID`, `SIM_HTS_ID`: (선택) 실시간 **체결통보 WebSocket** 구독키(KIS HTS 로그인 ID). 실전/모의 각각 지정하며, 동일 ID면 `KIS_HTS_ID`(또는 `HTS_ID`) 하나로 갈음할 수 있습니다. **미설정 시 체결 감지는 REST 폴링으로 폴백**됩니다.
 *   `TOSS_APP_KEY`, `TOSS_APP_SECRET`: 토스증권 API Key
 *   `TOSS_ACC_NUM`: 토스증권 계좌번호 (미입력 시 첫 번째 계좌 자동 선택)
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: 텔레그램 알림 설정
 *   `GEMINI_API_KEY`: (선택) 테마 분석용 Google Gemini API Key (발급받기)
 *   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-3.1-flash-lite`)
 *   `DART_API_KEY`: (선택) 국내 공시·배당·실적 조회용 OpenDART API Key ([발급 안내](#12--opendart-전자공시-연동-설정-disclosure-integration))
+
+**설정 예시 (`~/.htsrc` 등 셸 프로파일에 `export`로 등록):**
+```sh
+# 한국투자증권 (실전/모의)
+export REAL_APP_KEY="..."      ; export REAL_APP_SECRET="..."   ; export REAL_ACC_NUM="12345678-01"
+export SIM_APP_KEY="..."       ; export SIM_APP_SECRET="..."    ; export SIM_ACC_NUM="50012345-01"
+
+# (선택) 실시간 체결통보 WebSocket 구독키 = KIS HTS 로그인 ID
+export REAL_HTS_ID="myhtsid"   # 실전
+export SIM_HTS_ID="myhtsid"    # 모의 (동일 ID면 KIS_HTS_ID 하나로 갈음 가능)
+```
+> 환경 변수를 추가/변경한 뒤에는 셸에 다시 반영(`source ~/.htsrc`)하고 **프로그램을 재시작**해야 적용됩니다.
 
 *또는 `config.py` 파일을 직접 수정하여 기본 설정을 변경할 수 있습니다.*
 

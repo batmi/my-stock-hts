@@ -244,6 +244,12 @@ This system applies a robust backend architecture to solve concurrency issues an
 *   **Unified Real-time Price**: 
     *   To ensure the analysis screens and the system trader compute indicators from the **same intraday price**, the logic that overlays the latest real-time price onto the unconfirmed daily candle (close/high/low) is unified into a single entry point (`indicators.apply_realtime_price`), structurally eliminating score mismatches between the menu analysis and auto-trading.
     *   Domestic price/trade-strength is fetched in **a single call covering both KRX and NXT (alternative exchange)**; in real-trading mode, NXT session quotes are reflected in real time, sharing the same cache key as the system trader to cut redundant calls.
+    *   **NXT closing price retained after hours**: In real-trading mode, after the NXT sessions end (pre 08:00–09:00, after 15:30–20:00) — overnight, weekends, holidays — the live NXT quote is used if KIS provides one; otherwise the **last NXT close is remembered and shown until the next trading day's open** (persisted to disk, survives restart). This exposes the more recent NXT close (20:00) rather than the KRX regular-session close (15:30). (Simulation always shows the KRX close, since the KIS API does not support NXT there.)
+*   **Real-time WebSocket Quotes & Execution Notices**:
+    *   Korea Investment & Securities (real/simulation) **WebSocket push** is used to receive the current price/trade-strength of held and candidate stocks without REST polling (`realtime.py`). The read paths (`get_current_price`/trade-strength) prefer the WS cache and **automatically fall back to REST** when a symbol is unsubscribed, disconnected, or the feature is off — so behavior is always guaranteed. Freeing the TPS budget for order/balance calls **improves system-trading throughput**.
+    *   **System-trading symbols subscribed first**: KIS limits a single connection to 41 registrations (symbol×TR) and one concurrent connection per approval_key. System-trading symbols (holdings → buy candidates) are **always subscribed**, and remaining slots rotate the other watchlist symbols. Whether domestic ETFs are included in system trading (`SYSTEM_INCLUDE_ETF`) is also honored in the subscription priority.
+    *   **Real-time execution notices (H0STCNI0/H0STCNI9)**: Order fills are detected instantly over WebSocket (AES256-CBC decryption), immediately waking the proven conclusion-confirmation logic (`ConclusionMonitor`). The simulation account's fill-estimation delay (up to minutes when idle) is **cut to near-instant**. On missing notices, decryption failure, or unset HTS ID, it **fully falls back to the existing periodic polling**. (Requires the **HTS login ID** as the subscription key — see environment variables below.)
+    *   **Runtime toggle**: The on/off setting (`USE_WEBSOCKET`) can be changed under **Main Menu `[0] System Settings > 5-1`** and applies **without restarting** (off → REST fallback, on → auto-reconnect). WebSocket connection/subscription/execution-notice status is logged at **INFO level to the file log** for monitoring. (Toss Securities has no official WS support, so REST polling is retained.)
 *   **Memory Protection (Raspberry Pi OOM guard)**: 
     *   For long-running operation on constrained devices (e.g., Raspberry Pi 1GB), the quote micro-cache and chart cache enforce a **maximum item count** and evict the oldest entries when exceeded, so memory does not grow unbounded even during full-market scans.
 *   **Interrupt-safe Exceptions**: 
@@ -331,6 +337,7 @@ You need an account and API access key from the brokerages to run the program no
 2.  **Apply for KIS Developers**: Apply on the KIS Developers website.
 3.  **Mock Investment (Recommended)**: Apply for mock trading via the website/HTS.
 4.  **Issue API Key**: My Page > My Services > Issue Key (Real/Mock separately).
+5.  **(Optional) HTS login ID**: To use real-time **execution-notice WebSocket**, your KIS HTS login ID is required as the subscription key. (If unset, fill detection works via the existing REST polling.)
 
 ### Toss Securities
 1.  **Open Account**: Via the Toss app.
@@ -366,10 +373,23 @@ Register sensitive information like API Keys as **environment variables**:
 *   `SIM_APP_KEY`, `SIM_APP_SECRET`, `SIM_ACC_NUM`: KIS Mock Investment
 *   `REAL_APP_KEY`, `REAL_APP_SECRET`, `REAL_ACC_NUM`: KIS Real Investment
 *   `AUTO_APP_KEY`, `AUTO_APP_SECRET`, `AUTO_ACC_NUM`: KIS Auto Trading Only (Optional)
+*   `REAL_HTS_ID`, `SIM_HTS_ID`: Subscription key (KIS HTS login ID) for real-time **execution-notice WebSocket** (Optional). Set per real/mock; if identical, a single `KIS_HTS_ID` (or `HTS_ID`) suffices. **If unset, fill detection falls back to REST polling.**
 *   `TOSS_APP_KEY`, `TOSS_APP_SECRET`, `TOSS_ACC_NUM`: Toss Securities
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: Telegram Bot (Optional)
 *   `GEMINI_API_KEY`: Google Gemini API Key for AI features (Optional)
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
+
+**Example (`export` in a shell profile such as `~/.htsrc`):**
+```sh
+# Korea Investment & Securities (real/mock)
+export REAL_APP_KEY="..."  ; export REAL_APP_SECRET="..."  ; export REAL_ACC_NUM="12345678-01"
+export SIM_APP_KEY="..."   ; export SIM_APP_SECRET="..."   ; export SIM_ACC_NUM="50012345-01"
+
+# (Optional) real-time execution-notice WebSocket key = KIS HTS login ID
+export REAL_HTS_ID="myhtsid"   # real
+export SIM_HTS_ID="myhtsid"    # mock (a single KIS_HTS_ID covers both if identical)
+```
+> After adding/changing env vars, reload the shell (`source ~/.htsrc`) and **restart the program** for them to take effect.
 
 ### 5. Execution
 ```bash

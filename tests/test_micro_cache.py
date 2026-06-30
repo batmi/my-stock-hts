@@ -41,8 +41,14 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
 
     # NXT(대체거래소) 보조 호출까지 검증하므로 실전 모드를 가정한다.
     # (모의투자 환경에서는 NXT 조회를 스킵해 호출이 1회로 줄어 환경 의존이 생기므로 명시 고정)
-    with patch.object(api.config.session, 'is_simulation', False):
-        # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (정규장 1회 + NXT장 1회 = 총 2회)
+    # [결정론화] 벽시계 시각/휴장 캐시 상태에 무관하게 'KRX 1회 + NXT 1회'가 되도록 고정한다:
+    #   - 휴장 판정을 캐시에 미리 채워 is_holiday_today가 chk-holiday API를 호출하지 않게 함
+    #   - NXT 처리 단계를 'active'로 고정해 시간대와 무관하게 NXT 보조호출이 1회 발생하게 함
+    from datetime import datetime as _dt
+    api._HOLIDAY_CACHE[_dt.now().strftime("%Y%m%d")] = False
+    with patch.object(api.config.session, 'is_simulation', False), \
+         patch.object(api, '_nxt_quote_phase', return_value='active'):
+        # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (KRX 1회 + NXT 1회 = 총 2회)
         res1 = api.get_current_price_data("005930", is_overseas=False)
         assert res1["output"]["stck_prpr"] == "50000"
         assert mock_call_api.call_count == 2

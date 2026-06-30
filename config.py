@@ -84,6 +84,11 @@ class GlobalSettings(BaseModel):
     # 기본값: False (관심종목 중 국내 주식만 시스템 트레이딩 대상으로 함)
     SYSTEM_INCLUDE_ETF: bool = False
 
+    # [추가] 실시간 시세 WebSocket 사용 여부 (KIS mode 1/2)
+    # 기본값: True. 켜면 보유/관심 종목 현재가·체결강도를 WebSocket push로 받아 REST/TPS 부담을 줄인다.
+    # 미구독/끊김/비활성 시 자동으로 기존 REST 조회로 폴백한다. (토스 mode 3는 공식 미지원→REST 유지)
+    USE_WEBSOCKET: bool = True
+
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
     MARKET_FILTER_MA: int = Field(default=30, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                             #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
@@ -397,6 +402,23 @@ TOSS_TX_PER_SECOND = 10
 OVERVIEW_WARM_ENABLED = True          # 백그라운드 예열 사용 여부 (실전 계좌에서만 자동 동작)
 OVERVIEW_WARM_INTERVAL_SEC = 15       # 예열 주기(초). 해외 시세/지수 fast_info 예열에 사용
 OVERVIEW_WARM_ON_SIMULATION = False   # 모의투자에서도 예열할지 (기본 OFF: 시스템 트레이딩 보호)
+
+# ==========================================================
+# [설정] 실시간 시세 WebSocket (KIS 실전/모의)
+# ==========================================================
+# KIS는 단일 WS 연결당 41건(종목×TR) 등록 제한 + approval_key당 동시 연결 1개 제한이 있다.
+# 보유종목 우선 구독 + 관심종목 로테이션으로 운용하고, 미구독/끊김 시 기존 REST로 자동 폴백한다.
+# 토스(mode 3)는 공식 WS 미지원이라 REST 폴링을 유지한다(추후 WS 공개 시 어댑터 교체).
+# (USE_WEBSOCKET 사용 여부 토글은 메뉴 0에서 변경 가능하도록 GlobalSettings(Pydantic) 필드로 둔다)
+WS_MAX_REGISTRATIONS = 41         # KIS 단일 연결 등록 한도(종목×TR)
+# 호가(H0STASP0) 구독 여부. 종목당 등록 1건을 추가 소모해 동시 구독 종목 수가 절반(20)으로 줄어든다.
+# 현재 WS 호가 캐시를 읽는 소비처가 없고(분석/매도조건의 호가는 REST out1에서 취득), 켜두면 용량만
+# 반감되어 관심종목이 20개를 넘으면 불필요한 구독 로테이션이 발생한다. → 기본 OFF(40종목까지 무회전 커버).
+# 추후 WS 호가를 읽는 경로를 추가하면 True로 전환한다.
+WS_SUBSCRIBE_ORDERBOOK = False
+WS_DATA_TTL_SEC = 3.0             # WS 캐시 신선도(초): 이 시간 이내면 REST 대신 WS 값을 사용
+WS_ROTATE_INTERVAL_SEC = 30       # 41건 초과분(관심종목) 구독 로테이션 주기(초)
+WS_RECONNECT_BACKOFF_SEC = 5      # 연결 실패/끊김 시 재연결 대기(초)
 
 # ==========================================================
 # [설정] 파일 경로 관리
