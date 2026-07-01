@@ -609,6 +609,13 @@ def setup_logging():
     # [추가] 외부 라이브러리 로그 레벨 조정 (노이즈 감소)
     for lib in ["httpcore", "httpx", "urllib3", "google", "google.genai", "mistune", "markdown_it", "yfinance", "peewee"]:
         logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # [추가] urllib3 커넥션 재시도 WARNING 억제.
+    #  KIS 서버가 idle keep-alive 연결을 먼저 끊어(RemoteDisconnected) 발생하는
+    #  "Retrying (Retry(total=...)) after connection broken by ..." 경고는 어댑터가
+    #  자동 재시도로 자가 치유하는 정상 동작이라 로그 노이즈일 뿐이다.
+    #  (특히 모의투자(2 TPS)는 요청 간격이 길어 연결이 오래 idle→더 빈번). ERROR로 올려 숨긴다.
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
         
     logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
 
