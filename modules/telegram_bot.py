@@ -1857,13 +1857,7 @@ class TelegramCommander:
             if not is_overseas:
                 try:
                     vol_strength = api.get_realtime_vol_strength(code)
-                    ob_data = api.get_order_book(code, False)
-                    if ob_data and ob_data.get('rt_cd') == '0':
-                        out1 = ob_data.get('output1', {})
-                        total_ask = api.safe_int(out1.get('total_askp_rsqn'))
-                        total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
-                        if total_bid > 0: ask_bid_ratio = total_ask / total_bid
-                        elif total_ask > 0: ask_bid_ratio = 99.9
+                    ask_bid_ratio = api.get_ask_bid_ratio(code, False)
                 except Exception: pass
             
             is_buy_score = score >= buy_score_limit

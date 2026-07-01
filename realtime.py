@@ -175,11 +175,14 @@ class SubscriptionManager:
         return out
 
     def _regs_per_symbol(self):
-        return 2 if self.subscribe_orderbook else 1
+        # 종목당 '최소' 등록 수는 1(현재가). 호가는 남는 슬롯에 best-effort로 얹으므로
+        # 현재가 커버리지를 절반으로 깎지 않는다.
+        return 1
 
     def capacity_symbols(self):
-        """동시에 구독 가능한 종목 수((등록 한도 - 예약 슬롯) ÷ 종목당 등록 수)."""
-        return max(0, self.max_regs - self._reserved) // self._regs_per_symbol()
+        """동시에 현재가를 구독 가능한 종목 수(등록 한도 - 예약 슬롯).
+        (호가는 별도 예산이 아니라 현재가 등록 후 남는 슬롯에 얹는다.)"""
+        return max(0, self.max_regs - self._reserved)
 
     def advance(self):
         """로테이션 윈도우를 한 칸 전진시킨다(other 또는 초과 priority 순환용)."""
@@ -187,9 +190,15 @@ class SubscriptionManager:
             self._offset += 1
 
     def plan(self):
-        """현재 구독해야 할 (tr_id, code) 등록 집합을 한도 내에서 산출한다."""
+        """현재 구독해야 할 (tr_id, code) 등록 집합을 한도 내에서 산출한다.
+
+        등록 예산(=한도-예약)을 현재가(H0STCNT0)에 우선 배정해 최대한 많은 종목을 커버하고,
+        호가(H0STASP0)는 남는 슬롯에 우선순위(보유→후보) 순으로 best-effort로 얹는다.
+        이렇게 하면 호가 구독을 켜도 현재가 커버리지가 절반으로 줄지 않는다.
+        """
         with self._lock:
-            cap = self.capacity_symbols()
+            budget = max(0, self.max_regs - self._reserved)  # 남은 등록 예산
+            cap = budget  # 현재가는 종목당 1등록이므로 예산이 곧 종목 수
             pri, oth = self._priority, self._other
 
             if cap <= 0:
@@ -206,12 +215,35 @@ class SubscriptionManager:
                     off = self._offset % len(oth)
                     chosen += [oth[(off + i) % len(oth)] for i in range(min(slots, len(oth)))]
 
-            regs = []
-            for code in chosen:
-                regs.append((TR_PRICE, code))
-                if self.subscribe_orderbook:
+            # 1) 현재가 우선 등록
+            regs = [(TR_PRICE, code) for code in chosen]
+            # 2) 호가는 남는 등록 슬롯에 우선순위(chosen 순서)대로 best-effort 추가
+            if self.subscribe_orderbook:
+                remaining = budget - len(regs)
+                for code in chosen:
+                    if remaining <= 0:
+                        break
                     regs.append((TR_ASK, code))
+                    remaining -= 1
             return regs
+
+    def coverage(self):
+        """현재 구독 계획 기준 커버리지 요약을 반환한다.
+        반환: dict(priority=시스템종목수, capacity=동시 현재가 용량,
+                  price_covered=현재가 커버 종목수, ob_covered=호가 커버 종목수,
+                  rest_fallback=현재가를 REST로 폴백해야 하는 시스템 종목수)."""
+        with self._lock:
+            regs = self.plan()
+            price_codes = {c for (t, c) in regs if t == TR_PRICE}
+            ob_codes = {c for (t, c) in regs if t == TR_ASK}
+            pri_set = set(self._priority)
+            return {
+                'priority': len(pri_set),
+                'capacity': self.capacity_symbols(),
+                'price_covered': len(price_codes),
+                'ob_covered': len(ob_codes),
+                'rest_fallback': len(pri_set - price_codes),
+            }
 
 
 # ==========================================================
@@ -221,6 +253,7 @@ class RealtimeFeed:
     def start(self): pass
     def stop(self): pass
     def set_symbols(self, priority, other=None): pass
+    def coverage(self): return None
     def get_price(self, code, max_age=3.0): return None
     def get_vol_strength(self, code, max_age=3.0): return None
     def get_orderbook(self, code, max_age=3.0): return None
@@ -296,6 +329,9 @@ class KisRealtimeFeed(RealtimeFeed):
 
     def set_symbols(self, priority, other=None):
         self.manager.set_symbols(priority, other)
+
+    def coverage(self):
+        return self.manager.coverage()
 
     # ---- 체결통보 ----
     def register_exec_callback(self, fn):
@@ -614,6 +650,14 @@ def update_symbols(priority, other=None):
         get_feed().set_symbols(priority, other)
     except Exception as e:
         logger.debug(f"[WS] 심볼 갱신 오류: {e}")
+
+
+def coverage():
+    """현재 WS 구독 커버리지 요약(dict) 또는 None(미지원/오류)."""
+    try:
+        return get_feed().coverage()
+    except Exception:
+        return None
 
 
 def register_exec_callback(fn):

@@ -50,14 +50,13 @@ def test_parser_ignores_short_records():
 
 
 def test_subscription_priority_always_on_plus_rotation():
-    # cap = 8 // 2 = 4 종목
-    m = rt.SubscriptionManager(max_regs=8, subscribe_orderbook=True)
+    # 현재가 우선: 예산 4 전부 현재가에 소모 → 호가 여유 없음. 시스템 고정 + 그 외 로테이션.
+    m = rt.SubscriptionManager(max_regs=4, subscribe_orderbook=True)
     m.set_symbols(priority=["A", "B"], other=["X", "Y", "Z"])
 
     def syms(regs):
         return [c for (t, c) in regs if t == rt.TR_PRICE]
 
-    # 호가 포함이므로 종목당 등록 2건
     plan = m.plan()
     assert all(reg[0] in (rt.TR_PRICE, rt.TR_ASK) for reg in plan)
     assert syms(plan) == ["A", "B", "X", "Y"]   # 시스템 항상 + 그 외 2개 로테이션
@@ -66,8 +65,8 @@ def test_subscription_priority_always_on_plus_rotation():
 
 
 def test_subscription_priority_overflow_rotates_within_priority():
-    # cap = 4 // 2 = 2 종목인데 시스템이 4개 → 시스템끼리만 로테이션, 그 외 제외
-    m = rt.SubscriptionManager(max_regs=4, subscribe_orderbook=True)
+    # 예산 2인데 시스템이 4개 → 시스템끼리만 로테이션(현재가), 그 외 제외
+    m = rt.SubscriptionManager(max_regs=2, subscribe_orderbook=True)
     m.set_symbols(priority=["A", "B", "C", "D"], other=["X"])
 
     def syms(regs):
@@ -79,13 +78,39 @@ def test_subscription_priority_overflow_rotates_within_priority():
     assert "X" not in syms(m.plan())
 
 
-def test_subscription_price_only_doubles_capacity():
+def test_subscription_price_only_full_capacity():
     m = rt.SubscriptionManager(max_regs=4, subscribe_orderbook=False)
     m.set_symbols(priority=["A", "B", "C", "D"], other=[])
     regs = m.plan()
     # 호가 미구독 → 종목당 1건 → 4종목 모두 수용
     assert sorted(c for (t, c) in regs) == ["A", "B", "C", "D"]
     assert all(t == rt.TR_PRICE for (t, c) in regs)
+
+
+def test_subscription_orderbook_uses_leftover_slots():
+    # 현재가 우선 배정 후 남는 등록 슬롯에만 호가를 best-effort로 얹는다(현재가 커버 유지).
+    m = rt.SubscriptionManager(max_regs=6, subscribe_orderbook=True)
+    m.set_symbols(priority=["A", "B"], other=[])
+    regs = m.plan()
+    price = [c for (t, c) in regs if t == rt.TR_PRICE]
+    ask = [c for (t, c) in regs if t == rt.TR_ASK]
+    assert price == ["A", "B"]     # 현재가 커버리지 유지(절반으로 안 줄어듦)
+    assert ask == ["A", "B"]       # 남는 4슬롯 중 2개를 호가에 사용
+    assert len(regs) == 4
+
+
+def test_subscription_orderbook_partial_when_price_dominates():
+    # 예산이 빠듯하면 현재가를 최대한 덮고 호가는 상위 우선순위에만 얹힌다.
+    m = rt.SubscriptionManager(max_regs=5, subscribe_orderbook=True)
+    m.set_symbols(priority=["A", "B", "C"], other=[])
+    regs = m.plan()
+    price = [c for (t, c) in regs if t == rt.TR_PRICE]
+    ask = [c for (t, c) in regs if t == rt.TR_ASK]
+    assert price == ["A", "B", "C"]   # 현재가 3종목 전부 커버
+    assert ask == ["A", "B"]          # 남는 2슬롯만 호가(우선순위순)
+    cov = m.coverage()
+    assert cov['priority'] == 3 and cov['price_covered'] == 3
+    assert cov['ob_covered'] == 2 and cov['rest_fallback'] == 0
 
 
 def test_dedup_and_other_excludes_priority():

@@ -411,11 +411,11 @@ OVERVIEW_WARM_ON_SIMULATION = False   # 모의투자에서도 예열할지 (기�
 # 토스(mode 3)는 공식 WS 미지원이라 REST 폴링을 유지한다(추후 WS 공개 시 어댑터 교체).
 # (USE_WEBSOCKET 사용 여부 토글은 메뉴 0에서 변경 가능하도록 GlobalSettings(Pydantic) 필드로 둔다)
 WS_MAX_REGISTRATIONS = 41         # KIS 단일 연결 등록 한도(종목×TR)
-# 호가(H0STASP0) 구독 여부. 종목당 등록 1건을 추가 소모해 동시 구독 종목 수가 절반(20)으로 줄어든다.
-# 현재 WS 호가 캐시를 읽는 소비처가 없고(분석/매도조건의 호가는 REST out1에서 취득), 켜두면 용량만
-# 반감되어 관심종목이 20개를 넘으면 불필요한 구독 로테이션이 발생한다. → 기본 OFF(40종목까지 무회전 커버).
-# 추후 WS 호가를 읽는 경로를 추가하면 True로 전환한다.
-WS_SUBSCRIBE_ORDERBOOK = False
+# 호가(H0STASP0) 구독 여부. SubscriptionManager.plan()이 현재가(H0STCNT0)를 먼저 등록해 종목
+# 커버리지를 최대(=한도)로 확보한 뒤, 남는 등록 슬롯에만 호가를 best-effort로 얹으므로 현재가
+# 커버리지는 절반으로 줄지 않는다. WS 호가 캐시는 api.get_ask_bid_ratio()의 수급 게이트가 소비하며,
+# 이를 켜면 매수후보/매도조건 분석에서 종목당 호가 REST 1콜을 절감한다(특히 모의투자 2 TPS에서 체감 큼).
+WS_SUBSCRIBE_ORDERBOOK = True
 WS_DATA_TTL_SEC = 3.0             # WS 캐시 신선도(초): 이 시간 이내면 REST 대신 WS 값을 사용
 WS_ROTATE_INTERVAL_SEC = 30       # 41건 초과분(관심종목) 구독 로테이션 주기(초)
 WS_RECONNECT_BACKOFF_SEC = 5      # 연결 실패/끊김 시 재연결 대기(초)

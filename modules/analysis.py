@@ -1187,25 +1187,26 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         df = None
         vol_strength = None
         inv_data = None
-        ob_data = None
-        
+        ask_bid_ratio = None
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             if is_domestic_index:
                 fut_chart = ex.submit(get_domestic_index_data, code)
                 fut_vol = None
                 fut_inv = None
-                fut_ob = None
+                fut_ab = None
             else:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas else None
-                fut_ob = ex.submit(api.get_order_book, code, False) if not is_overseas else None
-            
+                # 수급 게이트용 비율만 필요 → WS 우선(get_ask_bid_ratio)으로 호가 REST 절감
+                fut_ab = ex.submit(api.get_ask_bid_ratio, code, False) if not is_overseas else None
+
             df = fut_chart.result()
             vol_strength = fut_vol.result() if fut_vol else None
             inv_data = fut_inv.result() if fut_inv else None
-            ob_data = fut_ob.result() if fut_ob else None
-            
+            ask_bid_ratio = fut_ab.result() if fut_ab else None
+
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
@@ -1215,17 +1216,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             rt_price = api.get_current_price(code, is_overseas=is_overseas)
             indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
         except Exception: pass
-
-        # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
-        ask_bid_ratio = None
-        if ob_data and ob_data.get('rt_cd') == '0':
-            out1 = ob_data.get('output1', {})
-            total_ask = api.safe_int(out1.get('total_askp_rsqn'))
-            total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
-            if total_bid > 0:
-                ask_bid_ratio = total_ask / total_bid
-            elif total_ask > 0:
-                ask_bid_ratio = 99.9 # 매수 잔량은 없고 매도만 있는 상태
 
         # 2. 지표 계산
         progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")
@@ -3181,7 +3171,7 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, True, 0) if not is_overseas and not use_investor_data else None
                 fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
                 # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
-                fut_ob = ex.submit(api.get_order_book, code, False) if (config.session.is_toss and not is_overseas) else None
+                fut_ab = ex.submit(api.get_ask_bid_ratio, code, False) if (config.session.is_toss and not is_overseas) else None
 
                 curr_data = fut_curr.result()
                 if fut_chart is not None:
@@ -3190,15 +3180,8 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 if fut_vol:
                     try: rt_strength = fut_vol.result()
                     except Exception: pass
-                if fut_ob:
-                    try:
-                        ob = fut_ob.result()
-                        if ob and ob.get('rt_cd') == '0':
-                            o1 = ob.get('output1', {})
-                            ta = api.safe_int(o1.get('total_askp_rsqn'))
-                            tb = api.safe_int(o1.get('total_bidp_rsqn'))
-                            if tb > 0: ask_bid_ratio = ta / tb
-                            elif ta > 0: ask_bid_ratio = 99.9
+                if fut_ab:
+                    try: ask_bid_ratio = fut_ab.result()
                     except Exception: pass
                 detail = fut_detail.result() if fut_detail else None
 

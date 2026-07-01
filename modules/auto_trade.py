@@ -5074,6 +5074,21 @@ class AutoTrader:
                 realtime.update_symbols(hold_codes + cand_codes + etf_codes, [])
             else:
                 realtime.update_symbols(hold_codes + cand_codes, etf_codes)
+
+            # [WS] 커버리지 진단: 시스템 종목 수가 WS 동시 용량을 넘으면 초과분은 현재가/호가를
+            #  REST로 폴백(로테이션)하므로 모의투자(2 TPS)에서 분석이 느려질 수 있다. 상태 변화 시에만 1회 로그.
+            cov = realtime.coverage()
+            if cov:
+                sig = (cov.get('priority'), cov.get('capacity'), cov.get('rest_fallback'), cov.get('ob_covered'))
+                if sig != getattr(self, '_ws_cov_sig', None):
+                    self._ws_cov_sig = sig
+                    if cov.get('rest_fallback', 0) > 0:
+                        self.log(f"[WS] 시스템 종목 {cov['priority']}개 > 동시 용량 {cov['capacity']}개 "
+                                 f"→ {cov['rest_fallback']}개는 현재가 REST 폴백(분석 지연 가능). "
+                                 f"관심목록 축소를 권장합니다.")
+                    else:
+                        self.log(f"[WS] 커버리지 양호: 현재가 {cov['price_covered']}개 / 호가 {cov['ob_covered']}개 "
+                                 f"실시간 구독(시스템 {cov['priority']}개 전부 커버).")
         except Exception: pass
 
         # [최적화] 인자로 전달받은 holdings 사용
@@ -5097,7 +5112,7 @@ class AutoTrader:
                 codes_to_prefetch.append(code)
                 
         if codes_to_prefetch:
-            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False)
+            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False, prefer_ws=True)
 
         # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
@@ -5522,18 +5537,20 @@ class AutoTrader:
                        if _ab_rule else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
             _need_ob = config.session.is_toss or (_ab_thr or 0) > 0
 
-            # 5. [최적화] 차트, 체결강도, 호가창 데이터 병렬(동시) 조회
+            # 5. [최적화] 차트, 체결강도, 호가(수급비율) 데이터 병렬(동시) 조회
+            #  호가는 10호가 상세가 아니라 수급 게이트용 비율만 필요하므로 get_ask_bid_ratio를 쓴다.
+            #  (WS 호가 총잔량이 신선하면 REST 없이 계산 → 종목당 호가 REST 1콜 절감)
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
-                fut_ob = ex.submit(api.get_order_book, code, is_overseas_stock) if _need_ob else None
-                
+                fut_ab = ex.submit(api.get_ask_bid_ratio, code, is_overseas_stock) if _need_ob else None
+
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result() if fut_vol else None
                 except Exception: vol_strength = None
-                try: ob_data = fut_ob.result() if fut_ob else None
-                except Exception: ob_data = None
-                
+                try: ask_bid_ratio = fut_ab.result() if fut_ab else None
+                except Exception: ask_bid_ratio = None
+
             if df is None or df.empty:
                 self.set_stock_state(code, None)
                 return None
@@ -5546,18 +5563,7 @@ class AutoTrader:
             except Exception: pass
             
             current_price = float(df.iloc[-1]['close'])
-            
-            # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
-            ask_bid_ratio = None
-            if ob_data and ob_data.get('rt_cd') == '0':
-                out1 = ob_data.get('output1', {})
-                total_ask = api.safe_int(out1.get('total_askp_rsqn'))
-                total_bid = api.safe_int(out1.get('total_bidp_rsqn'))
-                if total_bid > 0:
-                    ask_bid_ratio = total_ask / total_bid
-                elif total_ask > 0:
-                    ask_bid_ratio = 99.9 # 매수 잔량은 없고 매도만 있는 상태
-            
+
             # [추가] 상관계수 필터링
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
                 corr_threshold = getattr(config, 'CORRELATION_THRESHOLD', 0.7)
@@ -5726,7 +5732,7 @@ class AutoTrader:
         if codes_to_prefetch:
             # [수정] 시장 구분(_get_stock_market_type)에 필요한 현재가 정보를 먼저 일괄 prefetch 합니다.
             # 이렇게 하면 _analyze_candidate_worker 내부에서 개별 API 호출을 방지할 수 있습니다.
-            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False)
+            api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False, prefer_ws=True)
 
         # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
         tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND

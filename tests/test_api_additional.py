@@ -133,3 +133,42 @@ def test_clear_yfinance_cache(mock_remove, mock_listdir, mock_exists):
     """yfinance 캐시 정리 테스트"""
     api.clear_yfinance_cache()
     mock_remove.assert_called()
+
+@patch('api.call_api')
+def test_get_ask_bid_ratio_rest_fallback(mock_call):
+    """WS 미커버 시 REST 호가 out1 총잔량으로 비율 계산(폴백)"""
+    mock_call.return_value = {
+        'rt_cd': '0',
+        'output1': {'total_askp_rsqn': '3000', 'total_bidp_rsqn': '1500'},
+    }
+    config.session.is_toss = False
+    ratio = api.get_ask_bid_ratio("005930", is_overseas=False)
+    assert ratio == pytest.approx(2.0)
+
+
+@patch('api.call_api')
+def test_get_ask_bid_ratio_ws_first_skips_rest(mock_call):
+    """WS에 신선한 호가 총잔량이 있으면 REST(call_api) 없이 즉시 계산"""
+    import realtime
+
+    class _StubFeed:
+        def get_orderbook(self, code, max_age=3.0):
+            return {'total_ask': 2000, 'total_bid': 1000}
+
+    config.session.is_toss = False
+    with patch.object(realtime, 'get_feed', return_value=_StubFeed()):
+        ratio = api.get_ask_bid_ratio("005930", is_overseas=False)
+    assert ratio == pytest.approx(2.0)
+    mock_call.assert_not_called()
+
+
+@patch('api.call_api')
+def test_get_ask_bid_ratio_only_ask_returns_sentinel(mock_call):
+    """매수 잔량 0·매도만 존재 시 99.9 반환"""
+    mock_call.return_value = {
+        'rt_cd': '0',
+        'output1': {'total_askp_rsqn': '5000', 'total_bidp_rsqn': '0'},
+    }
+    config.session.is_toss = False
+    ratio = api.get_ask_bid_ratio("005930", is_overseas=False)
+    assert ratio == pytest.approx(99.9)

@@ -891,8 +891,12 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             _chart_disk_set(cache_key, df, today_str)
     return df
 
-def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None):
-    """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)"""
+def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None, prefer_ws=False):
+    """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)
+
+    prefer_ws=True면 WS 실시간 피드가 이미 신선한 현재가를 보유한 종목은 현재가 REST 예열을
+    생략한다(모의투자 2 TPS 절감). 시스템 트레이딩처럼 이후 경로가 현재가 값만 필요한 곳에서 쓴다.
+    """
     if not codes: return
     
     if is_overseas:
@@ -949,15 +953,34 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                 futures = [executor.submit(fetch_yf_worker, c) for c in remaining_codes]
                 concurrent.futures.wait(futures)
     else:
+        # WS가 신선한 현재가를 이미 가진 종목은 현재가 REST 예열을 생략(TPS 절감)하기 위한 피드 핸들
+        _ws_feed = None
+        if prefer_ws and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+            try:
+                import realtime
+                _ws_feed = realtime.get_feed()
+            except Exception:
+                _ws_feed = None
+        _ws_ttl = getattr(config, 'WS_DATA_TTL_SEC', 3.0)
+
         def fetch_worker(code):
-            try: get_current_price_data(code, False)
-            except Exception: pass
+            ws_has_price = False
+            if _ws_feed is not None:
+                try:
+                    p = _ws_feed.get_price(code, max_age=_ws_ttl)
+                    ws_has_price = bool(p and p > 0)
+                except Exception:
+                    ws_has_price = False
+            if not ws_has_price:
+                try: get_current_price_data(code, False)
+                except Exception: pass
             if include_investor:
                 try: get_investor_trend(code)
                 except Exception: pass
+            # 체결강도는 get_realtime_vol_strength가 내부적으로 WS를 먼저 확인하므로 WS 커버 시 REST 미발생
             try: get_realtime_vol_strength(code)
             except Exception: pass
-            
+
         max_w = 4 if config.session.is_simulation else 10
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(fetch_worker, c) for c in codes]
@@ -2549,6 +2572,43 @@ def get_order_book(code, is_overseas=False):
                     _set_micro_cache(cache_key, res)
                     return res
         return {'rt_cd': '9999'}
+
+def get_ask_bid_ratio(code, is_overseas=False):
+    """매도/매수 총잔량 비율(비대칭성)만 필요한 수급 게이트용 헬퍼.
+
+    10호가 상세가 필요없는 경로(매수후보·매도조건 분석의 ask_bid_ratio)에서 사용한다.
+    WS 실시간 호가 총잔량이 신선하면 REST 없이 즉시 계산 → 종목당 호가 REST 1콜을 절감한다.
+    미구독/끊김/해외/토스면 REST(get_order_book) out1 총잔량으로 자동 폴백한다.
+
+    반환: float 비율(매도/매수). 매수잔량 0·매도만 존재 시 99.9. 데이터 없으면 None.
+    """
+    # [WS] 국내주식 실시간 호가 총잔량 우선 사용(REST 절감)
+    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+        try:
+            import realtime
+            ob = realtime.get_feed().get_orderbook(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
+            if ob:
+                ta = ob.get('total_ask') or 0
+                tb = ob.get('total_bid') or 0
+                if tb > 0:
+                    return ta / tb
+                if ta > 0:
+                    return 99.9
+                # 둘 다 0이면 유효 데이터 없음으로 보고 REST로 폴백
+        except Exception:
+            pass
+
+    # [폴백] REST 호가창 out1 총잔량
+    ob_data = get_order_book(code, is_overseas)
+    if ob_data and ob_data.get('rt_cd') == '0':
+        out1 = ob_data.get('output1', {})
+        total_ask = safe_int(out1.get('total_askp_rsqn'))
+        total_bid = safe_int(out1.get('total_bidp_rsqn'))
+        if total_bid > 0:
+            return total_ask / total_bid
+        if total_ask > 0:
+            return 99.9
+    return None
 
 def get_investor_trend(code, market_div="J"):
     # [추가] 토스 미제공: 투자자 매매동향 없음
