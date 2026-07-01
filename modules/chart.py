@@ -182,13 +182,18 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
                 box_x = list(range(box['start_idx'], box['end_idx'] + 1))
                 ax1.fill_between(box_x, box_low, box_high, color='orange', alpha=0.10)
                 ax1.text(x_end, box_high, f" 박스상단 {box_high:,.0f}", color='red',
-                         fontsize=8, va='bottom', ha='left', alpha=0.85)
+                         fontsize=8, fontweight='bold', va='bottom', ha='left', alpha=0.85)
                 ax1.text(x_end, box_low, f" 박스하단 {box_low:,.0f}", color='blue',
-                         fontsize=8, va='top', ha='left', alpha=0.85)
+                         fontsize=8, fontweight='bold', va='top', ha='left', alpha=0.85)
                 # 현재 상태 배지 (우측 상단 — 좌측 상단 범례와 겹치지 않도록)
                 ax1.text(0.99, 0.97, f"박스권: {status}", transform=ax1.transAxes,
                          fontsize=11, fontweight='bold', color=status_color, va='top', ha='right',
                          bbox=dict(boxstyle='round', facecolor='white', edgecolor=status_color, alpha=0.8))
+                # 배지 아래에 현재 박스권 설정값 표기 (BOX_PERIOD / BOX_VALUE_AREA_PCT)
+                box_period = config.INDICATOR_PARAMS.get("BOX_PERIOD", 20)
+                box_va_pct = config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0)
+                ax1.text(0.99, 0.94, f"{box_period}일 / {box_va_pct:g}%", transform=ax1.transAxes,
+                         fontsize=9.5, fontweight='bold', color='dimgray', va='top', ha='right', alpha=0.95)
 
             # [추세선] 스윙 피봇 연결 (상승=저점, 하락=고점)
             trend = indicators.get_trend_lines(df)
@@ -337,6 +342,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             ax.set_xticklabels(formatted_labels, rotation=0, ha='center', fontsize=9)
             # [수정] 모든 그래프의 X축 날짜 표시
             ax.tick_params(axis='x', labeltop=False, labelbottom=True)
+
+        # 우측 여백 확보 — 박스상단/하단 등 우측 라벨이 잘리지 않도록 (sharex라 ax1만 조정)
+        ax1.set_xlim(right=(len(df) - 1) + max(len(df) * 0.06, 4))
 
         plt.tight_layout()
         safe_code = re.sub(r'[=\-\.\^]', '', code)
