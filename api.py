@@ -722,10 +722,22 @@ def _chart_disk_set(cache_key, df, today_str):
 # 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
 _OVERLAY_GUARD = threading.local()
 
+def _chart_disk_clear():
+    """디스크 일봉 캐시(SQLite)를 전부 비운다. (수동 전체 갱신/테스트 격리용)"""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
+            conn.execute("DELETE FROM chart_cache")
+    except Exception as e:
+        logger.debug(f"[ChartDisk] clear 실패: {e}")
+
 def clear_chart_cache():
-    """모든 차트 데이터 캐시 초기화 (수동 갱신용)"""
+    """모든 차트 데이터 캐시 초기화 (수동 갱신용). 디스크 영속 캐시도 함께 비운다."""
     with _CHART_CACHE_LOCK:
         _CHART_CACHE.clear()
+    _chart_disk_clear()
     if _is_screen_output_allowed():
         config.console.print("[bold green]차트 데이터 캐시(메모리)가 전체 초기화되었습니다.[/bold green]")
     logger.info("[Cache] 차트 데이터 캐시 수동 초기화")
@@ -846,9 +858,15 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                     old_low = float(df.iloc[-1]['low'])
                     high_p = max(old_high, high_p, curr)
                     low_p = min(old_low, low_p, curr) if low_p > 0 else min(old_low, curr)
+                    # 현재가 API가 시가/거래량을 안 주는 경우(토스 등)는 캐시된 당일 봉 값을 보존(0 덮어쓰기 방지)
+                    if open_p <= 0: open_p = float(df.iloc[-1]['open'])
+                    if vol <= 0: vol = float(df.iloc[-1]['volume'])
                     df.loc[df.index[-1], ['open', 'high', 'low', 'close', 'volume']] = [open_p, high_p, low_p, curr, vol]
                 else:
-                    # 오늘 날짜 행이 없으면 새로 추가
+                    # 오늘 날짜 행이 없으면 새로 추가 (시가/고가/저가 미제공 시 현재가로 근사)
+                    if open_p <= 0: open_p = curr
+                    if high_p <= 0: high_p = curr
+                    if low_p <= 0: low_p = curr
                     new_row = pd.DataFrame([{'date': today_ymd, 'open': open_p, 'high': high_p, 'low': low_p, 'close': curr, 'volume': vol}])
                     df = pd.concat([df, new_row], ignore_index=True)
                 
@@ -1835,6 +1853,15 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     _yf_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
                  or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if config.session.is_toss and not _yf_index:
+        # [최적화] 일봉은 KIS 경로와 동일하게 _get_cached_chart로 6시간/디스크 캐싱한다.
+        #  과거 일봉은 불변이므로 반복 조회(메뉴2 등) 시 토스 캔들 페이지네이션(최대 4콜)을 제거한다.
+        #  당일 봉은 오버레이가 실시간 현재가로 갱신한다. 시봉/분봉은 KIS와 동일하게 캐시 제외.
+        if period_type == 'daily':
+            return _get_cached_chart(
+                code, is_overseas, is_index=False,
+                fetch_func=lambda: _toss_chart_data(code, 'daily', is_overseas),
+                realtime_overlay=realtime,
+            )
         return _toss_chart_data(code, period_type, is_overseas)
 
     if period_type == 'intraday':

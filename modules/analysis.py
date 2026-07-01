@@ -1213,7 +1213,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         # [추가] 실시간 현재가 조회 및 차트 데이터 최신화 (점수 불일치 방지)
         try:
             rt_price = api.get_current_price(code, is_overseas=is_overseas)
-            indicators.apply_realtime_price(df, rt_price)
+            indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
         except Exception: pass
 
         # [추가] 호가창 매도/매수 잔량 비율(비대칭성) 계산
@@ -2037,10 +2037,10 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
                 rt_price = nxt_price if nxt_price > 0 else krx_price
             else:
                 rt_price = api.get_current_price(code, is_overseas=False)
-                
-            indicators.apply_realtime_price(df, rt_price)
+
+            indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(False))
         except Exception: pass
-        
+
         ind = indicators.calculate_indicators(df)
         current_price = float(df.iloc[-1]['close'])
         
@@ -3246,8 +3246,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     nxt_price = float(curr_data['output'].get('ats_prpr', 0) or 0)
                     krx_price = float(curr_data['output'].get('stck_prpr', 0) or 0)
                     rt_price = nxt_price if nxt_price > 0 else krx_price
-                
-            indicators.apply_realtime_price(chart_df, rt_price)
+
+            indicators.apply_realtime_price(chart_df, rt_price, market_date=utils.market_today(is_overseas))
         except Exception: pass
 
         # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.

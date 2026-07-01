@@ -4,12 +4,17 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 import config
 
-def apply_realtime_price(df, price):
+def apply_realtime_price(df, price, market_date=None):
     """차트 마지막 봉(당일 미확정 캔들)의 종가를 실시간 현재가로 덮어쓰고 고가/저가를 보정한다.
 
     종목분석 메뉴와 시스템 트레이딩이 동일한 당일 시세로 지표를 계산하도록 통일하는 단일 진입점.
     (과거 이 로직이 여러 곳에 복제되며 메뉴 분석↔자동매매 점수 불일치를 유발해 단일화한다.)
     price<=0 이거나 df가 비어 있으면 아무 작업도 하지 않는다. df를 제자리에서 수정하고 반환한다.
+
+    market_date(YYYYMMDD)가 주어지고 마지막 봉 날짜가 그보다 과거이면(깊은 프리마켓 등
+    당일 일봉이 아직 캔들 소스에 없는 경우), 마지막 봉을 덮어쓰지 않고 '당일' 봉을 새로
+    추가한다. 이렇게 해야 등락률 기준(iloc[-2])이 직전 거래일 종가로 유지되어, 프리마켓에서
+    등락률이 하루 밀려(그제 대비) 과장되는 문제를 막는다. market_date=None이면 종전 동작.
     """
     try:
         p = float(price)
@@ -20,6 +25,28 @@ def apply_realtime_price(df, price):
     ci = df.columns.get_loc('close')
     hi = df.columns.get_loc('high')
     lo = df.columns.get_loc('low')
+
+    # [프리마켓 보정] 마지막 봉이 '직전 거래일'뿐이면 당일 봉을 새로 추가(덮어쓰지 않음)
+    if market_date is not None and 'date' in df.columns:
+        last_val = df.iloc[-1]['date']
+        # 날짜를 YYYYMMDD 문자열로 정규화해 비교(문자열·Timestamp 양쪽 안전)
+        if hasattr(last_val, 'strftime'):
+            last_str = last_val.strftime('%Y%m%d')
+        else:
+            last_str = str(last_val).replace('-', '').replace('/', '')[:8]
+        md_str = str(market_date)
+        if last_str < md_str:
+            new_row = df.iloc[-1].copy()
+            # 날짜 컬럼 dtype을 기존과 일치시켜(문자열↔Timestamp) 혼합타입 정렬오류 방지
+            new_row['date'] = pd.Timestamp(md_str) if hasattr(last_val, 'strftime') else md_str
+            for col in ('open', 'high', 'low', 'close'):
+                if col in df.columns:
+                    new_row[col] = p
+            if 'volume' in df.columns:
+                new_row['volume'] = 0
+            df.loc[df.index.max() + 1] = new_row
+            return df
+
     df.iloc[-1, ci] = p
     if p > float(df.iloc[-1, hi]): df.iloc[-1, hi] = p
     if p < float(df.iloc[-1, lo]): df.iloc[-1, lo] = p

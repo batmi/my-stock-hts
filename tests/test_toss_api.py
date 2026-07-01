@@ -231,8 +231,9 @@ def test_chart_data_adapter_daily_paginates_to_250():
 
     config.session.is_toss = True
     try:
+        # 어댑터의 페이징만 검증한다(get_chart_data는 일봉 캐시 레이어를 덧대므로 직접 호출).
         with patch("toss_api.get_candles", side_effect=fake_candles):
-            df = api.get_chart_data("005930", period_type='daily')
+            df = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
     finally:
         config.session.is_toss = False
 
@@ -509,6 +510,10 @@ def test_print_table_worker_toss_enriches_change_and_52w():
         'close': [float(c) for c in closes],
         'volume': [1000.0 + i for i in range(n)],
     })
+    # 실제 토스 일봉은 장중/장후 마지막 봉이 '당일'이다 → 현재가가 당일 봉을 덮어쓰고
+    # 등락은 직전 봉(전일) 대비로 계산된다. (마지막 봉이 과거면 프리마켓 보정이 당일봉을 새로 추가)
+    import utils
+    df.loc[df.index[-1], 'date'] = utils.market_today(False)
     curr = {'rt_cd': '0', 'output': {'stck_prpr': str(closes[-1])}}
 
     config.session.is_toss = True

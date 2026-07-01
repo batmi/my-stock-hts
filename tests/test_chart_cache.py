@@ -12,8 +12,15 @@ import api
 import config
 
 @pytest.fixture(autouse=True)
-def setup_teardown():
-    """매 테스트마다 캐시를 강제 초기화하고 TTL을 설정합니다."""
+def setup_teardown(monkeypatch):
+    """매 테스트마다 캐시를 강제 초기화하고 TTL을 설정합니다.
+
+    이 파일은 '메모리' 캐시 로직을 검증하므로, 디스크 영속 캐시(실제 chart_cache.db)에
+    오염되지 않도록 디스크 get/set을 no-op으로 막는다(테스트 격리).
+    """
+    monkeypatch.setattr(api, '_chart_disk_get', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_chart_disk_set', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_chart_disk_clear', lambda *a, **k: None)
     api.clear_chart_cache()
     config.settings.CHART_CACHE_TTL_MINUTES = 180
     yield
