@@ -71,6 +71,13 @@ def is_system_odno(odno):
     with _SYSTEM_ODNOS_LOCK:
         return str(odno) in _SYSTEM_ODNOS
 
+def _norm_odno(odno):
+    """주문번호 정규화(매칭용). 발주 API의 ODNO와 WS 체결통보의 주문번호는 앞자리 0 패딩이
+    다를 수 있으므로, 숫자형이면 선행 0을 제거해 동일 주문을 안정적으로 매칭한다.
+    (숫자형이 아니면 원문 유지)"""
+    s = str(odno or "").strip()
+    return (s.lstrip('0') or '0') if s.isdigit() else s
+
 def _current_account_type():
     """현재 세션 기준 제한 종목 계좌종류 라벨을 반환한다. (모의/토스/한투-자동)"""
     if getattr(config.session, 'is_toss', False):
@@ -417,6 +424,8 @@ class ConclusionMonitor:
             cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
             cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
             cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
+            cls._instance.ws_confirmed_fills = {}     # [추가] WS 체결통보로 '실제 체결'이 확인된 주문 {odno: {price,qty,ts}}
+                                                       #  → 체결 알림에서 '(추정)' 문구 제거 및 실제 체결가 사용에 이용
             
             # [수정] 적응형 폴링 설정 로드
             cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 2)
@@ -459,6 +468,21 @@ class ConclusionMonitor:
         try:
             if notice.get('rejected'):
                 return  # 거부 통보는 폴링이 처리(미체결 정리 경로)
+            # [추가] WS로 '실제 체결(is_fill=2)'을 확인한 주문은 주문번호+체결정보를 기록한다.
+            #  이후 체결 알림 생성 시 이 기록이 있으면 '(추정)' 문구를 빼고 실제 체결가를 사용한다.
+            #  (WS 미수신이면 기록이 없어 기존처럼 잔고 기반 추정 라벨을 유지)
+            if notice.get('is_fill') and notice.get('odno'):
+                with self._lock:
+                    # 메모리 상한(라즈베리파이): 오래된 항목 정리
+                    if len(self.ws_confirmed_fills) > 200:
+                        cutoff = time.time() - 600
+                        for k in [k for k, v in self.ws_confirmed_fills.items() if v.get('ts', 0) < cutoff]:
+                            self.ws_confirmed_fills.pop(k, None)
+                    self.ws_confirmed_fills[_norm_odno(notice['odno'])] = {
+                        'price': notice.get('price') or 0.0,
+                        'qty': notice.get('qty') or 0.0,
+                        'ts': time.time(),
+                    }
             self.check_now()  # 집중 감시 모드 진입 + 즉시 폴링 1회
         except Exception as e:
             logger.debug(f"[Monitor] 체결통보 처리 오류: {e}")
@@ -1169,8 +1193,17 @@ class ConclusionMonitor:
                                 price = float(cp_data['output'].get('stck_prpr', 0))
                 except Exception: pass
 
+            # [추가] WS 체결통보로 '실제 체결'이 확인된 주문인지 판정.
+            #  확인되면 (추정)이 아닌 확정 체결로 라벨링하고, 실시간 체결가(있으면)를 사용한다.
+            ws_fill = None
+            with self._lock:
+                ws_fill = self.ws_confirmed_fills.get(_norm_odno(odno))
+            ws_confirmed = bool(ws_fill)
+            if ws_fill and float(ws_fill.get('price') or 0) > 0:
+                price = float(ws_fill['price'])  # 추정가 → 실시간 체결통보의 실제 체결가로 대체
+
             type_str = trade.get('type', '') # [수정] KeyError 방지
-            
+
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
             try: profit_amt = int(float(trade.get('profit_amt') or 0))
             except Exception: profit_amt = 0
@@ -1207,9 +1240,9 @@ class ConclusionMonitor:
             if not exists_check:
                 # [수정] 큐 시스템 적용으로 단순 호출로 변경
                 db_manager.db.insert_trade(
-                    type_str, code, name, qty, price, odno, 
-                    order_status="체결(추정)", 
-                    reason=reason_to_save, 
+                    type_str, code, name, qty, price, odno,
+                    order_status=("체결" if ws_confirmed else "체결(추정)"),
+                    reason=reason_to_save,
                     custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     snapshot=snapshot_data,
                     score=trade.get('strategy_score', 0),
@@ -1230,7 +1263,10 @@ class ConclusionMonitor:
                     rules_map = {r['code']: r for r in custom_rules}
                     rule = rules_map.get(code)
                     
-                    title_tag = f"[{type_name} 체결(추정)]" if type_name else "[체결 알림(추정)]"
+                    if ws_confirmed:
+                        title_tag = f"[{type_name} 체결]" if type_name else "[체결 알림]"
+                    else:
+                        title_tag = f"[{type_name} 체결(추정)]" if type_name else "[체결 알림(추정)]"
                     rule_info = ""
                     if rule:
                         title_tag += " [개별]"
@@ -1272,8 +1308,9 @@ class ConclusionMonitor:
 
                     exec_amt = int(price * qty)
                     price_fmt = f"{price:,.0f}원" if price > 0 else "시장가"
+                    price_suffix = "(체결가)" if ws_confirmed else "(추정체결가)"
                     amt_fmt = f"{exec_amt:,}원" if exec_amt > 0 else "-"
-                    
+
                     original_reason = trade.get('reason', reason)
                     profit_msg = ""
                     if type_name == "매도":
@@ -1282,9 +1319,9 @@ class ConclusionMonitor:
                         if p_amt is not None and p_rate is not None:
                             profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
                             
-                    msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
+                    msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}{price_suffix}\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
-                    logger.info(f"[Monitor] 모의투자 체결 확인: {name} {qty}주 ({reason})")
+                    logger.info(f"[Monitor] 모의투자 체결 확인{'(WS 확정)' if ws_confirmed else '(추정)'}: {name} {qty}주 ({reason})")
 
                     # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
                     #  트레이딩 RUNNING 중 사용자가 수동 매수하면 이 백그라운드
