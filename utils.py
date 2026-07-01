@@ -14,7 +14,7 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def market_today(is_overseas=False):
     if not is_overseas:
         return datetime.now().strftime('%Y%m%d')
     # 미국 서머타임(DST) 자동 판별 후 ET 날짜 산출 (trading.py 주문 세션 판별과 동일 규칙)
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     year = now_utc.year
     march_first = datetime(year, 3, 1)
     march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)

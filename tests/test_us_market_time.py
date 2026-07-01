@@ -82,10 +82,13 @@ def test_us_market_order_time(
     
     mock_now_utc = dt.datetime.strptime(test_time_utc, "%Y-%m-%d %H:%M:%S")
     
-    # datetime.utcnow() 호출을 제어하기 위한 Fake 클래스 주입
+    # datetime.now(timezone.utc) 호출을 제어하기 위한 Fake 클래스 주입
     class FakeDatetime(dt.datetime):
         @classmethod
-        def utcnow(cls):
+        def now(cls, tz=None):
+            # 코드가 now(timezone.utc).replace(tzinfo=None)로 UTC를 얻으므로 tz-aware로 반환
+            if tz is not None:
+                return mock_now_utc.replace(tzinfo=tz)
             return mock_now_utc
             
     with patch('modules.trading.datetime', FakeDatetime):

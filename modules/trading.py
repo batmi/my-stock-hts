@@ -9,7 +9,7 @@ import json
 import time
 import concurrent.futures
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import config
 import context # [추가]
 import api
@@ -955,7 +955,7 @@ def send_order(order_type):
 
         if is_overseas:
             # [추가] 미국 서머타임(DST) 및 현재 시장 시간 자동 판별
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             year = now_utc.year
             
             # 매년 3월 두 번째 일요일 07:00 UTC (02:00 EST) 서머타임 시작
