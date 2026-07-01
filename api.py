@@ -2615,7 +2615,7 @@ def get_investor_trend(code, market_div="J"):
     if config.session.is_toss:
         return []
     cache_key = f"inv_{code}_{market_div}"
-    cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 수급 정보 유지 시간 연장
+    cached = _get_micro_cache(cache_key, ttl=300.0) # [수정] 수급 정보는 장중 잠정치가 천천히 갱신되는 일단위 집계라 5분 캐시로 REST/TPS 절감
     if cached is not None: return cached
 
     # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용

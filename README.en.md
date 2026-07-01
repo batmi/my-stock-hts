@@ -271,6 +271,8 @@ my-stock-hts/
 ├── main.py               # Main execution file (Menu & Routing)
 ├── config.py             # Settings, Env vars, Data load
 ├── api.py                # KIS API, yfinance, OpenDART communication
+├── toss_api.py           # Toss Securities Open API client (quotes/assets/orders in Toss mode)
+├── realtime.py           # KIS WebSocket real-time quote & execution-notice feed (REST fallback when uncovered)
 ├── constants.py          # Constant definitions (TR ID, field mapping, etc.)
 ├── indicators.py         # Technical indicators calculation (RSI, ADX, MACD, etc.)
 ├── utils.py              # Common utilities (dates, formatting, etc.)

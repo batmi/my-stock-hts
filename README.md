@@ -280,6 +280,8 @@ my-stock-hts/
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── config.py             # 설정, 환경변수, 데이터 로드
 ├── api.py                # KIS API 통신, yfinance, OpenDART(전자공시) 연동 및 데이터 조회
+├── toss_api.py           # 토스증권 Open API 클라이언트 (토스 모드 시세/자산/주문)
+├── realtime.py           # KIS WebSocket 실시간 시세·체결통보 피드 (미커버 시 REST 폴백)
 ├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
 ├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
 ├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
