@@ -89,7 +89,7 @@ def test_subscription_price_only_full_capacity():
 
 def test_subscription_orderbook_uses_leftover_slots():
     # 현재가 우선 배정 후 남는 등록 슬롯에만 호가를 best-effort로 얹는다(현재가 커버 유지).
-    m = rt.SubscriptionManager(max_regs=6, subscribe_orderbook=True, subscribe_vi=False)
+    m = rt.SubscriptionManager(max_regs=6, subscribe_orderbook=True)
     m.set_symbols(priority=["A", "B"], other=[])
     regs = m.plan()
     price = [c for (t, c) in regs if t == rt.TR_PRICE]
@@ -101,7 +101,7 @@ def test_subscription_orderbook_uses_leftover_slots():
 
 def test_subscription_orderbook_partial_when_price_dominates():
     # 예산이 빠듯하면 현재가를 최대한 덮고 호가는 상위 우선순위에만 얹힌다.
-    m = rt.SubscriptionManager(max_regs=5, subscribe_orderbook=True, subscribe_vi=False)
+    m = rt.SubscriptionManager(max_regs=5, subscribe_orderbook=True)
     m.set_symbols(priority=["A", "B", "C"], other=[])
     regs = m.plan()
     price = [c for (t, c) in regs if t == rt.TR_PRICE]
@@ -114,47 +114,12 @@ def test_subscription_orderbook_partial_when_price_dominates():
 
 
 def test_dedup_and_other_excludes_priority():
-    m = rt.SubscriptionManager(max_regs=20, subscribe_orderbook=False, subscribe_vi=False)
+    m = rt.SubscriptionManager(max_regs=20, subscribe_orderbook=False)
     m.set_symbols(priority=["A", "A", "B"], other=["B", "C", "C"])
     regs = m.plan()
     codes = [c for (t, c) in regs]
     assert codes.count("A") == 1 and codes.count("B") == 1  # B는 priority에만
     assert "C" in codes
-
-
-def test_subscription_vi_before_orderbook():
-    # 남는 슬롯 배분 우선순위: 현재가 > VI(H0STMKO0) > 호가(H0STASP0).
-    m = rt.SubscriptionManager(max_regs=6, subscribe_orderbook=True, subscribe_vi=True)
-    m.set_symbols(priority=["A", "B"], other=[])
-    regs = m.plan()
-    price = [c for (t, c) in regs if t == rt.TR_PRICE]
-    vi = [c for (t, c) in regs if t == rt.TR_MKT_OPER]
-    ask = [c for (t, c) in regs if t == rt.TR_ASK]
-    assert price == ["A", "B"]   # 현재가 우선
-    assert vi == ["A", "B"]      # 남는 4슬롯 중 2개를 VI에 우선 배정
-    assert ask == ["A", "B"]     # 그 다음 남는 2슬롯을 호가에
-    assert m.coverage()["vi_covered"] == 2
-
-
-def test_subscription_vi_takes_priority_over_orderbook_when_tight():
-    # 슬롯이 빠듯하면 VI가 호가보다 먼저 채워진다(VI 알림이 호가 수급보다 우선).
-    # budget=4 → 현재가 2 + VI 2 로 소진, 호가는 슬롯 없음.
-    m = rt.SubscriptionManager(max_regs=4, subscribe_orderbook=True, subscribe_vi=True)
-    m.set_symbols(priority=["A", "B"], other=[])
-    regs = m.plan()
-    vi = [c for (t, c) in regs if t == rt.TR_MKT_OPER]
-    ask = [c for (t, c) in regs if t == rt.TR_ASK]
-    assert vi == ["A", "B"]   # 남은 2슬롯 VI 우선
-    assert ask == []          # 호가는 슬롯 없음
-
-
-def test_parse_h0stmko0_vi_fields():
-    # 장운영정보(H0STMKO0): vi_cls_code=index8, 거래정지=index1
-    body = "005930^N^^11^ ^ ^ ^ ^1^0^KRX"
-    recs = rt.parse_h0stmko0(body, "1")
-    assert recs == [{"code": "005930", "trht_yn": "N", "mkop_cls_code": "11", "vi_cls_code": "1"}]
-    # 필드 부족 레코드는 건너뜀
-    assert rt.parse_h0stmko0("005930^N", "1") == []
 
 
 def test_start_feed_toss_returns_none(monkeypatch):
