@@ -197,7 +197,11 @@ def add_restricted_stock(code, name, memo, is_overseas=False, cano=None, acnt=No
                 new_memo = ex_memo + ", " + memo if ex_memo else memo
                 data[code]["accounts"][account_key] = {
                     "memo": new_memo,
-                    "type": account_type or existing.get("type", "지정계좌")
+                    "type": account_type or existing.get("type", "지정계좌"),
+                    # [수정] 계좌 스코프별 등록일 저장. 최초 등록 시각을 유지하되,
+                    #        기존 종목에 새 계좌가 추가돼도 최상위 date(최초 등록일)와 무관하게
+                    #        해당 계좌의 실제 등록 시각이 표시되도록 한다.
+                    "date": existing.get("date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
         else:
             existing_memo = data[code].get("memo", "")
@@ -6458,28 +6462,30 @@ def _view_restricted_stocks():
     ) as progress:
         # [수정] (종목 × 계좌 범위) 단위로 평탄화하여 글로벌/계좌별 제한을 각각 한 행으로 펼쳐 보여준다.
         #        기존에는 한 셀에 '\n'으로 묶어 2번째 줄부터 종목명·코드가 비어 보였다(해제 화면과 동일한 표기로 통일).
-        entries = []  # {code, name, type, acc_str, memo, is_overseas}
+        entries = []  # {code, name, type, acc_str, memo, is_overseas, date}
         for code, info in data.items():
             name = info.get('name', code)
             is_overseas = info.get('is_overseas')
             if is_overseas is None:
                 is_overseas = (len(code) != 6)
+            code_date = info.get('date', '-')
 
             global_memo = info.get('memo', '')
             if global_memo:
                 entries.append({
                     "code": code, "name": name, "type": "전체", "acc_str": "-",
-                    "memo": global_memo, "is_overseas": is_overseas,
+                    "memo": global_memo, "is_overseas": is_overseas, "date": code_date,
                 })
 
             for acc, acc_info in info.get('accounts', {}).items():
                 if isinstance(acc_info, str):
-                    a_type, a_memo = "지정계좌", acc_info
+                    a_type, a_memo, a_date = "지정계좌", acc_info, code_date
                 else:
                     a_type, a_memo = acc_info.get("type", "지정계좌"), acc_info.get("memo", "")
+                    a_date = acc_info.get("date") or code_date  # 스코프 날짜 없으면 최초 등록일로 폴백
                 entries.append({
                     "code": code, "name": name, "type": a_type, "acc_str": acc.rstrip('-'),
-                    "memo": a_memo, "is_overseas": is_overseas,
+                    "memo": a_memo, "is_overseas": is_overseas, "date": a_date,
                 })
 
         task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(entries))
@@ -6490,7 +6496,7 @@ def _view_restricted_stocks():
         for e in entries:
             code = e["code"]
             is_overseas = e["is_overseas"]
-            reg_date = data.get(code, {}).get('date', '-')
+            reg_date = e["date"]
 
             if code not in price_cache:
                 price_str = diff_str = w52_str = "-"
@@ -6596,32 +6602,34 @@ def _remove_restricted_stock():
     # [수정] (종목 × 계좌 범위) 단위로 평탄화하여 계좌별 정밀 해제를 지원한다.
     #        등록은 글로벌/지정계좌 스코프로 이루어지므로 해제도 같은 단위여야,
     #        다계좌 운영 시 다른 계좌(또는 글로벌)의 제한이 함께 삭제되는 과다 삭제를 막는다.
-    entries = []  # {code, name, scope('global'|'account'), cano, acnt, type, acc_str, memo, is_overseas}
+    entries = []  # {code, name, scope('global'|'account'), cano, acnt, type, acc_str, memo, is_overseas, date}
     for code, info in data.items():
         name = info.get('name', code)
         is_overseas = info.get('is_overseas')
         if is_overseas is None:
             is_overseas = (len(code) != 6)
+        code_date = info.get('date', '-')
 
         global_memo = info.get('memo', '')
         if global_memo:
             entries.append({
                 "code": code, "name": name, "scope": "global",
                 "cano": None, "acnt": None, "type": "전체", "acc_str": "-",
-                "memo": global_memo, "is_overseas": is_overseas,
+                "memo": global_memo, "is_overseas": is_overseas, "date": code_date,
             })
 
         for acc, acc_info in info.get('accounts', {}).items():
             if isinstance(acc_info, str):
-                a_type, a_memo = "지정계좌", acc_info
+                a_type, a_memo, a_date = "지정계좌", acc_info, code_date
             else:
                 a_type, a_memo = acc_info.get("type", "지정계좌"), acc_info.get("memo", "")
+                a_date = acc_info.get("date") or code_date  # 스코프 날짜 없으면 최초 등록일로 폴백
             # account_key 형식: "{cano}-{acnt}" (acnt가 빈 문자열일 수 있음)
             cano, _, acnt = acc.partition('-')
             entries.append({
                 "code": code, "name": name, "scope": "account",
                 "cano": cano, "acnt": acnt, "type": a_type, "acc_str": acc.rstrip('-'),
-                "memo": a_memo, "is_overseas": is_overseas,
+                "memo": a_memo, "is_overseas": is_overseas, "date": a_date,
             })
 
     console.print()
@@ -6654,7 +6662,7 @@ def _remove_restricted_stock():
         for i, e in enumerate(entries):
             code = e["code"]
             is_overseas = e["is_overseas"]
-            reg_date = data.get(code, {}).get('date', '-')
+            reg_date = e["date"]
 
             if code not in price_cache:
                 price_str = diff_str = w52_str = "-"
