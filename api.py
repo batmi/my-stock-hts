@@ -1866,12 +1866,155 @@ def _get_hourly_chart_data(code, is_overseas):
             
     return pd.DataFrame()
 
+def _resample_weekly(df):
+    """일봉 DataFrame(date=YYYYMMDD 문자열)을 주봉으로 리샘플링한다(주 마감=금요일 기준).
+    KIS 네이티브 주봉이 없는 경로(토스 개별종목)에서 사용한다.
+    OHLCV 집계: 시가=주 첫 거래일, 고가=최댓값, 저가=최솟값, 종가=주 마지막, 거래량=합계."""
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+    d = df.copy()
+    d['_dt'] = pd.to_datetime(d['date'].astype(str), format='%Y%m%d', errors='coerce')
+    d = d.dropna(subset=['_dt']).sort_values('_dt').set_index('_dt')
+    agg = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+    w = d.resample('W-FRI').agg(agg).dropna(subset=['close'])
+    w = w.reset_index()
+    w['date'] = w['_dt'].dt.strftime('%Y%m%d')  # 주봉 라벨 = 해당 주 마감(금)일
+    return w[['date', 'open', 'high', 'low', 'close', 'volume']].reset_index(drop=True)
+
+def _fetch_kis_weekly_domestic(code, lookback_days=1100):
+    """KIS 국내 주봉(FID_PERIOD_DIV_CODE='W'). 날짜 구간을 뒤로 페이징하며 ~3년치를 모은다."""
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    start_date_origin = (now - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["CHART"]
+    all_items = []
+    current_end_date = today
+    retry_count = 0
+    while retry_count < 10:
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code,
+                  "FID_INPUT_DATE_1": start_date_origin, "FID_INPUT_DATE_2": current_end_date,
+                  "FID_PERIOD_DIV_CODE": "W", "FID_ORG_ADJ_PRC": "0"}
+        data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
+        if data.get('rt_cd') == '0':
+            items = data.get('output2')
+            if items:
+                all_items.extend(items)
+                temp_dates = sorted([x['stck_bsop_date'] for x in items if x.get('stck_bsop_date')])
+                if not temp_dates or temp_dates[0] <= start_date_origin:
+                    break
+                current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+            else:
+                break
+            retry_count += 1
+        elif data.get('msg_cd') == 'EGW00201':
+            time.sleep(0.5)
+            retry_count += 1
+        else:
+            time.sleep(0.2)
+            break
+
+    if not all_items:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_items).drop_duplicates(subset=['stck_bsop_date'])
+    df = df[df['stck_bsop_date'] >= start_date_origin]
+    df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
+    df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
+    df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
+    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+
+def _fetch_kis_weekly_overseas(code, lookback_days=1100):
+    """KIS 해외 주봉(GUBN='1'). 거래소 후보를 순회하며 날짜 구간을 뒤로 페이징한다."""
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    start_date_origin = (now - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    cached_ex = config.session.exchange_cache.get(code)
+    exchanges = []
+    if cached_ex: exchanges.append(cached_ex)
+    for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
+        if e not in exchanges: exchanges.append(e)
+    url_path = constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"]
+
+    for excd in exchanges:
+        all_items = []
+        next_bymd = today
+        retry_count = 0
+        while retry_count < 10:
+            params = {"AUTH": "", "EXCD": excd, "SYMB": code, "GUBN": "1", "BYMD": next_bymd, "MODP": "1", "KEYB": code}
+            data = call_api(url_path, "overseas", "quotations", "chart", params=params, timeout=3)
+            if data.get('rt_cd') == '0':
+                items = data.get('output2')
+                if items:
+                    if not all_items and cached_ex != excd:
+                        config.session.update_cache_and_save(code, excd)
+                    all_items.extend(items)
+                    last = items[-1]['xymd']
+                    if last <= start_date_origin:
+                        break
+                    next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                else:
+                    break
+                retry_count += 1
+            elif data.get('msg_cd') == 'EGW00201':
+                time.sleep(0.5)
+                retry_count += 1
+            else:
+                time.sleep(0.1)
+                break
+
+        if all_items:
+            df = pd.DataFrame(all_items).drop_duplicates(subset=['xymd'])
+            df.rename(columns={'xymd': 'date', 'clos': 'close', 'open': 'open', 'high': 'high', 'low': 'low'}, inplace=True)
+            if 'tvol' in df.columns: df['volume'] = df['tvol']
+            elif 'tovol' in df.columns: df['volume'] = df['tovol']
+            elif 'vol' in df.columns: df['volume'] = df['vol']
+            else: df['volume'] = 0
+            df = df[df['date'] >= start_date_origin]
+            for c in ['close', 'open', 'high', 'low', 'volume']: df[c] = df[c].astype(float)
+            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+    return pd.DataFrame()
+
+def _get_weekly_chart_data(code, is_overseas):
+    """주봉 차트 데이터. KIS 네이티브 주봉(국내 W / 해외 GUBN=1)으로 ~3년치를 조회하고,
+    KIS 주봉이 없는 경로(지수·환율·원자재는 yfinance 1wk, 토스 개별종목은 일봉 리샘플링)로 보강한다."""
+    is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
+                or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
+    if is_index:
+        try:
+            df = fetch_yfinance_data(code, period="5y", interval="1wk")
+            if df is None or df.empty:
+                return pd.DataFrame()
+            flat_cols = [str(col[0]).lower() if isinstance(col, tuple) else str(col).lower() for col in df.columns]
+            df.columns = flat_cols
+            df.reset_index(inplace=True)
+            df.columns = [str(c).lower() for c in df.columns]
+            df = df.loc[:, ~df.columns.duplicated()].copy()
+            cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+            for c in cols:
+                if c not in df.columns: df[c] = 0
+            df = df[cols].copy()
+            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+        except Exception as e:
+            logger.debug(f"yfinance weekly index fetch error: {e}")
+            return pd.DataFrame()
+
+    # 토스 개별종목: 토스 캔들은 일/분봉만 제공 → 일봉을 주 단위로 리샘플링
+    if config.session.is_toss:
+        return _resample_weekly(get_chart_data(code, is_overseas, 'daily'))
+
+    if not is_overseas:
+        return _fetch_kis_weekly_domestic(code)
+    return _fetch_kis_weekly_overseas(code)
+
 def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     """
     기술적 분석을 위한 차트 데이터를 조회합니다.
-    period_type: 'daily' (일봉), 'hourly' (시봉), 'intraday' (분봉)
+    period_type: 'weekly' (주봉), 'daily' (일봉), 'hourly' (시봉), 'intraday' (분봉)
     realtime=False: 일봉 캐시 적중 시 현재가 오버레이를 생략한다(호출자가 직접 당일 캔들을 갱신하는 대량 조회용).
     """
+    if period_type == 'weekly':
+        return _get_weekly_chart_data(code, is_overseas)
+
     # [추가] 토스: yfinance 대상(지수/원자재/환율 등)이 아닌 개별 종목은 토스 캔들로 조회
     _yf_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
                  or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))

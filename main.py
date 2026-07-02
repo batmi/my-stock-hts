@@ -1149,16 +1149,17 @@ def main():
                         if target_code: 
                             logging.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
                             
-                            menu_items_type = [("1", "일봉", "Daily"), ("2", "시봉", "Hourly"), ("3", "분봉", "Intraday")]
-                            c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="1")
-                            
+                            menu_items_type = [("1", "주봉", "Weekly"), ("2", "일봉", "Daily"), ("3", "시봉", "Hourly"), ("4", "분봉", "Intraday")]
+                            c_type = utils.show_menu("차트 유형을 선택하세요", menu_items_type, default_choice="2")
+
                             if c_type.lower() not in ['b', 'q']:
                                 type_map = dict((k, v) for k, v, _ in menu_items_type)
                                 context.USER_ACTION_BREADCRUMB.append(f"[{c_type}] {type_map.get(c_type, '')}")
-                                
+
                                 p_type = 'daily'
-                                if c_type == '2': p_type = 'hourly'
-                                elif c_type == '3': p_type = 'intraday'
+                                if c_type == '1': p_type = 'weekly'
+                                elif c_type == '3': p_type = 'hourly'
+                                elif c_type == '4': p_type = 'intraday'
 
                                 # 일봉은 표시 기간 선택 (기본 6개월)
                                 c_months = 6

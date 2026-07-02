@@ -51,9 +51,11 @@ class GlobalSettings(BaseModel):
     AUTO_MORNING_BRIEFING_TIME: str = "0830"
     AUTO_DISCLOSURE_ALERT_USE: bool = True  # 관심종목 중대 공시 텔레그램 알림 (기본 ON)
     # [추가] 시장정지 알림: KIS는 서킷브레이커(CB)+VI, 토스는 VI만 (사이드카는 REST 미지원으로 제외)
+    #  KIS(실전/모의)의 VI는 WebSocket 장운영정보(H0STMKO0) push로 실시간 감지한다(REST 폴링 없음).
+    #  토스는 공식 WS 미지원이라 VI를 REST(get_warnings)로 폴링하며, 아래 주기는 '토스 전용'이다.
     MARKET_HALT_ALERT_USE: bool = True      # 서킷브레이커/VI 시장정지 텔레그램 알림 (기본 ON)
-    MARKET_HALT_CB_INTERVAL: int = 20       # CB 점검 주기(초) - KIS 전용
-    MARKET_HALT_VI_INTERVAL: int = 60       # VI 점검 주기(초) - 보유+관심종목
+    MARKET_HALT_CB_INTERVAL: int = 20       # CB 점검 주기(초) - KIS 전용(REST 바스켓)
+    MARKET_HALT_VI_INTERVAL: int = 20       # VI 점검 주기(초) - 토스 전용 REST 폴링(VI는 약 2분 지속)
     MARKET_HALT_VI_MAX_CODES: int = 40      # VI 점검 종목 수 상한 (라즈베리파이 부하 방어)
     TELEGRAM_INSTANCE_NAME: str = "HTS"
     TELEGRAM_POLLING_TIMEOUT: int = Field(default=10, gt=0)
@@ -416,6 +418,10 @@ WS_MAX_REGISTRATIONS = 41         # KIS 단일 연결 등록 한도(종목×TR)
 # 커버리지는 절반으로 줄지 않는다. WS 호가 캐시는 api.get_ask_bid_ratio()의 수급 게이트가 소비하며,
 # 이를 켜면 매수후보/매도조건 분석에서 종목당 호가 REST 1콜을 절감한다(특히 모의투자 2 TPS에서 체감 큼).
 WS_SUBSCRIBE_ORDERBOOK = True
+# VI(장운영정보 H0STMKO0) 구독 여부. plan()이 현재가 등록 후 남는 슬롯에 '호가보다 먼저' 얹는다.
+# VI는 발동/해제 이벤트 시에만 push되어 대역폭 부담이 없고, 이 구독으로 VI 발동/해제를 REST 폴링
+# 없이 실시간 감지한다(market_halt이 콜백으로 즉시 텔레그램 알림). 보유·시스템종목이 우선 배정된다.
+WS_SUBSCRIBE_VI = True
 WS_DATA_TTL_SEC = 3.0             # WS 캐시 신선도(초): 이 시간 이내면 REST 대신 WS 값을 사용
 WS_ROTATE_INTERVAL_SEC = 30       # 41건 초과분(관심종목) 구독 로테이션 주기(초)
 WS_RECONNECT_BACKOFF_SEC = 5      # 연결 실패/끊김 시 재연결 대기(초)
@@ -810,8 +816,8 @@ CONFIG_DESCRIPTIONS = {
     "AUTO_MORNING_BRIEFING_TIME": "장전 AI 브리핑 발송 시각",
     "MARKET_HALT_ALERT_USE": "서킷브레이커/VI 시장정지 알림 여부 (KIS:CB+VI, 토스:VI)",
     "MARKET_HALT_CB_INTERVAL": "서킷브레이커 점검 주기(초)",
-    "MARKET_HALT_VI_INTERVAL": "VI 점검 주기(초)",
-    "MARKET_HALT_VI_MAX_CODES": "VI 점검 종목 수 상한",
+    "MARKET_HALT_VI_INTERVAL": "VI 점검 주기(초) — 토스 전용 REST 폴링 (KIS는 WS 실시간)",
+    "MARKET_HALT_VI_MAX_CODES": "VI 점검 종목 수 상한 (토스 REST 폴링)",
     "TELEGRAM_INSTANCE_NAME": "알림 메시지 머리말 (인스턴스 식별)",
     "TELEGRAM_POLLING_TIMEOUT": "봇 명령어 수신 대기 시간",
     "SYSTEM_TRADING_INTERVAL": "자동매매 루프 실행 간격 (초)",

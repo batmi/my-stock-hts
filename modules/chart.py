@@ -216,7 +216,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or 'DX-Y' in code)
         
-        if period_type == 'daily':
+        if period_type == 'weekly':
+            period_str = "주봉 (약 3년)"
+        elif period_type == 'daily':
             period_str = f"일봉 ({months}개월)" if months and months < 12 else "일봉 (1년)"
         elif period_type == 'hourly':
             period_str = "시봉 (3개월)"

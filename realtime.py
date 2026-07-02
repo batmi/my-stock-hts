@@ -31,6 +31,7 @@ logger = logging.getLogger("hts")
 # ==========================================================
 TR_PRICE = "H0STCNT0"   # 국내주식 실시간 체결가(KRX) — 현재가/등락/거래량/체결강도 포함
 TR_ASK = "H0STASP0"     # 국내주식 실시간 호가(10단계 잔량)
+TR_MKT_OPER = "H0STMKO0"  # 국내주식 장운영정보(KRX) — VI 발동/해제 시에만 push(거래정지/VI적용구분 포함)
 TR_EXEC_REAL = "H0STCNI0"  # 실전 체결통보(AES256 암호화) — tr_key = HTS ID
 TR_EXEC_SIM = "H0STCNI9"   # 모의 체결통보(AES256 암호화) — tr_key = HTS ID
 
@@ -38,6 +39,10 @@ TR_EXEC_SIM = "H0STCNI9"   # 모의 체결통보(AES256 암호화) — tr_key = 
 _P_CODE, _P_PRICE, _P_CHG_RATE, _P_VOLUME, _P_VOL_STRENGTH = 0, 2, 5, 13, 18
 # H0STASP0(호가) 레코드 필드 인덱스 (총 매도/매수 호가잔량)
 _A_CODE, _A_TOTAL_ASK, _A_TOTAL_BID = 0, 43, 44
+# H0STMKO0(장운영정보) 레코드 필드 인덱스
+#  0:종목코드 1:거래정지여부 2:거래정지사유 3:장운영구분코드 4:예상장운영구분코드
+#  5:임의연장구분 6:동시호가배분처리 7:종목상태구분 8:VI적용구분코드 9:시간외단일가VI 10:거래소구분
+_M_CODE, _M_TRHT_YN, _M_MKOP, _M_VI_CLS = 0, 1, 3, 8
 # H0STCNI0/9(체결통보) 레코드 필드 인덱스 (KIS 체결통보 스펙)
 #  0:고객ID 1:계좌 2:주문번호 3:원주문 4:매도매수구분(01매도/02매수) 5:정정구분 6:주문종류
 #  7:주문조건 8:종목코드 9:체결수량 10:체결단가 11:체결시각 12:거부여부(0정상/1거부)
@@ -98,6 +103,22 @@ def parse_h0stasp0(body, count="1"):
     return out
 
 
+def parse_h0stmko0(body, count="1"):
+    """실시간 장운영정보(H0STMKO0) body를 파싱해 종목별 VI/거래정지 상태 dict 리스트를 반환한다.
+    VI 발동/해제 시에만 수신되므로, 각 레코드는 곧 VI 상태 전이 이벤트를 의미한다."""
+    out = []
+    for rec in _split_records(body, count):
+        if len(rec) <= _M_VI_CLS:
+            continue
+        out.append({
+            'code': rec[_M_CODE],
+            'trht_yn': str(rec[_M_TRHT_YN]).strip(),
+            'mkop_cls_code': str(rec[_M_MKOP]).strip(),
+            'vi_cls_code': str(rec[_M_VI_CLS]).strip(),
+        })
+    return out
+
+
 def aes_cbc_decrypt(b64_cipher, key, iv):
     """KIS 체결통보 AES256-CBC(PKCS7) 복호화. 표준 라이브러리 cryptography 사용(추가 의존성 없음)."""
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -145,9 +166,10 @@ class SubscriptionManager:
       - priority가 용량 이내면: priority는 **전부 항상 구독**(로테이션 없음), 남는 슬롯만 그 외(other) 관심종목을 로테이션.
       - priority만으로 용량을 초과하면: **priority 안에서만 로테이션**(시스템 종목끼리 번갈아 커버), other는 구독하지 않는다.
     """
-    def __init__(self, max_regs=41, subscribe_orderbook=True):
+    def __init__(self, max_regs=41, subscribe_orderbook=True, subscribe_vi=True):
         self.max_regs = int(max_regs)
         self.subscribe_orderbook = bool(subscribe_orderbook)
+        self.subscribe_vi = bool(subscribe_vi)
         self._reserved = 0    # 체결통보 등 시세 외 고정 등록 슬롯 수(종목 용량에서 제외).
         self._priority = []   # 시스템 트레이딩 종목(보유→후보 순). 최우선.
         self._other = []      # 그 외 관심종목. 남는 슬롯에 로테이션.
@@ -217,9 +239,18 @@ class SubscriptionManager:
 
             # 1) 현재가 우선 등록
             regs = [(TR_PRICE, code) for code in chosen]
-            # 2) 호가는 남는 등록 슬롯에 우선순위(chosen 순서)대로 best-effort 추가
+            remaining = budget - len(regs)
+            # 2) VI(장운영정보 H0STMKO0)를 남는 슬롯에 우선순위(chosen 순서)대로 추가.
+            #    VI 발동/해제 실시간 알림용. 이벤트 시에만 push되어 대역폭 부담은 없으나
+            #    등록 슬롯을 1개 차지하므로 호가보다 먼저 배정한다(보유·시스템종목이 chosen 앞쪽).
+            if self.subscribe_vi:
+                for code in chosen:
+                    if remaining <= 0:
+                        break
+                    regs.append((TR_MKT_OPER, code))
+                    remaining -= 1
+            # 3) 호가는 그 다음 남는 등록 슬롯에 우선순위대로 best-effort 추가
             if self.subscribe_orderbook:
-                remaining = budget - len(regs)
                 for code in chosen:
                     if remaining <= 0:
                         break
@@ -236,12 +267,14 @@ class SubscriptionManager:
             regs = self.plan()
             price_codes = {c for (t, c) in regs if t == TR_PRICE}
             ob_codes = {c for (t, c) in regs if t == TR_ASK}
+            vi_codes = {c for (t, c) in regs if t == TR_MKT_OPER}
             pri_set = set(self._priority)
             return {
                 'priority': len(pri_set),
                 'capacity': self.capacity_symbols(),
                 'price_covered': len(price_codes),
                 'ob_covered': len(ob_codes),
+                'vi_covered': len(vi_codes),
                 'rest_fallback': len(pri_set - price_codes),
             }
 
@@ -257,6 +290,7 @@ class RealtimeFeed:
     def get_price(self, code, max_age=3.0): return None
     def get_vol_strength(self, code, max_age=3.0): return None
     def get_orderbook(self, code, max_age=3.0): return None
+    def register_vi_callback(self, fn): pass
 
 
 class TossPollingFeed(RealtimeFeed):
@@ -272,6 +306,7 @@ class KisRealtimeFeed(RealtimeFeed):
         self.manager = SubscriptionManager(
             max_regs=getattr(config, 'WS_MAX_REGISTRATIONS', 41),
             subscribe_orderbook=getattr(config, 'WS_SUBSCRIBE_ORDERBOOK', True),
+            subscribe_vi=getattr(config, 'WS_SUBSCRIBE_VI', True),
         )
         self._price = {}   # code -> {'price','change_rate','volume','vol_strength','ts'}
         self._ask = {}     # code -> {'total_ask','total_bid','ts'}
@@ -289,6 +324,10 @@ class KisRealtimeFeed(RealtimeFeed):
         self._aes_iv = None
         self._exec_subscribed = False  # 연결당 체결통보 구독 여부
         self._got_exec = False         # 연결당 첫 체결통보 로깅용
+        # ---- 장운영정보(H0STMKO0) : VI 발동/해제 실시간 이벤트 ----
+        self._vi_callbacks = []     # VI 이벤트(레코드 dict) 도착 시 호출할 콜백
+        self._vi_cb_lock = threading.RLock()
+        self._got_vi = False        # 연결당 첫 VI 이벤트 로깅용
 
     # ---- 읽기 API (읽기 경로가 호출) ----
     def _fresh(self, entry, max_age):
@@ -339,6 +378,22 @@ class KisRealtimeFeed(RealtimeFeed):
         with self._cb_lock:
             if fn not in self._exec_callbacks:
                 self._exec_callbacks.append(fn)
+
+    # ---- VI 장운영정보 ----
+    def register_vi_callback(self, fn):
+        """VI 이벤트(H0STMKO0 레코드 dict) 도착 시 호출할 콜백을 등록한다(중복 등록 방지)."""
+        with self._vi_cb_lock:
+            if fn not in self._vi_callbacks:
+                self._vi_callbacks.append(fn)
+
+    def _invoke_vi_callbacks(self, record):
+        with self._vi_cb_lock:
+            callbacks = list(self._vi_callbacks)
+        for fn in callbacks:
+            try:
+                fn(record)
+            except Exception as e:
+                logger.debug(f"[WS] VI 콜백 오류: {e}")
 
     def _hts_id(self):
         return (getattr(config.session, 'hts_id', '') or '').strip()
@@ -447,6 +502,7 @@ class KisRealtimeFeed(RealtimeFeed):
                     logger.info(f"[WS] 연결 성공 ({self._ws_uri()}, {label})")
                     self._got_data = False
                     self._got_exec = False
+                    self._got_vi = False
                     self._subscribed = set()
                     self._exec_subscribed = False
                     self._aes_key = self._aes_iv = None
@@ -572,6 +628,13 @@ class KisRealtimeFeed(RealtimeFeed):
                         self._ask[r['code']] = {
                             'total_ask': r['total_ask'], 'total_bid': r['total_bid'], 'ts': now,
                         }
+            elif tr_id == TR_MKT_OPER:
+                # VI 발동/해제 이벤트: 파싱 후 콜백(market_halt)이 즉시 텔레그램 알림을 전송한다.
+                for r in parse_h0stmko0(body, count):
+                    if not self._got_vi:
+                        self._got_vi = True
+                        logger.info("[WS] 장운영정보(VI) 수신 시작")
+                    self._invoke_vi_callbacks(r)
         except Exception as e:
             logger.debug(f"[WS] 메시지 처리 오류: {e}")
 
@@ -671,3 +734,16 @@ def register_exec_callback(fn):
             feed.register_exec_callback(fn)
     except Exception as e:
         logger.debug(f"[WS] 체결통보 콜백 등록 오류: {e}")
+
+
+def register_vi_callback(fn):
+    """VI 장운영정보(H0STMKO0) 이벤트 도착 시 호출할 콜백을 등록한다(KIS 피드 한정).
+
+    토스/미지원 피드에서는 no-op → 기존 REST 폴링이 VI를 처리한다.
+    """
+    try:
+        feed = get_feed()
+        if hasattr(feed, 'register_vi_callback'):
+            feed.register_vi_callback(fn)
+    except Exception as e:
+        logger.debug(f"[WS] VI 콜백 등록 오류: {e}")
