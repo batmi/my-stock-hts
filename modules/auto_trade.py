@@ -78,13 +78,26 @@ def _norm_odno(odno):
     s = str(odno or "").strip()
     return (s.lstrip('0') or '0') if s.isdigit() else s
 
-def _current_account_type():
-    """현재 세션 기준 제한 종목 계좌종류 라벨을 반환한다. (모의/토스/한투-자동)"""
+def _current_account_type(cano=None, acnt=None):
+    """제한 종목 계좌종류 라벨을 반환한다. (모의/토스/한투-자동/한투-수동)
+
+    한투 실전은 실제 계좌(cano/acnt)를 자동매매 전용 계좌(auto_cano)와 비교해
+    구분한다. 외부(앱/HTS) 수동 매수는 메인(수동) 계좌에서 감지되므로 '한투-수동',
+    자동매매 전용 계좌면 '한투-자동'으로 라벨링한다. (cano 미지정 시 기존처럼 자동으로 간주)
+    """
     if getattr(config.session, 'is_toss', False):
         return "토스"
     if config.session.is_simulation:
         return "모의"
-    return "한투-자동"
+    auto_cano = getattr(config.session, 'auto_cano', None)
+    auto_acnt = getattr(config.session, 'auto_acnt_prdt_cd', None)
+    # 자동매매 전용 계좌가 설정돼 있고 인자로 받은 계좌가 그와 일치하면 '한투-자동',
+    # 그 외(메인/수동 계좌)는 '한투-수동'. 계좌 정보가 없으면 기존 동작(자동) 유지.
+    if cano is None:
+        return "한투-자동"
+    if auto_cano and cano == auto_cano and (not auto_acnt or acnt == auto_acnt):
+        return "한투-자동"
+    return "한투-수동"
 
 def _get_trade_account():
     """현재 시스템 트레이딩이 실제 매매하는 계좌(cano, acnt)를 반환한다.
@@ -1023,7 +1036,7 @@ class ConclusionMonitor:
                                 if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name \
                                         and not is_system_odno(odno):
                                     try:
-                                        add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type())
+                                        add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type(cano, acnt))
                                     except Exception as e:
                                         logger.error(f"수동매매 제한 종목 등록 중 오류: {e}")
 
@@ -1330,7 +1343,7 @@ class ConclusionMonitor:
                     if type_name == "매수" and not is_system_odno(odno):
                         try:
                             r_cano, r_acnt = _get_trade_account()
-                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt, account_type=_current_account_type())
+                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt, account_type=_current_account_type(r_cano, r_acnt))
                         except Exception as e:
                             logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
                 except Exception as e:
@@ -6443,76 +6456,79 @@ def _view_restricted_stocks():
         console=console,
         transient=True
     ) as progress:
-        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(data))
-
+        # [수정] (종목 × 계좌 범위) 단위로 평탄화하여 글로벌/계좌별 제한을 각각 한 행으로 펼쳐 보여준다.
+        #        기존에는 한 셀에 '\n'으로 묶어 2번째 줄부터 종목명·코드가 비어 보였다(해제 화면과 동일한 표기로 통일).
+        entries = []  # {code, name, type, acc_str, memo, is_overseas}
         for code, info in data.items():
             name = info.get('name', code)
-            
-            global_memo = info.get('memo', '')
-            accounts = info.get('accounts', {})
-            
-            types = []
-            accs = []
-            memos = []
-            
-            if global_memo:
-                types.append("전체")
-                accs.append("-")
-                memos.append(global_memo)
-                
-            for acc, acc_info in accounts.items():
-                if isinstance(acc_info, str):
-                    types.append("지정계좌")
-                    memos.append(acc_info)
-                else:
-                    types.append(acc_info.get("type", "지정계좌"))
-                    memos.append(acc_info.get("memo", ""))
-                accs.append(acc.rstrip('-'))
-                
-            display_type = "\n".join(types) if types else "-"
-            display_acc = "\n".join(accs) if accs else "-"
-            display_memo = "\n".join(memos) if memos else "-"
-            
-            reg_date = info.get('date', '-')
-            
-            # 데이터 조회 및 지표 계산
             is_overseas = info.get('is_overseas')
             if is_overseas is None:
                 is_overseas = (len(code) != 6)
-            df = api.get_chart_data(code, is_overseas)
-            
-            price_str = "-"
-            diff_str = "-"
-            w52_str = "-"
-            
-            if df is not None and not df.empty:
-                current_price = float(df.iloc[-1]['close'])
-                prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
-                diff = current_price - prev_price
-                rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
-                
-                price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
-                
-                c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                if is_overseas:
-                    diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
-                else:
-                    diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
 
-                w52_pos_val = 0.0
-                recent_df = df.tail(250)
-                h52 = recent_df['high'].max()
-                l52 = recent_df['low'].min()
-                if h52 > l52:
-                    w52_pos_val = (current_price - l52) / (h52 - l52) * 100
-                
-                w_color = "[white]"
-                if w52_pos_val >= 90: w_color = "[red]"
-                elif w52_pos_val >= 80: w_color = "[orange3]"
-                elif w52_pos_val <= 20: w_color = "[blue]"
-                w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
-            
-            table.add_row(name, code, display_type, display_acc, price_str, diff_str, w52_str, display_memo, reg_date)
+            global_memo = info.get('memo', '')
+            if global_memo:
+                entries.append({
+                    "code": code, "name": name, "type": "전체", "acc_str": "-",
+                    "memo": global_memo, "is_overseas": is_overseas,
+                })
+
+            for acc, acc_info in info.get('accounts', {}).items():
+                if isinstance(acc_info, str):
+                    a_type, a_memo = "지정계좌", acc_info
+                else:
+                    a_type, a_memo = acc_info.get("type", "지정계좌"), acc_info.get("memo", "")
+                entries.append({
+                    "code": code, "name": name, "type": a_type, "acc_str": acc.rstrip('-'),
+                    "memo": a_memo, "is_overseas": is_overseas,
+                })
+
+        task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(entries))
+
+        # [최적화] 동일 종목이 여러 범위(글로벌/계좌별)로 나뉠 수 있으므로 시세는 종목당 1회만 조회한다.
+        price_cache = {}
+
+        for e in entries:
+            code = e["code"]
+            is_overseas = e["is_overseas"]
+            reg_date = data.get(code, {}).get('date', '-')
+
+            if code not in price_cache:
+                price_str = diff_str = w52_str = "-"
+                df = api.get_chart_data(code, is_overseas)
+                if df is not None and not df.empty:
+                    current_price = float(df.iloc[-1]['close'])
+                    prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+                    diff = current_price - prev_price
+                    rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
+
+                    price_str = f"{int(current_price):,}" if not is_overseas else f"{current_price:,.2f}"
+
+                    c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
+                    if is_overseas:
+                        diff_str = f"{c_color}{rate:+.2f}% ({diff:+.2f})[/]"
+                    else:
+                        diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
+
+                    w52_pos_val = 0.0
+                    recent_df = df.tail(250)
+                    h52 = recent_df['high'].max()
+                    l52 = recent_df['low'].min()
+                    if h52 > l52:
+                        w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+
+                    w_color = "[white]"
+                    if w52_pos_val >= 90: w_color = "[red]"
+                    elif w52_pos_val >= 80: w_color = "[orange3]"
+                    elif w52_pos_val <= 20: w_color = "[blue]"
+                    w52_str = f"{w_color}{w52_pos_val:.1f}%[/]"
+                price_cache[code] = (price_str, diff_str, w52_str)
+
+            price_str, diff_str, w52_str = price_cache[code]
+
+            table.add_row(
+                e["name"], code, e["type"], e["acc_str"],
+                price_str, diff_str, w52_str, e["memo"] or "-", reg_date,
+            )
             progress.advance(task)
 
     console.print(table)
@@ -6551,7 +6567,7 @@ def _add_restricted_stock():
             acnt = getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd)
             account_type = "한투-자동"
     elif choice == "3":
-        account_type = Prompt.ask("계좌종류 선택", choices=["모의", "한투-자동", "토스"], default="한투-자동")
+        account_type = Prompt.ask("계좌종류 선택", choices=["모의", "한투-자동", "한투-수동", "토스"], default="한투-자동")
         cano = Prompt.ask("계좌 앞 8자리")
         acnt = Prompt.ask("계좌 뒤 2자리", default="01")
         
