@@ -50,10 +50,14 @@ class GlobalSettings(BaseModel):
     AUTO_MORNING_BRIEFING_USE: bool = False
     AUTO_MORNING_BRIEFING_TIME: str = "0830"
     AUTO_DISCLOSURE_ALERT_USE: bool = True  # 관심종목 중대 공시 텔레그램 알림 (기본 ON)
-    # [추가] 시장정지 알림: KIS는 서킷브레이커(CB)+VI, 토스는 VI만 (사이드카는 REST 미지원으로 제외)
-    MARKET_HALT_ALERT_USE: bool = True      # 서킷브레이커/VI 시장정지 텔레그램 알림 (기본 ON)
+    # [추가] 시장정지 알림: 서킷브레이커(CB)와 VI를 '독립 스위치'로 각각 ON/OFF한다.
+    #  CB·VI 모두 REST 폴링이며(WS 슬롯은 현재가에 우선 배정), 사이드카는 REST 미지원으로 제외.
+    #  - CB(MARKET_HALT_ALERT_USE): 시장 전체 정지. KIS 전용, 대표종목 바스켓만 조회해 부하가 작음(기본 ON).
+    #  - VI(MARKET_HALT_VI_USE): 보유+관심 '종목별' 폴링이라 부하가 커서 기본 OFF.
+    MARKET_HALT_ALERT_USE: bool = True      # 서킷브레이커(CB) 알림 — 시장 전체 정지, KIS 대표종목 바스켓 (기본 ON)
+    MARKET_HALT_VI_USE: bool = False        # VI 발동/해제 알림 — 보유+관심 종목별 REST 폴링 (기본 OFF) — 메뉴 0 토글
     MARKET_HALT_CB_INTERVAL: int = 20       # CB 점검 주기(초) - KIS 전용
-    MARKET_HALT_VI_INTERVAL: int = 60       # VI 점검 주기(초) - 보유+관심종목
+    MARKET_HALT_VI_INTERVAL: int = 30       # VI 점검 주기(초) - 보유+관심종목 (VI는 약 2분 지속)
     MARKET_HALT_VI_MAX_CODES: int = 40      # VI 점검 종목 수 상한 (라즈베리파이 부하 방어)
     TELEGRAM_INSTANCE_NAME: str = "HTS"
     TELEGRAM_POLLING_TIMEOUT: int = Field(default=10, gt=0)
@@ -94,7 +98,7 @@ class GlobalSettings(BaseModel):
                                             #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                             #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
-    SYSTEM_DAILY_LOSS_LIMIT: float = Field(default=10.0, ge=0.0)   # [안전장치] 일일 손실률 10.0% 도달 시 자동 중단 (0.0이면 미사용)
+    SYSTEM_DAILY_LOSS_LIMIT: float = Field(default=10.0, ge=0.0)   # [안전장치] 일일 손실률 도달 시 자동 중단(비상 정지). 0.0%면 비상 정지 OFF(미사용)
     SYSTEM_RISK_PER_TRADE: float = Field(default=5.0, ge=0.0)      # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
 
     # [설정] 변동성 타겟팅 (Volatility Targeting)
@@ -808,7 +812,8 @@ CONFIG_DESCRIPTIONS = {
     "ENABLE_TELEGRAM": "텔레그램 알림 기능 활성화 여부",
     "AUTO_MORNING_BRIEFING_USE": "매일 글로벌 매크로 시황 전송 여부",
     "AUTO_MORNING_BRIEFING_TIME": "장전 AI 브리핑 발송 시각",
-    "MARKET_HALT_ALERT_USE": "서킷브레이커/VI 시장정지 알림 여부 (KIS:CB+VI, 토스:VI)",
+    "MARKET_HALT_ALERT_USE": "서킷브레이커(CB) 알림 — 시장 전체 정지, KIS 대표종목 폴링",
+    "MARKET_HALT_VI_USE": "VI 알림 — 보유+관심 종목별 REST 폴링 (기본 OFF)",
     "MARKET_HALT_CB_INTERVAL": "서킷브레이커 점검 주기(초)",
     "MARKET_HALT_VI_INTERVAL": "VI 점검 주기(초)",
     "MARKET_HALT_VI_MAX_CODES": "VI 점검 종목 수 상한",
@@ -821,7 +826,7 @@ CONFIG_DESCRIPTIONS = {
     "USE_MARKET_FILTER": "지수 하락 시 신규 매수 보류 여부",
     "MARKET_FILTER_MA": "시장 추세 판단용 단순이동평균선 (일)",
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
-    "SYSTEM_DAILY_LOSS_LIMIT": "자산 보호를 위한 비상 정지 기준 손실률",
+    "SYSTEM_DAILY_LOSS_LIMIT": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)",
     "SYSTEM_RISK_PER_TRADE": "1회 매매 시 계좌 대비 최대 허용 손실률",
     "USE_VOLATILITY_TARGETING": "변동성(ATR) 타겟팅 비중 조절 사용 여부",
     "TARGET_VOLATILITY": "목표 연간 변동성",

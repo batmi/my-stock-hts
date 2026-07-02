@@ -42,6 +42,7 @@ def _save_dynamic_config():
         "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
         "AUTO_DISCLOSURE_ALERT_USE": getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True),
         "MARKET_HALT_ALERT_USE": getattr(config.settings, 'MARKET_HALT_ALERT_USE', True),
+        "MARKET_HALT_VI_USE": getattr(config.settings, 'MARKET_HALT_VI_USE', False),
         "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),
         "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
@@ -204,7 +205,7 @@ def view_system_config():
     table.add_row("시장 필터링 사용\n[dim]지수 하락 시 신규 매수 보류[/dim]", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}")
     table.add_row("  └ 시장 필터링 SMA (일)\n[dim]지수 추세 판단용 단순이동평균선[/dim]", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 50)}")
     table.add_row("연속 에러 허용\n[dim]시스템 중단 임계값[/dim]", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}")
-    table.add_row("일일 손실 제한 (%)\n[dim]자산 보호를 위한 비상 정지 기준[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
+    table.add_row("일일 손실 제한 (%)\n[dim]비상 정지 기준 손실률 (0%면 비상 정지 OFF)[/dim]", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}")
     table.add_row("1회 최대 리스크 (%)\n[dim]계좌 대비 1회 매매 최대 손실폭[/dim]", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0)}")
     table.add_row("상관계수 필터링 사용\n[dim]유사 테마 종목 중복 매수 방지[/dim]", "USE_CORRELATION_FILTER", f"{getattr(config.settings, 'USE_CORRELATION_FILTER', True)}")
     table.add_row("  └ 상관계수 임계값\n    [dim]동조화 판단 기준치 (0.0~1.0)[/dim]", "CORRELATION_THRESHOLD", f"{getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)}")
@@ -256,7 +257,8 @@ def view_system_config():
     table.add_row("폴링 타임아웃\n[dim]봇 명령어 수신 대기 시간[/dim]", "TELEGRAM_POLLING_TIMEOUT", f"{getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10)}")
     table.add_row("장전 AI 브리핑\n[dim]매일 글로벌 매크로 시황 전송[/dim]", "AUTO_MORNING_BRIEFING_USE", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False)}")
     table.add_row("장전 AI 브리핑 시간\n[dim]발송 시각 (HHMM)[/dim]", "AUTO_MORNING_BRIEFING_TIME", f"{getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', '0830')}")
-    table.add_row("시장정지 알림\n[dim]서킷브레이커/VI (KIS:CB+VI, 토스:VI)[/dim]", "MARKET_HALT_ALERT_USE", f"{getattr(config.settings, 'MARKET_HALT_ALERT_USE', True)}")
+    table.add_row("서킷브레이커(CB) 알림\n[dim]시장 전체 정지 (KIS 대표종목 폴링)[/dim]", "MARKET_HALT_ALERT_USE", f"{getattr(config.settings, 'MARKET_HALT_ALERT_USE', True)}")
+    table.add_row("VI 발동 알림\n[dim]보유+관심 종목별 발동/해제 (REST 폴링, 기본 OFF)[/dim]", "MARKET_HALT_VI_USE", f"{getattr(config.settings, 'MARKET_HALT_VI_USE', False)}")
 
     table.add_section()
     table.add_row("[bold dim]  5-3. 화면 및 로그 설정[/]", "", "")
@@ -604,8 +606,10 @@ def modify_telegram_settings():
          "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', v)},
         {"desc": "장전 AI 브리핑 시간", "help": "발송 시각 (예: 0830)", "name": "AUTO_MORNING_BRIEFING_TIME", "type": "time",
          "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', v)},
-        {"desc": "시장정지 알림 사용", "help": "서킷브레이커/VI 알림 (KIS:CB+VI, 토스:VI / 사이드카 미지원)", "name": "MARKET_HALT_ALERT_USE", "type": "bool", "choices": ["y", "n"],
-         "get": lambda: getattr(config.settings, 'MARKET_HALT_ALERT_USE', True), "set": lambda v: setattr(config.settings, 'MARKET_HALT_ALERT_USE', v)}
+        {"desc": "서킷브레이커(CB) 알림 사용", "help": "시장 전체 거래정지 감지 (KIS 대표종목 바스켓 REST 폴링)", "name": "MARKET_HALT_ALERT_USE", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: getattr(config.settings, 'MARKET_HALT_ALERT_USE', True), "set": lambda v: setattr(config.settings, 'MARKET_HALT_ALERT_USE', v)},
+        {"desc": "VI 발동 알림 사용", "help": "보유+관심 종목별 VI 발동/해제 감지 (REST 폴링, 기본 OFF)", "name": "MARKET_HALT_VI_USE", "type": "bool", "choices": ["y", "n"],
+         "get": lambda: getattr(config.settings, 'MARKET_HALT_VI_USE', False), "set": lambda v: setattr(config.settings, 'MARKET_HALT_VI_USE', v)}
     ]
     return _edit_config_table("텔레그램 설정 (Telegram)", items)
 
@@ -765,7 +769,7 @@ def modify_risk_portfolio_settings():
              "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
             {"desc": "연속 에러 허용", "help": "시스템 중단 임계값", "name": "SYSTEM_MAX_CONSECUTIVE_ERRORS", "type": "int", "section": "Risk",
              "get": lambda: getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', v)},
-            {"desc": "일일 손실 제한 (%)", "help": "자산 보호를 위한 비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk",
+            {"desc": "일일 손실 제한 (%)", "help": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk",
              "get": lambda: getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
             {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "Risk",
              "get": lambda: getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config.settings, 'SYSTEM_RISK_PER_TRADE', v)},
@@ -1059,7 +1063,7 @@ def _edit_single_preset(preset_type):
 
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk", "get": make_getter("USE_MARKET_FILTER"), "set": make_setter("USE_MARKET_FILTER", 'bool')},
             {"desc": "시장 필터 SMA(일)", "help": "필터 감지 이평선 주기", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk", "get": make_getter("MARKET_FILTER_MA"), "set": make_setter("MARKET_FILTER_MA", 'int')},
-            {"desc": "일일 손실 제한(%)", "help": "비상 정지 기준", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_DAILY_LOSS_LIMIT"), "set": make_setter("SYSTEM_DAILY_LOSS_LIMIT", 'float')},
+            {"desc": "일일 손실 제한(%)", "help": "비상 정지 기준 (0%면 비상 정지 OFF)", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_DAILY_LOSS_LIMIT"), "set": make_setter("SYSTEM_DAILY_LOSS_LIMIT", 'float')},
             {"desc": "종목당 투자 비중", "help": "0.1 ~ 1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float')}
         ]
 

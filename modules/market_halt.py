@@ -3,12 +3,14 @@
 추정(지수 등락률)이 아니라 거래소가 내려주는 '실제 상태 플래그'를 사용한다.
  - 서킷브레이커(CB): KIS 시세 응답의 temp_stop_yn(임시정지여부). 시장 전체가 멈추므로
    대표 유동주 바스켓이 '동시에' 정지하면 시장 CB로 판정(개별 종목 정지 오탐 방지).
- - VI(변동성완화장치): KIS는 vi_cls_code(VI적용구분코드), 토스는 get_warnings.
+ - VI(변동성완화장치): KIS는 vi_cls_code(VI적용구분코드), 토스는 get_warnings로
+   종목별 REST 폴링한다(WS 슬롯은 현재가에 우선 배정하므로 VI에는 쓰지 않는다).
    종목 단위라 보유+관심종목으로 감시 범위를 한정한다.
+   VI 알림은 REST 부하가 있어 옵션(MARKET_HALT_VI_USE)으로 두며 기본값은 OFF다.
  - 사이드카: 프로그램매매 호가만 정지하고 일반 거래는 지속되어 REST 실제 플래그가
    없으므로 지원하지 않는다(추정 제외 방침).
 
-모드별 지원: KIS(실전/모의) = CB + VI, 토스 = VI 전용.
+모드별 지원: KIS(실전/모의) = CB + VI(옵션), 토스 = VI(옵션) 전용. VI는 모두 REST 폴링.
 """
 import logging
 import time
@@ -72,8 +74,15 @@ class MarketHaltMonitor:
 
     # ---- 진입점 ----
     def check(self):
-        """스케줄러 주기 호출. 내부에서 장중/주기 게이트를 적용한다."""
-        if not getattr(config, "MARKET_HALT_ALERT_USE", True):
+        """스케줄러 주기 호출. 내부에서 장중/주기 게이트를 적용한다.
+
+        CB(서킷브레이커)와 VI는 서로 독립적인 스위치로 각각 ON/OFF한다.
+         - MARKET_HALT_ALERT_USE: 서킷브레이커(CB) — 시장 전체 정지. KIS 전용, 대표종목 바스켓 REST 폴링.
+         - MARKET_HALT_VI_USE: VI — 보유+관심 '종목별' REST 폴링(기본 OFF).
+        """
+        cb_on = getattr(config, "MARKET_HALT_ALERT_USE", True)
+        vi_on = getattr(config, "MARKET_HALT_VI_USE", False)
+        if not (cb_on or vi_on):
             return
         if not self._is_kr_market_hours():
             return
@@ -81,13 +90,13 @@ class MarketHaltMonitor:
             is_toss = getattr(config.session, "is_toss", False)
             now = time.time()
 
-            # CB: KIS 전용
-            if not is_toss and (now - self.last_cb_check) >= getattr(config, "MARKET_HALT_CB_INTERVAL", 20):
+            # CB(서킷브레이커): 시장 전체 정지 감지. KIS 전용, 대표 유동주 바스켓 REST 폴링.
+            if cb_on and not is_toss and (now - self.last_cb_check) >= getattr(config, "MARKET_HALT_CB_INTERVAL", 20):
                 self.last_cb_check = now
                 self._check_cb_kis()
 
-            # VI: 보유+관심종목
-            if (now - self.last_vi_check) >= getattr(config, "MARKET_HALT_VI_INTERVAL", 60):
+            # VI: 보유+관심 종목별 REST 폴링(기본 OFF).
+            if vi_on and (now - self.last_vi_check) >= getattr(config, "MARKET_HALT_VI_INTERVAL", 30):
                 self.last_vi_check = now
                 current = self._check_vi_toss() if is_toss else self._check_vi_kis()
                 self._diff_vi_alerts(current)
