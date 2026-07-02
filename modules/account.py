@@ -1157,54 +1157,65 @@ def view_trade_history():
     if config.session.auto_cano:
         current_auto_acc = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
 
-    # [수정] 데이터 분류 및 그룹핑 (계좌 종류/번호별 분리)
-    grouped_trades = {} # (category, account) -> list
-    
+    # [추가] 현재 실행 중인 세션의 계좌만 표시하기 위한 유효 계좌 집합.
+    #        토스/모의/한투는 모두 세션 계좌가 다르므로, 실제 계좌번호로 격리한다.
+    #        (예: 모드2 한투 실행 시 토스 내역이 섞여 보이던 문제 해결)
+    #        계좌번호 끝의 '-'(토스 등 상품코드 없는 계좌)는 정규화해 비교한다.
+    valid_accs_norm = {current_main_acc.rstrip('-')}
+    if current_auto_acc:
+        valid_accs_norm.add(current_auto_acc.rstrip('-'))
+
+    # [수정] 데이터 분류 및 그룹핑 (계좌번호 정규화 단위)
+    grouped_trades = {} # acc_norm -> list
+
     for t in trades:
         # 1. 모드 필터링 (모의투자 모드면 모의내역만, 실전이면 실전/자동 내역만)
         is_sim_data = bool(t['is_sim'])
         if config.session.is_simulation and not is_sim_data: continue
         if not config.session.is_simulation and is_sim_data: continue
-        
+
         acc_no = t.get('account', '')
+        acc_norm = acc_no.rstrip('-')
 
-        # 2. 카테고리 결정
-        category = "모의"
-        if not is_sim_data:
-            # [수정] 자동매매 계좌가 별도로 설정되어 있고, 해당 계좌의 내역인 경우 '자동'으로 통합
-            if current_auto_acc and current_auto_acc != current_main_acc and acc_no == current_auto_acc:
-                category = "자동"
-            else:
-                if "AUTO" in t['type']: category = "자동"
-                else: category = "실전"
-            
-        # 3. 그룹핑
-        key = (category, acc_no)
-        if key not in grouped_trades:
-            grouped_trades[key] = []
-        grouped_trades[key].append(t)
-        
-    if not grouped_trades:
-        logger.debug("[HISTORY_DEBUG] 그룹핑 결과 없음 (필터링됨). 리턴.")
-        config.console.print("\n[yellow]현재 모드에 해당하는 거래 내역이 없습니다.[/yellow]")
-        return
+        # 1-2. 현재 세션 계좌 격리: 실행 중인 계좌의 내역만 표시.
+        #      계좌번호가 없는 오염 데이터('')나 다른 계좌(토스↔한투) 내역은 제외.
+        if acc_norm not in valid_accs_norm:
+            continue
 
-    # 출력 순서 정의 (실전 -> 자동 -> 모의)
-    def sort_key(k):
-        cat, acc = k
-        order = {"실전": 1, "자동": 2, "모의": 3}
-        return (order.get(cat, 99), acc)
+        grouped_trades.setdefault(acc_norm, []).append(t)
 
-    sorted_keys = sorted(grouped_trades.keys(), key=sort_key)
+    # [추가] 현재 세션에서 표시할 계좌 섹션(수동+자동)을 정의한다. 거래가 0건이어도
+    #        섹션은 항상 노출하고, 내역이 없으면 노란색 안내를 출력한다.
+    #        (예: 시스템 트레이딩(자동) 계좌를 동시 운용하지만 아직 자동매매 체결이
+    #         없는 경우에도 해당 계좌 섹션을 확인할 수 있도록 함)
+    #        [용어 통일] 계좌종류 라벨을 제한종목 화면과 동일하게
+    #        (모의 / 토스 / 한투-수동 / 한투-자동)으로 표기한다.
+    expected_sections = []  # (category, display_acc, acc_norm)
+    if config.session.is_simulation:
+        expected_sections.append(("모의", current_main_acc, current_main_acc.rstrip('-')))
+    elif getattr(config.session, 'is_toss', False):
+        expected_sections.append(("토스", current_main_acc, current_main_acc.rstrip('-')))
+    else:
+        expected_sections.append(("한투-수동", current_main_acc, current_main_acc.rstrip('-')))
+        if current_auto_acc and current_auto_acc.rstrip('-') != current_main_acc.rstrip('-'):
+            expected_sections.append(("한투-자동", current_auto_acc, current_auto_acc.rstrip('-')))
 
-    for cat, acc in sorted_keys:
-        t_list = grouped_trades[(cat, acc)]
-        if not t_list: continue
+    for cat, disp_acc, acc_norm in expected_sections:
+        t_list = grouped_trades.get(acc_norm, [])
 
+        # 거래 내역이 없는 계좌(예: 아직 체결이 없는 자동매매 계좌)는 노란색 안내 출력
+        if not t_list:
+            logger.debug(f"[HISTORY_DEBUG] 내역 없음: {cat} {acc_norm}")
+            config.console.print(
+                f"\n[yellow][{cat}] 거래 히스토리 (계좌: {disp_acc.rstrip('-')}) - 거래 내역이 없습니다.[/yellow]"
+            )
+            continue
+
+        acc = disp_acc  # 제목 표시용 (아래 rstrip 처리)
         logger.debug(f"[HISTORY_DEBUG] 테이블 생성 및 출력: {cat} {acc} ({len(t_list)}건)")
 
-        # 테이블 생성 (제목에 계좌번호 포함)
-        table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc}) - {len(t_list)}건"
+        # 테이블 생성 (제목에 계좌번호 포함, 끝의 '-'는 제거하여 표시)
+        table_title = f"\n[{cat}] 거래 히스토리 (계좌: {acc.rstrip('-')}) - {len(t_list)}건"
         table = Table(title=table_title, box=box.HORIZONTALS, header_style="dim", border_style="dim", show_lines=True)
         table.add_column("시간", justify="center", style="dim", width=15, overflow="fold")
         table.add_column("주문번호", justify="center", style="dim", width=10, overflow="fold")
