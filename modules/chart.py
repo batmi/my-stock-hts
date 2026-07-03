@@ -363,6 +363,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             else: os.system(f"xdg-open {file_path}")
         except Exception: pass
 
+    # [AI 분석] 생성된 차트 PNG 경로를 반환해 Gemini 비전 분석 등 후속 처리에 활용할 수 있게 한다.
+    return file_path
+
 def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     """Monte Carlo 시뮬레이션 수익률 분포 히스토그램 생성"""
     setup_korean_font()

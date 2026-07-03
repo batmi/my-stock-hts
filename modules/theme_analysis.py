@@ -615,6 +615,58 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         else:
             return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
 
+def analyze_chart_image_with_gemini(image_path, name, code, period_str):
+    """생성된 종합 분석 차트(PNG 이미지)를 Gemini 비전 모델로 직접 판독하여 심층 진단.
+
+    차트 이미지를 그대로 전달하므로, 수치 텍스트가 아닌 '차트 전체 그림'을 보고 분석한다.
+    """
+    if genai is None or not config.GEMINI_API_KEY:
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    try:
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+    except OSError as e:
+        logger.error(f"[GEMINI_AI_DEBUG] 차트 이미지 로드 실패: {e}")
+        return f"⚠️ [red]차트 이미지를 불러올 수 없습니다: {e}[/red]"
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = prompts.CHART_IMAGE_ANALYSIS_PROMPT.format(
+        now=now, name=name, code=code, period_str=period_str
+    )
+    # Gemini 멀티모달 입력: [프롬프트 텍스트, 이미지 blob] (PIL 없이 바이트로 직접 전달)
+    image_part = {"mime_type": "image/png", "data": image_bytes}
+
+    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 차트 이미지 분석 요청 (모델: {config.GEMINI_MODEL})")
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
+        )
+
+        future = ai_executor.submit(model.generate_content, [prompt, image_part])
+        try:
+            res = future.result(timeout=90.0)  # 이미지 처리로 텍스트 분석보다 여유 있게
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
+
+        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 차트 이미지 분석 요청 - API 응답 수신 성공")
+        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+    except Exception as e:
+        logger.error(f"[GEMINI_AI_DEBUG] Gemini Chart Image Analyze Error: {e}", exc_info=True)
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
+            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
+        elif "404" in error_msg and "NOT_FOUND" in error_msg:
+            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나 비전(이미지) 입력을 지원하지 않을 수 있습니다.[/dim]"
+        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
+            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
+        else:
+            return f"⚠️ [red]차트 분석 중 오류 발생: {error_msg}[/red]"
+
 def analyze_index_with_gemini(code, name, tech_info_str):
     """시장 지수의 기술적 지표와 매크로 모멘텀을 결합하여 심층 진단"""
     if genai is None or not config.GEMINI_API_KEY:

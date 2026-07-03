@@ -1171,7 +1171,35 @@ def main():
                                     c_months = 12 if c_period == '2' else 6
                                     context.USER_ACTION_BREADCRUMB.append(f"[{c_period}] {'1년' if c_months == 12 else '6개월'}")
 
-                                chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type, months=c_months)
+                                chart_path = chart.generate_visual_chart(target_code, target_name, target_ovs, period_type=p_type, months=c_months)
+
+                                # [AI 분석] 생성된 차트 이미지를 Gemini 비전 모델로 전달해 전체 차트를 판독·분석
+                                if chart_path and os.path.exists(chart_path):
+                                    if not config.GEMINI_API_KEY:
+                                        config.console.print("[dim]※ AI 차트 분석은 GEMINI_API_KEY 설정 시 이용할 수 있습니다.[/dim]")
+                                    else:
+                                        config.console.print()
+                                        do_ai = Prompt.ask("이 차트를 AI(Gemini)로 분석할까요?", choices=["y", "n"], default="n")
+                                        if do_ai.lower() == "y":
+                                            period_str_map = {"weekly": "주봉", "daily": f"일봉({c_months}개월)", "hourly": "시봉", "intraday": "분봉"}
+                                            period_str = period_str_map.get(p_type, "일봉")
+                                            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), console=config.console, transient=True) as _p:
+                                                _p.add_task(f"[cyan]Gemini가 차트 이미지를 판독하여 분석 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
+                                                ai_result = theme_analysis.analyze_chart_image_with_gemini(chart_path, target_name, target_code, period_str)
+                                            if ai_result:
+                                                if ai_result.startswith("⚠️"):
+                                                    config.console.print(f"\n{ai_result}")
+                                                else:
+                                                    # [출력 통일] 기존 AI 심층 진단 리포트와 동일한 여백/패딩 사용
+                                                    #   (theme_analysis.py: Panel padding=(1,2), width=120 + 좌우 마진 Padding(_,(0,4)))
+                                                    from rich.markdown import Markdown
+                                                    from rich.panel import Panel
+                                                    from rich.padding import Padding
+                                                    _md = Markdown(ai_result)
+                                                    _panel = Panel(_md, title=f"🤖 AI 차트 분석: {target_name}({target_code}) - {period_str}", border_style="cyan", padding=(1, 2), width=120)
+                                                    config.console.print()
+                                                    config.console.print(Padding(_panel, (0, 4)))
+
                                 last_sub_choice = sub_choice
                                 action_taken = True
                                 utils.pause()
