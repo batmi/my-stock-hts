@@ -1568,10 +1568,12 @@ def _fetch_and_set_token(token_type, force_refresh=False):
                 token = res_json['access_token']
                 expired = res_json.get('access_token_token_expired')
                 config.session.set_token(token_type, token, expired)
+                config.set_last_token_error(None)
                 logger.info(f"[green]{token_type} 토큰 발급 완료[/green]")
                 return token
             else:
                 logger.error(f"토큰 발급 응답 오류: {res.text}")
+                config.set_last_token_error('AUTH')
                 return None
         else:
             try:
@@ -1585,10 +1587,18 @@ def _fetch_and_set_token(token_type, force_refresh=False):
             except Exception as e:
                 logger.debug(f"Token fetch EGW00133 fallback error: {e}")
             logger.error(f"{token_type} 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
+            # [추가] 허용 IP(화이트리스트) 미등록 감지 (403 또는 응답에 IP 관련 문구)
+            _txt = res.text.lower()
+            if res.status_code == 403 or ('ip' in _txt and 'allow' in _txt):
+                config.set_last_token_error('IP_BLOCKED')
+            else:
+                config.set_last_token_error('AUTH')
             return None
 
     except requests.exceptions.RequestException as e:
+        # [추가] 연결 거부/타임아웃 등은 네트워크 장애로 분류(고정 IP 미등록 시에도 발생 가능).
         logger.error(f"{token_type} 토큰 발급 중 네트워크 오류: {e}")
+        config.set_last_token_error('NETWORK')
         return None
     except Exception as e:
         logger.error(f"{token_type} 토큰 발급 중 오류: {e}")

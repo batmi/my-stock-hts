@@ -348,6 +348,11 @@ You need an account and API access key from the brokerages to run the program no
 
 ### Common
 5.  **Environment Variables**: Register the issued Keys and Account Numbers as System Environment Variables.
+6.  **IP Allowlist (Whitelist)**:
+    - **Toss Securities (required)**: The Toss Open API **requires registering allowed IPs**. Running from an unregistered network (mobile tethering, VPN, a line whose IP changed, etc.) causes token issuance to be rejected with `IP address not allowed`. Register the **public IP of the server/PC that runs the program** in the developer console (App Settings → Allowed IP).
+    - **KIS (optional)**: KIS does not require IP registration by default. It only restricts access if you have set a "Customer IP" restriction on the API key. (Connection-refused / timeout errors are usually **KIS server maintenance/outage or a network issue** — check the server status and your network first.)
+    - For always-on operation (e.g. a Raspberry Pi), a **static IP** line is recommended. If the public IP changes, you must re-register it.
+    - If token issuance fails, the program **prints your current public IP and cause-specific guidance during the pre-flight check** — follow it.
 
 ## 7. Installation & Execution
 

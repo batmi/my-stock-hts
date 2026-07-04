@@ -119,23 +119,33 @@ def get_access_token(force_refresh=False):
                     expired_dt = datetime.now() + timedelta(seconds=max(expires_in - 30, 0))
                     expired = expired_dt.strftime("%Y-%m-%d %H:%M:%S")
                     config.session.set_token("TOSS", token, expired)
+                    config.set_last_token_error(None)
                     logger.info("[Toss] 액세스 토큰 발급 완료")
                     return token
                 logger.error(f"[Toss] 토큰 응답에 access_token 없음: {res.text[:200]}")
+                config.set_last_token_error('AUTH')
                 return None
             else:
                 # OAuth2 표준 에러 포맷 {"error","error_description"}
+                err_code = err_desc = None
                 try:
                     err = res.json()
+                    err_code, err_desc = err.get('error'), err.get('error_description')
                     logger.error(
-                        f"[Toss] 토큰 발급 실패 ({res.status_code}): "
-                        f"{err.get('error')} - {err.get('error_description')}"
+                        f"[Toss] 토큰 발급 실패 ({res.status_code}): {err_code} - {err_desc}"
                     )
                 except Exception:
                     logger.error(f"[Toss] 토큰 발급 실패 ({res.status_code}): {res.text[:200]}")
+                # [추가] 허용 IP(화이트리스트) 미등록 감지: 403 access_denied / "IP ... not allowed"
+                blob = f"{err_code or ''} {err_desc or ''} {res.text[:200]}".lower()
+                if res.status_code == 403 or 'ip address not allowed' in blob or 'access_denied' in blob:
+                    config.set_last_token_error('IP_BLOCKED')
+                else:
+                    config.set_last_token_error('AUTH')
                 return None
         except requests.exceptions.RequestException as e:
             logger.error(f"[Toss] 토큰 발급 네트워크 오류: {e}")
+            config.set_last_token_error('NETWORK')
             return None
 
 

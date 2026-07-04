@@ -505,6 +505,91 @@ REAL_URL = "https://openapi.koreainvestment.com:9443"
 # [추가] 토스증권 Open API 서버 URL
 TOSS_URL = "https://openapi.tossinvest.com"
 
+# =========================================================================
+# [추가] 토큰 발급 실패 원인 분류 + 공인 IP 화이트리스트 안내
+# -------------------------------------------------------------------------
+# 토스/한투 모두 '허용 IP(화이트리스트)'에 등록되지 않은 곳에서 접속하면 토큰
+# 발급이 거부된다(토스: 403 access_denied "IP address not allowed", 한투:
+# 연결 거부). 토큰 발급 함수가 실패 원인을 LAST_TOKEN_ERROR에 기록하면,
+# preflight 등이 이를 참조해 "IP 미등록" 같은 구체적 안내를 노출한다.
+#   값: 'IP_BLOCKED' | 'NETWORK' | 'AUTH' | None
+# =========================================================================
+LAST_TOKEN_ERROR = None
+
+_PUBLIC_IP_CACHE = None
+_PUBLIC_IP_CACHE_TS = 0.0
+
+
+def set_last_token_error(kind):
+    """토큰 발급 실패 원인을 전역에 기록한다(성공 시 None으로 초기화)."""
+    global LAST_TOKEN_ERROR
+    LAST_TOKEN_ERROR = kind
+
+
+def get_public_ip(timeout=4, ttl=300):
+    """현재 아웃바운드 공인 IP를 best-effort로 조회한다. 실패 시 None."""
+    global _PUBLIC_IP_CACHE, _PUBLIC_IP_CACHE_TS
+    import time
+    import requests
+    now = time.time()
+    if _PUBLIC_IP_CACHE and now - _PUBLIC_IP_CACHE_TS < ttl:
+        return _PUBLIC_IP_CACHE
+    for url in ("https://api.ipify.org", "https://checkip.amazonaws.com"):
+        try:
+            r = requests.get(url, timeout=timeout)
+            if r.status_code == 200 and r.text.strip():
+                _PUBLIC_IP_CACHE = r.text.strip()
+                _PUBLIC_IP_CACHE_TS = now
+                return _PUBLIC_IP_CACHE
+        except Exception:
+            continue
+    return None
+
+
+def build_token_failure_help(is_toss=False):
+    """토큰 발급 실패 시 사용자 안내 메시지(rich 마크업 문자열 리스트)를 만든다.
+
+    LAST_TOKEN_ERROR 분류와 사업자(토스/한투)에 따라 안내를 다르게 구성한다.
+      - IP_BLOCKED: 허용 IP 미등록이 확정적(주로 토스 403 "IP not allowed").
+      - NETWORK   : 연결 거부/타임아웃. 서버 점검·네트워크 문제일 수 있으며,
+                    토스는 화이트리스트 필수라 IP 미등록도 유력 원인으로 함께 안내한다.
+                    한투는 IP 등록이 선택 사항이므로 서버 상태 확인을 우선 안내한다.
+    키/시크릿 오류(AUTH) 등 IP·연결과 무관한 경우에는 빈 리스트를 반환한다.
+    """
+    kind = LAST_TOKEN_ERROR
+    if kind not in ('IP_BLOCKED', 'NETWORK'):
+        return []
+
+    lines = []
+    ip = get_public_ip()
+    ip_str = f"[bold]{ip}[/bold]" if ip else "(확인 실패 — 네트워크 연결을 먼저 점검하세요)"
+
+    if kind == 'IP_BLOCKED':
+        # 허용 IP 미등록 확정
+        lines.append("  [bold yellow]→ 현재 공인 IP가 API 사업자의 허용 IP(화이트리스트)에 등록되어 있지 않습니다.[/bold yellow]")
+        lines.append(f"     • 현재 공인 IP: {ip_str}")
+        if is_toss:
+            lines.append("     • [토스] 토스증권 개발자센터 → 앱 설정 → 허용 IP 에 위 IP를 등록하세요.")
+        else:
+            lines.append("     • [한투] KIS Developers → My App(앱 관리) → 고객 IP 에 위 IP를 등록하세요.")
+        lines.append("     • 또는 기존에 등록해 둔(고정 IP) 네트워크에서 실행하세요.")
+        return lines
+
+    # kind == 'NETWORK' : 연결 자체가 안 되는 상태
+    if is_toss:
+        # 토스는 화이트리스트가 필수 → IP 미등록을 유력 원인으로 함께 안내
+        lines.append("  [yellow]→ 토스 API 서버에 연결하지 못했습니다. 서버 점검·네트워크 문제일 수 있으며,[/yellow]")
+        lines.append("  [yellow]   토스는 허용 IP(화이트리스트) 등록이 필수이므로 현재 IP 미등록도 유력한 원인입니다.[/yellow]")
+        lines.append(f"     • 현재 공인 IP: {ip_str}")
+        lines.append("     • [토스] 토스증권 개발자센터 → 앱 설정 → 허용 IP 에 위 IP가 등록돼 있는지 확인하세요.")
+    else:
+        # 한투는 IP 등록이 선택 사항 → 서버 상태 확인을 우선 안내
+        lines.append("  [yellow]→ 한투 API 서버에 연결하지 못했습니다(연결 거부/시간초과).[/yellow]")
+        lines.append("  [yellow]   KIS 서버 점검·장애이거나 네트워크 문제일 가능성이 높습니다. 잠시 후 다시 시도하세요.[/yellow]")
+        lines.append("     • KIS Developers 공지/서버 상태와 네트워크(방화벽·포트 9443/29443)를 확인하세요.")
+        lines.append(f"     • (참고) 한투 API 키에 '고객 IP' 제한을 설정해 두었다면, 현재 공인 IP {ip_str} 가 등록돼 있는지 확인하세요.")
+    return lines
+
 # [추가] 로그 파일명 변경을 위한 Namer 함수
 def _log_namer(name):
     """

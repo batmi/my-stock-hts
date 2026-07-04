@@ -258,6 +258,9 @@ def preflight_check():
             config.console.print(f"  - 성공: 토스 계좌 확인 (seq={config.session.toss_account_seq}).")
     else:
         config.console.print("  - [bold red]실패[/]: API 토큰 발급에 실패했습니다. (서버 점검 또는 Key 오류)")
+        # [추가] 허용 IP(화이트리스트) 미등록 등 원인별 안내 노출
+        for line in config.build_token_failure_help(is_toss=config.session.is_toss):
+            config.console.print(line)
         checks_ok = False
 
     if not checks_ok: return False
