@@ -1718,10 +1718,13 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 full_url = f"{base_url}/{url_path}"
                 
                 # [수정] 재시도 로직을 session.request로 위임 (retries 인자 전달)
+                # [Fix] 그동안 retries가 session에 전달되지 않아 ThrottledSession이 항상
+                #  config.MAX_RETRIES로 재시도했다. retries=0(빠른 실패) 의도가 무력화되어
+                #  네트워크 장애 시 불필요하게 수십 초 블로킹되던 문제를 바로잡는다.
                 if method == "GET":
-                    res = session.get(full_url, headers=headers, params=params, timeout=timeout)
+                    res = session.get(full_url, headers=headers, params=params, timeout=timeout, retries=retries)
                 else:
-                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, timeout=timeout)
+                    res = session.post(full_url, headers=headers, data=json.dumps(data) if data else None, timeout=timeout, retries=retries)
                 
                 return res.json()
             except Exception as e:
@@ -1738,9 +1741,15 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                     
                     if new_token:
                         context.TOKEN_EXPIRED = False
-                        
+
                     continue
-                
+
+                # [추가] 네트워크 레벨 장애(연결 거부/타임아웃 등)를 API 논리 오류와 구분한다.
+                #  msg_cd='NETERR'로 표시하여 상위 로직/로그가 "일시적 서버·네트워크 장애"임을
+                #  명확히 인지하도록 한다. (토큰 만료·잔고 부족 등 진짜 오류와 혼동 방지)
+                if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+                    return {'rt_cd': '9999', 'msg_cd': 'NETERR', 'msg1': f'네트워크 연결 실패: {str(e)}'}
+
                 return {'rt_cd': '9999', 'msg1': str(e)}
     finally:
         if use_lock:
@@ -3634,12 +3643,15 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
         
         return output1, output2
     
-    # [추가] 실패 시 로그 출력
-    msg = f"잔고 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})"
+    # [추가] 실패 시 로그 출력 (네트워크 장애와 API 논리 오류를 구분)
+    if data.get('msg_cd') == 'NETERR':
+        msg = f"잔고 조회 실패(일시적 네트워크/서버 장애): {data.get('msg1')}"
+    else:
+        msg = f"잔고 조회 실패: {data.get('msg1')} ({data.get('msg_cd')})"
     logger.debug(f"{msg}")
     if hasattr(context, 'SYSTEM_LOGGER') and context.SYSTEM_LOGGER:
         context.SYSTEM_LOGGER(f"[API] {msg}")
-        
+
     return None, None
 
 def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
