@@ -525,6 +525,34 @@ def _gemini_generate(content, generation_config, timeout):
     raise last_exc
 
 
+def _gemini_text(res, default="분석 결과를 생성하지 못했습니다."):
+    """Gemini 응답에서 텍스트를 안전하게 추출한다.
+
+    - 출력 토큰 한도(finish_reason=MAX_TOKENS)로 잘린 경우 경고 문구를 덧붙여
+      잘림이 묵살되지 않게 한다.
+    - thinking 모델은 내부 추론 토큰도 max_output_tokens에서 차감되므로,
+      텍스트 파트가 아예 없어 .text 접근이 예외를 던지는 경우도 방어한다.
+    """
+    if res is None:
+        return default
+    try:
+        text = res.text
+    except Exception as e:
+        logger.warning(f"Gemini 응답 텍스트 추출 실패 (파트 없음/차단 등): {e}")
+        text = None
+    if not text:
+        return default
+    try:
+        finish = res.candidates[0].finish_reason
+        finish_name = getattr(finish, "name", "") or str(finish)
+        if finish_name == "MAX_TOKENS" or str(finish) == "2":
+            logger.warning("Gemini 응답이 출력 토큰 한도(MAX_TOKENS)로 잘렸습니다.")
+            text += "\n\n⚠️ 출력 토큰 한도에 도달하여 응답 뒷부분이 잘렸습니다. (max_output_tokens)"
+    except Exception:
+        pass
+    return text
+
+
 def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
@@ -575,12 +603,9 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                 }, 90.0)
 
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
-                if response and response.text:
-                    return response.text
+                return _gemini_text(response, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
             except Exception as e:
                 raise e
-                
-            return "검색 결과가 없거나 응답을 생성하지 못했습니다."
 
     except KeyboardInterrupt:
         config.console.print("\n[yellow]사용자에 의해 분석이 중단되었습니다.[/yellow]")
@@ -619,10 +644,10 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
         
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
 
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        return _gemini_text(res)
     except Exception as e:
         logger.error(f"[GEMINI_AI_DEBUG] Gemini Stock Analyze Error: {e}", exc_info=True)
         error_msg = str(e)
@@ -664,10 +689,10 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
         genai.configure(api_key=config.GEMINI_API_KEY)
 
         # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 90초)
-        res = _gemini_generate([prompt, image_part], {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 90.0)
+        res = _gemini_generate([prompt, image_part], {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 90.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 차트 이미지 분석 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        return _gemini_text(res)
     except Exception as e:
         logger.error(f"[GEMINI_AI_DEBUG] Gemini Chart Image Analyze Error: {e}", exc_info=True)
         error_msg = str(e)
@@ -692,9 +717,9 @@ def analyze_index_with_gemini(code, name, tech_info_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        return _gemini_text(res)
     except Exception as e:
         logger.error(f"[GEMINI_AI_DEBUG] Gemini Index Analyze Error: {e}", exc_info=True)
         error_msg = str(e)
@@ -726,10 +751,10 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
         
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 호출 대기 시작")
 
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        return _gemini_text(res)
     except Exception as e:
         logger.error(f"Gemini Backtest Evaluate Error: {e}")
         error_msg = str(e)
@@ -754,7 +779,7 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
         res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else None
+        return _gemini_text(res, default=None)
     except Exception as e:
         logger.error(f"Trading autopsy AI error: {e}")
         err_str = str(e)
@@ -797,7 +822,7 @@ def generate_daily_closing_report(portfolio_str):
         logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 호출 대기 시작")
         res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else None
+        return _gemini_text(res, default=None)
     except Exception as e:
         logger.error(f"Daily closing report AI error: {e}")
         err_str = str(e)
@@ -818,10 +843,10 @@ def generate_morning_briefing(market_data_str):
         
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
 
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else None
+        return _gemini_text(res, default=None)
     except Exception as e:
         logger.error(f"Gemini Morning Briefing Error: {e}")
         return None
@@ -840,7 +865,7 @@ def generate_stock_curation():
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
         res = _gemini_generate(prompt, {"temperature": 0.3}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else None
+        return _gemini_text(res, default=None)
     except Exception as e:
         logger.error(f"Stock curation AI error: {e}")
         err_str = str(e)
@@ -864,12 +889,10 @@ def ask_gemini(question):
         
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
 
-        response = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        response = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 응답 수신 성공")
-        if response and response.text:
-            return response.text
-        return "검색 결과가 없거나 답변을 생성하지 못했습니다."
+        return _gemini_text(response, default="검색 결과가 없거나 답변을 생성하지 못했습니다.")
 
     except Exception as e:
         logger.error(f"Gemini Ask Error: {e}")
@@ -901,8 +924,8 @@ def summarize_disclosures_with_gemini(items_text):
     )
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
-        return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
+        return _gemini_text(res)
     except Exception as e:
         logger.error(f"Gemini Disclosure Summary Error: {e}")
         error_msg = str(e)
@@ -955,10 +978,10 @@ def get_latest_news_with_gemini(keyword, code=None):
         genai.configure(api_key=config.GEMINI_API_KEY)
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 호출 대기 시작")
 
-        res = _gemini_generate(prompt, {"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+        res = _gemini_generate(prompt, {"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 응답 수신 성공")
-        return res.text if res and res.text else "검색 결과가 없거나 응답을 생성하지 못했습니다."
+        return _gemini_text(res, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
     except Exception as e:
         logger.error(f"Gemini News Search Error: {e}")
         err_str = str(e)
