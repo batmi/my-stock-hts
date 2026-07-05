@@ -482,6 +482,49 @@ def _get_macro_context_str():
 
     return "\n".join(context_lines) + "\n"
 
+def _is_gemini_rate_limit(error_msg):
+    """Gemini 무료 티어 한도 초과(429/RESOURCE_EXHAUSTED/Quota) 여부 판별"""
+    return "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg
+
+
+def _gemini_generate(content, generation_config, timeout):
+    """기본 모델(config.GEMINI_MODEL)로 콘텐츠 생성을 요청하되,
+    무료 티어 한도 초과(429) 시 폴백 모델(config.GEMINI_FALLBACK_MODEL)로
+    자동 전환하여 재시도한다. 안내 메시지는 화면에 그대로 출력한다.
+
+    반환: generate_content 응답 객체. 최종 실패 시 예외를 그대로 전파한다.
+    """
+    models = [config.GEMINI_MODEL]
+    fallback = getattr(config, "GEMINI_FALLBACK_MODEL", "")
+    if fallback and fallback != config.GEMINI_MODEL:
+        models.append(fallback)
+
+    last_exc = None
+    for idx, model_name in enumerate(models):
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                generation_config=generation_config,
+            )
+            future = ai_executor.submit(model.generate_content, content)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise Exception(f"TimeoutError: API 응답 대기 시간 초과 ({int(timeout)}초)")
+        except Exception as e:
+            last_exc = e
+            has_fallback = idx < len(models) - 1
+            if has_fallback and _is_gemini_rate_limit(str(e)):
+                next_model = models[idx + 1]
+                config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {model_name}[/yellow]")
+                config.console.print(f"[dim]  무료 티어 사용량이 초과되어 '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
+                logger.warning(f"Gemini rate limit on {model_name}; falling back to {next_model}. {e}")
+                continue
+            raise
+    raise last_exc
+
+
 def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
@@ -523,25 +566,14 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             genai.configure(api_key=config.GEMINI_API_KEY)
 
             try:
-                model = genai.GenerativeModel(
-                    model_name=config.GEMINI_MODEL,
-                    # tools="google_search_retrieval", # [주의] 무료 계정(Free Tier)에서는 검색 도구 권한 오류가 발생하므로 주석 처리함
-                    generation_config={
-                        "temperature": 0.2,
-                        "top_p": 0.95,
-                        "max_output_tokens": 8192,
-                    }
-                )
-                
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 호출 대기 시작")
-                
-                future = ai_executor.submit(model.generate_content, prompt)
-                try:
-                    response = future.result(timeout=90.0)
-                except concurrent.futures.TimeoutError:
-                    future.cancel()
-                    raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
-                        
+
+                response = _gemini_generate(prompt, {
+                    "temperature": 0.2,
+                    "top_p": 0.95,
+                    "max_output_tokens": 8192,
+                }, 90.0)
+
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
                 if response and response.text:
                     return response.text
@@ -585,20 +617,10 @@ def analyze_stock_with_gemini(code, name, tech_info_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                
+
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 응답 수신 성공")
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
@@ -641,17 +663,8 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
 
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
-
-        future = ai_executor.submit(model.generate_content, [prompt, image_part])
-        try:
-            res = future.result(timeout=90.0)  # 이미지 처리로 텍스트 분석보다 여유 있게
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (90초)")
+        # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 90초)
+        res = _gemini_generate([prompt, image_part], {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 90.0)
 
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 차트 이미지 분석 요청 - API 응답 수신 성공")
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
@@ -679,18 +692,8 @@ def analyze_index_with_gemini(code, name, tech_info_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
         logger.error(f"[GEMINI_AI_DEBUG] Gemini Index Analyze Error: {e}", exc_info=True)
@@ -721,19 +724,10 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 호출 대기 시작")
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                
+
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 응답 수신 성공")
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
@@ -757,14 +751,8 @@ def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profi
     
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
     except Exception as e:
@@ -806,14 +794,8 @@ def generate_daily_closing_report(portfolio_str):
     
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.2})
         logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 호출 대기 시작")
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
     except Exception as e:
@@ -834,20 +816,10 @@ def generate_morning_briefing(market_data_str):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                
+
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
     except Exception as e:
@@ -865,14 +837,8 @@ def generate_stock_curation():
     
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(model_name=config.GEMINI_MODEL, generation_config={"temperature": 0.3}) # tools="google_search_retrieval", 무료 계정 권한 오류 방지
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        res = _gemini_generate(prompt, {"temperature": 0.3}, 60.0)
         logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 응답 수신 성공")
         return res.text if res and res.text else None
     except Exception as e:
@@ -896,20 +862,10 @@ def ask_gemini(question):
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            response = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
-                
+
+        response = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 응답 수신 성공")
         if response and response.text:
             return response.text
@@ -945,16 +901,7 @@ def summarize_disclosures_with_gemini(items_text):
     )
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            generation_config={"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096},
-        )
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
         return res.text if res and res.text else "분석 결과를 생성하지 못했습니다."
     except Exception as e:
         logger.error(f"Gemini Disclosure Summary Error: {e}")
@@ -1006,19 +953,10 @@ def get_latest_news_with_gemini(keyword, code=None):
     """
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL,
-            # tools="google_search_retrieval", # [주의] 무료 계정 권한 오류 방지
-            generation_config={"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 4096}
-        )
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 호출 대기 시작")
-        
-        future = ai_executor.submit(model.generate_content, prompt)
-        try:
-            res = future.result(timeout=60.0)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise Exception("TimeoutError: API 응답 대기 시간 초과 (60초)")
+
+        res = _gemini_generate(prompt, {"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 4096}, 60.0)
+
         logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 응답 수신 성공")
         return res.text if res and res.text else "검색 결과가 없거나 응답을 생성하지 못했습니다."
     except Exception as e:
