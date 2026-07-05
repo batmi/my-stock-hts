@@ -47,6 +47,7 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 *   **AI Investment Assistant:** Utilizes Google Gemini LLM to provide in-depth stock diagnostics, analysis of market-leading themes, interactive Q&A, and pre-market briefings.
 *   **DART (Electronic Disclosure) Integration:** Utilizes OpenDART API for interest stock **disclosure monitoring** (importance classification + AI good/bad news interpretation), **dividend/earnings calendar** (ex-dividend dates by dividend cycle, earnings submission deadlines), and **real-time Telegram alerts for major disclosures** (capital increase, capital reduction, treasury stock, administrative issue designation, etc.).
 *   **Market Index Filtering:** Risk management feature that analyzes the trend of KOSPI/KOSDAQ indices and automatically suspends buying in a downtrend.
+*   **Real-time Market Halt Alerts (Circuit Breaker / VI):** Detects market-wide circuit breakers (CB) and per-stock Volatility Interruptions (VI) based on actual exchange status flags and instantly notifies via Telegram. (CB on by default; VI is optional.)
 *   **Portfolio De-synchronization (Correlation Filtering):** Prevents duplicate purchases of stocks that have similar price movements (correlation coefficient of 0.7 or higher) to currently held stocks, inducing portfolio diversification.
 *   **Real-time Configuration Changes:** The ability to immediately change and permanently apply buy/sell conditions and investment weights while system trading is running.
 *   **Trading Restricted Stock Management:** Exclude specific stocks from system trading (buy/sell restricted) and set to only receive alerts when buy signals occur.
@@ -64,48 +65,38 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 
 This system is based on a **Trend Following** strategy, catching high-probability entry points through multi-faceted technical analysis and executing strict risk management.
 
+> This section explains the **concepts** of the strategy. For the trigger thresholds (defaults) and parameter details of each condition, see **[3. Configuration](#3-configuration)**. (All values are configurable.)
+
 ### 1. Buy Strategy
 Buying is executed when both the composite score calculated through the **Quant Multi-Factor Model** and the filtering conditions are satisfied.
 
 *   **Entry Conditions (AND condition)**:
-    1.  **Composite Score**: **7.5 points or higher** (out of 10)
-    2.  **Overheating Prevention**: RSI **under 65** (zone with upside potential)
-    3.  **Supply & Demand Check**: Volume strength **100% or higher** (buying pressure dominance)
-    4.  **Market Filter**: KOSPI/KOSDAQ index located above the 50-day moving average (avoiding downtrends)
-
-*   **Scoring Model (Total 10 points)**:
-    *   **Trend (Trend)**: Moving average alignment, MACD golden cross, Parabolic SAR uptrend
-    *   **Momentum (Momentum)**: RSI bullish zone (50+) and upside potential zone (40~50), CCI uptrend
-    *   **Strength (Strength)**: ADX trend strength (20+), OBV volume uptrend, Smart Money (Foreign/Institutional turnaround)
-    *   **Bonus (Bonus)**: Additional points awarded for synergy between indicators
+    1.  **Composite Score**: At or above the buy threshold (`BUY_SCORE`) — see [3. Scoring System](#3-scoring-system) below for how the score is built
+    2.  **Overheating Prevention**: RSI under the allowed ceiling (`BUY_RSI_MAX`) (zone with upside potential)
+    3.  **Supply & Demand Check**: Volume strength at or above the threshold (`BUY_VOL_STRENGTH`) (buying pressure dominance)
+    4.  **Market Filter**: KOSPI/KOSDAQ index located above the reference moving average (`MARKET_FILTER_MA`) (avoiding downtrends)
 
 *   **Downtrend Exclusive: Oversold Mean Reversion**:
     *   A strategy aiming for a technical rebound in a temporary oversold (depressed) zone during a major downtrend or sudden drop due to individual bad news.
-    *   Even if the composite score is insufficient, it enters as a **'Mean Reversion Buy'** if all following conditions are met:
-        *   **Condition 1**: Disparity compared to the 20-day MA is very low (default `90%` or less)
-        *   **Condition 2**: RSI turns upward after reaching oversold & **closes as a bullish candle today** (default `40` or less & higher than previous day & current > open)
-        *   **Condition 3**: OBV uptrend or Smart Money inflow confirmed (cumulative buying pressure verified)
-        *   **Condition 4**: Volume strength `120%` or higher during auto-trading execution (real-time buying pressure re-verified)
-        *   *(Note: To prevent whipsaws (fake rebounds) in panic selling zones with ADX 45+, entry is blocked regardless of the score.)*
+    *   Even if the composite score is insufficient, it enters as a **'Mean Reversion Buy'** when all of the following hold: ① very low disparity vs. the 20-day MA, ② RSI turning upward after oversold plus a bullish close today, ③ OBV uptrend or Smart Money (foreign/institutional) inflow, and ④ high volume strength (during auto-trading).
+    *   *(Note: Entry is blocked regardless of the score in super-panic selling zones to prevent whipsaws (fake rebounds).)*
 
 *   **Leading Stock Following: Super Momentum**:
-    *   For leading stocks making strong rallies near 52-week highs, standard overheating criteria are relaxed to follow the trend longer.
-    *   **Trigger Conditions**: Composite score **8.5+** & current price at **90%+** of 52-week high.
-    *   **Strategy Change**: Maximum allowed buy RSI is raised to **75**, and overheating sell RSI is raised to **85** to follow the market's strong trend to the end.
+    *   For leading stocks making strong rallies near 52-week highs, the standard overheating criteria (allowed buy/sell RSI) are relaxed to follow the market's strong trend to the end.
 
 ### 2. Sell Strategy
 To preserve profits and limit losses, the following sell logic is monitored in real-time. (Applied in order of priority)
 
-1.  **Take Profit**: Immediate profit realization when the return reaches the target (**+50.0%**).
-2.  **Half Take-Profit**: To respond to highly volatile markets, **50% of the holding amount is pre-sold** when reaching half the target take-profit return to secure early profits and defend the win rate.
-3.  **Stop Loss**: Immediate sell to lock in losses when the loss rate reaches the limit (**-7.0%**).
-4.  **Time-based Stop**: To reduce opportunity costs for sideways stocks, forcefully liquidate if the target minimum return (e.g., +3.0%) is not reached within a set period (default 20 days) after purchase. (Postponed if today's indicator state maintains a 'Buy' or 'Rise' trend.)
-5.  **Trailing Stop**: After reaching a return of **+10.0%** or more, sell to preserve profit if it drops **-4.0%** from the peak (or ATR-linked dynamic drop).
-6.  **Break Even Stop**: When the **maximum return achieved** since purchase reaches **+7.0%** (or ATR dynamic stop loss width) or more, forcefully raise the existing stop-loss line to the break-even profit zone (**+0.5%**) to secure minimal profit and defend against a loss.
+1.  **Take Profit**: Immediate profit realization when the return reaches the target.
+2.  **Half Take-Profit**: **50% of the holding amount is pre-sold** when reaching half the target take-profit return to secure early profits and defend the win rate.
+3.  **Stop Loss**: Immediate sell to lock in losses when the loss rate reaches the limit.
+4.  **Time-based Stop**: To reduce opportunity costs for sideways stocks, forcefully liquidate if the target minimum return is not reached within the set period. (Postponed if today's indicator state maintains a 'Buy' or 'Rise' trend.)
+5.  **Trailing Stop**: After the activation return is reached, sell to preserve profit if the price drops a set ratio (or an ATR-linked dynamic ratio) from the peak.
+6.  **Break Even Stop**: When the maximum return achieved reaches the trigger level, forcefully raise the existing stop-loss line to the break-even profit zone to secure minimal profit.
 7.  **Defensive Half Sell**: Take out 50% to preserve profits early when a downward reversal signal (SAR sell reversal + dropping below 5-day MA) occurs while the stock is rising.
-8.  **Overheating Sell**: Preemptive sell judging as an overbought state if RSI exceeds **85**.
-9.  **Trend Broken**: Sell if the composite score drops below **5.0 points** or major support lines collapse.
-10. **ATR Dynamic Stop Loss**: When `USE_ATR_STOP` is set, a different stop loss rate is applied to each stock based on the volatility (ATR) at the time of purchase. (e.g., ATR * 2.0)
+8.  **Overheating Sell**: Preemptive sell when RSI exceeds the overbought threshold.
+9.  **Trend Broken**: Sell if the composite score drops below the sell threshold or major support lines collapse.
+10. **ATR Dynamic Stop Loss**: A different stop loss rate is applied to each stock based on the volatility (ATR) at the time of purchase (`USE_ATR_STOP`).
 
 ### 3. Scoring System
 The composite score determining whether to buy is calculated based on the **Quant Multi-Factor Model**. (Total 10 points, 0.5 point increments)
@@ -135,7 +126,7 @@ The composite score determining whether to buy is calculated based on the **Quan
 *   **8.5 ~ 10.0 points (Strong Buy)**: All indicators point to an uptrend with perfect correlation. Good to enter with a high weight.
 *   **7.0 ~ 8.5 points (Buy)**: The trend is clear, but some secondary indicators haven't followed yet. (Default buy threshold `BUY_SCORE` = 7.0) Good for split buying.
 *   **6.0 ~ 7.0 points (Rise)**: The trend is aligned and alive, but the score falls slightly short of the buy threshold. (`RISE_SCORE` = 6.0)
-*   **Interest / Nascent (regardless of score)**: The trend alignment is **not yet complete**, but **early trend-reversal signals** (short-term golden cross, MACD improvement, +DI dominance, RSI crossing above 50, CCI improvement, supply inflow, MA60 proximity) are detected in **3 or more** counts (`INTEREST_SIGNAL_MIN`) with no clear risk signals (MACD dead cross, -DI dominance, RSI overheating/depletion, etc.). It is **detected even below the 120-day line**, intended for **manual swing (short-term) trading monitoring** to quickly recognize whether it may develop into an actual buy stage. Note: it is not an automatic-buy target.
+*   **Interest / Nascent (regardless of score)**: The trend alignment is **not yet complete**, but **early trend-reversal signals are detected in a minimum count or more** (`INTEREST_SIGNAL_MIN`) with no clear risk signals. Intended for **manual swing (short-term) trading monitoring** to quickly recognize whether it may develop into an actual buy stage; it is not an automatic-buy target. (See 3-2 for the seven early signals and detailed conditions.)
 *   **Below 5.0 points (Sell/Avoid)**: Downtrend or sideways market with no clear direction.
 
 ## 3. Configuration
@@ -159,7 +150,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 ### 2. Buy/Analysis Thresholds (`ANALYSIS_THRESHOLDS`)
 *   **Buy Score (`BUY_SCORE`)**: Default **7.0 points**. A buy signal is generated when the composite score combining various technical indicators is equal to or higher than this value.
 *   **Rise Score (`RISE_SCORE`)**: Default **6 points**. It doesn't meet the buy criteria, but there is an upward flow.
-*   **Interest Signal Minimum (`INTEREST_SIGNAL_MIN`)**: Default **3**. When trend alignment is incomplete but early trend-reversal signals are detected in this many counts or more (with no risk signals), the stock is classified as **'Interest' (nascent)**. Detected even below the 120-day line, intended for manual swing-trade monitoring. (0 disables it.)
+*   **Interest Signal Minimum (`INTEREST_SIGNAL_MIN`)**: Default **3**. When trend alignment is incomplete but early trend-reversal signals — seven kinds: short-term golden cross, MACD improvement, +DI dominance, RSI crossing above 50, CCI improvement, supply inflow, MA60 proximity — are detected in this many counts or more with no risk signals (MACD dead cross, -DI dominance, RSI overheating/depletion, etc.), the stock is classified as **'Interest' (nascent)**. Detected even below the 120-day line, intended for manual swing-trade monitoring. (0 disables it.)
 *   **Interest MA60 Proximity Ratio (`INTEREST_MA60_NEAR`)**: Default **0.97**. If the current price is at or above this ratio of the 60-day line (e.g., 97%), it counts as an 'MA60 breakout attempt' early signal even while still below the 60-day line.
 *   **Maximum Buy Allowed RSI (`BUY_RSI_MAX`)**: Default **70**. Even if the buy score is met, we do not enter if the RSI is above this value, considering it already overheated.
 *   **Buy Volume Strength (`BUY_VOL_STRENGTH`)**: Default **100.0%**. The volume strength at the time of purchase must be at least this value (buying pressure dominance).
@@ -181,7 +172,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Trailing Stop**:
     *   **Trigger Condition**: Start monitoring upon reaching **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) return.
     *   **Sell Condition**: Sell if it drops **-4.0%** (`TRAILING_STOP_CALLBACK_RATE`) from the peak. (If `USE_ATR_STOP` is True, dynamic drop rate based on ATR is applied.)
-*   **Break Even Stop**: When the highest return achieved reaches `BREAK_EVEN_PROFIT_RATE` (default 7.0%), raise the stop loss to `BREAK_EVEN_STOP_RATE` (default +0.5%) to defend profits.
+*   **Break Even Stop**: When the highest return achieved reaches `BREAK_EVEN_PROFIT_RATE` (default 5.0%, dynamically linked when ATR is in use), raise the stop loss to `BREAK_EVEN_STOP_RATE` (default +0.5%) to defend profits.
 *   **Defensive Half Sell**: If `DEFENSIVE_HALF_SELL_USE` is True, sell 50% on a downward reversal signal (SAR Sell + 5MA breakdown).
 *   **Overheating Sell**: If RSI exceeds **85** (`TAKE_PROFIT_RSI`), it is considered an overbought zone, so a preemptive sell is executed.
 *   **Trend Broken Sell**: Sell if the composite score falls below **5 points** (`SELL_SCORE`).
@@ -288,6 +279,7 @@ my-stock-hts/
 │   ├── restricted_stocks.json  # Trading restricted stock list
 │   ├── daily_asset_state.json  # Initial starting asset record for the day (for daily loss limit)
 │   ├── dynamic_config.json     # Backup of system settings changed during program execution
+│   ├── token_cache.json        # [Auto-generated] API access token cache
 │   └── dart_corp_map.json      # [Auto-generated] DART stock code ↔ unique number (corp_code) mapping cache
 ├── logs/                 # [Auto-generated] Log file storage
 ├── chart/                # [Auto-generated] Chart image storage
@@ -306,12 +298,13 @@ my-stock-hts/
 │   ├── search_indices_yfinance.py   # yfinance-based overseas index search tool
 │   ├── gemini_tool.py          # Gemini AI feature direct test tool
 │   └── get_google_genai.py     # Google GenAI SDK connection confirmation tool
-├── tests/                # Pytest unit/integration test codes (750+)
+├── tests/                # Pytest unit/integration test codes (870+)
 └── modules/              # Feature-specific module folders
     ├── db_manager.py     # DB connection & query management
     ├── db_queue.py       # Single worker queue proxy for SQLite concurrency control
     ├── telegram_bot.py   # Telegram bot integration & notifications
     ├── scheduler.py      # Dedicated worker for background scheduling & timers
+    ├── market_halt.py    # Circuit breaker (CB) / VI market-halt detection & Telegram alerts
     ├── executors.py      # Central management of system-wide Thread Pool
     ├── prompts.py        # External management of prompt templates for AI assistant
     ├── settings.py       # [0] System Settings management
@@ -384,6 +377,8 @@ Register sensitive information like API Keys as **environment variables**:
 *   `TOSS_APP_KEY`, `TOSS_APP_SECRET`, `TOSS_ACC_NUM`: Toss Securities
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: Telegram Bot (Optional)
 *   `GEMINI_API_KEY`: Google Gemini API Key for AI features (Optional)
+*   `GEMINI_MODEL`: Gemini model name to use (Optional, default: `gemini-flash-latest`)
+*   `GEMINI_FALLBACK_MODEL`: Lighter fallback model automatically retried when the free-tier quota is exceeded (429) (Optional, default: `gemini-flash-lite-latest`)
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
 
 **Example (`export` in a shell profile such as `~/.htsrc`):**
@@ -424,10 +419,12 @@ We recommend integrating a Telegram Bot to receive trading history notifications
 Register `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config.py` or as environment variables.
 
 ### 4. Main Commands
-*   **Status**: `/status`, `/balance`, `/holdings`, `/profit`
-*   **Control**: `/start`, `/stop`, `/restart`
-*   **Analysis**: `/market`, `/signal`, `/analyze`, `/curate`, `/closing`
-*   **Scan & Config**: `/scan`, `/config`, `/preset`, `/rules`, `/stocks`
+*   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/config` (strategy settings), `/preset <phase>` (market preset, b/r/s/d)
+*   **Account & Assets**: `/balance`, `/holdings`, `/pending` (unfilled orders), `/reserves` (reserved orders), `/profit [period]` (realized P&L, d/w/m/n), `/history [period]` (trade history), `/report [period]` (performance report), `/stats [stock]` (per-stock performance)
+*   **Market & Stock Analysis**: `/market [group]` (indices, k/u/s/r/g/c/b), `/signal <stock/index>` (technical diagnosis), `/analyze <stock/index>` (AI in-depth diagnosis), `/chart [period] <stock/index>` (chart, d/h/m), `/briefing` (on-demand AI market briefing), `/closing` (AI closing briefing), `/curate` (AI leading-stock curation), `/scan [market]` (TradingView scan, k/u), `/news <stock>` (AI latest news), `/ask <question>` (free-form AI Q&A)
+*   **Management & Misc**: `/stocks` (watchlist), `/rules [stock]` (per-stock trading rules), `/restrict` (restricted stocks), `/addrestrict <stock> [reason]`, `/delrestrict <stock>`, `/memo [a/d/stock]`, `/log` (recent logs), `/help`
+
+> Commands may be added or changed over time. **Type `/help` in the bot for the latest full list.**
 
 ## 9. Disclosure Integration (OpenDART)
 
@@ -453,6 +450,7 @@ By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use
     6.  **AI Trading Autopsy**: Analyzes your trading results after selling and advises on future strategies.
     7.  **AI Closing Briefing (`/closing`)**: Daily market review and analysis of held stocks.
     8.  **AI Curation (`/curate`)**: Discovers leading themes and recommends stocks based on real-time macro indicators.
+    9.  **AI Chart Image Reading (Gemini Vision)**: The chart image generated by Chart Analysis (menu `[3]`, weekly/daily supported) is read directly by the Gemini vision model, providing an in-depth diagnosis of candle patterns, trendlines, and volume profiles — just as a human would read the chart.
 
 **Google AI Studio Integration**: Get a free API Key from [Google AI Studio](https://aistudio.google.com/) and register it as `GEMINI_API_KEY`.
 
