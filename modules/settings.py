@@ -1,4 +1,5 @@
 import json
+import jsonio
 import os
 from rich.prompt import Prompt
 from rich.console import Console
@@ -59,14 +60,12 @@ def _save_dynamic_config():
         "CORRELATION_THRESHOLD": getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)
     }
     
-    try:
-        path = os.path.join(config.JSON_DIR, "dynamic_config.json")
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+    path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+    if jsonio.save_json(path, data):
         console.print(f"\n[green]설정이 저장되었습니다. (재시작 시에도 유지됨)[/green]")
         console.print(f"[dim]저장 경로: {path}[/dim]")
-    except Exception as e:
-        console.print(f"\n[bold red]설정 저장 실패: {e}[/bold red]")
+    else:
+        console.print("\n[bold red]설정 저장 실패 (상세는 로그 참조)[/bold red]")
 
 def _get_custom_settings_summary():
     """커스텀 프리셋 전환 시 텔레그램 알림에 포함할 변경 내역 요약 문자열 생성"""
@@ -843,20 +842,12 @@ DEFAULT_PRESETS = {
 
 def load_custom_presets():
     path = getattr(config, 'PRESETS_FILE', os.path.join(config.JSON_DIR, "presets.json"))
-    if os.path.exists(path):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception: pass
-    return {}
+    return jsonio.load_json(path, default={}) or {}
 
 def save_custom_presets(presets):
     path = getattr(config, 'PRESETS_FILE', os.path.join(config.JSON_DIR, "presets.json"))
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(presets, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        console.print(f"[red]프리셋 저장 실패: {e}[/red]")
+    if not jsonio.save_json(path, presets):
+        console.print("[red]프리셋 저장 실패 (상세는 로그 참조)[/red]")
 
 def get_preset_values(preset_type):
     base = DEFAULT_PRESETS.get(preset_type, {}).copy()
@@ -898,14 +889,11 @@ def check_and_update_active_preset():
             
     if getattr(config.settings, 'ACTIVE_PRESET', 'default') != matched_preset:
         config.settings.ACTIVE_PRESET = matched_preset
-        try:
-            import json, os
-            path = os.path.join(config.JSON_DIR, "dynamic_config.json")
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f: data = json.load(f)
-                data['ACTIVE_PRESET'] = matched_preset
-                with open(path, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-        except Exception: pass
+        path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+        data = jsonio.load_json(path)
+        if data is not None:
+            data['ACTIVE_PRESET'] = matched_preset
+            jsonio.save_json(path, data)
             
     return matched_preset
 

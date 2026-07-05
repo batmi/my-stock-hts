@@ -10,6 +10,7 @@ import logging
 import contextlib
 import indicators
 import utils
+import caching
 import time
 from datetime import datetime
 import urllib.request
@@ -36,27 +37,21 @@ m_codes = set()
 restricted_stocks = set()
 rules_map = {}
 
-# [수정] 스마트머니 캐시 (종목코드 -> {'time': datetime, 'flag': bool, 'reason': str})
-_SMART_MONEY_CACHE = {}
-_SMART_MONEY_CACHE_LOCK = threading.RLock() # [추가] 스레드 동기화 락
+# [리팩토링] 스마트머니 캐시 (종목코드 -> (flag, reason)) — 공용 TTLCache 사용
+_SMART_MONEY_CACHE = caching.TTLCache()
 
 def clear_smart_money_cache():
     """스마트머니 수급 캐시 초기화 (수동 갱신용)"""
-    with _SMART_MONEY_CACHE_LOCK:
-        _SMART_MONEY_CACHE.clear()
+    _SMART_MONEY_CACHE.clear()
 
 def check_smart_money_turnaround(code, is_overseas=False):
     """외국인/기관 수급 턴어라운드 및 쌍끌이 발생 여부 확인"""
     if is_overseas: return False, ""
-    
-    now = datetime.now()
-    ttl_seconds = 3600 # 1시간(60분) 유지
-    
-    with _SMART_MONEY_CACHE_LOCK:
-        if code in _SMART_MONEY_CACHE:
-            if (now - _SMART_MONEY_CACHE[code]['time']).total_seconds() < ttl_seconds:
-                return _SMART_MONEY_CACHE[code]['flag'], _SMART_MONEY_CACHE[code]['reason']
-        
+
+    cached = _SMART_MONEY_CACHE.get(code, ttl=3600)  # 1시간(60분) 유지
+    if isinstance(cached, tuple):
+        return cached
+
     try:
         inv_list = api.get_investor_trend(code)
         if not inv_list or len(inv_list) < 3: 
@@ -86,8 +81,7 @@ def check_smart_money_turnaround(code, is_overseas=False):
                     flag, reason = True, "기관 턴어라운드"
                     break
         
-        with _SMART_MONEY_CACHE_LOCK:
-            _SMART_MONEY_CACHE[code] = {'time': now, 'flag': flag, 'reason': reason}
+        _SMART_MONEY_CACHE.set(code, (flag, reason))
         return flag, reason
     except Exception as e:
         logger.debug(f"Smart Money Check Error for {code}: {e}")

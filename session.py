@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import jsonio
 from datetime import datetime, timedelta
 from rich.prompt import Prompt
 import config
@@ -257,17 +258,10 @@ class SessionManager:
 
     # [추가] 토큰 캐시 관리 메서드
     def _load_token_cache(self):
-        try:
-            if not os.path.exists(config.TOKEN_CACHE_FILE): return {}
-            with open(config.TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception: return {}
+        return jsonio.load_json(config.TOKEN_CACHE_FILE, default={}) or {}
 
     def _save_token_cache(self, cache_data):
-        try:
-            with open(config.TOKEN_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
-        except Exception: pass
+        jsonio.save_json(config.TOKEN_CACHE_FILE, cache_data, indent=2)
 
     def _check_token_validity(self, token_info):
         if not token_info: return False

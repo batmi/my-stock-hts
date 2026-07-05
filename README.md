@@ -270,12 +270,14 @@ my-stock-hts/
 ├── run.bat               # [Windows] 실행 스크립트
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── config.py             # 설정, 환경변수, 데이터 로드
-├── api.py                # KIS API 통신, yfinance, OpenDART(전자공시) 연동 및 데이터 조회
+├── api.py                # KIS API 통신, yfinance 연동 및 시세/차트 데이터 조회
 ├── toss_api.py           # 토스증권 Open API 클라이언트 (토스 모드 시세/자산/주문)
 ├── realtime.py           # KIS WebSocket 실시간 시세·체결통보 피드 (미커버 시 REST 폴백)
 ├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
 ├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
 ├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
+├── jsonio.py             # JSON 파일 로드/저장 공용 헬퍼 (최하위 유틸)
+├── caching.py            # 공용 인메모리 TTL 캐시 (항목 상한·자동 eviction)
 ├── session.py            # 세션 및 토큰 관리
 ├── context.py            # 스레드 전역 상태 및 락(Lock) 관리
 ├── requirements.txt      # Python 의존성 패키지 목록
@@ -311,7 +313,9 @@ my-stock-hts/
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
-    ├── telegram_bot.py   # 텔레그램 봇 연동 및 알림
+    ├── telegram_bot.py   # 텔레그램 봇 수신/명령 처리
+    ├── telegram_notify.py# 텔레그램 발신(메시지/사진 전송) 계층
+    ├── dart_api.py       # OpenDART(전자공시) API 연동 (배당/실적/공시 조회)
     ├── scheduler.py      # 백그라운드 스케줄링 및 타이머 전담 워커
     ├── market_halt.py    # 서킷브레이커(CB)/VI 시장 정지 감지 및 텔레그램 알림
     ├── executors.py      # 시스템 전역 스레드 풀(Thread Pool) 중앙 관리
@@ -321,7 +325,12 @@ my-stock-hts/
     ├── analysis.py       # [2] 종목 시세 및 기술적 분석
     ├── chart.py          # [3] 차트 시각화 및 분석
     ├── backtest.py       # [4] 전략 백테스팅
-    ├── auto_trade.py     # [5] 시스템 트레이딩 (자동매매)
+    ├── auto_trade/       # [5] 시스템 트레이딩 (자동매매) 패키지
+    │   ├── common.py     #   ├ 공용 헬퍼 (제한종목/일일자산/장시간 판정/OrderStatus)
+    │   ├── engine.py     #   ├ 매매 엔진 (DefaultStrategy·OrderManager·RiskManager)
+    │   ├── conclusion.py #   ├ 체결 감시/확정 (ConclusionMonitor)
+    │   ├── trader.py     #   ├ AutoTrader 메인 루프 (분석→매수/매도→리포트)
+    │   └── menu.py       #   └ 트레이딩 룰/제한종목 관리 메뉴 UI
     ├── theme_analysis.py # [6] 종목 트랜드 분석 + AI(Gemini) 분석/공시 요약
     ├── manage.py         # [7] 관심 종목 관리
     ├── calendar_events.py# [7-6] 배당·실적 캘린더 (DART + yfinance)

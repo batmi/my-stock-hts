@@ -13,6 +13,7 @@ import threading
 import concurrent.futures
 import sqlite3
 import pickle
+import caching
 from contextlib import closing
 import yfinance as yf
 import pandas as pd
@@ -279,8 +280,8 @@ def get_holiday_name(date_str, country='KR'):
     return None
 
 def _is_screen_output_allowed():
-    """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단)"""
-    return threading.current_thread().name != "TelegramBot"
+    """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단) — context 공용 판정으로 위임"""
+    return context.is_screen_output_allowed()
 
 def clear_yfinance_cache():
     """yfinance 캐시 파일(.sqlite)을 강제로 삭제하여 DB Lock 문제를 해결합니다."""
@@ -353,201 +354,23 @@ class TLSAdapter(HTTPAdapter):
             # urllib3 v1.x
             self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
 
-def _get_telegram_footer():
-    """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
-    if not config.TELEGRAM_BOT_TOKEN:
-        return
-
-    cano = config.session.cano
-    acc_label = "모의" if config.session.is_simulation else "실전"
-
-    # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
-        cano = config.session.auto_cano
-        acc_label = "자동"
-
-    instance_name = config.TELEGRAM_INSTANCE_NAME
-    return f"[{instance_name} | {acc_label} {cano}]"
-
-def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=False):
-    """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
-        return
-
-    account_info = _get_telegram_footer()
-    
-    # [추가] 마크다운 링크 패턴([text](url))을 임시 토큰으로 변환 (Rich 태그 제거 및 이스케이프 영향 방지)
-    link_map = {}
-    def _stash_link(match):
-        token = f"__LINK_{len(link_map)}__"
-        link_map[token] = (match.group(1), match.group(2)) # text, url
-        return token
-    
-    clean_message = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', _stash_link, message)
-
-    # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
-    # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
-    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', clean_message)
-
-    # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
-    clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    # [추가] AI가 무작위로 생성하는 마크다운 굵게(**) 기호 일괄 제거
-    clean_message = clean_message.replace("**", "")
-
-    # [추가] 마크다운 헤더(#) 및 수평선(---) 기호 일괄 제거
-    clean_message = re.sub(r'^#{1,6}\s*', '', clean_message, flags=re.MULTILINE)
-    clean_message = re.sub(r'^[-*_]{3,}\s*$', '', clean_message, flags=re.MULTILINE)
-
-    # [추가] 마크다운 링크 복원 (HTML <a> 태그로 변환)
-    for token, (text, url) in link_map.items():
-        # 텍스트 부분도 이스케이프 처리
-        safe_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        clean_message = clean_message.replace(token, f'<a href="{url}">{safe_text}</a>')
-
-    # [수정] 종목 코드에 링크 자동 적용 (네이버 증권)
-    # 패턴: 괄호 안의 6자리 숫자/영문(국내) 또는 영문 대문자(해외) -> 예: (005930), (0080G0), (AAPL)
-    def add_stock_link(match):
-        code = match.group(1)
-        
-        # [추가] 일반 영문 단어나 보조지표명 등이 해외 티커로 오인되어 링크되는 현상 방지
-        exclude_words = {"ON", "OFF", "RSI", "MACD", "ATR", "SMA", "EMA", "CCI", "ADX", "SAR", "OBV", "ETF", "TS", "RUN", "STOP", "WAIT"}
-        if code in exclude_words:
-            return f"({code})"
-
-        # 1. 국내 주식 (6자리)
-        if len(code) == 6:
-            # [수정] 국내 주식: 트레이딩뷰 심볼 오버뷰 페이지 (유료/앱 설치 팝업 우회)
-            url = f"https://kr.tradingview.com/symbols/KRX-{code}/"
-        # 2. 해외 주식
-        else:
-            # 거래소 정보 확인 (config.session.exchange_cache 활용)
-            exchange = config.session.exchange_cache.get(code, "")
-            tv_exchange = ""
-            
-            # 트레이딩뷰 해외주식 거래소 접미사 매핑
-            if exchange in ["NAS", "NASD"]: tv_exchange = "NASDAQ"
-            elif exchange in ["NYS", "NYSE"]: tv_exchange = "NYSE"
-            elif exchange in ["AMS", "AMEX"]: tv_exchange = "AMEX"
-            
-            if tv_exchange:
-                url = f"https://kr.tradingview.com/symbols/{tv_exchange}-{code}/"
-            else:
-                # 거래소 정보가 없으면 티커만으로 접근 (트레이딩뷰가 자동 라우팅)
-                url = f"https://kr.tradingview.com/symbols/{code}/"
-                
-        return f'(<a href="{url}">{code}</a>)'
-    
-    clean_message = re.sub(r'\(([0-9A-Z]{6}|[A-Z]{1,5})\)', add_stock_link, clean_message)
-
-    # [수정] 계좌 정보를 메시지 가장 마지막에 추가 (가독성을 위해 한 줄 공백 추가)
-    final_msg = f"{clean_message.rstrip()}\n\n{account_info}"
-
-    # [수정] 전송 메시지 로그 기록 (시스템 로그로 변경)
-    log_content = final_msg.replace('\n', ' | ')
-    logger.info(f"[Telegram] 메시지 발송: {log_content}")
-
-    # [추가] 4000자 분할 로직 (긴 메시지 자동 분할 전송)
-    MAX_LEN = 4000
-    msg_chunks = []
-    if len(final_msg) <= MAX_LEN:
-        msg_chunks.append(final_msg)
-    else:
-        lines = final_msg.split('\n')
-        current_chunk = ""
-        for line in lines:
-            if len(current_chunk) + len(line) + 1 > MAX_LEN:
-                if current_chunk:
-                    msg_chunks.append(current_chunk.strip())
-                    current_chunk = line + "\n"
-                else:
-                    msg_chunks.append(line[:MAX_LEN])
-                    current_chunk = line[MAX_LEN:] + "\n"
-            else:
-                current_chunk += line + "\n"
-        if current_chunk:
-            msg_chunks.append(current_chunk.strip())
-
-    def _send_task():
-        url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-        
-        # [추가] 화면 디버그 로그 (요청)
-        if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-            config.console.print(f"[dim cyan][TRACE] REQ (TELEGRAM) | POST {url}[/dim cyan]")
-            if config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                config.console.print(f"[dim cyan]  > Message: {message.replace(chr(10), ' ')}[/dim cyan]")
-
-        # [수정] 재시도 로직 추가 (최대 3회)
-        max_retries = 3
-        for i, chunk in enumerate(msg_chunks):
-            data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}
-            
-            if reply_markup and i == len(msg_chunks) - 1:
-                data["reply_markup"] = json.dumps(reply_markup)
-
-            success_chunk = False
-            for attempt in range(max_retries):
-                try:
-                    current_timeout = 1 + (attempt * 0.5)
-                    res = requests.post(url, data=data, timeout=current_timeout)
-                    
-                    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                        config.console.print(f"[dim magenta][TRACE] RES (TELEGRAM) Status:{res.status_code} Chunk {i+1}/{len(msg_chunks)} ({attempt+1}/{max_retries})[/dim magenta]")
-                        if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res.status_code != 200:
-                             config.console.print(f"[dim red]  > Error: {res.text}[/dim red]")
-                    
-                    if res.status_code == 200:
-                        logger.info(f"[Telegram] 전송 성공 (Chunk {i+1}/{len(msg_chunks)})")
-                        success_chunk = True
-                        break
-                    else:
-                        logger.error(f"[Telegram] 전송 실패 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
-                except Exception as e:
-                    # [추가] 네트워크 오류 등 긴 에러 메시지 축약
-                    error_msg = str(e)
-                    if "Network is unreachable" in error_msg:
-                        error_msg = "네트워크 통신 불가 (Network is unreachable)"
-                    elif "Max retries exceeded" in error_msg:
-                        error_msg = "서버 접속 지연 (Connection Timeout)"
-
-                    if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                        config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {error_msg} ({attempt+1}/{max_retries})[/dim red]")
-                    logger.error(f"[Telegram] 전송 중 오류 발생 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}): {error_msg}")
-                
-                if attempt < max_retries - 1:
-                    # [수정] 네트워크 단절 시 복구될 시간을 벌기 위해 점진적 대기 (1초 -> 2초 -> 4초)
-                    time.sleep(2 ** attempt)
-                    
-            if not success_chunk:
-                logger.error(f"[Telegram] 최종 전송 실패 (Chunk {i+1}/{len(msg_chunks)})")
-
-    # [수정] 긴급 발송 여부에 따라 큐(Queue) 대기열 우회 처리
-    if sync:
-        _send_task()
-    elif is_urgent:
-        threading.Thread(target=_send_task, daemon=True, name="TgUrgentSender").start()
-    else:
-        # 핵심 매매 로직 블로킹 방지를 위해 스레드 풀로 위임 (비동기 전송)
-        tg_sender_executor.submit(_send_task)
-
-_last_alert_time = 0 # [추가] 텔레그램 알림 스로틀링용
+# [리팩토링] 텔레그램 발신 계층은 modules/telegram_notify.py 로 분리되었다.
+# 기존 호출부(api.send_telegram_message 등) 호환을 위한 재수출(re-export).
+from modules.telegram_notify import (_get_telegram_footer, send_telegram_message,
+                                     send_telegram_photo)
 
 # ==========================================================
 # [추가] 실시간 단건 API용 초단기 마이크로 캐시 (Micro-Cache)
 # 화면 렌더링 중 발생하는 동일 종목의 동시다발적 중복 호출 방지 (TTL: 3~10초)
 # ==========================================================
-_MICRO_CACHE = {}
-_MICRO_CACHE_LOCK = threading.RLock()
 # [메모리] 항목 상한(라즈베리파이 OOM 방어). 초과 시 가장 오래된 항목부터 제거한다.
 # 전체 종목(코스피+코스닥 ~2800)을 스캔해도 종목당 cp_/vol_/ob_/yf_fi_ 정도라 여유 있게 잡는다.
 _MICRO_CACHE_MAX = 6000
+_MICRO_CACHE = caching.TTLCache(max_size=_MICRO_CACHE_MAX)
+_MICRO_CACHE_LOCK = _MICRO_CACHE._lock  # 하위 호환 별칭 (기존 코드/테스트의 with 락 사용처)
 
 def _get_micro_cache(key, ttl=60.0): # [수정] 잦은 중복 호출 방지를 위해 기본 TTL 상향
-    with _MICRO_CACHE_LOCK:
-        item = _MICRO_CACHE.get(key)
-        if item and time.time() - item['time'] < ttl:
-            return item['data']
-    return None
+    return _MICRO_CACHE.get(key, ttl)
 
 def _evict_oldest(cache, max_size, time_key):
     """딕셔너리 캐시가 상한을 넘으면 가장 오래된 항목들을 제거해 90% 수준으로 낮춘다.
@@ -559,9 +382,7 @@ def _evict_oldest(cache, max_size, time_key):
         cache.pop(k, None)
 
 def _set_micro_cache(key, data):
-    with _MICRO_CACHE_LOCK:
-        _MICRO_CACHE[key] = {'time': time.time(), 'data': data}
-        _evict_oldest(_MICRO_CACHE, _MICRO_CACHE_MAX, 'time')
+    _MICRO_CACHE.set(key, data)  # 상한 초과 시 자동 eviction (TTLCache 내장)
 
 # [추가] yfinance 특수 티커를 TradingView 티커로 완벽히 1:1 매핑
 YF_TO_TV_EXACT = {
@@ -4121,258 +3942,7 @@ def check_server_health():
         logger.debug(f"check_server_health error: {e}")
     return False
 
-def send_telegram_photo(file_path, caption=None):
-    """텔레그램 사진 전송"""
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
-        return False
 
-    if not os.path.exists(file_path):
-        logger.error(f"[Telegram] 전송할 파일이 없습니다: {file_path}")
-        return False
-
-    account_info = _get_telegram_footer()
-    final_caption = f"{caption}\n\n{account_info}" if caption else account_info
-
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendPhoto"
-    chat_id = config.TELEGRAM_CHAT_ID
-    
-    logger.info(f"[Telegram] 사진 전송 시작: {os.path.basename(file_path)}")
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            with open(file_path, 'rb') as f:
-                data = {"chat_id": chat_id, "caption": final_caption}
-                files = {"photo": (os.path.basename(file_path), f, 'image/png')}
-                
-                # 이미지 전송은 시간이 더 걸릴 수 있으므로 타임아웃을 넉넉하게 설정
-                res = requests.post(url, data=data, files=files, timeout=30)
-            
-            if res.status_code == 200:
-                logger.info("[Telegram] 사진 전송 성공")
-                return True
-            else:
-                logger.error(f"[Telegram] 사진 전송 실패({attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
-                
-        except Exception as e:
-            # [추가] 네트워크 오류 등 긴 에러 메시지 축약
-            error_msg = str(e)
-            if "Network is unreachable" in error_msg:
-                error_msg = "네트워크 통신 불가 (Network is unreachable)"
-            elif "Max retries exceeded" in error_msg:
-                error_msg = "서버 접속 지연 (Connection Timeout)"
-
-            if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim red][TRACE] ERR (TELEGRAM PHOTO) {error_msg}[/dim red]")
-            logger.error(f"[Telegram] 사진 전송 중 오류({attempt+1}/{max_retries}): {error_msg}")
-        
-        if attempt < max_retries - 1:
-            time.sleep(2 ** attempt)
-            
-    return False
-
-
-# ==========================================================
-# [추가] OpenDART (전자공시) 연동 - 국내 배당/실적 조회
-# ==========================================================
-DART_BASE_URL = "https://opendart.fss.or.kr/api"
-_dart_corp_map_cache = None  # 프로세스 메모리 캐시
-_dart_corp_map_lock = threading.Lock()  # [중요] 동시 다운로드 방지용 락
-
-
-def call_dart(endpoint, params, timeout=10):
-    """OpenDART OpenAPI 공통 호출 래퍼.
-
-    반환: 성공 시 응답 JSON의 'list'(없으면 dict 전체), 실패/데이터없음 시 None.
-    status: 000=정상, 013=데이터없음, 020/021=한도초과/오류.
-    """
-    if not config.DART_API_KEY:
-        return None
-    try:
-        p = dict(params)
-        p["crtfc_key"] = config.DART_API_KEY
-        res = requests.get(f"{DART_BASE_URL}/{endpoint}", params=p, timeout=timeout)
-        data = res.json()
-        status = data.get("status")
-        if status == "000":
-            return data.get("list", data)
-        if status == "013":  # 조회된 데이터 없음 (정상 케이스)
-            return None
-        logger.warning(f"[DART] {endpoint} 응답 코드 {status}: {data.get('message')}")
-        return None
-    except Exception as e:
-        logger.error(f"[DART] {endpoint} 호출 오류: {e}")
-        return None
-
-
-def get_dart_corp_map(force_refresh=False):
-    """종목코드(6자리) -> DART 고유번호(corp_code, 8자리) 매핑.
-
-    corpCode.xml(ZIP) 1회 다운로드 후 json 파일로 캐시(30일 TTL).
-    """
-    global _dart_corp_map_cache
-    if _dart_corp_map_cache is not None and not force_refresh:
-        return _dart_corp_map_cache
-
-    if not config.DART_API_KEY:
-        return {}
-
-    # [중요] 동시 다운로드 방지: 여러 워커 스레드(공시 수집 등)가 동시에 진입하면
-    # 각자 DART 기업코드 ZIP(수십 MB XML+10만건 dict)을 중복 다운로드/파싱해 메모리가
-    # 수배로 폭증(OOM)한다. 락으로 직렬화하여 한 스레드만 받고 나머지는 캐시를 재사용한다.
-    with _dart_corp_map_lock:
-        # 락 획득 후 재확인 (대기 중 다른 스레드가 이미 채웠을 수 있음)
-        if _dart_corp_map_cache is not None and not force_refresh:
-            return _dart_corp_map_cache
-
-        return _load_dart_corp_map_locked(force_refresh)
-
-
-def _load_dart_corp_map_locked(force_refresh):
-    """락 보유 상태에서 DART 기업코드 맵을 파일캐시/다운로드로 로드한다."""
-    global _dart_corp_map_cache
-    cache_path = os.path.join(config.JSON_DIR, "dart_corp_map.json")
-
-    # 파일 캐시 확인 (30일 이내면 재사용)
-    if not force_refresh and os.path.exists(cache_path):
-        try:
-            age_days = (time.time() - os.path.getmtime(cache_path)) / 86400.0
-            if age_days < 30:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    _dart_corp_map_cache = json.load(f)
-                return _dart_corp_map_cache
-        except Exception:
-            pass
-
-    # 신규 다운로드 (ZIP 안에 CORPCODE.xml)
-    try:
-        import zipfile, io
-        import xml.etree.ElementTree as ET
-        res = requests.get(f"{DART_BASE_URL}/corpCode.xml",
-                           params={"crtfc_key": config.DART_API_KEY}, timeout=20)
-
-        # [메모리 최적화] 전체 XML(수십 MB)을 트리로 올리지 않고 스트리밍 파싱(iterparse)으로
-        # <list> 요소를 하나씩 처리 후 즉시 비워(clear) 메모리 피크를 최소화한다. (저사양 보호)
-        corp_map = {}
-        with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
-            with zf.open(zf.namelist()[0]) as xmlf:
-                for _evt, item in ET.iterparse(xmlf, events=("end",)):
-                    if item.tag != "list":
-                        continue
-                    stock_code = (item.findtext("stock_code") or "").strip()
-                    corp_code = (item.findtext("corp_code") or "").strip()
-                    if stock_code and corp_code:  # 상장사만 (비상장은 stock_code 공란)
-                        corp_map[stock_code] = corp_code
-                    item.clear()  # 처리한 요소 즉시 해제
-
-        if corp_map:
-            _dart_corp_map_cache = corp_map
-            try:
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(corp_map, f)
-            except Exception as e:
-                logger.warning(f"[DART] corp_map 캐시 저장 실패: {e}")
-            return corp_map
-    except Exception as e:
-        logger.error(f"[DART] corp_map 다운로드 오류: {e}")
-
-    return _dart_corp_map_cache or {}
-
-
-def get_dart_dividend(stock_code, year=None, reprt_code="11011"):
-    """국내 종목의 '배당에 관한 사항' 조회 (정기보고서 기준).
-
-    반환: {'주당배당금': float, '시가배당률': float, '결산월': str, 'year': str} 또는 None.
-    reprt_code: 11011=사업보고서(연간), 11012=반기, 11013=1분기, 11014=3분기.
-    """
-    if year is None:
-        # 사업보고서는 다음 해 3월경 공시되므로 직전 회계연도를 우선 조회
-        year = datetime.now().year - 1
-
-    corp = get_dart_corp_map().get(stock_code)
-    if not corp:
-        return None
-
-    rows = call_dart("alotMatter.json", {
-        "corp_code": corp, "bsns_year": str(year), "reprt_code": reprt_code
-    })
-    if not rows or not isinstance(rows, list):
-        return None
-
-    def _to_num(s):
-        try:
-            return float(str(s).replace(",", "").strip())
-        except Exception:
-            return 0.0
-
-    result = {"year": str(year), "주당배당금": 0.0, "시가배당률": 0.0}
-    for row in rows:
-        se = (row.get("se") or "").strip()          # 항목명
-        val = row.get("thstrm")                       # 당기 값
-        # 주당 현금배당금(원) / 현금배당수익률(%) 추출 (보통주 기준)
-        if "주당 현금배당금" in se or ("주당배당금" in se and "현금" in se):
-            num = _to_num(val)
-            if num > result["주당배당금"]:
-                result["주당배당금"] = num
-        elif "현금배당수익률" in se or "시가배당" in se:
-            num = _to_num(val)
-            if num > result["시가배당률"]:
-                result["시가배당률"] = num
-
-    if result["주당배당금"] <= 0 and result["시가배당률"] <= 0:
-        return None
-    return result
-
-
-_dart_acc_month_cache = {}  # 종목코드 -> 결산월
-
-
-def get_dart_acc_month(stock_code):
-    """종목의 결산월('12' 등) 조회 (company.json). 프로세스 메모리 캐시."""
-    if stock_code in _dart_acc_month_cache:
-        return _dart_acc_month_cache[stock_code]
-
-    acc = None
-    corp = get_dart_corp_map().get(stock_code)
-    if corp:
-        data = call_dart("company.json", {"corp_code": corp})
-        if isinstance(data, dict):
-            acc = (data.get("acc_mt") or "").strip() or None
-    _dart_acc_month_cache[stock_code] = acc
-    return acc
-
-
-def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
-    """종목의 최근 공시 목록 조회 (list.json).
-
-    반환: [{rcept_no, report_nm, flr_nm, rcept_dt, rm, corp_name}, ...] (최신순). 실패 시 [].
-    pblntf_ty: 공시유형 코드(A정기/B주요사항/C발행/D지분 등). None이면 전체.
-    """
-    corp = get_dart_corp_map().get(stock_code)
-    if not corp:
-        return []
-    end = datetime.now()
-    bgn = end - timedelta(days=int(days))
-    params = {
-        "corp_code": corp,
-        "bgn_de": bgn.strftime("%Y%m%d"),
-        "end_de": end.strftime("%Y%m%d"),
-        "page_count": str(page_count),
-        "sort": "date", "sort_mth": "desc",
-    }
-    if pblntf_ty:
-        params["pblntf_ty"] = pblntf_ty
-    rows = call_dart("list.json", params)
-    if not rows or not isinstance(rows, list):
-        return []
-    out = []
-    for r in rows:
-        out.append({
-            "rcept_no": r.get("rcept_no", ""),
-            "report_nm": (r.get("report_nm") or "").strip(),
-            "flr_nm": (r.get("flr_nm") or "").strip(),
-            "rcept_dt": (r.get("rcept_dt") or "").strip(),
-            "rm": (r.get("rm") or "").strip(),
-            "corp_name": (r.get("corp_name") or "").strip(),
-        })
-    return out
+# [리팩토링] OpenDART 연동 계층은 modules/dart_api.py 로 분리되었다. (재수출)
+from modules.dart_api import (DART_BASE_URL, call_dart, get_dart_corp_map,
+                              get_dart_dividend, get_dart_acc_month, get_dart_disclosures)

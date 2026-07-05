@@ -34,7 +34,7 @@ def test_manage_unfilled_orders(mock_revise, mock_get):
         def now(cls):
             return cls(2023, 1, 2, 12, 0, 0)
 
-    with patch('modules.auto_trade.datetime', MockDatetime):
+    with patch('modules.auto_trade.engine.datetime', MockDatetime):  # [패키지 분해 반영] OrderManager는 engine.py
         with patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value={'type': 'buy'}):
             with patch.object(trader, 'is_market_open', return_value=True):
                 trader.order_manager.manage_unfilled_orders()

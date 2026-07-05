@@ -20,15 +20,15 @@ def test_market_open_regular_times(trader, monkeypatch):
     monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
     
     # 오전 8시 30분 (NXT 프리마켓)
-    monkeypatch.setattr('modules.auto_trade.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 30)))
+    monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 30)))
     assert trader.is_market_open() is True
     
     # 오전 10시 (KRX 정규장)
-    monkeypatch.setattr('modules.auto_trade.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 10, 0)))
+    monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 10, 0)))
     assert trader.is_market_open() is True
     
     # 오후 4시 (NXT 애프터마켓)
-    monkeypatch.setattr('modules.auto_trade.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
+    monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
     assert trader.is_market_open() is True
 
 def test_market_pause_times(trader, monkeypatch):
@@ -36,11 +36,11 @@ def test_market_pause_times(trader, monkeypatch):
     monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
     
     # 08:55 (오전 휴게시간)
-    monkeypatch.setattr('modules.auto_trade.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 55)))
+    monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 55)))
     assert trader.is_market_open() is False
     
     # 15:28 (오후 휴게시간)
-    monkeypatch.setattr('modules.auto_trade.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 15, 28)))
+    monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 15, 28)))
     assert trader.is_market_open() is False
 
 def test_sor_order_routing_real(monkeypatch):

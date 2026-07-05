@@ -261,12 +261,14 @@ my-stock-hts/
 ├── run.bat               # [Windows] Execution script
 ├── main.py               # Main execution file (Menu & Routing)
 ├── config.py             # Settings, Env vars, Data load
-├── api.py                # KIS API, yfinance, OpenDART communication
+├── api.py                # KIS API communication, yfinance integration, quote/chart data
 ├── toss_api.py           # Toss Securities Open API client (quotes/assets/orders in Toss mode)
 ├── realtime.py           # KIS WebSocket real-time quote & execution-notice feed (REST fallback when uncovered)
 ├── constants.py          # Constant definitions (TR ID, field mapping, etc.)
 ├── indicators.py         # Technical indicators calculation (RSI, ADX, MACD, etc.)
 ├── utils.py              # Common utilities (dates, formatting, etc.)
+├── jsonio.py             # Shared JSON file load/save helper (lowest-level utility)
+├── caching.py            # Shared in-memory TTL cache (size cap & auto-eviction)
 ├── session.py            # Session & Token management
 ├── context.py            # Global thread states & Lock management
 ├── requirements.txt      # Python dependencies list
@@ -302,7 +304,9 @@ my-stock-hts/
 └── modules/              # Feature-specific module folders
     ├── db_manager.py     # DB connection & query management
     ├── db_queue.py       # Single worker queue proxy for SQLite concurrency control
-    ├── telegram_bot.py   # Telegram bot integration & notifications
+    ├── telegram_bot.py   # Telegram bot inbound command handling
+    ├── telegram_notify.py# Telegram outbound layer (message/photo sending)
+    ├── dart_api.py       # OpenDART (disclosure) API integration (dividends/earnings/disclosures)
     ├── scheduler.py      # Dedicated worker for background scheduling & timers
     ├── market_halt.py    # Circuit breaker (CB) / VI market-halt detection & Telegram alerts
     ├── executors.py      # Central management of system-wide Thread Pool
@@ -312,7 +316,12 @@ my-stock-hts/
     ├── analysis.py       # [2] Stock price & technical analysis
     ├── chart.py          # [3] Chart visualization & analysis
     ├── backtest.py       # [4] Strategy Backtesting
-    ├── auto_trade.py     # [5] System Trading (Auto Trading)
+    ├── auto_trade/       # [5] System Trading (Auto Trading) package
+    │   ├── common.py     #   ├ Shared helpers (restricted stocks/daily asset/market hours/OrderStatus)
+    │   ├── engine.py     #   ├ Trading engine (DefaultStrategy·OrderManager·RiskManager)
+    │   ├── conclusion.py #   ├ Fill monitoring/confirmation (ConclusionMonitor)
+    │   ├── trader.py     #   ├ AutoTrader main loop (analyze→buy/sell→report)
+    │   └── menu.py       #   └ Trading rules/restricted stocks menu UI
     ├── theme_analysis.py # [6] Stock trend analysis + AI (Gemini) analysis/disclosure summary
     ├── manage.py         # [7] Interest Stock Management
     ├── calendar_events.py# [7-6] Dividend/Earnings Calendar (DART + yfinance)

@@ -10,6 +10,8 @@ import modules.auto_trade as auto_trade
 
 @pytest.fixture
 def mock_dependencies():
+    # [패키지 분해 반영] config는 실행 코드가 있는 서브모듈(conclusion/common) 양쪽에 동일 mock을 주입
+    mock_config = MagicMock()
     with patch('modules.auto_trade.api.get_today_history') as mock_history, \
          patch('modules.auto_trade.api.get_overseas_today_history') as mock_overseas, \
          patch('modules.auto_trade.api.get_domestic_balance') as mock_domestic_bal, \
@@ -17,7 +19,8 @@ def mock_dependencies():
          patch('modules.auto_trade.api.get_current_price_data') as mock_cp, \
          patch('modules.auto_trade.api.send_telegram_message') as mock_telegram, \
          patch('modules.auto_trade.db_manager.db') as mock_db, \
-         patch('modules.auto_trade.config') as mock_config, \
+         patch('modules.auto_trade.conclusion.config', mock_config), \
+         patch('modules.auto_trade.common.config', mock_config), \
          patch('modules.auto_trade.load_restricted_stocks') as mock_load, \
          patch('modules.auto_trade.save_restricted_stocks') as mock_save:
          
@@ -295,7 +298,8 @@ def test_manual_remove_unrestricts_only_selected_scope(tmp_path, monkeypatch):
     모든 범위를 해제해야 종목 자체가 목록에서 사라진다. (과다 삭제 방지)
     """
     restricted_file = tmp_path / "restricted_stocks.json"
-    monkeypatch.setattr(auto_trade, "RESTRICTED_FILE", str(restricted_file))
+    # [패키지 분해 반영] 파일 경로 상수는 실행 코드가 있는 common 서브모듈에 주입
+    monkeypatch.setattr(auto_trade.common, "RESTRICTED_FILE", str(restricted_file))
 
     auto_trade.add_restricted_stock('005930', '삼성전자', '급등주')  # 글로벌
     auto_trade.add_restricted_stock('005930', '삼성전자', '수동매매', cano='11111111', acnt='01')

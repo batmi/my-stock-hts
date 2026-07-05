@@ -553,6 +553,67 @@ def _gemini_text(res, default="분석 결과를 생성하지 못했습니다."):
     return text
 
 
+def _gemini_error_text(e, error_prefix="분석", style="rich"):
+    """Gemini 호출 예외를 사용자 안내 메시지로 표준 변환한다.
+
+    style:
+      - "rich":   터미널용 (rich 마크업 색상 + 상세 힌트)
+      - "plain":  텔레그램용 (마크업 없는 짧은 평문)
+      - "silent": 조용히 None 반환 (백그라운드 작업용)
+    """
+    msg = str(e)
+    if style == "silent":
+        return None
+    if style == "plain":
+        if _is_gemini_rate_limit(msg):
+            return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
+        if any(c in msg.lower() for c in ("timeouterror", "deadline", "timeout")):
+            return "⚠️ Gemini API 응답 지연 (Timeout)"
+        return f"⚠️ {error_prefix} 중 오류 발생: {msg}"
+    # rich (터미널 마크업)
+    if _is_gemini_rate_limit(msg):
+        return (f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n"
+                f"[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]")
+    if "400" in msg and "tools" in msg:
+        return (f"⚠️ [red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]\n"
+                f"[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]")
+    if "404" in msg and "NOT_FOUND" in msg:
+        return (f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n"
+                f"[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n"
+                f"[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요.[/dim]")
+    if any(c in msg.lower() for c in ("timeouterror", "deadline", "timeout")):
+        return (f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n"
+                f"[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]")
+    return f"⚠️ [red]{error_prefix} 중 오류 발생: {msg}[/red]"
+
+
+def _run_gemini_report(prompt_content, *, label="분석", timeout=60.0, generation_config=None,
+                       default="분석 결과를 생성하지 못했습니다.", error_style="rich", error_prefix=None):
+    """리포트형 Gemini 호출 공통 래퍼.
+
+    설정 확인 → genai.configure → 생성(429 시 폴백 모델 재시도) → 텍스트 추출(잘림 경고)
+    → 오류 메시지 표준화까지의 보일러플레이트를 한곳으로 모은다.
+    """
+    if genai is None or not config.GEMINI_API_KEY:
+        if error_style == "silent":
+            return None
+        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
+
+    gen_cfg = {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}
+    if generation_config:
+        gen_cfg.update(generation_config)
+
+    try:
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        logger.debug(f"[GEMINI_AI_DEBUG] {label} 요청 - API 호출 대기 시작 (모델: {config.GEMINI_MODEL})")
+        res = _gemini_generate(prompt_content, gen_cfg, timeout)
+        logger.debug(f"[GEMINI_AI_DEBUG] {label} 요청 - API 응답 수신 성공")
+        return _gemini_text(res, default=default)
+    except Exception as e:
+        logger.error(f"[GEMINI_AI_DEBUG] Gemini {label} Error: {e}", exc_info=True)
+        return _gemini_error_text(e, error_prefix or label, error_style)
+
+
 def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
@@ -632,35 +693,9 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
 
 def analyze_stock_with_gemini(code, name, tech_info_str):
     """특정 종목의 기술적 지표와 모멘텀을 결합하여 심층 진단"""
-    if genai is None or not config.GEMINI_API_KEY:
-        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.STOCK_ANALYSIS_PROMPT.format(now=now, name=name, code=code, tech_info_str=tech_info_str)
-    
-    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 종목 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 호출 대기 시작")
-
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 종목 진단 요청 - API 응답 수신 성공")
-        return _gemini_text(res)
-    except Exception as e:
-        logger.error(f"[GEMINI_AI_DEBUG] Gemini Stock Analyze Error: {e}", exc_info=True)
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
-        elif "400" in error_msg and "tools" in error_msg:
-            return f"⚠️ [red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]"
-        elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
-        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
-            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
-        else:
-            return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
+    return _run_gemini_report(prompt, label=f"[{name}({code})] 종목 심층 진단", error_prefix="분석")
 
 def analyze_chart_image_with_gemini(image_path, name, code, period_str):
     """생성된 종합 분석 차트(PNG 이미지)를 Gemini 비전 모델로 직접 판독하여 심층 진단.
@@ -684,59 +719,18 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
     # Gemini 멀티모달 입력: [프롬프트 텍스트, 이미지 blob] (PIL 없이 바이트로 직접 전달)
     image_part = {"mime_type": "image/png", "data": image_bytes}
 
-    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 차트 이미지 분석 요청 (모델: {config.GEMINI_MODEL})")
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-
-        # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 90초)
-        res = _gemini_generate([prompt, image_part], {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 90.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 차트 이미지 분석 요청 - API 응답 수신 성공")
-        return _gemini_text(res)
-    except Exception as e:
-        logger.error(f"[GEMINI_AI_DEBUG] Gemini Chart Image Analyze Error: {e}", exc_info=True)
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
-        elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나 비전(이미지) 입력을 지원하지 않을 수 있습니다.[/dim]"
-        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
-            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
-        else:
-            return f"⚠️ [red]차트 분석 중 오류 발생: {error_msg}[/red]"
+    # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 90초)
+    return _run_gemini_report([prompt, image_part], label=f"[{name}({code})] 차트 이미지 분석",
+                              timeout=90.0, error_prefix="차트 분석")
 
 def analyze_index_with_gemini(code, name, tech_info_str):
     """시장 지수의 기술적 지표와 매크로 모멘텀을 결합하여 심층 진단"""
-    if genai is None or not config.GEMINI_API_KEY:
-        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.INDEX_ANALYSIS_PROMPT.format(now=now, name=name, code=code, tech_info_str=tech_info_str)
-    
-    logger.debug(f"[GEMINI_AI_DEBUG] [{name}({code})] AI 지수 심층 진단 요청 (모델: {config.GEMINI_MODEL})")
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        return _gemini_text(res)
-    except Exception as e:
-        logger.error(f"[GEMINI_AI_DEBUG] Gemini Index Analyze Error: {e}", exc_info=True)
-        error_msg = str(e)
-        if "429" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]"
-        elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 - 모델: {config.GEMINI_MODEL}[/red]"
-        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
-            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout)[/yellow]"
-        else:
-            return f"⚠️ [red]분석 중 오류 발생: {error_msg}[/red]"
+    return _run_gemini_report(prompt, label=f"[{name}({code})] 지수 심층 진단", error_prefix="분석")
 
 def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     """백테스팅 결과를 바탕으로 Gemini에게 평가 및 조언을 요청"""
-    if genai is None or not config.GEMINI_API_KEY:
-        return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     if mode == 'monte_carlo':
@@ -746,46 +740,13 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
     else:
         prompt = prompts.BACKTEST_SINGLE_PROMPT.format(now=now, name=name, code=code, backtest_info=backtest_info)
 
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 호출 대기 시작")
-
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 백테스팅 진단 요청 - API 응답 수신 성공")
-        return _gemini_text(res)
-    except Exception as e:
-        logger.error(f"Gemini Backtest Evaluate Error: {e}")
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
-        elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
-        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
-            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
-        else:
-            return f"⚠️ [red]진단 중 오류 발생: {error_msg}[/red]"
+    return _run_gemini_report(prompt, label=f"[{name}] 백테스팅 진단", error_prefix="진단")
 
 def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days):
     """건별 매도 체결 시 AI 매매 복기 리포트 작성"""
-    if genai is None or not config.GEMINI_API_KEY:
-        return "⚠️ Gemini API가 설정되지 않았습니다."
-
     prompt = prompts.TRADING_AUTOPSY_PROMPT.format(name=name, code=code, buy_time=buy_time, buy_score=buy_score, holding_days=holding_days, profit_rate=profit_rate, sell_reason=sell_reason)
-    
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 호출 대기 시작")
-        res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
-        logger.debug(f"[GEMINI_AI_DEBUG] [{name}] 매매 복기 요청 - API 응답 수신 성공")
-        return _gemini_text(res, default=None)
-    except Exception as e:
-        logger.error(f"Trading autopsy AI error: {e}")
-        err_str = str(e)
-        if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
-        elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
-        return f"⚠️ 매매 복기 분석 중 오류 발생: {err_str}"
+    return _run_gemini_report(prompt, label=f"[{name}] 매매 복기", default=None,
+                              error_style="plain", error_prefix="매매 복기 분석")
 
 def _get_today_trades_str():
     """DB에서 당일 매매 내역을 조회하여 문자열로 반환"""
@@ -816,40 +777,14 @@ def generate_daily_closing_report(portfolio_str):
     macro_context = _get_macro_context_str()
     today_trades_str = _get_today_trades_str()
     prompt = prompts.DAILY_CLOSING_PROMPT.format(portfolio_str=portfolio_str, macro_context=macro_context, today_trades_str=today_trades_str)
-    
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 호출 대기 시작")
-        res = _gemini_generate(prompt, {"temperature": 0.2}, 60.0)
-        logger.debug(f"[GEMINI_AI_DEBUG] 장 마감 브리핑 요청 - API 응답 수신 성공")
-        return _gemini_text(res, default=None)
-    except Exception as e:
-        logger.error(f"Daily closing report AI error: {e}")
-        err_str = str(e)
-        if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
-        elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
-        return f"⚠️ 장 마감 브리핑 생성 중 오류 발생: {err_str}"
+    return _run_gemini_report(prompt, label="장 마감 브리핑", default=None,
+                              error_style="plain", error_prefix="장 마감 브리핑 생성")
 
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
-    if genai is None or not config.GEMINI_API_KEY:
-        return None
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.MORNING_BRIEFING_PROMPT.format(now=now, market_data_str=market_data_str)
-    
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        
-        logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 호출 대기 시작")
-
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] 장전 브리핑 요청 - API 응답 수신 성공")
-        return _gemini_text(res, default=None)
-    except Exception as e:
-        logger.error(f"Gemini Morning Briefing Error: {e}")
-        return None
+    return _run_gemini_report(prompt, label="장전 브리핑", default=None, error_style="silent")
 
 def generate_stock_curation():
     """현재 시점 매크로 지표 및 뉴스를 기반으로 관심 종목 큐레이션 (수동 추가용)"""
@@ -859,52 +794,16 @@ def generate_stock_curation():
     macro_context = _get_macro_context_str()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.STOCK_CURATION_PROMPT.format(now=now, macro_context=macro_context)
-    
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 호출 대기 시작")
-        res = _gemini_generate(prompt, {"temperature": 0.3}, 60.0)
-        logger.debug(f"[GEMINI_AI_DEBUG] 큐레이션 요청 - API 응답 수신 성공")
-        return _gemini_text(res, default=None)
-    except Exception as e:
-        logger.error(f"Stock curation AI error: {e}")
-        err_str = str(e)
-        if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
-        elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
-        return f"⚠️ 종목 큐레이션 중 오류 발생: {err_str}"
+    return _run_gemini_report(prompt, label="큐레이션", default=None,
+                              generation_config={"temperature": 0.3},
+                              error_style="plain", error_prefix="종목 큐레이션")
 
 def ask_gemini(question):
     """사용자의 자유 질문에 대해 Gemini API로 답변 생성"""
-    if genai is None:
-        return "⚠️ google-generativeai 라이브러리가 설치되지 않았습니다."
-
-    if not config.GEMINI_API_KEY:
-        return "⚠️ Gemini API 키가 설정되지 않았습니다."
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.ASK_GEMINI_PROMPT.format(now=now, question=question)
-
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        
-        logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 호출 대기 시작")
-
-        response = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] Q&A 요청 - API 응답 수신 성공")
-        return _gemini_text(response, default="검색 결과가 없거나 답변을 생성하지 못했습니다.")
-
-    except Exception as e:
-        logger.error(f"Gemini Ask Error: {e}")
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]"
-        elif "404" in error_msg and "NOT_FOUND" in error_msg:
-            return f"⚠️ [red]Gemini 모델을 찾을 수 없습니다 (404 Not Found) - 모델: {config.GEMINI_MODEL}[/red]\n[dim]  설정된 모델명이 유효하지 않거나, 해당 API 버전에서 지원되지 않습니다.[/dim]\n[dim]  config.py의 GEMINI_MODEL 설정을 확인하세요. (예: gemini-2.0-flash)[/dim]"
-        elif any(c in error_msg.lower() for c in ["timeouterror", "deadline", "timeout"]):
-            return f"⚠️ [yellow]API 서버 응답 대기 시간 초과 (Timeout) - 모델: {config.GEMINI_MODEL}[/yellow]\n[dim]  구글 서버가 현재 불안정합니다. 잠시 후 다시 시도해주세요.[/dim]"
-        else:
-            return f"⚠️ [red]AI 답변 생성 중 오류 발생: {error_msg}[/red]"
+    return _run_gemini_report(prompt, label="Q&A", default="검색 결과가 없거나 답변을 생성하지 못했습니다.",
+                              error_prefix="AI 답변 생성")
 
 def summarize_disclosures_with_gemini(items_text):
     """관심종목 공시 목록을 받아 호재/악재로 분류·요약."""
@@ -922,16 +821,7 @@ def summarize_disclosures_with_gemini(items_text):
         "3) 마지막에 한 줄 총평\n"
         "한국어로, 마크다운 불릿으로 간결하게 작성하세요."
     )
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        res = _gemini_generate(prompt, {"temperature": 0.2, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-        return _gemini_text(res)
-    except Exception as e:
-        logger.error(f"Gemini Disclosure Summary Error: {e}")
-        error_msg = str(e)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg:
-            return f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]"
-        return f"⚠️ [red]공시 분석 중 오류 발생: {error_msg}[/red]"
+    return _run_gemini_report(prompt, label="공시 요약", error_prefix="공시 분석")
 
 def get_latest_news_with_gemini(keyword, code=None):
     """특정 종목의 최신 중요 뉴스 5개 검색 (링크 포함)"""
@@ -942,52 +832,16 @@ def get_latest_news_with_gemini(keyword, code=None):
     
     # 통합 포털 검색을 사용하여 종목 코드(국내/해외) 의존성 완전 제거 및 수집 성공률 100% 확보
     crawled_news = fetch_realtime_news(keyword, limit=10)
-    
+
     if not crawled_news:
         return f"⚠️ '{keyword}'에 대한 실시간 뉴스 검색 결과가 없습니다. (구글 뉴스 RSS 수집 실패)"
 
-    instruction = f"""
-    [시스템이 수집한 실시간 최신 뉴스 데이터]
-    {crawled_news}
-    
-    위 제공된 시스템 수집 뉴스 데이터를 바탕으로 '{keyword}'에 대한 가장 중요하고 핵심적인 투자 포인트와 이슈 5가지를 요약해주세요.
-    
-    [필수 지시사항]
-    1. 주식 투자와 무관한 단순 제품 홍보, 가십, 중복 기사는 엄격히 제외하고 주가에 영향을 줄 수 있는 핵심 모멘텀(실적, 수주, 신사업, 거시경제 등) 관련 기사 위주로 선별하세요.
-    2. 제공된 뉴스 기사 제목, 날짜, 출처를 명시하세요.
-    3. URL 링크가 지저분하게 노출되지 않도록, 반드시 [기사 원문 보기](원본URL) 형태의 마크다운 하이퍼링크로 작성하세요. (예: 🔗 링크: [기사 원문 보기](https://news...))
-    """
-
-    prompt = f"""
-    [현재 시각: {now} (KST)]
-    당신은 한국 및 글로벌 주식 시장 전문 AI 어시스턴트입니다.
-    {instruction}
-    
-    반드시 다음 출력 형식을 엄격하게 지켜주세요:
-    
-    📰 [{keyword}] 핵심 투자 포인트 및 최신 뉴스 5선
-    
-    1. [기사/이슈 요약 제목 1]
-       - 요약: (1~2줄 이내의 핵심 요약)
-       - 시사점: (해당 이슈가 주가에 미치는 투자 관점의 영향)
-       - 링크: [기사 원문 보기](제공된 원본 URL 삽입)
-       
-    (2~5번도 동일한 형식으로 출력)
-    """
-    try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 호출 대기 시작")
-
-        res = _gemini_generate(prompt, {"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 8192}, 60.0)
-
-        logger.debug(f"[GEMINI_AI_DEBUG] [{keyword}] 뉴스 검색 요청 - API 응답 수신 성공")
-        return _gemini_text(res, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
-    except Exception as e:
-        logger.error(f"Gemini News Search Error: {e}")
-        err_str = str(e)
-        if "429" in err_str or "Quota" in err_str: return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
-        elif "timeout" in err_str.lower(): return "⚠️ Gemini API 응답 지연 (Timeout)"
-        return f"⚠️ 뉴스 검색 중 오류 발생: {err_str}"
+    # [리팩토링] 함수 내 인라인 중복 프롬프트 제거 → prompts.NEWS_SEARCH_PROMPT 템플릿 사용
+    prompt = prompts.NEWS_SEARCH_PROMPT.format(now=now, crawled_news=crawled_news, keyword=keyword)
+    return _run_gemini_report(prompt, label=f"[{keyword}] 뉴스 검색",
+                              default="검색 결과가 없거나 응답을 생성하지 못했습니다.",
+                              generation_config={"temperature": 0.1},
+                              error_style="plain", error_prefix="뉴스 검색")
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""

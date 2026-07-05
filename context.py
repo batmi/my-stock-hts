@@ -28,3 +28,11 @@ API_PRIORITY_CONDITION = threading.Condition() # 우선순위 제어용 조건 �
 # [추가] 토큰 갱신 및 에러 알림 쿨타임 제어
 LAST_TOKEN_REFRESH_ATTEMPT = 0
 LAST_TOKEN_REFRESH_ALERT = 0
+
+
+def is_screen_output_allowed():
+    """화면 출력 허용 여부 확인 (텔레그램 봇 스레드에서는 터미널 출력 차단).
+
+    api/db_manager 등에 흩어져 있던 동일 판정의 단일 출처(Single Source of Truth).
+    """
+    return threading.current_thread().name != "TelegramBot"
