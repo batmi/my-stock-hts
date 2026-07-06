@@ -72,7 +72,7 @@ class SystemScheduler:
         if now.weekday() >= 5:
             return
         try:
-            from modules import disclosure
+            from modules.manage import disclosure
             threading.Thread(target=disclosure.check_and_alert_disclosures, daemon=True).start()
         except Exception as e:
             logger.error(f"[Scheduler] 공시 알림 체크 오류: {e}")

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import config
 import api
-from modules import disclosure
+from modules.manage import disclosure
 from modules import db_manager
 
 

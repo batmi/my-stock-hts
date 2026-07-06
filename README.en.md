@@ -323,9 +323,10 @@ my-stock-hts/
     │   ├── trader.py     #   ├ AutoTrader main loop (analyze→buy/sell→report)
     │   └── menu.py       #   └ Trading rules/restricted stocks menu UI
     ├── theme_analysis.py # [6] Stock trend analysis + AI (Gemini) analysis/disclosure summary
-    ├── manage.py         # [7] Interest Stock Management
-    ├── calendar_events.py# [7-6] Dividend/Earnings Calendar (DART + yfinance)
-    ├── disclosure.py     # [7-7/7-8] Disclosure monitoring/earnings tracking + Telegram alerts (DART)
+    ├── manage/           # [7] Watchlist Management package
+    │   ├── watchlist.py  #   ├ Watchlist add/delete/view & menu UI
+    │   ├── events.py     #   ├ Dividend/Earnings Calendar (DART + yfinance)
+    │   └── disclosure.py #   └ Disclosure monitoring/earnings tracking + Telegram alerts (DART)
     ├── trading.py        # [8] Stock Order Management (Buy/Sell/Modify/Cancel)
     ├── reserved_order_monitor.py # Background reserved order (Stop loss, Trailing, etc.) monitoring thread
     └── account.py        # [9] Asset & Balance Management

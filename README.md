@@ -332,9 +332,10 @@ my-stock-hts/
     │   ├── trader.py     #   ├ AutoTrader 메인 루프 (분석→매수/매도→리포트)
     │   └── menu.py       #   └ 트레이딩 룰/제한종목 관리 메뉴 UI
     ├── theme_analysis.py # [6] 종목 트랜드 분석 + AI(Gemini) 분석/공시 요약
-    ├── manage.py         # [7] 관심 종목 관리
-    ├── calendar_events.py# [7-6] 배당·실적 캘린더 (DART + yfinance)
-    ├── disclosure.py     # [7-7/7-8] 공시 모니터링·실적 추적 + 공시 텔레그램 알림 (DART)
+    ├── manage/           # [7] 관심 종목 관리 패키지
+    │   ├── watchlist.py  #   ├ 관심 종목 등록/삭제/조회 및 메뉴 UI
+    │   ├── events.py     #   ├ 배당·실적 캘린더 (DART + yfinance)
+    │   └── disclosure.py #   └ 공시 모니터링·실적 추적 + 공시 텔레그램 알림 (DART)
     ├── trading.py        # [8] 종목 주문 관리 (매수/매도/정정/취소)
     ├── reserved_order_monitor.py # 백그라운드 예약 주문(스탑로스, 트레일링 등) 감시 스레드
     └── account.py        # [9] 자산 및 잔고 관리

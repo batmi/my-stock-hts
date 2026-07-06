@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import config
 import api
-from modules import calendar_events
+from modules.manage import events as calendar_events
 
 
 def _set_watchlist(kr=None, us=None):
