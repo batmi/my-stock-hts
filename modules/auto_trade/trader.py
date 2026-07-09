@@ -2516,11 +2516,18 @@ class AutoTrader:
                             _pending_before = bool(self.order_manager.pending_orders)
                         _sent_before = self.order_manager.orders_sent_count
 
+                        # [최적화] 개별 룰(DB)·트레이딩 제한 종목(파일)을 주기당 1회만 로드해
+                        #  매도/매수 검사에 공유 (기존: 각 검사가 개별 로드 → DB 연결·파일 I/O 2회씩)
+                        _cycle_rules = _enrich_rules_with_weights(db_manager.db.get_all_stock_strategies())
+                        _cycle_rules_map = {r['code']: r for r in _cycle_rules}
+                        _cycle_cano, _cycle_acnt = _get_trade_account()
+                        _cycle_restricted = get_restricted_stocks(_cycle_cano, _cycle_acnt)
+
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
                         # 1. 매도 조건 점검 (리스크 관리)
-                        self._check_sell_conditions(holdings, current_market_status)
+                        self._check_sell_conditions(holdings, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                         # 2. 매수 조건 점검
-                        self._check_buy_conditions(holdings, deposit_res, current_market_status)
+                        self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
 
@@ -2960,7 +2967,7 @@ class AutoTrader:
             except Exception: pass
         return None
 
-    def _check_sell_conditions(self, holdings, is_market_open=True):
+    def _check_sell_conditions(self, holdings, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [WS] 시스템 트레이딩 종목을 실시간 피드에 최우선으로 등록한다.
         #  보유종목(포지션, 최우선) → 매수후보 순서로 priority. 매수후보는 국내주식 + (ETF 포함 설정 시)국내 ETF.
         #  ETF 미포함 설정이면 ETF는 시스템 대상이 아니므로 '그 외(other) 로테이션'으로 둔다.
@@ -2993,14 +3000,16 @@ class AutoTrader:
         # [최적화] 인자로 전달받은 holdings 사용
         if not holdings: return
 
-        # [추가] 개별 룰 로드
-        custom_rules = db_manager.db.get_all_stock_strategies()
-        custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
-        rules_map = {r['code']: r for r in custom_rules}
-        
+        # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
+        if rules_map is None:
+            custom_rules = db_manager.db.get_all_stock_strategies()
+            custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
+            rules_map = {r['code']: r for r in custom_rules}
+
         # [추가] 트레이딩 제한 종목 로드 (현재 시스템 트레이딩 계좌 기준으로 필터링)
-        _trade_cano, _trade_acnt = _get_trade_account()
-        restricted_stocks = get_restricted_stocks(_trade_cano, _trade_acnt)
+        if restricted_stocks is None:
+            _trade_cano, _trade_acnt = _get_trade_account()
+            restricted_stocks = get_restricted_stocks(_trade_cano, _trade_acnt)
 
         # [최적화] 종목별 개별 DB 조회(최근 매수/보유분 매수 내역)를 주기 시작 시 배치 쿼리로 일괄 로드
         #  (기존: 보유 종목 × 최대 5쿼리 → 배치 3쿼리, 저사양 SD카드 SQLite I/O 절감)
@@ -3276,7 +3285,7 @@ class AutoTrader:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
 
-    def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True):
+    def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합 (그룹 정보 추가)
         targets = []
         for item in config.session.stock_data.get("stocks_kr", []):
@@ -3340,10 +3349,11 @@ class AutoTrader:
                  self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원)")
             return 
             
-        # [추가] 개별 룰 로드
-        custom_rules = db_manager.db.get_all_stock_strategies()
-        custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
-        rules_map = {r['code']: r for r in custom_rules}
+        # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
+        if rules_map is None:
+            custom_rules = db_manager.db.get_all_stock_strategies()
+            custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
+            rules_map = {r['code']: r for r in custom_rules}
 
         # [추가] 당일 매도 이력 확인 및 재진입 허들(체결강도) 설정
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -3376,7 +3386,7 @@ class AutoTrader:
                     reentry_hurdles[scode] = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
 
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=restricted_stocks)
         
         # 2. 매수 집행
         if candidates:
@@ -3611,15 +3621,17 @@ class AutoTrader:
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None):
         candidates = []
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
-        
+
         # [추가] 트레이딩 제한 종목 로드 (현재 시스템 트레이딩 계좌 기준으로 필터링)
-        _trade_cano, _trade_acnt = _get_trade_account()
-        restricted_stocks = get_restricted_stocks(_trade_cano, _trade_acnt)
+        #  ([최적화] 루프에서 주기당 1회 로드해 전달받으면 파일 재조회 생략)
+        if restricted_stocks is None:
+            _trade_cano, _trade_acnt = _get_trade_account()
+            restricted_stocks = get_restricted_stocks(_trade_cano, _trade_acnt)
         
         # [추가] 시장 국면 판단 (적응형 임계값용)
         market_regime_adj = {} # Market Type -> Score Adj
