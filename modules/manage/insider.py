@@ -55,7 +55,7 @@ def _collect(code, name, cutoff):
 def show_insider_trades(days=90):
     """관심종목 내부자(임원·주요주주) 매매 및 대량보유 변동 조회."""
     utils.clear_screen()
-    config.console.print(f"\n[bold cyan]🕵️ [관심종목 내부자 매매 동향] (최근 {days}일)[/bold cyan]\n")
+    config.console.print(f"\n[bold cyan][관심종목 내부자 매매 동향] (최근 {days}일)[/bold cyan]\n")
 
     codes = _kr_stocks()
     if not codes:

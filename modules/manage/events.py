@@ -260,7 +260,7 @@ def _gather_watchlist():
 def show_calendar():
     """관심종목 배당/실적 캘린더 출력."""
     utils.clear_screen()
-    config.console.print("\n[bold cyan]📅 [관심종목 배당 · 실적 캘린더][/bold cyan]\n")
+    config.console.print("\n[bold cyan][관심종목 배당 · 실적 캘린더][/bold cyan]\n")
 
     kr, us = _gather_watchlist()
     if not kr and not us:
@@ -340,7 +340,6 @@ def _render_upcoming(events):
         d = (e["date"] - today).days
         dday = "D-DAY" if d == 0 else f"D-{d}"
         type_color = "yellow" if e["type"] == "배당락" else "cyan"
-        icon = "💰" if e["type"] == "배당락" else "📊"
         note = ""
         if e.get("estimated"):
             freq = e.get("freq", "")
@@ -351,7 +350,7 @@ def _render_upcoming(events):
             e["date"].strftime("%Y-%m-%d (%a)"),
             f"[bold]{dday}[/bold]" if d <= 3 else dday,
             f"{e['name']} ({e['code']})",
-            f"[{type_color}]{icon} {e['type']}[/]",
+            f"[{type_color}]{e['type']}[/]",
             note,
         )
     config.console.print(table)

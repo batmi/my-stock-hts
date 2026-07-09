@@ -268,7 +268,7 @@ def _enrich_details(events, limit=12):
 def show_disclosures(days=14):
     """관심종목 최근 공시 조회 (중요도순)."""
     utils.clear_screen()
-    config.console.print(f"\n[bold cyan]📰 [관심종목 공시 모니터링] (최근 {days}일)[/bold cyan]\n")
+    config.console.print(f"\n[bold cyan][관심종목 공시 모니터링] (최근 {days}일)[/bold cyan]\n")
 
     codes = _kr_watchlist()
     if not codes:

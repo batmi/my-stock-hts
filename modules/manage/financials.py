@@ -115,7 +115,7 @@ def _fmt_cell(pair):
 def show_financial_snapshot():
     """관심종목 재무 스냅샷 (최근 정기보고서 손익 + 전기 대비)."""
     utils.clear_screen()
-    config.console.print("\n[bold cyan]📈 [관심종목 재무 스냅샷][/bold cyan]\n")
+    config.console.print("\n[bold cyan][관심종목 재무 스냅샷][/bold cyan]\n")
 
     codes = _kr_stocks()
     if not codes:
