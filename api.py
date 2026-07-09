@@ -311,7 +311,7 @@ def clear_yfinance_cache():
     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
         config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
 
-def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False):
+def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False, threads=False):
     """yfinance 데이터 조회 통합 함수.
 
     [DB Lock 대응]
@@ -319,10 +319,15 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
     - 최신 yfinance는 'database is locked'를 예외로 던지지 않고 내부에서 삼킨 뒤
       빈 DataFrame을 반환하므로(예외 핸들러 우회), 결과가 비어 있으면 캐시를 정리하고
       1회 재시도한다. (_retried 플래그로 무한 재귀 방지)
+
+    threads: 다중 티커 요청 시 yfinance 내부 병렬 다운로드 허용 여부.
+      _YF_LOCK이 '외부 호출자 간' 경합은 계속 직렬화하므로, 시장 지수처럼 티커가 많은
+      일괄 조회는 True로 켜면 티커당 순차 왕복(N회)이 병렬로 줄어 수 배 빨라진다.
+      (결과 데이터는 동일. 빈 응답/DB Lock 재시도 시엔 안전하게 순차(False)로 폴백)
     """
     try:
         with _YF_LOCK:
-            df = yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=False)
+            df = yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=threads)
 
         # [추가] 빈 결과(= tz 캐시 lock 등으로 인한 조용한 실패 가능성) → 캐시 정리 후 1회 재시도
         if not _retried and (df is None or getattr(df, 'empty', True)):
@@ -1408,9 +1413,11 @@ def _fetch_and_set_token(token_type, force_refresh=False):
             except Exception as e:
                 logger.debug(f"Token fetch EGW00133 fallback error: {e}")
             logger.error(f"{token_type} 토큰 발급 실패 (Status: {res.status_code}): {res.text}")
-            # [추가] 허용 IP(화이트리스트) 미등록 감지 (403 또는 응답에 IP 관련 문구)
+            # [수정] 한투(KIS)는 개인 계정에 IP 화이트리스트 개념이 없다(포털 실측 확인).
+            #  403 + EGW00103('유효하지 않은 AppKey')은 키 불일치·만료·모의투자 만기 등
+            #  '키 자체' 문제이므로 AUTH로 분류한다. (응답에 IP 차단 문구가 명시된 경우에만 IP_BLOCKED)
             _txt = res.text.lower()
-            if res.status_code == 403 or ('ip' in _txt and 'allow' in _txt):
+            if 'ip' in _txt and 'allow' in _txt:
                 config.set_last_token_error('IP_BLOCKED')
             else:
                 config.set_last_token_error('AUTH')
@@ -2402,6 +2409,87 @@ def _nxt_quote_phase():
     if holiday or now >= "2000" or now < "0800":
         return 'offhours'
     return 'skip'
+
+# [최적화] 관심종목 멀티시세 세션 비활성 플래그 (TR 미지원 서버에서 1회 실패 후 재시도 방지)
+_MULTI_PRICE_DISABLED = False
+
+def get_multi_current_prices(codes, market_div="J"):
+    """[최적화] 관심종목(멀티종목) 시세조회(FHKST11300006)로 국내 현재가를 30종목/1콜 일괄 수집.
+
+    종목당 1콜씩 나가던 현재가 REST를 N/30콜로 줄여 TPS 소모를 대폭 절감한다
+    (모의투자 2 TPS 환경에서 특히 효과 큼). 응답 필드를 개별 현재가 API(output) 이름으로
+    정규화해 반환하므로 호출측은 기존 필드명 그대로 사용한다.
+      stck_prpr←inter2_prpr, prdy_vrss←inter2_prdy_vrss, stck_oprc/hgpr/lwpr←inter2_*,
+      stck_sdpr←inter2_sdpr, stck_prdy_clpr←inter2_prdy_clpr,
+      rprs_mrkt_kor_name←kospi_kosdaq_cls_name (prdy_ctrt/prdy_vrss_sign/acml_vol는 동일명)
+    52주 고저(w52_*)는 이 TR이 제공하지 않으므로 '_src'='multi' 마커를 남기고,
+    호출측(_analyze_table_row)이 차트(250봉)로 보강한다.
+
+    반환: {code: 정규화 output dict}. TR 미지원(모의 등)·오류 시 None을 반환하며,
+    이후 세션 동안 비활성화되어 호출측이 즉시 종목별 조회로 폴백한다.
+    """
+    global _MULTI_PRICE_DISABLED
+    if _MULTI_PRICE_DISABLED or not codes or config.session.is_toss:
+        return None
+    if not getattr(config, 'USE_MULTI_PRICE', True):
+        return None
+    result = {}
+    try:
+        for i in range(0, len(codes), 30):
+            chunk = codes[i:i + 30]
+            params = {}
+            for j, c in enumerate(chunk, start=1):
+                params[f"FID_COND_MRKT_DIV_CODE_{j}"] = market_div
+                params[f"FID_INPUT_ISCD_{j}"] = c
+            res = call_api("uapi/domestic-stock/v1/quotations/intstock-multprice",
+                           "domestic", "quotations", "multi_price", params=params,
+                           tr_id="FHKST11300006", timeout=5, retries=1)
+            if not res or res.get('rt_cd') != '0':
+                raise RuntimeError(f"rt_cd={res.get('rt_cd') if res else None} msg={res.get('msg1', '') if res else ''}")
+            outputs = res.get('output') or res.get('output1') or []
+            for row in outputs:
+                code = str(row.get('inter_shrn_iscd', '')).strip()
+                prpr = str(row.get('inter2_prpr', '')).strip()
+                if not code or not prpr:
+                    continue
+                result[code] = {
+                    '_src': 'multi',
+                    'stck_prpr': prpr,
+                    'prdy_vrss': row.get('inter2_prdy_vrss', '0'),
+                    'prdy_vrss_sign': row.get('prdy_vrss_sign', ''),
+                    'prdy_ctrt': row.get('prdy_ctrt', '0'),
+                    'acml_vol': row.get('acml_vol', '0'),
+                    'stck_oprc': row.get('inter2_oprc', '0'),
+                    'stck_hgpr': row.get('inter2_hgpr', '0'),
+                    'stck_lwpr': row.get('inter2_lwpr', '0'),
+                    'stck_sdpr': row.get('inter2_sdpr', '0'),
+                    'stck_prdy_clpr': row.get('inter2_prdy_clpr', '0'),
+                    'rprs_mrkt_kor_name': row.get('kospi_kosdaq_cls_name', ''),
+                }
+        if not result:
+            raise RuntimeError("응답에 유효 종목 없음")
+
+        # [보강] 실전 응답에서 kospi_kosdaq_cls_name이 빈 값으로 오는 경우가 실측 확인되어,
+        # 관심목록(stock.json)의 exchange 정보로 시장구분을 보강한다.
+        # (시장 국면 보정에서 코스닥 종목이 KOSPI로 오분류되는 것 방지)
+        try:
+            exch_map = {}
+            sd = getattr(config.session, 'stock_data', None) or {}
+            for key in ("stocks_kr", "etfs_kr"):
+                for s in sd.get(key, []):
+                    if s.get('code') and s.get('exchange'):
+                        exch_map[s['code']] = str(s['exchange']).upper()
+            for c, out in result.items():
+                if not out.get('rprs_mrkt_kor_name'):
+                    out['rprs_mrkt_kor_name'] = exch_map.get(c, '')
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        _MULTI_PRICE_DISABLED = True
+        logger.info(f"[MultiPrice] 관심종목 멀티시세 비활성(세션 유지): {e} → 종목별 현재가 조회로 폴백")
+        return None
 
 def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.

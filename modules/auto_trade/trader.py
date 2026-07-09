@@ -3447,11 +3447,17 @@ class AutoTrader:
                     if cand_group != hold_group:
                         continue
                         
-                    hold_df = hold_info['df']
                     hold_name = hold_info['name']
-                    if hold_df is None or hold_df.empty: continue
-                    hold_ret = hold_df.set_index('date')['close'].astype(float).pct_change().dropna()
-                    
+                    # [최적화] _analyze_candidates에서 사전계산된 수익률 시리즈 재사용
+                    #  (없으면 1회만 계산해 memoize — 후보×보유 조합마다 재계산 방지)
+                    hold_ret = hold_info.get('ret')
+                    if hold_ret is None:
+                        hold_df = hold_info.get('df')
+                        if hold_df is None or hold_df.empty: continue
+                        hold_ret = hold_df.set_index('date')['close'].astype(float).pct_change().dropna()
+                        hold_info['ret'] = hold_ret
+                    if hold_ret.empty: continue
+
                     combined = pd.concat([cand_ret, hold_ret], axis=1, join='inner').dropna()
                     if len(combined) > 30:
                         corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
@@ -3588,7 +3594,12 @@ class AutoTrader:
                 df = api.get_chart_data(code, is_overseas)
                 if df is not None and not df.empty:
                     name = holding_names_map.get(code, code)
-                    holdings_dfs[code] = {'name': name, 'df': df}
+                    # [최적화] 수익률 시리즈를 주기당 1회만 계산 (워커에서 후보×보유 조합마다 재계산 방지)
+                    try:
+                        ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
+                    except Exception:
+                        ret = None
+                    holdings_dfs[code] = {'name': name, 'df': df, 'ret': ret}
 
         # [최적화] 분석 대상 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []

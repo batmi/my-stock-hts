@@ -654,14 +654,8 @@ class TelegramCommander:
             ind = indicators.calculate_indicators(df)
             current_price = float(df.iloc[-1]['close'])
             
-            # 상태 분류를 위한 전일 RSI 계산
-            prev_rsi = None
-            if len(df) >= 16:
-                delta = df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except Exception: pass
+            # 상태 분류를 위한 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+            prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
 
             w52_pos = 0.0
             if len(df) > 0:
@@ -1738,17 +1732,8 @@ class TelegramCommander:
             if high_52 > low_52:
                 pos_52 = (current_price - low_52) / (high_52 - low_52) * 100
             
-            # 전일 RSI 계산 (상태 분류용)
-            # [수정] AutoTrader의 protected 메서드 대신 직접 계산 (결합도 감소)
-            prev_rsi = None
-            if len(df) >= 16:
-                delta = df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try:
-                    prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except Exception as e:
-                    logger.debug(f"Prev RSI calculation error: {e}")
+            # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+            prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
                 
             # 52주 위치 계산 (슈퍼 모멘텀 판정용)
             w52_pos = 0.0

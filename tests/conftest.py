@@ -19,6 +19,10 @@ def setup_config():
     """테스트 세션 동안 사용할 설정 초기화 (모의투자 모드 강제)"""
     # 테스트 중 실수로 실전 API가 호출되지 않도록 안전장치
     config.session.initialize(mode="1")
+    # [지연 임포트 대응] genai는 운영에서 최초 사용 시 로드되지만, 테스트는
+    # modules.theme_analysis.genai.GenerativeModel 을 직접 patch하므로 미리 채워 둔다.
+    from modules import theme_analysis
+    theme_analysis._ensure_genai()
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +73,10 @@ def block_external_market_api(request, monkeypatch):
         return
     monkeypatch.setattr(api, "get_domestic_index_chart",
                         lambda *a, **k: _mock_index_chart_df(), raising=False)
+    # [격리] 멀티시세 프리페치가 mock 없는 print_table 테스트에서 실 서버로 나가지 않도록
+    # 기본 비활성화한다. (멀티시세 전용 테스트는 개별적으로 다시 켠다)
+    monkeypatch.setattr(config, "USE_MULTI_PRICE", False, raising=False)
+    monkeypatch.setattr(api, "_MULTI_PRICE_DISABLED", False, raising=False)
 
 @pytest.fixture(autouse=True)
 def isolate_test_files(tmp_path, monkeypatch):
@@ -153,12 +161,15 @@ def reset_all_singletons():
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
-    
+    # [격리] 시장 국면 TTL 캐시 초기화 (테스트별 모킹 데이터가 캐시로 새지 않도록)
+    analysis._MARKET_REGIME_CACHE.clear()
+
     yield
-    
+
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
+    analysis._MARKET_REGIME_CACHE.clear()
 
 def create_mock_df(trend='up', periods=100, start_price=10000):
     """가상의 주가 데이터프레임 생성 헬퍼 함수"""

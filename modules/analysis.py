@@ -25,8 +25,6 @@ import sqlite3
 import json
 import math
 import re
-from openpyxl.styles import Font
-from openpyxl.utils import get_column_letter
 from modules import db_manager
 
 logger = logging.getLogger(__name__)
@@ -39,6 +37,10 @@ rules_map = {}
 
 # [리팩토링] 스마트머니 캐시 (종목코드 -> (flag, reason)) — 공용 TTLCache 사용
 _SMART_MONEY_CACHE = caching.TTLCache()
+
+# [최적화] 시장 국면(get_market_regime) 단기 캐시 — 자동매매 주기당 반복 호출 제거
+_MARKET_REGIME_CACHE = caching.TTLCache(max_size=8)
+_MARKET_REGIME_TTL_SEC = 60.0
 
 def clear_smart_money_cache():
     """스마트머니 수급 캐시 초기화 (수동 갱신용)"""
@@ -166,10 +168,8 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         if prev_cci is None and len(df) > 20:
             try:
                 window = config.INDICATOR_PARAMS.get('CCI_WINDOW', 20)
-                tp = (df['high'] + df['low'] + df['close']) / 3
-                sma_tp = tp.rolling(window=window).mean()
-                mad = tp.rolling(window=window).apply(lambda x: np.abs(x - x.mean()).mean(), raw=False)
-                cci_series = (tp - sma_tp) / (0.015 * mad)
+                # [최적화] 동일 수식의 벡터화 버전에 위임 (rolling.apply 대비 100배 이상 빠름, 결과 동일)
+                cci_series = indicators.get_cci_full_series(df, window)
                 if len(cci_series) > 1: prev_cci = cci_series.iloc[-2]
             except Exception: pass
 
@@ -513,45 +513,55 @@ def get_domestic_index_data(market_type, force_refresh=False):
         return df
 
 def get_market_regime(market_type="KOSPI"):
-    """시장 국면 판단 (Bull/Bear/Sideways)"""
+    """시장 국면 판단 (Bull/Bear/Sideways)
+
+    자동매매는 매 주기(매도검사·매수스캔 각각) 시장별로 호출하므로, 짧은 TTL 캐시로
+    지수 차트 조회 + 지표 재계산 중복을 제거한다. (국면은 초 단위로 변하지 않음)
+    데이터 부족/오류 폴백("Sideways", 0.0)은 일시 장애일 수 있어 캐시하지 않는다.
+    """
+    cached = _MARKET_REGIME_CACHE.get(market_type, ttl=_MARKET_REGIME_TTL_SEC)
+    if cached is not None:
+        return cached
+
     try:
         # [수정] 공통 함수를 통해 데이터 조회 (Fallback 적용)
         df = get_domestic_index_data(market_type)
-        
+
         # [수정] 설정된 MA 기간 가져오기
         ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
-        
+
         if df is None or df.empty or len(df) < ma_period:
             return "Sideways", 0.0 # 데이터 부족 시 횡보로 가정
-            
+
         current_price = float(df.iloc[-1]['close'])
-        
+
         # 지표 계산
         adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-        
+
         ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
-        
+
         # MA 기울기 (최근 5일)
         ma_series = df['close'].ewm(span=ma_period, adjust=False).mean()
         slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-        
+
         # ADX 계산
         ind = indicators.calculate_indicators(df)
         adx = ind['adx']
-        
+
         # 국면 판단 로직
         # 1. 강세장: 지수 > MA & 기울기 > 0 & ADX > 기준
         if current_price > ma_val and slope > 0 and adx >= adx_threshold:
-            return "Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -1.0)
-            
+            result = ("Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -1.0))
         # 2. 약세장: 지수 < MA
         elif current_price < ma_val:
-            return "Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 1.0)
-            
+            result = ("Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 1.0))
         # 3. 횡보장: 그 외
         else:
-            return "Sideways", config.MARKET_REGIME_PARAMS.get("SIDEWAYS_SCORE_ADJ", 0.0)
-            
+            result = ("Sideways", config.MARKET_REGIME_PARAMS.get("SIDEWAYS_SCORE_ADJ", 0.0))
+
+        _MARKET_REGIME_CACHE.set(market_type, result)
+        return result
+
     except Exception as e:
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
@@ -1215,15 +1225,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")
         ind = indicators.calculate_indicators(df)
         
-        # 전일 RSI 계산
-        prev_rsi = None
-        if df is not None and not df.empty and len(df) >= 16:
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-            try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except Exception: pass
-            
+        # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+        prev_rsi = ind.get('prev_rsi') if df is not None and not df.empty and len(df) >= 16 else None
+
         current_price = float(df.iloc[-1]['close'])
         prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
         diff = current_price - prev_price
@@ -2028,15 +2032,9 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         ind = indicators.calculate_indicators(df)
         current_price = float(df.iloc[-1]['close'])
         
-        # 전일 RSI (상태 분류용)
-        prev_rsi = None
-        if len(df) >= 16:
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-            try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except Exception: pass
-            
+        # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+        prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
+
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         if len(df) > 0:
@@ -2331,15 +2329,9 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         current_price = float(df.iloc[-1]['close'])
         ind = indicators.calculate_indicators(df)
         
-        # 전일 RSI 계산
-        prev_rsi = None
-        if len(df) >= 16:
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-            try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except Exception: pass
-            
+        # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+        prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
+
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         if len(df) > 0:
@@ -2877,7 +2869,11 @@ def analyze_market_stocks(market_type):
 
 def save_all_market_analysis():
     """코스피/코스닥 전 종목 분석 결과를 엑셀로 저장"""
-    
+    # [최적화] openpyxl은 이 함수에서만 사용 → 지연 임포트로 프로그램 시작 시간 단축
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+
     config.console.print("\n[bold]전체 종목 분석결과 저장 (Export to Excel)[/bold]")
     config.console.print("[dim]코스피 및 코스닥 전 종목을 분석하여 파일로 저장합니다.[/dim]")
     config.console.print("[dim]시간이 오래 걸릴 수 있습니다. (중단: Ctrl+C)[/dim]\n")
@@ -3136,11 +3132,13 @@ def _fetch_chart_data(item, is_overseas):
         logger.error(f"[{code}] 차트 데이터 수신 오류: {e}")
         return None
 
-def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=None):
+def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=None, preloaded_curr=None):
     """(내부함수) print_table 2단계 전반부: 당일 실시간 데이터(현재가/체결강도/수급/상세) 수신.
 
     chart_df가 주어지면(1단계에서 수신) 차트는 재수신하지 않는다. 실제 지표 분석/행 포맷은
     _analyze_table_row가 담당한다. (메뉴1처럼 '데이터 수신' / '실시간 데이터 수신 및 분석' 단계 분리)
+    preloaded_curr: 멀티시세(30종목/1콜) 프리페치로 확보한 현재가 응답({'rt_cd','output'}).
+      주어지면 종목별 현재가 REST를 생략한다(TPS 절감). 없으면 종전대로 개별 조회.
     """
     name, code = item
     bundle = {'curr_data': None, 'chart_df': chart_df, 'inv_list': None,
@@ -3158,7 +3156,8 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 # cache_ttl=0 → 예열 캐시를 재사용하지 않는 라이브 호출(25초 예열 폐지). 시스템 트레이딩과
                 # 동일 캐시 키(cp_{code}_J / vol_{code})를 공유해 동시 조회 시 중복 호출이 합쳐진다.
                 # (모의투자(VTS)는 NXT 미지원이라 내부에서 NX 조회를 건너뛴다 → 정규장 시세만 표시)
-                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0)
+                # [멀티시세] 프리페치된 현재가가 있으면 종목별 REST 생략
+                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0) if preloaded_curr is None else None
                 # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
@@ -3167,7 +3166,7 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
                 fut_ab = ex.submit(api.get_ask_bid_ratio, code, False) if (config.session.is_toss and not is_overseas) else None
 
-                curr_data = fut_curr.result()
+                curr_data = fut_curr.result() if fut_curr is not None else preloaded_curr
                 if fut_chart is not None:
                     chart_df = fut_chart.result()
                 inv_list = fut_inv.result() if fut_inv else None
@@ -3251,6 +3250,17 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     _o['w52_hgpr'] = str(_h52); _o['w52_lwpr'] = str(_l52)
                     if _prev > 0:
                         _o['stck_sdpr'] = str(int(_prev))  # 기준가(전일종가) → diff = 현재가 - 기준가
+            except Exception: pass
+
+        # [멀티시세] 이 TR은 52주 고저(w52_*)를 제공하지 않으므로 차트(250봉)로 보강한다.
+        # (개별 현재가 API의 액면분할 보정 경로와 동일한 산출 방식)
+        if not is_overseas and curr_data and curr_data.get('rt_cd') == '0' \
+           and curr_data.get('output', {}).get('_src') == 'multi' \
+           and chart_df is not None and not chart_df.empty:
+            _o = curr_data['output']
+            try:
+                _o['w52_hgpr'] = str(float(chart_df['high'].tail(250).max()))
+                _o['w52_lwpr'] = str(float(chart_df['low'].tail(250).min()))
             except Exception: pass
 
         ind = indicators.calculate_indicators(chart_df)
@@ -3361,13 +3371,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             rate_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
             rate_str = f"{rate_color}{diff_str} ({rate:+.2f}%)[/]{strength_display}"
 
-            prev_rsi_val = None
-            if chart_df is not None and not chart_df.empty and len(chart_df) >= 16:
-                delta = chart_df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi_val = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except Exception: pass
+            # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+            prev_rsi_val = ind.get('prev_rsi') if chart_df is not None and not chart_df.empty and len(chart_df) >= 16 else None
 
             # 적응형 임계값 적용
             thresholds = None
@@ -3566,12 +3571,13 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
         logger.error(f"[{code}] 분석 오류: {e}")
         return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
 
-def _realtime_and_analyze(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, chart_df):
+def _realtime_and_analyze(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, chart_df, preloaded_curr=None):
     """(내부함수) print_table 2단계: 당일 실시간 데이터 수신 + 지표 분석.
 
     1단계에서 받은 과거 차트(chart_df)를 받아 현재가/체결강도/수급을 수신하고 지표를 계산한다.
+    preloaded_curr가 있으면(멀티시세 프리페치) 종목별 현재가 REST를 생략한다.
     """
-    bundle = _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=chart_df)
+    bundle = _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=chart_df, preloaded_curr=preloaded_curr)
     return _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks,
                               rules_map, market_regime_adj, reserved_codes, m_codes, bundle)
 
@@ -3733,6 +3739,26 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                         charts[idx] = None
                     progress.advance(task_d)
 
+        # [멀티시세] 국내 그룹 현재가를 30종목/1콜로 프리페치 (종목당 현재가 REST 제거 → TPS 절감)
+        #  NXT 병합(ats_prpr)이 필요 없는 경우에만 사용: 모의투자(NXT 미지원) 또는 실전 정규장(phase 'skip').
+        #  실패/미지원 시 None → 워커가 종전대로 종목별 조회(동일 출력 폴백).
+        multi_prices = None
+        if not is_overseas and data_list and not config.session.is_toss and getattr(config, 'USE_MULTI_PRICE', True):
+            _use_multi = config.session.is_simulation
+            if not _use_multi:
+                try: _use_multi = api._nxt_quote_phase() == 'skip'
+                except Exception: _use_multi = False
+            if _use_multi:
+                try:
+                    multi_prices = api.get_multi_current_prices([c for _, c in data_list])
+                except Exception:
+                    multi_prices = None
+
+        def _preloaded(code):
+            if multi_prices and code in multi_prices:
+                return {'rt_cd': '0', 'output': multi_prices[code]}
+            return None
+
         # 2단계: 실시간 데이터 수신 및 분석 (당일 현재가/체결강도/수급 수신 + 지표 연산)
         with Progress(
             SpinnerColumn(),
@@ -3748,7 +3774,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                 fut_map = {
                     executor.submit(
                         _realtime_and_analyze, item, title, is_overseas, use_investor_data,
-                        restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, charts[i]
+                        restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, charts[i],
+                        _preloaded(item[1])
                     ): i
                     for i, item in enumerate(data_list)
                 }

@@ -22,14 +22,30 @@ from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
 from modules.executors import ai_executor, io_executor
 from modules import db_manager
 
-# [수정] google.generativeai 패키지 Deprecation 경고(FutureWarning) 숨김 처리
-# (최신 SDK인 google.genai로의 전환 권고 메시지를 숨기고 기존 로직 유지)
-try:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        import google.generativeai as genai
-except ImportError:
-    genai = None
+# [최적화] google.generativeai(grpc 등 무거운 의존성 포함)는 AI 기능 최초 사용 시점에
+# 지연 임포트한다 → 프로그램 시작 시간 단축 (라즈베리파이에서 특히 유효).
+# 테스트가 modules.theme_analysis.genai 를 직접 patch하는 관행을 유지하기 위해
+# 모듈 전역 genai 심볼은 그대로 두고 _ensure_genai()가 최초 1회만 채운다.
+genai = None
+_GENAI_IMPORT_TRIED = False
+
+def _ensure_genai():
+    """google.generativeai를 최초 사용 시 임포트해 전역 genai에 바인딩한다.
+
+    미설치 시 None 유지. 이미 로드됐거나 테스트가 genai를 patch한 경우 그대로 반환한다.
+    (FutureWarning 숨김: 최신 SDK인 google.genai로의 전환 권고 메시지 억제, 기존 로직 유지)
+    """
+    global genai, _GENAI_IMPORT_TRIED
+    if genai is None and not _GENAI_IMPORT_TRIED:
+        _GENAI_IMPORT_TRIED = True
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=FutureWarning)
+                import google.generativeai as _genai
+            genai = _genai
+        except ImportError:
+            genai = None
+    return genai
 import config
 
 logger = logging.getLogger(__name__)
@@ -594,7 +610,7 @@ def _run_gemini_report(prompt_content, *, label="분석", timeout=60.0, generati
     설정 확인 → genai.configure → 생성(429 시 폴백 모델 재시도) → 텍스트 추출(잘림 경고)
     → 오류 메시지 표준화까지의 보일러플레이트를 한곳으로 모은다.
     """
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         if error_style == "silent":
             return None
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
@@ -618,7 +634,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
     """
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
     """
-    if genai is None:
+    if _ensure_genai() is None:
         config.console.print("\n[red]※ google-generativeai 라이브러리가 설치되지 않았습니다.[/red]")
         return None
 
@@ -702,7 +718,7 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
 
     차트 이미지를 그대로 전달하므로, 수치 텍스트가 아닌 '차트 전체 그림'을 보고 분석한다.
     """
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
 
     try:
@@ -771,7 +787,7 @@ def _get_today_trades_str():
 
 def generate_daily_closing_report(portfolio_str):
     """하루 장 마감 후 시장, 포트폴리오, 당일 매매를 종합 진단하는 마감 브리핑 생성"""
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
     macro_context = _get_macro_context_str()
@@ -788,7 +804,7 @@ def generate_morning_briefing(market_data_str):
 
 def generate_stock_curation():
     """현재 시점 매크로 지표 및 뉴스를 기반으로 관심 종목 큐레이션 (수동 추가용)"""
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
     macro_context = _get_macro_context_str()
@@ -807,7 +823,7 @@ def ask_gemini(question):
 
 def summarize_disclosures_with_gemini(items_text):
     """관심종목 공시 목록을 받아 호재/악재로 분류·요약."""
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -825,7 +841,7 @@ def summarize_disclosures_with_gemini(items_text):
 
 def get_latest_news_with_gemini(keyword, code=None):
     """특정 종목의 최신 중요 뉴스 5개 검색 (링크 포함)"""
-    if genai is None or not config.GEMINI_API_KEY:
+    if _ensure_genai() is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다."
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1081,13 +1097,8 @@ def _analyze_stock_ui():
             ind = indicators.calculate_indicators(df)
             current_price = float(df.iloc[-1]['close'])
             
-            prev_rsi = None
-            if len(df) >= 16:
-                delta = df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                try: prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2]
-                except Exception: pass
+            # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+            prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
 
             w52_pos = 0.0
             if len(df) > 0:

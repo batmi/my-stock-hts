@@ -60,11 +60,8 @@ class DefaultStrategy:
             return None
 
         ind = indicators.calculate_indicators(df)
-        # 전일 RSI 계산 (상태 분류용)
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-        loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-        prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+        # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+        prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
         
         # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
@@ -193,11 +190,8 @@ class DefaultStrategy:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
                 
             ind = indicators.calculate_indicators(df)
-            # 전일 RSI 계산 (상태 분류용)
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-            prev_rsi = (100 - (100 / (1 + gain/loss))).iloc[-2] if len(df) >= 16 else None
+            # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+            prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
             
             is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)

@@ -785,7 +785,8 @@ def _show_market_indices_core(target_indices=None):
                             try:
                                 # [최적화] 분봉(5m) bulk 다운로드 제거. 평상시 fast_info가 성공하면 분봉은 쓰이지 않으므로,
                                 # 일봉(1y)만 받고 분봉은 fast_info 실패(지연) 종목에 한해 워커에서 단건 지연조회한다.
-                                d = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker')
+                                # threads=True: 그룹 내 티커들을 yfinance 내부에서 병렬 수신(순차 N왕복 → 동시, 데이터 동일)
+                                d = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker', threads=True)
                                 result_container['daily'] = d
                                 result_container['intra'] = pd.DataFrame()
                             except Exception as e:

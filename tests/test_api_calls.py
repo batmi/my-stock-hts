@@ -30,7 +30,8 @@ def test_call_api_success(mock_session):
             ANY,
             headers=ANY,
             params=None,
-            timeout=config.DEFAULT_TIMEOUT
+            timeout=config.DEFAULT_TIMEOUT,
+            retries=ANY  # call_api가 retries를 세션으로 위임하도록 변경됨
         )
         # URL 확인
         args, _ = mock_session.get.call_args
@@ -153,5 +154,6 @@ def test_call_api_args(mock_get):
             expected_url,
             headers=expected_headers,
             params={"param1": "value1"},
-            timeout=config.DEFAULT_TIMEOUT
+            timeout=config.DEFAULT_TIMEOUT,
+            retries=ANY  # call_api가 retries를 세션으로 위임하도록 변경됨
         )

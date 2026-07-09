@@ -360,6 +360,11 @@ INDICES_GROUPS = {
 SIM_TX_PER_SECOND = 2     # 모의투자 서버 최대 TPS: 2
 REAL_TX_PER_SECOND = 20   # 실전투자 서버 최대 TPS: 20 (KIS 명목 한도)
 
+# [최적화] 관심종목 멀티시세(FHKST11300006) 사용 여부.
+# 메뉴2(종목 시세 분석) 국내 현재가를 30종목/1콜로 일괄 수집해 TPS 소모를 대폭 줄인다.
+# (모의투자 2 TPS 환경에서 특히 효과 큼. TR 미지원/오류 시 자동으로 종목별 조회 폴백)
+USE_MULTI_PRICE = True
+
 # [추가] 내부 TPS 안전계수 (Safety Margin)
 # 위 *_TX_PER_SECOND는 운영자가 선언하는 '명목 한도'로 그대로 두고,
 # 스로틀 로직 내부에서만 이 비율을 곱한 '실효 한도'로 운행한다.
@@ -552,28 +557,41 @@ def build_token_failure_help(is_toss=False):
     """토큰 발급 실패 시 사용자 안내 메시지(rich 마크업 문자열 리스트)를 만든다.
 
     LAST_TOKEN_ERROR 분류와 사업자(토스/한투)에 따라 안내를 다르게 구성한다.
-      - IP_BLOCKED: 허용 IP 미등록이 확정적(주로 토스 403 "IP not allowed").
+      - IP_BLOCKED: 허용 IP(화이트리스트) 미등록. 토스 전용 분류다 — 토스는 허용 IP 등록이
+                    필수지만, 한투(KIS Developers)는 개인 계정에 IP 등록 메뉴 자체가 없어
+                    (실측 확인) IP 안내를 하지 않는다.
+      - AUTH      : 앱키/시크릿 거부(한투 403 EGW00103 '유효하지 않은 AppKey' 포함).
+                    한투는 키 불일치·만료·모의투자 서비스 만기 확인을 안내한다.
       - NETWORK   : 연결 거부/타임아웃. 서버 점검·네트워크 문제일 수 있으며,
                     토스는 화이트리스트 필수라 IP 미등록도 유력 원인으로 함께 안내한다.
-                    한투는 IP 등록이 선택 사항이므로 서버 상태 확인을 우선 안내한다.
-    키/시크릿 오류(AUTH) 등 IP·연결과 무관한 경우에는 빈 리스트를 반환한다.
     """
     kind = LAST_TOKEN_ERROR
-    if kind not in ('IP_BLOCKED', 'NETWORK'):
+    if kind not in ('IP_BLOCKED', 'NETWORK', 'AUTH'):
         return []
 
     lines = []
+
+    if kind == 'AUTH':
+        if is_toss:
+            return []  # 토스 키 오류는 preflight 기본 문구로 충분
+        # 한투: EGW00103 등 앱키 거부 — 키 자체 문제를 사실 기반으로 안내
+        lines.append("  [bold yellow]→ 앱키/시크릿이 거부되었습니다 (예: EGW00103 '유효하지 않은 AppKey').[/bold yellow]")
+        lines.append("     • KIS Developers → My App 에서 현재 발급된 AppKey/AppSecret과 ~/.htsrc 값이 일치하는지 확인하세요.")
+        lines.append("       (키 재발급·유효기간(1년) 만료 시 기존 키는 무효화됩니다)")
+        lines.append("     • 모의투자 키라면 '모의투자' 서비스 신청 상태가 유효한지 확인하세요. (모의계좌 만기 시 키 무효화)")
+        lines.append("     • 다른 기기에서 정상 동작 중이라면 그 기기의 ~/.htsrc 키와 값을 비교하세요.")
+        return lines
+
     ip = get_public_ip()
     ip_str = f"[bold]{ip}[/bold]" if ip else "(확인 실패 — 네트워크 연결을 먼저 점검하세요)"
 
     if kind == 'IP_BLOCKED':
-        # 허용 IP 미등록 확정
-        lines.append("  [bold yellow]→ 현재 공인 IP가 API 사업자의 허용 IP(화이트리스트)에 등록되어 있지 않습니다.[/bold yellow]")
+        # 허용 IP 미등록 — 토스 전용 안내 (한투 개인 계정에는 IP 등록 메뉴가 없음)
+        if not is_toss:
+            return []
+        lines.append("  [bold yellow]→ 현재 공인 IP가 허용 IP(화이트리스트)에 등록되어 있지 않습니다.[/bold yellow]")
         lines.append(f"     • 현재 공인 IP: {ip_str}")
-        if is_toss:
-            lines.append("     • [토스] 토스증권 개발자센터 → 앱 설정 → 허용 IP 에 위 IP를 등록하세요.")
-        else:
-            lines.append("     • [한투] KIS Developers → My App(앱 관리) → 고객 IP 에 위 IP를 등록하세요.")
+        lines.append("     • [토스] 토스증권 개발자센터 → 앱 설정 → 허용 IP 에 위 IP를 등록하세요.")
         lines.append("     • 또는 기존에 등록해 둔(고정 IP) 네트워크에서 실행하세요.")
         return lines
 
@@ -585,11 +603,10 @@ def build_token_failure_help(is_toss=False):
         lines.append(f"     • 현재 공인 IP: {ip_str}")
         lines.append("     • [토스] 토스증권 개발자센터 → 앱 설정 → 허용 IP 에 위 IP가 등록돼 있는지 확인하세요.")
     else:
-        # 한투는 IP 등록이 선택 사항 → 서버 상태 확인을 우선 안내
+        # 한투: 서버 상태·네트워크 확인 안내 (IP 화이트리스트 개념 없음)
         lines.append("  [yellow]→ 한투 API 서버에 연결하지 못했습니다(연결 거부/시간초과).[/yellow]")
         lines.append("  [yellow]   KIS 서버 점검·장애이거나 네트워크 문제일 가능성이 높습니다. 잠시 후 다시 시도하세요.[/yellow]")
         lines.append("     • KIS Developers 공지/서버 상태와 네트워크(방화벽·포트 9443/29443)를 확인하세요.")
-        lines.append(f"     • (참고) 한투 API 키에 '고객 IP' 제한을 설정해 두었다면, 현재 공인 IP {ip_str} 가 등록돼 있는지 확인하세요.")
     return lines
 
 # [추가] 로그 파일명 변경을 위한 Namer 함수

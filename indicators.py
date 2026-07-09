@@ -87,20 +87,22 @@ def get_psar_full_series(df, af_start=None, af_step=None, af_max=None):
         psar[i] = curr_psar
     return psar
 
-def get_cci_full_series(df, window=None):
-    if window is None: window = config.INDICATOR_PARAMS["CCI_WINDOW"]
-    
-    tp = (df['high'] + df['low'] + df['close']) / 3
-    sma_tp = tp.rolling(window=window).mean()
-
-    # [최적화] 평균절대편차(MAD)를 rolling.apply(lambda) 대신 sliding_window_view로 벡터화.
-    #          (rolling.apply 대비 결과는 비트 단위로 동일하며 100배 이상 빠름 - Monte Carlo 재계산 비용 절감)
+def _rolling_mad(tp, window):
+    """롤링 평균절대편차(MAD)를 sliding_window_view로 벡터화 계산.
+    (rolling.apply(lambda) 대비 결과는 비트 단위로 동일하며 100배 이상 빠름)"""
     tp_arr = tp.to_numpy(dtype=float)
     mad_arr = np.full(len(tp_arr), np.nan)
     if len(tp_arr) >= window:
         win = sliding_window_view(tp_arr, window)
         mad_arr[window - 1:] = np.abs(win - win.mean(axis=1, keepdims=True)).mean(axis=1)
-    mad = pd.Series(mad_arr, index=tp.index)
+    return pd.Series(mad_arr, index=tp.index)
+
+def get_cci_full_series(df, window=None):
+    if window is None: window = config.INDICATOR_PARAMS["CCI_WINDOW"]
+
+    tp = (df['high'] + df['low'] + df['close']) / 3
+    sma_tp = tp.rolling(window=window).mean()
+    mad = _rolling_mad(tp, window)
     return (tp - sma_tp) / (0.015 * mad)
 
 def get_rsi_full_series(df, period=None):
@@ -177,28 +179,21 @@ def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
 def calculate_indicators(df):
     indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'plus_di': None, 'minus_di': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
-    
-    # SettingWithCopyWarning 방지를 위해 명시적 복사
-    df = df.copy()
-    
+
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
     if len(df) >= 20: indicators['ema_20'] = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     if len(df) >= 60: indicators['ema_60'] = df['close'].ewm(span=60, adjust=False).mean().iloc[-1]
     if len(df) >= 120: indicators['ema_120'] = df['close'].ewm(span=120, adjust=False).mean().iloc[-1]
 
-    if len(df) >= 15: 
-        rsi_period = config.INDICATOR_PARAMS["RSI_PERIOD"]
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).ewm(com=rsi_period-1, adjust=False).mean()
-        loss = -delta.where(delta < 0, 0).ewm(com=rsi_period-1, adjust=False).mean()
-        rs = gain / loss
-        indicators['rsi'] = 100 - (100 / (1 + rs)).iloc[-1]
+    if len(df) >= 15:
+        # [일원화] 전체 시리즈 함수에 위임 (동일 수식). 전일 RSI(prev_rsi)도 함께 제공해
+        # 호출부마다 반복되던 재계산(고정 com=13)을 제거하고 RSI_PERIOD 설정과 일치시킨다.
+        rsi_series = get_rsi_full_series(df)
+        indicators['rsi'] = rsi_series.iloc[-1]
+        if len(rsi_series) > 1: indicators['prev_rsi'] = rsi_series.iloc[-2]
 
     if len(df) >= 2:
-        df['obv_change'] = 0
-        df.loc[df['close'] > df['close'].shift(1), 'obv_change'] = df['volume']
-        df.loc[df['close'] < df['close'].shift(1), 'obv_change'] = -df['volume']
-        obv_series = df['obv_change'].cumsum()
+        obv_series = get_obv_full_series(df)
         indicators['obv'] = obv_series.iloc[-1]
         obv_period = config.INDICATOR_PARAMS["OBV_MA_PERIOD"]
         if len(df) >= obv_period:
@@ -207,14 +202,14 @@ def calculate_indicators(df):
 
     if len(df) >= 20:
         window = config.INDICATOR_PARAMS["CCI_WINDOW"]
-        df['tp'] = (df['high'] + df['low'] + df['close']) / 3
-        df['sma_tp'] = df['tp'].rolling(window=window).mean()
-        df['mad'] = df['tp'].rolling(window=window).apply(lambda x: np.abs(x - x.mean()).mean(), raw=False)
-        df['cci'] = 0.0
-        mask = df['mad'] != 0
-        df.loc[mask, 'cci'] = (df.loc[mask, 'tp'] - df.loc[mask, 'sma_tp']) / (0.015 * df.loc[mask, 'mad'])
-        indicators['cci'] = df['cci'].iloc[-1]
-        if len(df['cci']) > 1: indicators['prev_cci'] = df['cci'].iloc[-2]
+        tp = (df['high'] + df['low'] + df['close']) / 3
+        sma_tp = tp.rolling(window=window).mean()
+        mad = _rolling_mad(tp, window)  # [최적화] rolling.apply(lambda) 대비 100배 이상 빠름 (비트 단위 동일)
+        cci = pd.Series(0.0, index=df.index)
+        mask = mad != 0
+        cci[mask] = (tp[mask] - sma_tp[mask]) / (0.015 * mad[mask])
+        indicators['cci'] = cci.iloc[-1]
+        if len(cci) > 1: indicators['prev_cci'] = cci.iloc[-2]
 
     if len(df) >= 28:
         adx_series, di_p_series, di_m_series = get_adx_full_series(df)

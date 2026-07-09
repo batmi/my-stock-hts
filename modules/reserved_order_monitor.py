@@ -252,13 +252,11 @@ class ReservedOrderMonitor:
         df = ctx['df']
         if '_sm' not in ctx:
             ctx['_sm'], _ = analysis.check_smart_money_turnaround(code, is_overseas=ctx['is_overseas'])
+        # 전일 RSI — calculate_indicators(ctx['ind'])가 계산한 값 재사용 (중복 계산 제거·SSOT)
         prev_rsi = None
         try:
             if len(df) >= 16:
-                delta = df['close'].diff()
-                gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-                loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-                prev_rsi = (100 - (100 / (1 + gain / loss))).iloc[-2]
+                prev_rsi = (ctx.get('ind') or {}).get('prev_rsi')
         except Exception:
             pass
         w52_pos = 0.0
