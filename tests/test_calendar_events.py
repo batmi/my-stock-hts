@@ -6,10 +6,10 @@ import api
 from modules.manage import events as calendar_events
 
 
-def _set_watchlist(kr=None, us=None):
+def _set_watchlist(kr=None, us=None, kr_etf=None, us_etf=None):
     config.session.stock_data = {
-        "stocks_kr": kr or [], "etfs_kr": [],
-        "stocks_us": us or [], "etfs_us": [],
+        "stocks_kr": kr or [], "etfs_kr": kr_etf or [],
+        "stocks_us": us or [], "etfs_us": us_etf or [],
     }
 
 
@@ -41,6 +41,19 @@ def test_show_calendar_renders_with_mocked_sources():
 
     out = " ".join(str(c.args) for c in mock_print.call_args_list)
     assert "예정 일정" in out and "국내 배당 정보" in out
+
+
+def test_gather_watchlist_excludes_etfs():
+    """ETF는 배당·실적 공시 대상이 아니므로 캘린더 조회 대상에서 제외된다 (yfinance 404 방지)."""
+    _set_watchlist(
+        kr=[{"code": "005930", "name": "삼성전자"}],
+        us=[{"code": "AAPL", "name": "Apple"}],
+        kr_etf=[{"code": "069500", "name": "KODEX 200"}],
+        us_etf=[{"code": "QQQ", "name": "Invesco QQQ"}],
+    )
+    kr, us = calendar_events._gather_watchlist()
+    assert kr == [("005930", "삼성전자")]
+    assert us == [("AAPL", "Apple")]
 
 
 def test_month_end_ex_date_matches_known_years():

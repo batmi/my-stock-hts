@@ -1,8 +1,9 @@
 # modules/manage/events.py
 """관심종목 배당/실적 캘린더 조회.
 
-- 국내(stocks_kr/etfs_kr): OpenDART 'alotMatter'로 최근 확정 배당 정보 조회.
-- 해외(stocks_us/etfs_us): yfinance로 예정 배당락일/실적발표일 조회.
+- 국내(stocks_kr): OpenDART 'alotMatter'로 최근 확정 배당 정보 조회.
+- 해외(stocks_us): yfinance로 예정 배당락일/실적발표일 조회.
+- ETF는 배당·실적 공시 대상이 아니라 조회에서 제외.
 """
 import calendar as _cal
 import concurrent.futures
@@ -240,15 +241,19 @@ def _collect_us(code, name):
 
 
 def _gather_watchlist():
+    """배당/실적 캘린더 조회 대상: 국내·해외 '주식'만.
+
+    ETF는 배당·실적 공시 대상이 아니다 — 국내 ETF는 DART(alotMatter) 미제출이라
+    원래 조회되지 않고, 미국 ETF는 fundamentals가 없어 yfinance가 404 에러 로그만
+    남기므로 처음부터 제외한다.
+    """
     kr, us = [], []
-    for key in ("stocks_kr", "etfs_kr"):
-        for s in config.session.stock_data.get(key, []):
-            if s.get("code"):
-                kr.append((s["code"], s.get("name", s["code"])))
-    for key in ("stocks_us", "etfs_us"):
-        for s in config.session.stock_data.get(key, []):
-            if s.get("code"):
-                us.append((s["code"], s.get("name", s["code"])))
+    for s in config.session.stock_data.get("stocks_kr", []):
+        if s.get("code"):
+            kr.append((s["code"], s.get("name", s["code"])))
+    for s in config.session.stock_data.get("stocks_us", []):
+        if s.get("code"):
+            us.append((s["code"], s.get("name", s["code"])))
     return kr, us
 
 
@@ -318,7 +323,7 @@ def _render_upcoming(events):
     upcoming = sorted([e for e in events if e["date"] >= today], key=lambda e: e["date"])
 
     config.console.print("[bold]▸ 예정 일정[/bold]")
-    config.console.print("  [dim]※ 실적발표 일정은 해외 종목만 제공됩니다. (국내 기업은 예정일을 공시하지 않음)[/dim]")
+    config.console.print("  [dim]※ 실적발표 일정은 해외 종목만 제공됩니다. (국내 기업은 예정일을 공시하지 않음) · ETF는 배당·실적 공시 대상이 아니라 제외됩니다.[/dim]")
     if not upcoming:
         config.console.print("  [dim]표시할 예정 일정이 없습니다.[/dim]\n")
         return
