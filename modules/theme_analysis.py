@@ -503,10 +503,65 @@ def _is_gemini_rate_limit(error_msg):
     return "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg
 
 
-def _gemini_generate(content, generation_config, timeout):
+def _is_gemini_unavailable(error_msg):
+    """Gemini 서버 과부하/일시 사용 불가(503/UNAVAILABLE/high demand) 여부 판별"""
+    msg = error_msg.lower()
+    return "503" in error_msg or "unavailable" in msg or "high demand" in msg or "overloaded" in msg
+
+
+class GeminiTimeoutError(Exception):
+    """Gemini API 응답 대기 시간 초과 (클라이언트 측 타임아웃)"""
+
+
+# 스트리밍 수신 중 조각(chunk) 간 최대 대기 시간(초).
+# 첫 응답(내부 추론 포함)은 호출별 timeout이 담당하고, 일단 생성이 시작되면
+# 이 간격 안에 다음 조각이 도착하지 않을 때만 중단한다.
+GEMINI_STREAM_CHUNK_TIMEOUT = 30.0
+
+_STREAM_END = object()
+
+
+def _gemini_stream_response(model, content, first_timeout):
+    """generate_content(stream=True)로 응답을 조각 단위로 수신해 누적한다.
+
+    stream=True 호출 자체가 첫 응답 조각이 도착할 때까지 블로킹되므로,
+    first_timeout은 모델의 내부 추론(thinking)을 포함한 첫 응답까지의 제한이다.
+    이후에는 조각 간 간격이 GEMINI_STREAM_CHUNK_TIMEOUT를 넘으면 중단하므로,
+    전체 생성이 오래 걸려도 진행 중인 응답은 끝까지 수신한다.
+    (future.cancel()은 이미 실행 중인 요청을 중단하지 못하므로, 타임아웃된
+    요청은 백그라운드에 남지만 ai_executor 워커가 여유 있어 재시도는 가능하다.)
+
+    반환: 모든 조각이 누적된 응답 객체 (.text로 전체 텍스트 접근 가능)
+    """
+    future = ai_executor.submit(model.generate_content, content, stream=True)
+    try:
+        response = future.result(timeout=first_timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise GeminiTimeoutError(f"TimeoutError: API 응답 대기 시간 초과 (첫 응답 {int(first_timeout)}초)")
+
+    stream_iter = iter(response)
+    while True:
+        chunk_future = ai_executor.submit(next, stream_iter, _STREAM_END)
+        try:
+            chunk = chunk_future.result(timeout=GEMINI_STREAM_CHUNK_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            chunk_future.cancel()
+            raise GeminiTimeoutError(
+                f"TimeoutError: API 응답 대기 시간 초과 "
+                f"(스트리밍 중 {int(GEMINI_STREAM_CHUNK_TIMEOUT)}초간 수신 없음)")
+        if chunk is _STREAM_END:
+            return response
+
+
+def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
     """기본 모델(config.GEMINI_MODEL)로 콘텐츠 생성을 요청하되,
     무료 티어 한도 초과(429) 시 폴백 모델(config.GEMINI_FALLBACK_MODEL)로
     자동 전환하여 재시도한다. 안내 메시지는 화면에 그대로 출력한다.
+
+    응답은 스트리밍(stream=True)으로 수신하며, timeout은 첫 응답 조각까지의
+    제한으로 적용된다. 타임아웃 시에는 같은 모델로 timeout_retries회까지
+    재시도한다.
 
     반환: generate_content 응답 객체. 최종 실패 시 예외를 그대로 전파한다.
     """
@@ -522,12 +577,15 @@ def _gemini_generate(content, generation_config, timeout):
                 model_name=model_name,
                 generation_config=generation_config,
             )
-            future = ai_executor.submit(model.generate_content, content)
-            try:
-                return future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                future.cancel()
-                raise Exception(f"TimeoutError: API 응답 대기 시간 초과 ({int(timeout)}초)")
+            for attempt in range(timeout_retries + 1):
+                try:
+                    return _gemini_stream_response(model, content, timeout)
+                except GeminiTimeoutError:
+                    if attempt < timeout_retries:
+                        config.console.print("\n[yellow]API 응답 대기 시간 초과 - 같은 모델로 다시 시도합니다...[/yellow]")
+                        logger.warning(f"Gemini timeout on {model_name} (attempt {attempt + 1}/{timeout_retries + 1}); retrying")
+                        continue
+                    raise
         except Exception as e:
             last_exc = e
             has_fallback = idx < len(models) - 1
@@ -536,6 +594,12 @@ def _gemini_generate(content, generation_config, timeout):
                 config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {model_name}[/yellow]")
                 config.console.print(f"[dim]  무료 티어 사용량이 초과되어 '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
                 logger.warning(f"Gemini rate limit on {model_name}; falling back to {next_model}. {e}")
+                continue
+            if has_fallback and _is_gemini_unavailable(str(e)):
+                next_model = models[idx + 1]
+                config.console.print(f"\n[yellow]Gemini 서버 과부하 (503 High Demand) - 모델: {model_name}[/yellow]")
+                config.console.print(f"[dim]  일시적인 수요 급증으로 '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
+                logger.warning(f"Gemini unavailable (503) on {model_name}; falling back to {next_model}. {e}")
                 continue
             raise
     raise last_exc
@@ -583,6 +647,8 @@ def _gemini_error_text(e, error_prefix="분석", style="rich"):
     if style == "plain":
         if _is_gemini_rate_limit(msg):
             return "⚠️ Gemini API 호출 한도 초과 (Rate Limit)"
+        if _is_gemini_unavailable(msg):
+            return "⚠️ Gemini 서버 과부하 (503) - 잠시 후 다시 시도"
         if any(c in msg.lower() for c in ("timeouterror", "deadline", "timeout")):
             return "⚠️ Gemini API 응답 지연 (Timeout)"
         return f"⚠️ {error_prefix} 중 오류 발생: {msg}"
@@ -590,6 +656,9 @@ def _gemini_error_text(e, error_prefix="분석", style="rich"):
     if _is_gemini_rate_limit(msg):
         return (f"⚠️ [yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]\n"
                 f"[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]")
+    if _is_gemini_unavailable(msg):
+        return ("⚠️ [yellow]Gemini 서버 과부하 (503 High Demand)[/yellow]\n"
+                "[dim]  구글 서버의 일시적인 수요 급증입니다. 잠시 후 다시 시도해주세요.[/dim]")
     if "400" in msg and "tools" in msg:
         return (f"⚠️ [red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]\n"
                 f"[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]")
@@ -677,7 +746,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                     "temperature": 0.2,
                     "top_p": 0.95,
                     "max_output_tokens": 8192,
-                }, 90.0)
+                }, 150.0)
 
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
                 return _gemini_text(response, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
@@ -693,6 +762,10 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {config.GEMINI_MODEL}[/yellow]")
             config.console.print("[dim]  무료 티어 사용량이 초과되었습니다. 잠시 후 다시 시도하세요.[/dim]")
             logger.warning(f"Gemini API Rate Limit (Model: {config.GEMINI_MODEL}): {e}")
+        elif _is_gemini_unavailable(error_msg):
+            config.console.print("\n[yellow]Gemini 서버 과부하 (503 High Demand)[/yellow]")
+            config.console.print("[dim]  구글 서버의 일시적인 수요 급증입니다. 잠시 후 다시 시도해주세요.[/dim]")
+            logger.warning(f"Gemini Unavailable 503 (Model: {config.GEMINI_MODEL}): {e}")
         elif "400" in error_msg and "tools" in error_msg:
             config.console.print(f"\n[red]Gemini API 오류: Google Search 도구 사용 불가 - 모델: {config.GEMINI_MODEL}[/red]")
             config.console.print(f"[dim]  API 설정 오류 또는 '{config.GEMINI_MODEL}' 모델이 도구를 지원하지 않을 수 있습니다.[/dim]")
@@ -735,9 +808,9 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
     # Gemini 멀티모달 입력: [프롬프트 텍스트, 이미지 blob] (PIL 없이 바이트로 직접 전달)
     image_part = {"mime_type": "image/png", "data": image_bytes}
 
-    # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 90초)
+    # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 120초)
     return _run_gemini_report([prompt, image_part], label=f"[{name}({code})] 차트 이미지 분석",
-                              timeout=90.0, error_prefix="차트 분석")
+                              timeout=120.0, error_prefix="차트 분석")
 
 def analyze_index_with_gemini(code, name, tech_info_str):
     """시장 지수의 기술적 지표와 매크로 모멘텀을 결합하여 심층 진단"""

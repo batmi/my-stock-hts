@@ -130,6 +130,39 @@ def test_analyze_market_trends_success(mock_model_cls):
     
     config.GEMINI_API_KEY = original_key
 
+def test_gemini_generate_503_fallback():
+    """기본 모델 503(서버 과부하) 시 폴백 모델로 자동 전환 테스트"""
+    pytest.importorskip("google.generativeai")
+    theme_analysis._ensure_genai()
+    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
+        _run_fallback_scenario(mock_model_cls, "503 This model is currently experiencing high demand. Please try again later.")
+        assert mock_model_cls.call_args_list[1].kwargs["model_name"] == config.GEMINI_FALLBACK_MODEL
+
+
+def test_gemini_generate_429_fallback():
+    """기본 모델 429(한도 초과) 시 폴백 모델로 자동 전환 테스트"""
+    pytest.importorskip("google.generativeai")
+    theme_analysis._ensure_genai()
+    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
+        _run_fallback_scenario(mock_model_cls, "429 RESOURCE_EXHAUSTED: Quota exceeded")
+
+
+def _run_fallback_scenario(mock_model_cls, error_message):
+    """기본 모델이 error_message로 실패하면 폴백 모델 응답이 반환되는지 검증"""
+    mock_fail = MagicMock()
+    mock_fail.generate_content.side_effect = Exception(error_message)
+    mock_response = MagicMock()
+    mock_response.text = "폴백 모델 분석 결과"
+    mock_ok = MagicMock()
+    mock_ok.generate_content.return_value = mock_response
+    mock_model_cls.side_effect = [mock_fail, mock_ok]
+
+    result = theme_analysis._gemini_generate("테스트 프롬프트", {"temperature": 0.2}, 5.0)
+
+    assert result is mock_response
+    assert mock_model_cls.call_count == 2
+
+
 def test_analyze_market_trends_no_api_key():
     """API 키가 없을 때 None 반환 테스트"""
     original_key = config.GEMINI_API_KEY
