@@ -94,7 +94,7 @@ class GlobalSettings(BaseModel):
     USE_WEBSOCKET: bool = True
 
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
-    MARKET_FILTER_MA: int = Field(default=30, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
+    MARKET_FILTER_MA: int = Field(default=60, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                             #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                             #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
@@ -249,7 +249,7 @@ class GlobalSettings(BaseModel):
         "BULL_SCORE_ADJ": -0.5,          # 강세장: 기준 완화 (예: 8.0 -> 7.5)
         "BEAR_SCORE_ADJ": 0.5,           # 약세장: 기준 강화 (예: 8.0 -> 8.5)
         "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
-        "REGIME_MA_PERIOD": 20,          # 추세 판단용 지수이동평균선 (EMA, 일)
+        "REGIME_MA_PERIOD": 5,           # 추세 판단용 지수이동평균선 (EMA, 일)
         "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
     }
 
@@ -887,7 +887,7 @@ def reset_all_settings():
         }
         settings.MARKET_REGIME_PARAMS = {
             "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
-            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 20, "REGIME_ADX_THRESHOLD": 20
+            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 5, "REGIME_ADX_THRESHOLD": 20
         }
         settings.INDICATOR_PARAMS = {
             "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,

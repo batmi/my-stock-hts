@@ -339,6 +339,9 @@ class OrderManager:
         #  잔고가 0이 되어야만 체결로 보던 기존 방식은 부분매도를 감지하지 못해
         #  (실시간 감지 실패 → 미체결 타임아웃 우회 경로로 수 분 지연 발생) 보강한다.
         self.sell_pre_qty = {}
+        # [최적화] 누적 주문 접수 카운터 — 루프에서 '이번 주기에 주문이 나갔는가'를 판단해
+        #  주문이 없으면 루프 말미 잔고/예수금 재조회를 생략하기 위한 단조 증가 값
+        self.orders_sent_count = 0
         self._lock = threading.RLock()
 
     def is_pending(self, code):
@@ -439,6 +442,7 @@ class OrderManager:
                     if temp_id in self.pending_orders[code]:
                         del self.pending_orders[code][temp_id]
                     self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+                    self.orders_sent_count += 1
 
                 self.trader.trade_history.append(success_msg)
                 self.trader.log(f"결과: 성공 (주문번호: {utils.format_order_no(odno)})")

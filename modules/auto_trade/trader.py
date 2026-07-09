@@ -1024,31 +1024,67 @@ class AutoTrader:
                 console=console,
                 transient=True
             ) as progress:
-                task = progress.add_task("[cyan]보유 종목 및 자산 정보 조회 중...[/cyan]", total=None)
-                progress.update(task, description="[cyan]보유 종목 및 잔고 조회 중...[/cyan]")
-                # [추가] 보유 종목 확인
+                task = progress.add_task("[cyan]자산/시장 정보 병렬 조회 중...[/cyan]", total=None)
                 acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                try:
-                    holdings, summary = api.get_domestic_balance(target_cano, acnt)
-                except Exception: 
-                    holdings = []
-                    summary = []
-                
-                progress.update(task, description="[cyan]예수금 정보 확인 중...[/cyan]")
-                # 예수금 별도 조회 (매수 여력 확인용)
-                try:
-                    if summary and len(summary) > 0:
-                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                        if config.session.is_simulation:
-                            deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                    
-                    # [수정] 실전 투자는 항상 상세 조회 시도 (정확도 우선)
-                    if deposit == 0 or not config.session.is_simulation:
-                        res = api.get_deposit_balance(target_cano, acnt)
-                        if res:
-                            deposit = res.get('d2_real', 0)
-                            if deposit == 0: deposit = res.get('d2_deposit', 0)
-                except Exception: pass
+
+                # [최적화] 잔고+예수금 / 시장 국면 / 지수 상태를 병렬 조회 (기존 순차 → 동시)
+                def _fetch_asset():
+                    _holdings, _summary, _deposit = [], [], 0
+                    try:
+                        _holdings, _summary = api.get_domestic_balance(target_cano, acnt)
+                    except Exception:
+                        _holdings, _summary = [], []
+                    # 예수금 조회 (매수 여력 확인용) — 잔고 결과에 의존하므로 같은 태스크에서 수행
+                    try:
+                        if _summary and len(_summary) > 0:
+                            _deposit = api.safe_int(_summary[0].get('dnca_tot_amt', 0))
+                            if config.session.is_simulation:
+                                _deposit = api.safe_int(_summary[0].get('prvs_rcdl_excc_amt', 0))
+
+                        # [수정] 실전 투자는 항상 상세 조회 시도 (정확도 우선)
+                        if _deposit == 0 or not config.session.is_simulation:
+                            res = api.get_deposit_balance(target_cano, acnt)
+                            if res:
+                                _deposit = res.get('d2_real', 0)
+                                if _deposit == 0: _deposit = res.get('d2_deposit', 0)
+                    except Exception: pass
+                    return _holdings, _summary, _deposit
+
+                def _fetch_regimes():
+                    try:
+                        k = analysis.get_market_regime("KOSPI")
+                        q = analysis.get_market_regime("KOSDAQ")
+                        return k, q
+                    except Exception:
+                        return None, None
+
+                def _update_indices():
+                    # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
+                    # 시스템이 정지 상태이거나 장 시작 전이라도 상태 조회 시에는 최신 정보를 보여주기 위함
+                    if not getattr(config, 'USE_MARKET_FILTER', True):
+                        return
+                    need_update = False
+                    if "KOSPI" not in self.market_index_status or "KOSDAQ" not in self.market_index_status:
+                        need_update = True
+                    elif self.market_index_status.get("KOSPI", {}).get("current", 0) == 0 or \
+                         self.market_index_status.get("KOSDAQ", {}).get("current", 0) == 0:
+                        need_update = True
+                    if need_update:
+                        try:
+                            self._update_market_indices_status(notify=False)
+                        except Exception: pass
+
+                summary = []
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    fut_asset = executor.submit(_fetch_asset)
+                    fut_regime = executor.submit(_fetch_regimes)
+                    fut_indices = executor.submit(_update_indices)
+
+                    holdings, summary, deposit = fut_asset.result()
+                    _k, _q = fut_regime.result()
+                    if _k: kospi_regime, kospi_adj = _k
+                    if _q: kosdaq_regime, kosdaq_adj = _q
+                    fut_indices.result()
 
                 # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
                 tot_evlu = 0
@@ -1059,27 +1095,6 @@ class AutoTrader:
                     tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
 
                 current_asset = deposit + tot_evlu
-                
-                progress.update(task, description="[cyan]시장 국면(KOSPI/KOSDAQ) 분석 중...[/cyan]")
-                try:
-                    kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
-                    kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
-                except Exception:
-                    pass
-
-                # [추가] 지수 상태 정보가 없으면 업데이트 시도 (시장 필터링 사용 시)
-                # 시스템이 정지 상태이거나 장 시작 전이라도 상태 조회 시에는 최신 정보를 보여주기 위함
-                if getattr(config, 'USE_MARKET_FILTER', True):
-                    need_update = False
-                    if "KOSPI" not in self.market_index_status or "KOSDAQ" not in self.market_index_status:
-                        need_update = True
-                    elif self.market_index_status.get("KOSPI", {}).get("current", 0) == 0 or \
-                         self.market_index_status.get("KOSDAQ", {}).get("current", 0) == 0:
-                        need_update = True
-                    
-                    if need_update:
-                        progress.update(task, description="[cyan]시장 지수(KOSPI/KOSDAQ) 상태 업데이트 중...[/cyan]")
-                        self._update_market_indices_status(notify=False)
 
         console.print()
         table = Table(title=f"시스템 트레이딩 상태 ({status_text})", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
@@ -2495,6 +2510,12 @@ class AutoTrader:
                         # API 호출 간격 조절 (Rate Limit 방지)
                         time.sleep(0.2)
 
+                        # [최적화] 이번 주기 주문 활동 감지용 스냅샷
+                        #  (주문이 하나도 없었다면 루프 말미 잔고/예수금 재조회를 생략해 REST 콜 절감)
+                        with self.order_manager._lock:
+                            _pending_before = bool(self.order_manager.pending_orders)
+                        _sent_before = self.order_manager.orders_sent_count
+
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
                         # 1. 매도 조건 점검 (리스크 관리)
                         self._check_sell_conditions(holdings, current_market_status)
@@ -2502,26 +2523,34 @@ class AutoTrader:
                         self._check_buy_conditions(holdings, deposit_res, current_market_status)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
-                        
-                        # [추가] 루프 동안 매수/매도가 발생했을 수 있으므로, 
-                        # 최종 로깅 전 잔고와 예수금을 최신 상태로 갱신합니다.
-                        time.sleep(0.5)
-                        try:
-                            upd_holdings, upd_summary = api.get_domestic_balance(target_cano, acnt)
-                            if upd_holdings is not None:
-                                holdings = upd_holdings
-                                summary = upd_summary
-                                
-                            if not config.session.is_simulation:
-                                upd_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                                if upd_dep: deposit_res = upd_dep
-                            else:
-                                if summary:
-                                    dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                                    d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                                    deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
-                        except Exception as e:
-                            logger.debug(f"최종 상태 로깅을 위한 잔고 갱신 실패: {e}")
+
+                        # [수정] 루프 동안 매수/매도가 발생한 경우에만 최종 로깅 전 잔고와 예수금을 갱신.
+                        #  주기 시작 시(직전) 조회한 스냅샷이 있고 주문 활동이 전혀 없었다면 계좌 상태가
+                        #  변하지 않았으므로 재조회를 생략한다 (2 TPS 모의 환경에서 주기당 2~3콜+0.7초 절감).
+                        with self.order_manager._lock:
+                            _pending_after = bool(self.order_manager.pending_orders)
+                        _had_order_activity = (
+                            _pending_before or _pending_after
+                            or self.order_manager.orders_sent_count > _sent_before
+                        )
+                        if _had_order_activity:
+                            time.sleep(0.5)
+                            try:
+                                upd_holdings, upd_summary = api.get_domestic_balance(target_cano, acnt)
+                                if upd_holdings is not None:
+                                    holdings = upd_holdings
+                                    summary = upd_summary
+
+                                if not config.session.is_simulation:
+                                    upd_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                                    if upd_dep: deposit_res = upd_dep
+                                else:
+                                    if summary:
+                                        dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+                                        d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                                        deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
+                            except Exception as e:
+                                logger.debug(f"최종 상태 로깅을 위한 잔고 갱신 실패: {e}")
 
                         # [추가] 보유 종목 상태 로깅 및 자산 안전장치 체크
                         self._monitor_account_status(holdings, summary, deposit_res)
@@ -2973,6 +3002,12 @@ class AutoTrader:
         _trade_cano, _trade_acnt = _get_trade_account()
         restricted_stocks = get_restricted_stocks(_trade_cano, _trade_acnt)
 
+        # [최적화] 종목별 개별 DB 조회(최근 매수/보유분 매수 내역)를 주기 시작 시 배치 쿼리로 일괄 로드
+        #  (기존: 보유 종목 × 최대 5쿼리 → 배치 3쿼리, 저사양 SD카드 SQLite I/O 절감)
+        _all_hold_codes = [h['pdno'] for h in holdings]
+        latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes)
+        buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes)
+
         # [최적화] 보유 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []
         for item in holdings:
@@ -3085,7 +3120,8 @@ class AutoTrader:
             if use_atr_stop:
                 # [Fix: Point 4] 분할 매수를 고려하여, 현재 보유량에 해당하는 모든 매수 기록의
                 # ATR 손절률을 수량 가중 평균하여 적용합니다.
-                buy_trades = db_manager.db.get_buy_trades_for_current_holding(code)
+                # [최적화] 주기 시작 시 배치 로드한 결과 사용 (종목별 개별 쿼리 제거)
+                buy_trades = buy_trades_map.get(code, [])
                 if buy_trades:
                     total_qty_trade = 0
                     weighted_sl_sum = 0
@@ -3113,7 +3149,8 @@ class AutoTrader:
                 
             holding_days = 0
             is_mr_holding = False
-            last_buy = db_manager.db.get_latest_buy_trade(code)
+            # [최적화] 주기 시작 시 배치 로드한 결과 사용 (종목별 개별 쿼리 제거)
+            last_buy = latest_buy_map.get(code)
             if last_buy and last_buy.get('time'):
                 if '역매수' in str(last_buy.get('reason', '')) or '역추세' in str(last_buy.get('reason', '')):
                     is_mr_holding = True
@@ -3232,7 +3269,9 @@ class AutoTrader:
                     except Exception: pass
 
         # 병렬 처리 실행
-        max_workers = 5 if not config.session.is_simulation else 1
+        # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
+        #  REST 대기 구간이 겹쳐져 주기당 소요 시간이 단축됨)
+        max_workers = 5 if not config.session.is_simulation else 2
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
@@ -3324,8 +3363,10 @@ class AutoTrader:
         sold_today = set(t['code'] for t in today_trades if "sell" in t.get('type', '').lower() or "매도" in t.get('type', ''))
         
         reentry_hurdles = {}
+        # [최적화] 당일 매도 종목의 최근 매수 내역을 배치 쿼리로 일괄 조회
+        _sold_latest_buys = db_manager.db.get_latest_buy_trades(sold_today)
         for scode in sold_today:
-            last_buy = db_manager.db.get_latest_buy_trade(scode)
+            last_buy = _sold_latest_buys.get(scode)
             if last_buy:
                 reason = last_buy.get('reason', '')
                 match = re.search(r'체결강도:\s*([0-9.]+)%', reason)
@@ -3347,8 +3388,11 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map):
-        """(내부함수) 매수 후보 분석용 단일 워커"""
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=None):
+        """(내부함수) 매수 후보 분석용 단일 워커
+
+        io_pool: 차트/체결강도/호가 동시 조회용 공유 스레드풀 (None이면 자체 생성 — 하위 호환)
+        """
         if not self.is_running: return None # [추가] 중지 요청 시 즉시 종료
         
         try:
@@ -3410,7 +3454,13 @@ class AutoTrader:
             # 5. [최적화] 차트, 체결강도, 호가(수급비율) 데이터 병렬(동시) 조회
             #  호가는 10호가 상세가 아니라 수급 게이트용 비율만 필요하므로 get_ask_bid_ratio를 쓴다.
             #  (WS 호가 총잔량이 신선하면 REST 없이 계산 → 종목당 호가 REST 1콜 절감)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+            #  [최적화] 공유 io_pool 사용 시 후보마다 풀을 생성/파괴하지 않는다.
+            _local_pool = None
+            ex = io_pool
+            if ex is None:
+                _local_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+                ex = _local_pool
+            try:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
                 fut_ab = ex.submit(api.get_ask_bid_ratio, code, is_overseas_stock) if _need_ob else None
@@ -3420,6 +3470,9 @@ class AutoTrader:
                 except Exception: vol_strength = None
                 try: ask_bid_ratio = fut_ab.result() if fut_ab else None
                 except Exception: ask_bid_ratio = None
+            finally:
+                if _local_pool is not None:
+                    _local_pool.shutdown(wait=False)
 
             if df is None or df.empty:
                 self.set_stock_state(code, None)
@@ -3621,30 +3674,36 @@ class AutoTrader:
 
         # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
         # (실전: 5개, 모의: 2개 - ThrottledSession이 병목 없이 안전하게 제어함)
-        max_workers = 5 if not config.session.is_simulation else 1
+        max_workers = 5 if not config.session.is_simulation else 2
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map) for item in targets]
-            
-            for future in concurrent.futures.as_completed(futures):
-                if not self.is_running: break
-                res = future.result()
-                if res:
-                    if res['type'] == 'candidate':
-                        self.log(res['log'])
-                        candidates.append(res['data'])
-                    elif res['type'] == 'log_only':
-                        self.log(res['log'])
-                    elif res['type'] == 'restricted_skip':
-                        restricted_skipped_stocks.append(res['name'])
-                    elif res['type'] == 'market_skip':
-                        m_type = res.get('market_type', 'KOSPI')
-                        if m_type in self.skipped_by_market_filter_count:
-                            self.skipped_by_market_filter_count[m_type] += 1
-                        skipped_stocks.append(res['name'])
-                    elif res['type'] == 'correlation_skip':
-                        self.log(res['log'])
-                        correlation_skipped_stocks.append(res['name'])
+        # [최적화] 워커 내부의 차트/체결강도/호가 동시 조회용 I/O 풀을 공유
+        #  (기존에는 후보 종목마다 ThreadPoolExecutor(3)를 생성/파괴 — 저사양 환경에서 오버헤드)
+        io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 3, thread_name_prefix="cand_io")
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool) for item in targets]
+
+                for future in concurrent.futures.as_completed(futures):
+                    if not self.is_running: break
+                    res = future.result()
+                    if res:
+                        if res['type'] == 'candidate':
+                            self.log(res['log'])
+                            candidates.append(res['data'])
+                        elif res['type'] == 'log_only':
+                            self.log(res['log'])
+                        elif res['type'] == 'restricted_skip':
+                            restricted_skipped_stocks.append(res['name'])
+                        elif res['type'] == 'market_skip':
+                            m_type = res.get('market_type', 'KOSPI')
+                            if m_type in self.skipped_by_market_filter_count:
+                                self.skipped_by_market_filter_count[m_type] += 1
+                            skipped_stocks.append(res['name'])
+                        elif res['type'] == 'correlation_skip':
+                            self.log(res['log'])
+                            correlation_skipped_stocks.append(res['name'])
+        finally:
+            io_pool.shutdown(wait=False)
 
         # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:

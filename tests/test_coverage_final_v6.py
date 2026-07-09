@@ -408,8 +408,9 @@ def test_check_sell_conditions_atr_stop(mock_get_rules, mock_del, mock_upd, mock
     config.SELL_STRATEGY["USE_ATR_STOP"] = True
     
     # Mock DB latest buy trade to have stop_loss_rate
-    with patch('modules.auto_trade.db_manager.db.get_latest_buy_trade', return_value={'stop_loss_rate': -4.0}):
-        with patch('modules.auto_trade.db_manager.db.get_buy_trades_for_current_holding', return_value=[{'qty': 10, 'stop_loss_rate': -4.0}]):
+    # [수정] 매도 분석 경로가 배치 조회(get_latest_buy_trades/get_buy_trades_for_current_holdings)로 전환됨
+    with patch('modules.auto_trade.db_manager.db.get_latest_buy_trades', return_value={'005930': {'stop_loss_rate': -4.0}}):
+        with patch('modules.auto_trade.db_manager.db.get_buy_trades_for_current_holdings', return_value={'005930': [{'qty': 10, 'stop_loss_rate': -4.0}]}):
             # analyze_sell returns sell due to stop loss
             mock_analyze.return_value = {
                 'action': 'sell', 'reason': '손절', 'score': 4.0, 'state': '매도', 'ind': {}

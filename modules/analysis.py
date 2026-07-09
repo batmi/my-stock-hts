@@ -454,7 +454,12 @@ def _fetch_domestic_index_data(market_type):
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
 
     # 2. Fallback 체크
+    # [수정] 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이
+    #  함께 사용하므로 두 기간 중 큰 값을 기준으로 충분성을 판단한다.
+    #  (KIS 지수 차트는 약 50일치만 제공 → MARKET_FILTER_MA 60일 설정 시 yfinance로 자동 대체)
     ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+    if getattr(config, 'USE_MARKET_FILTER', True):
+        ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 50))
 
     if df is None or df.empty or len(df) < ma_period:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")

@@ -512,6 +512,81 @@ class DBManager:
         except Exception:
             return []
 
+    def get_buy_trades_for_current_holdings(self, codes):
+        """[배치] 여러 종목의 현재 보유분 매수 내역을 일괄 조회합니다. {code: [trades]}
+
+        get_buy_trades_for_current_holding과 동일한 결과를 종목 수와 무관하게
+        쿼리 2회로 반환한다 (자동매매 매도 분석 주기의 DB I/O 절감).
+        """
+        codes = [c for c in dict.fromkeys(codes or []) if c]
+        result = {c: [] for c in codes}
+        if not codes: return result
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            ph = ",".join("?" * len(codes))
+
+            # 1. 종목별 마지막 매도 시각 일괄 조회
+            cursor.execute(f"""
+                SELECT code, time FROM trades
+                WHERE id IN (
+                    SELECT MAX(id) FROM trades
+                    WHERE code IN ({ph}) AND (type LIKE '%sell%' OR type LIKE '%매도%')
+                    GROUP BY code
+                )""", codes)
+            last_sell = {row['code']: row['time'] for row in cursor.fetchall()}
+
+            # 2. 매수 내역 일괄 조회 후 종목별 '마지막 매도 이후' 필터링
+            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%')", codes)
+            for row in cursor.fetchall():
+                t = dict(row)
+                ls = last_sell.get(t['code'])
+                if ls is not None and not (t.get('time') and t['time'] > ls):
+                    continue
+                result[t['code']].append(t)
+            return result
+        except Exception:
+            return result
+
+    def get_latest_buy_trades(self, codes):
+        """[배치] 여러 종목의 최근 매수 내역을 일괄 조회합니다. {code: trade|None 미포함}
+
+        get_latest_buy_trade의 3단계 우선순위(ATR 손절률 보존 원본 → 접수 원본 → 체결확인 더미)를
+        동일하게 적용하되 쿼리 1회로 처리한다.
+        """
+        codes = [c for c in dict.fromkeys(codes or []) if c]
+        result = {}
+        if not codes: return result
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            ph = ",".join("?" * len(codes))
+            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC", codes)
+
+            tiers = {}  # code -> [원본(ATR), 원본, 아무거나] 각 티어별 최신(id 최대) 1건
+            for row in cursor.fetchall():
+                t = dict(row)
+                code = t['code']
+                slot = tiers.setdefault(code, [None, None, None])
+                if slot[0] is not None:
+                    continue  # 최우선 티어가 찼으면 이후 행은 모두 더 오래된 것
+                reason = t.get('reason')
+                is_origin = (reason is None or not str(reason).startswith('체결 확인'))
+                try:
+                    has_sl = float(t.get('stop_loss_rate') or 0.0) != 0.0
+                except (TypeError, ValueError):
+                    has_sl = False
+                if is_origin and has_sl and slot[0] is None: slot[0] = t
+                if is_origin and slot[1] is None: slot[1] = t
+                if slot[2] is None: slot[2] = t
+
+            for code, slot in tiers.items():
+                picked = slot[0] or slot[1] or slot[2]
+                if picked: result[code] = picked
+            return result
+        except Exception:
+            return result
+
     def get_latest_buy_trade(self, code):
         """특정 종목의 가장 최근 매수 내역 조회 (ATR 손절률 확인용)"""
         try:
