@@ -4033,4 +4033,8 @@ def check_server_health():
 
 # [리팩토링] OpenDART 연동 계층은 modules/dart_api.py 로 분리되었다. (재수출)
 from modules.dart_api import (DART_BASE_URL, call_dart, get_dart_corp_map,
-                              get_dart_dividend, get_dart_acc_month, get_dart_disclosures)
+                              get_dart_dividend, get_dart_acc_month, get_dart_disclosures,
+                              get_dart_insider_trades, get_dart_major_holdings,
+                              get_dart_financials, get_dart_paid_increase_detail,
+                              get_dart_bond_issue_detail, get_dart_document_text,
+                              get_dart_earnings_brief)

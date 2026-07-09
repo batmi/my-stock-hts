@@ -123,8 +123,10 @@ def _project_next_ex_date(div_series, today):
 def _kr_dividend_plan(pay_count, acc_month):
     """연간 배당 지급 횟수 + 결산월 -> (기준일 월 목록, 주기 라벨).
 
-    분기배당=3·6·9·12월말, 반기배당=6·12월말(법정), 연배당=결산월말.
+    월배당=매월말, 분기배당=3·6·9·12월말, 반기배당=6·12월말(법정), 연배당=결산월말.
     """
+    if pay_count >= 10:
+        return list(range(1, 13)), "월배당"
     if pay_count >= 4:
         return [3, 6, 9, 12], "분기배당"
     if pay_count >= 2:
@@ -316,6 +318,7 @@ def _render_upcoming(events):
     upcoming = sorted([e for e in events if e["date"] >= today], key=lambda e: e["date"])
 
     config.console.print("[bold]▸ 예정 일정[/bold]")
+    config.console.print("  [dim]※ 실적발표 일정은 해외 종목만 제공됩니다. (국내 기업은 예정일을 공시하지 않음)[/dim]")
     if not upcoming:
         config.console.print("  [dim]표시할 예정 일정이 없습니다.[/dim]\n")
         return
@@ -366,14 +369,19 @@ def _render_kr_dividends(rows):
     table.add_column("기준연도", justify="center")
     table.add_column("주당배당금", justify="right")
     table.add_column("시가배당률", justify="right")
+    table.add_column("배당주기", justify="center")
 
+    freq_color = {"월배당": "magenta", "분기배당": "cyan", "반기배당": "green", "연배당": "white"}
     for r in rows:
         y_color = "red" if r["yield"] >= 3.0 else ("orange3" if r["yield"] >= 1.0 else "white")
+        freq = r.get("freq_label") or "-"
         table.add_row(
             f"{r['name']} ({r['code']})",
             str(r["year"]),
             f"{r['dps']:,.0f}원" if r["dps"] else "-",
             f"[{y_color}]{r['yield']:.2f}%[/]" if r["yield"] else "-",
+            f"[{freq_color.get(freq, 'white')}]{freq}[/]",
         )
     config.console.print(table)
+    config.console.print("  [dim]※ 배당주기는 최근 1년 실제 지급 횟수(yfinance) 기반 추정입니다.[/dim]")
     config.console.print()

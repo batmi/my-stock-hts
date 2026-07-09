@@ -1,13 +1,11 @@
 # modules/manage/disclosure.py
-"""관심종목 공시 모니터링 / 실적 발표 추적 (OpenDART list.json 기반).
+"""관심종목 공시 모니터링 (OpenDART list.json 기반).
 
 - 공시 조회: 관심종목 최근 공시를 중요도 분류해 표시 + (선택) Gemini AI 요약
-- 실적 추적: 정기보고서·잠정실적 공시 + 결산월 기반 예상 제출기한
 - 스케줄러 알림(scheduler)에서도 분류 로직을 재사용한다.
 """
-import calendar as _cal
 import concurrent.futures
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 from rich.table import Table
 from rich import box
@@ -104,6 +102,169 @@ def _gather(codes, days, min_level):
     return events
 
 
+# ---------------------------------------------------------------------------
+# 공시 상세정보 (잠정실적 수치 / 유상증자 희석률 / 메자닌 발행조건)
+# ---------------------------------------------------------------------------
+_EARNINGS_DOC_KEYWORDS = ("잠정실적", "손익구조", "잠정)실적")
+_FDPP_LABELS = (("fdpp_fclt", "시설자금"), ("fdpp_bsninh", "영업양수"),
+                ("fdpp_op", "운영자금"), ("fdpp_dtrp", "채무상환"),
+                ("fdpp_ocsa", "타법인증권취득"), ("fdpp_etc", "기타자금"))
+
+
+def _num(s):
+    try:
+        t = str(s).replace(",", "").replace("△", "-").replace("▲", "-").strip()
+        return float(t) if t not in ("", "-") else None
+    except Exception:
+        return None
+
+
+def _fmt_eok(won):
+    """원 단위 금액 -> '1,234억' / '171.0조' 문자열."""
+    if won is None:
+        return "-"
+    if abs(won) >= 1e13:
+        return f"{won / 1e12:,.1f}조"
+    return f"{won / 1e8:,.0f}억"
+
+
+def _fmt_pct(s):
+    """증감률 셀('12.3', '1,810.26', '△5.1', '흑전' 등) -> '+12.3%' 형태."""
+    t = str(s).replace(",", "").replace("△", "-").replace("▲", "-").rstrip("%").strip()
+    try:
+        return f"{float(t):+.1f}%"
+    except Exception:
+        return str(s)
+
+
+def _detail_eligible(e):
+    """공시 원문/전용 API로 상세정보를 뽑을 수 있는 공시인지."""
+    nm = e["report_nm"]
+    if e["category"] == "실적·IR" and any(k in nm for k in _EARNINGS_DOC_KEYWORDS):
+        return True
+    if e["category"] == "증자·감자" and "유상증자" in nm:
+        return True
+    if e["category"] == "메자닌(CB/BW)":
+        return True
+    return False
+
+
+def _earnings_note(e):
+    """잠정실적/손익구조 공시 -> '매출 1,234억(+12.3%) · 영업익 ...' 요약."""
+    brief = api.get_dart_earnings_brief(e["rcept_no"])
+    if not brief:
+        return ""
+    unit, name_map = brief["unit"], {"매출액": "매출", "영업이익": "영업익", "당기순이익": "순익"}
+    parts = []
+    for key in ("매출액", "영업이익", "당기순이익"):
+        row = brief["rows"].get(key)
+        if not row or row[0] is None:
+            continue
+        cur, base, pct = row
+        if pct:
+            pct_s = _fmt_pct(pct)
+        elif base:  # 증감률 셀이 없으면 비교값으로 직접 계산
+            pct_s = f"{(cur - base) / abs(base) * 100:+.1f}%"
+        else:
+            pct_s = ""
+        parts.append(f"{name_map[key]} {_fmt_eok(cur * unit)}" + (f"({pct_s})" if pct_s else ""))
+    return " · ".join(parts)
+
+
+def _detail_date_range(e):
+    """상세조회 API용 접수일 범위. 정정공시는 원공시 접수일이 과거라 45일 전부터 조회."""
+    end = str(e["date"])
+    try:
+        bgn = (datetime.strptime(end, "%Y%m%d") - timedelta(days=45)).strftime("%Y%m%d")
+    except Exception:
+        bgn = end
+    return bgn, end
+
+
+def _paid_increase_note(e):
+    """유상증자결정 -> 신주 수·희석률·증자방식·자금목적 요약."""
+    bgn, end = _detail_date_range(e)
+    rows = api.get_dart_paid_increase_detail(e["code"], bgn, end)
+    row = next((r for r in rows if r.get("rcept_no") == e["rcept_no"]),
+               max(rows, key=lambda r: r.get("rcept_no", "")) if rows else None)
+    if not row:
+        return ""
+    new = (_num(row.get("nstk_ostk_cnt")) or 0) + (_num(row.get("nstk_estk_cnt")) or 0)
+    base = (_num(row.get("bfic_tisstk_ostk")) or 0) + (_num(row.get("bfic_tisstk_estk")) or 0)
+    parts = []
+    if new:
+        parts.append(f"신주 {new:,.0f}주")
+    if new and base:
+        parts.append(f"희석 {new / base * 100:.1f}%")
+    method = (row.get("ic_mthn") or "").strip()
+    if method:
+        parts.append(method)
+    amounts = [(label, _num(row.get(f)) or 0) for f, label in _FDPP_LABELS]
+    top = max(amounts, key=lambda x: x[1])
+    if top[1] > 0:
+        parts.append(top[0])
+    return " · ".join(parts)
+
+
+def _bond_note(e):
+    """CB/BW/EB 발행결정 -> 권면총액·전환(행사)가·발행방법 요약."""
+    nm = e["report_nm"]
+    kind = ("CB" if "전환사채" in nm else
+            "BW" if "신주인수권" in nm else
+            "EB" if "교환사채" in nm else None)
+    if not kind:
+        return ""
+    bgn, end = _detail_date_range(e)
+    rows = api.get_dart_bond_issue_detail(e["code"], bgn, end, kind=kind)
+    row = next((r for r in rows if r.get("rcept_no") == e["rcept_no"]),
+               max(rows, key=lambda r: r.get("rcept_no", "")) if rows else None)
+    if not row:
+        return ""
+    parts = []
+    amt = _num(row.get("bd_fta"))
+    if amt:
+        parts.append(f"권면 {_fmt_eok(amt)}")
+    prc = _num(row.get("cv_prc")) or _num(row.get("ex_prc"))
+    if prc:
+        parts.append(f"{'전환가' if kind == 'CB' else '행사가' if kind == 'BW' else '교환가'} {prc:,.0f}원")
+    method = (row.get("bdis_mthn") or "").strip()
+    if method:
+        parts.append(method)
+    return " · ".join(parts)
+
+
+def build_detail_note(e):
+    """공시 1건의 상세 요약 문자열 (부적합/실패 시 '')."""
+    try:
+        nm = e["report_nm"]
+        if e["category"] == "실적·IR" and any(k in nm for k in _EARNINGS_DOC_KEYWORDS):
+            return _earnings_note(e)
+        if e["category"] == "증자·감자" and "유상증자" in nm:
+            return _paid_increase_note(e)
+        if e["category"] == "메자닌(CB/BW)":
+            return _bond_note(e)
+    except Exception:
+        pass
+    return ""
+
+
+def _enrich_details(events, limit=12):
+    """표시 대상 공시 중 상세정보 대상만 병렬 조회해 e['note']를 채운다."""
+    targets = [e for e in events if _detail_eligible(e)][:limit]
+    if not targets:
+        return
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  console=config.console, transient=True) as progress:
+        progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=None)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {ex.submit(build_detail_note, e): e for e in targets}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    futs[fut]["note"] = fut.result()
+                except Exception:
+                    futs[fut]["note"] = ""
+
+
 def show_disclosures(days=14):
     """관심종목 최근 공시 조회 (중요도순)."""
     utils.clear_screen()
@@ -124,6 +285,8 @@ def show_disclosures(days=14):
         return
 
     events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
+    shown = events[:40]
+    _enrich_details(shown)
 
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("일자", justify="center")
@@ -131,15 +294,17 @@ def show_disclosures(days=14):
     table.add_column("종목", justify="left")
     table.add_column("구분", justify="left")
     table.add_column("공시 제목", justify="left")
+    table.add_column("상세", justify="left")
 
     level_style = {2: "bold red", 1: "white", 0: "dim"}
-    for e in events[:40]:
+    for e in shown:
         table.add_row(
             _fmt_date(e["date"]),
             e["icon"],
             f"{e['name']} ({e['code']})",
             f"[{level_style[e['level']]}]{e['category']}[/]",
             e["report_nm"],
+            f"[dim]{e.get('note', '')}[/dim]",
         )
     config.console.print(table)
     config.console.print("[dim]🔴 중대  🟠 증자/메자닌  🟢 호재성  🟡 이벤트  🔵 실적 · 원문: dart.fss.or.kr[/dim]")
@@ -173,10 +338,13 @@ def check_and_alert_disclosures(min_level=2, days=2):
         rcept = e.get("rcept_no")
         if not rcept or db_manager.db.is_disclosure_notified(rcept):
             continue
+        note = build_detail_note(e) if _detail_eligible(e) else ""
+        detail_line = f"· 상세: {note}\n" if note else ""
         msg = (f"{e['icon']} [공시 알림] {e['name']}({e['code']})\n"
                f"· 구분: {e['category']}\n"
                f"· {e['report_nm']}\n"
                f"· 일자: {_fmt_date(e['date'])}\n"
+               f"{detail_line}"
                f"{DART_VIEWER_URL.format(rcept)}")
         try:
             api.send_telegram_message(msg)
@@ -212,104 +380,3 @@ def _maybe_ai_summary(events):
         else:
             config.console.print()
             config.console.print(Padding(Panel(Markdown(answer), title="🤖 AI 공시 해석", border_style="cyan", padding=(1, 2), width=120), (0, 4)))
-
-
-# ---------------------------------------------------------------------------
-# 실적 발표 추적
-# ---------------------------------------------------------------------------
-def next_earnings_deadline(acc_month, today):
-    """결산월 기준 다음 정기보고서 법정 제출기한 (분기/반기 +45일, 사업 +90일)."""
-    try:
-        fy = int(acc_month)
-    except Exception:
-        fy = 12
-    q_months = sorted({((fy - off - 1) % 12) + 1 for off in (9, 6, 3, 0)})
-    half_month = ((fy - 6 - 1) % 12) + 1
-    cands = []
-    for y in (today.year - 1, today.year, today.year + 1):
-        for m in q_months:
-            qend = date(y, m, _cal.monthrange(y, m)[1])
-            offset = 90 if m == fy else 45
-            cands.append((qend + timedelta(days=offset), m))
-    fut = sorted([c for c in cands if c[0] >= today])
-    if not fut:
-        return None, None
-    dl, m = fut[0]
-    if m == fy:
-        label = "사업보고서"
-    elif m == half_month:
-        label = "반기보고서"
-    else:
-        label = "분기보고서"
-    return dl, label
-
-
-def _collect_earnings(code, name):
-    acc = api.get_dart_acc_month(code)
-    today = date.today()
-    deadline, rpt = next_earnings_deadline(acc, today)
-    # 최근 실적/정기보고서 공시 1건
-    recent = None
-    for r in api.get_dart_disclosures(code, days=120):
-        _, _, cat = classify_disclosure(r["report_nm"])
-        if cat in ("실적·IR", "정기보고서"):
-            recent = r
-            break
-    return {
-        "code": code, "name": name, "acc_month": acc,
-        "deadline": deadline, "report_type": rpt, "recent": recent,
-    }
-
-
-def show_earnings():
-    """관심종목 실적 발표 추적 (최근 실적공시 + 예상 제출기한)."""
-    utils.clear_screen()
-    config.console.print("\n[bold cyan]📊 [관심종목 실적 발표 추적][/bold cyan]\n")
-
-    codes = _kr_watchlist()
-    if not codes:
-        config.console.print("[yellow]등록된 국내 관심종목이 없습니다.[/yellow]")
-        return
-    if not config.DART_API_KEY:
-        config.console.print("[yellow]※ DART API 키가 설정되지 않았습니다. (환경변수 DART_API_KEY)[/yellow]")
-        return
-
-    rows = []
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  BarColumn(), console=config.console, transient=True) as progress:
-        task = progress.add_task("[cyan]실적 일정 조회 중...[/cyan]", total=len(codes))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-            futs = {ex.submit(_collect_earnings, c, n): c for c, n in codes}
-            for fut in concurrent.futures.as_completed(futs):
-                try:
-                    rows.append(fut.result())
-                except Exception:
-                    pass
-                progress.advance(task)
-
-    rows = [r for r in rows if r.get("deadline")]
-    rows.sort(key=lambda r: r["deadline"])
-    today = date.today()
-
-    config.console.print("[dim]※ DART는 실적 '예정일'을 제공하지 않아, 법정 제출기한(분기+45일/사업+90일)으로 산출한 추정치입니다.[/dim]\n")
-    table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table.add_column("종목", justify="left")
-    table.add_column("다음 예상 제출기한", justify="center")
-    table.add_column("D-day", justify="center")
-    table.add_column("보고서", justify="center")
-    table.add_column("최근 실적 공시", justify="left")
-
-    for r in rows:
-        d = (r["deadline"] - today).days
-        dday = "D-DAY" if d == 0 else f"D-{d}"
-        recent_str = "-"
-        if r["recent"]:
-            recent_str = f"{_fmt_date(r['recent']['rcept_dt'])} {r['recent']['report_nm']}"
-        table.add_row(
-            f"{r['name']} ({r['code']})",
-            r["deadline"].strftime("%Y-%m-%d (%a)"),
-            f"[bold]{dday}[/bold]" if d <= 7 else dday,
-            r["report_type"] or "-",
-            recent_str,
-        )
-    config.console.print(table)

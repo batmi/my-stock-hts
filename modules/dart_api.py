@@ -230,3 +230,238 @@ def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
             "corp_name": (r.get("corp_name") or "").strip(),
         })
     return out
+
+
+def _dart_num(s):
+    """DART 숫자 문자열('1,234', '△12' 등) -> float. 파싱 불가 시 None."""
+    if s is None:
+        return None
+    t = str(s).replace(",", "").replace("△", "-").replace("▲", "-").strip()
+    if t in ("", "-", "0-"):
+        return None
+    try:
+        return float(t)
+    except Exception:
+        return None
+
+
+def get_dart_insider_trades(stock_code, since=None):
+    """임원·주요주주 특정증권등 소유상황 보고 (elestock.json, 최신순).
+
+    반환: [{rcept_no, rcept_dt, repror, ofcps, main_shrholdr, qty, chg, rate, rate_chg}, ...]
+    qty=보유 특정증권 수, chg=증감 수량(+매수/-매도), rate=보유비율(%).
+    since: 'YYYYMMDD' — 응답이 전체 이력(수천 건)이라 이 날짜 이전은 정규화 전에 버려
+           저사양 환경의 메모리 사용을 줄인다.
+    """
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    rows = _api().call_dart("elestock.json", {"corp_code": corp})
+    if not rows or not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        if since and (r.get("rcept_dt") or "").replace("-", "") < since:
+            continue
+        out.append({
+            "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+            "repror": (r.get("repror") or "").strip(),
+            "ofcps": (r.get("isu_exctv_ofcps") or "").strip(),
+            "main_shrholdr": (r.get("isu_main_shrholdr") or "").strip(),
+            "qty": _dart_num(r.get("sp_stock_lmp_cnt")),
+            "chg": _dart_num(r.get("sp_stock_lmp_irds_cnt")),
+            "rate": _dart_num(r.get("sp_stock_lmp_rate")),
+            "rate_chg": _dart_num(r.get("sp_stock_lmp_irds_rate")),
+        })
+    return out
+
+
+def get_dart_major_holdings(stock_code):
+    """대량보유(5%) 상황 보고 (majorstock.json, 최신순).
+
+    반환: [{rcept_no, rcept_dt, repror, reason, qty, chg, rate, rate_chg}, ...]
+    """
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    rows = _api().call_dart("majorstock.json", {"corp_code": corp})
+    if not rows or not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+            "repror": (r.get("repror") or "").strip(),
+            "reason": " ".join((r.get("report_resn") or "").split()),
+            "qty": _dart_num(r.get("stkqy")),
+            "chg": _dart_num(r.get("stkqy_irds")),
+            "rate": _dart_num(r.get("stkrt")),
+            "rate_chg": _dart_num(r.get("stkrt_irds")),
+        })
+    return out
+
+
+def get_dart_financials(stock_code, year, reprt_code):
+    """단일회사 주요계정 (fnlttSinglAcnt.json) 원본 rows. 없으면 None.
+
+    reprt_code: 11011=사업, 11012=반기, 11013=1분기, 11014=3분기.
+    """
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return None
+    rows = _api().call_dart("fnlttSinglAcnt.json", {
+        "corp_code": corp, "bsns_year": str(year), "reprt_code": reprt_code
+    })
+    return rows if isinstance(rows, list) else None
+
+
+def get_dart_paid_increase_detail(stock_code, bgn_de, end_de):
+    """유상증자 결정 세부내역 (piicDecsn.json). 없으면 [].
+
+    주요 필드: nstk_ostk_cnt(신주 보통주), nstk_estk_cnt(신주 기타주),
+    bfic_tisstk_ostk(증자 전 발행주식총수), ic_mthn(증자방식), fdpp_*(자금 목적).
+    """
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    rows = _api().call_dart("piicDecsn.json", {
+        "corp_code": corp, "bgn_de": bgn_de, "end_de": end_de
+    })
+    return rows if isinstance(rows, list) else []
+
+
+_BOND_ENDPOINTS = {
+    "CB": "cvbdIsDecsn.json",   # 전환사채
+    "BW": "bwbdIsDecsn.json",   # 신주인수권부사채
+    "EB": "exbdIsDecsn.json",   # 교환사채
+}
+
+
+def get_dart_bond_issue_detail(stock_code, bgn_de, end_de, kind="CB"):
+    """메자닌(CB/BW/EB) 발행 결정 세부내역. 없으면 [].
+
+    주요 필드: bd_fta(권면총액), cv_prc/ex_prc(전환/행사가액), bdis_mthn(발행방법).
+    """
+    endpoint = _BOND_ENDPOINTS.get(kind)
+    if not endpoint:
+        return []
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    rows = _api().call_dart(endpoint, {
+        "corp_code": corp, "bgn_de": bgn_de, "end_de": end_de
+    })
+    return rows if isinstance(rows, list) else []
+
+
+# ---------------------------------------------------------------------------
+# 공시 원문(document.xml) 기반 잠정실적 파싱
+# ---------------------------------------------------------------------------
+def get_dart_document_text(rcept_no):
+    """공시 원문(document.xml ZIP)을 내려받아 태그를 제거한 텍스트 반환. 실패 시 None."""
+    if not config.DART_API_KEY or not rcept_no:
+        return None
+    try:
+        import io
+        import re
+        import zipfile
+        res = requests.get(f"{DART_BASE_URL}/document.xml",
+                           params={"crtfc_key": config.DART_API_KEY, "rcept_no": rcept_no},
+                           timeout=15)
+        if not res.content.startswith(b"PK"):  # ZIP이 아니면 오류 JSON
+            return None
+        with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+            raw = zf.read(zf.namelist()[0])
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp949", errors="replace")
+        text = re.sub(r"<[^>]+>", "\n", text)
+        import html as _html
+        return _html.unescape(text)
+    except Exception as e:
+        logger.debug(f"[DART] document.xml({rcept_no}) 조회 실패: {e}")
+        return None
+
+
+# 잠정실적 표의 숫자/증감 셀 토큰 (숫자, %, 흑전·적전 등)
+_EARNINGS_TOKEN = None  # 모듈 임포트 시점 컴파일 비용 회피 (지연 컴파일)
+
+
+def _earnings_token_re():
+    global _EARNINGS_TOKEN
+    if _EARNINGS_TOKEN is None:
+        import re
+        _EARNINGS_TOKEN = re.compile(
+            r"^[-+△▲(]?\s*[\d,]+(?:\.\d+)?\s*[)%]?$|^(?:-|흑전|적전|흑자전환|적자전환|적자지속|흑자지속)$")
+    return _EARNINGS_TOKEN
+
+
+def parse_earnings_brief(text):
+    """잠정실적/손익구조변동 공시 텍스트에서 매출·영업이익·순이익을 추출 (best-effort).
+
+    반환: {"unit": 배수(원), "rows": {지표명: (당기, 전년동기/전기, 증감률str|None)}} 또는 None.
+    '-'(빈 셀) 제거 후 남은 열 수로 레이아웃 판별:
+      5+열=[당기,직전,QoQ,전년동기,YoY], 4열=[당기,전기,증감액,증감률],
+      3열=[당기,전기,증감률], 2열=[당기,비교값(증감률은 직접 계산)].
+    """
+    if not text:
+        return None
+    import re
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    unit = 1.0
+    for ln in lines[:400]:
+        m = re.search(r"단위\s*[::]?\s*(조원|백만원|천만원|억원|천원|원)", ln.replace(" ", ""))
+        if m:
+            unit = {"조원": 1e12, "백만원": 1e6, "천만원": 1e7,
+                    "억원": 1e8, "천원": 1e3, "원": 1.0}[m.group(1)]
+            break
+
+    token_re = _earnings_token_re()
+    metrics = (("매출액", "매출액"), ("영업이익", "영업이익"), ("당기순이익", "당기순이익"))
+    rows = {}
+    for i, ln in enumerate(lines):
+        compact = ln.replace(" ", "")
+        for key, label in metrics:
+            if label in rows:
+                continue
+            # 셀 라벨 형태만 매칭 (문장 속 언급 제외)
+            if compact == key or (compact.startswith(key) and len(compact) <= len(key) + 6
+                                  and "율" not in compact and "액또는" not in compact):
+                toks, skipped = [], 0
+                for nxt in lines[i + 1:i + 12]:
+                    t = nxt.replace(" ", "")
+                    if token_re.match(t):
+                        toks.append(t)
+                    elif toks:
+                        break
+                    else:  # 라벨과 숫자 사이 헤더 셀 등은 소량 허용
+                        skipped += 1
+                        if skipped > 2:
+                            break
+                toks = [t for t in toks if t != "-"]
+                if not toks:
+                    continue
+                cur = _dart_num(toks[0])
+                base = pct = None
+                if len(toks) >= 5:
+                    base, pct = _dart_num(toks[3]), toks[4]
+                elif len(toks) == 4:
+                    base, pct = _dart_num(toks[1]), toks[3]
+                elif len(toks) == 3:
+                    base, pct = _dart_num(toks[1]), toks[2]
+                elif len(toks) == 2:
+                    base = _dart_num(toks[1])
+                if cur is not None:
+                    rows[label] = (cur, base, pct)
+    if not rows:
+        return None
+    return {"unit": unit, "rows": rows}
+
+
+def get_dart_earnings_brief(rcept_no):
+    """잠정실적 공시 원문에서 주요 수치 추출. 실패 시 None."""
+    return parse_earnings_brief(_api().get_dart_document_text(rcept_no))

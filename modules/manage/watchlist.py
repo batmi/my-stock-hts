@@ -1055,7 +1055,8 @@ def manage_stock_menu():
             ("5", "관심 종목 메모 관리", "Manage Memo"),
             ("6", "배당 · 실적 캘린더", "Dividend & Earnings Calendar"),
             ("7", "공시 모니터링", "Disclosure Monitoring"),
-            ("8", "실적 발표 추적", "Earnings Tracking")
+            ("8", "내부자 매매 동향", "Insider Trading"),
+            ("9", "재무 스냅샷", "Financial Snapshot")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -1091,8 +1092,12 @@ def manage_stock_menu():
             disclosure.show_disclosures()
             is_success = True
         elif choice == "8":
-            from modules.manage import disclosure
-            disclosure.show_earnings()
+            from modules.manage import insider
+            insider.show_insider_trades()
+            is_success = True
+        elif choice == "9":
+            from modules.manage import financials
+            financials.show_financial_snapshot()
             is_success = True
 
         if is_success:

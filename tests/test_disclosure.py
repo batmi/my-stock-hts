@@ -1,4 +1,3 @@
-from datetime import date
 from unittest.mock import patch
 
 import config
@@ -29,13 +28,6 @@ def test_classify_disclosure_levels():
     assert disclosure.classify_disclosure("무언가알수없는보고서")[2] == "기타"
 
 
-def test_next_earnings_deadline_dec_fiscal():
-    """12월 결산: 6/21 기준 다음은 반기보고서(6월말+45일=8/14)."""
-    dl, label = disclosure.next_earnings_deadline("12", date(2026, 6, 21))
-    assert dl == date(2026, 8, 14)
-    assert label == "반기보고서"
-
-
 def test_show_disclosures_empty_and_nokey():
     """관심종목 없음/키 없음 경로는 조용히 안내."""
     _set_watchlist([])
@@ -62,6 +54,7 @@ def test_check_and_alert_dedup(tmp_path):
     rows = [{"rcept_no": "RC100", "report_nm": "유상증자결정", "flr_nm": "", "rcept_dt": "20260620", "rm": "", "corp_name": ""}]
 
     with patch.object(api, "get_dart_disclosures", return_value=rows), \
+         patch.object(api, "get_dart_paid_increase_detail", return_value=[]), \
          patch.object(api, "send_telegram_message") as mock_send:
         # 1회차: 발송
         sent1 = disclosure.check_and_alert_disclosures(min_level=2, days=2)
