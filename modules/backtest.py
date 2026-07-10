@@ -23,6 +23,22 @@ import json
 
 logger = logging.getLogger(__name__)
 
+def _trend_smo_str(close, psar, macd, macd_signal, obv_trend):
+    """추세SMO 셀 문자열 생성 (S: SAR ⬆/⬇, M: MACD 0선±/골든G·데드D, O: OBV ▲/▼) — 종목분석 표기와 동일"""
+    sar_icon = "-"
+    if close is not None and psar is not None and not (np.isnan(close) or np.isnan(psar)):
+        sar_icon = "[red]⬆[/]" if close > psar else "[blue]⬇[/]"
+    macd_icon = "-"
+    if macd is not None and macd_signal is not None and not (np.isnan(macd) or np.isnan(macd_signal)):
+        zero_sign = "+" if macd > 0 else "-"
+        cross_char = "G" if macd > macd_signal else "D"
+        m_color = "red" if macd > macd_signal else "blue"
+        macd_icon = f"[{m_color}]{zero_sign}{cross_char}[/]"
+    obv_icon = "-"
+    if obv_trend is True: obv_icon = "[red]▲[/]"
+    elif obv_trend is False: obv_icon = "[blue]▼[/]"
+    return f"{sar_icon} {macd_icon} {obv_icon}"
+
 def calculate_daily_status(row, prev_row, thresholds=None):
     """
     analysis.py의 로직을 기반으로 일별 상태 및 점수 계산
@@ -498,6 +514,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     "date": date, "type": f"매도({reason})", "price": sell_price, "qty": sold_qty, "balance": balance, 
                     "profit": profit_rate, "profit_amt": profit, "days": holding_days, 
                     "score": sell_check_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "close": row['close'], "psar": row.get('SAR'), "macd": row.get('MACD'), "macd_signal": row.get('MACD_Signal'),
                     "cum_profit": cum_profit
                 })
 
@@ -577,6 +594,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     "date": date, "type": f"매수({buy_reason_str})", "price": buy_price, "qty": buy_qty, "balance": balance, 
                     "profit": 0, "profit_amt": 0, "days": 0, 
                     "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                    "close": row['close'], "psar": row.get('SAR'), "macd": row.get('MACD'), "macd_signal": row.get('MACD_Signal'),
                     "cum_profit": cum_profit
                 })
         elif position['qty'] == 0: # 매수 조건 미충족 시 (이미 보유 중인 상태는 누락으로 기록하지 않음)
@@ -590,7 +608,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
                 missed_trades.append({
                     "date": date, "score": raw_score, "state": state, "reason": missed_reason,
-                    "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "price": price
+                    "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "price": price,
+                    "close": row['close'], "psar": row.get('SAR'), "macd": row.get('MACD'), "macd_signal": row.get('MACD_Signal'), "obv_trend": (row['OBV'] > row['OBV_MA'])
                 })
         
         prev_row = row
@@ -1715,11 +1734,11 @@ def run_backtest():
             t_table.add_column("일자", justify="center")
             t_table.add_column("구분", justify="center")
             t_table.add_column("점수", justify="center")
+            t_table.add_column("추세SMO", justify="center")
             t_table.add_column("RSI", justify="right")
             t_table.add_column("CCI", justify="right")
             t_table.add_column("ADX", justify="right")
             t_table.add_column("DMI", justify="right")
-            t_table.add_column("OBV", justify="right")
             t_table.add_column("수량", justify="right")
             t_table.add_column("단가", justify="right")
             t_table.add_column("수익금", justify="right")
@@ -1787,10 +1806,9 @@ def run_backtest():
                     else:
                         dmi_str = f"{plus_di:.1f}/{minus_di:.1f}"
                 
-                # OBV
-                obv_val = t.get('obv') or 0
-                obv_c = "red" if t.get('obv_trend') else "blue"
-                
+                # 추세SMO (SAR/MACD/OBV)
+                smo_str = _trend_smo_str(t.get('close'), t.get('psar'), t.get('macd'), t.get('macd_signal'), t.get('obv_trend'))
+
                 qty_str = f"{t['qty']:,}"
                 
                 # [수정] 금액 포맷팅 (해외/국내 분기)
@@ -1822,12 +1840,12 @@ def run_backtest():
                     date_str[:10], 
                     f"{type_color}{t['type']}[/]", 
                     f"{t.get('score', 0):.1f}",
+                    smo_str,
                     f"[{rsi_c}]{rsi_str}[/]",
                     f"[{cci_c}]{cci_str}[/]",
                     f"[{adx_c}]{adx_str}[/]",
                     dmi_str,
-                    f"[{obv_c}]{int(obv_val/1000):,}K[/]",
-                    qty_str, 
+                    qty_str,
                     price_str, 
                     amt_str, 
                     profit_display, 
@@ -1930,6 +1948,7 @@ def run_backtest():
             m_table.add_column("점수", justify="center")
             m_table.add_column("상태", justify="center")
             m_table.add_column("당시 주가", justify="right")
+            m_table.add_column("추세SMO", justify="center")
             m_table.add_column("RSI", justify="right")
             m_table.add_column("CCI", justify="right")
             m_table.add_column("ADX", justify="right")
@@ -1964,7 +1983,8 @@ def run_backtest():
                         dmi_str = f"{plus_di:.1f}/{minus_di:.1f}"
                 
                 price_str = fmt_money(m.get('price', 0))
-                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, f"{m['rsi']:.1f}", cci_str, adx_str, dmi_str, m['reason'])
+                smo_str = _trend_smo_str(m.get('close'), m.get('psar'), m.get('macd'), m.get('macd_signal'), m.get('obv_trend'))
+                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, smo_str, f"{m['rsi']:.1f}", cci_str, adx_str, dmi_str, m['reason'])
                 
             config.console.print(m_table)
 
