@@ -15,15 +15,36 @@ def test_wait_for_server_recovery(mock_tg, mock_health):
     """서버 복구 대기 로직 테스트"""
     trader = auto_trade.AutoTrader()
     trader.is_running = True
-    
+    trader._wait_alert_sent = True # 진입 알림이 발송된 상태 가정 (복구 알림 짝 맞춤)
+
+    # [추가] 장애 중 누적된 체결 감시 에러 카운트가 복구 시 리셋되는지 검증
+    monitor = auto_trade.ConclusionMonitor()
+    monitor.consecutive_errors = 7
+
     # 1. False (Still down) -> 2. True (Recovered)
     mock_health.side_effect = [False, True]
-    
+
     with patch('time.sleep'): # Skip delay
         trader._wait_for_server_recovery()
-        
+
     assert mock_tg.called
     assert "서버 복구" in mock_tg.call_args[0][0]
+    assert monitor.consecutive_errors == 0 # Kill Switch 교착 방지
+    assert trader._wait_alert_sent is False
+
+
+@patch('modules.auto_trade.api.check_server_health', return_value=True)
+@patch('modules.auto_trade.api.send_telegram_message')
+def test_wait_for_server_recovery_alert_suppressed(mock_tg, mock_health):
+    """진입 알림이 쿨타임으로 생략된 경우 복구 알림도 생략 (스팸 방지)"""
+    trader = auto_trade.AutoTrader()
+    trader.is_running = True
+    trader._wait_alert_sent = False
+
+    with patch('time.sleep'):
+        trader._wait_for_server_recovery()
+
+    assert not mock_tg.called
 
 def test_monitor_account_status_empty():
     """계좌 상태 모니터링 (빈 데이터) 테스트"""

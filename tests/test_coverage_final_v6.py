@@ -238,7 +238,8 @@ def test_wait_for_server_recovery_loop(mock_tg, mock_health):
     """서버 복구 대기 루프 테스트"""
     trader = auto_trade.AutoTrader()
     trader.is_running = True
-    
+    trader._wait_alert_sent = True # 진입 알림이 발송된 상태 가정 (복구 알림 짝 맞춤)
+
     # False -> True
     mock_health.side_effect = [False, True]
     

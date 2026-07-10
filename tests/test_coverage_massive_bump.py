@@ -92,6 +92,7 @@ def test_autotrader_run_loop_exception_kill_switch(mock_bal):
     # MAX_ERRORS 임계치를 2로 낮춰서 빠른 테스트 진행
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 2
     trader.consecutive_errors = 1 # 1회 남음
+    trader.last_wait_alert_time = 0 # [추가] 진입 알림 쿨타임 초기화 (싱글톤 상태 격리)
     
     with patch.object(trader, 'is_market_open', return_value=True), \
          patch.object(trader, '_wait_for_server_recovery') as mock_recovery, \

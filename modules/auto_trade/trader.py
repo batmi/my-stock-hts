@@ -83,6 +83,8 @@ class AutoTrader:
             cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
+            cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
+            cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
             
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             # [추가] 로그 디렉토리 확인 및 생성
@@ -2375,8 +2377,12 @@ class AutoTrader:
                     
                     # [추가] Kill Switch: 체결 감시 시스템 상태 점검
                     # 체결 확인이 불가능한 상태에서는 신규 주문도 위험하므로 중단
-                    if not _pkg().ConclusionMonitor().is_healthy():
-                        raise Exception(f"체결 감시 시스템 불안정 (연속 에러 {_pkg().ConclusionMonitor().consecutive_errors}회)")
+                    conclusion_monitor = _pkg().ConclusionMonitor()
+                    if not conclusion_monitor.is_healthy():
+                        # 모니터를 즉시 깨워 재점검 유도 — 서버가 정상이면 카운터가 0으로 리셋되어
+                        # 스스로 회복된다 (모니터가 조회를 쉬는 동안 카운터가 얼어붙는 교착 방지)
+                        conclusion_monitor.check_now()
+                        raise Exception(f"체결 감시 시스템 불안정 (연속 에러 {conclusion_monitor.consecutive_errors}회)")
                     
                     # [수정] 매 사이클 시작 시점에 수행하던 일일 손실 한도 강제 체크 로직 제거
                     # API Rate Limit 발생 시 잔고가 누락되어 가짜 비상 정지를 유발할 수 있으므로,
@@ -2630,15 +2636,20 @@ class AutoTrader:
                     if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
                         console.print(f"\n[bold red][ERROR] 연속 에러 {max_err}회 초과! 자동매매 시스템이 대기 모드(정지)로 전환되었습니다. (사유: {err_reason})[/bold red]\n")
                     msg = f"🚨 [시스템 긴급 대기] 연속 에러 {max_err}회 발생\n매매를 일시 중단하고 서버 복구를 대기합니다.\n\n원인: {err_reason}\n\n서버 복구 확인 시 자동으로 재개됩니다."
-                    
-                    # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
+
+                    # [추가] 진입 알림 쿨타임(10분) — 대기/복구가 짧은 주기로 반복(진동)해도 스팸 방지
                     now = time.time()
-                    if now - self.last_emergency_alert_time > 3600:
-                        log_tail = get_mystock_log_tail(20)
-                        msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
-                        self.last_emergency_alert_time = now
-                    
-                    api.send_telegram_message(msg)
+                    if now - self.last_wait_alert_time > 600:
+                        self.last_wait_alert_time = now
+                        self._wait_alert_sent = True
+
+                        # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
+                        if now - self.last_emergency_alert_time > 3600:
+                            log_tail = get_mystock_log_tail(20)
+                            msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                            self.last_emergency_alert_time = now
+
+                        api.send_telegram_message(msg)
                     
                     self._wait_for_server_recovery()
                     
@@ -2661,7 +2672,15 @@ class AutoTrader:
                 # 삼성전자 현재가 조회로 서버 상태 확인
                 if api.check_server_health():
                     self.log("[서버 복구] 서버 정상화 확인. 매매를 재개합니다.")
-                    api.send_telegram_message("✅ [서버 복구] KIS 서버가 정상화되었습니다.\n자동매매를 재개합니다.")
+                    # [추가] 서버 정상화가 확인되었으므로 체결 감시 에러 카운트도 리셋
+                    # (장애 중 누적된 카운터가 Kill Switch를 계속 걸어 대기/복구가
+                    #  무한 반복되는 교착 방지 — 이후 조회가 다시 실패하면 재누적됨)
+                    _pkg().ConclusionMonitor().consecutive_errors = 0
+                    # [수정] 진입 알림을 보냈을 때만 복구 알림 발송 (쿨타임으로 진입 알림이
+                    # 생략된 반복 진동 구간에서는 복구 알림도 생략해 스팸 방지)
+                    if self._wait_alert_sent:
+                        self._wait_alert_sent = False
+                        api.send_telegram_message("✅ [서버 복구] KIS 서버가 정상화되었습니다.\n자동매매를 재개합니다.")
                     return
                 else:
                     self.log("[장애 대기] 서버 여전히 응답 없음.")

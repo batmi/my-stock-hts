@@ -167,6 +167,10 @@ class ConclusionMonitor:
             # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
             # 단, 시스템 초기 1회 실행(초기화)은 장 마감 상태여도 무조건 수행해야 하므로 조건 추가
             if self.initialized and not self._is_market_open() and not has_pending_orders:
+                # [추가] 조회를 쉬는 동안에는 '연속 에러' 개념이 성립하지 않으므로 리셋
+                # (장애 중 누적된 카운터가 얼어붙어 Kill Switch가 영구히 걸리는 것 방지)
+                if self.consecutive_errors:
+                    self.consecutive_errors = 0
                 self.event.wait(60)
                 if not self.event.is_set():
                     continue
