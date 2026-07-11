@@ -1182,7 +1182,7 @@ def main():
                                         config.console.print("[dim]※ AI 차트 분석은 GEMINI_API_KEY 설정 시 이용할 수 있습니다.[/dim]")
                                     else:
                                         config.console.print()
-                                        do_ai = Prompt.ask("이 차트를 AI(Gemini)로 분석할까요?", choices=["y", "n"], default="n")
+                                        do_ai = Prompt.ask("🤖 이 차트를 AI로 분석하시겠습니까?", choices=["y", "n"], default="n")
                                         if do_ai.lower() == "y":
                                             period_str_map = {"weekly": "주봉", "daily": f"일봉({c_months}개월)", "hourly": "시봉", "intraday": "분봉"}
                                             period_str = period_str_map.get(p_type, "일봉")

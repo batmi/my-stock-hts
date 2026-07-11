@@ -406,6 +406,7 @@ class TelegramCommander:
         presets = [
             ("TopGainers", "당일 급상승 상위 15종목"),
             ("TopLosers", "당일 급하락 상위 15종목"),
+            ("GapUp", "갭상승 출발"),
             ("Breakout", "신고가 돌파 주도주"),
             ("Pullback", "정배열 눌림목"),
             ("VolumeMomentum", "폭발적 수급 유입"),
@@ -418,7 +419,7 @@ class TelegramCommander:
         # [단일 관리 지점] 프리셋 조건/설명/쿼리는 theme_analysis(SCREENER_*)에서 공유한다.
         #   텔레그램 프리셋 키 -> 정식 프리셋 ID 매핑
         tg_to_id = {
-            "TopGainers": "gainers", "TopLosers": "losers", "Breakout": "breakout", "Pullback": "pullback",
+            "TopGainers": "gainers", "TopLosers": "losers", "GapUp": "gapup", "Breakout": "breakout", "Pullback": "pullback",
             "VolumeMomentum": "volume", "OversoldRebound": "oversold", "ValueTurnaround": "value",
             "HighDividend": "dividend", "TrendReversal": "reversal"
         }

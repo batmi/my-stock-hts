@@ -1281,6 +1281,7 @@ SCREENER_SELECT_COLS = [
 SCREENER_PRESETS = {
     "gainers":  {"name": "당일 급상승 상위 15종목", "limit": 15,  "desc": None},
     "losers":   {"name": "당일 급하락 상위 15종목", "limit": 15,  "desc": None},
+    "gapup":    {"name": "갭상승 출발",             "limit": 20,  "desc": "밤사이 재료(공시·실적·수주)로 전일 종가보다 3% 이상 높게 출발하고 강한 거래량이 붙은 종목을 장 초반에 가장 빨리 포착합니다."},
     "breakout": {"name": "신고가 돌파 주도주",      "limit": 200, "desc": "강세장에서 시장을 주도하며 전고점을 뚫고 날아가는 가장 강한 주식을 잡을 때 사용합니다."},
     "pullback": {"name": "정배열 눌림목",           "limit": 20,  "desc": "완벽한 우상향 추세에 있는 주식이 일시적인 조정(과매도)을 받을 때 안전하게 진입하는 스윙 전략입니다."},
     "volume":   {"name": "폭발적 수급 유입",        "limit": 20,  "desc": "평소 조용하던 주식에 세력이나 기관의 강력한 매수세가 유입되며 시세가 분출하기 시작한 종목을 포착합니다."},
@@ -1290,37 +1291,52 @@ SCREENER_PRESETS = {
     "reversal": {"name": "상승 추세 전환",          "limit": 200, "desc": "오랜 하락이나 횡보를 끝내고 본격적인 상승 추세로 진입하는 초기(무릎) 타점을 잡아내는 가장 신뢰도 높은 스윙 전략입니다."},
 }
 
-# UI 메뉴 순번("1".."9") <-> 정식 프리셋 ID 매핑
+# UI 메뉴 순번("1".."9") -> 정식 프리셋 ID 목록 매핑 (메뉴 1번은 급상승+급하락 통합 실행)
 SCREENER_MENU_TO_ID = {
-    "1": "gainers", "2": "losers", "3": "breakout", "4": "pullback", "5": "volume",
-    "6": "oversold", "7": "value", "8": "dividend", "9": "reversal"
+    "1": ["gainers", "losers"], "2": ["gapup"], "3": ["breakout"], "4": ["pullback"], "5": ["volume"],
+    "6": ["oversold"], "7": ["value"], "8": ["dividend"], "9": ["reversal"]
 }
 
 def screener_liquidity_filters(market):
-    """시장별 공통 유동성/규모 필터 (나노캡·동전주·관리종목 노이즈 제거).
+    """시장별 공통 유동성/규모/종목유형 필터 (나노캡·동전주·우선주·ETF 노이즈 제거).
 
     market_cap_basic 단위가 한국=KRW, 미국=USD로 다르므로 임계값을 시장별로 분기한다.
+    종목유형: 한국=보통주만(우선주/ETF/ETN 제외), 미국=보통주+ADR(TSM 등은 type='dr')·우선주 제외.
     반환: (필터 리스트, 사람이 읽는 라벨 문자열)
     """
     from tradingview_screener import Column
     if market == "korea":
-        return [Column('market_cap_basic') > 1e11, Column('volume') > 50000], "시총 1,000억↑ · 거래량 5만주↑"
-    return [Column('market_cap_basic') > 3e8, Column('close') >= 1.0, Column('volume') > 100000], "시총 $300M↑ · $1↑ · 거래량 10만주↑"
+        return [Column('market_cap_basic') > 1e11, Column('volume') > 50000,
+                Column('type') == 'stock', Column('typespecs').has('common')], "시총 1,000억↑ · 거래량 5만주↑ · 보통주만"
+    return [Column('market_cap_basic') > 3e8, Column('close') >= 1.0, Column('volume') > 100000,
+            Column('type').isin(['stock', 'dr']), Column('typespecs').has_none_of('preferred')], "시총 $300M↑ · $1↑ · 거래량 10만주↑ · 보통주/ADR만"
 
 def screener_condition_str(market, preset_id):
     """프리셋별 조건 요약 문자열 (화면/텔레그램 공통 표기)."""
     _, lab = screener_liquidity_filters(market)
     return {
-        "gainers":  f"({lab} + 당일 거래량 평균 이상)",
-        "losers":   f"({lab} + 당일 거래량 평균 이상)",
-        "breakout": "(완전정배열 20>50>200 + 52주고점 95%↑ + 종가>20일선 + RSI>65 + ADX>25 + MACD골든·0선위)",
-        "pullback": "(완전정배열 20>50>200 + 종가가 50일선 위·20일선 아래 + RSI 35~50 + MACD>0 + ADX>20)",
+        "gainers":  f"({lab} + 당일 상승 + 거래량 평균 이상)",
+        "losers":   f"({lab} + 당일 하락 + 거래량 평균 이상)",
+        "gapup":    "(시가 갭 +3%↑ 출발 + 당일 상승 유지 + 거래량 2배↑)",
+        "breakout": "(완전정배열 20>50>200 + 52주고점 95%↑ + 종가>20일선 + RSI>60 + ADX>20 + MACD골든·0선위 + 당일 상승 + 거래량 1.2배↑)",
+        "pullback": "(완전정배열 20>50>200 + 종가가 50일선 위·20일선 아래 + RSI 35~50 + MACD>0 + ADX>20 + 거래량 1.5배 미만 건전한 조정)",
         "volume":   "(평균 거래량 3배↑ 폭증 + 당일 5%↑ 급등 + 종가>20일선 + MACD골든 + RSI<80 과열제외)",
-        "oversold": "(RSI<40 + 주가<20일선 + MACD골든 + 당일 2%↑ 반등 + 거래량 평균 이상)",
+        "oversold": "(RSI<40 + 주가<20일선 + MACD골든 + 당일 2~15% 반등(추격매수 제외) + 거래량 1.5배↑)",
         "value":    "(PER 1~12 + PBR<1.5 + ROE>15% + 부채비율<150% + 20·50일선 위 + MACD골든)",
-        "dividend": "(배당률 5~15% + PER 1~15 + 종가>200일선 장기상승추세)",
-        "reversal": "(20일<50일 역배열에서 50일선 강세돌파 + MACD골든 + RSI>50 + 거래량 1.5배↑ + 52주 중간값 이하)",
+        "dividend": "(배당률 5~15% + PER 1~15 + 종가>200·50일선 상승추세)",
+        "reversal": "(20일<50일 역배열에서 50일선 강세돌파 + MACD골든 + RSI 50~70 + 거래량 1.5배↑ + 52주 중간값 이하)",
     }.get(preset_id, "")
+
+def _screener_noise_filter(df):
+    """이름 기반 노이즈 제거: 스팩/리츠/인프라펀드/ETN 등 TradingView type 필터가 못 거르는 종목.
+
+    (예: KB발해인프라·맥쿼리인프라는 type='stock'/typespecs='common'으로 분류되어 있음)
+    """
+    if df is None or df.empty or 'description' not in df.columns:
+        return df
+    noise = df['description'].astype(str).str.contains(
+        r'(?i)\b(?:SPAC|REIT|ETN|Fund|Trust)\b|Special Purpose|Acquisition Corp', regex=True, na=False)
+    return df[~noise]
 
 def _screener_post_breakout(df):
     return df[df['close'] >= df['price_52_week_high'] * 0.95].head(20)
@@ -1339,32 +1355,41 @@ def build_screener_query(market, preset_id):
     post = None
 
     if preset_id == "gainers":
-        # 급상승: 당일 거래량이 평소(10일 평균) 이상 동반된 실질 상승만
-        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0).order_by('change', ascending=False)
+        # 급상승: 당일 거래량이 평소(10일 평균) 이상 동반된 실질 상승만 (하락 종목 혼입 방지 change>0)
+        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0, Column('change') > 0).order_by('change', ascending=False)
     elif preset_id == "losers":
-        # 급하락: 거래량 동반 투매
-        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0).order_by('change', ascending=True)
+        # 급하락: 거래량 동반 투매 (상승 종목 혼입 방지 change<0)
+        q = q.where(*liq, Column('relative_volume_10d_calc') > 1.0, Column('change') < 0).order_by('change', ascending=True)
+    elif preset_id == "gapup":
+        # 갭상승 출발: 시가 갭 +3% 이상 + 갭 유지(당일 상승) + 거래량 2배 폭증 (밤사이 재료 포착)
+        q = q.where(*liq, Column('gap') > 3.0, Column('change') > 0,
+                    Column('relative_volume_10d_calc') > 2.0).order_by('gap', ascending=False)
     elif preset_id == "breakout":
         # 신고가 돌파 주도주: 완전정배열(20>50>200) + 종가>20일선 + 추세확립(MACD 0선 위)
+        # + 당일 상승 중 + 거래량 동반(relvol>1.2) — 하락 중이거나 거래량 없는 고RSI 종목 배제
         q = q.where(*liq, Column('SMA20') > Column('SMA50'), Column('SMA50') > Column('SMA200'),
-                    Column('close') > Column('SMA20'), Column('RSI') > 65, Column('ADX') > 25,
-                    Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') > 0).order_by('Recommend.All', ascending=False)
+                    Column('close') > Column('SMA20'), Column('RSI') > 60, Column('ADX') > 20,
+                    Column('MACD.macd') > Column('MACD.signal'), Column('MACD.macd') > 0,
+                    Column('change') > 0, Column('relative_volume_10d_calc') > 1.2).order_by('Recommend.All', ascending=False)
         post = _screener_post_breakout
     elif preset_id == "pullback":
         # 정배열 눌림목: 완전정배열 + 추세강도(ADX>20) 유지 중 단기 조정
+        # 거래량 폭증(relvol≥1.5) 조정은 투매 가능성 → 거래량 잠잠한 건전한 눌림만
         q = q.where(*liq, Column('SMA20') > Column('SMA50'), Column('SMA50') > Column('SMA200'),
                     Column('close') > Column('SMA50'), Column('close') < Column('SMA20'),
-                    Column('RSI').between(35, 50), Column('MACD.macd') > 0, Column('ADX') > 20).order_by('Recommend.All', ascending=False)
+                    Column('RSI').between(35, 50), Column('MACD.macd') > 0, Column('ADX') > 20,
+                    Column('relative_volume_10d_calc') < 1.5).order_by('Recommend.All', ascending=False)
     elif preset_id == "volume":
         # 폭발적 수급: 거래량 3배 폭증 + 급등 + MACD골든, 과열(RSI≥80) 분출후반 제외
         q = q.where(*liq, Column('relative_volume_10d_calc') > 3.0, Column('change') > 5.0,
                     Column('close') > Column('SMA20'), Column('MACD.macd') > Column('MACD.signal'),
                     Column('RSI') < 80).order_by('relative_volume_10d_calc', ascending=False)
     elif preset_id == "oversold":
-        # 낙폭과대 바닥탈출: 과매도 반등에 거래량(평균 이상) 동반(데드캣 방어)
+        # 낙폭과대 바닥탈출: 과매도 반등에 강한 거래량(1.5배) 동반(데드캣 방어)
+        # 반등폭 2~15%로 제한 — 이미 15% 이상 급등한 종목은 '바닥 타점'이 아니라 추격 매수
         q = q.where(*liq, Column('RSI') < 40, Column('close') < Column('SMA20'),
-                    Column('MACD.macd') > Column('MACD.signal'), Column('change') > 2.0,
-                    Column('relative_volume_10d_calc') > 1.0).order_by('Recommend.All', ascending=False)
+                    Column('MACD.macd') > Column('MACD.signal'), Column('change').between(2, 15),
+                    Column('relative_volume_10d_calc') > 1.5).order_by('Recommend.All', ascending=False)
     elif preset_id == "value":
         # 저평가 우량 턴어라운드: 가치+수익성+재무안정(부채비율<150%) + 20·50일선 위 추세 호전
         q = q.where(*liq, Column('price_earnings_ttm').between(1, 12), Column('price_book_ratio') < 1.5,
@@ -1372,18 +1397,26 @@ def build_screener_query(market, preset_id):
                     Column('close') > Column('SMA20'), Column('close') > Column('SMA50'),
                     Column('MACD.macd') > Column('MACD.signal')).order_by('Recommend.All', ascending=False)
     elif preset_id == "dividend":
-        # 고배당 상승추세: 배당 5~15%(배당함정 제외) + 저PER + 종가>200일선(장기 우상향)
+        # 고배당 상승추세: 배당 5~15%(배당함정 제외) + 저PER + 200일선·50일선 위(장기+중기 상승 추세)
         q = q.where(*liq, Column('dividend_yield_recent').between(5, 15), Column('price_earnings_ttm').between(1, 15),
-                    Column('close') > Column('SMA200')).order_by('dividend_yield_recent', ascending=False)
+                    Column('close') > Column('SMA200'), Column('close') > Column('SMA50')).order_by('dividend_yield_recent', ascending=False)
     elif preset_id == "reversal":
-        # 상승추세 전환: 역배열에서 50일선 강세돌파 + 모멘텀 전환(RSI>50) + 거래량 1.5배 동반
+        # 상승추세 전환: 역배열에서 50일선 강세돌파 + 모멘텀 전환(RSI 50~70, 과열 추격 제외) + 거래량 1.5배 동반
         q = q.where(*liq, Column('SMA20') < Column('SMA50'), Column('close') > Column('SMA50'),
-                    Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0, Column('RSI') > 50,
+                    Column('MACD.macd') > Column('MACD.signal'), Column('change') > 0, Column('RSI').between(50, 70),
                     Column('relative_volume_10d_calc') > 1.5).order_by('Recommend.All', ascending=False)
         post = _screener_post_reversal
 
     q = q.limit(SCREENER_PRESETS[preset_id]["limit"])
-    return q, post
+
+    # 모든 프리셋 공통: 스팩/리츠/인프라펀드 등 이름 기반 노이즈 제거 후 프리셋별 후처리 적용
+    preset_post = post
+    def _combined_post(df, _p=preset_post):
+        df = _screener_noise_filter(df)
+        if _p is not None and df is not None and not df.empty:
+            df = _p(df)
+        return df
+    return q, _combined_post
 
 def _run_tradingview_screener():
     """트레이딩뷰 스크리너 기반 조건 검색 및 종목 발굴"""
@@ -1410,8 +1443,8 @@ def _run_tradingview_screener():
 
     preset_items = [
         ("0", "전체 프리셋 순차 스캔", "All Presets"),
-        ("1", "당일 급상승 상위 15종목", "Top Gainers"),
-        ("2", "당일 급하락 상위 15종목", "Top Losers"),
+        ("1", "당일 급상승/급하락 상위 15종목", "Top Movers"),
+        ("2", "갭상승 출발", "Gap-Up Momentum"),
         ("3", "신고가 돌파 주도주", "Breakout"),
         ("4", "정배열 눌림목", "Pullback"),
         ("5", "폭발적 수급 유입", "Volume Momentum"),
@@ -1428,14 +1461,16 @@ def _run_tradingview_screener():
     context.USER_ACTION_BREADCRUMB.append(f"[{preset_choice}] {preset_name}")
     
     # 프리셋 조건/설명 문자열은 공용 정의(SCREENER_*)에서 파생 (단일 관리 지점)
-    preset_conditions = {mk: screener_condition_str(market, cid) for mk, cid in SCREENER_MENU_TO_ID.items()}
-    preset_desc = {mk: SCREENER_PRESETS[cid]["desc"] for mk, cid in SCREENER_MENU_TO_ID.items() if SCREENER_PRESETS[cid]["desc"]}
+    preset_conditions = {pid: screener_condition_str(market, pid) for pid in SCREENER_PRESETS}
+    preset_desc = {pid: SCREENER_PRESETS[pid]["desc"] for pid in SCREENER_PRESETS if SCREENER_PRESETS[pid]["desc"]}
 
     try:
         target_choices = [str(i) for i in range(1, 10)] if preset_choice == "0" else [preset_choice]
+        # 메뉴 순번 -> 실행할 프리셋 ID들로 전개 (메뉴 1번은 급상승+급하락 2개 프리셋)
+        target_ids = [pid for mk in target_choices for pid in SCREENER_MENU_TO_ID[mk]]
         results = []
         stock_map = {}
-        
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1445,21 +1480,21 @@ def _run_tradingview_screener():
             console=config.console,
             transient=True
         ) as progress:
-            is_single = len(target_choices) == 1
+            is_single = len(target_ids) == 1
             if is_single:
                 task_main = progress.add_task("[cyan]TradingView 스크리너 검색 중...[/cyan]", total=None)
             else:
-                task_main = progress.add_task("[cyan]전체 프리셋 스캔 진행률 (All Presets)[/cyan]", total=len(target_choices))
-            
-            for p_choice in target_choices:
-                p_name = preset_map.get(p_choice, '').split(' (')[0]
+                task_main = progress.add_task("[cyan]프리셋 스캔 진행률[/cyan]", total=len(target_ids))
+
+            for pid in target_ids:
+                p_name = SCREENER_PRESETS[pid]["name"]
                 if is_single:
                     progress.update(task_main, description=f"[cyan]{p_name} 검색 중...[/cyan]", total=None, completed=0)
                 else:
                     task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
-                
+
                 # [단일 관리 지점] 프리셋 쿼리/후처리는 build_screener_query()에서 생성 (telegram봇과 공유)
-                query, post_fn = build_screener_query(market, SCREENER_MENU_TO_ID[p_choice])
+                query, post_fn = build_screener_query(market, pid)
 
                 count, df = 0, None
                 for attempt in range(3):
@@ -1637,20 +1672,20 @@ def _run_tradingview_screener():
                         
                     if not is_single:
                         progress.remove_task(task_sub)
-                    results.append((p_choice, preset_map.get(p_choice, ''), table))
+                    results.append((pid, p_name, table))
                 else:
                     if not is_single:
                         progress.remove_task(task_sub)
-                    results.append((p_choice, preset_map.get(p_choice, ''), None))
-                
+                    results.append((pid, p_name, None))
+
                 if not is_single:
                     progress.advance(task_main)
-                
-        for p_choice, p_full_name, table in results:
-            cond_str = f" {preset_conditions[p_choice]}" if p_choice in preset_conditions else ""
+
+        for pid, p_full_name, table in results:
+            cond_str = f" {preset_conditions[pid]}" if preset_conditions.get(pid) else ""
             config.console.print(f"\n[bold cyan]▶ {p_full_name}{cond_str}[/bold cyan]")
-            if p_choice in preset_desc:
-                config.console.print(f"   [dim]: {preset_desc[p_choice]}[/dim]")
+            if pid in preset_desc:
+                config.console.print(f"   [dim]: {preset_desc[pid]}[/dim]")
 
             if table is None:
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
