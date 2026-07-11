@@ -4,22 +4,24 @@ from modules import settings
 import config
 
 @patch('rich.prompt.Prompt.ask')
-@patch('modules.settings.modify_trading_cycle_settings')
-def test_system_config_menu_cycle(mock_cycle, mock_ask):
-    """시스템 설정 메뉴 - 환경 및 주기 설정 테스트"""
+@patch('modules.settings._edit_section')
+def test_system_config_menu_cycle(mock_edit, mock_ask):
+    """시스템 설정 메뉴 - 환경 및 주기 설정 테스트 (5-1. 거래 시간·주기)"""
     # 메인메뉴 5 -> 서브메뉴 1 -> 메인메뉴 q
     mock_ask.side_effect = ["5", "1", "q"]
     settings.system_config_menu()
-    mock_cycle.assert_called_once()
+    mock_edit.assert_called_once()
+    assert mock_edit.call_args[0][2] == "5-1"
 
 @patch('rich.prompt.Prompt.ask')
-@patch('modules.settings.modify_analysis_thresholds')
-def test_system_config_menu_analysis(mock_analysis, mock_ask):
-    """시스템 설정 메뉴 - 분석 임계값 테스트"""
+@patch('modules.settings._edit_section')
+def test_system_config_menu_analysis(mock_edit, mock_ask):
+    """시스템 설정 메뉴 - 분석 임계값 테스트 (1-1. 기본 진입 조건)"""
     # 메인메뉴 1 -> 서브메뉴 1 -> 메인메뉴 q
     mock_ask.side_effect = ["1", "1", "q"]
     settings.system_config_menu()
-    mock_analysis.assert_called_once()
+    mock_edit.assert_called_once()
+    assert mock_edit.call_args[0][2] == "1-1"
 
 @patch('rich.prompt.Prompt.ask')
 def test_modify_risk_portfolio_settings(mock_ask):
