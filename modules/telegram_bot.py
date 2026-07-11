@@ -548,7 +548,7 @@ class TelegramCommander:
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
             "• /config : 트레이딩 전략 설정값 조회\n"
-            "• /preset <설정> : 시장 설정 프리셋 (b/r/s/d)\n\n"
+            "• /preset [설정] : 시장 설정 프리셋 (b/r/s/d)\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
             "• /holdings : 보유 종목 및 수익률 조회\n"
@@ -1285,8 +1285,8 @@ class TelegramCommander:
 
     def _cmd_preset(self, args):
         if not args:
-            return "⚠️ 사용법: /preset <설정> (b:강세/r:약세/s:횡보/d:초기화)\n(예: /preset d)"
-            
+            return self._get_preset_status()
+
         target = args[0].lower()
         preset_type = None
         if target in ['bull', 'b']:
@@ -1303,6 +1303,60 @@ class TelegramCommander:
             
         from modules import settings
         msg = settings.apply_strategy_preset(preset_type, interactive=False)
+        return msg
+
+    def _get_preset_status(self):
+        """현재 적용 중인 전략 프리셋 및 기본 설정과의 차이 조회 (/preset 무옵션)"""
+        from modules import settings
+        try:
+            preset = settings.check_and_update_active_preset()
+        except Exception:
+            preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
+
+        preset_display_map = {
+            "default": ("🟢", "기본 (Default)"),
+            "bull": ("🔴", "강세장 (Bull)"),
+            "bear": ("🔵", "약세장 (Bear)"),
+            "sideways": ("🟡", "횡보장 (Sideways)"),
+            "custom": ("⚪", "커스텀 (Custom)"),
+        }
+        p_emoji, p_name = preset_display_map.get(preset, ("⚪", preset))
+        msg = f"[전략 프리셋: {p_emoji} {p_name}]\n"
+
+        lines = []
+        try:
+            if preset == "custom":
+                # 커스텀: 현재 설정 전체를 기본값과 비교
+                changed_items = config.get_custom_settings()
+                for key, info in changed_items.items():
+                    dict_key = info.get("key", key)
+                    desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(dict_key, dict_key)
+                    lines.append(f"• {desc}: {info['default']} ➔ {info['current']}")
+            elif preset != "default":
+                # 강세/약세/횡보: 프리셋 정의값을 기본 프리셋과 비교
+                default_vals = settings.get_preset_values("default")
+                preset_vals = settings.get_preset_values(preset)
+                for k, v in preset_vals.items():
+                    default_v = default_vals.get(k)
+                    if v != default_v:
+                        desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(k, k)
+                        lines.append(f"• {desc}: {default_v} ➔ {v}")
+        except Exception as e:
+            logger.debug(f"Preset diff error: {e}")
+
+        if preset == "default":
+            msg += "\n기본 설정 그대로 운용 중입니다."
+        elif lines:
+            max_items = 30
+            if len(lines) > max_items:
+                rest = len(lines) - max_items
+                lines = lines[:max_items] + [f"• ... 외 {rest}건 (설정 메뉴에서 확인)"]
+            msg += "\n기본 설정과 다른 항목 (기본값 ➔ 현재값)\n"
+            msg += "\n".join(lines)
+        else:
+            msg += "\n기본 설정과 다른 항목이 없습니다."
+
+        msg += "\n\n프리셋 변경: /preset b(강세) · r(약세) · s(횡보) · d(초기화)"
         return msg
 
     def _cmd_balance(self, args):
