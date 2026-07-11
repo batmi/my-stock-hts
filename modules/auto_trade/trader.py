@@ -916,6 +916,41 @@ class AutoTrader:
             if skip_msg:
                 msg += f"⚠️ 하락장 방어 중 (현재 {', '.join(skip_msg)} 신규 매수 보류)\n"
 
+        # [추가] 전략 프리셋 표시 (커스텀이면 기본 설정과 다른 항목도 함께 출력)
+        try:
+            from modules import settings as settings_module
+            preset = settings_module.check_and_update_active_preset()
+        except Exception:
+            preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
+
+        preset_display_map = {
+            "default": ("🟢", "기본 (Default)"),
+            "bull": ("🔴", "강세장 (Bull)"),
+            "bear": ("🔵", "약세장 (Bear)"),
+            "sideways": ("🟡", "횡보장 (Sideways)"),
+            "custom": ("⚪", "커스텀 (Custom)"),
+        }
+        p_emoji, p_name = preset_display_map.get(preset, ("⚪", preset))
+        msg += f"\n[전략 프리셋: {p_emoji} {p_name}]\n"
+
+        if preset == "custom":
+            try:
+                changed_items = config.get_custom_settings()
+                if changed_items:
+                    lines = []
+                    for key, info in changed_items.items():
+                        dict_key = info.get("key", key)
+                        desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(dict_key, dict_key)
+                        lines.append(f"• {desc}: {info['default']} ➔ {info['current']}")
+                    max_items = 20
+                    if len(lines) > max_items:
+                        rest = len(lines) - max_items
+                        lines = lines[:max_items] + [f"• ... 외 {rest}건 (설정 메뉴에서 확인)"]
+                    msg += "기본 설정과 다른 항목 (기본값 ➔ 현재값)\n"
+                    msg += "\n".join(lines) + "\n"
+            except Exception:
+                pass
+
         # [수정] 보유수량 0 초과인 종목만 필터링
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
