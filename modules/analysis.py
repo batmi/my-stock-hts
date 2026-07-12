@@ -1216,6 +1216,11 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             inv_data = fut_inv.result() if fut_inv else None
             ask_bid_ratio = fut_ab.result() if fut_ab else None
 
+        # [Fix] 국내 지수 df는 공유 캐시 객체이므로 복사 후 사용
+        #  (apply_realtime_price의 당일 봉 덮어쓰기/추가가 캐시를 오염시키지 않도록)
+        if is_domestic_index and df is not None:
+            df = df.copy()
+
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
@@ -4088,6 +4093,9 @@ def _print_period_price_common(code, is_overseas, limit=20):
         progress.add_task("[cyan]기간별 시세 데이터 조회 중...[/cyan]", total=None)
         if is_domestic_index:
             df = get_domestic_index_data(code)
+            # [Fix] 공유 캐시 객체 보호: 아래에서 ma/diff/OBV 등 컬럼을 추가하므로 복사본 사용
+            if df is not None:
+                df = df.copy()
         else:
             df = api.get_chart_data(code, is_overseas)
             

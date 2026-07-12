@@ -125,7 +125,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if config.session.is_toss and m_type == "KOSDAQ150" and (df_fallback is None or df_fallback.empty):
                 return {'status': 'skipped', 'name': name}
             if df_fallback is not None and not df_fallback.empty:
-                df_daily = df_fallback
+                # [Fix] get_domestic_index_data는 공유 캐시 객체를 반환하므로 복사 후 사용.
+                #  아래 set_index(inplace=True)가 캐시 df의 'date' 컬럼을 제거해
+                #  개별 지수 분석(기간별 시세)이 KeyError로 실패하던 문제 방지.
+                df_daily = df_fallback.copy()
                 df_daily.columns = [c.lower() for c in df_daily.columns]
                 
                 if not isinstance(df_daily.index, pd.DatetimeIndex):
@@ -1093,7 +1096,13 @@ def show_market_indices(interval=0):
                             
                         context.USER_ACTION_BREADCRUMB.append(f"[개별분석] {target_name}")
                         config.console.print(f"\n[bold green]>> {target_name}({target_code}) 개별 지수 심층 분석 실행[/bold green]")
-                        analysis.diagnose_stock(target_code=target_code, target_name=target_name, target_is_overseas=is_overseas)
+                        # [Fix] 분석 중 예외가 바깥 입력 파싱 except에 잡혀 '잘못된 입력입니다.'로
+                        #  잘못 안내되지 않도록 별도 처리하고 트레이스백을 로그에 남긴다.
+                        try:
+                            analysis.diagnose_stock(target_code=target_code, target_name=target_name, target_is_overseas=is_overseas)
+                        except Exception:
+                            logger.exception(f"개별 지수 분석 실패: {target_name}({target_code})")
+                            config.console.print(f"[red]{target_name} 분석 중 오류가 발생했습니다. 로그(logs/mystock.log)를 확인하세요.[/red]")
                     
                     last_choice = sel
                     utils.pause()
@@ -1112,6 +1121,7 @@ def show_market_indices(interval=0):
                         time.sleep(1)
                         continue
             except Exception:
+                logger.exception(f"시장 지수 메뉴 입력 처리 오류: {sel!r}")
                 config.console.print("[red]잘못된 입력입니다.[/red]")
                 time.sleep(1)
                 continue
