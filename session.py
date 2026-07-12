@@ -198,7 +198,7 @@ class SessionManager:
             config.console.print(f"\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
             config.console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
             config.console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
-            config.console.print(f"[dim]   - 시세 기준: 국내 종가·등락률은 NXT 연장(~20:00) 포함 통합가 기준 → KIS 모드(KRX 기준가 대비)와 값이 다를 수 있음[/dim]")
+            config.console.print(f"[dim]   - 시세: NXT 포함 통합가 기준(KIS와 등락률 상이)[/dim]")
             return
 
         # [추가] 계좌 정보 누락 시 사용자 입력 요청

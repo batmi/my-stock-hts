@@ -362,7 +362,7 @@ Toss and KIS provide the "closing price" of domestic (KR) stocks on different ba
 
 - Example (Samsung Electronics, as of 2026-07-10): Thursday's close differs — KRX 278,000 vs Toss (NXT-inclusive) 282,500 — so even though both modes show the same Friday last price (286,500), the change displays as +8,500 (+3.06%) in KIS vs +4,000 (+1.42%) in Toss.
 - The Toss API does not expose the KRX regular-session close at all, so change rates in Toss mode are computed **self-consistently on the unified-price basis** (the same family of figures the Toss app shows). Chart-derived indicators (52-week high/low, moving averages, etc.) are also unified-price based and may differ slightly from KIS mode.
-- The program notes this difference at Toss-mode startup and below the stock analysis tables.
+- The program notes this difference at Toss-mode startup.
 
 ### Common
 5.  **Environment Variables**: Register the issued Keys and Account Numbers as System Environment Variables.
