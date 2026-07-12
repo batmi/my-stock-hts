@@ -3924,6 +3924,15 @@ def show_stock_analysis():
         last_choice = choice_str # [수정] 정상 처리된 유효한 입력만 기억
         context.USER_ACTION_BREADCRUMB.append(f"[{choice_str}] {','.join(group_names)}")
 
+        # [추가] 최초 클론 등으로 stock.json이 없으면 기본 관심종목(삼성전자)으로 자동 생성
+        if not os.path.exists(config.STOCK_DATA_FILE):
+            config.session.save_stock_config({
+                "stocks_kr": [{"name": "삼성전자", "code": "005930", "exchange": "KOSPI"}],
+                "etfs_kr": [], "stocks_us": [], "etfs_us": []
+            })
+            config.session.load_stock_config()  # exchange 캐시 재구성
+            config.console.print("[yellow]관심종목 파일(json/stock.json)이 없어 기본 종목(삼성전자)으로 새로 생성했습니다.[/yellow]\n")
+
         target_list = []
         order_map = [
             ('stocks_kr', "국내 주식 기술적 분석", False),
@@ -3936,6 +3945,15 @@ def show_stock_analysis():
             if key in selected_groups:
                 d_list = [(x['name'], x['code']) for x in config.session.stock_data.get(key, [])]
                 target_list.append((title, d_list, is_ovs))
+
+        # [추가] 조회 대상 종목이 하나도 없을 때 빈 화면 대신 안내 메시지 출력
+        if not any(d_list for _, d_list, _ in target_list):
+            if not any(config.session.stock_data.get(k) for k in ["stocks_kr", "etfs_kr", "stocks_us", "etfs_us"]):
+                config.console.print("[yellow]관심종목에 추가된 종목이 없습니다. [7] 관심 종목 관리 메뉴에서 종목을 추가해주세요.[/yellow]")
+            else:
+                config.console.print("[yellow]선택한 분류에 등록된 종목이 없습니다.[/yellow]")
+            utils.pause()
+            continue
 
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 

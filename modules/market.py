@@ -688,6 +688,12 @@ def _show_market_indices_core(target_indices=None):
     # (실시간성은 최대 TTL 만큼만 지연되며, 반복(@) 조회 시 체감 속도가 크게 향상된다.)
 
     indices_map = INDICES_MAP.copy()
+
+    # [추가] 토스 모드: 코스피200·코스닥150은 토스 API에서 시세를 제공하지 않아 조회 대상에서 제외
+    if getattr(config.session, 'is_toss', False):
+        for _unsupported in ("코스피200", "코스닥150"):
+            indices_map.pop(_unsupported, None)
+
     if target_indices:
         indices_map = {k: v for k, v in indices_map.items() if k in target_indices}
         
