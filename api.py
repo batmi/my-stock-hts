@@ -543,6 +543,18 @@ def _chart_disk_set(cache_key, df, today_str):
                 _chart_disk_pruned_date = today_str
     except Exception as e:
         logger.debug(f"[ChartDisk] set 실패({cache_key}): {e}")
+
+def _chart_disk_delete(cache_key):
+    """디스크 일봉 캐시에서 특정 키를 제거한다(수정주가 감지 시 오염 항목 파기용).
+    메모리만 지우면 다음 호출에서 디스크의 옛 df가 재적재→재파기가 반복되므로 함께 지운다."""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
+            conn.execute("DELETE FROM chart_cache WHERE cache_key=?", (cache_key,))
+    except Exception as e:
+        logger.debug(f"[ChartDisk] delete 실패({cache_key}): {e}")
 # [추가] 캐시 오버레이(get_current_price_data) 재진입 방지용 가드.
 # 액면분할 보정 경로(get_current_price_data → get_chart_data → 오버레이 → get_current_price_data)에서
 # 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
@@ -656,8 +668,10 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                         high_p = _safe_float(out.get('high', 0)) if out.get('high') else curr
                         low_p = _safe_float(out.get('low', 0)) if out.get('low') else curr
                         vol = _safe_float(out.get('tvol', 0) or out.get('vol', 0))
-                        diff = _safe_float(out.get('diff', 0))
-                        prev = curr - diff
+                        # 전일종가는 base 필드만 신뢰한다. (curr - diff) 방식은 last가 장외
+                        # 실시간가로 덮어써지거나(KIS 프리/애프터) diff 미제공(토스) 시 어긋나
+                        # 아래 수정주가 검증이 오탐→캐시 파기·재조회를 반복한다. base 없으면 0(검증 스킵).
+                        prev = _safe_float(out.get('base', 0))
                     else:
                         curr = _safe_float(out.get('stck_prpr', 0))
                         open_p = _safe_float(out.get('stck_oprc', 0))
@@ -675,33 +689,39 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                     if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[Cache] {code} 수정주가 감지 (캐시:{target_prev} != 실시간:{prev}). 파기 후 재조회.")
                     with _CHART_CACHE_LOCK:
                         if cache_key in _CHART_CACHE: del _CHART_CACHE[cache_key]
-                    return fetch_func()
-
-                # 3. 실시간 가격 패치(Patch)
-                if last_date == today_ymd:
-                    # 오늘 날짜 행 덮어쓰기 (고가/저가는 캐시된 데이터와 비교하여 최대/최소 유지)
-                    old_high = float(df.iloc[-1]['high'])
-                    old_low = float(df.iloc[-1]['low'])
-                    high_p = max(old_high, high_p, curr)
-                    low_p = min(old_low, low_p, curr) if low_p > 0 else min(old_low, curr)
-                    # 현재가 API가 시가/거래량을 안 주는 경우(토스 등)는 캐시된 당일 봉 값을 보존(0 덮어쓰기 방지)
-                    if open_p <= 0: open_p = float(df.iloc[-1]['open'])
-                    if vol <= 0: vol = float(df.iloc[-1]['volume'])
-                    df.loc[df.index[-1], ['open', 'high', 'low', 'close', 'volume']] = [open_p, high_p, low_p, curr, vol]
+                    _chart_disk_delete(cache_key)
+                    # 아래 공통 재조회 경로로 합류시켜 새 데이터가 메모리·디스크에 재캐싱되게 한다.
+                    cached = None
                 else:
-                    # 오늘 날짜 행이 없으면 새로 추가 (시가/고가/저가 미제공 시 현재가로 근사)
-                    if open_p <= 0: open_p = curr
-                    if high_p <= 0: high_p = curr
-                    if low_p <= 0: low_p = curr
-                    new_row = pd.DataFrame([{'date': today_ymd, 'open': open_p, 'high': high_p, 'low': low_p, 'close': curr, 'volume': vol}])
-                    df = pd.concat([df, new_row], ignore_index=True)
-                
-                return df
+                    # 3. 실시간 가격 패치(Patch)
+                    if last_date == today_ymd:
+                        # 오늘 날짜 행 덮어쓰기 (고가/저가는 캐시된 데이터와 비교하여 최대/최소 유지)
+                        old_high = float(df.iloc[-1]['high'])
+                        old_low = float(df.iloc[-1]['low'])
+                        high_p = max(old_high, high_p, curr)
+                        low_p = min(old_low, low_p, curr) if low_p > 0 else min(old_low, curr)
+                        # 현재가 API가 시가/거래량을 안 주는 경우(토스 등)는 캐시된 당일 봉 값을 보존(0 덮어쓰기 방지)
+                        if open_p <= 0: open_p = float(df.iloc[-1]['open'])
+                        if vol <= 0: vol = float(df.iloc[-1]['volume'])
+                        df.loc[df.index[-1], ['open', 'high', 'low', 'close', 'volume']] = [open_p, high_p, low_p, curr, vol]
+                    else:
+                        # 오늘 날짜 행이 없으면 새로 추가 (시가/고가/저가 미제공 시 현재가로 근사)
+                        if open_p <= 0: open_p = curr
+                        if high_p <= 0: high_p = curr
+                        if low_p <= 0: low_p = curr
+                        new_row = pd.DataFrame([{'date': today_ymd, 'open': open_p, 'high': high_p, 'low': low_p, 'close': curr, 'volume': vol}])
+                        df = pd.concat([df, new_row], ignore_index=True)
+
+                    return df
         except Exception as e:
             logger.debug(f"[Cache] Update failed for {code}: {e}")
-            pass # 실패 시 그냥 원본 받아옴
         finally:
             _OVERLAY_GUARD.active = False
+        # 오버레이 실패(현재가 미확보·예외) 시 전체 재조회 대신 캐시된 과거봉을 그대로 반환한다.
+        # 과거봉은 불변이므로 당일 봉만 잠시 덜 신선할 뿐, 무거운 전체 재다운로드보다 낫다.
+        # (수정주가 파기 시에만 cached=None으로 아래 재조회 경로를 탄다)
+        if cached is not None:
+            return df
 
     df = fetch_func()
     if df is not None and not df.empty:
@@ -1826,24 +1846,30 @@ def _get_weekly_chart_data(code, is_overseas):
     is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
                 or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if is_index:
-        try:
-            df = fetch_yfinance_data(code, period="5y", interval="1wk")
-            if df is None or df.empty:
+        def _fetch_yf_index_weekly():
+            try:
+                df = fetch_yfinance_data(code, period="5y", interval="1wk")
+                if df is None or df.empty:
+                    return pd.DataFrame()
+                flat_cols = [str(col[0]).lower() if isinstance(col, tuple) else str(col).lower() for col in df.columns]
+                df.columns = flat_cols
+                df.reset_index(inplace=True)
+                df.columns = [str(c).lower() for c in df.columns]
+                df = df.loc[:, ~df.columns.duplicated()].copy()
+                cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+                for c in cols:
+                    if c not in df.columns: df[c] = 0
+                df = df[cols].copy()
+                df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+                return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+            except Exception as e:
+                logger.debug(f"yfinance weekly index fetch error: {e}")
                 return pd.DataFrame()
-            flat_cols = [str(col[0]).lower() if isinstance(col, tuple) else str(col).lower() for col in df.columns]
-            df.columns = flat_cols
-            df.reset_index(inplace=True)
-            df.columns = [str(c).lower() for c in df.columns]
-            df = df.loc[:, ~df.columns.duplicated()].copy()
-            cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-            for c in cols:
-                if c not in df.columns: df[c] = 0
-            df = df[cols].copy()
-            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
-            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
-        except Exception as e:
-            logger.debug(f"yfinance weekly index fetch error: {e}")
-            return pd.DataFrame()
+
+        # [최적화] 지수 주봉도 메모리 캐싱한다. 일봉과 키가 겹치지 않게 '_W' 접미사를 붙이고,
+        # 당일 '일봉' 패치용 오버레이는 주봉 캔들(주 시작일 date)에 맞지 않으므로 끈다.
+        return _get_cached_chart(f"{code}_W", is_overseas=True, is_index=True,
+                                 fetch_func=_fetch_yf_index_weekly, realtime_overlay=False)
 
     # 토스 개별종목: 토스 캔들은 일/분봉만 제공 → 일봉을 주 단위로 리샘플링
     if config.session.is_toss:
@@ -1889,33 +1915,39 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     
     is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if is_index:
-        try:
-            df = fetch_yfinance_data(code, period="2y")
-            if df is None or df.empty: return pd.DataFrame()
-                
-            # 1. 컬럼 평탄화 및 튜플 방어
-            flat_cols = []
-            for col in df.columns:
-                if isinstance(col, tuple):
-                    flat_cols.append(str(col[0]).lower())
-                else:
-                    flat_cols.append(str(col).lower())
-            df.columns = flat_cols
-            
-            df.reset_index(inplace=True)
-            df.columns = [str(c).lower() for c in df.columns]
-            df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
-            
-            cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-            for c in cols:
-                if c not in df.columns: df[c] = 0
-            df = df[cols].copy()
-            df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
-            df = df[df['date'] >= start_date_origin]
-            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
-        except Exception as e:
-            logger.debug(f"yfinance 2y index fetch error: {e}")
-            return pd.DataFrame()
+        def _fetch_yf_index_daily():
+            try:
+                df = fetch_yfinance_data(code, period="2y")
+                if df is None or df.empty: return pd.DataFrame()
+
+                # 1. 컬럼 평탄화 및 튜플 방어
+                flat_cols = []
+                for col in df.columns:
+                    if isinstance(col, tuple):
+                        flat_cols.append(str(col[0]).lower())
+                    else:
+                        flat_cols.append(str(col).lower())
+                df.columns = flat_cols
+
+                df.reset_index(inplace=True)
+                df.columns = [str(c).lower() for c in df.columns]
+                df = df.loc[:, ~df.columns.duplicated()].copy() # 중복 컬럼 제거 방어 로직 추가
+
+                cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+                for c in cols:
+                    if c not in df.columns: df[c] = 0
+                df = df[cols].copy()
+                df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+                df = df[df['date'] >= start_date_origin]
+                return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+            except Exception as e:
+                logger.debug(f"yfinance 2y index fetch error: {e}")
+                return pd.DataFrame()
+
+        # [최적화] 지수/원자재/환율 일봉도 종목과 동일하게 메모리 캐싱한다(is_index=True → 디스크 제외).
+        # 모두 yfinance 티커이므로 당일 봉 오버레이가 fast_info 경로를 타도록 is_overseas=True로 고정한다.
+        return _get_cached_chart(code, is_overseas=True, is_index=True,
+                                 fetch_func=_fetch_yf_index_daily, realtime_overlay=realtime)
 
     if not is_overseas:
         # [최적화] 일봉 과거 데이터는 불변이므로 _get_cached_chart로 캐싱(당일 봉만 실시간 오버레이).

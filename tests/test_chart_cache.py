@@ -21,6 +21,7 @@ def setup_teardown(monkeypatch):
     monkeypatch.setattr(api, '_chart_disk_get', lambda *a, **k: None)
     monkeypatch.setattr(api, '_chart_disk_set', lambda *a, **k: None)
     monkeypatch.setattr(api, '_chart_disk_clear', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_chart_disk_delete', lambda *a, **k: None)
     api.clear_chart_cache()
     config.settings.CHART_CACHE_TTL_MINUTES = 180
     yield
@@ -111,10 +112,74 @@ def test_cache_invalidation_by_corporate_action(mock_get_price):
     mock_fetch_func.return_value = create_dummy_df(yesterday_str, last_close=2000.0)
     
     df_new = api._get_cached_chart('005930', False, False, mock_fetch_func)
-    
+
     # 검증: 캐시가 무효화되고 무거운 API(fetch_func)가 다시 호출되어야 함!
     mock_fetch_func.assert_called_once()
     assert df_new.iloc[-1]['close'] == 2000.0
+
+    # 검증: 재조회한 새 데이터가 캐시에 저장되어, 다음 호출은 재조회 없이 캐시를 써야 함
+    # (과거엔 파기 후 결과를 캐싱하지 않아 매 호출 재다운로드가 반복됐음)
+    mock_fetch_func.reset_mock()
+    api._get_cached_chart('005930', False, False, mock_fetch_func)
+    mock_fetch_func.assert_not_called()
+
+
+@patch('api.get_current_price_data')
+def test_corporate_action_purges_disk_cache(mock_get_price, monkeypatch):
+    """3-1. 수정주가 감지 시 디스크 캐시 항목도 함께 파기하는가?
+    (메모리만 지우면 다음 호출에서 디스크의 옛 df가 재적재→재파기→재다운로드가 무한 반복됨)"""
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    deleted_keys = []
+    monkeypatch.setattr(api, '_chart_disk_delete', lambda key: deleted_keys.append(key))
+
+    initial_df = create_dummy_df(yesterday_str, last_close=10000.0)
+    mock_fetch_func = MagicMock(return_value=initial_df)
+    api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    mock_get_price.return_value = {
+        'rt_cd': '0',
+        'output': {'stck_prpr': '2100', 'stck_oprc': '2000', 'stck_hgpr': '2150',
+                   'stck_lwpr': '1950', 'acml_vol': '50000', 'stck_prdy_clpr': '2000'}
+    }
+    mock_fetch_func.return_value = create_dummy_df(yesterday_str, last_close=2000.0)
+    api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    assert deleted_keys == ['005930_False_False']
+
+
+@patch('api.get_current_price_data')
+def test_overlay_failure_returns_cached(mock_get_price):
+    """3-2. 현재가 조회 실패(rt_cd!=0) 시 전체 재다운로드 대신 캐시된 과거봉을 반환하는가?"""
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    initial_df = create_dummy_df(yesterday_str, last_close=1000.0)
+    mock_fetch_func = MagicMock(return_value=initial_df)
+    api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    mock_get_price.return_value = {'rt_cd': '9999'}
+    mock_fetch_func.reset_mock()
+    df = api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    mock_fetch_func.assert_not_called()  # 캐시가 유효하므로 무거운 재조회 금지
+    assert len(df) == 2
+    assert df.iloc[-1]['close'] == 1000.0
+
+
+@patch('api.get_current_price_data')
+def test_overseas_no_base_skips_purge(mock_get_price):
+    """3-3. 해외 현재가에 base(전일종가)가 없으면(토스 등) 수정주가 검증을 건너뛰는가?
+    (과거엔 prev=curr-diff로 계산해 ±1.5% 이상 움직인 종목마다 오탐 파기·재다운로드 반복)"""
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    initial_df = create_dummy_df(yesterday_str, last_close=100.0)
+    mock_fetch_func = MagicMock(return_value=initial_df)
+    api._get_cached_chart('TSLA', True, False, mock_fetch_func)
+
+    # 토스 어댑터처럼 last만 제공 + 전일 대비 +5% 변동 → base 없으므로 파기하면 안 됨
+    mock_get_price.return_value = {'rt_cd': '0', 'output': {'last': '105.0'}}
+    mock_fetch_func.reset_mock()
+    df = api._get_cached_chart('TSLA', True, False, mock_fetch_func)
+
+    mock_fetch_func.assert_not_called()
+    assert df.iloc[-1]['close'] == 105.0  # 당일 봉은 현재가로 병합됨
 
 def test_cache_ttl_expiration():
     """4. 지정된 TTL(180분)이 지나면 캐시가 만료되어 새로 데이터를 받아오는가?"""
