@@ -22,6 +22,10 @@ def setup_teardown(monkeypatch):
     monkeypatch.setattr(api, '_chart_disk_set', lambda *a, **k: None)
     monkeypatch.setattr(api, '_chart_disk_clear', lambda *a, **k: None)
     monkeypatch.setattr(api, '_chart_disk_delete', lambda *a, **k: None)
+    # 기존 테스트들은 달력 날짜로 더미 봉을 만들므로, 시장 기준일을 달력 오늘로 고정해
+    # 실행 요일(주말·휴일)에 따라 결과가 달라지는 플래키를 막는다. (거래일 보정 자체는
+    # test_market_date_* 계열에서 별도 검증)
+    monkeypatch.setattr(api, 'market_today', lambda is_overseas=False: datetime.now().strftime('%Y%m%d'))
     api.clear_chart_cache()
     config.settings.CHART_CACHE_TTL_MINUTES = 180
     yield
@@ -180,6 +184,41 @@ def test_overseas_no_base_skips_purge(mock_get_price):
 
     mock_fetch_func.assert_not_called()
     assert df.iloc[-1]['close'] == 105.0  # 당일 봉은 현재가로 병합됨
+
+
+@patch('api.get_current_price_data')
+def test_market_date_no_fake_candle_on_holiday(mock_get_price, monkeypatch):
+    """7. 비거래일(주말·휴장일) 조회 시 가짜 당일 봉을 추가하지 않고 마지막 거래일 봉을 덮어쓰는가?
+    (가짜 봉이 생기면 마지막 두 봉이 같은 종가가 되어 토스 모드 등락폭/등락률이 0으로 계산됨)"""
+    friday_str = '20260710'
+    # 시장 기준일이 직전 거래일(금요일)로 보정된 상황 (조회 시점은 일요일)
+    monkeypatch.setattr(api, 'market_today', lambda is_overseas=False: friday_str)
+
+    initial_df = create_dummy_df(friday_str, last_close=1000.0)  # 목+금 2봉
+    mock_fetch_func = MagicMock(return_value=initial_df)
+    api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    # 일요일의 현재가 = 금요일 최종 종가 (토스 lastPrice와 동일한 상황)
+    mock_get_price.return_value = {'rt_cd': '0', 'output': {'stck_prpr': '1000'}}
+    mock_fetch_func.reset_mock()
+    df = api._get_cached_chart('005930', False, False, mock_fetch_func)
+
+    mock_fetch_func.assert_not_called()
+    assert len(df) == 2                          # 가짜 일요일 봉이 추가되면 3이 됨
+    assert str(df.iloc[-1]['date']) == friday_str
+    assert df.iloc[-1]['close'] == 1000.0
+    # 등락 계산 기준(마지막 두 봉)이 서로 다른 거래일을 유지해야 함
+    assert df.iloc[-1]['close'] != df.iloc[-2]['close']
+
+
+def test_last_trading_day_skips_weekend_and_holiday(monkeypatch):
+    """8. last_trading_day가 주말과 공휴일(라이브러리 판정)을 연속으로 건너뛰는가?"""
+    # 2026-07-10(금)을 공휴일로 가정 → 일요일 기준 직전 거래일은 목요일(7/9)
+    monkeypatch.setattr(api, 'get_holiday_name',
+                        lambda d, country='KR': '테스트휴일' if d == '20260710' else None)
+    assert api.last_trading_day(datetime(2026, 7, 12), 'KR') == '20260709'
+    # 평일이고 휴일이 아니면 그대로 반환
+    assert api.last_trading_day(datetime(2026, 7, 9), 'KR') == '20260709'
 
 def test_cache_ttl_expiration():
     """4. 지정된 TTL(180분)이 지나면 캐시가 만료되어 새로 데이터를 받아오는가?"""

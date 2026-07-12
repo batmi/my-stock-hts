@@ -22,24 +22,11 @@ logger = logging.getLogger(__name__)
 def market_today(is_overseas=False):
     """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
 
-    국내는 시스템 로컬(KST) 기준, 해외(미국)는 동부시간(ET, 서머타임 자동판별) 기준이다.
-    indicators.apply_realtime_price()에 넘겨, 깊은 프리마켓처럼 당일 일봉이 아직 없을 때
-    마지막 봉(직전 거래일)을 덮어쓰지 않고 당일 봉을 새로 추가하도록 한다.
+    api.market_today로 위임한다: 국내는 KST, 해외(미국)는 ET 기준이며 주말·공휴일(휴장일)이면
+    직전 거래일을 반환한다. indicators.apply_realtime_price()에 넘겨, 당일 일봉이 아직 없을 때만
+    당일 봉을 새로 추가하고 비거래일엔 마지막 거래일 봉을 덮어쓰게 한다(가짜 봉 방지).
     """
-    if not is_overseas:
-        return datetime.now().strftime('%Y%m%d')
-    # 미국 서머타임(DST) 자동 판별 후 ET 날짜 산출 (trading.py 주문 세션 판별과 동일 규칙)
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    year = now_utc.year
-    march_first = datetime(year, 3, 1)
-    march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
-    dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
-    nov_first = datetime(year, 11, 1)
-    nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
-    dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
-    is_dst = dst_start_utc <= now_utc < dst_end_utc
-    now_et = now_utc - timedelta(hours=4 if is_dst else 5)
-    return now_et.strftime('%Y%m%d')
+    return api.market_today(is_overseas)
 
 def get_common_headers(tr_id):
     # [수정] 컨텍스트에 따라 적절한 앱 키/시크릿 선택

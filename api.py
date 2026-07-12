@@ -17,7 +17,7 @@ import caching
 from contextlib import closing
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
@@ -278,6 +278,61 @@ def get_holiday_name(date_str, country='KR'):
         logger.debug(f"get_holiday_name error: {e}")
         return None
     return None
+
+# (계산일 YYYYMMDD, country) -> 직전 거래일 YYYYMMDD. 하루 2건 수준이라 상한 불필요.
+_TRADING_DAY_CACHE = {}
+
+def _is_closed_day(dt, country):
+    """해당 일자가 주말·휴장일이면 True. 오늘(KR)은 실시간 캘린더(토스/KIS API) 판정을
+    우선해 holidays 라이브러리에 없는 임시휴장까지 반영하고, 그 외 일자는 라이브러리로 판정한다."""
+    if dt.weekday() > 4:
+        return True
+    d_str = dt.strftime('%Y%m%d')
+    if country == 'KR' and d_str == datetime.now().strftime('%Y%m%d'):
+        try:
+            return bool(is_holiday_today())
+        except Exception:
+            pass
+    return get_holiday_name(d_str, country=country) is not None
+
+def last_trading_day(dt, country='KR'):
+    """dt(datetime)부터 주말·공휴일(휴장일)을 거슬러 올라간 가장 가까운 거래일(YYYYMMDD)을 반환한다."""
+    for _ in range(15):  # 최장 연휴(추석 등)+주말 연속 상한
+        if not _is_closed_day(dt, country):
+            break
+        dt -= timedelta(days=1)
+    return dt.strftime('%Y%m%d')
+
+def market_today(is_overseas=False):
+    """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
+
+    국내는 시스템 로컬(KST), 해외(미국)는 동부시간(ET, 서머타임 자동판별) 기준이며,
+    주말·공휴일(휴장일)이면 직전 거래일까지 되돌려 반환한다. 비거래일에 현재가(=최종 종가)로
+    '가짜 당일 봉'이 추가되어 등락폭/등락률이 0으로 계산되는 문제를 막는다.
+    """
+    if not is_overseas:
+        dt = datetime.now()
+    else:
+        # 미국 서머타임(DST) 자동 판별 후 ET 날짜 산출 (trading.py 주문 세션 판별과 동일 규칙)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        year = now_utc.year
+        march_first = datetime(year, 3, 1)
+        march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
+        dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
+        nov_first = datetime(year, 11, 1)
+        nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
+        dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
+        is_dst = dst_start_utc <= now_utc < dst_end_utc
+        dt = now_utc - timedelta(hours=4 if is_dst else 5)
+
+    country = 'US' if is_overseas else 'KR'
+    key = (dt.strftime('%Y%m%d'), country)
+    hit = _TRADING_DAY_CACHE.get(key)
+    if hit:
+        return hit
+    res = last_trading_day(dt, country)
+    _TRADING_DAY_CACHE[key] = res
+    return res
 
 def _is_screen_output_allowed():
     """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단) — context 공용 판정으로 위임"""
@@ -625,7 +680,9 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             return df
         _OVERLAY_GUARD.active = True
         try:
-            today_ymd = now.strftime("%Y%m%d")
+            # 시장 기준일(주말·휴장일이면 직전 거래일). 달력 날짜를 쓰면 비거래일에
+            # 최종 종가로 '가짜 당일 봉'이 추가되어 등락률이 0으로 계산된다.
+            today_ymd = market_today(is_overseas)
             last_date = str(df.iloc[-1]['date'])
             
             curr, open_p, high_p, low_p, vol, prev = 0, 0, 0, 0, 0, 0
@@ -694,8 +751,11 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                     cached = None
                 else:
                     # 3. 실시간 가격 패치(Patch)
-                    if last_date == today_ymd:
-                        # 오늘 날짜 행 덮어쓰기 (고가/저가는 캐시된 데이터와 비교하여 최대/최소 유지)
+                    # last_date > today_ymd(캔들 소스가 기준일보다 앞선 경우: KST 장중의 국내지수를
+                    # ET 기준일로 본 경우 등)에도 최신 봉을 덮어쓴다. 새 행 추가는 기준일이
+                    # 거래일로 보정되어 있으므로 실제 개장일에만 일어난다.
+                    if last_date >= today_ymd:
+                        # 당일 봉 덮어쓰기 (고가/저가는 캐시된 데이터와 비교하여 최대/최소 유지)
                         old_high = float(df.iloc[-1]['high'])
                         old_low = float(df.iloc[-1]['low'])
                         high_p = max(old_high, high_p, curr)
