@@ -303,6 +303,20 @@ def last_trading_day(dt, country='KR'):
         dt -= timedelta(days=1)
     return dt.strftime('%Y%m%d')
 
+def now_us_eastern():
+    """미국 동부시간(ET) 현재 시각(naive datetime). 서머타임(DST) 자동 판별.
+    (trading.py 주문 세션 판별과 동일 규칙 — 3월 둘째 일요일 ~ 11월 첫째 일요일)"""
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    year = now_utc.year
+    march_first = datetime(year, 3, 1)
+    march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
+    dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
+    nov_first = datetime(year, 11, 1)
+    nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
+    dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
+    is_dst = dst_start_utc <= now_utc < dst_end_utc
+    return now_utc - timedelta(hours=4 if is_dst else 5)
+
 def market_today(is_overseas=False):
     """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
 
@@ -310,21 +324,7 @@ def market_today(is_overseas=False):
     주말·공휴일(휴장일)이면 직전 거래일까지 되돌려 반환한다. 비거래일에 현재가(=최종 종가)로
     '가짜 당일 봉'이 추가되어 등락폭/등락률이 0으로 계산되는 문제를 막는다.
     """
-    if not is_overseas:
-        dt = datetime.now()
-    else:
-        # 미국 서머타임(DST) 자동 판별 후 ET 날짜 산출 (trading.py 주문 세션 판별과 동일 규칙)
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-        year = now_utc.year
-        march_first = datetime(year, 3, 1)
-        march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
-        dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
-        nov_first = datetime(year, 11, 1)
-        nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
-        dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
-        is_dst = dst_start_utc <= now_utc < dst_end_utc
-        dt = now_utc - timedelta(hours=4 if is_dst else 5)
-
+    dt = datetime.now() if not is_overseas else now_us_eastern()
     country = 'US' if is_overseas else 'KR'
     key = (dt.strftime('%Y%m%d'), country)
     hit = _TRADING_DAY_CACHE.get(key)

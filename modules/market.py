@@ -29,6 +29,39 @@ def clear_market_yf_cache():
     with _MARKET_YF_CACHE_LOCK:
         _MARKET_YF_CACHE.clear()
 
+def _us_futures_closed_now():
+    """CME 글로벡스 주말 휴장(금 17:00 ~ 일 18:00 ET) 여부."""
+    try:
+        et = api.now_us_eastern()
+        wd = et.weekday()  # 0=월
+        return wd == 5 or (wd == 6 and et.hour < 18) or (wd == 4 and et.hour >= 17)
+    except Exception:
+        return False
+
+def _daily_prev_close_idx(df_daily, last_price, is_futures):
+    """선물/암호화폐의 '전일 종가'로 쓸 일봉 인덱스(-1 또는 -2)를 고른다.
+
+    마지막 봉이 오늘(UTC) 이전이면 기본은 -1(마지막 봉 종가 = 전일 종가, 월요일 아시아
+    시간대처럼 새 세션 봉이 아직 없는 장중 상황). 다만 선물이 주말·휴장 중이면 현재가가
+    마지막 봉 종가와 같아 등락이 0%로 굳으므로, 그 전 봉(-2)과 비교해 마지막 세션의
+    등락을 표시한다. (휴장 판정: 현재가==마지막 봉 종가 또는 CME 주말 휴장 시간대)"""
+    last_dt = df_daily.index[-1].date()
+    utc_today = datetime.now(timezone.utc).date()
+    if last_dt >= utc_today:
+        return -2
+    if is_futures:
+        stale_price = False
+        try:
+            last_close = float(df_daily['close'].iloc[-1])
+            stale_price = (last_price is not None and not math.isnan(float(last_price))
+                           and last_close > 0
+                           and abs(float(last_price) - last_close) / last_close < 1e-6)
+        except Exception:
+            pass
+        if stale_price or _us_futures_closed_now():
+            return -2
+    return -1
+
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
     # 1. 국내 지수
@@ -145,9 +178,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     # [수정] 선물/암호화폐는 yfinance의 전일 종가 대신 일봉 데이터의 종가를 사용 (정확도 향상)
                     if (is_crypto or is_futures) and not df_daily.empty and len(df_daily) >= 2:
                         try:
-                            last_dt = df_daily.index[-1].date()
-                            utc_today = datetime.now(timezone.utc).date()
-                            target_idx = -2 if last_dt >= utc_today else -1
+                            target_idx = _daily_prev_close_idx(df_daily, last_price, is_futures)
                             check_prev = float(df_daily['close'].iloc[target_idx])
                             if not math.isnan(check_prev):
                                 prev_close = check_prev
