@@ -3717,6 +3717,22 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         charts = [None] * len(data_list)
         results = [None] * len(data_list)
 
+        # [최적화] 해외 그룹: TV 일괄 예열(HTTP 1회)을 1단계(차트 수신)와 병렬로 백그라운드 수행.
+        #  2단계 워커의 장외가 병합(get_yf_fast_info, ttl=30)이 대부분 캐시 적중으로 처리된다.
+        #  프로그래스 바가 0%에 머무는 동기 대기를 없애기 위해 join하지 않는다: 예열이 채 끝나기
+        #  전에 기동한 초기 워커(최대 max_w개)만 TV 단건 조회로 자체 폴백한다(출력 동일).
+        #  백그라운드 워머(OverviewWarmer, 실전 15초 주기) 캐시가 신선하면 예열 자체를 생략한다.
+        if is_overseas and data_list:
+            def _warm_ovs_prices():
+                try:
+                    warm_fresh_sec = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15))) + 5
+                    api.prefetch_multiple_current_prices(
+                        [c for _, c in data_list], is_overseas=True, skip_if_fresh_sec=warm_fresh_sec
+                    )
+                except Exception as e:
+                    logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
+            threading.Thread(target=_warm_ovs_prices, name="OvsTablePrewarm", daemon=True).start()
+
         # 1단계: 데이터 수신 (과거 전체 일봉). 캐시 적중 시 즉시 통과, 캐시 미스 때만 실제 다운로드.
         with Progress(
             SpinnerColumn(),
@@ -3773,21 +3789,6 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             transient=True
         ) as progress:
             task_a = progress.add_task(f"[cyan]{title} (실시간 데이터 수신 및 분석)[/cyan]", total=len(data_list))
-
-            # [최적화] 해외 그룹: TradingView 일괄 조회(HTTP 1회)로 fast_info 마이크로 캐시를 예열한 뒤
-            #  워커를 기동한다. 워커의 장외가 병합(get_current_price_data → get_yf_fast_info)이
-            #  종목별 TV 단건 조회 대신 캐시 적중으로 처리되어 체감 속도를 높인다.
-            #  백그라운드 워머(OverviewWarmer, 실전 15초 주기)가 방금 예열해 둔 경우에는 재조회도 생략.
-            #  (별도 '예열 중' 스피너 없이 본 프로그래스 바 안에서 수행 — 예열 중에는 0% 스피너로 표시)
-            if is_overseas and data_list:
-                try:
-                    warm_fresh_sec = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15))) + 5
-                    api.prefetch_multiple_current_prices(
-                        [c for _, c in data_list], is_overseas=True, skip_if_fresh_sec=warm_fresh_sec
-                    )
-                except Exception as e:
-                    logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 fut_map = {
                     executor.submit(
