@@ -96,10 +96,14 @@ def isolate_test_files(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_FILE_PATH", str(test_db))
     monkeypatch.setattr(config, "JSON_DIR", str(tmp_path)) # 시스템 설정(dynamic_config.json) 덮어쓰기 방지
 
-    # [격리] RESTRICTED_FILE은 import 시점에 config.JSON_DIR로 고정되므로 위 JSON_DIR 패치만으로는
-    # 격리되지 않는다. 운영 restricted_stocks.json(실계좌 수동매매 제한 종목)이 테스트로 누수되면
-    # 매도/후보 분석이 해당 종목을 '제한종목'으로 스킵해 주문 검증 테스트가 실패한다. 임시 경로로 격리한다.
-    monkeypatch.setattr("modules.auto_trade.RESTRICTED_FILE", str(tmp_path / "restricted_stocks.json"))
+    # [격리] RESTRICTED_FILE/DAILY_STATE_FILE은 import 시점에 config.JSON_DIR로 고정되므로 위
+    # JSON_DIR 패치만으로는 격리되지 않는다. 또한 load/save 함수는 '패키지 재수출 속성'이 아니라
+    # modules.auto_trade.common 모듈의 전역을 직접 참조하므로, 반드시 common 쪽을 패치해야 한다.
+    # (과거 패키지 속성만 패치해 테스트의 수동매매 감지가 운영 restricted_stocks.json을 오염시켰음)
+    monkeypatch.setattr("modules.auto_trade.common.RESTRICTED_FILE", str(tmp_path / "restricted_stocks.json"))
+    monkeypatch.setattr("modules.auto_trade.RESTRICTED_FILE", str(tmp_path / "restricted_stocks.json"), raising=False)
+    monkeypatch.setattr("modules.auto_trade.common.DAILY_STATE_FILE", str(tmp_path / "daily_asset_state.json"))
+    monkeypatch.setattr("modules.auto_trade.DAILY_STATE_FILE", str(tmp_path / "daily_asset_state.json"), raising=False)
 
     # [추가] 테스트 중 생성되는 파일(차트, 엑셀, 로그) 격리
     test_chart_dir = tmp_path / "chart"
