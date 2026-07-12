@@ -797,15 +797,25 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             _chart_disk_set(cache_key, df, today_str)
     return df
 
-def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None, prefer_ws=False):
+def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None, prefer_ws=False, skip_if_fresh_sec=None):
     """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)
 
     prefer_ws=True면 WS 실시간 피드가 이미 신선한 현재가를 보유한 종목은 현재가 REST 예열을
     생략한다(모의투자 2 TPS 절감). 시스템 트레이딩처럼 이후 경로가 현재가 값만 필요한 곳에서 쓴다.
+    skip_if_fresh_sec(해외 전용): 전 종목의 fast_info 마이크로 캐시가 지정 초 이내로 신선하면
+    TV 재조회 자체를 생략한다. 백그라운드 워머(OverviewWarmer)가 방금 예열한 경우 임계경로의
+    네트워크 왕복을 제거하는 용도이며, 워머 자신은 이 인자를 쓰면 안 된다(갱신이 영구 생략됨).
     """
     if not codes: return
-    
+
     if is_overseas:
+        # 0. [최적화] 워머가 예열해 둔 캐시가 전 종목 신선하면 라이브 조회 생략
+        if skip_if_fresh_sec:
+            if all(_get_micro_cache(f"yf_fi_{c}", ttl=skip_if_fresh_sec) for c in codes):
+                if progress_updater:
+                    for _ in codes: progress_updater()
+                return
+
         # 1. TradingView 일괄 조회 (가장 빠름, 단 1회의 HTTP 요청으로 모두 해결)
         tv_success_codes = set()
         try:
