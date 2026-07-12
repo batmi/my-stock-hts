@@ -53,6 +53,39 @@ def _is_before_krx_open():
     now = datetime.now()
     return (now.hour, now.minute) < (9, 0)
 
+def open_image_viewer(file_path):
+    """생성된 이미지 파일을 OS 기본 뷰어로 연다 (비차단).
+
+    SSH·헤드리스 환경 등 뷰어 실행이 불가능한 상황이면 안내 메시지만 출력하고
+    즉시 반환하여 메뉴로 복귀할 수 있게 한다. (os.system은 뷰어 종료까지
+    블로킹되어 프로그램이 멈춘 것처럼 보이므로 사용하지 않는다.)
+    """
+    import subprocess
+    import shutil
+    try:
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(file_path)
+            return True
+        if system == "Darwin":
+            subprocess.Popen(["open", file_path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        # Linux: GUI 세션이 없으면(SSH/헤드리스) 뷰어를 띄울 수 없다
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            config.console.print(f"[yellow]GUI 환경이 아니어서 이미지 뷰어를 실행할 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            return False
+        if shutil.which("xdg-open") is None:
+            config.console.print(f"[yellow]이미지 뷰어(xdg-open)를 찾을 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            return False
+        subprocess.Popen(["xdg-open", file_path],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return True
+    except Exception as e:
+        config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+        return False
+
 def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily', months=6):
     # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
     # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
@@ -359,11 +392,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
     if not quiet:
         config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
     if open_file:
-        try:
-            if platform.system() == "Windows": os.startfile(file_path)
-            elif platform.system() == "Darwin": os.system(f"open {file_path}")
-            else: os.system(f"xdg-open {file_path}")
-        except Exception: pass
+        open_image_viewer(file_path)
 
     # [AI 분석] 생성된 차트 PNG 경로를 반환해 Gemini 비전 분석 등 후속 처리에 활용할 수 있게 한다.
     return file_path
@@ -403,8 +432,4 @@ def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     config.console.print(f"\n[bold green]수익률 분포 히스토그램이 저장되었습니다: {file_name}[/bold green]")
     
     if open_file:
-        try:
-            if platform.system() == "Windows": os.startfile(file_path)
-            elif platform.system() == "Darwin": os.system(f"open {file_path}")
-            else: os.system(f"xdg-open {file_path}")
-        except Exception: pass
+        open_image_viewer(file_path)
