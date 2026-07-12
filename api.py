@@ -2593,10 +2593,13 @@ def get_multi_current_prices(codes, market_div="J"):
         logger.info(f"[MultiPrice] 관심종목 멀티시세 비활성(세션 유지): {e} → 종목별 현재가 조회로 폴백")
         return None
 
-def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
+def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, fast_info_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
     (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
     cache_ttl: 캐시 재사용 허용 시간(초). 개요/예열 경로는 더 큰 값으로 백그라운드 예열 데이터를 재사용한다.
+    fast_info_ttl(해외 전용): 장외가(프리/애프터) 병합용 fast_info 캐시 허용 시간(초).
+      개요(대량) 경로는 TV 일괄 예열 캐시를 재사용하도록 크게(예: 30초) 주고,
+      주문/개별 분석 경로는 기본 3초로 실시간성을 유지한다.
     """
     if config.session.is_toss:
         return _toss_current_price_data(code, is_overseas)
@@ -2667,7 +2670,8 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0):
                     # [추가] 미국 주식 프리/애프터마켓 시세 실시간 반영 로직
                     # KIS 정규장 종가(last) 대신 TradingView/yfinance의 실시간 장외 최신가로 덮어쓰기
                     try:
-                        fi = get_yf_fast_info(code, ttl=3.0) # [수정] 실시간 시세 갱신을 위해 TTL을 3초로 단축
+                        # [수정] TTL 인자화: 주문/개별 경로는 3초(실시간), 개요 대량 경로는 30초(예열 캐시 재사용)
+                        fi = get_yf_fast_info(code, ttl=fast_info_ttl)
                         if fi and fi.get('last_price'):
                             global_rt_price = float(fi['last_price'])
                             kis_regular_price = float(data['output'].get('last', 0))

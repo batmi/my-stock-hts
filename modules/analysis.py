@@ -3167,7 +3167,9 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 # 동일 캐시 키(cp_{code}_J / vol_{code})를 공유해 동시 조회 시 중복 호출이 합쳐진다.
                 # (모의투자(VTS)는 NXT 미지원이라 내부에서 NX 조회를 건너뛴다 → 정규장 시세만 표시)
                 # [멀티시세] 프리페치된 현재가가 있으면 종목별 REST 생략
-                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0) if preloaded_curr is None else None
+                # [최적화] fast_info_ttl=30: 해외 장외가 병합이 직전 TV 일괄 예열 캐시를 재사용
+                #  (종목별 TV 단건 재조회 제거. 개요 화면 장외가 최대 ~30초 지연 허용)
+                fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0, 30.0) if preloaded_curr is None else None
                 # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
@@ -3698,28 +3700,6 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [최적화] 해외 그룹은 TradingView 일괄 조회(HTTP 1회)로 fast_info 마이크로 캐시를 사전 예열한다.
-    # → 워커별 개별 yfinance 단건 호출(_YF_LOCK 직렬화)을 캐시 적중으로 대체하여 체감 속도를 높인다.
-    # [UX] 네트워크 왕복(수 초)이 무표시로 돌면 직전 테이블 출력 후 멈춘 것처럼 보이므로 스피너를 붙인다.
-    # [최적화] 백그라운드 워머(OverviewWarmer, 실전 계좌 15초 주기)가 방금 예열해 둔 경우에는
-    #  전 종목 캐시 신선 확인 후 TV 재조회를 생략해 예열 구간을 사실상 0초로 만든다.
-    #  (워머 비활성: 모의투자·토스 등에서는 기존처럼 라이브 1회 조회로 자동 폴백)
-    if is_overseas and data_list:
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=config.console,
-                transient=True
-            ) as progress:
-                progress.add_task("[cyan]해외 시세 일괄 예열 중 (TradingView)...[/cyan]", total=None)
-                ovs_codes = [c for _, c in data_list]
-                warm_fresh_sec = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15))) + 5
-                api.prefetch_multiple_current_prices(ovs_codes, is_overseas=True, skip_if_fresh_sec=warm_fresh_sec)
-        except Exception as e:
-            logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
-
     # [최적화] 통신+연산 통합 처리를 위한 스레드 수 안정화
     if is_overseas:
         max_w = 4 if config.session.is_simulation else 5 # 야후 API 동시 호출 차단 방지
@@ -3793,6 +3773,21 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             transient=True
         ) as progress:
             task_a = progress.add_task(f"[cyan]{title} (실시간 데이터 수신 및 분석)[/cyan]", total=len(data_list))
+
+            # [최적화] 해외 그룹: TradingView 일괄 조회(HTTP 1회)로 fast_info 마이크로 캐시를 예열한 뒤
+            #  워커를 기동한다. 워커의 장외가 병합(get_current_price_data → get_yf_fast_info)이
+            #  종목별 TV 단건 조회 대신 캐시 적중으로 처리되어 체감 속도를 높인다.
+            #  백그라운드 워머(OverviewWarmer, 실전 15초 주기)가 방금 예열해 둔 경우에는 재조회도 생략.
+            #  (별도 '예열 중' 스피너 없이 본 프로그래스 바 안에서 수행 — 예열 중에는 0% 스피너로 표시)
+            if is_overseas and data_list:
+                try:
+                    warm_fresh_sec = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15))) + 5
+                    api.prefetch_multiple_current_prices(
+                        [c for _, c in data_list], is_overseas=True, skip_if_fresh_sec=warm_fresh_sec
+                    )
+                except Exception as e:
+                    logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 fut_map = {
                     executor.submit(
