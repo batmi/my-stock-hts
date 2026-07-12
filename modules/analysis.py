@@ -3695,10 +3695,19 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
 
     # [최적화] 해외 그룹은 TradingView 일괄 조회(HTTP 1회)로 fast_info 마이크로 캐시를 사전 예열한다.
     # → 워커별 개별 yfinance 단건 호출(_YF_LOCK 직렬화)을 캐시 적중으로 대체하여 체감 속도를 높인다.
+    # [UX] 네트워크 왕복(수 초)이 무표시로 돌면 직전 테이블 출력 후 멈춘 것처럼 보이므로 스피너를 붙인다.
     if is_overseas and data_list:
         try:
-            ovs_codes = [c for _, c in data_list]
-            api.prefetch_multiple_current_prices(ovs_codes, is_overseas=True)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                progress.add_task("[cyan]해외 시세 일괄 예열 중 (TradingView)...[/cyan]", total=None)
+                ovs_codes = [c for _, c in data_list]
+                api.prefetch_multiple_current_prices(ovs_codes, is_overseas=True)
         except Exception as e:
             logger.debug(f"[print_table] 해외 일괄 예열 실패: {e}")
 
