@@ -3637,7 +3637,12 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
 
     failed_list = []
     display_title = f"\n{title}"
-    table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+    # [안내] 토스 국내 시세는 NXT 연장(~20:00) 포함 통합가 기준이라, KIS(KRX 기준가 대비)와
+    # 등락폭/등락률이 다를 수 있다. 값을 비교해 보는 운영자가 바로 알 수 있게 표 하단에 명시한다.
+    toss_caption = ("※ 토스 모드: 종가·등락률은 NXT 연장 포함 통합가 기준 (KIS의 KRX 기준가 대비와 다를 수 있음)"
+                    if config.session.is_toss and not is_overseas else None)
+    table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim",
+                  caption=toss_caption, caption_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
     table.add_column("분류", justify="center") 
@@ -4149,7 +4154,11 @@ def _print_period_price_common(code, is_overseas, limit=20):
         title_prefix = f"[{idx_name}]"
         
     period_str = f"(최근 {limit}일)" if limit else "(전체)"
-    table = Table(title=f"{title_prefix} 기간별 시세 {period_str}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+    # [안내] 토스 국내 일봉은 NXT 연장 포함 통합가 기준 (KIS/KRX 정규장 종가와 다를 수 있음)
+    toss_caption = ("※ 토스 모드: 종가·등락률은 NXT 연장 포함 통합가 기준 (KIS의 KRX 기준가 대비와 다를 수 있음)"
+                    if config.session.is_toss and not is_overseas and not is_index else None)
+    table = Table(title=f"{title_prefix} 기간별 시세 {period_str}", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim",
+                  caption=toss_caption, caption_style="dim")
     table.add_column("일자", justify="center")
     table.add_column("종가", justify="right")
     table.add_column("등락폭 (등락률)", justify="right")

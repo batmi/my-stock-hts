@@ -349,6 +349,21 @@ You need an account and API access key from the brokerages to run the program no
 2.  **Toss Developer Center**: Apply on the Toss Securities Open API website.
 3.  **Issue API Key**: Issue App Key & Secret from the Developer Center.
 
+### Toss Mode (mode 3) Data Basis (Caution)
+
+Toss and KIS provide the "closing price" of domestic (KR) stocks on different bases. **A different change amount/rate in Toss mode compared to KIS mode is not a bug but a data-source difference.**
+
+| Item | KIS (mode 1/2) | Toss (mode 3) |
+| --- | --- | --- |
+| Current/last price | KRX regular-session close (mode 1) or NXT close (mode 2, merged) | Unified last trade price including NXT extended hours (~20:00) |
+| Daily candle close | KRX regular-session (15:30) close | Unified last price including NXT extended hours |
+| Base for change amount/rate (previous close) | Reference price (`stck_sdpr`) = previous KRX regular-session close | Previous daily candle close = previous unified (NXT-inclusive) last price |
+| Price limit (upper/lower) base | KRX reference price | Unified (NXT-inclusive) last price |
+
+- Example (Samsung Electronics, as of 2026-07-10): Thursday's close differs — KRX 278,000 vs Toss (NXT-inclusive) 282,500 — so even though both modes show the same Friday last price (286,500), the change displays as +8,500 (+3.06%) in KIS vs +4,000 (+1.42%) in Toss.
+- The Toss API does not expose the KRX regular-session close at all, so change rates in Toss mode are computed **self-consistently on the unified-price basis** (the same family of figures the Toss app shows). Chart-derived indicators (52-week high/low, moving averages, etc.) are also unified-price based and may differ slightly from KIS mode.
+- The program notes this difference at Toss-mode startup and below the stock analysis tables.
+
 ### Common
 5.  **Environment Variables**: Register the issued Keys and Account Numbers as System Environment Variables.
 6.  **IP Allowlist (Whitelist)**:
