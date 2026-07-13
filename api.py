@@ -2,6 +2,7 @@
 import requests
 import logging
 import json
+import math
 import time
 import random
 import sys
@@ -3145,6 +3146,81 @@ def _toss_float(v, default=0.0):
         return default
 
 
+# [추가] 국내 기준가(전일 KRX 종가) 역산 캐시: {code: (yyyymmdd, base or None)}
+_toss_base_cache = {}
+_toss_base_lock = threading.Lock()
+
+
+def _toss_krx_tick(price, unit5=False):
+    """KRX 호가단위. unit5=True면 ETF/ETN/ELW(전 구간 5원). (utils.get_tick_size와 동일 밴드,
+    utils→api 방향 의존이라 여기서 직접 정의)"""
+    if unit5: return 5
+    if price < 2000: return 1
+    if price < 5000: return 5
+    if price < 20000: return 10
+    if price < 50000: return 50
+    if price < 200000: return 100
+    if price < 500000: return 500
+    return 1000
+
+
+def _toss_base_price(code):
+    """국내 기준가(당일 등락률의 분모 = 전일 KRX 종가, 권리락 시 조정가)를 상/하한가에서 역산한다.
+
+    토스 시세·캔들은 NXT 연장(08:00~20:00) 체결까지 포함해 '전일 캔들 종가'가 KRX 정규장
+    종가와 다를 수 있다(토스 HTS 등락률은 KRX 기준가 대비). 토스는 기준가를 직접 주지 않지만
+    상한가=내림(기준가×(1+폭)), 하한가=올림(기준가×(1-폭)) 규칙이므로 호가단위 그리드에서
+    후보를 역산해 상·하한 양쪽이 정확히 재현되는 유일한 값만 채택한다(실측 검증 완료).
+    레버리지 ETF의 비표준 절사나 호가단위 밖 조정 기준가 등 검증 실패 시 None(보정 생략).
+    결과는 하루 단위로 캐시한다(기준가는 장중 불변).
+    """
+    today = datetime.now().strftime('%Y%m%d')
+    with _toss_base_lock:
+        hit = _toss_base_cache.get(code)
+        if hit and hit[0] == today:
+            return hit[1]
+    try:
+        pl = toss_api.get_price_limit(code)
+    except toss_api.TossApiError as e:
+        # 일시 오류일 수 있으므로 캐시하지 않는다(다음 호출에서 재시도)
+        logger.debug(f"[Toss] 상하한가 조회 실패({code}): {e}")
+        return None
+    base = None
+    try:
+        upper = round(_toss_float((pl or {}).get('upperLimitPrice')))
+        lower = round(_toss_float((pl or {}).get('lowerLimitPrice')))
+        if upper > lower > 0:
+            rate_raw = (upper - lower) / (upper + lower)  # ≈ 가격제한폭(일반 0.3, 레버리지 0.6 등)
+            est = (upper + lower) / 2.0
+            matches = set()
+            for limit_rate in (0.10, 0.15, 0.30, 0.60, 0.90):
+                if abs(rate_raw - limit_rate) > 0.02:
+                    continue
+                for unit5 in (False, True):
+                    t = _toss_krx_tick(est, unit5)
+                    center = int(round(est / t))
+                    for k in range(-3, 4):
+                        cand = (center + k) * t
+                        if cand <= 0:
+                            continue
+                        u_raw = cand * (1 + limit_rate)
+                        ut = _toss_krx_tick(u_raw, unit5)
+                        l_raw = cand * (1 - limit_rate)
+                        lt = _toss_krx_tick(l_raw, unit5)
+                        if int(math.floor(u_raw / ut + 1e-9)) * ut == upper \
+                           and int(math.ceil(l_raw / lt - 1e-9)) * lt == lower:
+                            matches.add(cand)
+            if len(matches) == 1:
+                base = float(matches.pop())
+            elif matches:
+                logger.debug(f"[Toss] 기준가 후보 복수({code}): {sorted(matches)} → 보정 생략")
+    except Exception as e:
+        logger.debug(f"[Toss] 기준가 역산 실패({code}): {e}")
+    with _toss_base_lock:
+        _toss_base_cache[code] = (today, base)
+    return base
+
+
 def _toss_krw_deposit():
     """토스 매수 가능 금액(KRW, 현금)을 예수금 근사치로 사용한다."""
     try:
@@ -3312,7 +3388,24 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
     df = df.sort_values('date', ascending=True).reset_index(drop=True)
     if interval == '1d':
-        return df.tail(250)
+        df = df.tail(250).reset_index(drop=True)
+        # [추가] 국내 일봉: 직전 거래일 봉의 종가를 KRX 기준가로 보정한다.
+        # 토스 일봉 종가는 NXT 연장(~20:00) 체결까지 포함해 KRX 정규장 종가와 다를 수 있고,
+        # 그대로 두면 등락률(전일 종가 대비)이 토스 HTS(KRX 기준가 대비)와 어긋난다.
+        # 휴장일엔 기준가↔봉 매칭이 모호하므로 거래일 당일에만 적용한다.
+        # (기준가는 전일 실체결가라 봉의 고저 범위를 벗어나지 않는다)
+        if not is_overseas and len(df) > 0:
+            try:
+                md = market_today(False)
+                if md == datetime.now().strftime('%Y%m%d'):
+                    prev_idx = df.index[df['date'] < md]
+                    if len(prev_idx) > 0:
+                        base = _toss_base_price(code)
+                        if base and base > 0:
+                            df.loc[prev_idx[-1], 'close'] = float(base)
+            except Exception as e:
+                logger.debug(f"[Toss] 일봉 기준가 보정 실패({code}): {e}")
+        return df
 
     # 분봉: KIS 당일분봉과 동일하게 "당일(가장 최근 거래일)의 정규장(09:00~15:30)"만 표시.
     # 토스의 시간외/NXT 연장(08:00~/~20:00) 캔들과 날짜 교차를 모두 제거한다.
@@ -3334,11 +3427,20 @@ def _toss_current_price_data(code, is_overseas):
     if not row:
         return {'rt_cd': '9999'}
     price = row.get('lastPrice', '0')
-    # 국내(stck_prpr)/해외(last) 양쪽 경로를 모두 채운다. 등락/외인비율 등은 토스 미제공.
+    # 국내(stck_prpr)/해외(last) 양쪽 경로를 모두 채운다. 외인비율 등은 토스 미제공.
     output = {
         'stck_prpr': str(_toss_int(price)),
         'last': str(_toss_float(price)),
     }
+    # [추가] 국내: 기준가(전일 KRX 종가)를 역산해 KIS와 동일한 전일대비/등락률 필드를 채운다.
+    # (토스 lastPrice는 NXT 포함 실시간 체결가 → 토스 HTS처럼 KRX 기준가 대비로 계산)
+    if not is_overseas:
+        base = _toss_base_price(code)
+        p = _toss_float(price)
+        if base and base > 0 and p > 0:
+            output['stck_sdpr'] = str(int(base))
+            output['prdy_vrss'] = str(int(round(p - base)))
+            output['prdy_ctrt'] = str(round((p - base) / base * 100, 2))
     return {'rt_cd': '0', 'output': output}
 
 

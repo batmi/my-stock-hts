@@ -3261,7 +3261,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 else:
                     _o['w52_hgpr'] = str(_h52); _o['w52_lwpr'] = str(_l52)
                     if _prev > 0:
-                        _o['stck_sdpr'] = str(int(_prev))  # 기준가(전일종가) → diff = 현재가 - 기준가
+                        # 어댑터가 역산한 KRX 기준가(stck_sdpr)가 있으면 우선, 없을 때만 차트 전일종가로 폴백
+                        _o.setdefault('stck_sdpr', str(int(_prev)))
             except Exception: pass
 
         # [멀티시세] 이 TR은 52주 고저(w52_*)를 제공하지 않으므로 차트(250봉)로 보강한다.

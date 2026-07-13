@@ -189,7 +189,9 @@ def test_chart_data_adapter_daily():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", return_value=res):
+        with patch("toss_api.get_candles", return_value=res), \
+             patch("toss_api.get_price_limit",
+                   side_effect=toss_api.TossApiError("network-error", "mock")):  # 기준가 보정 경로 차단(네트워크 격리)
             df = api.get_chart_data("005930", is_overseas=False, period_type='daily')
     finally:
         config.session.is_toss = False
@@ -232,7 +234,9 @@ def test_chart_data_adapter_daily_paginates_to_250():
     config.session.is_toss = True
     try:
         # 어댑터의 페이징만 검증한다(get_chart_data는 일봉 캐시 레이어를 덧대므로 직접 호출).
-        with patch("toss_api.get_candles", side_effect=fake_candles):
+        with patch("toss_api.get_candles", side_effect=fake_candles), \
+             patch("toss_api.get_price_limit",
+                   side_effect=toss_api.TossApiError("network-error", "mock")):  # 기준가 보정 경로 차단(네트워크 격리)
             df = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
     finally:
         config.session.is_toss = False
@@ -240,6 +244,75 @@ def test_chart_data_adapter_daily_paginates_to_250():
     # 2페이지(>=260) 확보 후 중단, tail(250) 적용
     assert calls["n"] == 2
     assert len(df) == 250
+
+
+def test_toss_base_price_reverse_from_price_limits():
+    """상/하한가 역산으로 KRX 기준가(전일 정규장 종가)를 복원한다 (2026-07-13 실측 케이스)."""
+    import api
+    cases = [
+        ({"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}, 285000.0),  # 삼성전자
+        ({"upperLimitPrice": "227500", "lowerLimitPrice": "122700"}, 175200.0),  # 셀트리온(상한 후보 4개 → 하한으로 유일 판별)
+        ({"upperLimitPrice": "594000", "lowerLimitPrice": "320500"}, 457500.0),  # 현대차
+        ({"upperLimitPrice": "45950", "lowerLimitPrice": "24750"}, 35350.0),     # 카카오
+        ({"upperLimitPrice": "156785", "lowerLimitPrice": "84425"}, 120605.0),   # KODEX200(ETF 5원 호가)
+        ({"upperLimitPrice": "241105", "lowerLimitPrice": "60285"}, None),       # 레버리지 ETF(비표준 절사) → 보정 생략
+        ({"upperLimitPrice": "288500", "lowerLimitPrice": "155500"}, None),      # 호가단위 밖 조정 기준가 → 보정 생략
+    ]
+    for limits, expected in cases:
+        api._toss_base_cache.clear()
+        with patch("toss_api.get_price_limit", return_value=limits):
+            assert api._toss_base_price("TEST") == expected, limits
+
+
+def test_toss_base_price_day_cache_and_transient_error():
+    """성공 결과는 하루 단위 캐시, 일시 오류(TossApiError)는 캐시하지 않고 재시도한다."""
+    import api
+    api._toss_base_cache.clear()
+    with patch("toss_api.get_price_limit",
+               side_effect=toss_api.TossApiError("network-error", "mock")):
+        assert api._toss_base_price("005930") is None
+    with patch("toss_api.get_price_limit",
+               return_value={"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}) as m:
+        assert api._toss_base_price("005930") == 285000.0
+        assert api._toss_base_price("005930") == 285000.0
+        assert m.call_count == 1  # 두 번째 호출은 캐시
+
+
+def test_chart_data_adapter_daily_prev_close_krx_base():
+    """국내 일봉: 직전 거래일 봉 종가를 NXT 연장(~20:00) 종가에서 KRX 기준가로 보정한다.
+
+    토스 캔들 종가는 NXT 연장 체결까지 포함해, 그대로 두면 등락률(전일 종가 대비)이
+    토스 HTS(KRX 기준가 대비)와 어긋난다.
+    """
+    import api
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.now()
+    ts_today = today.strftime("%Y-%m-%dT09:00:00+09:00")
+    ts_prev = (today - _td(days=3)).strftime("%Y-%m-%dT09:00:00+09:00")
+    res = {"candles": [
+        {"timestamp": ts_today, "openPrice": "285000", "highPrice": "292500",
+         "lowPrice": "262000", "closePrice": "262500", "volume": "100"},
+        {"timestamp": ts_prev, "openPrice": "285000", "highPrice": "298000",
+         "lowPrice": "282000", "closePrice": "286500", "volume": "100"},  # NXT 20:00 연장 종가
+    ], "nextBefore": None}
+    limits = {"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}  # → 기준가 285000
+
+    api._toss_base_cache.clear()
+    with patch("toss_api.get_candles", return_value=res), \
+         patch("toss_api.get_price_limit", return_value=limits), \
+         patch.object(api, "market_today", return_value=today.strftime("%Y%m%d")):
+        df = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
+    assert float(df.iloc[-2]['close']) == 285000.0  # 286500(NXT) → 285000(KRX)
+    assert float(df.iloc[-1]['close']) == 262500.0  # 당일 봉은 그대로
+
+    # 휴장일(market_today != 오늘)엔 기준가↔봉 매칭이 모호하므로 보정하지 않는다
+    api._toss_base_cache.clear()
+    with patch("toss_api.get_candles", return_value=res), \
+         patch("toss_api.get_price_limit", return_value=limits), \
+         patch.object(api, "market_today",
+                      return_value=(today - _td(days=1)).strftime("%Y%m%d")):
+        df2 = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
+    assert float(df2.iloc[-2]['close']) == 286500.0
 
 
 def test_chart_data_adapter_intraday_session_window():
@@ -449,9 +522,12 @@ def test_chart_data_adapter_intraday_date_is_timestamp():
 
 def test_current_price_data_adapter():
     import api
+    api._toss_base_cache.clear()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_price", return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}):
+        with patch("toss_api.get_price", return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
+             patch("toss_api.get_price_limit",
+                   return_value={"upperLimitPrice": "93000", "lowerLimitPrice": "50200"}):  # 기준가 71600
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:
@@ -459,6 +535,10 @@ def test_current_price_data_adapter():
     assert res['rt_cd'] == '0'
     assert res['output']['stck_prpr'] == '72000'
     assert price == 72000
+    # [추가] 국내는 상/하한가 역산 기준가로 KIS 호환 전일대비 필드를 채운다
+    assert res['output']['stck_sdpr'] == '71600'
+    assert res['output']['prdy_vrss'] == '400'
+    assert res['output']['prdy_ctrt'] == '0.56'
 
 
 def test_order_book_adapter_totals():
