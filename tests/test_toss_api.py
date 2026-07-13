@@ -260,7 +260,9 @@ def test_toss_base_price_reverse_from_price_limits():
     ]
     for limits, expected in cases:
         api._toss_base_cache.clear()
-        with patch("toss_api.get_price_limit", return_value=limits):
+        api._toss_krx_close_store = None
+        with patch("toss_api.get_price_limit", return_value=limits), \
+             patch.object(api, "_toss_cached_daily_chart", return_value=None):  # 판별용 일봉 격리(순수 역산 검증)
             assert api._toss_base_price("TEST") == expected, limits
 
 
@@ -268,14 +270,123 @@ def test_toss_base_price_day_cache_and_transient_error():
     """성공 결과는 하루 단위 캐시, 일시 오류(TossApiError)는 캐시하지 않고 재시도한다."""
     import api
     api._toss_base_cache.clear()
-    with patch("toss_api.get_price_limit",
-               side_effect=toss_api.TossApiError("network-error", "mock")):
-        assert api._toss_base_price("005930") is None
-    with patch("toss_api.get_price_limit",
-               return_value={"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}) as m:
-        assert api._toss_base_price("005930") == 285000.0
-        assert api._toss_base_price("005930") == 285000.0
-        assert m.call_count == 1  # 두 번째 호출은 캐시
+    api._toss_krx_close_store = None
+    with patch.object(api, "_toss_cached_daily_chart", return_value=None):  # 판별용 일봉 격리
+        with patch("toss_api.get_price_limit",
+                   side_effect=toss_api.TossApiError("network-error", "mock")):
+            assert api._toss_base_price("005930") is None
+        with patch("toss_api.get_price_limit",
+                   return_value={"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}) as m:
+            assert api._toss_base_price("005930") == 285000.0
+            assert api._toss_base_price("005930") == 285000.0
+            assert m.call_count == 1  # 두 번째 호출은 캐시
+
+
+def _inject_daily_chart(code, rows):
+    """기준가 판별용 일봉을 메모리 차트 캐시에 주입한다. rows: [{'date','close'}, ...] (과거→최신)"""
+    import api
+    import pandas as pd
+    from datetime import datetime as _dt
+    df = pd.DataFrame(rows)
+    api._CHART_CACHE[f"{code}_False_False"] = {
+        'df': df, 'timestamp': _dt.now(), 'date': _dt.now().strftime('%Y-%m-%d')}
+
+
+def _reset_base_price_state():
+    import api
+    api._toss_base_cache.clear()
+    api._toss_krx_close_store = None  # JSON_DIR(테스트 격리 tmp)에서 재로드
+
+
+SAMSUNG_LIMITS = {"upperLimitPrice": "370500", "lowerLimitPrice": "199500"}  # → 역산 기준가 285000
+
+
+def test_toss_base_price_next_day_base_rejected_after_close():
+    """[마감 후] 역산 값이 최신 캔들 종가에 가까우면 '다음 거래일 기준가'로 판별해 폐기하고
+    전일 캔들 종가로 폴백한다. 폐기 값은 해당 거래일의 KRX 종가로 스토어에 축적된다."""
+    import api
+    _reset_base_price_state()
+    # 전일 314,000(NXT) / 최신(오늘) 285,300 — 역산 285,000은 최신 캔들에 근접
+    _inject_daily_chart("TSTNXD", [
+        {'date': '20260710', 'close': 314000.0},
+        {'date': '20260713', 'close': 285300.0},
+    ])
+    try:
+        with patch("toss_api.get_price_limit", return_value=SAMSUNG_LIMITS), \
+             patch.object(api, "_toss_in_krx_session", return_value=False):
+            assert api._toss_base_price("TSTNXD") == 314000.0  # 전일 캔들 폴백
+        # 폐기한 285,000은 '20260713(최신 캔들 거래일)의 KRX 종가'로 축적
+        assert api._toss_krx_close_get("TSTNXD", "20260713") == 285000.0
+    finally:
+        api._CHART_CACHE.pop("TSTNXD_False_False", None)
+
+
+def test_toss_base_price_next_day_base_uses_stored_krx_close():
+    """[마감 후] 폴백 시 축적 스토어에 전일 KRX 종가가 있으면 캔들(NXT) 종가보다 우선한다."""
+    import api
+    _reset_base_price_state()
+    api._toss_krx_close_put("TSTSTORE", "20260710", 314500.0)  # 전일 KRX 종가 (전일 저녁 축적분)
+    _inject_daily_chart("TSTSTORE", [
+        {'date': '20260710', 'close': 314000.0},  # NXT 연장 종가 (KRX와 500원 차이)
+        {'date': '20260713', 'close': 285300.0},
+    ])
+    try:
+        with patch("toss_api.get_price_limit", return_value=SAMSUNG_LIMITS), \
+             patch.object(api, "_toss_in_krx_session", return_value=False):
+            assert api._toss_base_price("TSTSTORE") == 314500.0
+    finally:
+        api._CHART_CACHE.pop("TSTSTORE_False_False", None)
+
+
+def test_toss_base_price_intraday_adopts_reversed_base():
+    """[장중] 역산 값이 전일 캔들 종가에 가까우면(오늘 기준가) 그대로 채택하고 스토어에 축적한다."""
+    import api
+    _reset_base_price_state()
+    _inject_daily_chart("TSTINTRA", [
+        {'date': '20260710', 'close': 285000.0},  # 전일 (KRX 보정 종가 = 역산 값과 일치)
+        {'date': '20260713', 'close': 262500.0},  # 오늘 (진행 중)
+    ])
+    try:
+        with patch("toss_api.get_price_limit", return_value=SAMSUNG_LIMITS), \
+             patch.object(api, "_toss_in_krx_session", return_value=False):
+            assert api._toss_base_price("TSTINTRA") == 285000.0  # 근접 비교만으로 채택
+        assert api._toss_krx_close_get("TSTINTRA", "20260710") == 285000.0
+    finally:
+        api._CHART_CACHE.pop("TSTINTRA_False_False", None)
+
+
+def test_toss_base_price_session_guard_adopts_on_stale_chart():
+    """[장중+캐시 지연] 당일 봉이 아직 없어 역산 값이 최신 캔들에 근접해 보여도,
+    거래일 장중에는 세션 가드로 역산 값을 그대로 신뢰한다 (오판 방지)."""
+    import api
+    _reset_base_price_state()
+    _inject_daily_chart("TSTSTALE", [
+        {'date': '20260709', 'close': 320000.0},
+        {'date': '20260710', 'close': 285300.0},  # 최신 = 전일 (오늘 봉 미수신)
+    ])
+    try:
+        with patch("toss_api.get_price_limit", return_value=SAMSUNG_LIMITS), \
+             patch.object(api, "_toss_in_krx_session", return_value=True):
+            assert api._toss_base_price("TSTSTALE") == 285000.0  # 채택 (폐기하지 않음)
+    finally:
+        api._CHART_CACHE.pop("TSTSTALE_False_False", None)
+
+
+def test_toss_base_price_reverse_fail_falls_back_to_store():
+    """역산 실패(비표준 절사 등) 시 축적된 전일 KRX 종가가 있으면 그 값으로 대체한다."""
+    import api
+    _reset_base_price_state()
+    api._toss_krx_close_put("TSTFAIL", "20260710", 120605.0)
+    _inject_daily_chart("TSTFAIL", [
+        {'date': '20260710', 'close': 120700.0},
+        {'date': '20260713', 'close': 118000.0},
+    ])
+    try:
+        with patch("toss_api.get_price_limit",
+                   return_value={"upperLimitPrice": "241105", "lowerLimitPrice": "60285"}):  # 역산 불가 케이스
+            assert api._toss_base_price("TSTFAIL") == 120605.0
+    finally:
+        api._CHART_CACHE.pop("TSTFAIL_False_False", None)
 
 
 def test_chart_data_adapter_daily_prev_close_krx_base():
@@ -523,11 +634,13 @@ def test_chart_data_adapter_intraday_date_is_timestamp():
 def test_current_price_data_adapter():
     import api
     api._toss_base_cache.clear()
+    api._toss_krx_close_store = None
     config.session.is_toss = True
     try:
         with patch("toss_api.get_price", return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
              patch("toss_api.get_price_limit",
-                   return_value={"upperLimitPrice": "93000", "lowerLimitPrice": "50200"}):  # 기준가 71600
+                   return_value={"upperLimitPrice": "93000", "lowerLimitPrice": "50200"}), \
+             patch.object(api, "_toss_cached_daily_chart", return_value=None):  # 판별용 일봉 격리(순수 역산 검증)
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:

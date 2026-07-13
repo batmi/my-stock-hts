@@ -3185,9 +3185,93 @@ def _toss_float(v, default=0.0):
         return default
 
 
-# [추가] 국내 기준가(전일 KRX 종가) 역산 캐시: {code: (yyyymmdd, base or None)}
+# [추가] 국내 기준가(전일 KRX 종가) 역산 캐시: {code: ((yyyymmdd, 최신캔들일), base or None)}
 _toss_base_cache = {}
 _toss_base_lock = threading.Lock()
+
+# [추가] 역산으로 확인된 'KRX 정규장 종가' 축적 스토어 (영속: json/toss_krx_close.json)
+#  마감 후 price-limits가 '다음 거래일 기준가(=당일 KRX 종가)'로 넘어가면 그 값을 날짜별로
+#  축적해 두고, 다음 거래일의 기준가(전일 종가)로 재활용한다 (NXT 연장 종가 오차 제거).
+_toss_krx_close_store = None
+_toss_krx_close_lock = threading.Lock()
+
+
+def _toss_krx_close_path():
+    return os.path.join(config.JSON_DIR, "toss_krx_close.json")
+
+
+def _toss_krx_close_load_locked():
+    """스토어 지연 로드 (락 보유 상태에서 호출)"""
+    global _toss_krx_close_store
+    if _toss_krx_close_store is None:
+        try:
+            with open(_toss_krx_close_path(), 'r', encoding='utf-8') as f:
+                _toss_krx_close_store = json.load(f)
+            if not isinstance(_toss_krx_close_store, dict):
+                _toss_krx_close_store = {}
+        except Exception:
+            _toss_krx_close_store = {}
+    return _toss_krx_close_store
+
+
+def _toss_krx_close_get(code, date_str):
+    """축적된 KRX 정규장 종가 조회 (없으면 None)"""
+    if not date_str:
+        return None
+    with _toss_krx_close_lock:
+        store = _toss_krx_close_load_locked()
+        try:
+            v = (store.get(code) or {}).get(date_str)
+            return float(v) if v else None
+        except Exception:
+            return None
+
+
+def _toss_krx_close_put(code, date_str, close):
+    """KRX 정규장 종가 축적 (종목당 최근 10거래일 유지, 원자적 저장)"""
+    if not date_str or not close or close <= 0:
+        return
+    with _toss_krx_close_lock:
+        store = _toss_krx_close_load_locked()
+        per = store.setdefault(code, {})
+        if not isinstance(per, dict):
+            per = {}
+            store[code] = per
+        if per.get(date_str) == close:
+            return
+        per[date_str] = close
+        for k in sorted(per.keys())[:-10]:
+            del per[k]
+        try:
+            tmp = _toss_krx_close_path() + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(store, f, ensure_ascii=False)
+            os.replace(tmp, _toss_krx_close_path())
+        except Exception as e:
+            logger.debug(f"[Toss] KRX 종가 스토어 저장 실패: {e}")
+
+
+def _toss_cached_daily_chart(code):
+    """기준가 판별용 국내 일봉을 '캐시 우선'으로 조회한다 (메모리→디스크→최초 1회 네트워크).
+
+    _toss_base_price는 현재가 조회마다 불리므로, 차트는 오늘자 캐시를 재사용하고
+    캐시가 전혀 없을 때만(하루 최대 1회) 오버레이 없는 과거봉을 새로 받는다.
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    ck = f"{code}_False_False"
+    with _CHART_CACHE_LOCK:
+        c = _CHART_CACHE.get(ck)
+        if c and c.get('date') == today_str:
+            return c['df']
+    df = _chart_disk_get(ck, today_str)
+    if df is not None:
+        return df
+    if config.session.is_toss:
+        try:
+            return get_chart_data(code, False, 'daily', False)
+        except Exception as e:
+            logger.debug(f"[Toss] 기준가 판별용 일봉 조회 실패({code}): {e}")
+    return None
 
 
 def _toss_krx_tick(price, unit5=False):
@@ -3203,7 +3287,17 @@ def _toss_krx_tick(price, unit5=False):
     return 1000
 
 
-def _toss_base_price(code):
+def _toss_in_krx_session():
+    """KRX 거래일 장중(NXT 프리 08:00 ~ 정규장 마감 15:30) 여부.
+
+    이 시간대엔 토스 price-limits가 '오늘 기준가(전일 KRX 종가)'를 주므로 역산 값을
+    그대로 신뢰한다 (이른 아침 일봉 캐시에 당일 봉이 아직 없을 때의 오판 방지용 가드).
+    """
+    now = datetime.now()
+    return market_today(False) == now.strftime('%Y%m%d') and '0800' <= now.strftime('%H%M') < '1530'
+
+
+def _toss_base_price(code, chart_df=None):
     """국내 기준가(당일 등락률의 분모 = 전일 KRX 종가, 권리락 시 조정가)를 상/하한가에서 역산한다.
 
     토스 시세·캔들은 NXT 연장(08:00~20:00) 체결까지 포함해 '전일 캔들 종가'가 KRX 정규장
@@ -3211,20 +3305,51 @@ def _toss_base_price(code):
     상한가=내림(기준가×(1+폭)), 하한가=올림(기준가×(1-폭)) 규칙이므로 호가단위 그리드에서
     후보를 역산해 상·하한 양쪽이 정확히 재현되는 유일한 값만 채택한다(실측 검증 완료).
     레버리지 ETF의 비표준 절사나 호가단위 밖 조정 기준가 등 검증 실패 시 None(보정 생략).
-    결과는 하루 단위로 캐시한다(기준가는 장중 불변).
+
+    [마감 후 '다음 거래일 기준가' 판별] KRX 정규장 마감(15:30) 후 토스 price-limits는
+    다음 거래일 상·하한가(기준가 = 당일 KRX 종가)로 넘어간다. 이를 그대로 쓰면 등락률이
+    0%로 붕괴하므로, 역산 값이 일봉의 '전일 캔들 종가'보다 '최신 캔들 종가'에 더 가까우면
+    다음 거래일 기준가로 판별해 폐기하고 전일 KRX 종가(축적 스토어, 없으면 전일 캔들 종가)로
+    폴백한다 → 마감 후 밤·주말·개장 전 새벽에도 마지막 거래일의 등락률이 유지된다.
+    폐기한 값은 '해당 거래일의 정확한 KRX 종가'이므로 스토어에 축적해 다음 거래일에 재활용한다.
+    거래일 장중(08:00~15:30)엔 토스가 오늘 기준가를 주므로 역산 값을 그대로 신뢰한다
+    (이른 아침 일봉 캐시에 당일 봉이 아직 없을 때의 오판 방지).
+    결과는 (달력일, 최신 캔들일) 단위로 캐시한다(같은 상태에서 기준가는 불변).
+
+    chart_df: 판별용 일봉을 호출자가 이미 들고 있으면 전달(예: _toss_chart_data의 전일봉
+    보정 경로). 미전달 시 캐시 우선으로 조회한다(순환 없음: chart_df 경로는 차트를 다시
+    받지 않고, 캐시 미스 네트워크 조회 내부의 보정은 chart_df를 전달하므로 여기로 재진입).
     """
     today = datetime.now().strftime('%Y%m%d')
+
+    # 판별용 일봉 (전달분 → 캐시 → 최초 1회 네트워크). 실패해도 역산 자체는 진행한다.
+    latest_date = prev_date = None
+    latest_close = prev_close = 0.0
+    try:
+        df = chart_df if chart_df is not None else _toss_cached_daily_chart(code)
+        if df is not None and len(df) >= 2:
+            latest_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
+            prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
+            latest_close = float(df.iloc[-1]['close'])
+            prev_close = float(df.iloc[-2]['close'])
+    except Exception as e:
+        logger.debug(f"[Toss] 기준가 판별용 일봉 처리 실패({code}): {e}")
+
+    cache_token = (today, latest_date)
     with _toss_base_lock:
         hit = _toss_base_cache.get(code)
-        if hit and hit[0] == today:
+        if hit and hit[0] == cache_token:
             return hit[1]
+
     try:
         pl = toss_api.get_price_limit(code)
     except toss_api.TossApiError as e:
-        # 일시 오류일 수 있으므로 캐시하지 않는다(다음 호출에서 재시도)
+        # 일시 오류일 수 있으므로 캐시하지 않는다(다음 호출에서 재시도).
+        # 축적 스토어에 전일 KRX 종가가 있으면 그 값으로 응답해 등락률 공백을 막는다.
         logger.debug(f"[Toss] 상하한가 조회 실패({code}): {e}")
-        return None
-    base = None
+        return _toss_krx_close_get(code, prev_date)
+
+    cand = None
     try:
         upper = round(_toss_float((pl or {}).get('upperLimitPrice')))
         lower = round(_toss_float((pl or {}).get('lowerLimitPrice')))
@@ -3239,24 +3364,43 @@ def _toss_base_price(code):
                     t = _toss_krx_tick(est, unit5)
                     center = int(round(est / t))
                     for k in range(-3, 4):
-                        cand = (center + k) * t
-                        if cand <= 0:
+                        c_val = (center + k) * t
+                        if c_val <= 0:
                             continue
-                        u_raw = cand * (1 + limit_rate)
+                        u_raw = c_val * (1 + limit_rate)
                         ut = _toss_krx_tick(u_raw, unit5)
-                        l_raw = cand * (1 - limit_rate)
+                        l_raw = c_val * (1 - limit_rate)
                         lt = _toss_krx_tick(l_raw, unit5)
                         if int(math.floor(u_raw / ut + 1e-9)) * ut == upper \
                            and int(math.ceil(l_raw / lt - 1e-9)) * lt == lower:
-                            matches.add(cand)
+                            matches.add(c_val)
             if len(matches) == 1:
-                base = float(matches.pop())
+                cand = float(matches.pop())
             elif matches:
                 logger.debug(f"[Toss] 기준가 후보 복수({code}): {sorted(matches)} → 보정 생략")
     except Exception as e:
         logger.debug(f"[Toss] 기준가 역산 실패({code}): {e}")
+
+    base = cand
+    if cand is not None and latest_close > 0 and prev_close > 0 and latest_date:
+        # 역산 값이 어느 캔들의 KRX 종가인지 근접 비교로 판별해 스토어에 축적
+        is_near_prev = abs(cand - prev_close) <= abs(cand - latest_close)
+        _toss_krx_close_put(code, prev_date if is_near_prev else latest_date, cand)
+
+        if not _toss_in_krx_session() and not is_near_prev:
+            # 마감 후/주말/새벽: '다음 거래일 기준가'(= 최신 캔들 거래일의 KRX 종가) → 폐기하고
+            # 전일 기준가로 폴백 (스토어의 정확한 KRX 종가 우선, 없으면 전일 캔들 NXT 종가)
+            stored_prev = _toss_krx_close_get(code, prev_date)
+            base = stored_prev if stored_prev else prev_close
+            logger.debug(f"[Toss] {code} 다음 거래일 기준가 감지({cand:,.0f}) → 전일 기준가 폴백({base:,.0f})")
+    elif cand is None:
+        # 역산 실패(비표준 절사·복수 후보 등): 축적된 전일 KRX 종가가 있으면 대체
+        stored_prev = _toss_krx_close_get(code, prev_date)
+        if stored_prev:
+            base = stored_prev
+
     with _toss_base_lock:
-        _toss_base_cache[code] = (today, base)
+        _toss_base_cache[code] = (cache_token, base)
     return base
 
 
@@ -3439,7 +3583,8 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
                 if md == datetime.now().strftime('%Y%m%d'):
                     prev_idx = df.index[df['date'] < md]
                     if len(prev_idx) > 0:
-                        base = _toss_base_price(code)
+                        # 판별용 일봉으로 지금 만든 df를 그대로 전달 (재조회·순환 방지)
+                        base = _toss_base_price(code, chart_df=df)
                         if base and base > 0:
                             df.loc[prev_idx[-1], 'close'] = float(base)
             except Exception as e:
