@@ -266,6 +266,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
     ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
 
+    # [동기화] 피라미딩 (수익 포지션 증액) 설정 - 실매매 trader._try_pyramid_buy / engine.analyze_pyramid와 동일 조건
+    pyr_use = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False)
+    pyr_trigger = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
+    pyr_ratio = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5)
+    pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+    pyramid_count = 0
+
     # [추가] 리스크 관리 설정 로드
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
     
@@ -296,6 +303,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
         sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
         sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
+
+    # [동기화] 시간청산 유예 판단용 최근 5일/10일 고점 (실매매의 상방 모멘텀 확인과 동일)
+    if 'roll_high_5' not in sim_df.columns:
+        sim_df['roll_high_5'] = sim_df['high'].rolling(5, min_periods=1).max()
+        sim_df['roll_high_10'] = sim_df['high'].rolling(10, min_periods=1).max()
 
     # [추가] 가격 모멘텀 컬럼 사전계산 (전체 df 사전계산을 거치지 않은 경로 대비 안전장치)
     if 'MOM_RET' not in sim_df.columns:
@@ -412,9 +424,17 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
             mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -7.0)
 
-            if take_profit_limit > 0 and loss_rate >= take_profit_limit: sell_signal = True; reason = "익절"
-            elif use_half_tp and take_profit_limit > 0 and not half_tp_executed and loss_rate >= half_tp_limit: # [수정] half_tp_limit 사용
+            # [동기화] 익절/반익절/수익보존 체인 - 실매매(engine.analyze_sell)와 동일 순서·조건
+            #  (기본 설정은 TAKE_PROFIT_RATE=0으로 모두 비활성이나, 옵션을 켜면 실매매와 동일하게 재현)
+            if take_profit_limit > 0 and use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
                 sell_signal = True; reason = "반익절"; sell_ratio = 0.5
+            elif take_profit_limit > 0 and loss_rate >= take_profit_limit:
+                if not (use_half_tp and half_tp_executed):
+                    sell_signal = True; reason = "익절"
+                # else: 반익절 후 잔여 물량은 천장 해제 (Let profit run) - 실매매와 동일하게 이번 주기 소비
+            elif take_profit_limit > 0 and use_half_tp and half_tp_executed and max_profit_rate >= take_profit_limit and loss_rate <= take_profit_limit - 3.0:
+                # [동기화] 수익보존 (Profit Lock-in): 목표 돌파 후 목표-3% 아래로 되돌리면 잔량 매도
+                sell_signal = True; reason = "수익보존"
             elif sl_rate_to_use != 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
                 sell_signal = True
                 if is_bep_applied:
@@ -424,9 +444,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 else:
                     reason = "손절"
             elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
+                # [동기화] 시간청산 유예: 실매매와 동일하게 '매수/상승 상태 유지 + 상방 모멘텀(최근 5일 고점 >= 10일 고점)'
+                #  이중 확인을 모두 통과해야 유예 (기존에는 상태만 확인해 실매매보다 관대했음)
+                time_stop_triggered = True
                 if state in ["매수", "강매수", "역매수", "상승"]:
-                    pass # 상승 또는 매수 신호가 유지 중이면 시간 청산 유예
-                else:
+                    if row.get('roll_high_5', 0) >= row.get('roll_high_10', 0):
+                        time_stop_triggered = False # 상방 모멘텀 유지 → 유예
+                if time_stop_triggered:
                     sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
                 if max_profit_rate >= ts_activation:
@@ -507,6 +531,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     ts_highest_price = 0
                     half_tp_executed = False
                     buy_reason_str = ""
+                    pyramid_count = 0 # [동기화] 피라미딩 횟수 초기화
                 else:
                     half_tp_executed = True
                 
@@ -519,6 +544,45 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     "close": row['close'], "psar": row.get('SAR'), "macd": row.get('MACD'), "macd_signal": row.get('MACD_Signal'),
                     "cum_profit": cum_profit
                 })
+
+            # [동기화] 피라미딩 (수익 포지션 증액) - 실매매 trader._try_pyramid_buy와 동일 조건
+            #  매도 신호가 없고, 수익률이 트리거 이상이며, 매수 신호(추세)가 유지 중일 때만 증액 (손실 종목 발동 불가)
+            if (not sell_signal) and pyr_use and position['qty'] > 0 and pyramid_count < pyr_max \
+                    and loss_rate >= pyr_trigger and state in ("매수", "강매수"):
+                add_qty = int(position['qty'] * pyr_ratio)
+                if add_qty >= 1:
+                    slippage_mult = random.uniform(0.5, 1.5) if execution_noise else 1.0
+                    raw_add_price = price * (1 + (config.SLIPPAGE_RATE * slippage_mult))
+                    add_price = utils.adjust_to_tick(raw_add_price, is_overseas)
+                    if add_price > 0:
+                        add_qty = min(add_qty, int(balance / add_price)) # 예수금 한도 내 증액
+                    if add_price > 0 and add_qty >= 1:
+                        # 증액분 손절률: 증액 시점 ATR로 재계산 (가중평균 손절선에 반영)
+                        atr_sl_rate = 0.0
+                        atr_val = row.get('ATR', 0)
+                        if use_atr_stop and atr_val and atr_val > 0:
+                            atr_sl_rate = -((atr_val * atr_mult / add_price) * 100)
+                            max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+                            if max_atr_sl != 0 and atr_sl_rate < max_atr_sl:
+                                atr_sl_rate = max_atr_sl
+
+                        cost = add_qty * add_price
+                        balance -= cost
+                        total_cost = (position['qty'] * position['avg_price']) + cost
+                        position['qty'] += add_qty
+                        position['avg_price'] = total_cost / position['qty']
+                        position['buy_trades'].append({'qty': add_qty, 'price': add_price, 'atr_sl_rate': atr_sl_rate})
+                        pyramid_count += 1
+                        # 실매매는 최근 매수 시점부터 시간청산을 재계산하므로 동일하게 기준일 갱신
+                        buy_date_dt = current_date_dt
+
+                        trades.append({
+                            "date": date, "type": f"매수(피라미딩 {pyramid_count}차)", "price": add_price, "qty": add_qty, "balance": balance,
+                            "profit": 0, "profit_amt": 0, "days": 0,
+                            "score": raw_score, "rsi": row['RSI'], "adx": row['ADX'], "cci": row['CCI'], "plus_di": row.get('PLUS_DI'), "minus_di": row.get('MINUS_DI'), "obv": row['OBV'], "obv_trend": (row['OBV'] > row['OBV_MA']),
+                            "close": row['close'], "psar": row.get('SAR'), "macd": row.get('MACD'), "macd_signal": row.get('MACD_Signal'),
+                            "cum_profit": cum_profit
+                        })
 
         # [매수]
         # [수정] 매수 조건 체크 (역추세 허용)
@@ -586,6 +650,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     buy_date_dt = current_date_dt
                     ts_highest_price = buy_price
                     buy_reason_str = "역매수" if is_mr_buy else "일반"
+                    pyramid_count = 0 # [동기화] 피라미딩 횟수 초기화
                 
                 total_cost = (position['qty'] * position['avg_price']) + cost
                 position['qty'] += buy_qty

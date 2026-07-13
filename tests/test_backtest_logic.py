@@ -94,3 +94,116 @@ def test_append_smart_money_signal(mock_investor, sample_df):
     # 해외 주식 테스트 (수급 무시)
     df_res2 = backtest._append_smart_money_signal(sample_df.copy(), "AAPL", is_overseas=True)
     assert bool(df_res2["smart_money"].iloc[0]) is False
+
+
+# =========================================================
+# [동기화] 실매매-백테스트 로직 패리티 테스트 (피라미딩/수익보존/시간청산 유예)
+# =========================================================
+
+def _make_bt_df(closes, dates=None, highs=None):
+    """패리티 테스트용 최소 컬럼 데이터프레임 생성"""
+    n = len(closes)
+    if dates is None:
+        dates = [(pd.Timestamp('2023-10-01') + pd.Timedelta(days=i)).strftime('%Y%m%d') for i in range(n)]
+    if highs is None:
+        highs = [c + 500 for c in closes]
+    return pd.DataFrame({
+        'date': dates, 'close': closes, 'open': closes, 'high': highs,
+        'low': [c - 500 for c in closes],
+        'RSI': [55.0] * n, 'ADX': [25.0] * n, 'CCI': [100] * n,
+        'OBV': [1000] * n, 'OBV_MA': [900] * n, 'ATR': [1000] * n,
+        'SAR': [c - 1000 for c in closes],
+    })
+
+
+_PYR_ON = {"PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 1}
+_PYR_OFF = {"PYRAMIDING_USE": False}
+_TF_SELL = {"TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False,
+            "TAKE_PROFIT_RSI": 0.0, "SELL_SCORE": 5.0, "STOP_LOSS_RATE": -7.0}
+
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_pyramiding_triggers(mock_status):
+    """수익 +10% & 매수신호 유지 시 백테스트에서도 피라미딩 증액이 발생해야 함"""
+    df = _make_bt_df([50000, 56000, 57000, 57500, 58000])
+    mock_status.side_effect = [
+        (9.0, 9.0, True, "매수", "강세"),   # 1일차: 신규 매수
+        (9.0, 9.0, True, "매수", "강세"),   # 2일차: +11.8% & 매수 유지 → 피라미딩
+        (7.0, 7.0, False, "상승", ""),
+        (7.0, 7.0, False, "상승", ""),
+        (7.0, 7.0, False, "상승", ""),
+    ]
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_ON), patch.dict(config.SELL_STRATEGY, _TF_SELL):
+        res = backtest.simulate_strategy(
+            sim_df=df, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+    types = [t['type'] for t in res['trades']]
+    assert any(t == "매수(일반)" for t in types)
+    pyramid_trades = [t for t in types if t.startswith("매수(피라미딩")]
+    assert len(pyramid_trades) == 1, f"피라미딩 1회 발생해야 함: {types}"
+    assert "매수(피라미딩 1차)" in pyramid_trades
+
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_pyramiding_blocked_below_trigger(mock_status):
+    """수익률이 트리거 미달이면 매수신호가 유지돼도 증액하지 않아야 함"""
+    df = _make_bt_df([50000, 50500, 50700, 50900, 51000])
+    mock_status.side_effect = [(9.0, 9.0, True, "매수", "강세")] * 5
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_ON), patch.dict(config.SELL_STRATEGY, _TF_SELL):
+        res = backtest.simulate_strategy(
+            sim_df=df, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+    types = [t['type'] for t in res['trades']]
+    assert not any(t.startswith("매수(피라미딩") for t in types)
+
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_profit_lockin_after_half_tp(mock_status):
+    """익절/반익절 활성 시: 반익절 → 목표 돌파(천장 해제) → 목표-3% 반납 시 수익보존 전량 매도 (실매매 동일)"""
+    df = _make_bt_df([50000, 63000, 76000, 73000])
+    mock_status.side_effect = [
+        (9.0, 9.0, True, "매수", "강세"),   # 매수
+        (7.0, 7.0, False, "상승", ""),      # +25.7% → 반익절
+        (7.0, 7.0, False, "상승", ""),      # +51.7% → 천장 해제 (Let profit run)
+        (7.0, 7.0, False, "상승", ""),      # +45.7% (목표-3% 이하) → 수익보존
+    ]
+    sell_opts = {**_TF_SELL, "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True}
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_OFF), patch.dict(config.SELL_STRATEGY, sell_opts):
+        res = backtest.simulate_strategy(
+            sim_df=df, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+    types = [t['type'] for t in res['trades']]
+    assert "매도(반익절)" in types
+    assert "매도(수익보존)" in types
+    assert "매도(익절)" not in types  # 천장 해제로 고정 익절은 발생하지 않아야 함
+
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_time_stop_momentum_grace(mock_status):
+    """시간청산 유예: 상태 유지 + 최근 5일 고점 >= 10일 고점(상방 모멘텀)일 때만 유예 (실매매 동일)"""
+    n = 11
+    dates = [(pd.Timestamp('2023-01-01') + pd.Timedelta(days=3 * i)).strftime('%Y%m%d') for i in range(n)]
+    closes = [50000] + [48500] * (n - 1)  # 매수 후 약 -3% 손실 정체
+
+    # Case A: 고점 유지 (roll5 == roll10) → 유예되어 시간청산 없음
+    df_hold = _make_bt_df(closes, dates=dates, highs=[50500] * n)
+    mock_status.side_effect = [(9.0, 9.0, True, "매수", "강세")] + [(7.0, 7.0, False, "매수", "")] * (n - 1)
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_OFF), patch.dict(config.SELL_STRATEGY, {**_TF_SELL, "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0, "USE_ATR_STOP": False}):
+        res = backtest.simulate_strategy(
+            sim_df=df_hold, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+    assert not any("시간청산" in t['type'] for t in res['trades']), "상방 모멘텀 유지 시 유예되어야 함"
+
+    # Case B: 고점이 계속 낮아짐 (roll5 < roll10) → 상태가 '매수'여도 시간청산 발동
+    df_sell = _make_bt_df(closes, dates=dates, highs=[52000 - 300 * i for i in range(n)])
+    mock_status.side_effect = [(9.0, 9.0, True, "매수", "강세")] + [(7.0, 7.0, False, "매수", "")] * (n - 1)
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_OFF), patch.dict(config.SELL_STRATEGY, {**_TF_SELL, "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0, "USE_ATR_STOP": False}):
+        res = backtest.simulate_strategy(
+            sim_df=df_sell, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+    assert any("시간청산" in t['type'] for t in res['trades']), "상방 모멘텀 상실 시 시간청산되어야 함"
