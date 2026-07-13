@@ -3202,8 +3202,8 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 # 동일 캐시 키(cp_{code}_J / vol_{code})를 공유해 동시 조회 시 중복 호출이 합쳐진다.
                 # (모의투자(VTS)는 NXT 미지원이라 내부에서 NX 조회를 건너뛴다 → 정규장 시세만 표시)
                 # [멀티시세] 프리페치된 현재가가 있으면 종목별 REST 생략
-                # [최적화] fast_info_ttl=30: 해외 장외가 병합이 직전 TV 일괄 예열 캐시를 재사용
-                #  (종목별 TV 단건 재조회 제거. 개요 화면 장외가 최대 ~30초 지연 허용)
+                # [최적화] fast_info_ttl=30: 해외 현재가의 KIS 실패 시 TV 폴백이 직전 TV 일괄 예열 캐시를 재사용
+                #  (종목별 TV 단건 재조회 제거. 정상 경로는 KIS last/diff/rate를 그대로 사용)
                 fut_curr = ex.submit(api.get_current_price_data, code, is_overseas, True, 0, 30.0) if preloaded_curr is None else None
                 # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None

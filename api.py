@@ -499,21 +499,26 @@ def get_yf_fast_info(code, ttl=60.0):
                 # [추가] 장외(프리/애프터마켓) 가격이 존재할 경우 실시간 가격으로 우선 적용
                 pre_close = row.get('premarket_close')
                 post_close = row.get('postmarket_close')
-                
+
+                is_extended = False
                 if pd.notna(post_close) and post_close > 0:
                     close_p = post_close
+                    is_extended = True
                 elif pd.notna(pre_close) and pre_close > 0:
                     close_p = pre_close
-                
+                    is_extended = True
+
                 prev_close = None
                 if pd.notna(row.get('close')) and pd.notna(change_abs):
                     prev_close = row.get('close') - change_abs
-                    
+
                 data = {
                     'last_price': close_p,
                     'regular_market_previous_close': prev_close,
                     'last_volume': row.get('volume', 0),
-                    'year_high': row.get('High.52Week')
+                    'year_high': row.get('High.52Week'),
+                    'src': 'tv',            # [추가] 소스 구분 (해외주식 현재가 폴백은 TV만 허용)
+                    'is_extended': is_extended  # [추가] 장외(프리/애프터) 세션 가격 여부
                 }
                 _set_micro_cache(cache_key, data)
                 return data
@@ -535,7 +540,9 @@ def get_yf_fast_info(code, ttl=60.0):
             'last_price': getattr(fi, 'last_price', None),
                 'regular_market_previous_close': prev_close,
             'last_volume': getattr(fi, 'last_volume', 0),
-            'year_high': getattr(fi, 'year_high', None)
+            'year_high': getattr(fi, 'year_high', None),
+            'src': 'yf',           # [추가] yfinance fast_info는 정규장가만 제공 (장외 시세 병합에 사용 금지)
+            'is_extended': False
         }
         _set_micro_cache(cache_key, data)
         return data
@@ -833,22 +840,27 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                     
                     pre_close = row.get('premarket_close')
                     post_close = row.get('postmarket_close')
+                    is_extended = False
                     if pd.notna(post_close) and post_close > 0:
                         close_p = post_close
+                        is_extended = True
                     elif pd.notna(pre_close) and pre_close > 0:
                         close_p = pre_close
-                        
+                        is_extended = True
+
                     if pd.isna(close_p): continue
-                    
+
                     prev_close = None
                     if pd.notna(row.get('close')) and pd.notna(change_abs):
                         prev_close = row.get('close') - change_abs
-                        
+
                     data = {
                         'last_price': close_p,
                         'regular_market_previous_close': prev_close,
                         'last_volume': row.get('volume', 0),
-                        'year_high': row.get('High.52Week')
+                        'year_high': row.get('High.52Week'),
+                        'src': 'tv',
+                        'is_extended': is_extended
                     }
                     _set_micro_cache(f"yf_fi_{ticker}", data)
                     tv_success_codes.add(ticker)
@@ -2598,9 +2610,10 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
     (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
     cache_ttl: 캐시 재사용 허용 시간(초). 개요/예열 경로는 더 큰 값으로 백그라운드 예열 데이터를 재사용한다.
-    fast_info_ttl(해외 전용): 장외가(프리/애프터) 병합용 fast_info 캐시 허용 시간(초).
+    fast_info_ttl(해외 전용): KIS 조회 실패 시 TV 폴백에 쓰는 fast_info 캐시 허용 시간(초).
       개요(대량) 경로는 TV 일괄 예열 캐시를 재사용하도록 크게(예: 30초) 주고,
       주문/개별 분석 경로는 기본 3초로 실시간성을 유지한다.
+      (해외 현재가는 KIS last/diff/rate를 1차 신뢰하며, TV는 KIS 실패 시에만 사용. yfinance 미사용)
     """
     if config.session.is_toss:
         return _toss_current_price_data(code, is_overseas)
@@ -2667,24 +2680,50 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             if data.get('rt_cd') == '0':
                 if float(data.get('output', {}).get('last', 0) or 0) > 0:
                     if cached_ex != excd: config.session.update_cache_and_save(code, excd)
-                    
-                    # [추가] 미국 주식 프리/애프터마켓 시세 실시간 반영 로직
-                    # KIS 정규장 종가(last) 대신 TradingView/yfinance의 실시간 장외 최신가로 덮어쓰기
+
+                    # [수정] 장외(프리/애프터) 시세: KIS 응답을 1차 신뢰한다.
+                    #  KIS 현재체결가의 last/diff/rate는 프리·애프터장에도 갱신되므로, 기존의
+                    #  TV/yfinance 덮어쓰기(특히 yfinance fast_info는 정규장가만 제공)가 오히려
+                    #  신선한 KIS 가격을 정지시키고 등락률과 불일치를 만들던 문제를 제거.
+                    #  단, last만 동결되고 rate는 갱신되는 비정합 응답에 대비해 KIS 자체 필드로 역산 보정한다.
                     try:
-                        # [수정] TTL 인자화: 주문/개별 경로는 3초(실시간), 개요 대량 경로는 30초(예열 캐시 재사용)
-                        fi = get_yf_fast_info(code, ttl=fast_info_ttl)
-                        if fi and fi.get('last_price'):
-                            global_rt_price = float(fi['last_price'])
-                            kis_regular_price = float(data['output'].get('last', 0))
-                            
-                            # KIS 종가와 글로벌 실시간 가격이 다르면 장외 거래 시세로 간주하여 반영
-                            if global_rt_price > 0 and abs(global_rt_price - kis_regular_price) > 0.0001:
-                                data['output']['last'] = str(global_rt_price)
+                        out_o = data['output']
+                        base_v = float(out_o.get('base', 0) or 0)
+                        rate_v = float(out_o.get('rate', 0) or 0)
+                        last_v = float(out_o.get('last', 0) or 0)
+                        if base_v > 0 and rate_v != 0:
+                            expected = base_v * (1 + rate_v / 100.0)
+                            # 0.1% 이상 괴리 = last 동결 감지 (rate 반올림 오차 최대 0.005%의 20배 여유)
+                            if abs(last_v - expected) / base_v > 0.001:
+                                out_o['last'] = str(round(expected, 4))
+                                logger.debug(f"[API] {code} 해외 last 정합성 보정: {last_v} -> {expected:.4f} (base {base_v}, rate {rate_v}%)")
                     except Exception as e:
-                        logger.debug(f"[API] 해외주식 장외 시세 병합 오류: {e}")
-                        
+                        logger.debug(f"[API] 해외 last 정합성 보정 오류({code}): {e}")
+
                     _set_micro_cache(cache_key, data)
                     return data
+
+        # [폴백] KIS 전 거래소 조회 실패 시에만 TradingView 시세로 대체한다.
+        #  (yfinance는 장외가 미제공이라 사용하지 않음. fast_info_ttl: 개요 경로는 예열 캐시 재사용)
+        #  가격·등락률 일관성을 위해 diff/rate는 전일 종가 기준으로 함께 재계산해 채운다.
+        try:
+            fi = get_yf_fast_info(code, ttl=fast_info_ttl)
+            if fi and fi.get('src') == 'tv' and fi.get('last_price'):
+                last_v = float(fi['last_price'])
+                prev_v = fi.get('regular_market_previous_close')
+                if last_v > 0:
+                    out_o = {'last': str(last_v), '_src': 'tv_fallback'}
+                    if prev_v is not None and float(prev_v) > 0:
+                        prev_v = float(prev_v)
+                        out_o['base'] = str(prev_v)
+                        out_o['diff'] = str(round(last_v - prev_v, 4))
+                        out_o['rate'] = str(round((last_v - prev_v) / prev_v * 100, 2))
+                    res_tv = {'rt_cd': '0', 'output': out_o}
+                    _set_micro_cache(cache_key, res_tv)
+                    return res_tv
+        except Exception as e:
+            logger.debug(f"[API] 해외 현재가 TV 폴백 실패({code}): {e}")
+
         res_err = {'rt_cd': '9999'}
         return res_err
     return {'rt_cd': '9999'}
