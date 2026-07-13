@@ -405,7 +405,7 @@ class AutoTrader:
                 msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 매도잔량비 {buy_abr}배↑ [dim](체결강도 대체)[/dim]"
             else:
                 msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
-            msg += f"\n• 매도: {sell_score}점 미만 / RSI {tp_rsi} 초과"
+            msg += f"\n• 매도: {sell_score}점 미만+60일선 이탈 / RSI {tp_rsi} 초과"
             
             tp_str = f"+{tp}%"
             if use_half_tp:
@@ -1365,7 +1365,7 @@ class AutoTrader:
         time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
-        table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만) / 과열 매도 (RSI {tp_rsi} 초과)")
+        table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만 + 60일선 이탈) / 과열 매도 (RSI {tp_rsi} 초과)")
         
         # 익절 / 반익절
         tp_str = f"익절 (+{tp}%)"

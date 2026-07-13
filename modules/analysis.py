@@ -177,17 +177,34 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         if len(df) >= vol_ma_period:
             vol_ma20 = df['volume'].rolling(window=vol_ma_period).mean().iloc[-1]
             vol_ma5 = df['volume'].rolling(window=5).mean().iloc[-1]
-            
+
             if vol_ma5 > vol_ma20:
                 vol_trend_flag = True
-                
+
             if not vol_spike_flag:
                 vol_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
                 vol = df['volume'].iloc[-1]
                 opn = df['open'].iloc[-1]
                 if price is not None and vol_ma20 > 0 and vol >= (vol_ma20 * vol_ratio) and price > opn:
                     vol_spike_flag = True
-                
+
+        # [추세추종] 가격 모멘텀 팩터 입력값 동적 계산 (백테스트는 사전계산 값을 인자로 전달)
+        try:
+            if w52_pos is None and price is not None and 'high' in df.columns and 'low' in df.columns:
+                recent_df = df.tail(250)
+                h52 = float(recent_df['high'].max())
+                l52 = float(recent_df['low'].min())
+                if h52 > l52:
+                    w52_pos = (price - l52) / (h52 - l52) * 100
+            if mom_ret is None and price is not None:
+                mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+                if len(df) > mom_lb:
+                    past_close = float(df['close'].iloc[-(mom_lb + 1)])
+                    if past_close > 0:
+                        mom_ret = (price / past_close - 1) * 100
+        except Exception:
+            pass
+
     if price is None:
         return 0.0, details
 
@@ -235,11 +252,16 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     if sar is not None and price > sar:
         s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
     
-    # 2. Momentum Factor (2.5점)
+    # 2. Momentum Factor (2.5점) — RSI 1.0 + CCI 0.5 + DMI 0.5 + 가격 모멘텀 0.5
     score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
     score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
     score_rsi_overheat = config.INDICATOR_PARAMS.get('SCORE_RSI_OVERHEAT', 80)
     score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 40)
+
+    # [추세추종] 반등 성격 가점(RSI 상승 여력, CCI 과매도 탈출)은 추세 구조(주가>60일선) 위에서만 인정.
+    #   USE_MEAN_REVERSION 기본 OFF 기조와 정합: '상승 추세 내 눌림목 회복'만 가점하고,
+    #   추세 없는 약세 종목의 단순 기술적 반등이 매수 점수를 밀어올리는 것을 차단.
+    in_uptrend_structure = ema60 is not None and price > ema60
 
     if rsi is not None:
         # [Fix] RSI 상단 제한(75) 해제로 과열 구간에서도 기본 강세 점수는 유지 (스코어 클리프 방지)
@@ -249,22 +271,29 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
             #          이미 과열된 종목에 고점매수 신호가 강화되는 것을 방지.
             if score_rsi_strong <= rsi < score_rsi_overheat:
                 s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
-        elif score_rsi_rebound <= rsi < score_rsi_mid:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 상승 여력 구간 (+{s:.2f})")
-            
+        elif score_rsi_rebound <= rsi < score_rsi_mid and in_uptrend_structure:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 상승 여력 구간(추세 내 눌림) (+{s:.2f})")
+
     cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
     cci_strong = config.INDICATOR_PARAMS.get('SCORE_CCI_STRONG', 0)
-    cci_mom = config.INDICATOR_PARAMS.get('SCORE_CCI_MOMENTUM', 50)
     if cci is not None:
+        # [개선] 'CCI 모멘텀 심화'는 'CCI 상승 추세'·RSI 강세와 상관이 높아 정보 가치가 낮으므로 폐지하고,
+        #        그 0.5점을 아래 '가격 모멘텀' 항목으로 이관. CCI는 상승/과매도탈출 중 하나만 인정(최대 0.5).
         if cci > cci_strong:
             s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
-        if prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출 (+{s:.2f})")
-        elif cci >= cci_mom:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 모멘텀 심화 (+{s:.2f})")
-            
+        elif in_uptrend_structure and prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
+            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출(추세 내) (+{s:.2f})")
+
     if plus_di is not None and minus_di is not None and plus_di > minus_di:
         s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 (+{s:.2f})")
+
+    # [추세추종] 가격 모멘텀 (절대 모멘텀 + 52주 신고가 근접) — '강한 종목을 매수하라' 핵심 팩터.
+    #   6개월(MOMENTUM_LOOKBACK) 수익률이 양수이고 52주 위치가 기준(MOMENTUM_W52_NEAR) 이상인
+    #   주도주에만 가점하여, 지표만 좋은 바닥권 종목과 신고가 랠리 종목을 점수로 구분한다.
+    mom_w52_near = config.INDICATOR_PARAMS.get('MOMENTUM_W52_NEAR', 80)
+    if mom_ret is not None and mom_ret > 0 and w52_pos is not None and w52_pos >= mom_w52_near:
+        s = round(0.5 * r_mom, 2); score += s
+        details.append(f"가격 모멘텀: 6개월 +{mom_ret:.1f}% & 52주 위치 {w52_pos:.0f}% (+{s:.2f})")
 
     # 3. Strength & Volume Factor (1.5점)
     adx_min = config.INDICATOR_PARAMS.get('SCORE_ADX_MIN', 20)
@@ -571,7 +600,7 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
-def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False):
+def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None):
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
         ema20 = ind.get('ema_20')
@@ -654,10 +683,11 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
     score, _ = calculate_score(
-        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci, 
-        obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money, 
-        plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist, 
-        prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend
+        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci,
+        obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money,
+        plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist,
+        prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
+        w52_pos=w52_pos, mom_ret=mom_ret  # [추세추종] 가격 모멘텀 팩터 입력 전달 (df 없이 호출되는 백테스트 경로 패리티)
     )
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
@@ -1731,14 +1761,19 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         table_logic.add_row("매수 판단", buy_result, buy_reason)
         
         sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-        is_sell_signal = (score < sell_score_limit) or (state == "매도")
-        
+        # [추세추종] 점수 하락 매도는 추세 구조 훼손(현재가<60일선) 동반 시에만 발동 (실매매 analyze_sell과 동일 기준)
+        ema60_now = ind.get('ema_60')
+        structure_broken = ema60_now is None or current_price < ema60_now
+        is_sell_signal = (state == "매도") or (score < sell_score_limit and structure_broken)
+
         sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
-        
+
         if state == "매도":
             sell_reason = "매도 상태 진입 (필터링 조건)"
+        elif score < sell_score_limit and structure_broken:
+            sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만) + 60일선 이탈"
         elif score < sell_score_limit:
-            sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만)"
+            sell_reason = f"점수 미달이나 60일선 위 추세 구조 유지 (주청산은 트레일링 스탑에 위임)"
         else:
             sell_reason = "추세 유지 중 (주의/관망 상태라도 점수 유지 시 보유)"
         

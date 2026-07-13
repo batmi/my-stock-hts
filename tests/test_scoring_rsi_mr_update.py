@@ -57,23 +57,23 @@ class TestRsiScoreBoundary:
         assert config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND') == 40
 
     def test_rsi_40_at_lower_boundary_gets_score(self):
-        """RSI 40: 하한 경계값 포함(≥40) — 상승 여력 구간 +0.5"""
+        """RSI 40: 하한 경계값 포함(≥40) — 추세 구조(price>ema60) 위에서 상승 여력 구간 +0.5"""
         with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
-            score, details = analysis.calculate_score(price=10000, rsi=40.0)
+            score, details = analysis.calculate_score(price=10000, ema60=9000, rsi=40.0)
         assert score == pytest.approx(0.5)
         assert any("상승 여력 구간" in d for d in details)
 
     def test_rsi_45_in_zone_gets_score(self):
-        """RSI 45: 구간 내 — 상승 여력 구간 +0.5"""
+        """RSI 45: 구간 내 — 추세 구조 위에서 상승 여력 구간 +0.5"""
         with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
-            score, details = analysis.calculate_score(price=10000, rsi=45.0)
+            score, details = analysis.calculate_score(price=10000, ema60=9000, rsi=45.0)
         assert score == pytest.approx(0.5)
         assert any("상승 여력 구간" in d for d in details)
 
     def test_rsi_49_upper_boundary_in_zone_gets_score(self):
-        """RSI 49: 상한 경계값 미만(<50) — 상승 여력 구간 +0.5"""
+        """RSI 49: 상한 경계값 미만(<50) — 추세 구조 위에서 상승 여력 구간 +0.5"""
         with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
-            score, details = analysis.calculate_score(price=10000, rsi=49.0)
+            score, details = analysis.calculate_score(price=10000, ema60=9000, rsi=49.0)
         assert score == pytest.approx(0.5)
         assert any("상승 여력 구간" in d for d in details)
 
@@ -111,8 +111,8 @@ class TestRsiScoreBoundary:
     def test_boundary_step_39_vs_40(self):
         """경계 전후 계단 확인: RSI 39 → 0점, RSI 40 → 0.5점"""
         with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
-            score_below, _ = analysis.calculate_score(price=10000, rsi=39.0)
-            score_at, _    = analysis.calculate_score(price=10000, rsi=40.0)
+            score_below, _ = analysis.calculate_score(price=10000, ema60=9000, rsi=39.0)
+            score_at, _    = analysis.calculate_score(price=10000, ema60=9000, rsi=40.0)
         assert score_below == pytest.approx(0.0)
         assert score_at    == pytest.approx(0.5)
         assert score_at > score_below
@@ -120,10 +120,23 @@ class TestRsiScoreBoundary:
     def test_label_is_상승여력구간_not_반등시도(self):
         """레이블이 '반등 시도'에서 '상승 여력 구간'으로 변경되었는지 확인"""
         with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
-            _, details = analysis.calculate_score(price=10000, rsi=45.0)
+            _, details = analysis.calculate_score(price=10000, ema60=9000, rsi=45.0)
         detail_str = " ".join(details)
         assert "상승 여력 구간" in detail_str
         assert "반등 시도" not in detail_str
+
+    def test_rebound_zone_blocked_below_ema60(self):
+        """[추세추종] 추세 구조 훼손(price<ema60) 시 상승 여력 가점 없음 (약세 반등 미가점)"""
+        with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
+            score, details = analysis.calculate_score(price=10000, ema60=11000, rsi=45.0)
+        assert not any("상승 여력 구간" in d for d in details)
+
+    def test_rebound_zone_blocked_without_ema60(self):
+        """[추세추종] ema60 미제공 시 추세 구조 확인 불가 → 상승 여력 가점 없음"""
+        with patch.dict(config.INDICATOR_PARAMS, {'SCORE_RSI_REBOUND': 40}):
+            score, details = analysis.calculate_score(price=10000, rsi=45.0)
+        assert score == pytest.approx(0.0)
+        assert not any("상승 여력 구간" in d for d in details)
 
 
 # ─────────────────────────────────────────────

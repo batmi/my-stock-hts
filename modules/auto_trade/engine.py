@@ -333,7 +333,13 @@ class DefaultStrategy:
                         sell_ratio = 0.5
 
             # 5. 추세 이탈
-            if not reason and (state == "매도" or score < sell_score_limit):
+            # [추세추종] 점수 하락 단독으로는 매도하지 않고 추세 구조 훼손(주가<60일선)을 동시 요구.
+            #   스코어는 단기 신호(5>20 EMA, MACD 히스토그램, SAR 등) 비중이 커서 정배열 유지 중의
+            #   통상적 눌림목에서도 기준 미만으로 떨어질 수 있음 → 주청산(샹들리에 TS)의 fat-tail
+            #   추종을 점수 매도가 조기에 잘라내는 것을 방지. ('매도' 상태는 자체 조건이 이미 엄격하므로 즉시 발동)
+            ema60_val = ind.get('ema_60') if ind else None
+            structure_broken = ema60_val is None or current_price < ema60_val
+            if not reason and (state == "매도" or (score < sell_score_limit and structure_broken)):
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
@@ -345,7 +351,7 @@ class DefaultStrategy:
                     if state == "매도":
                         reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
                     else:
-                        reason = f"추세이탈({state}/점수하락) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
+                        reason = f"추세이탈({state}/점수하락+60일선이탈) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             
         return {
             'action': 'sell' if reason else 'hold',

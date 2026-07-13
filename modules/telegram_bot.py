@@ -1957,13 +1957,18 @@ class TelegramCommander:
                 logger.debug(f"TV rating fetch error: {e}")
 
             sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-            is_sell_signal = (score < sell_score_limit) or (state == "매도")
-            
+            # [추세추종] 점수 하락 매도는 추세 구조 훼손(현재가<60일선) 동반 시에만 발동 (실매매 analyze_sell과 동일 기준)
+            ema60_now = ind.get('ema_60')
+            structure_broken = ema60_now is None or current_price < ema60_now
+            is_sell_signal = (state == "매도") or (score < sell_score_limit and structure_broken)
+
             if is_sell_signal:
                 reasons = []
                 if state == "매도": reasons.append(f"상태:{state}")
-                if score < sell_score_limit: reasons.append(f"점수하락({score}<{sell_score_limit})")
+                if score < sell_score_limit and structure_broken: reasons.append(f"점수하락({score}<{sell_score_limit})+60일선 이탈")
                 sell_result = f"🔵 매도 ({', '.join(reasons)})"
+            elif score < sell_score_limit:
+                sell_result = "🟢 보유 (점수 미달이나 60일선 위 추세 구조 유지)"
             else:
                 sell_result = "🟢 보유 (추세유지)"
 

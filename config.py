@@ -282,7 +282,9 @@ class GlobalSettings(BaseModel):
         "TIME_STOP_DAYS": 20,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 10→20 완화)
         "TIME_STOP_MIN_PROFIT_RATE": 0.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%) - 0이면 손실 정체 종목만 청산 ('수익 종목은 보유' 원칙, 3.0→0.0)
         "MR_GRACE_LOSS_RATE": -7.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
-        "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
+        "SELL_SCORE": 4.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만 '이고' 주가가 60일선을 이탈하면 매도
+                                            #  (추세추종 기조: 점수 하락 단독으로는 팔지 않음. 정배열 유지 중의 눌림목 조기 청산 방지를 위해
+                                            #   구조 훼손[주가<60일선] 동시 충족을 요구하며, 기준점도 5.0→4.0으로 완화해 주청산을 샹들리에 TS에 위임)
         "TAKE_PROFIT_RSI": 0.0,             # 과열 매도 기준 RSI (0이면 미사용 - 강한 추세는 RSI가 오래 과매수에 머무르므로 기본 OFF)
         "SUPER_TAKE_PROFIT_RSI": 90.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI (TAKE_PROFIT_RSI 사용 시에만 유효)
         "TRAILING_STOP_ACTIVATION_RATE": 10.0, # [트레일링 스탑] 감시 시작 수익률 (주청산 수단으로 일찍 활성화: 15→10)
@@ -318,8 +320,8 @@ class GlobalSettings(BaseModel):
         "TREND_PERIOD": 60,            # [추가] 상승/하락 추세선 기간 일수
         "BOX_PERIOD": 20,              # [추가] 박스권 설정 기간 봉 수 (일봉=일, 분봉=분)
         "BOX_VALUE_AREA_PCT": 50.0,    # [추가] 박스권 매물대 %
-        "MOMENTUM_LOOKBACK": 126,      # [추가] 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일)
-        "MOMENTUM_W52_NEAR": 80,       # [추가] 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도)
+        "MOMENTUM_LOOKBACK": 126,      # 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일) - 스코어링 '가격 모멘텀' 항목에 사용
+        "MOMENTUM_W52_NEAR": 80,       # 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도) - 스코어링 '가격 모멘텀' 항목에 사용
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
         "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
@@ -328,8 +330,9 @@ class GlobalSettings(BaseModel):
         "SCORE_RSI_OVERHEAT": 80,      # [추가] 모멘텀 확장 가점 동결 기준 RSI (과열 구간 고점매수 방지)
         "SCORE_RSI_REBOUND": 40,       # 스코어링 상승 여력 구간 하한 RSI (MR_RSI_MAX=40과 동일 경계: 40 이상이면 여력 점수, 40 미만은 역매수 영역)
         "SCORE_ADX_MIN": 20,           # 스코어링 추세 기준 ADX
-        "SCORE_CCI_STRONG": 0,         # 스코어링 추세 기준 CCI
-        "SCORE_CCI_MOMENTUM": 50       # 스코어링 모멘텀 심화 기준 CCI
+        "SCORE_CCI_STRONG": 0          # 스코어링 추세 기준 CCI
+        # [제거] SCORE_CCI_MOMENTUM: 'CCI 모멘텀 심화' 항목은 CCI 상승·RSI 강세와 상관이 높아 폐지,
+        #        해당 0.5점은 '가격 모멘텀'(MOMENTUM_LOOKBACK/MOMENTUM_W52_NEAR) 항목으로 이관됨
     }
 
 _settings_lock = threading.RLock()
@@ -880,21 +883,24 @@ def reset_all_settings():
         
         # [추가] 파이썬 클래스 딕셔너리의 메모리 참조 오염을 방지하기 위해 
         # 초기화 시 하드코딩된 순수 기본값으로 강제 복원
+        # [동기화] 아래 값들은 GlobalSettings 클래스 기본값(추세추종 정합화 기준)과 반드시 일치해야 함
         settings.ANALYSIS_THRESHOLDS = {
             "BUY_SCORE": 7.0, "RISE_SCORE": 6.0, "INTEREST_SIGNAL_MIN": 3, "INTEREST_MA60_NEAR": 0.97,
             "BUY_RSI_MAX": 70, "BUY_VOL_STRENGTH": 100.0,
             "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False,
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
-            "SUPER_MOMENTUM_SCORE": 8.5, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 75.0
+            "SUPER_MOMENTUM_SCORE": 8.0, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 80.0,
+            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 1
         }
         settings.SELL_STRATEGY = {
-            "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True,
+            "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False,
             "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
             "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
-            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 3.0,
-            "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0,
-            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0
+            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
+            "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
+            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
+            "TRAILING_ATR_MULTIPLIER": 3.0
         }
         settings.SCORING_WEIGHTS = {
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
@@ -908,9 +914,11 @@ def reset_all_settings():
             "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0, "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
+            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0,
+            "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80,
+            "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
             "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
-            "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0, "SCORE_CCI_MOMENTUM": 50
+            "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0
         }
         
         import sys
@@ -1005,7 +1013,7 @@ CONFIG_DESCRIPTIONS = {
     "TIME_STOP_DAYS": "시간 청산 제한 보유 일수",
     "TIME_STOP_MIN_PROFIT_RATE": "시간 청산 회피 최소 달성 수익률",
     "MR_GRACE_LOSS_RATE": "역매수 유예기간 중 최대 허용 손실률",
-    "SELL_SCORE": "추세 이탈 매도 기준 점수",
+    "SELL_SCORE": "추세 이탈 매도 기준 점수 (미만 + 60일선 이탈 시 매도)",
     "TAKE_PROFIT_RSI": "과열 매도 기준 RSI",
     "TRAILING_STOP_ACTIVATION_RATE": "트레일링 스탑 감시 시작 수익률",
     "TRAILING_STOP_CALLBACK_RATE": "최고가 대비 트레일링 스탑 매도 이탈률",
@@ -1035,7 +1043,8 @@ CONFIG_DESCRIPTIONS = {
     "SCORE_RSI_REBOUND": "스코어링 상승 여력 구간 하한 RSI (초기 매수 진입 여지 구간)",
     "SCORE_ADX_MIN": "스코어링 추세 기준 ADX",
     "SCORE_CCI_STRONG": "스코어링 추세 기준 CCI",
-    "SCORE_CCI_MOMENTUM": "스코어링 모멘텀 심화 기준 CCI"
+    "MOMENTUM_LOOKBACK": "가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (거래일)",
+    "MOMENTUM_W52_NEAR": "가격 모멘텀 가점 기준 52주 위치(%)"
 }
 
 # 모듈 로드 시 자동 실행

@@ -81,7 +81,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
         thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money,
         plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
         ema_5=ema_5, macd_hist=macd_hist, prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        is_yangbong=is_yangbong_flag
+        is_yangbong=is_yangbong_flag, mom_ret=row.get('MOM_RET')  # [추세추종] 가격 모멘텀 팩터 (상태 분류 내부 점수도 동일 입력 사용)
     )
     
     # 2. 점수 계산
@@ -230,13 +230,14 @@ def compute_price_indicators(df):
     return df
 
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
-                      stop_loss_rate=None, take_profit_rate=None, 
-                      take_profit_rsi=None, sell_score=None, 
-                      ts_activation_rate=None, ts_callback_rate=None, 
+                      stop_loss_rate=None, take_profit_rate=None,
+                      take_profit_rsi=None, sell_score=None,
+                      ts_activation_rate=None, ts_callback_rate=None,
                       time_stop_days_limit=None,
                       use_atr_stop_limit=None, atr_stop_multiplier_limit=None, half_tp_use_limit=None,
                       weights=None,
-                      execution_noise=False):
+                      execution_noise=False,
+                      pyramiding_max_count_limit=None):
     """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
     
     # 시뮬레이션 변수
@@ -270,7 +271,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     pyr_use = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False)
     pyr_trigger = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
     pyr_ratio = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5)
-    pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+    # [최적화 지원] 피라미딩 최대 차수 오버라이드 (0이면 피라미딩 미사용, 1 이상이면 사용 여부와 무관하게 해당 차수까지 허용)
+    if pyramiding_max_count_limit is not None:
+        pyr_max = pyramiding_max_count_limit
+        pyr_use = pyr_max > 0
+    else:
+        pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
     pyramid_count = 0
 
     # [추가] 리스크 관리 설정 로드
@@ -481,7 +487,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
             
             if not sell_signal and take_profit_rsi_limit > 0 and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
-            if not sell_signal and sell_check_score < sell_score_limit:
+            # [동기화] 점수 매도는 추세 구조 훼손(주가<60일선) 동시 충족 시에만 발동 (실매매 engine.analyze_sell과 동일).
+            #   '매도' 상태(sell_check_score=0 처리)는 자체 조건이 엄격하므로 구조 확인 없이 즉시 발동.
+            ema60_val = row.get('EMA60')
+            structure_broken = (state == "매도") or ema60_val is None or price < ema60_val
+            if not sell_signal and sell_check_score < sell_score_limit and structure_broken:
                 # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
                 if buy_reason_str == "역매수" and current_holding_days <= time_stop_days and loss_rate > mr_grace_loss_limit:
                     pass
@@ -2253,7 +2263,72 @@ def run_backtest():
             config.console.print(f"\n[green]추천 (수익률):[/] 익절 +{best_return_set[0]}% / 손절 {best_return_set[1]}% (수익률 {best_return:+.2f}%)")
         if best_mdd_set:
             config.console.print(f"[cyan]추천 (안정성):[/] 익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}% (MDD {best_mdd:.2f}%)")
-            
+
+        # === 피라미딩 차수 최적화 모드 ===
+        # 각 차수는 발동 조건(수익률 트리거 + 매수/강매수 상태 유지)이 허용하는 한 해당 차수까지 최대로 증액했을 때의 결과
+        pyr_table = Table(title=f"\n피라미딩 차수 최적화 분석 ({name}) / 기준 매수 점수 ({buy_score}점)", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+        pyr_table.add_column("최대 차수", justify="center")
+        pyr_table.add_column("수익률", justify="right")
+        pyr_table.add_column("승률", justify="right")
+        pyr_table.add_column("MDD", justify="right")
+        pyr_table.add_column("매매 횟수", justify="right")
+        pyr_table.add_column("증액 발동", justify="right")
+        pyr_table.add_column("손익비", justify="right")
+
+        best_pyr_return_count = 0
+        best_pyr_return = -999.0
+        best_pyr_mdd_count = 0
+        best_pyr_mdd = -999.0
+
+        pyr_candidates = [0, 1, 2, 3, 4, 5]
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("[cyan]피라미딩 차수별 시뮬레이션 진행 중...[/cyan]", total=len(pyr_candidates))
+            for pyr_count in pyr_candidates:
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas,
+                                        stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                        take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                        time_stop_days_limit=time_stop_days,
+                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
+                                        weights=weights, pyramiding_max_count_limit=pyr_count)
+
+                total_trades = len(res['trades'])
+                sell_trades_inner = res['win_trades'] + res['loss_trades']
+                win_rate = (res['win_trades'] / sell_trades_inner * 100) if sell_trades_inner > 0 else 0.0
+                pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+                pyr_fired = sum(1 for t in res['trades'] if "피라미딩" in str(t.get('type', '')))
+
+                if res['total_return'] > best_pyr_return:
+                    best_pyr_return = res['total_return']
+                    best_pyr_return_count = pyr_count
+                if res['mdd'] > best_pyr_mdd:
+                    best_pyr_mdd = res['mdd']
+                    best_pyr_mdd_count = pyr_count
+
+                label = "미사용 (0차)" if pyr_count == 0 else f"{pyr_count}차"
+                r_color = "[red]" if res['total_return'] > 0 else "[blue]"
+                pyr_table.add_row(
+                    label,
+                    f"{r_color}{res['total_return']:+.2f}%[/]",
+                    f"{win_rate:.1f}%",
+                    f"{res['mdd']:.2f}%",
+                    f"{total_trades}건",
+                    f"{pyr_fired}회",
+                    f"{pf:.2f}"
+                )
+                progress.advance(task)
+
+        config.console.print(pyr_table)
+        config.console.print(f"\n[green]추천 (수익률):[/] {'미사용' if best_pyr_return_count == 0 else str(best_pyr_return_count) + '차'} (수익률 {best_pyr_return:+.2f}%)")
+        config.console.print(f"[cyan]추천 (안정성):[/] {'미사용' if best_pyr_mdd_count == 0 else str(best_pyr_mdd_count) + '차'} (MDD {best_pyr_mdd:.2f}%)")
+
         # [추가] 가중치 최적화 로직 통합 (1번 실행 시 자동 수행)
         # [수정] 타이틀/프롬프트 제거 및 자동 실행 (랜덤 조합 포함)
         use_random = True
@@ -2369,7 +2444,7 @@ def run_backtest():
             - 손익비 (Profit Factor): {pf:.2f}
             - 샤프지수 (Sharpe Ratio): {sharpe_ratio:.2f}
             - 최대 낙폭 (MDD): {mdd:.2f}%
-            - [시스템 산출 최적화 추천값]: 매수 {best_return_score}점, RSI < {best_return_rsi}, 익절 +{tp_opt}% / 손절 {sl_opt}%, 가중치: {w_opt}
+            - [시스템 산출 최적화 추천값]: 매수 {best_return_score}점, RSI < {best_return_rsi}, 익절 +{tp_opt}% / 손절 {sl_opt}%, 피라미딩 {'미사용' if best_pyr_return_count == 0 else str(best_pyr_return_count) + '차'}, 가중치: {w_opt}
             """
             
             with Progress(
