@@ -216,7 +216,7 @@ def test_dynamic_atr_trailing_stop(mock_calc_score, mock_classify, mock_calc_ind
         "ts_activation": 10.0,
         "ts_callback": 2.0, # 고정 비율로는 고점 대비 2% 하락 시 매도
         "USE_ATR_STOP": True,
-        "ATR_STOP_MULTIPLIER": 2.0
+        "TRAILING_ATR_MULTIPLIER": 2.0 # [샹들리에] TS 콜백은 손절 배수와 분리된 전용 배수 사용
     }
     buy_price = 10000
     highest_price = 11500 # +15% 수익 도달 (트레일링 발동)
@@ -256,9 +256,11 @@ def test_defensive_half_sell(strategy):
     
     with patch('modules.auto_trade.indicators.calculate_indicators', return_value=mock_ind), \
          patch('modules.auto_trade.analysis.classify_stock_state', return_value=("관망", "", "")), \
-         patch('modules.auto_trade.analysis.calculate_score', return_value=(6.0, [])):
-        
+         patch('modules.auto_trade.analysis.calculate_score', return_value=(6.0, [])), \
+         patch.dict(config.SELL_STRATEGY, {"DEFENSIVE_HALF_SELL_USE": True}):
+
         # 방어적 반매도는 최소 수익권(기본 3.0%) 이상일 때 발동해야 하므로 profit_rate를 4.1%로 설정
+        # (기능 자체는 추세추종 기조로 기본 OFF이므로 테스트에서 명시적으로 ON)
         res = strategy.analyze_sell("005930", "Test", df, current_price=10000, buy_price=9600, profit_rate=4.1, thresholds=thresholds)
         
         assert res['action'] == 'sell'

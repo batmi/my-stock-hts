@@ -263,6 +263,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     
     ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
     ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+    # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
+    ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
 
     # [추가] 리스크 관리 설정 로드
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
@@ -433,7 +435,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     actual_ts_callback = ts_callback
                     atr_val = row.get('ATR', 0)
                     if use_atr_stop and atr_val > 0:
-                        dynamic_callback = (atr_val * atr_mult / ts_highest_price) * 100
+                        dynamic_callback = (atr_val * ts_atr_mult / ts_highest_price) * 100
                         # [추가] 트레일링 스탑 하/상한선 방어 로직 동기화
                         max_allowed_callback = max(ts_callback, max_profit_rate * 0.5)
                         actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
@@ -454,7 +456,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if is_super:
                 actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
             
-            if not sell_signal and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
+            if not sell_signal and take_profit_rsi_limit > 0 and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
             if not sell_signal and sell_check_score < sell_score_limit:
                 # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
                 if buy_reason_str == "역매수" and current_holding_days <= time_stop_days and loss_rate > mr_grace_loss_limit:

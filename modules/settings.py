@@ -173,13 +173,19 @@ def view_system_config(group=None):
             row("슈퍼 52주 위치 기준", "신고가 근접 여부 (예: 90.0% 이상)", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_W52_POS']", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%", key="SUPER_MOMENTUM_W52_POS", indent=True)
             row("완화된 매수 RSI 상한", "발동 시 적용되는 진입 최대 RSI", "ANALYSIS_THRESHOLDS['SUPER_BUY_RSI_MAX']", f"{thresholds.get('SUPER_BUY_RSI_MAX', 75.0)}", key="SUPER_BUY_RSI_MAX", indent=True)
             row("슈퍼 매도 과열 RSI", "추세 유지 시 매도 지연 RSI 기준", "SELL_STRATEGY['SUPER_TAKE_PROFIT_RSI']", f"{sell.get('SUPER_TAKE_PROFIT_RSI', 85.0)}", key="SUPER_TAKE_PROFIT_RSI", indent=True)
+        row("피라미딩 (수익 증액)", "수익으로 추세 검증된 포지션만 증액 (물타기 반대)", "ANALYSIS_THRESHOLDS['PYRAMIDING_USE']", f"{thresholds.get('PYRAMIDING_USE', True)}", key="PYRAMIDING_USE")
+        if thresholds.get('PYRAMIDING_USE', True):
+            row("증액 발동 수익률", "이 수익률 이상 & 매수신호 유지 시 증액", "ANALYSIS_THRESHOLDS['PYRAMIDING_PROFIT_TRIGGER']", f"{thresholds.get('PYRAMIDING_PROFIT_TRIGGER', 10.0)}%", key="PYRAMIDING_PROFIT_TRIGGER", indent=True)
+            row("증액 비율", "보유 수량 대비 증액 수량 비율", "ANALYSIS_THRESHOLDS['PYRAMIDING_RATIO']", f"{thresholds.get('PYRAMIDING_RATIO', 0.5)}", key="PYRAMIDING_RATIO", indent=True)
+            row("최대 증액 횟수", "포지션당 피라미딩 허용 횟수", "ANALYSIS_THRESHOLDS['PYRAMIDING_MAX_COUNT']", f"{thresholds.get('PYRAMIDING_MAX_COUNT', 1)}회", key="PYRAMIDING_MAX_COUNT", indent=True)
 
         subheader("1-3. 매도/청산 — 익절")
         row("익절 수익률", "목표 수익 달성 시 매도", "SELL_STRATEGY['TAKE_PROFIT_RATE']", f"{sell.get('TAKE_PROFIT_RATE')}%", key="TAKE_PROFIT_RATE")
         row("반익절 사용", "익절 수익률의 절반 도달 시 50% 선매도", "SELL_STRATEGY['HALF_TAKE_PROFIT_USE']", f"{sell.get('HALF_TAKE_PROFIT_USE', True)}", key="HALF_TAKE_PROFIT_USE")
         row("과열 매도 RSI", "RSI 과열 시 선제 매도", "SELL_STRATEGY['TAKE_PROFIT_RSI']", f"{sell.get('TAKE_PROFIT_RSI')}", key="TAKE_PROFIT_RSI")
         row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
-        row("TS 하락 감지율", "최고가 대비 하락 시 매도", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%", key="TRAILING_STOP_CALLBACK_RATE")
+        row("TS 하락 감지율", "최고가 대비 최소 하락률 (ATR 동적 콜백의 하한)", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%", key="TRAILING_STOP_CALLBACK_RATE")
+        row("TS ATR 배수", "샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대", "SELL_STRATEGY['TRAILING_ATR_MULTIPLIER']", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}", key="TRAILING_ATR_MULTIPLIER")
 
         subheader("1-4. 매도/청산 — 손절")
         row("손절 수익률", "손실 제한 (Stop Loss)", "SELL_STRATEGY['STOP_LOSS_RATE']", f"{sell.get('STOP_LOSS_RATE')}%", key="STOP_LOSS_RATE")
@@ -537,7 +543,15 @@ def _entry_strategy_items():
         {"desc": "슈퍼 모멘텀 매수 RSI", "help": "발동 시 완화되는 진입 허용 RSI (예: 75.0)", "name": "SUPER_BUY_RSI_MAX", "type": "float", "section": "1-2. 서브전략 — 슈퍼 모멘텀",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_BUY_RSI_MAX": v})},
         {"desc": "슈퍼 모멘텀 과열 매도 RSI", "help": "추세 유지 시 매도 지연 RSI (예: 85.0)", "name": "SUPER_TAKE_PROFIT_RSI", "type": "float", "section": "1-2. 서브전략 — 슈퍼 모멘텀",
-         "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})}
+         "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})},
+        {"desc": "피라미딩(수익 증액) 사용", "help": "수익으로 추세 검증된 포지션만 증액 (물타기 반대)", "name": "PYRAMIDING_USE", "type": "bool", "choices": ["y", "n"], "section": "1-2. 서브전략 — 피라미딩",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_USE": v})},
+        {"desc": "증액 발동 수익률(%)", "help": "이 수익률 이상 & 매수신호 유지 시 증액 (예: 10.0)", "name": "PYRAMIDING_PROFIT_TRIGGER", "type": "float", "section": "1-2. 서브전략 — 피라미딩",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_PROFIT_TRIGGER": v})},
+        {"desc": "증액 비율", "help": "보유 수량 대비 증액 수량 비율 (예: 0.5 = 50%)", "name": "PYRAMIDING_RATIO", "type": "float", "section": "1-2. 서브전략 — 피라미딩",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_RATIO": v})},
+        {"desc": "최대 증액 횟수", "help": "포지션당 피라미딩 허용 횟수 (기본 1회)", "name": "PYRAMIDING_MAX_COUNT", "type": "int", "section": "1-2. 서브전략 — 피라미딩",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_MAX_COUNT": v})}
     ]
     # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목은 편집 목록에서 숨김(미사용 유지)
     #   수급 확인은 매도잔량비(BUY_ASK_BID_RATIO)로 수행하므로 해당 항목은 유지한다.
@@ -886,25 +900,25 @@ def modify_trading_cycle_settings():
 DEFAULT_PRESETS = {
     "bull": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 75.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 60.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 25, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 25, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.0,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
-        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
-        "TAKE_PROFIT_RATE": 20.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0,
+        "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "TRAILING_ATR_MULTIPLIER": 2.0,
         "TREND": 3.0, "MOMENTUM": 3.0, "STRENGTH": 2.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": False, "MARKET_FILTER_MA": 20
+        "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "sideways": {
-        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": True, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
-        "TAKE_PROFIT_RATE": 30.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 80.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0,
+        "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "TRAILING_ATR_MULTIPLIER": 2.5,
         "TREND": 3.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 50.0, "HALF_TAKE_PROFIT_USE": True, "DEFENSIVE_HALF_SELL_USE": True, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 85.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 4.0,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.2, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 60
     }
@@ -998,7 +1012,8 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "SELL_SCORE": vals.get("SELL_SCORE", 5.0),
         "TAKE_PROFIT_RSI": vals["TAKE_PROFIT_RSI"],
         "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
-        "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"]
+        "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"],
+        "TRAILING_ATR_MULTIPLIER": vals.get("TRAILING_ATR_MULTIPLIER", 3.0)
     })
     config.SCORING_WEIGHTS.pop("MOMENTUM_PRICE", None)  # 구버전 잔여 키 제거
     config.SCORING_WEIGHTS.update({

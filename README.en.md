@@ -65,6 +65,8 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 
 This system is based on a **Trend Following** strategy, catching high-probability entry points through multi-faceted technical analysis and executing strict risk management.
 
+> **Trend-Following Doctrine (Core Principles)**: ① Cut losses short, let profits run — there is no fixed take-profit ceiling; the **trailing stop (Chandelier Exit)** is the primary exit. ② Buy strength — buy candidates are prioritized by 52-week-high proximity and volume strength, and only positions validated by profit are **pyramided (scaled up)**. Averaging down into losers is structurally impossible. ③ The trend is the market — new buys are suspended when the index is below its reference moving average.
+
 > This section explains the **concepts** of the strategy. For the trigger thresholds (defaults) and parameter details of each condition, see **[3. Configuration](#3-configuration)**. (All values are configurable.)
 
 ### 1. Buy Strategy
@@ -72,31 +74,32 @@ Buying is executed when both the composite score calculated through the **Quant 
 
 *   **Entry Conditions (AND condition)**:
     1.  **Composite Score**: At or above the buy threshold (`BUY_SCORE`) — see [3. Scoring System](#3-scoring-system) below for how the score is built
-    2.  **Overheating Prevention**: RSI under the allowed ceiling (`BUY_RSI_MAX`) (zone with upside potential)
+    2.  **Overheating Prevention**: RSI under the allowed ceiling (`BUY_RSI_MAX`) (relaxed when Super Momentum triggers)
     3.  **Supply & Demand Check**: Volume strength at or above the threshold (`BUY_VOL_STRENGTH`) (buying pressure dominance)
     4.  **Market Filter**: KOSPI/KOSDAQ index located above the reference moving average (`MARKET_FILTER_MA`) (avoiding downtrends)
 
-*   **Downtrend Exclusive: Oversold Mean Reversion**:
-    *   A strategy aiming for a technical rebound in a temporary oversold (depressed) zone during a major downtrend or sudden drop due to individual bad news.
-    *   Even if the composite score is insufficient, it enters as a **'Mean Reversion Buy'** when all of the following hold: ① very low disparity vs. the 20-day MA, ② RSI turning upward after oversold plus a bullish close today, ③ OBV uptrend or Smart Money (foreign/institutional) inflow, and ④ high volume strength (during auto-trading).
-    *   *(Note: Entry is blocked regardless of the score in super-panic selling zones to prevent whipsaws (fake rebounds).)*
+*   **Buy Priority (Strength First)**: When multiple candidates pass the entry conditions, they are bought in order of **① composite score → ② 52-week-high proximity → ③ volume strength**.
 
 *   **Leading Stock Following: Super Momentum**:
     *   For leading stocks making strong rallies near 52-week highs, the standard overheating criteria (allowed buy/sell RSI) are relaxed to follow the market's strong trend to the end.
 
-### 2. Sell Strategy
-To preserve profits and limit losses, the following sell logic is monitored in real-time. (Applied in order of priority)
+*   **Pyramiding: Scaling into Winners**:
+    *   For held positions whose return is at or above the trigger (`PYRAMIDING_PROFIT_TRIGGER`, default +10%) with the buy signal (trend) still intact, the position is increased by a ratio of the held quantity (`PYRAMIDING_RATIO`, default 50%), limited to once per position by default.
+    *   The exact opposite of averaging down — **it never fires on losing positions.** The stop-loss rate for the added tranche is recalculated from the ATR at the time of scaling and feeds into the weighted-average stop.
 
-1.  **Take Profit**: Immediate profit realization when the return reaches the target.
-2.  **Half Take-Profit**: **50% of the holding amount is pre-sold** when reaching half the target take-profit return to secure early profits and defend the win rate.
-3.  **Stop Loss**: Immediate sell to lock in losses when the loss rate reaches the limit.
-4.  **Time-based Stop**: To reduce opportunity costs for sideways stocks, forcefully liquidate if the target minimum return is not reached within the set period. (Postponed if today's indicator state maintains a 'Buy' or 'Rise' trend.)
-5.  **Trailing Stop**: After the activation return is reached, sell to preserve profit if the price drops a set ratio (or an ATR-linked dynamic ratio) from the peak.
-6.  **Break Even Stop**: When the maximum return achieved reaches the trigger level, forcefully raise the existing stop-loss line to the break-even profit zone to secure minimal profit.
-7.  **Defensive Half Sell**: Take out 50% to preserve profits early when a downward reversal signal (SAR sell reversal + dropping below 5-day MA) occurs while the stock is rising.
-8.  **Overheating Sell**: Preemptive sell when RSI exceeds the overbought threshold.
-9.  **Trend Broken**: Sell if the composite score drops below the sell threshold or major support lines collapse.
-10. **ATR Dynamic Stop Loss**: A different stop loss rate is applied to each stock based on the volatility (ATR) at the time of purchase (`USE_ATR_STOP`).
+*   **Downtrend Exclusive: Oversold Mean Reversion** — **disabled by default**:
+    *   A strategy aiming for a technical rebound in oversold zones. As a counter-trend edge that conflicts with the trend-following doctrine, it is **disabled in the defaults and in every preset** for clean performance attribution. (Opt-in via `USE_MEAN_REVERSION`.)
+
+### 2. Sell Strategy
+Following the trend-following doctrine — **"cut losses fast, keep the upside open until the trend breaks"** — the exit conditions are monitored in the following priority order, with no fixed take-profit ceiling.
+
+1.  **Stop Loss**: Immediate sell when the loss rate reaches the limit. With `USE_ATR_STOP`, a dynamic stop based on the volatility (ATR) at purchase time is applied per stock.
+    *   **Break Even Stop**: When the maximum return achieved reaches the trigger level, the stop-loss line is automatically raised to the break-even profit zone (+0.5%) so a winner cannot turn into a loser.
+2.  **Time-based Stop**: Only stocks that are **still at a loss** after the set period and have lost upward momentum are liquidated. (Profitable positions are never sold on time; postponed while the uptrend holds.)
+3.  **Trailing Stop — Primary Exit (Chandelier Exit)**: After the activation return is reached, sell when the price drops from the peak by a dynamic callback based on the dedicated trailing ATR multiplier. Volatile leaders get a proportionally wider callback so the trend can be followed to the end, and in no case is more than 50% of the maximum gain given back.
+4.  **Trend Broken**: Full liquidation if the composite score drops below the sell threshold or the state is classified as 'Sell'.
+
+> **Disabled-by-default options (upside limiters)**: Fixed take profit (`TAKE_PROFIT_RATE=0`), half take-profit (`HALF_TAKE_PROFIT_USE=False`), RSI overheating sell (`TAKE_PROFIT_RSI=0`), and defensive half sell (`DEFENSIVE_HALF_SELL_USE=False`) cut off the fat tail of profits, so they are turned off in the defaults and in every preset. They can be re-enabled in settings.
 
 ### 3. Scoring System
 The composite score determining whether to buy is calculated based on the **Quant Multi-Factor Model**. (Total 10 points, 0.5 point increments)
@@ -154,30 +157,35 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Interest MA60 Proximity Ratio (`INTEREST_MA60_NEAR`)**: Default **0.97**. If the current price is at or above this ratio of the 60-day line (e.g., 97%), it counts as an 'MA60 breakout attempt' early signal even while still below the 60-day line.
 *   **Maximum Buy Allowed RSI (`BUY_RSI_MAX`)**: Default **70**. Even if the buy score is met, we do not enter if the RSI is above this value, considering it already overheated.
 *   **Buy Volume Strength (`BUY_VOL_STRENGTH`)**: Default **100.0%**. The volume strength at the time of purchase must be at least this value (buying pressure dominance).
-*   **Mean Reversion (`USE_MEAN_REVERSION`)**: Catches the point where indicators rebound after reaching oversold in a downtrend or sudden drop.
+*   **Mean Reversion (`USE_MEAN_REVERSION`)**: Catches the point where indicators rebound after reaching oversold in a downtrend or sudden drop. **(Disabled in defaults and all presets per the trend-following doctrine; opt-in.)**
     *   `MR_RSI_MAX`: Maximum allowed RSI for mean reversion entry (Default 40.0)
     *   `MR_DISPARITY_MAX`: Disparity limit compared to 20-day MA (Default 90.0% or less)
     *   `MR_VOL_STRENGTH`: High volume strength to confirm buying pressure at the bottom (Default 120.0%)
 *   **Super Momentum (`SUPER_MOMENTUM_USE`)**: Relaxes the buy/sell RSI thresholds for powerful leading stocks (new high rally) to follow the trend longer.
-    *   `SUPER_MOMENTUM_SCORE`: Minimum trigger composite score (Default 8.5 points)
+    *   `SUPER_MOMENTUM_SCORE`: Minimum trigger composite score (Default 8.0 points)
     *   `SUPER_MOMENTUM_W52_POS`: Minimum 52-week high position (Default 90.0% or higher)
-    *   `SUPER_BUY_RSI_MAX`: Maximum allowed buy RSI relaxed upon trigger (Default 75.0)
+    *   `SUPER_BUY_RSI_MAX`: Maximum allowed buy RSI relaxed upon trigger (Default 80.0)
+*   **Pyramiding (`PYRAMIDING_USE`)**: Scales up only held positions validated by profit. (The opposite of averaging down — never fires on losing positions.)
+    *   `PYRAMIDING_PROFIT_TRIGGER`: Minimum return to trigger scaling (Default +10.0%)
+    *   `PYRAMIDING_RATIO`: Added quantity as a ratio of the held quantity (Default 0.5 = 50%)
+    *   `PYRAMIDING_MAX_COUNT`: Maximum scale-ups per position (Default 1)
 
 ### 3. Sell Strategy (`SELL_STRATEGY`)
-*   **Take Profit**: Realize profit when the return reaches **+50.0%** (`TAKE_PROFIT_RATE`).
-*   **Half Take-Profit**: If `HALF_TAKE_PROFIT_USE` is True, 50% of the holdings are pre-sold when reaching half the target take-profit to secure early profit.
 *   **Stop Loss**: Confirm loss when the loss rate reaches **-7.0%** (`STOP_LOSS_RATE`).
-*   **Grace Period Stop Loss (`MR_GRACE_LOSS_RATE`)**: The maximum allowable loss rate during the grace period for stocks entered via mean reversion. (Default -7.0%)
-*   **Time-based Stop**: If `TIME_STOP_USE` is True, sell to secure opportunity cost if the target return (`TIME_STOP_MIN_PROFIT_RATE`, default 3.0%) is not met within the set days (`TIME_STOP_DAYS`, default 20 days) after purchase. (Postponed if uptrend is maintained)
-*   **Trailing Stop**:
-    *   **Trigger Condition**: Start monitoring upon reaching **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) return.
-    *   **Sell Condition**: Sell if it drops **-4.0%** (`TRAILING_STOP_CALLBACK_RATE`) from the peak. (If `USE_ATR_STOP` is True, dynamic drop rate based on ATR is applied.)
-*   **Break Even Stop**: When the highest return achieved reaches `BREAK_EVEN_PROFIT_RATE` (default 5.0%, dynamically linked when ATR is in use), raise the stop loss to `BREAK_EVEN_STOP_RATE` (default +0.5%) to defend profits.
-*   **Defensive Half Sell**: If `DEFENSIVE_HALF_SELL_USE` is True, sell 50% on a downward reversal signal (SAR Sell + 5MA breakdown).
-*   **Overheating Sell**: If RSI exceeds **85** (`TAKE_PROFIT_RSI`), it is considered an overbought zone, so a preemptive sell is executed.
-*   **Trend Broken Sell**: Sell if the composite score falls below **5 points** (`SELL_SCORE`).
-*   **ATR Stop Loss**: If `USE_ATR_STOP` is True, use ATR * `ATR_STOP_MULTIPLIER` at the time of purchase as the stop loss rate instead of a fixed rate.
+*   **ATR Stop Loss**: If `USE_ATR_STOP` is True (default), use ATR × `ATR_STOP_MULTIPLIER` (default 2.0) at the time of purchase as the stop loss rate instead of a fixed rate.
 *   **Max ATR Stop Loss Rate**: `MAX_ATR_STOP_LOSS_RATE` is a safety mechanism to prevent the stop loss width from becoming abnormally large due to data errors or excessive volatility. (Default -15.0%)
+*   **Break Even Stop**: When the highest return achieved reaches `BREAK_EVEN_PROFIT_RATE` (default 5.0%, dynamically linked when ATR is in use), raise the stop loss to `BREAK_EVEN_STOP_RATE` (default +0.5%) to defend profits.
+*   **Time-based Stop**: If `TIME_STOP_USE` is True, sell when — after the set days (`TIME_STOP_DAYS`, default 20 days) — the return is below `TIME_STOP_MIN_PROFIT_RATE` (default **0.0%**, i.e., only positions still at a loss) and upward momentum has been lost. (Postponed if uptrend is maintained)
+*   **Trailing Stop — Primary Exit (Chandelier Exit)**:
+    *   **Trigger Condition**: Start monitoring upon reaching **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) maximum return.
+    *   **Sell Condition**: Effective callback = clamp(`TRAILING_ATR_MULTIPLIER` (default 3.0) × ATR ÷ peak, minimum `TRAILING_STOP_CALLBACK_RATE` (default 5.0%), 50% of the maximum gain). Volatile leaders get a proportionally wider callback to follow the trend longer. (The trailing ATR multiplier is separate from the stop-loss `ATR_STOP_MULTIPLIER`.)
+*   **Trend Broken Sell**: Sell if the composite score falls below **5 points** (`SELL_SCORE`) or the state is classified as 'Sell'.
+*   **Grace Period Stop Loss (`MR_GRACE_LOSS_RATE`)**: The maximum allowable loss rate during the grace period for stocks entered via mean reversion. (Default -7.0%; irrelevant while mean reversion is disabled)
+*   **Disabled-by-default options (upside limiters — opt-in if needed)**:
+    *   **Take Profit**: `TAKE_PROFIT_RATE` = **0 (unused)**. If set, full liquidation at that return.
+    *   **Half Take-Profit**: `HALF_TAKE_PROFIT_USE` = **False**. If enabled, 50% is pre-sold at half the take-profit target.
+    *   **Overheating Sell**: `TAKE_PROFIT_RSI` = **0 (unused)**. If set, preemptive sell when RSI exceeds it. (`SUPER_TAKE_PROFIT_RSI` applies under Super Momentum.)
+    *   **Defensive Half Sell**: `DEFENSIVE_HALF_SELL_USE` = **False**. If enabled, sell 50% on a downward reversal signal (SAR Sell + 5MA breakdown).
 
 ### 4. Risk Management & Filtering
 *   **Slippage Adjustment**:

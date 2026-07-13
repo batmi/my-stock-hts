@@ -186,7 +186,7 @@ class GlobalSettings(BaseModel):
         # [RSI 과열 기준]
         # 매수 점수를 충족하더라도, RSI가 이 값 이상이면 '과열'로 판단하여 매수 추천에서 제외합니다.
         # (기본값: 70 - 추세추종 기조상 강한 추세는 RSI가 오래 과매수에 머무르므로 65→70으로 완화.
-        #  과도한 고점매수는 슈퍼모멘텀 게이팅[SUPER_BUY_RSI_MAX 75]과 추세악화 감점으로 별도 방어)
+        #  과도한 고점매수는 슈퍼모멘텀 게이팅[SUPER_BUY_RSI_MAX 80]과 추세악화 감점으로 별도 방어)
         "BUY_RSI_MAX": 70,
         
         # [체결강도 기준]
@@ -220,10 +220,19 @@ class GlobalSettings(BaseModel):
 
         # [추가] 슈퍼 모멘텀 (RSI 유연화) 설정
         # 강력한 주도주(신고가 랠리)의 경우 매수 및 매도 RSI 허용치를 완화하여 추세를 길게 추종합니다.
+        # ('강한 종목을 매수하라' 원칙: 강도가 검증된 주도주에만 선별적으로 추격 진입을 허용)
         "SUPER_MOMENTUM_USE": True,       # 슈퍼 모멘텀 전략 사용 여부
-        "SUPER_MOMENTUM_SCORE": 8.5,      # 발동 조건: 종합 점수 8.5점 이상 (및 52주 고점 90% 이상)
+        "SUPER_MOMENTUM_SCORE": 8.0,      # 발동 조건: 종합 점수 8.0점 이상 (및 52주 고점 90% 이상) (8.5→8.0 완화)
         "SUPER_MOMENTUM_W52_POS": 90.0,   # 발동 조건: 52주 고점 위치 90% 이상
-        "SUPER_BUY_RSI_MAX": 75.0         # 발동 시 완화되는 매수 진입 최고 RSI (기본 65 -> 75)
+        "SUPER_BUY_RSI_MAX": 80.0,        # 발동 시 완화되는 매수 진입 최고 RSI (75→80 확대)
+
+        # [추가] 피라미딩 (수익 포지션 증액) 설정
+        # 추세추종 기조: 수익이 나서 추세가 검증된 포지션에만 증액합니다. (물타기의 정반대)
+        # 발동 조건: 수익률이 트리거 이상 + 상태가 '매수/강매수'(추세 유지) + 잔여 증액 횟수 존재
+        "PYRAMIDING_USE": True,           # 피라미딩 사용 여부
+        "PYRAMIDING_PROFIT_TRIGGER": 10.0,  # 증액 발동 최소 수익률 (%) - TS 감시 시작(+10%)과 동일선
+        "PYRAMIDING_RATIO": 0.5,          # 증액 수량 비율 (현재 보유 수량 대비, 0.5 = 50%)
+        "PYRAMIDING_MAX_COUNT": 1         # 포지션당 최대 증액 횟수 (피라미드 구조 유지를 위해 기본 1회)
     }
 
     # ==========================================================
@@ -257,11 +266,12 @@ class GlobalSettings(BaseModel):
     # [설정] 매도 전략 임계값 (Backtest & Trading)
     # ==========================================================
     SELL_STRATEGY: dict = {
-        # [추세추종 기조] 청산의 주(主) 수단은 '트레일링 스탑'입니다. 고정 익절은 추세추종에서
-        # 수익의 fat-tail(드물게 나오는 +100%~ 종목)을 잘라내므로, 보조적 상한선 역할로만 둡니다.
-        "TAKE_PROFIT_RATE": 50.0,           # [익절 기준] 진입가 대비 이 값 이상 도달 시 즉시 매도 (상한선 역할로 상향, 0이면 미사용)
-        "HALF_TAKE_PROFIT_USE": True,       # [반익절] 목표 익절률의 절반(=25%)에 도달하면 50% 분할 매도 여부
-        "DEFENSIVE_HALF_SELL_USE": True,    # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현
+        # [추세추종 기조] 청산의 주(主) 수단은 '트레일링 스탑'입니다. 고정 익절/반익절/RSI 과열 익절/
+        # 방어적 반매도는 수익의 fat-tail(드물게 나오는 +100%~ 종목)을 잘라내 상방을 막으므로
+        # 기본 비활성화합니다. (수익보존 Profit Lock-in도 익절/반익절에 종속되어 함께 비활성화됨)
+        "TAKE_PROFIT_RATE": 0.0,            # [익절 기준] 진입가 대비 이 값 이상 도달 시 즉시 매도 (0이면 미사용 - 추세추종 기조 기본 OFF)
+        "HALF_TAKE_PROFIT_USE": False,      # [반익절] 목표 익절률의 절반에 도달하면 50% 분할 매도 여부 (기본 OFF)
+        "DEFENSIVE_HALF_SELL_USE": False,   # [방어적 반매도] 하락 반전(SAR 매도 + 5일선 이탈) 시 50% 수익실현 (기본 OFF)
         "STOP_LOSS_RATE": -7.0,             # [손절 기준] 진입가 대비 이 값 이하로 하락 시 즉시 매도
         "USE_ATR_STOP": True,               # ATR 기반 동적 손절 사용 여부
         "ATR_STOP_MULTIPLIER": 2.0,         # ATR 기반 손절 적용 배수
@@ -270,13 +280,17 @@ class GlobalSettings(BaseModel):
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
         "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
         "TIME_STOP_DAYS": 20,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 10→20 완화)
-        "TIME_STOP_MIN_PROFIT_RATE": 3.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%)
+        "TIME_STOP_MIN_PROFIT_RATE": 0.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%) - 0이면 손실 정체 종목만 청산 ('수익 종목은 보유' 원칙, 3.0→0.0)
         "MR_GRACE_LOSS_RATE": -7.0,         # 역매수로 진입 시 유예기간 중 최대 허용 손실률
         "SELL_SCORE": 5.0,                  # [추세 이탈 매도] 종합 점수가 이 값 미만으로 떨어지면 매도
-        "TAKE_PROFIT_RSI": 85.0,            # 과열 매도 기준 RSI
-        "SUPER_TAKE_PROFIT_RSI": 90.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI (추세 장기 추종)
+        "TAKE_PROFIT_RSI": 0.0,             # 과열 매도 기준 RSI (0이면 미사용 - 강한 추세는 RSI가 오래 과매수에 머무르므로 기본 OFF)
+        "SUPER_TAKE_PROFIT_RSI": 90.0,      # 슈퍼 모멘텀 상태 시 상향 적용되는 매도 기준 RSI (TAKE_PROFIT_RSI 사용 시에만 유효)
         "TRAILING_STOP_ACTIVATION_RATE": 10.0, # [트레일링 스탑] 감시 시작 수익률 (주청산 수단으로 일찍 활성화: 15→10)
-        "TRAILING_STOP_CALLBACK_RATE": 4.0     # [트레일링 스탑] 최고가 대비 이탈률(매도 조건)
+        "TRAILING_STOP_CALLBACK_RATE": 5.0,    # [트레일링 스탑] 최고가 대비 최소 이탈률(매도 조건). ATR 동적 콜백의 하한
+        # [샹들리에 엑시트] TS 전용 ATR 배수. 손절용 ATR_STOP_MULTIPLIER(2.0)와 분리하여,
+        # 급등주는 변동성(ATR)에 비례해 콜백이 자동으로 넓어져 추세를 끝까지 추종한다.
+        # 실효 콜백 = clamp(TRAILING_ATR_MULTIPLIER×ATR/고점, 최소 CALLBACK_RATE, 최대수익의 50%)
+        "TRAILING_ATR_MULTIPLIER": 3.0
     }
 
     # ==========================================================

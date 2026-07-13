@@ -58,20 +58,21 @@ def test_simulate_strategy(mock_calc_status, sample_df):
         (0.0, 0.0, False, "매도", "추세이탈") # 5일차: 매도 신호
     ]
     
-    # 설정 초기화 방어
-    config.SELL_STRATEGY["STOP_LOSS_RATE"] = -10.0
-    config.SELL_STRATEGY["TAKE_PROFIT_RATE"] = 10.0
-    config.SELL_STRATEGY["TAKE_PROFIT_RSI"] = 80.0
-    config.SELL_STRATEGY["SELL_SCORE"] = 4.0
-    
-    res = backtest.simulate_strategy(
-        sim_df=sample_df,
-        prev_row_init=None,
-        initial_capital=1000000,
-        buy_score_limit=8.0,
-        buy_rsi_limit=70.0,
-        is_overseas=False
-    )
+    # 설정 초기화 방어 (patch.dict로 테스트 종료 시 원복하여 타 테스트 오염 방지)
+    with patch.dict(config.SELL_STRATEGY, {
+        "STOP_LOSS_RATE": -10.0,
+        "TAKE_PROFIT_RATE": 10.0,
+        "TAKE_PROFIT_RSI": 80.0,
+        "SELL_SCORE": 4.0,
+    }):
+        res = backtest.simulate_strategy(
+            sim_df=sample_df,
+            prev_row_init=None,
+            initial_capital=1000000,
+            buy_score_limit=8.0,
+            buy_rsi_limit=70.0,
+            is_overseas=False
+        )
     
     assert res is not None
     assert "trades" in res

@@ -136,8 +136,33 @@ class DefaultStrategy:
             'ask_bid_ratio': ask_bid_ratio,
             'min_ask_bid_ratio': min_ask_bid_ratio,  # [추가] 재진입 허들 등에서 재사용
             'vol_reject_reason': vol_reject_reason,
-            'smart_money': sm_flag
+            'smart_money': sm_flag,
+            'w52_pos': w52_pos  # [추세추종] 매수 후보 우선순위(강한 종목 우선) 정렬용 52주 위치
         }
+
+    def analyze_pyramid(self, profit_rate, state, score, pyramid_count, thresholds=None):
+        """[추세추종] 수익 포지션 증액(피라미딩) 여부 판단
+
+        물타기의 정반대: 수익으로 추세가 검증된 포지션에만, 추세가 유지되는 동안 증액한다.
+        반환: (증액 여부, 사유 문자열)
+        """
+        at = config.ANALYSIS_THRESHOLDS
+        use = thresholds.get("PYRAMIDING_USE", at.get("PYRAMIDING_USE", False)) if thresholds else at.get("PYRAMIDING_USE", False)
+        if not use:
+            return False, ""
+
+        trigger = thresholds.get("PYRAMIDING_PROFIT_TRIGGER", at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)) if thresholds else at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
+        max_count = thresholds.get("PYRAMIDING_MAX_COUNT", at.get("PYRAMIDING_MAX_COUNT", 1)) if thresholds else at.get("PYRAMIDING_MAX_COUNT", 1)
+
+        if pyramid_count >= max_count:
+            return False, ""
+        if profit_rate < trigger:
+            return False, ""
+        # 추세 유지 확인: 신규 진입과 동일한 '매수' 신호가 살아있어야 증액
+        if state not in ("매수", "강매수"):
+            return False, ""
+
+        return True, f"피라미딩 {pyramid_count + 1}차 (수익률:+{profit_rate:.1f}%, 점수:{score}, 상태:{state})"
 
     def analyze_sell(self, code, name, df, current_price, buy_price, profit_rate, thresholds=None, already_half_sold=False, holding_days=0, is_mr_holding=False, highest_price=0.0):
         """매도 청산 여부 판단"""
@@ -169,9 +194,10 @@ class DefaultStrategy:
         
         # [추가] 본전 청산(BEP) 및 ATR 기반 트레일링 설정 로드
         use_atr_stop = thresholds.get("USE_ATR_STOP", config.SELL_STRATEGY.get("USE_ATR_STOP", True)) if thresholds else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
-        atr_mult = thresholds.get("ATR_STOP_MULTIPLIER", config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)) if thresholds else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         ts_activation = thresholds.get("ts_activation", config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
         ts_callback = thresholds.get("ts_callback", config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+        # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
+        ts_atr_mult = thresholds.get("TRAILING_ATR_MULTIPLIER", config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
         
         bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
         bep_stop = thresholds.get("BREAK_EVEN_STOP_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
@@ -224,7 +250,7 @@ class DefaultStrategy:
                 
                 atr_val = ind.get('atr', 0) if ind else 0
                 if use_atr_stop and atr_val > 0:
-                    dynamic_callback = (atr_val * atr_mult / highest_price) * 100
+                    dynamic_callback = (atr_val * ts_atr_mult / highest_price) * 100
                     
                     # [리스크 관리 방어 로직 추가]
                     # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
@@ -287,8 +313,8 @@ class DefaultStrategy:
                 actual_tp_rsi = super_tp_rsi
                 is_super = True
                 
-            # 4. RSI 과열 익절
-            if not reason and ind.get('rsi') is not None and ind['rsi'] > actual_tp_rsi:
+            # 4. RSI 과열 익절 (TAKE_PROFIT_RSI가 0이면 미사용 - 추세추종 기조)
+            if not reason and tp_rsi > 0 and ind.get('rsi') is not None and ind['rsi'] > actual_tp_rsi:
                 if is_super:
                     reason = f"RSI과열(슈퍼모멘텀, 기준:{actual_tp_rsi})"
                 else:

@@ -307,8 +307,11 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     sl_rate = rule['stop_loss']
                     tp_rate = rule['take_profit']
                 
-                target_price = buy_price * (1 + tp_rate / 100)
-                target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:.0f}%)[/dim]"
+                if tp_rate > 0:
+                    target_price = buy_price * (1 + tp_rate / 100)
+                    target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:.0f}%)[/dim]"
+                else:
+                    target_str = "[dim]미사용(TS)[/dim]"
                 
                 fixed_stop_price = buy_price * (1 + sl_rate / 100)
                 stop_str_list = [f"[dim]고정:[/dim][blue]{int(fixed_stop_price):,}[/][dim]({sl_rate:.0f}%)[/dim]"]
@@ -432,8 +435,11 @@ def _display_balance_details(cano, acnt_prdt_cd):
                     sl_rate = rule['stop_loss']
                     tp_rate = rule['take_profit']
                 
-                target_price = pchs_avg * (1 + tp_rate / 100)
-                target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:.0f}%)[/dim]"
+                if tp_rate > 0:
+                    target_price = pchs_avg * (1 + tp_rate / 100)
+                    target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:.0f}%)[/dim]"
+                else:
+                    target_str = "[dim]미사용(TS)[/dim]"
                 
                 fixed_stop_price = pchs_avg * (1 + sl_rate / 100)
                 stop_str_list = [f"[dim]고정:[/dim][blue]${fixed_stop_price:,.2f}[/][dim]({sl_rate:.0f}%)[/dim]"]

@@ -3295,6 +3295,9 @@ class AutoTrader:
                     try:
                         item['hldg_qty'] = str(max(0, int(item.get('hldg_qty', 0)) - target_sell_qty))
                     except Exception: pass
+            else:
+                # [추세추종] 보유 판정 시 피라미딩(수익 포지션 증액) 평가
+                self._try_pyramid_buy(code, name, qty, current_price, profit_rate, result, last_buy, is_market_open)
 
         # 병렬 처리 실행
         # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
@@ -3303,6 +3306,76 @@ class AutoTrader:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
+
+    def _try_pyramid_buy(self, code, name, held_qty, current_price, profit_rate, result, last_buy, is_market_open):
+        """[추세추종] 수익 포지션 증액(피라미딩) 시도
+
+        보유분석에서 '보유' 판정된 종목에 대해, 수익으로 추세가 검증되었고(수익률 트리거 이상)
+        매수 신호가 유지 중이면 보유 수량의 일정 비율만큼 1회 한정(기본) 증액한다.
+        물타기(손실 추가매수)와 정반대로, 손실 종목에는 절대 발동하지 않는다.
+        """
+        try:
+            # 국내 종목만 지원 (시스템 트레이딩 매수 경로와 동일 범위)
+            if not (len(code) == 6 and code[0].isdigit() and code.isalnum()):
+                return
+
+            # 증액 횟수 판별: 최근 매수 사유의 '피라미딩 N차' 마커 (DB 기록이라 재시작에도 유지)
+            pyramid_count = 0
+            if last_buy:
+                m = re.search(r'피라미딩\s*(\d+)차', str(last_buy.get('reason', '')))
+                if m:
+                    pyramid_count = int(m.group(1))
+
+            ok, reason = self.strategy.analyze_pyramid(profit_rate, result['state'], result['score'], pyramid_count)
+            if not ok:
+                return
+
+            if not is_market_open:
+                self.log(f"[장마감] 피라미딩 신호 감지 (주문 미전송): {name} - {reason}")
+                return
+            if self.order_manager.is_pending(code):
+                return
+
+            ratio = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5)
+            add_qty = int(held_qty * ratio)
+            if add_qty < 1:
+                return
+
+            raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
+            order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+            if order_price <= 0:
+                order_price = int(current_price)
+
+            max_qty = api.fetch_buyable_quantity(code, order_price)
+            if max_qty < add_qty:
+                if max_qty < 1:
+                    self.log(f"피라미딩 보류: {name} - 예수금 부족 (필요:{add_qty}주)")
+                    return
+                add_qty = max_qty
+
+            # 증액분 손절률: 신규 매수와 동일하게 현재 ATR 기준으로 계산 (가중평균 손절선에 자동 반영)
+            sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+            ind = result.get('ind') or {}
+            atr_val = ind.get('atr', 0) or 0
+            if config.SELL_STRATEGY.get("USE_ATR_STOP", False) and atr_val > 0 and current_price > 0:
+                atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+                sl_rate = -((atr_val * atr_mult / current_price) * 100)
+                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+                if max_atr_sl != 0 and sl_rate < max_atr_sl:
+                    sl_rate = max_atr_sl
+
+            self.log(f"피라미딩 실행: {name} +{add_qty}주 - {reason}")
+            odno = self.order_manager.send_order(code, add_qty, "buy", name=name, reason=reason, score=result['score'], price=order_price, stop_loss_rate=sl_rate)
+            if odno:
+                record = {
+                    "type": "buy", "code": code, "name": name, "qty": add_qty,
+                    "price": order_price, "reason": reason,
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "odno": odno,
+                    "stop_loss_rate": sl_rate
+                }
+                self.trade_records.append(record)
+        except Exception as e:
+            self.log(f"[피라미딩 오류] {name}: {e}")
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합 (그룹 정보 추가)
@@ -3628,6 +3701,7 @@ class AutoTrader:
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
+                    'w52_pos': result.get('w52_pos', 0.0),  # [추세추종] 52주 위치 (우선순위 정렬용)
                     'ask_bid_ratio': result.get('ask_bid_ratio'),  # [추가] 토스 수급 지표(체결강도 대체)
                     'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state'],
                     'state_reason': result.get('state_reason', ''),
@@ -3748,17 +3822,18 @@ class AutoTrader:
         if correlation_skipped_stocks:
             self.log(f"[상관관계 보류] 보유 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
 
-        # [수정] 우선순위 정렬 (1. 점수 높은 순, 2. RSI 낮은 순)
-        # 점수가 같다면 RSI가 낮을수록 상승 여력이 있다고 판단하여 우선순위를 둡니다.
-        candidates.sort(key=lambda x: (-x['score'], x['rsi'] if x['rsi'] is not None else 999.0))
-        
+        # [추세추종] 우선순위 정렬 (1. 점수 높은 순, 2. 52주 고점 근접도 높은 순, 3. 체결강도 높은 순)
+        # '강한 종목을 매수하라' 원칙에 따라 동점이면 구조적 강도(52주 위치)와 당일 수급 강도가
+        # 높은 종목을 우선합니다. (기존 'RSI 낮은 순'은 역추세적 가정이라 제거)
+        candidates.sort(key=lambda x: (-x['score'], -(x.get('w52_pos') or 0.0), -(x.get('vol_strength') or 0.0)))
+
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
             self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순):")
             for i, c in enumerate(candidates):
-                rsi_disp = f"{c['rsi']:.1f}" if c['rsi'] is not None else "-"
+                w52_disp = f"{c['w52_pos']:.0f}%" if c.get('w52_pos') else "-"
                 vol_disp = f"{c['vol_strength']:.1f}%" if c.get('vol_strength') else "-"
-                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, RSI:{rsi_disp}, 체결:{vol_disp})")
+                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, 52주위치:{w52_disp}, 체결:{vol_disp})")
         
         return candidates
 
