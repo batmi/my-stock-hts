@@ -914,6 +914,16 @@ def main():
         sys.exit(1)
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
+    # [안내] mode 3(토스): 등락률 기준가 정책 고지.
+    #  토스 Open API는 전일 KRX 정규장 종가/등락률을 제공하지 않는다. 과거의 상·하한가 역산·
+    #  yfinance 추정은 불안정(이른 아침 지연·오염)해 폐기했고, 등락률은 토스 네이티브 값끼리
+    #  (현재 NXT 체결가 vs 전일 NXT 종가)로 계산한다 → KRX 기준 HTS 등락률과 소폭 다를 수 있다.
+    if config.session.is_toss:
+        config.console.print(
+            "[yellow]※ [토스증권] 등락률 안내:[/yellow] 토스는 전일 KRX 정규장 종가를 제공하지 않아, "
+            "[bold]등락률을 '전일 NXT(대체거래소) 종가' 기준[/bold]으로 계산합니다.\n"
+            "[dim]   → 연장시간 체결 차이로 KRX 기준(증권사 HTS) 등락률과 소폭 다를 수 있습니다.[/dim]\n")
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),

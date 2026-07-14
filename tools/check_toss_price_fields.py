@@ -66,7 +66,7 @@ def dump_toss(code):
         console.print(f"[red]get_current_price_data 오류: {e}[/red]\n")
 
     try:
-        console.print(f"[bold cyan]api._toss_base_price(code) (역산 기준가)[/bold cyan] = "
+        console.print(f"[bold cyan]api._toss_base_price(code) (기준가=전일 NXT 종가=일봉 직전 캔들 종가)[/bold cyan] = "
                       f"{api._toss_base_price(code)}\n")
     except Exception as e:
         console.print(f"[red]_toss_base_price 오류: {e}[/red]\n")
@@ -167,7 +167,8 @@ def main():
             dump_kis(code)
 
     if config.session.is_toss:
-        console.print("[dim]※ TOSS 응답에 전일 정규장 종가/등락률 필드가 없으므로 역산/저장/yfinance로 기준가를 확보한다.[/dim]")
+        console.print("[dim]※ TOSS 응답에 전일 KRX 정규장 종가/등락률 필드가 없다. 역산/스토어/yfinance는 "
+                      "불안정(이른 아침 지연·오염)해 폐기했고, 이제 등락률 기준가=전일 NXT 종가(일봉 직전 캔들 종가)다.[/dim]")
     else:
         console.print("[dim]※ KIS: '현재가 stale + 강도 갱신' 종목은 KRX(J)/NXT(NX) 현재가 원본과 fetch_nxt_price를 "
                       "대조하라. NXT(NX) 원본 stck_prpr는 살아있는데 fetch_nxt_price=0 이거나, 멀티시세 stck_prpr가 "
