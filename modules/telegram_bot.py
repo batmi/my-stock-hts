@@ -2107,9 +2107,15 @@ class TelegramCommander:
         status_text = "실행 중" if self.trader.is_running else "중지됨"
         
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acc_label = "모의" if config.session.is_simulation else "실전"
-        if not config.session.is_simulation and config.session.auto_cano:
+        # [수정] 토스/모의는 단일계좌(시스템 트레이딩 계좌 = 기본 계좌). is_toss를 먼저 분기.
+        if config.session.is_toss:
+            acc_label = "토스"
+        elif config.session.is_simulation:
+            acc_label = "모의"
+        elif config.session.auto_cano:
             acc_label = "자동"
+        else:
+            acc_label = "실전"
 
         msg = f"{status_icon} [시스템 상태: {status_text}]\n"
         msg += f"• 운용 계좌: {target_cano} ({acc_label})\n\n"

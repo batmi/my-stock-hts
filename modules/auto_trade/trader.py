@@ -2390,7 +2390,14 @@ class AutoTrader:
                     
                     # [추가] 현재 운용 계좌 정보 로깅
                     if target_cano and is_log_needed:
-                        acc_type = "모의투자" if config.session.is_simulation else "한투증권(자동)"
+                        # [수정] 토스/모의는 단일계좌라 시스템 트레이딩 계좌 = 기본 계좌.
+                        #        is_simulation만 보면 토스가 '한투증권(자동)'으로 오표시되므로 is_toss도 분기.
+                        if config.session.is_toss:
+                            acc_type = "토스증권"
+                        elif config.session.is_simulation:
+                            acc_type = "모의투자"
+                        else:
+                            acc_type = "한투증권(자동)"
                         self.log(f"운용 계좌: {target_cano} [{acc_type}]")
                     
                     
