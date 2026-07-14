@@ -252,48 +252,111 @@ def _inject_daily_chart(code, rows):
     import pandas as pd
     from datetime import datetime as _dt
     df = pd.DataFrame(rows)
-    api._CHART_CACHE[f"{code}_False_False"] = {
+    api._CHART_CACHE[api._chart_cache_key(code, False, False)] = {
         'df': df, 'timestamp': _dt.now(), 'date': _dt.now().strftime('%Y-%m-%d')}
+
+
+def _pop_daily_chart(code):
+    import api
+    api._CHART_CACHE.pop(api._chart_cache_key(code, False, False), None)
 
 
 # 과거 거래일 일봉(항상 오늘보다 과거) → ref_date = 마지막 캔들일(20260713)
 PAST_CHART = [{'date': '20260710', 'close': 999.0}, {'date': '20260713', 'close': 285000.0}]
 
 
-def test_toss_base_price_uses_prev_nxt_candle_close():
-    """등락률 기준가 = 전일 NXT 종가 = 일봉 직전 거래일 캔들 종가(역산·yfinance·스토어 전량 폐기)."""
+def _reset_krx_store(entries=None):
+    """KRX 마감가 저장소를 테스트용으로 초기화(디스크 재로드 차단)."""
     import api
+    api._toss_krx_close_store = entries if entries is not None else {}
+
+
+def test_toss_base_price_falls_back_to_prev_nxt_candle():
+    """[폴백] 저장된 KRX 마감가가 없으면 전일 NXT 종가(일봉 직전 캔들)로 계산한다(역산·yfinance 없음)."""
+    import api
+    _reset_krx_store({})  # 저장분 없음
     _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → 그 종가
     try:
-        # price-limit(역산)·yfinance·스토어는 더 이상 참조하지 않는다(네트워크 없이 캔들만으로 결정).
         with patch("toss_api.get_price_limit") as m_pl:
-            assert api._toss_base_price("TSTA") == 285000.0
-            m_pl.assert_not_called()
+            assert api._toss_base_price("TSTA") == 285000.0  # NXT 캔들 종가
+            m_pl.assert_not_called()  # 역산 없음
     finally:
-        api._CHART_CACHE.pop("TSTA_False_False", None)
+        _pop_daily_chart("TSTA")
+
+
+def test_toss_base_price_uses_stored_krx_close_first():
+    """[우선순위 1] ref_date에 저장된 KRX 정규장 마감가가 있으면 NXT 폴백보다 그 값을 쓴다(HTS 일치)."""
+    import api
+    _reset_krx_store({"TSTB": {"20260713": 284000.0}})  # 캡처된 KRX 마감가
+    _inject_daily_chart("TSTB", PAST_CHART)  # ref_date=20260713, NXT 캔들=285000
+    try:
+        assert api._toss_base_price("TSTB") == 284000.0  # 저장분 우선(285000 NXT 아님)
+    finally:
+        _pop_daily_chart("TSTB")
 
 
 def test_toss_base_price_ref_date_is_prev_when_today_candle_exists():
-    """일봉 마지막 캔들이 '오늘'이면(마감 후 오늘 봉 형성) 직전 캔들 종가가 전일 기준가다."""
+    """일봉 마지막 캔들이 '오늘'이면(마감 후 오늘 봉 형성) 직전 캔들 종가가 전일 기준가다(폴백)."""
     import api
     from datetime import datetime as _dt
+    _reset_krx_store({})
     today = _dt.now().strftime('%Y%m%d')
-    _inject_daily_chart("TSTB", [{'date': '20260713', 'close': 285000.0},
+    _inject_daily_chart("TSTC", [{'date': '20260713', 'close': 285000.0},
                                  {'date': today, 'close': 262500.0}])
     try:
-        assert api._toss_base_price("TSTB") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
+        assert api._toss_base_price("TSTC") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
     finally:
-        api._CHART_CACHE.pop("TSTB_False_False", None)
+        _pop_daily_chart("TSTC")
 
 
 def test_toss_base_price_none_when_insufficient_candles():
     """캔들이 2개 미만이면 기준가를 만들지 않는다(등락률 필드 생략)."""
     import api
-    _inject_daily_chart("TSTC", [{'date': '20260713', 'close': 285000.0}])
+    _reset_krx_store({})
+    _inject_daily_chart("TSTD", [{'date': '20260713', 'close': 285000.0}])
     try:
-        assert api._toss_base_price("TSTC") is None
+        assert api._toss_base_price("TSTD") is None
     finally:
-        api._CHART_CACHE.pop("TSTC_False_False", None)
+        _pop_daily_chart("TSTD")
+
+
+def test_toss_capture_krx_close_stores_1530_bar_once(tmp_path):
+    """마감 후 정규장 분봉의 마지막(15:30) 봉 종가를 오늘 KRX 마감가로 1회 저장(재조회 안 함)."""
+    import api
+    import pandas as pd
+    from datetime import datetime as _dt
+    _reset_krx_store({})
+    today = _dt.now().strftime('%Y%m%d')
+    now = _dt.now()
+    intraday = pd.DataFrame([  # _toss_chart_data 분봉(정규장 필터) 결과 형태
+        {'date': now.replace(hour=15, minute=29), 'open': 0, 'high': 0, 'low': 0, 'close': 283000.0, 'volume': 0},
+        {'date': now.replace(hour=15, minute=30), 'open': 0, 'high': 0, 'low': 0, 'close': 284000.0, 'volume': 0},
+    ])
+    config.session.is_toss = True
+    try:
+        with patch.object(api, "_toss_after_krx_close", return_value=True), \
+             patch.object(api, "_toss_krx_close_path", return_value=str(tmp_path / "krx.json")), \
+             patch.object(api, "_toss_chart_data", return_value=intraday) as m_chart:
+            api._toss_capture_krx_close("TSTE")
+            assert api._toss_krx_close_get("TSTE", today) == 284000.0  # 15:30 봉 종가
+            api._toss_capture_krx_close("TSTE")  # 이미 저장됨 → 분봉 재조회 없음
+            assert m_chart.call_count == 1
+    finally:
+        config.session.is_toss = False
+
+
+def test_toss_capture_krx_close_skips_before_close():
+    """마감(15:35) 전에는 캡처하지 않는다(장중 분봉 마지막≠KRX 마감가)."""
+    import api
+    _reset_krx_store({})
+    config.session.is_toss = True
+    try:
+        with patch.object(api, "_toss_after_krx_close", return_value=False), \
+             patch.object(api, "_toss_chart_data") as m_chart:
+            api._toss_capture_krx_close("TSTF")
+            m_chart.assert_not_called()
+    finally:
+        config.session.is_toss = False
 
 
 def test_chart_data_adapter_daily_keeps_nxt_close():
@@ -524,17 +587,19 @@ def test_chart_data_adapter_intraday_date_is_timestamp():
 def test_current_price_data_adapter():
     import api
     config.session.is_toss = True
+    _reset_krx_store({})  # 저장된 KRX 마감가 없음 → NXT 폴백 경로
     # 전일 NXT 종가(=일봉 직전 캔들 종가) 71600 → 등락률 기준가
     _inject_daily_chart("005930", [{'date': '20260710', 'close': 71000.0},
                                    {'date': '20260713', 'close': 71600.0}])
     try:
         with patch("toss_api.get_price",
-                   return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}):
+                   return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
+             patch.object(api, "_toss_capture_krx_close"):  # 마감가 캡처(분봉 조회) 격리
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:
         config.session.is_toss = False
-        api._CHART_CACHE.pop("005930_False_False", None)
+        _pop_daily_chart("005930")
     assert res['rt_cd'] == '0'
     assert res['output']['stck_prpr'] == '72000'
     assert price == 72000

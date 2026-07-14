@@ -66,10 +66,39 @@ def dump_toss(code):
         console.print(f"[red]get_current_price_data 오류: {e}[/red]\n")
 
     try:
-        console.print(f"[bold cyan]api._toss_base_price(code) (기준가=전일 NXT 종가=일봉 직전 캔들 종가)[/bold cyan] = "
+        console.print(f"[bold cyan]api._toss_base_price(code) (기준가: 저장 KRX마감가 우선, 없으면 전일 NXT 종가)[/bold cyan] = "
                       f"{api._toss_base_price(code)}\n")
     except Exception as e:
         console.print(f"[red]_toss_base_price 오류: {e}[/red]\n")
+
+    # 3) 기준가 소스 대조: ①저장된 KRX 정규장 마감가(마감 후 15:30 분봉으로 캡처) 우선,
+    #    ②없으면 일봉 직전 캔들 종가(NXT)로 폴백. 일봉 꼬리와 시계도 함께 확인.
+    from datetime import datetime as _dt
+    try:
+        now = _dt.now()
+        mtoday = api.market_today(False)
+        console.print(f"[bold cyan]시계·기준일[/bold cyan] now={now:%Y-%m-%d %H:%M:%S} "
+                      f"(요일={now:%a})  market_today(False)={mtoday}  "
+                      f"마감후캡처가능(_toss_after_krx_close)={api._toss_after_krx_close()}")
+        df = api._toss_cached_daily_chart(code)
+        if df is None or len(df) == 0:
+            console.print("[red]  일봉 캐시 없음 → 기준가 산출 불가[/red]")
+        else:
+            tail = df.tail(6)
+            console.print(f"  일봉 꼬리(최근 6봉, 총 {len(df)}봉): "
+                          + ", ".join(f"{str(r['date'])[:10]}={int(api._toss_float(r['close']))}"
+                                      for _, r in tail.iterrows()))
+            last_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
+            prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
+            today = now.strftime('%Y%m%d')
+            ref_date = last_date if last_date < today else prev_date
+            stored = api._toss_krx_close_get(code, ref_date)
+            console.print(f"  ref_date={ref_date}  저장된 KRX마감가={stored} "
+                          f"{'→ 이 값 사용(HTS 일치)' if stored else '→ 미저장, NXT 종가 폴백'}")
+            console.print("[dim]  ※ 저장분은 그 거래일 마감(15:30) 후 앱이 돌았어야 생긴다. "
+                          "오늘 첫 구동/마감 전이면 NXT 폴백이 정상(다음 거래일부터 KRX 일치).[/dim]\n")
+    except Exception as e:
+        console.print(f"[red]일봉/기준가 진단 오류: {e}[/red]\n")
 
 
 def _kis_price_raw(code, market_div):
@@ -167,8 +196,8 @@ def main():
             dump_kis(code)
 
     if config.session.is_toss:
-        console.print("[dim]※ TOSS 응답에 전일 KRX 정규장 종가/등락률 필드가 없다. 역산/스토어/yfinance는 "
-                      "불안정(이른 아침 지연·오염)해 폐기했고, 이제 등락률 기준가=전일 NXT 종가(일봉 직전 캔들 종가)다.[/dim]")
+        console.print("[dim]※ TOSS엔 전일 KRX 정규장 종가 필드가 없다(역산/yfinance는 불안정해 폐기). 기준가는 "
+                      "①마감(15:30) 후 정규장 분봉으로 캡처·저장한 KRX 마감가(HTS 일치) 우선, ②없으면 전일 NXT 종가 폴백.[/dim]")
     else:
         console.print("[dim]※ KIS: '현재가 stale + 강도 갱신' 종목은 KRX(J)/NXT(NX) 현재가 원본과 fetch_nxt_price를 "
                       "대조하라. NXT(NX) 원본 stck_prpr는 살아있는데 fetch_nxt_price=0 이거나, 멀티시세 stck_prpr가 "

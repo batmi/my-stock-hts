@@ -50,7 +50,7 @@ def test_initial_fetch_and_cache(mock_get_price):
     
     mock_fetch_func.assert_called_once() # 무거운 데이터 조회가 1회 발생해야 함
     assert not df.empty
-    assert '005930_False_False' in api._CHART_CACHE # 캐시 딕셔너리에 저장되어야 함
+    assert api._chart_cache_key('005930', False, False) in api._CHART_CACHE # 캐시 딕셔너리에 저장되어야 함
 
 @patch('api.get_current_price_data')
 def test_cache_hit_and_stitch(mock_get_price):
@@ -148,7 +148,7 @@ def test_corporate_action_purges_disk_cache(mock_get_price, monkeypatch):
     mock_fetch_func.return_value = create_dummy_df(yesterday_str, last_close=2000.0)
     api._get_cached_chart('005930', False, False, mock_fetch_func)
 
-    assert deleted_keys == ['005930_False_False']
+    assert deleted_keys == [api._chart_cache_key('005930', False, False)]
 
 
 @patch('api.get_current_price_data')
@@ -231,7 +231,7 @@ def test_cache_ttl_expiration():
     
     # 2. 캐시 타임스탬프를 과거(4시간 전)로 강제 조작
     with api._CHART_CACHE_LOCK:
-        cached_item = api._CHART_CACHE['005930_False_False']
+        cached_item = api._CHART_CACHE[api._chart_cache_key('005930', False, False)]
         cached_item['timestamp'] = datetime.now() - timedelta(hours=4)
         
     # 3. 다시 조회

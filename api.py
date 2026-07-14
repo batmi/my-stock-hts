@@ -643,6 +643,18 @@ def clear_chart_cache():
         config.console.print("[bold green]차트 데이터 캐시(메모리)가 전체 초기화되었습니다.[/bold green]")
     logger.info("[Cache] 차트 데이터 캐시 수동 초기화")
 
+def _chart_cache_key(code, is_overseas, is_index):
+    """차트 캐시 키 (브로커 네임스페이스 포함).
+
+    같은 종목이라도 브로커별로 일봉 종가가 다르다: **TOSS 국내 일봉=NXT 연장 종가,
+    KIS 일봉=KRX 정규장 종가**. 브로커를 키에 넣지 않으면 mode 전환 시(예: 맥북에서
+    mode 2 → mode 3) 한쪽 데이터가 다른 쪽 캐시로 새어들어 등락률/EMA가 어긋난다.
+    모의(mode1)·실전(mode2)은 둘 다 KIS/KRX라 'K'로 공유한다.
+    """
+    broker = 'T' if getattr(config.session, 'is_toss', False) else 'K'
+    return f"{broker}_{code}_{is_overseas}_{is_index}"
+
+
 def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=True):
     """캐시된 차트를 반환하되, 당일 최신 캔들은 실시간 현재가로 덮어씌워 반환합니다.
 
@@ -655,7 +667,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
 
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
-    cache_key = f"{code}_{is_overseas}_{is_index}"
+    cache_key = _chart_cache_key(code, is_overseas, is_index)
 
     with _CHART_CACHE_LOCK:
         cached = _CHART_CACHE.get(cache_key)
@@ -3249,7 +3261,7 @@ def _toss_cached_daily_chart(code):
     캐시가 전혀 없을 때만(하루 최대 1회) 오버레이 없는 과거봉을 새로 받는다.
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
-    ck = f"{code}_False_False"
+    ck = _chart_cache_key(code, False, False)  # 브로커 네임스페이스(T_/K_)로 KIS↔TOSS 교차오염 차단
     with _CHART_CACHE_LOCK:
         c = _CHART_CACHE.get(ck)
         if c and c.get('date') == today_str:
@@ -3265,14 +3277,107 @@ def _toss_cached_daily_chart(code):
     return None
 
 
-def _toss_base_price(code, chart_df=None):
-    """국내 등락률 기준가 = 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가.
+# --- KRX 정규장 마감가(15:30) 캡처·저장 (mode 3 등락률 기준가) ---
+#  TOSS는 전일 KRX 정규장 종가 필드를 안 준다. 역산·yfinance는 불안정해 폐기했고, 대신
+#  '거래일 마감 후 정규장 분봉의 15:30 종가'(=KRX 마감가)를 그날 1회 캡처해 영속 저장한다.
+#  역산·계산 없이 '저장된 값을 그대로' 읽어 다음 거래일의 등락률 기준가로 쓴다(HTS와 일치).
+#  캡처 못한 날(앱 미구동 등)은 전일 NXT 종가(일봉 직전 캔들)로 안전 폴백한다.
+_toss_krx_close_store = None
+_toss_krx_close_lock = threading.Lock()
 
-    TOSS는 전일 KRX 정규장 종가/등락률 필드를 제공하지 않는다(get_price/get_stock 확인).
-    과거엔 상·하한가 역산·yfinance로 KRX 종가를 추정했으나, 이른 아침 yfinance 일봉 지연 등으로
-    틀린 값이 영속 스토어에 굳는 불안정이 있어 '전량 폐기'했다. 이제 등락률은 토스가 네이티브로
-    주는 값끼리(현재 NXT 체결가 vs 전일 NXT 종가)만 계산한다 → KRX 기준 HTS 등락률과 소폭 다를
-    수 있으며(연장시간 체결 차이), 그 사실은 mode 3 기동 시 1회 안내한다.
+
+def _toss_krx_close_path():
+    return os.path.join(config.JSON_DIR, "toss_krx_close.json")
+
+
+def _toss_krx_close_load_locked():
+    global _toss_krx_close_store
+    if _toss_krx_close_store is None:
+        try:
+            with open(_toss_krx_close_path(), 'r', encoding='utf-8') as f:
+                _toss_krx_close_store = json.load(f)
+            if not isinstance(_toss_krx_close_store, dict):
+                _toss_krx_close_store = {}
+        except Exception:
+            _toss_krx_close_store = {}
+    return _toss_krx_close_store
+
+
+def _toss_krx_close_get(code, date_str):
+    """저장된 KRX 정규장 마감가 조회 (없으면 None)."""
+    if not date_str:
+        return None
+    with _toss_krx_close_lock:
+        store = _toss_krx_close_load_locked()
+        try:
+            v = (store.get(code) or {}).get(date_str)
+            return float(v) if v else None
+        except Exception:
+            return None
+
+
+def _toss_krx_close_put(code, date_str, close):
+    """KRX 정규장 마감가 저장 (종목당 최근 10거래일 유지, 원자적 저장)."""
+    if not date_str or not close or close <= 0:
+        return
+    with _toss_krx_close_lock:
+        store = _toss_krx_close_load_locked()
+        per = store.setdefault(code, {})
+        if not isinstance(per, dict):
+            per = {}
+            store[code] = per
+        if per.get(date_str) == close:
+            return
+        per[date_str] = close
+        for k in sorted(per.keys())[:-10]:
+            del per[k]
+        try:
+            tmp = _toss_krx_close_path() + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(store, f, ensure_ascii=False)
+            os.replace(tmp, _toss_krx_close_path())
+        except Exception as e:
+            logger.debug(f"[Toss] KRX 마감가 저장 실패: {e}")
+
+
+def _toss_after_krx_close():
+    """오늘이 거래일이고 KRX 정규장 마감(15:35+, 종가 확정 여유) 이후면 True."""
+    now = datetime.now()
+    return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') >= '1535'
+
+
+def _toss_capture_krx_close(code):
+    """마감 후, 오늘 KRX 정규장 마감가(정규장 분봉의 마지막=15:30 종가)를 하루 1회 저장한다.
+
+    _toss_chart_data 분봉은 당일 정규장(09:00~15:30)만 필터하므로 마지막 봉 종가가 KRX 마감가다.
+    이미 오늘분이 저장돼 있으면(store 적중) 재조회하지 않아 마감 직후 1회 버스트로 끝난다.
+    """
+    if not (config.session.is_toss and _toss_after_krx_close()):
+        return
+    today = datetime.now().strftime('%Y%m%d')
+    if _toss_krx_close_get(code, today):  # 이미 캡처됨 → 네트워크 재조회 없음
+        return
+    try:
+        df = _toss_chart_data(code, period_type='intraday', is_overseas=False)
+        if df is None or len(df) == 0:
+            return
+        close = _toss_float(df.iloc[-1]['close'])  # 정규장 필터 → 마지막 봉 = 15:30 = KRX 마감가
+        if close > 0:
+            _toss_krx_close_put(code, today, close)
+    except Exception as e:
+        logger.debug(f"[Toss] KRX 마감가 캡처 실패({code}): {e}")
+
+
+def _toss_base_price(code, chart_df=None):
+    """국내 등락률 기준가. 역산·계산 없이 '저장된 값을 그대로' 쓴다.
+
+    우선순위:
+      1) 저장된 KRX 정규장 마감가(전일, `_toss_capture_krx_close`가 마감 후 캡처) — 있으면 HTS 일치
+      2) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
+         (아직 캡처 전인 오늘/최초 구동·앱 미구동일 등)
+
+    TOSS는 전일 KRX 정규장 종가/등락률 필드를 제공하지 않는다(과거 역산·yfinance는 불안정해 폐기).
+    폴백(NXT 종가)은 연장시간 체결 차이로 KRX 기준 HTS 등락률과 소폭 다를 수 있다(기동 시 안내).
 
     ref_date(전일 종가의 거래일)는 일봉 '날짜'만으로 결정한다:
       마지막 캔들일이 오늘보다 과거면 그 캔들(=장중, 오늘 봉 미형성),
@@ -3286,6 +3391,15 @@ def _toss_base_price(code, chart_df=None):
         if df is None or len(df) < 2:
             return None
         last_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
+        prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
+        ref_date = last_date if last_date < today else prev_date
+
+        # 1) 저장된 KRX 정규장 마감가 (권위값)
+        stored = _toss_krx_close_get(code, ref_date)
+        if stored:
+            return stored
+
+        # 2) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
         row = df.iloc[-1] if last_date < today else df.iloc[-2]
         base = _toss_float(row['close'])
         return base if base > 0 else None
@@ -3492,9 +3606,10 @@ def _toss_current_price_data(code, is_overseas):
         'stck_prpr': str(_toss_int(price)),
         'last': str(_toss_float(price)),
     }
-    # [추가] 국내: 기준가(전일 NXT 종가=일봉 직전 캔들 종가) 대비 전일대비/등락률 필드를 채운다.
-    # (토스 lastPrice=현재 NXT 체결가, 기준가=전일 NXT 종가 → 값끼리 정합. KRX 기준 HTS와 소폭 차이)
+    # [추가] 국내: 기준가 대비 전일대비/등락률 필드를 채운다. 기준가=저장된 KRX 정규장 마감가
+    # (있으면 HTS 일치), 없으면 전일 NXT 종가로 폴백. 마감 후엔 오늘 KRX 마감가를 1회 캡처해 저장.
     if not is_overseas:
+        _toss_capture_krx_close(code)  # 마감(15:35+) 후 오늘 KRX 마감가 1회 저장(이미 있으면 즉시 반환)
         base = _toss_base_price(code)
         p = _toss_float(price)
         if base and base > 0 and p > 0:
