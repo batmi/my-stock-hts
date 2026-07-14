@@ -2417,7 +2417,10 @@ def fetch_nxt_price(code):
         return 0
     try:
         nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
-        nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=0)
+        # [수정] retries=1: 장전(08:00~09:00) 오버뷰 팬아웃 중 EGW00201(초당 거래건수 초과)에 걸리면
+        #  call_api의 스로틀 백오프 재시도가 작동해 회복되도록 한다(retries=0이면 즉시 0→KRX 전일종가
+        #  폴백→등락률 0% stale). nxtSupported=false 종목은 rt_cd 0·stck_prpr 0 정상응답이라 무관.
+        nxt_res = call_api(nxt_url, "domestic", "quotations", "price", params={"fid_cond_mrkt_div_code": "NX", "fid_input_iscd": code}, timeout=2, retries=1)
         if nxt_res and nxt_res.get('rt_cd') == '0' and nxt_res.get('output'):
             nxt_price = nxt_res['output'].get('stck_prpr')
             if nxt_price and safe_int(nxt_price) > 0:
@@ -2605,6 +2608,60 @@ def get_multi_current_prices(codes, market_div="J"):
         _MULTI_PRICE_DISABLED = True
         logger.info(f"[MultiPrice] 관심종목 멀티시세 비활성(세션 유지): {e} → 종목별 현재가 조회로 폴백")
         return None
+
+# [최적화] NXT 멀티시세 세션 비활성 플래그 (KRX 'J' 멀티시세와 분리 — NX 미지원이 J를 끄지 않도록)
+_MULTI_PRICE_NXT_DISABLED = False
+
+def _fetch_multi_nxt_raw(codes):
+    """NXT(NX) 멀티시세 배치 → {code: {'prpr':int,'vol':int}}. 미지원/오류 시 빈 dict(세션 비활성)."""
+    global _MULTI_PRICE_NXT_DISABLED
+    if _MULTI_PRICE_NXT_DISABLED or not codes or config.session.is_simulation:
+        return {}
+    out = {}
+    try:
+        for i in range(0, len(codes), 30):
+            chunk = codes[i:i + 30]
+            params = {}
+            for j, c in enumerate(chunk, start=1):
+                params[f"FID_COND_MRKT_DIV_CODE_{j}"] = "NX"
+                params[f"FID_INPUT_ISCD_{j}"] = c
+            res = call_api("uapi/domestic-stock/v1/quotations/intstock-multprice",
+                           "domestic", "quotations", "multi_price", params=params,
+                           tr_id="FHKST11300006", timeout=5, retries=1)
+            if not res or res.get('rt_cd') != '0':
+                raise RuntimeError(f"rt_cd={res.get('rt_cd') if res else None} msg={res.get('msg1', '') if res else ''}")
+            for row in (res.get('output') or res.get('output1') or []):
+                c = str(row.get('inter_shrn_iscd', '')).strip()
+                p = safe_int(row.get('inter2_prpr'))
+                if c and p > 0:  # nxtSupported=false 종목은 prpr 0 → 제외(KRX 값 유지)
+                    out[c] = {'prpr': p, 'vol': safe_int(row.get('acml_vol'))}
+        return out
+    except Exception as e:
+        _MULTI_PRICE_NXT_DISABLED = True
+        logger.info(f"[MultiPrice] NXT 멀티시세 비활성(세션 유지): {e} → NXT 병합 생략(KRX 대표가 사용)")
+        return {}
+
+def get_multi_current_prices_nxt(codes):
+    """KRX(J) 멀티시세에 NXT(NX) 멀티시세를 병합해 반환(장전 08:00~09:00·장후 15:30~20:00용).
+
+    종목별 fetch_nxt_price(NX 단건) 팬아웃이 EGW00201(초당 거래건수 초과)을 유발해 현재가가
+    전일종가로 stale 폴백되던 문제를, NX도 30종목/1콜 배치로 바꿔 콜 수를 대폭 줄인다.
+    NX에 살아있는 체결가가 있으면 그 값으로 stck_prpr을 교체(등락률은 표시부가 stck_sdpr
+    기준으로 재계산). NX 미지원/실패 시 KRX 결과만 반환(세션 내 NXT 병합 자동 비활성).
+    """
+    base = get_multi_current_prices(codes)  # KRX 'J' (실패 시 None → 종목별 폴백)
+    if not base:
+        return base
+    nxt = _fetch_multi_nxt_raw(codes)
+    if not nxt:
+        return base
+    for c, o in base.items():
+        n = nxt.get(c)
+        if n and n['prpr'] > 0:
+            o['stck_prpr'] = str(n['prpr'])
+            if n['vol'] > 0:
+                o['acml_vol'] = str(n['vol'])
+    return base
 
 def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, fast_info_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
@@ -3189,9 +3246,10 @@ def _toss_float(v, default=0.0):
 _toss_base_cache = {}
 _toss_base_lock = threading.Lock()
 
-# [추가] 역산으로 확인된 'KRX 정규장 종가' 축적 스토어 (영속: json/toss_krx_close.json)
-#  마감 후 price-limits가 '다음 거래일 기준가(=당일 KRX 종가)'로 넘어가면 그 값을 날짜별로
-#  축적해 두고, 다음 거래일의 기준가(전일 종가)로 재활용한다 (NXT 연장 종가 오차 제거).
+# [추가] 확정된 'KRX 정규장 종가' 축적 스토어 (영속: json/toss_krx_close.json)
+#  TOSS는 전일 정규장 종가/등락률을 제공하지 않으므로(get_price/get_stock 확인), 장중 역산이나
+#  yfinance로 확보한 KRX 종가를 '거래일(ref_date)' 키로 축적해 등락률 기준가로 재사용한다.
+#  (NXT 연장 종가 오차 제거, 마감 후·주말·콜드스타트에도 안정적)
 _toss_krx_close_store = None
 _toss_krx_close_lock = threading.Lock()
 
@@ -3290,118 +3348,153 @@ def _toss_krx_tick(price, unit5=False):
 def _toss_in_krx_session():
     """KRX 거래일 장중(NXT 프리 08:00 ~ 정규장 마감 15:30) 여부.
 
-    이 시간대엔 토스 price-limits가 '오늘 기준가(전일 KRX 종가)'를 주므로 역산 값을
-    그대로 신뢰한다 (이른 아침 일봉 캐시에 당일 봉이 아직 없을 때의 오판 방지용 가드).
+    이 시간대엔 토스 price-limits가 '오늘 기준가(=전일 정규장 종가)'를 주므로 역산값을 신뢰한다.
+    마감(15:30) 후엔 price-limits가 다음 거래일 상·하한으로 넘어가 역산이 어긋나므로,
+    이때는 저장된 KRX 종가나 yfinance로 폴백한다.
     """
     now = datetime.now()
     return market_today(False) == now.strftime('%Y%m%d') and '0800' <= now.strftime('%H%M') < '1530'
 
 
+def _toss_yf_krx_close(code, ref_date):
+    """yfinance 일봉에서 특정 거래일(ref_date, YYYYMMDD)의 KRX 정규장 종가를 조회한다.
+
+    yfinance 일봉 종가 = KRX 정규장 종가(NXT 미포함)라, 상/하한가 역산이 실패하는 대형주
+    (삼성전자 등 호가단위 비대칭)나 장 시작 전·마감 후 콜드스타트의 권위 있는 폴백이다.
+    ref_date가 휴장/불일치면 ref_date 이하의 가장 최근 거래일 종가를 반환한다.
+    """
+    if not ref_date:
+        return None
+    try:
+        for suffix in ('.KS', '.KQ'):  # KOSPI / KOSDAQ
+            with _YF_LOCK:  # yfinance tz 캐시 동시접근 경합 방지 (get_yf_fast_info와 공유)
+                hist = yf.Ticker(code + suffix).history(period='10d', auto_adjust=False)
+            if hist is None or hist.empty:
+                continue
+            by_date = {d.strftime('%Y%m%d'): float(c)
+                       for d, c in zip(hist.index, hist['Close']) if c and float(c) > 0}
+            if not by_date:
+                continue
+            if ref_date in by_date:
+                return by_date[ref_date]
+            older = [d for d in by_date if d <= ref_date]
+            if older:
+                return by_date[max(older)]
+    except Exception as e:
+        logger.debug(f"[Toss] yfinance KRX 종가 폴백 실패({code},{ref_date}): {e}")
+    return None
+
+
+def _toss_reverse_base(pl):
+    """상/하한가에서 KRX 기준가를 역산한다(유일 후보만 반환, 없으면 None).
+
+    상한가=내림(기준가×(1+폭)), 하한가=올림(기준가×(1-폭)) 규칙이라 호가단위 그리드에서
+    후보를 훑어 상·하한 양쪽이 정확히 재현되는 유일값만 채택한다. 대형주의 비대칭 반올림
+    (삼성전자 등)이나 레버리지 ETF의 비표준 절사 등은 유일값이 없어 None → 상위에서 yfinance 폴백.
+    """
+    try:
+        upper = round(_toss_float((pl or {}).get('upperLimitPrice')))
+        lower = round(_toss_float((pl or {}).get('lowerLimitPrice')))
+        if not (upper > lower > 0):
+            return None
+        rate_raw = (upper - lower) / (upper + lower)  # ≈ 가격제한폭(일반 0.3, 레버리지 0.6 등)
+        est = (upper + lower) / 2.0
+        matches = set()
+        for limit_rate in (0.10, 0.15, 0.30, 0.60, 0.90):
+            if abs(rate_raw - limit_rate) > 0.02:
+                continue
+            for unit5 in (False, True):
+                t = _toss_krx_tick(est, unit5)
+                center = int(round(est / t))
+                for k in range(-3, 4):
+                    c_val = (center + k) * t
+                    if c_val <= 0:
+                        continue
+                    u_raw = c_val * (1 + limit_rate)
+                    ut = _toss_krx_tick(u_raw, unit5)
+                    l_raw = c_val * (1 - limit_rate)
+                    lt = _toss_krx_tick(l_raw, unit5)
+                    if int(math.floor(u_raw / ut + 1e-9)) * ut == upper \
+                       and int(math.ceil(l_raw / lt - 1e-9)) * lt == lower:
+                        matches.add(c_val)
+        if len(matches) == 1:
+            return float(matches.pop())
+        if matches:
+            logger.debug(f"[Toss] 기준가 후보 복수: {sorted(matches)} → 역산 보류")
+    except Exception as e:
+        logger.debug(f"[Toss] 기준가 역산 오류: {e}")
+    return None
+
+
 def _toss_base_price(code, chart_df=None):
-    """국내 기준가(당일 등락률의 분모 = 전일 KRX 종가, 권리락 시 조정가)를 상/하한가에서 역산한다.
+    """국내 기준가(당일 등락률의 분모 = 전일 KRX 정규장 종가)를 구한다.
 
-    토스 시세·캔들은 NXT 연장(08:00~20:00) 체결까지 포함해 '전일 캔들 종가'가 KRX 정규장
-    종가와 다를 수 있다(토스 HTS 등락률은 KRX 기준가 대비). 토스는 기준가를 직접 주지 않지만
-    상한가=내림(기준가×(1+폭)), 하한가=올림(기준가×(1-폭)) 규칙이므로 호가단위 그리드에서
-    후보를 역산해 상·하한 양쪽이 정확히 재현되는 유일한 값만 채택한다(실측 검증 완료).
-    레버리지 ETF의 비표준 절사나 호가단위 밖 조정 기준가 등 검증 실패 시 None(보정 생략).
+    TOSS는 전일종가/등락률 필드를 주지 않아(get_price/get_stock 확인) 직접 확보해야 한다.
+    소스 우선순위:
+      1) 저장된 KRX 종가(json/toss_krx_close.json, ref_date 키) — 장중에 확정·축적된 권위값
+      2) 상/하한가 역산 — '장중(08:00~15:30)'에만 신뢰(마감 후 price-limits가 다음 거래일로
+         넘어가 어긋나므로). 성공값은 스토어에 축적
+      3) yfinance 일봉 종가(.KS/.KQ) — 역산 실패(삼성전자 등) 또는 장 시작 전/마감 후
+         콜드스타트 폴백. 성공값은 스토어에 축적(하루 1회)
 
-    [마감 후 '다음 거래일 기준가' 판별] KRX 정규장 마감(15:30) 후 토스 price-limits는
-    다음 거래일 상·하한가(기준가 = 당일 KRX 종가)로 넘어간다. 이를 그대로 쓰면 등락률이
-    0%로 붕괴하므로, 역산 값이 일봉의 '전일 캔들 종가'보다 '최신 캔들 종가'에 더 가까우면
-    다음 거래일 기준가로 판별해 폐기하고 전일 KRX 종가(축적 스토어, 없으면 전일 캔들 종가)로
-    폴백한다 → 마감 후 밤·주말·개장 전 새벽에도 마지막 거래일의 등락률이 유지된다.
-    폐기한 값은 '해당 거래일의 정확한 KRX 종가'이므로 스토어에 축적해 다음 거래일에 재활용한다.
-    거래일 장중(08:00~15:30)엔 토스가 오늘 기준가를 주므로 역산 값을 그대로 신뢰한다
-    (이른 아침 일봉 캐시에 당일 봉이 아직 없을 때의 오판 방지).
-    결과는 (달력일, 최신 캔들일) 단위로 캐시한다(같은 상태에서 기준가는 불변).
+    ref_date(기준 종가의 거래일)는 일봉 '날짜'만으로 결정한다(과거의 NXT 캔들 근접 비교 로직
+    폐지 — 올바른 역산값을 오판·폐기하던 회귀의 원인이었음):
+      일봉 마지막 캔들일이 오늘보다 과거면 그 날짜(=장중, 오늘 봉 미형성),
+      오늘이면 그 직전 캔들일(=마감 후, 오늘 봉 형성됨)이 기준 종가의 거래일이다.
 
-    chart_df: 판별용 일봉을 호출자가 이미 들고 있으면 전달(예: _toss_chart_data의 전일봉
-    보정 경로). 미전달 시 캐시 우선으로 조회한다(순환 없음: chart_df 경로는 차트를 다시
-    받지 않고, 캐시 미스 네트워크 조회 내부의 보정은 chart_df를 전달하므로 여기로 재진입).
+    chart_df: 호출자가 일봉을 이미 들고 있으면 전달(_toss_chart_data의 전일봉 보정 경로).
+    미전달 시 캐시 우선으로 조회한다.
     """
     today = datetime.now().strftime('%Y%m%d')
 
-    # 판별용 일봉 (전달분 → 캐시 → 최초 1회 네트워크). 실패해도 역산 자체는 진행한다.
-    latest_date = prev_date = None
-    latest_close = prev_close = 0.0
+    # ref_date 산출 (일봉 '날짜'만 사용)
+    ref_date = None
     try:
         df = chart_df if chart_df is not None else _toss_cached_daily_chart(code)
         if df is not None and len(df) >= 2:
-            latest_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
+            last_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
             prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
-            latest_close = float(df.iloc[-1]['close'])
-            prev_close = float(df.iloc[-2]['close'])
+            ref_date = last_date if last_date < today else prev_date
     except Exception as e:
-        logger.debug(f"[Toss] 기준가 판별용 일봉 처리 실패({code}): {e}")
+        logger.debug(f"[Toss] 기준일 산출 실패({code}): {e}")
 
-    cache_token = (today, latest_date)
+    cache_token = (today, ref_date)
     with _toss_base_lock:
         hit = _toss_base_cache.get(code)
         if hit and hit[0] == cache_token:
             return hit[1]
 
-    try:
-        pl = toss_api.get_price_limit(code)
-    except toss_api.TossApiError as e:
-        # 일시 오류일 수 있으므로 캐시하지 않는다(다음 호출에서 재시도).
-        # 축적 스토어에 전일 KRX 종가가 있으면 그 값으로 응답해 등락률 공백을 막는다.
-        logger.debug(f"[Toss] 상하한가 조회 실패({code}): {e}")
-        return _toss_krx_close_get(code, prev_date)
+    def _finish(val):
+        with _toss_base_lock:
+            _toss_base_cache[code] = (cache_token, val)
+        return val
 
-    cand = None
-    try:
-        upper = round(_toss_float((pl or {}).get('upperLimitPrice')))
-        lower = round(_toss_float((pl or {}).get('lowerLimitPrice')))
-        if upper > lower > 0:
-            rate_raw = (upper - lower) / (upper + lower)  # ≈ 가격제한폭(일반 0.3, 레버리지 0.6 등)
-            est = (upper + lower) / 2.0
-            matches = set()
-            for limit_rate in (0.10, 0.15, 0.30, 0.60, 0.90):
-                if abs(rate_raw - limit_rate) > 0.02:
-                    continue
-                for unit5 in (False, True):
-                    t = _toss_krx_tick(est, unit5)
-                    center = int(round(est / t))
-                    for k in range(-3, 4):
-                        c_val = (center + k) * t
-                        if c_val <= 0:
-                            continue
-                        u_raw = c_val * (1 + limit_rate)
-                        ut = _toss_krx_tick(u_raw, unit5)
-                        l_raw = c_val * (1 - limit_rate)
-                        lt = _toss_krx_tick(l_raw, unit5)
-                        if int(math.floor(u_raw / ut + 1e-9)) * ut == upper \
-                           and int(math.ceil(l_raw / lt - 1e-9)) * lt == lower:
-                            matches.add(c_val)
-            if len(matches) == 1:
-                cand = float(matches.pop())
-            elif matches:
-                logger.debug(f"[Toss] 기준가 후보 복수({code}): {sorted(matches)} → 보정 생략")
-    except Exception as e:
-        logger.debug(f"[Toss] 기준가 역산 실패({code}): {e}")
+    # 1) 저장된 KRX 종가 (장중에 확정·축적된 권위값)
+    stored = _toss_krx_close_get(code, ref_date)
+    if stored:
+        return _finish(stored)
 
-    base = cand
-    if cand is not None and latest_close > 0 and prev_close > 0 and latest_date:
-        # 역산 값이 어느 캔들의 KRX 종가인지 근접 비교로 판별해 스토어에 축적
-        is_near_prev = abs(cand - prev_close) <= abs(cand - latest_close)
-        _toss_krx_close_put(code, prev_date if is_near_prev else latest_date, cand)
+    # 2) 장중 역산 (신뢰 가능한 08:00~15:30 구간에서만)
+    if _toss_in_krx_session():
+        try:
+            pl = toss_api.get_price_limit(code)
+        except toss_api.TossApiError as e:
+            logger.debug(f"[Toss] 상하한가 조회 실패({code}): {e}")
+            pl = None
+        cand = _toss_reverse_base(pl)
+        if cand:
+            if ref_date:
+                _toss_krx_close_put(code, ref_date, cand)
+            return _finish(cand)
 
-        if not _toss_in_krx_session() and not is_near_prev:
-            # 마감 후/주말/새벽: '다음 거래일 기준가'(= 최신 캔들 거래일의 KRX 종가) → 폐기하고
-            # 전일 기준가로 폴백 (스토어의 정확한 KRX 종가 우선, 없으면 전일 캔들 NXT 종가)
-            stored_prev = _toss_krx_close_get(code, prev_date)
-            base = stored_prev if stored_prev else prev_close
-            logger.debug(f"[Toss] {code} 다음 거래일 기준가 감지({cand:,.0f}) → 전일 기준가 폴백({base:,.0f})")
-    elif cand is None:
-        # 역산 실패(비표준 절사·복수 후보 등): 축적된 전일 KRX 종가가 있으면 대체
-        stored_prev = _toss_krx_close_get(code, prev_date)
-        if stored_prev:
-            base = stored_prev
+    # 3) yfinance 폴백 (역산 실패 종목 / 장외 콜드스타트)
+    yv = _toss_yf_krx_close(code, ref_date)
+    if yv:
+        if ref_date:
+            _toss_krx_close_put(code, ref_date, yv)
+        return _finish(yv)
 
-    with _toss_base_lock:
-        _toss_base_cache[code] = (cache_token, base)
-    return base
+    return _finish(None)
 
 
 def _toss_krw_deposit():

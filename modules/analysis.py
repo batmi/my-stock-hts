@@ -3795,19 +3795,25 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                     progress.advance(task_d)
 
         # [멀티시세] 국내 그룹 현재가를 30종목/1콜로 프리페치 (종목당 현재가 REST 제거 → TPS 절감)
-        #  NXT 병합(ats_prpr)이 필요 없는 경우에만 사용: 모의투자(NXT 미지원) 또는 실전 정규장(phase 'skip').
-        #  실패/미지원 시 None → 워커가 종전대로 종목별 조회(동일 출력 폴백).
+        #  정규장(phase 'skip')은 KRX 대표가만, 장전/장후 NXT 시간(phase 'active')은 KRX+NXT를 각각
+        #  배치(30종목/1콜)로 병합한다. 장후 'active'의 NX 병합은 종목별 fetch_nxt_price 팬아웃이
+        #  EGW00201(초당한도)을 유발해 현재가가 전일종가로 stale 폴백되던 문제를 콜 배치화로 해소한다.
+        #  야간·주말(offhours)은 _nxt_recalled_close 폴백을 위해 종목별 조회 유지. 실패 시 None → 종목별 폴백.
         multi_prices = None
         if not is_overseas and data_list and not config.session.is_toss and getattr(config, 'USE_MULTI_PRICE', True):
-            _use_multi = config.session.is_simulation
-            if not _use_multi:
-                try: _use_multi = api._nxt_quote_phase() == 'skip'
-                except Exception: _use_multi = False
-            if _use_multi:
-                try:
-                    multi_prices = api.get_multi_current_prices([c for _, c in data_list])
-                except Exception:
-                    multi_prices = None
+            _codes = [c for _, c in data_list]
+            try:
+                if config.session.is_simulation:
+                    multi_prices = api.get_multi_current_prices(_codes)  # 모의투자: NXT 미지원 → KRX만
+                else:
+                    _phase = api._nxt_quote_phase()
+                    if _phase == 'skip':        # 정규장: KRX 대표가
+                        multi_prices = api.get_multi_current_prices(_codes)
+                    elif _phase == 'active':     # 장전/장후 NXT 시간: KRX+NXT 배치 병합
+                        multi_prices = api.get_multi_current_prices_nxt(_codes)
+                    # offhours(야간·주말): 종목별 조회 유지
+            except Exception:
+                multi_prices = None
 
         def _preloaded(code):
             if multi_prices and code in multi_prices:

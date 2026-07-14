@@ -184,3 +184,70 @@ def test_analyze_table_row_fills_w52_from_chart():
     out = bundle['curr_data']['output']
     assert float(out['w52_hgpr']) > 0
     assert float(out['w52_lwpr']) > 0
+
+
+def _mk_nxt_response(codes, prpr='71000', vol='99999'):
+    """NXT(NX) 멀티시세 원본 응답 mock (NXT 체결가/거래량)"""
+    return {
+        'rt_cd': '0',
+        'output': [
+            {'inter_shrn_iscd': c, 'inter2_prpr': prpr, 'acml_vol': vol} for c in codes
+        ]
+    }
+
+
+def test_multi_price_nxt_merge_overrides_price(monkeypatch):
+    """[근본개선] 장전/장후 NXT 시간: KRX(J)에 NXT(NX) 체결가를 배치 병합해 stck_prpr을 교체한다.
+    (종목별 fetch_nxt_price 팬아웃 → EGW00201 stale 폴백 제거)"""
+    monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+
+    def fake_call(url, market, category, action, params=None, **kw):
+        mkt = params.get('FID_COND_MRKT_DIV_CODE_1')
+        codes = [v for k, v in params.items() if k.startswith('FID_INPUT_ISCD_')]
+        return _mk_nxt_response(codes) if mkt == 'NX' else _mk_multi_response(codes)
+
+    with patch('api.call_api', side_effect=fake_call):
+        res = api.get_multi_current_prices_nxt(['005930'])
+
+    out = res['005930']
+    assert out['stck_prpr'] == '71000'      # NXT 체결가로 교체됨
+    assert out['acml_vol'] == '99999'       # NXT 거래량으로 교체됨
+    assert out['stck_sdpr'] == '69500'      # 기준가(전일종가)는 KRX 값 유지 → 등락률 재계산 근거
+
+
+def test_multi_price_nxt_missing_keeps_krx(monkeypatch):
+    """NXT에 체결가가 없는 종목(nxtSupported=false, prpr 0)은 KRX 값을 그대로 유지한다."""
+    monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+
+    def fake_call(url, market, category, action, params=None, **kw):
+        mkt = params.get('FID_COND_MRKT_DIV_CODE_1')
+        codes = [v for k, v in params.items() if k.startswith('FID_INPUT_ISCD_')]
+        if mkt == 'NX':
+            return _mk_nxt_response(codes, prpr='0', vol='0')  # NXT 미지원 → 0
+        return _mk_multi_response(codes)
+
+    with patch('api.call_api', side_effect=fake_call):
+        res = api.get_multi_current_prices_nxt(['003490'])
+
+    assert res['003490']['stck_prpr'] == '70000'  # KRX 값 유지(0으로 덮어쓰지 않음)
+
+
+def test_multi_price_nxt_failure_falls_back_to_krx(monkeypatch):
+    """NXT 배치 실패/미지원 시 KRX 결과만 반환하고 NXT 병합을 세션 내 비활성화한다."""
+    monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+
+    def fake_call(url, market, category, action, params=None, **kw):
+        mkt = params.get('FID_COND_MRKT_DIV_CODE_1')
+        codes = [v for k, v in params.items() if k.startswith('FID_INPUT_ISCD_')]
+        if mkt == 'NX':
+            return {'rt_cd': '1', 'msg1': 'NX 미지원'}  # NXT 실패
+        return _mk_multi_response(codes)
+
+    with patch('api.call_api', side_effect=fake_call):
+        res = api.get_multi_current_prices_nxt(['005930'])
+
+    assert res['005930']['stck_prpr'] == '70000'   # KRX 값 그대로
+    assert api._MULTI_PRICE_NXT_DISABLED is True    # 세션 내 NXT 병합 비활성
