@@ -266,9 +266,60 @@ PAST_CHART = [{'date': '20260710', 'close': 999.0}, {'date': '20260713', 'close'
 
 
 def _reset_krx_store(entries=None):
-    """KRX 마감가 저장소를 테스트용으로 초기화(디스크 재로드 차단)."""
+    """KRX 마감가 저장소 + 랭킹 basePrice 캐시를 테스트용으로 초기화(네트워크/디스크 차단).
+
+    랭킹 캐시를 '오늘자 빈 맵'으로 세팅해 _toss_ranking_base가 네트워크 없이 None(1순위 미스)을
+    반환하게 한다 → 2/3순위 경로를 격리 검증할 수 있다.
+    """
     import api
+    from datetime import datetime as _dt
     api._toss_krx_close_store = entries if entries is not None else {}
+    api._toss_rank_base_map = {}
+    api._toss_rank_base_day = _dt.now().strftime('%Y%m%d')
+
+
+def _set_rank_base(mp):
+    """랭킹 basePrice 맵(1순위)을 오늘자로 주입한다."""
+    import api
+    from datetime import datetime as _dt
+    api._toss_rank_base_map = dict(mp)
+    api._toss_rank_base_day = _dt.now().strftime('%Y%m%d')
+
+
+def test_toss_base_price_uses_ranking_base_first():
+    """[우선순위 1] 랭킹 basePrice가 있으면 저장분·NXT 캔들을 보지 않고 그 값을 쓴다(단락 평가)."""
+    import api
+    _reset_krx_store({"TSTR": {"20260713": 284000.0}})  # 저장분(2순위)도 있지만
+    _set_rank_base({"TSTR": 286000.0})                  # 랭킹(1순위)이 이김
+    _inject_daily_chart("TSTR", PAST_CHART)             # NXT 캔들(3순위)=285000
+    config.session.is_toss = True
+    try:
+        assert api._toss_base_price("TSTR") == 286000.0  # 랭킹 basePrice
+    finally:
+        config.session.is_toss = False
+        _pop_daily_chart("TSTR")
+
+
+def test_toss_ranking_base_builds_map_and_caches():
+    """랭킹 basePrice 맵: 거래대금+거래량 각 100을 하루 1회 적재하고 재호출 시 캐시 사용."""
+    import api
+    api._toss_rank_base_map = None
+    api._toss_rank_base_day = None
+    resp = {"rankings": [
+        {"symbol": "005930", "price": {"lastPrice": "72000", "basePrice": "71600"}},
+        {"symbol": "000660", "price": {"lastPrice": "180000", "basePrice": "178000"}},
+    ]}
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_rankings", return_value=resp) as m:
+            assert api._toss_ranking_base("005930") == 71600.0
+            assert api._toss_ranking_base("000660") == 178000.0
+            assert api._toss_ranking_base("999999") is None  # 랭킹 밖 → None(하위순위로)
+            assert m.call_count == 2  # 최초 1회 적재(대금+거래량), 이후 캐시
+    finally:
+        config.session.is_toss = False
+        api._toss_rank_base_map = None
+        api._toss_rank_base_day = None
 
 
 def test_toss_base_price_falls_back_to_prev_nxt_candle():

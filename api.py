@@ -3368,24 +3368,67 @@ def _toss_capture_krx_close(code):
         logger.debug(f"[Toss] KRX 마감가 캡처 실패({code}): {e}")
 
 
+# --- 랭킹 basePrice = 전일 KRX 정규장 종가(기준가) 라이브 조회 (1순위 소스) ---
+#  /api/v1/rankings 의 price.basePrice(MARKET_* 타입)는 '전일 기준가'(=HTS 등락률 기준가)다.
+#  거래대금+거래량 상위 각 100종목을 하루 1회 받아 {symbol: basePrice} 맵을 만든다(대형주 커버).
+#  basePrice는 전일 종가라 장중 불변 → 거래일 단위 캐시. 랭킹 밖(중소형) 종목은 없음→하위순위로.
+_toss_rank_base_map = None      # {code: basePrice}
+_toss_rank_base_day = None      # 캐시 유효 거래일(YYYYMMDD)
+_toss_rank_lock = threading.Lock()
+
+
+def _toss_ranking_base(code):
+    """랭킹 basePrice(전일 KRX 정규장 종가). 랭킹 상위 종목만 존재, 없으면 None."""
+    global _toss_rank_base_map, _toss_rank_base_day
+    if not config.session.is_toss:
+        return None
+    today = datetime.now().strftime('%Y%m%d')
+    with _toss_rank_lock:
+        if _toss_rank_base_map is not None and _toss_rank_base_day == today:
+            return _toss_rank_base_map.get(code)
+        # 하루 1회 적재 (거래대금·거래량 상위 각 100)
+        mp = {}
+        for rank_type in ("MARKET_TRADING_AMOUNT", "MARKET_TRADING_VOLUME"):
+            try:
+                res = toss_api.get_rankings(rank_type=rank_type, market_country="KR",
+                                            duration="realtime", count=100)
+            except toss_api.TossApiError as e:
+                logger.debug(f"[Toss] 랭킹({rank_type}) 조회 실패: {e}")
+                continue
+            for item in (res or {}).get('rankings', []) or []:
+                sym = item.get('symbol')
+                bp = _toss_float(((item.get('price') or {}).get('basePrice')))
+                if sym and bp > 0:
+                    mp.setdefault(sym, bp)
+        # 조회 자체가 전부 실패하면(빈 맵) 캐시를 세팅하지 않아 다음 호출에서 재시도한다.
+        if mp:
+            _toss_rank_base_map, _toss_rank_base_day = mp, today
+        return mp.get(code)
+
+
 def _toss_base_price(code, chart_df=None):
-    """국내 등락률 기준가. 역산·계산 없이 '저장된 값을 그대로' 쓴다.
+    """국내 등락률 기준가. 역산·계산 없이 '확보된 값을 그대로' 쓴다(단락 평가).
 
-    우선순위:
-      1) 저장된 KRX 정규장 마감가(전일, `_toss_capture_krx_close`가 마감 후 캡처) — 있으면 HTS 일치
-      2) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
-         (아직 캡처 전인 오늘/최초 구동·앱 미구동일 등)
+    우선순위(위에서 값이 나오면 즉시 반환, 아래는 실행 안 함):
+      1) 랭킹 basePrice — 거래대금/거래량 상위(대형주)의 전일 KRX 정규장 종가(라이브, HTS 일치)
+      2) 저장된 KRX 정규장 마감가 — `_toss_capture_krx_close`가 마감 후 캡처(랭킹 밖 중소형)
+      3) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
 
-    TOSS는 전일 KRX 정규장 종가/등락률 필드를 제공하지 않는다(과거 역산·yfinance는 불안정해 폐기).
-    폴백(NXT 종가)은 연장시간 체결 차이로 KRX 기준 HTS 등락률과 소폭 다를 수 있다(기동 시 안내).
+    1·2가 모두 없을 때만 3(NXT 종가)으로 내려가며, 3은 연장시간 체결 차이로 KRX 기준 HTS
+    등락률과 소폭 다를 수 있다(기동 시 안내). TOSS는 전일 KRX 종가 필드를 직접 주지 않는다.
 
     ref_date(전일 종가의 거래일)는 일봉 '날짜'만으로 결정한다:
-      마지막 캔들일이 오늘보다 과거면 그 캔들(=장중, 오늘 봉 미형성),
-      오늘이면 그 직전 캔들(=마감 후, 오늘 봉 형성됨)이 전일 종가다.
+      마지막 캔들일이 오늘보다 과거면 그 캔들(=장중), 오늘이면 그 직전 캔들(=마감 후).
 
     chart_df: 호출자가 일봉을 이미 들고 있으면 전달(재조회 방지). 미전달 시 캐시 우선 조회.
     """
     today = datetime.now().strftime('%Y%m%d')
+
+    # 1) 랭킹 basePrice (대형주, 라이브·HTS 일치) — 있으면 여기서 종료
+    rb = _toss_ranking_base(code)
+    if rb:
+        return rb
+
     try:
         df = chart_df if chart_df is not None else _toss_cached_daily_chart(code)
         if df is None or len(df) < 2:
@@ -3394,12 +3437,12 @@ def _toss_base_price(code, chart_df=None):
         prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
         ref_date = last_date if last_date < today else prev_date
 
-        # 1) 저장된 KRX 정규장 마감가 (권위값)
+        # 2) 저장된 KRX 정규장 마감가 (캡처값)
         stored = _toss_krx_close_get(code, ref_date)
         if stored:
             return stored
 
-        # 2) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
+        # 3) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
         row = df.iloc[-1] if last_date < today else df.iloc[-2]
         base = _toss_float(row['close'])
         return base if base > 0 else None

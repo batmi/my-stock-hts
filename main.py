@@ -915,15 +915,15 @@ def main():
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
     # [안내] mode 3(토스): 등락률 기준가 정책 고지.
-    #  토스 Open API는 전일 KRX 정규장 종가/등락률을 제공하지 않는다(역산·yfinance는 불안정해 폐기).
-    #  대신 거래일 마감(15:30) 후 정규장 분봉의 마지막 봉 종가(=KRX 마감가)를 하루 1회 저장해두고,
-    #  다음 거래일 등락률 기준가로 그대로 쓴다(HTS와 일치). 아직 저장분이 없는 날은 전일 NXT 종가로 폴백.
+    #  TOSS는 전일 KRX 정규장 종가 필드를 직접 안 준다(역산·yfinance는 불안정해 폐기).
+    #  기준가 우선순위: ①랭킹 basePrice(대형주 전일 KRX 종가, 라이브·HTS 일치) →
+    #  ②마감 후 캡처한 KRX 마감가(중소형) → ③전일 NXT 종가(폴백).
     if config.session.is_toss:
         config.console.print(
-            "[yellow]※ [토스증권] 등락률 안내:[/yellow] 마감(15:30) 후 저장한 "
-            "[bold]KRX 정규장 마감가[/bold]를 기준으로 등락률을 계산합니다(HTS와 일치).\n"
-            "[dim]   → 저장분이 없는 날(첫 구동·마감 전 등)은 '전일 NXT 종가'로 폴백해 KRX 기준과 "
-            "소폭 다를 수 있으며, 다음 거래일부터 정상화됩니다.[/dim]\n")
+            "[yellow]※ [토스증권] 등락률 안내:[/yellow] 기준가는 "
+            "[bold]①랭킹 basePrice(대형주 전일 KRX 종가) → ②마감 후 캡처한 KRX 마감가 → "
+            "③전일 NXT 종가[/bold] 순으로 사용합니다(HTS 일치 우선).\n"
+            "[dim]   → ③으로 폴백하는 종목/시점(첫 구동·마감 전 등)만 KRX 기준과 소폭 다를 수 있습니다.[/dim]\n")
 
     with Progress(
         SpinnerColumn(),

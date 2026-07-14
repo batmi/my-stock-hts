@@ -51,6 +51,7 @@ _GROUP_RPS = {
     "ORDER": _TOSS_MAX_RPS,
     "ORDER_HISTORY": _TOSS_MAX_RPS,
     "ORDER_INFO": _TOSS_MAX_RPS,
+    "RANKING": _TOSS_MAX_RPS,
 }
 
 _rate_lock = threading.Lock()
@@ -357,6 +358,20 @@ def get_candles(symbol, interval="1d", count=100, before=None, adjusted=True):
 # =========================================================================
 # 종목 정보 (Stock Info)
 # =========================================================================
+def get_rankings(rank_type="MARKET_TRADING_AMOUNT", market_country="KR",
+                 duration="realtime", count=100, exclude_investment_caution=False):
+    """주식 랭킹. {rankedAt, rankings:[{rank,symbol,currency,price:{lastPrice,basePrice,changeRate},...}]}
+
+    MARKET_*/TOSS_* 타입의 price.basePrice = '전일 기준가'(= 전일 정규장 종가, HTS 등락률 기준가).
+    → 랭킹 상위(대형주)의 KRX 기준가를 역산·저장 없이 라이브로 확보하는 용도.
+    """
+    return _request("GET", "/api/v1/rankings", group="RANKING",
+                    params={"type": rank_type, "marketCountry": market_country,
+                            "duration": duration, "count": count,
+                            "excludeInvestmentCaution": str(exclude_investment_caution).lower()},
+                    account=False)
+
+
 def get_stocks(symbols):
     """종목 기본정보 다건. symbols: list[str] (최대 200)."""
     if isinstance(symbols, (list, tuple)):

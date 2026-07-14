@@ -66,8 +66,10 @@ def dump_toss(code):
         console.print(f"[red]get_current_price_data 오류: {e}[/red]\n")
 
     try:
-        console.print(f"[bold cyan]api._toss_base_price(code) (기준가: 저장 KRX마감가 우선, 없으면 전일 NXT 종가)[/bold cyan] = "
-                      f"{api._toss_base_price(code)}\n")
+        console.print(f"[bold cyan]api._toss_base_price(code) (기준가: ①랭킹 basePrice ②저장 KRX마감가 ③전일 NXT)[/bold cyan] = "
+                      f"{api._toss_base_price(code)}")
+        console.print(f"  [dim]1순위 api._toss_ranking_base(code) = {api._toss_ranking_base(code)} "
+                      f"(None이면 랭킹 밖→하위순위)[/dim]\n")
     except Exception as e:
         console.print(f"[red]_toss_base_price 오류: {e}[/red]\n")
 
@@ -196,8 +198,8 @@ def main():
             dump_kis(code)
 
     if config.session.is_toss:
-        console.print("[dim]※ TOSS엔 전일 KRX 정규장 종가 필드가 없다(역산/yfinance는 불안정해 폐기). 기준가는 "
-                      "①마감(15:30) 후 정규장 분봉으로 캡처·저장한 KRX 마감가(HTS 일치) 우선, ②없으면 전일 NXT 종가 폴백.[/dim]")
+        console.print("[dim]※ TOSS엔 전일 KRX 정규장 종가 단건 필드가 없다(역산/yfinance는 폐기). 기준가 우선순위: "
+                      "①랭킹 basePrice(대형주 전일 KRX 종가, 라이브·HTS 일치) → ②마감 후 캡처한 KRX 마감가 → ③전일 NXT 종가.[/dim]")
     else:
         console.print("[dim]※ KIS: '현재가 stale + 강도 갱신' 종목은 KRX(J)/NXT(NX) 현재가 원본과 fetch_nxt_price를 "
                       "대조하라. NXT(NX) 원본 stck_prpr는 살아있는데 fetch_nxt_price=0 이거나, 멀티시세 stck_prpr가 "
