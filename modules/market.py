@@ -67,7 +67,7 @@ ALL_INDICES = [
     # 1. 국내 지수
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     # 2. 미국 지수
-    ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500", "^GSPC"), ("다우존스", "^DJI"), ("러셀2000", "^RUT"),
+    ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
     # 3. 섹터 및 지표
     ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
@@ -166,7 +166,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움", "솔라나", "리플"]
-        is_futures = name in ["나스닥 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
+        is_futures = name in ["나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
@@ -521,7 +521,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         
         adaptive_targets = [
             "코스피", "코스닥", "코스피200", "코스닥150",
-            "나스닥 선물", "나스닥", "S&P500", "다우존스", "러셀2000",
+            "나스닥 선물", "나스닥", "S&P500 선물", "S&P500", "다우존스 선물", "다우존스", "러셀2000 선물", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40", 
             "Germany - DAX 40", "Europe - STOXX 50",
@@ -967,7 +967,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]: 
+                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]:
                     table.add_section()
 
                 res = results_dict.get(name)
