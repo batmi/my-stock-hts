@@ -315,14 +315,21 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     is_macd_expanding = False
     if macd_hist is not None and prev_macd_hist is not None:
         is_macd_expanding = (macd_hist > 0 and macd_hist >= prev_macd_hist * 0.8)
-    
-    if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= adx_min):
+
+    # [개선] 시너지 구조 게이트: 장기 역배열(주가<120일선) '이고' MACD가 0선 아래인 '지하실'에서
+    #   히스토그램만 골든크로스한 '데드캣 바운스'가 시너지 2.0점을 쓸어담는 것을 차단.
+    #   ADX는 방향을 모르고(폭락장도 높음), is_macd_expanding은 0선 아래 크로스도 True가 되므로
+    #   단독으로는 역추세 급반등을 걸러내지 못한다. macd>0(추세 확립) 또는 주가>120일선(장기 구조
+    #   회복) 중 하나라도 충족할 때만 시너지를 인정한다. (단독 Trend 가점의 macd>0 게이트와 정합)
+    synergy_structure_ok = not (macd is not None and macd <= 0 and (ema120 is None or price <= ema120))
+
+    if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= adx_min) and synergy_structure_ok:
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"추세 시작: 주가>60일선+MACD확산+ADX 20↑ (+{s:.2f})")
-        
+
     # Momentum Thrust
-    if is_macd_expanding and (rsi is not None and rsi >= score_rsi_strong) and obv_trend:
+    if is_macd_expanding and (rsi is not None and rsi >= score_rsi_strong) and obv_trend and synergy_structure_ok:
         s = round(1.0 * r_syn, 2)
         score += s
         details.append(f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")
