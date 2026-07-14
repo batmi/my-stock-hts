@@ -1486,6 +1486,7 @@ def _run_tradingview_screener():
             else:
                 task_main = progress.add_task("[cyan]프리셋 스캔 진행률[/cyan]", total=len(target_ids))
 
+            presets_done = 0  # [추가] 전체 진행률을 진행 중 프리셋의 소진행률까지 반영하기 위한 완료 카운터
             for pid in target_ids:
                 p_name = SCREENER_PRESETS[pid]["name"]
                 if is_single:
@@ -1561,6 +1562,8 @@ def _run_tradingview_screener():
                         "Miscellaneous": "기타"
                     }
                     
+                    total_rows = len(df)  # [추가] 메인 진행률에 프리셋 내부 소진행률을 반영하기 위한 총 행 수
+                    row_done = 0
                     for idx, row in df.iterrows():
                         ticker = str(row.get('name', '')).strip()
                         name = str(row.get('description', ticker)).strip()
@@ -1669,7 +1672,11 @@ def _run_tradingview_screener():
                             macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                         )
                         progress.advance(active_task)
-                        
+                        # [추가] 진행 중 프리셋의 행 처리 비율을 메인 진행률에 실시간 반영
+                        if not is_single and total_rows:
+                            row_done += 1
+                            progress.update(task_main, completed=presets_done + row_done / total_rows)
+
                     if not is_single:
                         progress.remove_task(task_sub)
                     results.append((pid, p_name, table))
@@ -1679,7 +1686,9 @@ def _run_tradingview_screener():
                     results.append((pid, p_name, None))
 
                 if not is_single:
-                    progress.advance(task_main)
+                    # 소진행률 반영으로 completed가 부동소수 오차/미달일 수 있어 정수 완료값으로 정합
+                    presets_done += 1
+                    progress.update(task_main, completed=presets_done)
 
         for pid, p_full_name, table in results:
             cond_str = f" {preset_conditions[pid]}" if preset_conditions.get(pid) else ""
