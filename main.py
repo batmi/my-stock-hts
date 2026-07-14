@@ -914,17 +914,6 @@ def main():
         sys.exit(1)
     config.console.print("\n[green]모든 점검 통과. 시스템을 시작합니다.[/green]\n")
 
-    # [안내] mode 3(토스): 등락률 기준가 정책 고지.
-    #  TOSS는 전일 KRX 정규장 종가 필드를 직접 안 준다(역산·yfinance는 불안정해 폐기).
-    #  기준가 우선순위: ①랭킹 basePrice(대형주 전일 KRX 종가, 라이브·HTS 일치) →
-    #  ②마감 후 캡처한 KRX 마감가(중소형) → ③전일 NXT 종가(폴백).
-    if config.session.is_toss:
-        config.console.print(
-            "[yellow]※ [토스증권] 등락률 안내:[/yellow] 기준가는 "
-            "[bold]①랭킹 basePrice(대형주 전일 KRX 종가) → ②마감 후 캡처한 KRX 마감가 → "
-            "③전일 NXT 종가[/bold] 순으로 사용합니다(HTS 일치 우선).\n"
-            "[dim]   → ③으로 폴백하는 종목/시점(첫 구동·마감 전 등)만 KRX 기준과 소폭 다를 수 있습니다.[/dim]\n")
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),

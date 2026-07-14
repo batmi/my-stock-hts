@@ -83,6 +83,38 @@ def _get_custom_settings_summary():
         return "\n\n[현재 적용된 커스텀 설정 내역]\n" + "\n".join(lines)
     return ""
 
+_PRESET_DISPLAY = {
+    "default": ("🟢", "기본 (Default)"),
+    "bull": ("🔴", "강세장 (Bull)"),
+    "bear": ("🔵", "약세장 (Bear)"),
+    "sideways": ("🟡", "횡보장 (Sideways)"),
+    "custom": ("⚪", "커스텀 (Custom)"),
+}
+
+def _notify_preset_switch(old_preset, new_preset):
+    """설정 변경으로 활성 프리셋이 바뀌면 텔레그램 알림을 보내고, 하단 고정 키보드
+    (상태 요약 버튼의 프리셋 색상 이모지)를 최신 프리셋으로 재전송하여 갱신한다.
+
+    핵심: 텔레그램 Reply Keyboard는 새 메시지를 보낼 때만 갱신되므로, 프리셋이
+    '커스텀으로 진입'하는 경우뿐 아니라 '커스텀→기본' 등 어떤 전환이든 메시지를
+    보내야 버튼 색상이 CLI와 동기화된다.
+    """
+    if new_preset == old_preset:
+        return
+    try:
+        if not getattr(config, 'ENABLE_TELEGRAM', True):
+            return
+        from modules.telegram_bot import TelegramCommander
+        emoji, name = _PRESET_DISPLAY.get(new_preset, ("⚪", new_preset))
+        if new_preset == "custom":
+            custom_summary = _get_custom_settings_summary()
+            msg = f"{emoji} [설정 변경] 세부 설정이 변경되어 '{name}' 프리셋 모드로 전환되었습니다.{custom_summary}"
+        else:
+            msg = f"{emoji} [설정 변경] 세부 설정이 '{name}' 프리셋과 일치하여 해당 모드로 전환되었습니다."
+        TelegramCommander()._send_reply(msg)
+    except Exception:
+        pass
+
 def view_system_config(group=None):
     """현재 시스템 설정 조회 (group: 1~5 해당 그룹만 조회, None이면 전체)"""
     group_names = {
@@ -480,17 +512,15 @@ def _edit_config_table(title_source, items_source, check_preset=True):
             old_preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
             if check_preset and changed_preset_keys:
                 config.settings.ACTIVE_PRESET = "custom"
+            # _save_dynamic_config() 내부의 check_and_update_active_preset()가
+            # 변경된 값이 실제로 어떤 프리셋과 일치하는지 재판별하여 ACTIVE_PRESET을 보정한다.
             _save_dynamic_config()
             action_taken = True
-            
-            if check_preset and changed_preset_keys and old_preset != "custom":
-                try:
-                    if getattr(config, 'ENABLE_TELEGRAM', True):
-                        from modules.telegram_bot import TelegramCommander
-                        custom_summary = _get_custom_settings_summary()
-                        TelegramCommander()._send_reply(f"⚪ [설정 변경] 세부 설정이 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.{custom_summary}")
-                except Exception:
-                    pass
+
+            if check_preset and changed_preset_keys:
+                # 보정 후의 실제 프리셋을 기준으로 어떤 전환이든(예: 커스텀→기본) 알림/키보드 갱신
+                new_preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
+                _notify_preset_switch(old_preset, new_preset)
             
     return action_taken
 
@@ -771,17 +801,14 @@ def modify_scoring_weights():
                     console.print("[yellow]가중치의 합은 정확히 10.0점이 되어야 합니다. 다시 입력해주세요.[/yellow]")
                     continue
 
+                old_preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
                 config.SCORING_WEIGHTS.update(new_weights)
-                
+
                 config.settings.ACTIVE_PRESET = "custom"
+                # _save_dynamic_config() 내부에서 실제 매칭 프리셋으로 보정됨
                 _save_dynamic_config()
-                try:
-                    if getattr(config, 'ENABLE_TELEGRAM', True):
-                        from modules.telegram_bot import TelegramCommander
-                        custom_summary = _get_custom_settings_summary()
-                        TelegramCommander()._send_reply(f"⚪ [설정 변경] 스코어링 가중치가 변경되어 '커스텀(Custom)' 프리셋 모드로 전환되었습니다.{custom_summary}")
-                except Exception:
-                    pass
+                new_preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
+                _notify_preset_switch(old_preset, new_preset)
                 console.print("\n[bold green]가중치 설정이 저장되었습니다.[/bold green]")
                 action_taken = True
                 
