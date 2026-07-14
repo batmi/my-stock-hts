@@ -715,7 +715,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
-                               weights=None, name="Unknown", code="Unknown", days=0):
+                               weights=None, name="Unknown", code="Unknown", days=0, pyramiding_max=None):
     """Monte Carlo 시뮬레이션 실행 (1,000회 반복)
 
     각 시행마다 (워밍업 포함) 전체 가격 시계열에 노이즈를 주입한 뒤 보조지표를 재계산하므로,
@@ -784,7 +784,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
                                     time_stop_days_limit=time_stop_days,
                                     use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
                                     execution_noise=True,
-                                    weights=weights)
+                                    weights=weights, pyramiding_max_count_limit=pyramiding_max)
             
             # 결과 수집
             returns.append(res['total_return'])
@@ -1092,7 +1092,8 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             ts_activation_rate=base_params['ts_activation'], ts_callback_rate=base_params['ts_callback'],
             time_stop_days_limit=base_params['time_stop_days'],
             use_atr_stop_limit=base_params['use_atr_stop'], atr_stop_multiplier_limit=base_params['atr_mult'],
-            half_tp_use_limit=base_params['half_tp_use'], weights={k: v for k, v in w.items() if k != "DESC"}
+            half_tp_use_limit=base_params['half_tp_use'], weights={k: v for k, v in w.items() if k != "DESC"},
+            pyramiding_max_count_limit=base_params.get('pyramiding_max')
         )
 
     def _sharpe(res):
@@ -1366,7 +1367,10 @@ def run_backtest():
         use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         half_tp_use = bool(custom_rule['half_take_profit_use']) if custom_rule and custom_rule.get('half_take_profit_use') is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
-        
+        # [추가] 피라미딩 최대 차수 오버라이드. None이면 config 기본값(PYRAMIDING_USE 포함) 그대로 사용,
+        #        0이면 미사용, 1~5이면 해당 차수까지 증액 허용.
+        pyramiding_max = None
+
         weights = config.SCORING_WEIGHTS
         if custom_rule and custom_rule.get('weights'):
             try:
@@ -1502,7 +1506,21 @@ def run_backtest():
                 if val.lower() in ['b', 'q']: continue
                 stop_loss = float(val)
             
-            config.console.print("\n[bold]5. 스코어링 가중치 설정[/bold]")
+            config.console.print("\n[bold]5. 피라미딩(수익 증액) 차수 설정[/bold]")
+            cur_pyr_on = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False)
+            cur_pyr_cnt = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+            cur_pyr_desc = f"{cur_pyr_cnt}차" if cur_pyr_on else "미사용"
+            if Prompt.ask(f"피라미딩 차수를 변경하시겠습니까? (현재: {cur_pyr_desc})", choices=["y", "n"], default="n") == "y":
+                val = Prompt.ask(
+                    "최대 피라미딩 차수 (0: 미사용 ~ 최대 5차)\n[dim]수익 포지션을 최대 몇 차까지 증액할지 설정 (0이면 증액 안 함)[/dim]",
+                    default=str(cur_pyr_cnt if cur_pyr_on else 0))
+                if val.lower() in ['b', 'q']: continue
+                try:
+                    pyramiding_max = max(0, min(5, int(val)))
+                except Exception:
+                    pyramiding_max = cur_pyr_cnt if cur_pyr_on else 0
+
+            config.console.print("\n[bold]6. 스코어링 가중치 설정[/bold]")
             if Prompt.ask("가중치를 변경하시겠습니까?", choices=["y", "n"], default="n") == "y":
                 curr_weights = weights.copy() if weights else config.SCORING_WEIGHTS.copy()
                 while True:
@@ -1552,6 +1570,11 @@ def run_backtest():
         msg += f"   [cyan]익절 / 손절[/cyan]              +{take_profit}% (반익절: {'ON' if half_tp_use else 'OFF'}) / {f'{stop_loss}% (ATR x{atr_mult})' if use_atr_stop else f'{stop_loss}%'}\n"
         msg += f"   [cyan]트레일링 스탑[/cyan]            +{ts_activation}% 발동 후 -{ts_callback}%\n"
         msg += f"   [cyan]시간 청산[/cyan]                {time_stop_days}일 경과 시 강제 매도\n"
+        if pyramiding_max is not None:
+            pyr_disp = f"최대 {pyramiding_max}차" if pyramiding_max > 0 else "미사용"
+        else:
+            pyr_disp = f"최대 {config.ANALYSIS_THRESHOLDS.get('PYRAMIDING_MAX_COUNT', 1)}차" if config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False) else "미사용"
+        msg += f"   [cyan]피라미딩 차수[/cyan]            {pyr_disp}\n"
         if weights:
             msg += f"   [cyan]스코어링 가중치[/cyan]          추세 {weights.get('TREND', 4.0)} / 모멘텀 {weights.get('MOMENTUM', 2.5)} / 강도 {weights.get('STRENGTH', 1.5)} / 시너지 {weights.get('SYNERGY', 2.0)}\n"
         msg += "[dim]" + "─" * 75 + "[/dim]\n"
@@ -1631,7 +1654,7 @@ def run_backtest():
             run_monte_carlo_simulation(df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
                                        time_stop_days, use_atr_stop, atr_mult, half_tp_use,
-                                       weights=weights, name=name, code=code, days=days)
+                                       weights=weights, name=name, code=code, days=days, pyramiding_max=pyramiding_max)
             last_choice = sub_choice
             utils.pause()
             continue
@@ -1642,6 +1665,7 @@ def run_backtest():
                 "stop_loss": stop_loss, "take_profit": take_profit, "take_profit_rsi": take_profit_rsi,
                 "ts_activation": ts_activation, "ts_callback": ts_callback, "time_stop_days": time_stop_days,
                 "use_atr_stop": use_atr_stop, "atr_mult": atr_mult, "half_tp_use": half_tp_use,
+                "pyramiding_max": pyramiding_max,
             }
             run_walk_forward(df, start_idx, initial_capital, is_overseas, base_params,
                              name=name, code=code, days=days)
@@ -1656,7 +1680,7 @@ def run_backtest():
                                 ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
                                 time_stop_days_limit=time_stop_days,
                                 use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
-                                weights=weights) # [수정] 가중치 전달
+                                weights=weights, pyramiding_max_count_limit=pyramiding_max) # [수정] 가중치·피라미딩 차수 전달
         
         # 결과 변수 매핑 (기존 출력 로직 호환)
         final_asset = res['final_asset']
