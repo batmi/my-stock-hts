@@ -3014,22 +3014,30 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
                         valid_val = float(str(tday_rltv).replace(',', ''))
                         if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                             logger.debug(f"[VOL_STRENGTH_PARSED] [{code}] Extracted Value: {valid_val}%")
-                        final_vol = valid_val
+                        # [수정] 체결강도 0은 해당 거래소 당일 무거래(NXT 단독시간대엔 KRX(J)가 닫혀 항상 0)를
+                        #  의미하는 무효값이므로 채택하지 않는다. 실제값은 아래 NXT(NX) 조회가 채운다.
+                        #  (0을 그대로 채택→캐시하면 NXT 조회 실패 시 [0%]로 오표시되는 문제를 차단)
+                        if valid_val > 0:
+                            final_vol = valid_val
                     except Exception as e:
                         if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]: logger.debug(f"[VOL_STRENGTH_ERROR] [{code}] Parse Error: {e}")
                         pass
+            # [수정] rt_cd=0 정상 응답이면 값이 0(무거래)이어도 재시도는 무의미하므로 즉시 종료한다.
+            #  (NXT 단독시간대에 J 조회를 3회 반복하면 EGW00201 스로틀만 악화 → 팬아웃 지연)
+            break
         elif data.get('msg_cd') == 'EGW00201': time.sleep(0.2)
         else: time.sleep(0.2)
-        
-        if final_vol is not None:
-            break
             
     # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
     # [수정] 모의투자(VTS)는 NXT 미지원 → NX 조회 스킵 (불필요한 ReadTimeout 방지)
     try:
         # [최적화] 정규장엔 NXT 보조호출 생략(_nxt_quote_window), NXT 단독시간에만 조회 → TPS 절감
         if include_nxt and not config.session.is_simulation and _nxt_quote_window():
-            nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=0)
+            # [수정] retries=1: NXT 단독시간대엔 NX가 유일한 유효 체결강도 소스인데, 개요 팬아웃(다워커
+            #  동시호출) 중 EGW00201(초당 거래건수 초과)에 걸려 retries=0으로 즉시 실패하면 J의 0으로
+            #  폴백돼 [0%]로 오표시된다(간헐적·종목마다 뒤바뀜). call_api의 스로틀 백오프로 회복시킨다.
+            #  (fetch_nxt_price의 동일 EGW00201 대응과 일관)
+            nxt_data = call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"], "domestic", "quotations", "vol_strength", params={"FID_COND_MRKT_DIV_CODE": "NX", "FID_INPUT_ISCD": code}, timeout=2, retries=1)
             if nxt_data and nxt_data.get('rt_cd') == '0':
                 nxt_items = nxt_data.get('output', [])
                 if nxt_items:
