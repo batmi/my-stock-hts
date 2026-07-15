@@ -55,55 +55,7 @@ _TVDATAFEED_INDEX_SYMBOLS = {
 }
 
 # tvdatafeed는 PyPI 미배포(git 전용)라 배포 환경(예: 라즈베리파이)에 누락될 수 있다.
-# 미설치 시 로딩 단계에서 git으로 자동 설치를 1회 시도한다.
-TVDATAFEED_GIT_URL = "git+https://github.com/rongardF/tvdatafeed.git"
-_TVDATAFEED_AVAILABLE = None  # None=미판정, True/False
-_TVDATAFEED_INSTALL_TRIED = False
-_TVDATAFEED_INSTALL_LOCK = threading.Lock()
-
-def is_tvdatafeed_available():
-    """tvdatafeed 라이브러리 import 가능 여부(설치 여부)를 판정해 캐시한다."""
-    global _TVDATAFEED_AVAILABLE
-    if _TVDATAFEED_AVAILABLE is None:
-        try:
-            import tvDatafeed  # noqa: F401
-            _TVDATAFEED_AVAILABLE = True
-        except Exception:
-            _TVDATAFEED_AVAILABLE = False
-    return _TVDATAFEED_AVAILABLE
-
-def ensure_tvdatafeed_installed():
-    """tvdatafeed 미설치 시 git에서 자동 설치를 1회 시도한다(로딩 단계에서 호출).
-    이미 설치/설치 성공 시 True. PyPI 미배포라 pip를 git URL로 실행한다.
-    실패는 1회만 기록해 반복 설치를 막고, 조용히 False를 반환한다(익명 조회 자체가 폴백)."""
-    global _TVDATAFEED_AVAILABLE, _TVDATAFEED_INSTALL_TRIED
-    if is_tvdatafeed_available():
-        return True
-    with _TVDATAFEED_INSTALL_LOCK:
-        if is_tvdatafeed_available():
-            return True
-        if _TVDATAFEED_INSTALL_TRIED:
-            return False
-        _TVDATAFEED_INSTALL_TRIED = True
-        import subprocess
-        import importlib
-        try:
-            logger.info("[TVDATAFEED] 미설치 감지 → git 자동 설치 시도")
-            res = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--no-cache-dir", TVDATAFEED_GIT_URL],
-                capture_output=True, text=True, timeout=600)
-            if res.returncode == 0:
-                importlib.invalidate_caches()
-                _TVDATAFEED_AVAILABLE = None  # 재판정
-                ok = is_tvdatafeed_available()
-                logger.info(f"[TVDATAFEED] 자동 설치 {'완료' if ok else '후 import 실패'}")
-                return ok
-            logger.warning(f"[TVDATAFEED] 자동 설치 실패(rc={res.returncode}): {(res.stderr or '')[-300:]}")
-            return False
-        except Exception as e:
-            logger.warning(f"[TVDATAFEED] 자동 설치 예외: {e}")
-            return False
-
+# 설치는 run.sh의 '필수 라이브러리 설치 상태 스캔' 단계가 git URL로 담당한다(여기서는 조회만).
 def _get_tvdatafeed():
     """tvDatafeed 인스턴스를 지연 생성해 재사용한다(익명). 미설치/초기화 실패 시 None."""
     global _TVDATAFEED_INSTANCE

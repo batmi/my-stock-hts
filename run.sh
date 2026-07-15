@@ -6,8 +6,12 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener gnureadline holidays pytest pytest-xdist"
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener tvdatafeed gnureadline holidays pytest pytest-xdist"
 MISSING_LIBS=""
+
+# tvdatafeed는 PyPI 미배포(git 전용)라 일반 pip install로 설치되지 않는다. git URL로 설치한다.
+# (토스 모드 코스피200·코스닥150 시세를 TradingView로 조회하는 데 사용)
+TVDATAFEED_GIT_URL="git+https://github.com/rongardF/tvdatafeed.git"
 
 # 2. 운영체제 확인 (macOS vs Linux)
 OS_NAME=$(uname -s)
@@ -70,6 +74,9 @@ for lib in $REQUIRED_LIBS; do
             "tradingview-screener")
                 IMPORT_NAME="tradingview_screener"
                 ;;
+            "tvdatafeed")
+                IMPORT_NAME="tvDatafeed"
+                ;;
             "gnureadline")
                 IMPORT_NAME="gnureadline"
                 ;;
@@ -92,7 +99,12 @@ if [ -n "$MISSING_LIBS" ]; then
     if [[ "$confirm" == [yY] || "$confirm" == "yes" ]]; then
         echo "[진행] 설치를 시작합니다..."
         for lib in $MISSING_LIBS; do
-            $PIP_PATH install $lib $PIP_FLAGS
+            if [ "$lib" = "tvdatafeed" ]; then
+                # PyPI 미배포 → git URL로 설치
+                $PIP_PATH install "$TVDATAFEED_GIT_URL" $PIP_FLAGS
+            else
+                $PIP_PATH install $lib $PIP_FLAGS
+            fi
         done
         echo "[완료] 모든 라이브러리 설치가 끝났습니다."
     else
