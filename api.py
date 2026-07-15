@@ -3455,6 +3455,16 @@ def _toss_before_nxt_open():
     return _before_nxt_premarket_open()
 
 
+def _before_krx_regular_open():
+    """오늘이 거래일이고 KRX 정규장 개장(09:00) 전이면 True.
+
+    국내 지수는 NXT 연장거래가 없어 09:00 개장 전까지 현재가=전일 종가로 등락률이 0%가 된다.
+    이 구간엔 직전 정규장 최종 등락률(전일 vs 전전일)을 대신 표시하기 위한 판정.
+    """
+    now = datetime.now()
+    return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') < '0900'
+
+
 def _toss_capture_krx_close(code):
     """마감 후, 오늘 KRX 정규장 마감가(정규장 분봉의 마지막=15:30 종가)를 하루 1회 저장한다.
 

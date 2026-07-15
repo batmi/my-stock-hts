@@ -385,7 +385,24 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         diff = current - prev
         rate = 0.0
         if prev != 0: rate = (diff / prev) * 100
-        
+
+        # [장전 폴백] 국내 지수는 NXT 연장거래가 없어 KRX 개장(09:00) 전엔 현재가=전일 종가라
+        #  등락률이 0%로 굳는다. 이 구간엔 직전 정규장 최종 등락률(전일 vs 전전일 종가)을 표시한다.
+        #  (일봉 마지막 봉이 장전 placeholder(오늘)면 전전일=-3, 오늘 봉이 없으면 전전일=-2)
+        if is_domestic_index and diff == 0 and not df_daily.empty and len(df_daily) >= 2 \
+           and api._before_krx_regular_open():
+            try:
+                today_d = datetime.strptime(utils.market_today(False), '%Y%m%d').date()
+                last_d = df_daily.index[-1].date()
+                pp_idx = -3 if last_d >= today_d else -2
+                if len(df_daily) >= abs(pp_idx):
+                    pp = float(df_daily['close'].iloc[pp_idx])
+                    if not math.isnan(pp) and pp > 0:
+                        prev = pp
+                        diff = current - prev
+                        rate = (diff / prev) * 100
+            except Exception: pass
+
         if math.isnan(diff): diff = 0.0
         if math.isnan(rate): rate = 0.0
 
