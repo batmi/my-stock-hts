@@ -285,7 +285,23 @@ def preflight_check():
         config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
         config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
-        
+
+    # 4. [추가] 토스 모드: 코스피200·코스닥150 시세는 tvdatafeed(git 전용, PyPI 미배포)로 조회하므로
+    #    미설치 환경(예: 라즈베리파이)에서는 로딩 단계에서 자동 설치를 1회 시도한다.
+    if config.session.is_toss and not analysis.is_tvdatafeed_available():
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=config.console,
+            transient=True
+        ) as progress:
+            progress.add_task("[cyan]  - tvdatafeed(코스피200·코스닥150용) 자동 설치 중... (최초 1회)[/cyan]", total=None)
+            tv_installed = analysis.ensure_tvdatafeed_installed()
+        if tv_installed:
+            config.console.print("  - 성공: tvdatafeed 설치 확인 완료.")
+        else:
+            config.console.print("  - [yellow]경고[/]: tvdatafeed 자동 설치 실패 — 코스피200·코스닥150 시세가 제한될 수 있습니다. (네트워크/pip 확인)")
+
     return checks_ok
 
 def show_help():

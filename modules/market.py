@@ -1024,7 +1024,7 @@ def _show_market_indices_core(target_indices=None):
     if failed_tickers:
         targets = ", ".join(failed_tickers)
         config.console.print(f"[dim][red] ⚠️ 데이터 수신 실패: {targets} - yfinance 서버 장애 또는 일시적 통신 오류일 수 있습니다. 잠시 후 다시 시도하세요.[/red][/dim]")
-        
+
     return failed_tickers
 
 def show_market_indices(interval=0):
