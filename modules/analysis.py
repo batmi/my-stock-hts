@@ -54,14 +54,29 @@ _TVDATAFEED_INDEX_SYMBOLS = {
     "KOSDAQ150": ("KOSDAQ150", "KRX"),
 }
 
+_TVDATAFEED_ANON_TOKEN = "unauthorized_user_token"  # tvDatafeed 로그인 실패 시 익명 토큰
+
 def _get_tvdatafeed():
-    """tvDatafeed 인스턴스를 지연 생성해 재사용한다(로그인 없음). 미설치/초기화 실패 시 None."""
+    """tvDatafeed 인스턴스를 지연 생성해 재사용한다. config.TVUSER/TVPASSWD가 있으면 로그인,
+    없거나 로그인 실패 시 익명(nologin)으로 동작한다. 미설치/초기화 실패 시 None."""
     global _TVDATAFEED_INSTANCE
     if _TVDATAFEED_INSTANCE is not None:
         return _TVDATAFEED_INSTANCE
     try:
         from tvDatafeed import TvDatafeed
-        _TVDATAFEED_INSTANCE = TvDatafeed()
+        user = (getattr(config, 'TVUSER', '') or '').strip()
+        pw = (getattr(config, 'TVPASSWD', '') or '').strip()
+        if user and pw:
+            _TVDATAFEED_INSTANCE = TvDatafeed(username=user, password=pw)
+            # 로그인 성공 여부 판정: 익명 토큰이면 signin 실패(캡차/2FA 등)로 익명 폴백된 것.
+            token = getattr(_TVDATAFEED_INSTANCE, 'token', None)
+            if token and token != _TVDATAFEED_ANON_TOKEN:
+                logger.info("[TVDATAFEED] TradingView 로그인 성공(인증 토큰 사용)")
+            else:
+                logger.warning("[TVDATAFEED] 로그인 실패 → 익명 조회로 폴백(캡차/2FA 가능). "
+                               "TVUSER/TVPASSWD 확인 필요")
+        else:
+            _TVDATAFEED_INSTANCE = TvDatafeed()  # 익명
     except Exception as e:
         logger.debug(f"[TVDATAFEED] 초기화 실패(라이브러리 미설치 가능): {e}")
         _TVDATAFEED_INSTANCE = None
@@ -86,9 +101,9 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
         return None
 
     # 익명 웹소켓은 웜 인스턴스에서도 ~1/3 확률로 빈 응답이 오고 버스트로 연속 실패도 있어
-    # 최대 4회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)하고, 실패 시 스테일 커넥션을
-    # 버리고 새 인스턴스로 재접속한다. 마지막 시도 후에는 대기/재접속하지 않는다(UI 지연 최소화).
-    global _TVDATAFEED_INSTANCE
+    # 최대 4회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)한다. get_hist는 호출마다 웹소켓을
+    # 새로 맺으므로(인증 토큰 재전송 포함) 인스턴스를 재생성할 필요가 없다 — 로그인 상태에서
+    # 반복 재생성 시 매번 재-signin(캡차/차단 위험)이 발생하므로 인스턴스는 재사용한다.
     max_attempts = 4
     df = None
     for attempt in range(max_attempts):
@@ -102,12 +117,7 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
             logger.debug(f"[TVDATAFEED] {market_type} 조회 오류(attempt={attempt}): {e}")
             df = None
         if attempt < max_attempts - 1:
-            # 드롭된 커넥션 폐기 후 재접속
-            _TVDATAFEED_INSTANCE = None
-            time.sleep(0.8 * (attempt + 1))
-            tv = _get_tvdatafeed()
-            if tv is None:
-                break
+            time.sleep(0.8 * (attempt + 1))  # 페이싱 후 재시도(UI 지연 최소화 위해 점증 백오프)
 
     if df is None or df.empty:
         logger.debug(f"[TVDATAFEED] {market_type} 데이터 없음")

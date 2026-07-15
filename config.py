@@ -359,6 +359,12 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 # ==========================================================
 DART_API_KEY = os.getenv("DART_API_KEY", "")  # https://opendart.fss.or.kr 발급 (무료, 40자리)
 
+# [설정] TradingView 계정 (토스 모드 코스피200·코스닥150 tvDatafeed 조회 안정화용)
+#  익명 조회는 간헐 빈 응답이 잦아 로그인 시 인증 토큰으로 안정성/한도가 개선된다.
+#  ~/.htsrc에 `export TVUSER=...`, `export TVPASSWD=...` 등록 후 재시작. 미설정 시 익명 조회.
+TVUSER = os.getenv("TVUSER", "")
+TVPASSWD = os.getenv("TVPASSWD", "")
+
 # ==========================================================
 # [설정] 시장 지수 그룹 (Market Index Groups)
 # ==========================================================
