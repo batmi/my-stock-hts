@@ -3439,6 +3439,16 @@ def _toss_after_krx_close():
     return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') >= '1535'
 
 
+def _toss_before_nxt_open():
+    """오늘이 거래일이고 NXT(대체거래소) 프리마켓 개장(08:00) 전이면 True(전일 마감~아침).
+
+    NXT 미지원 종목의 '마지막 정규장 등락률'은 다음날 NXT 개장(08:00) 전까지만 유지한다.
+    08:00 이후엔 NXT 거래시간(프리 08~09시)이라, 미지원 종목은 체결 없이 0%로 노출한다.
+    """
+    now = datetime.now()
+    return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') < '0800'
+
+
 def _toss_capture_krx_close(code):
     """마감 후, 오늘 KRX 정규장 마감가(정규장 분봉의 마지막=15:30 종가)를 하루 1회 저장한다.
 
@@ -3541,6 +3551,30 @@ def _toss_base_price(code, chart_df=None):
         return base if base > 0 else None
     except Exception as e:
         logger.debug(f"[Toss] 기준가 산출 실패({code}): {e}")
+        return None
+
+
+def _toss_prev_prev_close(code):
+    """전전일(직전 정규장의 하루 전) 종가. 프리마켓 '최종 등락률' 기준가로 쓴다.
+
+    NXT 미지원 종목은 개장 전 체결이 없어 현재가=전일 종가=기준가 → 등락률 0%가 된다.
+    이때 '기준가'를 전전일 종가로 바꿔 직전 정규장의 최종 등락률(전일 vs 전전일)을
+    개장 전까지 유지 표시한다. 일봉 마지막 캔들이 전일(과거)이면 그 직전(-2)이 전전일,
+    이미 오늘 캔들이 있으면(-3)이 전전일이다.
+    """
+    today = datetime.now().strftime('%Y%m%d')
+    try:
+        df = _toss_cached_daily_chart(code)
+        if df is None or len(df) < 2:
+            return None
+        last_date = str(df.iloc[-1]['date']).replace('-', '')[:8]
+        idx = -2 if last_date < today else -3
+        if len(df) < abs(idx):
+            return None
+        pp = _toss_float(df.iloc[idx]['close'])
+        return pp if pp > 0 else None
+    except Exception as e:
+        logger.debug(f"[Toss] 전전일 종가 산출 실패({code}): {e}")
         return None
 
 
@@ -3785,6 +3819,16 @@ def _toss_current_price_data(code, is_overseas):
             output['stck_sdpr'] = str(int(base))
             output['prdy_vrss'] = str(int(round(p - base)))
             output['prdy_ctrt'] = str(round((p - base) / base * 100, 2))
+            # [마감 후 최종 등락률 유지] NXT 미지원 종목은 체결이 없어 현재가(lastPrice)=전일 종가
+            #  =기준가 → 등락률 0%가 된다. 다음날 NXT 개장(08:00) 전까지는 기준가를 전전일 종가로
+            #  대체해 직전 정규장 최종 등락률(전일 vs 전전일)을 유지한다. 08:00(NXT 프리마켓) 이후엔
+            #  대체하지 않아 KRX 개장 전까지 약 1시간은 0%로 노출된다.
+            if int(round(p)) == int(round(base)) and _toss_before_nxt_open():
+                pp = _toss_prev_prev_close(code)
+                if pp and pp > 0:
+                    output['stck_sdpr'] = str(int(pp))
+                    output['prdy_vrss'] = str(int(round(p - pp)))
+                    output['prdy_ctrt'] = str(round((p - pp) / pp * 100, 2))
     return {'rt_cd': '0', 'output': output}
 
 

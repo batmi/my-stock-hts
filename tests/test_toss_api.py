@@ -660,6 +660,72 @@ def test_current_price_data_adapter():
     assert res['output']['prdy_ctrt'] == '0.56'
 
 
+def test_current_price_data_keeps_last_session_rate_before_nxt_open():
+    """NXT 미지원 종목: 다음날 NXT 개장(08:00) 전엔 현재가=기준가여도 직전 정규장 등락률 유지."""
+    import api
+    config.session.is_toss = True
+    _reset_krx_store({})
+    _set_rank_base({"005930": 285000.0})  # 기준가(전일 종가) = 현재가와 동일 → 0% 상황
+    # 일봉: 전전일(280000) → 전일(285000). NXT 개장 전 오늘 캔들 없음.
+    _inject_daily_chart("005930", [{'date': '20260713', 'close': 280000.0},
+                                   {'date': '20260714', 'close': 285000.0}])
+    try:
+        with patch("toss_api.get_price",
+                   return_value={"symbol": "005930", "lastPrice": "285000", "currency": "KRW"}), \
+             patch.object(api, "_toss_capture_krx_close"), \
+             patch.object(api, "_toss_before_nxt_open", return_value=True):
+            res = api.get_current_price_data("005930", False)
+    finally:
+        config.session.is_toss = False
+        _pop_daily_chart("005930")
+    # 기준가를 전전일(280000)로 대체 → 직전 정규장 최종 등락률(전일 vs 전전일) 유지
+    assert res['output']['stck_prpr'] == '285000'
+    assert res['output']['stck_sdpr'] == '280000'
+    assert res['output']['prdy_vrss'] == '5000'
+    assert res['output']['prdy_ctrt'] == '1.79'
+
+
+def test_current_price_data_zero_rate_after_nxt_open():
+    """NXT 개장(08:00) 후엔 대체하지 않는다: 미지원 종목은 현재가=기준가 → 0% 노출."""
+    import api
+    config.session.is_toss = True
+    _reset_krx_store({})
+    _set_rank_base({"005930": 285000.0})
+    _inject_daily_chart("005930", [{'date': '20260713', 'close': 280000.0},
+                                   {'date': '20260714', 'close': 285000.0}])
+    try:
+        with patch("toss_api.get_price",
+                   return_value={"symbol": "005930", "lastPrice": "285000", "currency": "KRW"}), \
+             patch.object(api, "_toss_capture_krx_close"), \
+             patch.object(api, "_toss_before_nxt_open", return_value=False):
+            res = api.get_current_price_data("005930", False)
+    finally:
+        config.session.is_toss = False
+        _pop_daily_chart("005930")
+    assert res['output']['stck_sdpr'] == '285000'
+    assert res['output']['prdy_ctrt'] == '0.0'
+
+
+def test_toss_before_nxt_open_boundary():
+    """08:00 경계: 08:00 직전 True, 08:00·09:00 False (거래일 가정)."""
+    import api
+    from datetime import datetime as _dt
+
+    class _FrozenDT(_dt):
+        _now = None
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    today = _dt.now().strftime('%Y%m%d')
+    cases = {'0759': True, '0800': False, '0830': False, '0900': False}
+    for hhmm, expected in cases.items():
+        _FrozenDT._now = _dt.strptime(today + hhmm, '%Y%m%d%H%M')
+        with patch.object(api, 'datetime', _FrozenDT), \
+             patch.object(api, 'market_today', return_value=today):
+            assert api._toss_before_nxt_open() is expected, hhmm
+
+
 def test_order_book_adapter_totals():
     import api
     ob = {
