@@ -85,11 +85,13 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
     except Exception:
         return None
 
-    # 익명 웹소켓은 간헐 드롭이 있어 최대 3회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)하고,
-    # 실패 시 스테일 커넥션을 버리고 새 인스턴스로 재접속을 시도한다.
+    # 익명 웹소켓은 웜 인스턴스에서도 ~1/3 확률로 빈 응답이 오고 버스트로 연속 실패도 있어
+    # 최대 4회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)하고, 실패 시 스테일 커넥션을
+    # 버리고 새 인스턴스로 재접속한다. 마지막 시도 후에는 대기/재접속하지 않는다(UI 지연 최소화).
     global _TVDATAFEED_INSTANCE
+    max_attempts = 4
     df = None
-    for attempt in range(3):
+    for attempt in range(max_attempts):
         try:
             with _TVDATAFEED_LOCK:
                 df = tv.get_hist(symbol=symbol, exchange=exchange,
@@ -99,12 +101,13 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
         except Exception as e:
             logger.debug(f"[TVDATAFEED] {market_type} 조회 오류(attempt={attempt}): {e}")
             df = None
-        # 드롭된 커넥션 폐기 후 재접속
-        _TVDATAFEED_INSTANCE = None
-        time.sleep(1.0 * (attempt + 1))
-        tv = _get_tvdatafeed()
-        if tv is None:
-            break
+        if attempt < max_attempts - 1:
+            # 드롭된 커넥션 폐기 후 재접속
+            _TVDATAFEED_INSTANCE = None
+            time.sleep(0.8 * (attempt + 1))
+            tv = _get_tvdatafeed()
+            if tv is None:
+                break
 
     if df is None or df.empty:
         logger.debug(f"[TVDATAFEED] {market_type} 데이터 없음")
@@ -479,8 +482,11 @@ def _lookup_index_cache(market_type):
             return 'miss', None
         df = entry.get('df')
         has_good = df is not None and not df.empty
-        # 최근 실패가 음성 TTL 이내면 재조회를 억제(폭주 차단)하고 가진 데이터를 반환
-        if (now - entry.get('fail_time', 0)) < _INDEX_DATA_NEG_TTL:
+        # 최근 실패가 음성 TTL 이내면 재조회를 억제(폭주 차단)하고 가진 데이터를 반환한다.
+        # 단, 서빙할 정상 데이터가 있을 때만 억제한다. 한 번도 성공한 적 없으면(df=None)
+        # 억제해도 '-'만 반복되고 사용자 재시도가 무의미해지므로, 'miss'로 넘겨 실제 재조회를
+        # 허용한다(tvDatafeed 익명 조회는 간헐 실패가 있어 재시도로 대부분 성공).
+        if has_good and (now - entry.get('fail_time', 0)) < _INDEX_DATA_NEG_TTL:
             return 'suppress', df
         if has_good:
             if (now - entry.get('time', 0)) < _INDEX_DATA_CACHE_TTL:
