@@ -804,13 +804,23 @@ def test_print_table_worker_toss_us_52w_from_chart_perpbr_na():
     assert row[-1] == "[dim]-[/dim]" and row[-2] == "[dim]-[/dim]"
 
 
-def test_overseas_detail_na_for_toss():
+def test_overseas_detail_via_tv_for_toss():
+    """토스 모드: 해외 PER/PBR/상장주수는 TradingView 스캐너로 조회한다(KIS 미호출)."""
     import api
+    from unittest.mock import patch
     config.session.is_toss = True
+    api._MICRO_CACHE.clear()
     try:
-        assert api.fetch_overseas_detail_price("AAPL", "NAS") is None
+        with patch.object(api, '_tv_overseas_fundamentals',
+                          return_value={'perx': '39.27', 'pbrx': '44.71'}) as m_tv, \
+             patch.object(api, 'call_api') as m_kis:
+            res = api.fetch_overseas_detail_price("AAPL", "NAS")
+        assert res == {'perx': '39.27', 'pbrx': '44.71'}
+        m_tv.assert_called_once_with("AAPL")
+        m_kis.assert_not_called()  # 토스 모드에서 KIS DETAIL TR 미호출
     finally:
         config.session.is_toss = False
+        api._MICRO_CACHE.clear()
 
 
 def test_rate_limit_group_rps_and_cooldown():

@@ -123,6 +123,91 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
         logger.debug(f"[TVDATAFEED] {market_type} 스키마 변환 실패: {e}")
         return None
 
+# [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
+#  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을
+#  막기 위해 일정 시간 재조회를 건너뛴다. (성공 결과는 api._get_cached_chart가 6시간/디스크 캐싱)
+_TVDATAFEED_OVERSEAS_NEG_CACHE = {}   # code -> 실패 기록 시각(datetime)
+_TVDATAFEED_NEG_TTL_SEC = 1800        # 30분
+
+def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
+    """해외 개별 종목/ETF 일봉을 TradingView(tvDatafeed)로 조회한다(토스 캔들 실패 시 폴백).
+
+    반환 스키마는 KIS/토스 해외 일봉과 동일: columns=['date','open','high','low','close','volume']
+    (date=YYYYMMDD 문자열, 오름차순, 최대 250봉). 미설치/실패/빈 응답 시 None.
+    거래소는 tvDatafeed.search_symbol로 자동 해석하고, 실패 시 미국 주요 거래소를 차례로 시도한다.
+    """
+    if not code:
+        return None
+    # 음성 캐시: 최근 실패한 종목은 TTL 동안 재조회를 건너뛴다.
+    hit = _TVDATAFEED_OVERSEAS_NEG_CACHE.get(code)
+    if hit is not None and (datetime.now() - hit).total_seconds() < _TVDATAFEED_NEG_TTL_SEC:
+        return None
+
+    tv = _get_tvdatafeed()
+    if tv is None:
+        return None
+    try:
+        from tvDatafeed import Interval
+    except Exception:
+        return None
+
+    # 거래소 자동 해석(검색) → 정확한 심볼 매칭 우선. 실패 시 미국 주요 거래소 폴백.
+    exchanges = []
+    try:
+        with _TVDATAFEED_LOCK:
+            matches = tv.search_symbol(code) or []
+        for m in matches:
+            sym = str(m.get('symbol', '')).upper()
+            exch = m.get('exchange') or ''
+            if sym == code.upper() and exch and exch not in exchanges:
+                exchanges.append(exch)
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {code} 심볼 검색 실패: {e}")
+    for e in ['NASDAQ', 'NYSE', 'AMEX']:
+        if e not in exchanges:
+            exchanges.append(e)
+
+    df = None
+    for exch in exchanges:
+        for attempt in range(2):  # 익명 웹소켓 간헐 실패 대비 거래소별 2회 재시도
+            try:
+                with _TVDATAFEED_LOCK:
+                    df = tv.get_hist(symbol=code, exchange=exch,
+                                     interval=Interval.in_daily, n_bars=n_bars)
+                if df is not None and not df.empty:
+                    break
+            except Exception as e:
+                logger.debug(f"[TVDATAFEED] {code}@{exch} 조회 오류(attempt={attempt}): {e}")
+                df = None
+            if attempt == 0:
+                time.sleep(0.6)
+        if df is not None and not df.empty:
+            break
+
+    if df is None or df.empty:
+        _TVDATAFEED_OVERSEAS_NEG_CACHE[code] = datetime.now()  # 실패 기록(TTL 재조회 억제)
+        logger.debug(f"[TVDATAFEED] {code} 해외 일봉 데이터 없음")
+        return None
+
+    try:
+        out = df.reset_index().rename(columns={'datetime': 'date'})
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col not in out.columns:
+                out[col] = 0.0
+        # date → YYYYMMDD 문자열(해외 일봉 스키마와 동일)
+        out['date'] = out['date'].apply(
+            lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+        out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+        for c in ['open', 'high', 'low', 'close', 'volume']:
+            out[c] = out[c].astype(float)
+        out = out.drop_duplicates(subset=['date']).sort_values('date', ascending=True)
+        out = out.reset_index(drop=True).tail(250).reset_index(drop=True)
+        _TVDATAFEED_OVERSEAS_NEG_CACHE.pop(code, None)  # 성공 시 음성 캐시 해제
+        return out
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {code} 해외 일봉 스키마 변환 실패: {e}")
+        return None
+
 def clear_smart_money_cache():
     """스마트머니 수급 캐시 초기화 (수동 갱신용)"""
     _SMART_MONEY_CACHE.clear()
@@ -3381,8 +3466,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 _cur = float(chart_df['close'].iloc[-1])
                 _prev = float(chart_df['close'].iloc[-2]) if len(chart_df) >= 2 else _cur
                 if is_overseas:
-                    # 52주 위치는 가격 기반이므로 차트로 산출(detail 경로 유지),
-                    # PER/PBR/시가총액은 토스 미제공이라 N/A로 둔다.
+                    # 52주 위치는 가격 기반이므로 차트로 산출(detail 경로 유지).
+                    # PER/PBR/상장주수는 fetch_overseas_detail_price가 TradingView 스캐너로 채운다.
                     if not detail:
                         detail = {}
                     detail.setdefault('h52p', _h52)

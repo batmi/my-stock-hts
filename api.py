@@ -1993,7 +1993,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
         if period_type == 'daily':
             return _get_cached_chart(
                 code, is_overseas, is_index=False,
-                fetch_func=lambda: _toss_chart_data(code, 'daily', is_overseas),
+                fetch_func=lambda: _toss_daily_chart_with_tv_fallback(code, is_overseas),
                 realtime_overlay=realtime,
             )
         return _toss_chart_data(code, period_type, is_overseas)
@@ -2675,6 +2675,30 @@ def get_multi_current_prices_nxt(codes):
                 o['acml_vol'] = str(n['vol'])
     return base
 
+def _overseas_tv_fallback_price(code, fast_info_ttl=3.0):
+    """해외 현재가: KIS/토스 조회 실패 시 TradingView 시세로 폴백한다.
+    성공 시 KIS get_current_price_data 형태({rt_cd:'0', output:{...}})를, 실패 시 None을 반환한다.
+    가격·등락률 일관성을 위해 diff/rate는 전일 종가(base) 기준으로 함께 재계산해 채운다.
+    (yfinance는 장외가 미제공이라 src=='tv'만 채택. mode 1/2/3 공통 폴백 경로)
+    """
+    try:
+        fi = get_yf_fast_info(code, ttl=fast_info_ttl)
+        if fi and fi.get('src') == 'tv' and fi.get('last_price'):
+            last_v = float(fi['last_price'])
+            prev_v = fi.get('regular_market_previous_close')
+            if last_v > 0:
+                out_o = {'last': str(last_v), '_src': 'tv_fallback'}
+                if prev_v is not None and float(prev_v) > 0:
+                    prev_v = float(prev_v)
+                    out_o['base'] = str(prev_v)
+                    out_o['diff'] = str(round(last_v - prev_v, 4))
+                    out_o['rate'] = str(round((last_v - prev_v) / prev_v * 100, 2))
+                return {'rt_cd': '0', 'output': out_o}
+    except Exception as e:
+        logger.debug(f"[API] 해외 현재가 TV 폴백 실패({code}): {e}")
+    return None
+
+
 def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, fast_info_ttl=3.0):
     """현재가 조회. include_nxt=False면 NXT(대체거래소) 보조 호출을 생략한다.
     (대량 개요 조회 시 종목당 1콜을 줄여 전역 TPS 부담을 낮춘다. 주문/상세 경로는 기본값 True 유지)
@@ -2774,24 +2798,10 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
 
         # [폴백] KIS 전 거래소 조회 실패 시에만 TradingView 시세로 대체한다.
         #  (yfinance는 장외가 미제공이라 사용하지 않음. fast_info_ttl: 개요 경로는 예열 캐시 재사용)
-        #  가격·등락률 일관성을 위해 diff/rate는 전일 종가 기준으로 함께 재계산해 채운다.
-        try:
-            fi = get_yf_fast_info(code, ttl=fast_info_ttl)
-            if fi and fi.get('src') == 'tv' and fi.get('last_price'):
-                last_v = float(fi['last_price'])
-                prev_v = fi.get('regular_market_previous_close')
-                if last_v > 0:
-                    out_o = {'last': str(last_v), '_src': 'tv_fallback'}
-                    if prev_v is not None and float(prev_v) > 0:
-                        prev_v = float(prev_v)
-                        out_o['base'] = str(prev_v)
-                        out_o['diff'] = str(round(last_v - prev_v, 4))
-                        out_o['rate'] = str(round((last_v - prev_v) / prev_v * 100, 2))
-                    res_tv = {'rt_cd': '0', 'output': out_o}
-                    _set_micro_cache(cache_key, res_tv)
-                    return res_tv
-        except Exception as e:
-            logger.debug(f"[API] 해외 현재가 TV 폴백 실패({code}): {e}")
+        res_tv = _overseas_tv_fallback_price(code, fast_info_ttl)
+        if res_tv is not None:
+            _set_micro_cache(cache_key, res_tv)
+            return res_tv
 
         res_err = {'rt_cd': '9999'}
         return res_err
@@ -3064,11 +3074,77 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
         
     return None
 
+def _tv_overseas_fundamentals(code):
+    """[토스] 해외 종목/ETF의 PER/PBR/상장주수를 TradingView 스캐너로 조회한다.
+
+    반환은 KIS 상세(fetch_overseas_detail_price) 형태의 부분 dict: {'perx','pbrx','shar'}
+    (미확보 필드는 생략). 실패/미매칭 시 {}.
+      - 기본 스캐너 쿼리는 type=stock(공통주·DR)만 반환하므로 filter2(type 제한)를 제거해
+        ETF(fund)도 매칭한다. (라이브러리 내부 키라 미존재 시 pop은 무해한 no-op)
+      - ETF는 total_shares_outstanding이 비어 있어 aum/nav로 상장주수를 역산한다.
+      - PBR은 TradingView 표시 기준과 동일한 price_book_fq(직전 분기)를 사용한다.
+      - PER은 KIS와 동일 방식으로 채운다: price_earnings_ttm이 있으면 그대로,
+        없으면(적자 기업은 EPS<0이라 TV가 None 반환) 주가/|EPS|로 직접 계산한다.
+        (KIS는 적자 종목도 EPS 절댓값 기준 양수 PER을 표기 — 역산으로 확인)
+    """
+    try:
+        from tradingview_screener import Query, Column
+        q = (Query()
+             .select('close', 'price_earnings_ttm', 'price_book_fq',
+                     'earnings_per_share_diluted_ttm', 'earnings_per_share_basic_ttm',
+                     'earnings_per_share_diluted_fy',
+                     'total_shares_outstanding', 'aum', 'nav', 'type')
+             .set_markets('america')
+             .where(Column('name') == code))
+        q.query.pop('filter2', None)  # type=stock 제한 제거 → ETF/fund 포함
+        _, df = q.limit(1).get_scanner_data()
+    except Exception as e:
+        logger.debug(f"[API] 해외 펀더멘털 TV 조회 실패({code}): {e}")
+        return {}
+    if df is None or df.empty:
+        return {}
+    row = df.iloc[0]
+    out = {}
+    per = row.get('price_earnings_ttm')
+    if pd.notna(per):
+        out['perx'] = f"{float(per):.2f}"
+    else:
+        # 적자 기업: TV는 PER을 None으로 주므로 KIS와 동일하게 주가/|EPS|로 계산.
+        # EPS는 희석(TTM) → 기본(TTM) → 희석(FY) 순으로 사용 가능한 값을 채택.
+        close_v = row.get('close')
+        eps = None
+        for f in ('earnings_per_share_diluted_ttm', 'earnings_per_share_basic_ttm',
+                  'earnings_per_share_diluted_fy'):
+            v = row.get(f)
+            if pd.notna(v) and float(v) != 0:
+                eps = float(v)
+                break
+        if pd.notna(close_v) and eps:
+            out['perx'] = f"{float(close_v) / abs(eps):.2f}"
+    pbr = row.get('price_book_fq')
+    if pd.notna(pbr):
+        out['pbrx'] = f"{float(pbr):.2f}"
+    shar = row.get('total_shares_outstanding')
+    if pd.isna(shar) or not shar:
+        aum, nav = row.get('aum'), row.get('nav')
+        if pd.notna(aum) and pd.notna(nav) and float(nav) > 0:
+            shar = float(aum) / float(nav)  # ETF: 순자산/기준가로 상장주수 역산
+    if pd.notna(shar) and shar:
+        out['shar'] = float(shar)
+    return out
+
+
 def fetch_overseas_detail_price(code, excd):
-    # [추가] 토스 미제공: 해외 상세(PER/PBR/시가총액 등). KIS로 누수되지 않도록 차단.
-    # (52주 위치는 가격 기반이라 토스 캔들로 별도 산출한다)
+    # [토스] 해외 상세(PER/PBR/상장주수)는 토스 미제공 → TradingView 스캐너로 보강한다.
+    # (52주 위치는 가격 기반이라 호출부에서 토스 캔들로 별도 산출)
     if config.session.is_toss:
-        return None
+        cache_key = f"detail_{code}"
+        cached = _get_micro_cache(cache_key, ttl=300.0)  # 펀더멘털은 일단위 변동 → 5분 캐시
+        if cached is not None:
+            return cached
+        data = _tv_overseas_fundamentals(code)
+        _set_micro_cache(cache_key, data)
+        return data
     cache_key = f"detail_{code}"
     cached = _get_micro_cache(cache_key, ttl=60.0) # [수정] 상세 정보 유지 시간 연장
     if cached is not None: return cached
@@ -3552,6 +3628,33 @@ def _toss_overseas_balance():
     return out
 
 
+def _toss_daily_chart_with_tv_fallback(code, is_overseas):
+    """토스 일봉을 조회하되, 해외 종목에서 토스 캔들이 비었거나 지표 계산에 부족하면
+    TradingView(tvDatafeed) 일봉으로 폴백한다.
+
+    SK hynix(ADR) 등 일부 해외 종목/ETF는 토스 캔들이 비어(또는 EMA120 산출에 못 미쳐)
+    EMA/RSI/CCI/ADX가 표에서 '-'로 비는데, 이때 TV 시세로 보강한다. 국내 종목은 폴백하지 않는다.
+    (tradingview_screener(스캐너)는 스냅샷만 제공하므로 시계열은 OHLC를 주는 tvDatafeed로 조회)
+    """
+    df = _toss_chart_data(code, 'daily', is_overseas)
+    if not is_overseas:
+        return df
+    have = 0 if (df is None or df.empty) else len(df)
+    # 120봉 미만이면 EMA(120)가 계산되지 않아 지표가 빈다 → TV 폴백 시도.
+    if have >= 120:
+        return df
+    try:
+        from modules import analysis as _analysis
+        tv_df = _analysis.fetch_overseas_daily_via_tvdatafeed(code)
+    except Exception as e:
+        logger.debug(f"[API] 토스 해외 일봉 TV 폴백 실패({code}): {e}")
+        tv_df = None
+    # 토스가 일부라도 줬으면 더 긴 쪽을 채택(TV도 실패하면 기존 토스 결과 유지).
+    if tv_df is not None and not tv_df.empty and len(tv_df) > have:
+        return tv_df
+    return df
+
+
 def _toss_chart_data(code, period_type='daily', is_overseas=False):
     """토스 캔들 → KIS get_chart_data 형태의 DataFrame.
     columns=['date','open','high','low','close','volume'] (date=YYYYMMDD, 오름차순).
@@ -3657,10 +3760,16 @@ def _toss_current_price_data(code, is_overseas):
         row = toss_api.get_price(code)
     except toss_api.TossApiError as e:
         logger.debug(f"[Toss] 현재가 조회 실패({code}): {e}")
-        return {'rt_cd': '9999'}
+        row = None
+    # [폴백] 토스 해외 현재가 조회 실패 시 TradingView 시세로 대체한다(mode 1/2와 동일 경로).
+    #  국내는 KRX/NXT 전용이라 TV 폴백 대상이 아니다.
+    price = (row or {}).get('lastPrice', '0')
+    if is_overseas and (not row or _toss_float(price) <= 0):
+        res_tv = _overseas_tv_fallback_price(code)
+        if res_tv is not None:
+            return res_tv
     if not row:
         return {'rt_cd': '9999'}
-    price = row.get('lastPrice', '0')
     # 국내(stck_prpr)/해외(last) 양쪽 경로를 모두 채운다. 외인비율 등은 토스 미제공.
     output = {
         'stck_prpr': str(_toss_int(price)),
