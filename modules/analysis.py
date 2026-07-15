@@ -42,6 +42,87 @@ _SMART_MONEY_CACHE = caching.TTLCache()
 _MARKET_REGIME_CACHE = caching.TTLCache(max_size=8)
 _MARKET_REGIME_TTL_SEC = 60.0
 
+# [추가] tvDatafeed 싱글턴 — 토스 모드에서 KIS 미제공 지수(코스피200·코스닥150)를
+#  TradingView 시세로 보강한다. 익명 웹소켓은 연결 드롭이 잦아 단일 인스턴스를 재사용하고
+#  호출을 전역 락으로 직렬화(페이싱)해 안정성을 높인다. get_domestic_index_data의 TTL 캐시가
+#  실호출 빈도를 크게 낮춘다.
+_TVDATAFEED_INSTANCE = None
+_TVDATAFEED_LOCK = threading.Lock()
+# market_type -> (TradingView 심볼, 거래소)
+_TVDATAFEED_INDEX_SYMBOLS = {
+    "KOSPI200": ("KOSPI200", "KRX"),
+    "KOSDAQ150": ("KOSDAQ150", "KRX"),
+}
+
+def _get_tvdatafeed():
+    """tvDatafeed 인스턴스를 지연 생성해 재사용한다(로그인 없음). 미설치/초기화 실패 시 None."""
+    global _TVDATAFEED_INSTANCE
+    if _TVDATAFEED_INSTANCE is not None:
+        return _TVDATAFEED_INSTANCE
+    try:
+        from tvDatafeed import TvDatafeed
+        _TVDATAFEED_INSTANCE = TvDatafeed()
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] 초기화 실패(라이브러리 미설치 가능): {e}")
+        _TVDATAFEED_INSTANCE = None
+    return _TVDATAFEED_INSTANCE
+
+def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
+    """토스 모드 국내 지수(코스피200·코스닥150)를 TradingView(tvDatafeed)로 조회한다.
+
+    반환 스키마는 KIS/yfinance 경로와 동일: ['date','open','high','low','close','volume']
+    (date=datetime, RangeIndex, 오름차순, attrs['source']='TVDATAFEED'). 실패 시 None.
+    """
+    sym = _TVDATAFEED_INDEX_SYMBOLS.get(market_type)
+    if not sym:
+        return None
+    symbol, exchange = sym
+    tv = _get_tvdatafeed()
+    if tv is None:
+        return None
+    try:
+        from tvDatafeed import Interval
+    except Exception:
+        return None
+
+    # 익명 웹소켓은 간헐 드롭이 있어 최대 3회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)하고,
+    # 실패 시 스테일 커넥션을 버리고 새 인스턴스로 재접속을 시도한다.
+    global _TVDATAFEED_INSTANCE
+    df = None
+    for attempt in range(3):
+        try:
+            with _TVDATAFEED_LOCK:
+                df = tv.get_hist(symbol=symbol, exchange=exchange,
+                                 interval=Interval.in_daily, n_bars=n_bars)
+            if df is not None and not df.empty:
+                break
+        except Exception as e:
+            logger.debug(f"[TVDATAFEED] {market_type} 조회 오류(attempt={attempt}): {e}")
+            df = None
+        # 드롭된 커넥션 폐기 후 재접속
+        _TVDATAFEED_INSTANCE = None
+        time.sleep(1.0 * (attempt + 1))
+        tv = _get_tvdatafeed()
+        if tv is None:
+            break
+
+    if df is None or df.empty:
+        logger.debug(f"[TVDATAFEED] {market_type} 데이터 없음")
+        return None
+
+    try:
+        out = df.reset_index().rename(columns={'datetime': 'date'})
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col not in out.columns:
+                out[col] = 0.0
+        out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+        out = out.sort_values('date', ascending=True).reset_index(drop=True)
+        out.attrs['source'] = 'TVDATAFEED'
+        return out
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {market_type} 스키마 변환 실패: {e}")
+        return None
+
 def clear_smart_money_cache():
     """스마트머니 수급 캐시 초기화 (수동 갱신용)"""
     _SMART_MONEY_CACHE.clear()
@@ -460,6 +541,13 @@ def _fetch_domestic_index_data(market_type):
     elif market_type == "KOSDAQ150":
         kis_code = "2203"
         yf_ticker = "^KQ150"
+
+    # [추가] 토스 모드: KOSPI200/KOSDAQ150은 KIS 미사용·yfinance(^KS200/^KQ150) 불안정 →
+    #  TradingView(tvDatafeed)로 조회한다. 실패 시 아래 기존 로직(yf 폴백/스킵)으로 진행.
+    if config.session.is_toss and market_type in _TVDATAFEED_INDEX_SYMBOLS:
+        tv_df = _fetch_index_via_tvdatafeed(market_type)
+        if tv_df is not None and not tv_df.empty:
+            return tv_df
 
     df = None
     try:

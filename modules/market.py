@@ -121,8 +121,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif name == "코스닥150": m_type = "KOSDAQ150"
             
             df_fallback = analysis.get_domestic_index_data(m_type)
-            # [추가] 토스 모드: 코스닥150은 KIS/yfinance 모두 데이터가 없어 스킵 → '-' 표시
-            if config.session.is_toss and m_type == "KOSDAQ150" and (df_fallback is None or df_fallback.empty):
+            # [수정] 토스 모드: 코스피200·코스닥150은 TradingView(tvDatafeed)로 조회하며,
+            #  그마저 실패하면 대체 소스가 없으므로 스킵 → '-' 표시(수신 실패 오탐 방지).
+            if config.session.is_toss and m_type in ("KOSPI200", "KOSDAQ150") and (df_fallback is None or df_fallback.empty):
                 return {'status': 'skipped', 'name': name}
             if df_fallback is not None and not df_fallback.empty:
                 # [Fix] get_domestic_index_data는 공유 캐시 객체를 반환하므로 복사 후 사용.
@@ -723,10 +724,9 @@ def _show_market_indices_core(target_indices=None):
 
     indices_map = INDICES_MAP.copy()
 
-    # [추가] 토스 모드: 코스피200·코스닥150은 토스 API에서 시세를 제공하지 않아 조회 대상에서 제외
-    if getattr(config.session, 'is_toss', False):
-        for _unsupported in ("코스피200", "코스닥150"):
-            indices_map.pop(_unsupported, None)
+    # [수정] 토스 모드에서도 코스피200·코스닥150을 출력한다.
+    #  토스 API는 이 지수 시세를 제공하지 않으므로 analysis._fetch_domestic_index_data가
+    #  TradingView(tvDatafeed)로 보강한다(모드 무관 출력). 조회 대상에서 더 이상 제외하지 않는다.
 
     if target_indices:
         indices_map = {k: v for k, v in indices_map.items() if k in target_indices}
