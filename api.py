@@ -3439,14 +3439,20 @@ def _toss_after_krx_close():
     return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') >= '1535'
 
 
-def _toss_before_nxt_open():
+def _before_nxt_premarket_open():
     """오늘이 거래일이고 NXT(대체거래소) 프리마켓 개장(08:00) 전이면 True(전일 마감~아침).
 
-    NXT 미지원 종목의 '마지막 정규장 등락률'은 다음날 NXT 개장(08:00) 전까지만 유지한다.
-    08:00 이후엔 NXT 거래시간(프리 08~09시)이라, 미지원 종목은 체결 없이 0%로 노출한다.
+    NXT 미지원(또는 장전 무체결) 종목의 '마지막 정규장 등락률'은 다음날 NXT 개장(08:00)
+    전까지만 유지한다. 08:00 이후엔 NXT 거래시간(프리 08~09시)이라 체결이 시작되므로,
+    무체결 종목은 0%로 노출한다. (토스/KIS 공통 판정)
     """
     now = datetime.now()
     return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') < '0800'
+
+
+def _toss_before_nxt_open():
+    """(호환 별칭) 토스 경로에서 쓰는 장전(NXT 개장 전) 판정. _before_nxt_premarket_open 위임."""
+    return _before_nxt_premarket_open()
 
 
 def _toss_capture_krx_close(code):

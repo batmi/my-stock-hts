@@ -3472,6 +3472,38 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
         logger.error(f"[{code}] 데이터 수집 오류: {e}")
     return bundle
 
+def _prelisting_last_regular_change(chart_df, curr):
+    """장전(NXT 프리마켓 08:00 개장 전) 무체결로 현재가=기준가가 되어 등락률이 0%로 굳는
+    국내 종목에 대해, 일봉 차트에서 '직전 정규장 최종 등락률'(전일 종가 vs 전전일 종가)을
+    산출한다. curr는 전일 정규장 종가(=현재가=기준가)로, 전전일 종가와 비교한다.
+
+    apply_realtime_price가 장전에 당일(오늘) 봉을 새로 추가하므로 마지막 봉이 오늘이면
+    전전일은 -3, (당일 봉이 없어) 마지막 봉이 전일이면 전전일은 -2다. 산출 불가 시 None.
+    반환: (diff:int, rate:float)
+    """
+    try:
+        if chart_df is None or chart_df.empty or len(chart_df) < 2:
+            return None
+        today = utils.market_today(False)
+        idx = -3
+        if 'date' in chart_df.columns:
+            last_val = chart_df.iloc[-1]['date']
+            if hasattr(last_val, 'strftime'):
+                last_str = last_val.strftime('%Y%m%d')
+            else:
+                last_str = str(last_val).replace('-', '').replace('/', '')[:8]
+            idx = -3 if last_str >= today else -2
+        if len(chart_df) < abs(idx):
+            return None
+        pp = float(chart_df.iloc[idx]['close'])  # 전전일 종가
+        if pp <= 0:
+            return None
+        diff = int(round(curr - pp))
+        rate = (curr - pp) / pp * 100
+        return diff, rate
+    except Exception:
+        return None
+
 def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, bundle):
     """(내부함수) print_table 2단계: 수집된 데이터(bundle)로 지표 분석 및 행 포맷."""
     try:
@@ -3640,7 +3672,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 krx_curr = int(out.get('stck_prpr', 0) or 0)
                 base_price = int(out.get('stck_sdpr', 0) or 0)
                 curr = nxt_curr if nxt_curr > 0 else krx_curr
-                
+
                 if base_price > 0:
                     diff = curr - base_price
                     rate = (diff / base_price) * 100
@@ -3649,7 +3681,15 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     except Exception: rate = 0.0
                     try: diff = int(out.get('prdy_vrss', 0))
                     except Exception: diff = 0
-                    
+
+                # [장전 폴백] 장전(NXT 개장 08:00 전)엔 무체결로 현재가=기준가 → 등락률 0%가 된다.
+                #  이때 일봉 차트로 '직전 정규장 최종 등락률'(전일 vs 전전일)을 산출해 개장 전까지
+                #  유지 표시한다. (토스 모드는 어댑터가 stck_sdpr을 이미 보정하므로 제외)
+                if diff == 0 and not config.session.is_toss and api._before_nxt_premarket_open():
+                    prev_reg = _prelisting_last_regular_change(chart_df, curr)
+                    if prev_reg is not None:
+                        diff, rate = prev_reg
+
                 curr_fmt = f"{curr:,}"
                 diff_str = f"{diff:+}"
 
