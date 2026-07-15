@@ -154,6 +154,13 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     # yfinance 분봉의 최신 날짜와 KIS 일봉의 최신 날짜가 다를 경우, 불필요한 '데이터 누락' 경고가 발생함
                     df_intraday = pd.DataFrame()
 
+            # [Fix] 토스 모드 코스피/코스닥은 yfinance(^KS11/^KQ11)로 받는데, 최신 거래일 종가가
+            #  아직 미집계면 close=NaN인 후행 행이 붙어온다(fast_info도 None). 이 행이 남으면
+            #  current=close.iloc[-1]=NaN→0이 되어 지수·등락률·52주가 '-'로만 표시된다(지표는
+            #  dropna 후 계산돼 정상). 후행 NaN 종가 행을 제거해 마지막 유효 종가를 현재가로 쓴다.
+            if 'close' in df_daily.columns:
+                df_daily = df_daily[df_daily['close'].notna()]
+
         # B. 가격 결정
         high_52_daily = 0.0
         if not df_daily.empty:

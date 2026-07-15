@@ -42,14 +42,18 @@ _SMART_MONEY_CACHE = caching.TTLCache()
 _MARKET_REGIME_CACHE = caching.TTLCache(max_size=8)
 _MARKET_REGIME_TTL_SEC = 60.0
 
-# [추가] tvDatafeed 싱글턴 — 토스 모드에서 KIS 미제공 지수(코스피200·코스닥150)를
+# [추가] tvDatafeed 싱글턴 — 토스 모드에서 KIS 미제공 지수(코스피·코스닥·코스피200·코스닥150)를
 #  TradingView 시세로 보강한다. 익명 웹소켓은 연결 드롭이 잦아 단일 인스턴스를 재사용하고
 #  호출을 전역 락으로 직렬화(페이싱)해 안정성을 높인다. get_domestic_index_data의 TTL 캐시가
 #  실호출 빈도를 크게 낮춘다.
 _TVDATAFEED_INSTANCE = None
 _TVDATAFEED_LOCK = threading.Lock()
 # market_type -> (TradingView 심볼, 거래소)
+#  코스피/코스닥은 yfinance(^KS11/^KQ11)가 최신 거래일 종가를 NaN으로 주는 일이 잦아(fast_info도
+#  None) 지수·등락률이 '-'로 표시된다 → tvDatafeed를 1순위로 쓰고 실패 시 yfinance로 폴백한다.
 _TVDATAFEED_INDEX_SYMBOLS = {
+    "KOSPI": ("KOSPI", "KRX"),
+    "KOSDAQ": ("KOSDAQ", "KRX"),
     "KOSPI200": ("KOSPI200", "KRX"),
     "KOSDAQ150": ("KOSDAQ150", "KRX"),
 }
@@ -70,7 +74,7 @@ def _get_tvdatafeed():
     return _TVDATAFEED_INSTANCE
 
 def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
-    """토스 모드 국내 지수(코스피200·코스닥150)를 TradingView(tvDatafeed)로 조회한다.
+    """토스 모드 국내 지수(코스피·코스닥·코스피200·코스닥150)를 TradingView(tvDatafeed)로 조회한다.
 
     반환 스키마는 KIS/yfinance 경로와 동일: ['date','open','high','low','close','volume']
     (date=datetime, RangeIndex, 오름차순, attrs['source']='TVDATAFEED'). 실패 시 None.
@@ -117,11 +121,61 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
                 out[col] = 0.0
         out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
         out = out.sort_values('date', ascending=True).reset_index(drop=True)
+        # [추가] tvDatafeed는 지수 거래량을 0으로 준다 → OBV 계산 불가('-'). yfinance 거래량을
+        #  날짜 매칭으로 채워 OBV를 살린다(코스피/코스닥/코스피200; ^KQ150은 실측 없음 → 0 유지).
+        out = _merge_index_volume_from_yfinance(out, _INDEX_YF_TICKERS.get(market_type))
         out.attrs['source'] = 'TVDATAFEED'
         return out
     except Exception as e:
         logger.debug(f"[TVDATAFEED] {market_type} 스키마 변환 실패: {e}")
         return None
+
+
+# market_type -> yfinance 티커 (거래량 보강·최후 폴백 공용)
+_INDEX_YF_TICKERS = {
+    "KOSPI": "^KS11",
+    "KOSDAQ": "^KQ11",
+    "KOSPI200": "^KS200",
+    "KOSDAQ150": "^KQ150",
+}
+
+
+def _merge_index_volume_from_yfinance(df, yf_ticker):
+    """tvDatafeed 지수 df(거래량=0)에 yfinance 일봉 거래량을 '날짜 매칭'으로 채운다(OBV 계산용).
+
+    가격(OHLC/close)은 tvDatafeed 값을 그대로 유지하고 volume만 교체한다. yfinance 조회 실패·
+    빈 응답(^KQ150 등)·매칭 실패 시 원본(volume=0)을 그대로 반환한다. 실 호출은 tvDatafeed
+    캐시 미스 시점에만 일어난다(get_domestic_index_data TTL 캐시가 빈도를 낮춤).
+    """
+    if not yf_ticker or df is None or df.empty or 'date' not in df.columns:
+        return df
+    try:
+        yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] 거래량 보강 yfinance 조회 실패({yf_ticker}): {e}")
+        return df
+    if yf_df is None or yf_df.empty or 'volume' not in yf_df.columns or 'date' not in yf_df.columns:
+        return df
+
+    vol_map = {}
+    for _, r in yf_df.iterrows():
+        key = str(r['date']).replace('-', '')[:8]
+        try:
+            v = float(r['volume'])
+        except (TypeError, ValueError):
+            continue
+        if v == v and v > 0:  # NaN 제외 & 양수만
+            vol_map[key] = v
+    if not vol_map:
+        return df
+
+    def _vol_for(dt):
+        key = dt.strftime('%Y%m%d') if hasattr(dt, 'strftime') else str(dt).replace('-', '')[:8]
+        return vol_map.get(key, 0.0)
+
+    out = df.copy()
+    out['volume'] = out['date'].map(_vol_for)
+    return out
 
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
 #  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을
@@ -616,7 +670,14 @@ def _trigger_async_refresh(market_type):
     threading.Thread(target=_worker, name=f"IndexRefresh-{market_type}", daemon=True).start()
 
 def _fetch_domestic_index_data(market_type):
-    """국내 지수 데이터를 실제 조회한다(캐시 미적용). KIS API -> yfinance Fallback."""
+    """국내 지수 데이터를 실제 조회한다(캐시 미적용).
+
+    폴백 체인(각 단계는 '데이터 없음/부족(< ma_period)'일 때만 다음으로 내려간다):
+      - 모드 1/2(KIS): KIS API → tvDatafeed → yfinance
+      - 모드 3(토스):  tvDatafeed → yfinance   (KIS 미사용)
+    tvDatafeed는 4종 지수(코스피·코스닥·코스피200·코스닥150) 모두 지원하며 KRX 정확·당일 종가를
+    준다. yfinance(^KS11/^KQ11 등)는 최신 거래일 종가를 NaN으로 주는 일이 잦아 최후 폴백으로 둔다.
+    """
     kis_code = "0001"
     yf_ticker = "^KS11"
 
@@ -630,64 +691,57 @@ def _fetch_domestic_index_data(market_type):
         kis_code = "2203"
         yf_ticker = "^KQ150"
 
-    # [추가] 토스 모드: KOSPI200/KOSDAQ150은 KIS 미사용·yfinance(^KS200/^KQ150) 불안정 →
-    #  TradingView(tvDatafeed)로 조회한다. 실패 시 아래 기존 로직(yf 폴백/스킵)으로 진행.
-    if config.session.is_toss and market_type in _TVDATAFEED_INDEX_SYMBOLS:
-        tv_df = _fetch_index_via_tvdatafeed(market_type)
-        if tv_df is not None and not tv_df.empty:
-            return tv_df
-
-    df = None
-    try:
-        # 1. KIS API 조회 (토스 모드에서는 KIS를 사용하지 않고 yfinance Fallback 사용)
-        if config.session.is_toss:
-            df = None
-        else:
-            df = api.get_domestic_index_chart(kis_code)
-
-        # [Fix] KIS API 컬럼명 표준화 및 타입 변환
-        if df is not None and not df.empty:
-            rename_map = {
-                'stck_bsop_date': 'date',
-                'bstp_nmix_prpr': 'close',
-                'bstp_nmix_oprc': 'open',
-                'bstp_nmix_hgpr': 'high',
-                'bstp_nmix_lwpr': 'low',
-                'acml_vol': 'volume'
-            }
-            df.rename(columns=rename_map, inplace=True)
-
-            for col in ['close', 'open', 'high', 'low', 'volume']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            df.attrs['source'] = 'KIS' # [추가] 데이터 소스 명시
-
-    except Exception as e:
-        logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
-
-    # 2. Fallback 체크
-    # [수정] 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이
-    #  함께 사용하므로 두 기간 중 큰 값을 기준으로 충분성을 판단한다.
-    #  (KIS 지수 차트는 약 50일치만 제공 → MARKET_FILTER_MA 60일 설정 시 yfinance로 자동 대체)
+    # 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
+    #  사용하므로 두 기간 중 큰 값을 '충분성' 기준으로 삼는다(부족하면 다음 소스로 폴백).
     ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
     if getattr(config, 'USE_MARKET_FILTER', True):
         ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 50))
 
-    if df is None or df.empty or len(df) < ma_period:
-        logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 데이터 부족/실패({len(df) if df is not None else 0}건) -> yfinance({yf_ticker}) Fallback 시도")
+    def _insufficient(d):
+        return d is None or d.empty or len(d) < ma_period
 
-        # [Fix] KOSDAQ150은 yfinance 티커(^KQ150)가 불안정/미지원이므로 Fallback을 수행하지 않음
-        #   (토스 모드는 KIS 대안이 없어 데이터 없음 → 화면에서 '-' 처리)
-        if market_type == "KOSDAQ150":
-            logger.debug(f"[MARKET_INDEX_DEBUG] KOSDAQ150({yf_ticker}) yfinance Fallback을 건너뜁니다 (티커 미지원).")
-            return df
+    df = None
 
+    # 1) KIS API (모드 1/2 전용; 토스 모드는 KIS 미사용)
+    if not config.session.is_toss:
         try:
-            df = api.get_chart_data(yf_ticker, is_overseas=True)
-            if df is not None:
-                df.attrs['source'] = 'YFINANCE' # [추가] 데이터 소스 명시
+            kis_df = api.get_domestic_index_chart(kis_code)
+            if kis_df is not None and not kis_df.empty:
+                # [Fix] KIS API 컬럼명 표준화 및 타입 변환
+                rename_map = {
+                    'stck_bsop_date': 'date',
+                    'bstp_nmix_prpr': 'close',
+                    'bstp_nmix_oprc': 'open',
+                    'bstp_nmix_hgpr': 'high',
+                    'bstp_nmix_lwpr': 'low',
+                    'acml_vol': 'volume'
+                }
+                kis_df.rename(columns=rename_map, inplace=True)
+                for col in ['close', 'open', 'high', 'low', 'volume']:
+                    if col in kis_df.columns:
+                        kis_df[col] = pd.to_numeric(kis_df[col], errors='coerce')
+                kis_df.attrs['source'] = 'KIS'
+                df = kis_df
         except Exception as e:
-            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance Fallback 실패: {e}")
+            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} KIS API 조회 실패: {e}")
+
+    # 2) tvDatafeed (모드 1/2의 1차 폴백 / 토스 모드의 1순위)
+    if _insufficient(df) and market_type in _TVDATAFEED_INDEX_SYMBOLS:
+        logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} → tvDatafeed 조회 시도")
+        tv_df = _fetch_index_via_tvdatafeed(market_type)
+        if tv_df is not None and not tv_df.empty:
+            df = tv_df  # attrs['source']='TVDATAFEED' (fetch 함수가 설정)
+
+    # 3) yfinance (최후 폴백) — ^KQ150은 실측 데이터가 거의 없어 보통 빈 응답('-')
+    if _insufficient(df):
+        logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} → yfinance({yf_ticker}) 폴백 시도")
+        try:
+            yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
+            if yf_df is not None and not yf_df.empty:
+                yf_df.attrs['source'] = 'YFINANCE'
+                df = yf_df
+        except Exception as e:
+            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance 폴백 실패: {e}")
 
     return df
 

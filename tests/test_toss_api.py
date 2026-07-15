@@ -1374,21 +1374,146 @@ def test_today_history_filters_other_days():
     assert res["output1"] == []
 
 
-def test_kosdaq150_skipped_in_toss():
-    """토스 모드: 코스닥150은 KIS/yfinance 모두 미사용 → 데이터 없음(None/empty)."""
+def test_kosdaq150_no_data_in_toss():
+    """토스 모드: 코스닥150은 tvDatafeed 실패 시 yfinance(^KQ150) 폴백까지 시도하나
+    ^KQ150은 실측 데이터가 없어 빈 응답 → 최종 '-'(None/empty). KIS는 미사용."""
     import api
     import modules.analysis as analysis
+    import pandas as pd
     config.session.is_toss = True
     try:
-        # 토스 모드면 KIS(get_domestic_index_chart)도, yfinance(get_chart_data)도 호출되면 안 됨
-        with patch("api.get_domestic_index_chart") as mock_kis, \
-             patch("api.get_chart_data") as mock_yf:
+        # tvDatafeed가 데이터를 못 주는 상황을 결정적으로 재현(라이브 웹소켓 flaky 제거).
+        # 폴백 체인상 yfinance(^KQ150)까지 내려가지만 빈 응답이라 데이터 없음.
+        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None), \
+             patch("api.get_domestic_index_chart") as mock_kis, \
+             patch("api.get_chart_data", return_value=pd.DataFrame()) as mock_yf:
             df = analysis.get_domestic_index_data("KOSDAQ150", force_refresh=True)
     finally:
         config.session.is_toss = False
     assert df is None or df.empty
-    mock_kis.assert_not_called()   # KIS 미호출
-    mock_yf.assert_not_called()    # yfinance(^KQ150)도 미호출 (스킵)
+    mock_kis.assert_not_called()             # 토스는 KIS 미호출
+    assert mock_yf.call_args.args[0] == "^KQ150"  # 최후 폴백으로 yfinance(^KQ150) 시도됨
+
+
+def test_kospi_kosdaq_use_tvdatafeed_in_toss():
+    """토스 모드: 코스피/코스닥도 tvDatafeed 1순위 조회 → 성공 시 KIS/yfinance 미호출."""
+    import modules.analysis as analysis
+    import pandas as pd
+    config.session.is_toss = True
+    fake = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=130),
+        'open': [7000.0] * 130, 'high': [7000.0] * 130, 'low': [7000.0] * 130,
+        'close': [7000.0 + i for i in range(130)], 'volume': [0] * 130,
+    })
+    fake.attrs['source'] = 'TVDATAFEED'
+    try:
+        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=fake) as mock_tv, \
+             patch("api.get_domestic_index_chart") as mock_kis, \
+             patch("api.get_chart_data") as mock_yf:
+            for mtype in ("KOSPI", "KOSDAQ"):
+                df = analysis.get_domestic_index_data(mtype, force_refresh=True)
+                assert df is not None and not df.empty
+                assert df.attrs.get('source') == 'TVDATAFEED'
+        assert {c.args[0] for c in mock_tv.call_args_list} == {"KOSPI", "KOSDAQ"}
+        mock_kis.assert_not_called()   # KIS 미호출
+        mock_yf.assert_not_called()    # yfinance(^KS11/^KQ11) 미호출 (tvDatafeed 성공)
+    finally:
+        config.session.is_toss = False
+
+
+def test_kospi_falls_back_to_yfinance_when_tvdatafeed_fails():
+    """토스 모드: 코스피 tvDatafeed 실패 시 yfinance(^KS11)로 폴백한다."""
+    import modules.analysis as analysis
+    import pandas as pd
+    config.session.is_toss = True
+    yf_df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=60),
+        'open': [3000.0] * 60, 'high': [3000.0] * 60, 'low': [3000.0] * 60,
+        'close': [3000.0] * 60, 'volume': [100] * 60,
+    })
+    try:
+        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv, \
+             patch("api.get_chart_data", return_value=yf_df) as mock_yf:
+            df = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
+        assert df is not None and not df.empty
+        mock_tv.assert_called_once()
+        # yfinance ^KS11로 폴백 호출됨
+        assert mock_yf.call_args.args[0] == "^KS11"
+    finally:
+        config.session.is_toss = False
+
+
+def test_merge_index_volume_from_yfinance_fills_volume():
+    """tvDatafeed 지수(volume=0)에 yfinance 거래량을 날짜 매칭으로 채운다(가격은 유지)."""
+    import modules.analysis as analysis
+    import pandas as pd
+    tv = pd.DataFrame({
+        'date': pd.to_datetime(['2026-07-13', '2026-07-14', '2026-07-15']),
+        'open': [7000.0] * 3, 'high': [7000.0] * 3, 'low': [7000.0] * 3,
+        'close': [7000.0, 7100.0, 7200.0], 'volume': [0, 0, 0],
+    })
+    yf = pd.DataFrame({
+        'date': ['20260713', '20260714', '20260715'],
+        'open': [0.0] * 3, 'high': [0.0] * 3, 'low': [0.0] * 3,
+        'close': [0.0] * 3, 'volume': [100, 200, 300],
+    })
+    with patch("api.get_chart_data", return_value=yf) as mock_yf:
+        out = analysis._merge_index_volume_from_yfinance(tv, "^KS11")
+    assert list(out['volume']) == [100.0, 200.0, 300.0]   # 거래량 채워짐
+    assert list(out['close']) == [7000.0, 7100.0, 7200.0]  # 가격은 tvDatafeed 유지
+    assert mock_yf.call_args.args[0] == "^KS11"
+
+
+def test_merge_index_volume_noop_when_yfinance_empty():
+    """yfinance가 빈 응답(^KQ150 등)이면 거래량 0을 그대로 둔다."""
+    import modules.analysis as analysis
+    import pandas as pd
+    tv = pd.DataFrame({
+        'date': pd.to_datetime(['2026-07-14', '2026-07-15']),
+        'open': [1.0] * 2, 'high': [1.0] * 2, 'low': [1.0] * 2,
+        'close': [1.0, 2.0], 'volume': [0, 0],
+    })
+    with patch("api.get_chart_data", return_value=pd.DataFrame()):
+        out = analysis._merge_index_volume_from_yfinance(tv, "^KQ150")
+    assert list(out['volume']) == [0, 0]
+
+
+def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed_then_yfinance():
+    """모드 1/2(KIS): KIS 실패 시 1차 tvDatafeed, 그 실패 시 2차 yfinance 순으로 폴백."""
+    import modules.analysis as analysis
+    import pandas as pd
+    config.session.is_toss = False  # KIS 모드
+
+    tv_df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=130),
+        'open': [7000.0] * 130, 'high': [7000.0] * 130, 'low': [7000.0] * 130,
+        'close': [7000.0 + i for i in range(130)], 'volume': [0] * 130,
+    })
+    tv_df.attrs['source'] = 'TVDATAFEED'
+    yf_df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=130),
+        'open': [3000.0] * 130, 'high': [3000.0] * 130, 'low': [3000.0] * 130,
+        'close': [3000.0] * 130, 'volume': [100] * 130,
+    })
+
+    # KIS는 항상 빈 응답(실패)으로 두고, tvDatafeed 성공/실패에 따른 분기를 검증
+    with patch("api.get_domestic_index_chart", return_value=pd.DataFrame()) as mock_kis:
+        # (a) KIS 실패 → tvDatafeed 성공: yfinance는 호출되지 않는다
+        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=tv_df) as mock_tv, \
+             patch("api.get_chart_data", return_value=yf_df) as mock_yf:
+            df = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
+            assert df is not None and df.attrs.get('source') == 'TVDATAFEED'
+            mock_kis.assert_called()      # KIS 1순위 시도
+            mock_tv.assert_called_once()  # 1차 폴백 tvDatafeed
+            mock_yf.assert_not_called()   # tvDatafeed 성공 → yfinance 미호출
+
+        # (b) KIS 실패 → tvDatafeed 실패 → yfinance 폴백
+        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv2, \
+             patch("api.get_chart_data", return_value=yf_df) as mock_yf2:
+            df2 = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
+            assert df2 is not None and df2.attrs.get('source') == 'YFINANCE'
+            mock_tv2.assert_called_once()
+            assert mock_yf2.call_args.args[0] == "^KS11"
 
 
 def test_format_order_no_toss_last_10():

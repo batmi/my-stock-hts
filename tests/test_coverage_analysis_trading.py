@@ -112,3 +112,74 @@ def test_process_index_worker_futures_proxy(mock_dom, mock_fi):
         res = market._process_index_worker("미국채 5년물 금리", "^FVX", df_empty, df_empty)
         assert res['status'] == 'success'
         assert "(F)" in res['row_data'][0]
+
+
+@patch('modules.market.api.get_yf_fast_info', return_value=None)
+@patch('modules.market.analysis.get_domestic_index_data')
+def test_process_index_worker_domestic_trailing_nan_close(mock_dom, mock_fi):
+    """토스 코스피/코스닥: yfinance 최신행 close=NaN이어도 마지막 유효 종가로 지수·등락률 표시."""
+    n = 130
+    closes = [6700.0 + i for i in range(n)]
+    closes[-1] = float('nan')  # yfinance ^KS11 최신 거래일 close 미집계(NaN) 재현
+    df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=n),
+        'open': [6700.0 + i for i in range(n)],
+        'high': [6700.0 + i for i in range(n)],
+        'low': [6700.0 + i for i in range(n)],
+        'close': closes,
+        'volume': [1000] * n,
+    })
+    df.attrs['source'] = 'YFINANCE'
+    mock_dom.return_value = df
+
+    res = market._process_index_worker("코스피", "^KS11", pd.DataFrame(), pd.DataFrame())
+    assert res['status'] == 'success'
+    # 지수/등락폭이 '-'가 아니라 마지막 유효 종가(6828)로 채워진다
+    assert '-[/]' not in res['row_data'][1]
+    assert '6,828' in res['row_data'][1]
+    # 등락률은 마지막 유효 종가(6828) vs 직전(6827) 기준으로 산출된다(0%/'-' 아님)
+    assert '+0.01%' in res['row_data'][2]
+
+
+@patch('modules.market.api.get_yf_fast_info', return_value=None)
+@patch('modules.market.analysis.get_domestic_index_data')
+def test_process_index_worker_obv_rendered_when_volume_present(mock_dom, mock_fi):
+    """지수 df에 거래량이 있으면(yfinance 보강) OBV 컬럼이 '-'가 아니라 값으로 렌더된다."""
+    n = 130
+    df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=n),
+        'open': [6700.0 + i for i in range(n)],
+        'high': [6700.0 + i for i in range(n)],
+        'low': [6700.0 + i for i in range(n)],
+        'close': [6700.0 + i for i in range(n)],
+        'volume': [10000 + i for i in range(n)],  # tvDatafeed+yfinance 거래량 보강 재현
+    })
+    df.attrs['source'] = 'TVDATAFEED'
+    mock_dom.return_value = df
+
+    res = market._process_index_worker("코스피", "^KS11", pd.DataFrame(), pd.DataFrame())
+    assert res['status'] == 'success'
+    # row_data[12] = OBV 컬럼. 거래량이 있으므로 '-'가 아닌 값(예: '..K'/'..M')이어야 한다.
+    obv_cell = res['row_data'][12]
+    assert '-[/dim]' not in obv_cell and obv_cell.strip() not in ('-', '[dim]-[/dim]')
+
+
+@patch('modules.market.api.get_yf_fast_info', return_value=None)
+@patch('modules.market.analysis.get_domestic_index_data')
+def test_process_index_worker_obv_dash_when_volume_zero(mock_dom, mock_fi):
+    """거래량이 0(tvDatafeed 단독, 보강 실패)이면 OBV는 '-'로 표시된다(데이터 한계)."""
+    n = 130
+    df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=n),
+        'open': [6700.0 + i for i in range(n)],
+        'high': [6700.0 + i for i in range(n)],
+        'low': [6700.0 + i for i in range(n)],
+        'close': [6700.0 + i for i in range(n)],
+        'volume': [0] * n,
+    })
+    df.attrs['source'] = 'TVDATAFEED'
+    mock_dom.return_value = df
+
+    res = market._process_index_worker("코스닥150", "^KQ150", pd.DataFrame(), pd.DataFrame())
+    assert res['status'] == 'success'
+    assert '-' in res['row_data'][12]  # OBV '-'

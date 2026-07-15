@@ -40,12 +40,14 @@ def test_manage_unfilled_orders(mock_revise, mock_get):
                 trader.order_manager.manage_unfilled_orders()
                 mock_revise.assert_called()
 
+@patch('modules.analysis._fetch_index_via_tvdatafeed', return_value=None)
 @patch('modules.analysis.api.get_domestic_index_chart')
-def test_get_market_regime_fallback(mock_get_index):
-    """시장 국면 판단 Fallback 테스트"""
+def test_get_market_regime_fallback(mock_get_index, mock_tv):
+    """시장 국면 판단 Fallback 테스트 (KIS 실패 → tvDatafeed 실패 → yfinance)."""
     # KIS API 실패 시뮬레이션
     mock_get_index.return_value = pd.DataFrame()
-    
+    # tvDatafeed도 실패(1차 폴백 무력화) → 최후 yfinance 폴백을 결정적으로 검증(라이브 호출 제거)
+
     # yfinance 데이터 모킹
     with patch('modules.analysis.api.get_chart_data') as mock_yf:
         mock_yf.return_value = pd.DataFrame({'close': [100]*60})
