@@ -1,14 +1,21 @@
 #!/bin/bash
-cd /home/batmi/my-stock-hts
+
+# 스크립트 파일이 위치한 tools 디렉토리를 기준으로 프로젝트 루트(my-stock-hts) 절대 경로 추출
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# 프로젝트 루트로 이동
+cd "$PROJECT_ROOT" || exit 1
 
 # 파라미터 저장 (예: --mode 2 --auto)
 ARGS="$@"
 
 # 1. 세션 생성 (System Trading - 첫 번째 윈도우)
-tmux new-session -d -s stock-hts -n "System Trading" "/usr/bin/bash -c \"source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && ./run.sh $ARGS; echo 'Process exited. Press Enter to close...'; read\""
+# 참고: ~/.htsrc 는 사용자 홈 디렉토리를 참조하도록 변경 (없어도 에러 메시지 무시)
+tmux new-session -d -s stock-hts -n "System Trading" "/usr/bin/bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && ./run.sh $ARGS; echo 'Process exited. Press Enter to close...'; read\""
 
 # 2. Log Monitoring 창 추가 (두 번째 윈도우)
-tmux new-window -t stock-hts -n "Log Monitoring" '/usr/bin/bash -c "source /home/batmi/.htsrc && cd /home/batmi/my-stock-hts && tail -F logs/mystock.log"'
+tmux new-window -t stock-hts -n "Log Monitoring" "/usr/bin/bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && tail -F logs/mystock.log\""
 
 # 3. System Trading 윈도우로 이동 (첫 번째 선택)
 tmux select-window -t stock-hts:0
