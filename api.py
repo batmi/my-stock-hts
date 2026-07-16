@@ -4423,9 +4423,11 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             "ORD_QTY": str(qty), "ORD_UNPR": str(price)
         }
         
-        # [추가] 모의투자가 아닐 경우 SOR (최적주문집행) 거래소 코드 적용
+        # [추가] 모의투자가 아닐 경우 거래소 코드 적용
+        # NXT 거래 가능 종목은 SOR(최적주문집행, KRX+NXT 통합 라우팅), 미지원 종목(ETF 등)은
+        # KRX로 지정한다. NXT 미지원 종목에 SOR을 쓰면 APBK3026(종목정보 없음) 오류가 발생한다.
         if not config.session.is_simulation:
-            data["EXCG_ID_DVSN_CD"] = "SOR"
+            data["EXCG_ID_DVSN_CD"] = "SOR" if is_nxt_tradeable(code) else "KRX"
     else: # overseas
         # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
         trade_excd = exchange_code
@@ -4461,9 +4463,9 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
         
-        # [추가] 모의투자가 아닐 경우 SOR (최적주문집행) 거래소 코드 적용
+        # [추가] 모의투자가 아닐 경우 거래소 코드 적용 (NXT 미지원 종목은 KRX, place_order와 동일)
         if not config.session.is_simulation:
-            data["EXCG_ID_DVSN_CD"] = "SOR"
+            data["EXCG_ID_DVSN_CD"] = "SOR" if is_nxt_tradeable(code) else "KRX"
     else: # overseas
         # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
         trade_excd = exchange_code

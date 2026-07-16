@@ -53,5 +53,20 @@ def test_sor_order_routing_real(monkeypatch):
         return {'rt_cd': '0', 'output': {'ODNO': '12345'}}
         
     monkeypatch.setattr(api, 'call_api', mock_call_api)
-    
+
     api.place_order("domestic", "buy", "005930", 1, 50000, "00")
+
+def test_nxt_unsupported_order_routing_krx(monkeypatch):
+    """4. NXT 미지원 종목(ETF 등)은 SOR 대신 KRX로 라우팅되는지 테스트 (APBK3026 방지)"""
+    config.session.is_simulation = False
+    monkeypatch.setattr(api, 'is_nxt_tradeable', lambda code: False)
+
+    def mock_call_api(url_path, market, category, action, data=None, method="GET", timeout=None, retries=None, tr_id=None):
+        assert data is not None
+        assert data.get("EXCG_ID_DVSN_CD") == "KRX"  # NXT 미지원 → KRX 라우팅
+        return {'rt_cd': '0', 'output': {'ODNO': '12345'}}
+
+    monkeypatch.setattr(api, 'call_api', mock_call_api)
+
+    # KODEX 삼성그룹 (NXT 미지원 ETF)
+    api.place_order("domestic", "buy", "102780", 1, 25400, "00")
