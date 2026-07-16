@@ -163,6 +163,22 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         df['DISP20'] = df['close'] / df['close'].rolling(window=20).mean() * 100
         df['DISP60'] = df['close'] / df['close'].rolling(window=60).mean() * 100
 
+        # [하이킨 아시] 별도 패널용 봉 값 산출 (시간축은 캔들과 동일 → 기존 지표와 정렬 유지)
+        #   HA_Close = (O+H+L+C)/4
+        #   HA_Open  = (직전 HA_Open + 직전 HA_Close)/2  (첫 봉은 (O+C)/2)
+        # HA_Open은 재귀식이라 표시구간 슬라이스 이전(전체 데이터)에 계산해 시드 오차를 없앤다.
+        _o = df['open'].to_numpy(); _h = df['high'].to_numpy()
+        _l = df['low'].to_numpy(); _c = df['close'].to_numpy()
+        _ha_close = (_o + _h + _l + _c) / 4
+        _ha_open = np.empty(len(df))
+        _ha_open[0] = (_o[0] + _c[0]) / 2
+        for i in range(1, len(df)):
+            _ha_open[i] = (_ha_open[i - 1] + _ha_close[i - 1]) / 2
+        df['HA_Close'] = _ha_close
+        df['HA_Open'] = _ha_open
+        df['HA_High'] = np.maximum(_h, np.maximum(_ha_open, _ha_close))
+        df['HA_Low'] = np.minimum(_l, np.minimum(_ha_open, _ha_close))
+
         # [일봉 표시기간] 지표는 전체 데이터로 계산한 뒤 표시 구간만 잘라낸다(EMA120 등 정확도 유지).
         # months가 지정되면 최근 N개월(거래일 ≈ 21일/월)만 표시.
         if period_type == 'daily' and months:
@@ -170,8 +186,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             if len(df) > disp_rows:
                 df = df.iloc[-disp_rows:].reset_index(drop=True)
 
-        # [변경] 서브플롯 6개로 조정 (이격도를 가격차트 바로 아래, MACD 위로 배치)
-        fig, (ax1, ax6, ax2, ax3, ax4, ax5) = plt.subplots(6, 1, figsize=(20, 25), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1]})
+        # [변경] 서브플롯 7개로 조정 (캔들 바로 아래 하이킨 아시 패널, 이후 이격도/MACD…)
+        fig, (ax1, ax_ha, ax6, ax2, ax3, ax4, ax5) = plt.subplots(7, 1, figsize=(20, 28), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1, 1]})
 
         # [1] Price Chart
         ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
@@ -278,6 +294,19 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax1.yaxis.tick_right()
         ax1.yaxis.set_label_position("right")
 
+        # [1-2] Heikin-Ashi Chart (기존 캔들 바로 아래 별도 패널, 동일 시간축)
+        ha_up = df[df['HA_Close'] >= df['HA_Open']]
+        ha_down = df[df['HA_Close'] < df['HA_Open']]
+        # 양봉 (Red)
+        ax_ha.bar(ha_up.index, ha_up['HA_Close'] - ha_up['HA_Open'], bottom=ha_up['HA_Open'], color='red', edgecolor='red', width=0.6, alpha=0.8)
+        ax_ha.vlines(ha_up.index, ha_up['HA_Low'], ha_up['HA_High'], color='red', linewidth=1)
+        # 음봉 (Blue)
+        ax_ha.bar(ha_down.index, ha_down['HA_Open'] - ha_down['HA_Close'], bottom=ha_down['HA_Close'], color='blue', edgecolor='blue', width=0.6, alpha=0.8)
+        ax_ha.vlines(ha_down.index, ha_down['HA_Low'], ha_down['HA_High'], color='blue', linewidth=1)
+        ax_ha.set_ylabel("지수" if is_index else "가격")
+        ax_ha.set_title("Heikin-Ashi (하이킨 아시)", fontsize=10, loc='right')
+        ax_ha.grid(True, alpha=0.2); ax_ha.yaxis.tick_right(); ax_ha.yaxis.set_label_position("right")
+
         # [2] MACD (위치 변경: RSI 위로 이동)
         ax2.plot(df.index, df['MACD'], label='MACD', color='gray', linewidth=1.2)
         ax2.plot(df.index, df['MACD_Signal'], label='Signal', color='orange', linewidth=1.0)
@@ -374,7 +403,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         formatted_labels = [format_date(df['date'].iloc[i]) for i in tick_indices]
         
-        for ax in [ax1, ax2, ax3, ax4, ax5, ax6]:
+        for ax in [ax1, ax_ha, ax2, ax3, ax4, ax5, ax6]:
             ax.set_xticks(tick_indices)
             ax.set_xticklabels(formatted_labels, rotation=0, ha='center', fontsize=9)
             # [수정] 모든 그래프의 X축 날짜 표시
