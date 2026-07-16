@@ -1061,16 +1061,17 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
 
 
 def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_params,
-                     name="", code="", days=365, n_splits=4):
+                     name="", code="", days=365, n_splits=4, optimize_dims=None):
     """Walk-Forward 검증 (과최적화 진단)
 
     전체 분석 구간을 n_splits개의 연속된 OOS(Out-of-Sample) 폴드로 나눈다.
-    각 폴드 직전까지의 데이터를 IS(In-Sample)로 삼아 후보 가중치 세트 중
-    'IS에서 가장 성과가 좋은' 세트를 고른 뒤, 그 세트를 한 번도 학습에 쓰지 않은
+    각 폴드 직전까지의 데이터를 IS(In-Sample)로 삼아 후보 조합 중
+    'IS에서 가장 성과가 좋은' 조합을 고른 뒤, 그 조합을 한 번도 학습에 쓰지 않은
     OOS 구간에 그대로 적용해 평가한다. IS 대비 OOS 성과 저하율로 과최적화(curve fitting)를 진단한다.
 
-    ※ 매도/리스크 파라미터는 base_params(사용자 설정)로 고정하고, 가중치(스코어링 팩터 배분)만
-       IS에서 선택하여 검증한다. (자유도가 큰 가중치의 과최적화 여부를 집중 점검)
+    [확장] 최적화 대상 차원을 선택할 수 있다(optimize_dims, None이면 대화형 선택):
+      1 가중치 / 2 매수 기준점 / 3 트레일링 스탑 / 4 ATR 손절 배수 / 5 시간 청산 / 6 매도 기준점
+    선택된 차원들의 조합(격자)을 IS에서 탐색하며, 미선택 차원은 base_params(사용자 설정)로 고정한다.
     """
     n = len(full_df)
     analysis_len = n - start_idx
@@ -1087,18 +1088,80 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
         {"DESC": "수급/강도 중시",   "TREND": 3.5, "MOMENTUM": 2.0, "STRENGTH": 2.5, "SYNERGY": 2.0},
     ]
 
-    def _run(seg_start, seg_end, w):
+    # [추가] 최적화 대상 차원 정의 — 각 차원은 (라벨, 후보값 리스트) / 후보값 = (표시명, 오버라이드 dict)
+    def _uniq(seq):
+        out, seen = [], set()
+        for label, ov in seq:
+            key = tuple(sorted(ov.items()))
+            if key not in seen:
+                seen.add(key)
+                out.append((label, ov))
+        return out
+
+    _bs = float(base_params['buy_score'])
+    _ss = float(base_params['sell_score'])
+    _am = float(base_params['atr_mult'])
+    _td = int(base_params['time_stop_days'])
+    _ta, _tc = float(base_params['ts_activation']), float(base_params['ts_callback'])
+    dim_defs = {
+        "1": ("가중치", [(w["DESC"], {"weights": {k: v for k, v in w.items() if k != "DESC"}}) for w in candidate_weights]),
+        "2": ("매수 기준점", _uniq([(f"매수{v:g}", {"buy_score": v}) for v in [_bs, round(_bs - 0.5, 1), round(_bs + 0.5, 1)]])),
+        "3": ("트레일링 스탑", _uniq([
+            (f"TS {_ta:g}/{_tc:g}", {"ts_activation": _ta, "ts_callback": _tc}),
+            ("TS 5/4(조기)", {"ts_activation": 5.0, "ts_callback": 4.0}),
+            ("TS 15/6(느긋)", {"ts_activation": 15.0, "ts_callback": 6.0}),
+        ])),
+        "4": ("ATR 손절 배수", _uniq([(f"ATR×{v:g}", {"atr_mult": v}) for v in [_am, 1.5, 2.5]])),
+        "5": ("시간 청산", _uniq([(f"기한{v}일", {"time_stop_days": v}) for v in [_td, 10, 30]])),
+        "6": ("매도 기준점", _uniq([(f"매도{v:g}", {"sell_score": v}) for v in [_ss, 3.0, 5.0]])),
+    }
+
+    # 차원 선택 (기본: 가중치만 — 기존 동작과 동일)
+    if optimize_dims is None:
+        config.console.print("\n[bold]Walk-Forward 최적화 대상 선택[/bold] [dim](쉼표로 복수 선택 가능, 예: 1,3)[/dim]")
+        for k, (label, cands) in dim_defs.items():
+            config.console.print(f"  [{k}] {label} ({len(cands)}종)")
+        sel_raw = Prompt.ask("선택", default="1")
+        optimize_dims = [s.strip() for s in sel_raw.split(',') if s.strip() in dim_defs]
+        if not optimize_dims:
+            optimize_dims = ["1"]
+
+    import itertools
+    selected = [(k, dim_defs[k]) for k in dim_defs if k in optimize_dims]
+    combos = list(itertools.product(*[cands for _, (_, cands) in selected]))
+    candidates = []
+    for combo in combos:
+        desc = " | ".join(label for label, _ in combo)
+        overrides = {}
+        weights_sel = None
+        for _, ov in combo:
+            if "weights" in ov:
+                weights_sel = ov["weights"]
+            else:
+                overrides.update(ov)
+        candidates.append({"desc": desc, "weights": weights_sel or config.SCORING_WEIGHTS, "overrides": overrides})
+
+    # 조합 폭발 가드: IS 시뮬 횟수 = 후보 수 × 폴드 수
+    total_runs = len(candidates) * n_splits
+    if len(candidates) > 120:
+        config.console.print(f"[yellow]후보 조합이 {len(candidates)}종(시뮬 약 {total_runs}회)으로 많습니다. 시간이 오래 걸릴 수 있습니다.[/yellow]")
+        if Prompt.ask("계속 진행하시겠습니까?", choices=["y", "n"], default="y") != "y":
+            return
+    dims_label = ", ".join(label for _, (label, _) in selected)
+
+    def _run(seg_start, seg_end, cand):
         seg_df = full_df.iloc[seg_start:seg_end].copy()
         prev_row = full_df.iloc[seg_start - 1] if seg_start > 0 else None
+        p = {**base_params, **cand["overrides"]}
         return simulate_strategy(
-            seg_df, prev_row, initial_capital, base_params['buy_score'], base_params['buy_rsi'], is_overseas,
-            stop_loss_rate=base_params['stop_loss'], take_profit_rate=base_params['take_profit'],
-            take_profit_rsi=base_params['take_profit_rsi'], sell_score=base_params['sell_score'],
-            ts_activation_rate=base_params['ts_activation'], ts_callback_rate=base_params['ts_callback'],
-            time_stop_days_limit=base_params['time_stop_days'],
-            use_atr_stop_limit=base_params['use_atr_stop'], atr_stop_multiplier_limit=base_params['atr_mult'],
-            half_tp_use_limit=base_params['half_tp_use'], weights={k: v for k, v in w.items() if k != "DESC"},
-            pyramiding_max_count_limit=base_params.get('pyramiding_max')
+            seg_df, prev_row, initial_capital, p['buy_score'], p['buy_rsi'], is_overseas,
+            stop_loss_rate=p['stop_loss'], take_profit_rate=p['take_profit'],
+            take_profit_rsi=p['take_profit_rsi'], sell_score=p['sell_score'],
+            ts_activation_rate=p['ts_activation'], ts_callback_rate=p['ts_callback'],
+            time_stop_days_limit=p['time_stop_days'],
+            use_atr_stop_limit=p['use_atr_stop'], atr_stop_multiplier_limit=p['atr_mult'],
+            half_tp_use_limit=p['half_tp_use'], weights=cand["weights"],
+            pyramiding_max_count_limit=p.get('pyramiding_max')
         )
 
     def _sharpe(res):
@@ -1120,13 +1183,26 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
     oos_region_start = start_idx + int(analysis_len * 0.4)
     fold_size = (n - oos_region_start) // n_splits
 
+    # [추가] 폴드 길이 가드 — 추세추종은 진입→TS활성화(+10%)→추세전개→청산까지 수주~수개월이
+    #  걸리므로, OOS 폴드가 짧으면 fat-tail 수익이 폴드 경계에서 잘려 승률 0%·유지율 저하가
+    #  '구조적으로' 발생한다(전략 문제 아님). 최소 권장: 시간청산 기간×3 이상.
+    min_fold_days = max(60, int(base_params.get('time_stop_days', 20)) * 3)
+    if fold_size < min_fold_days:
+        need_days = int((min_fold_days * n_splits / 0.6) * (365 / 252)) + 30  # 거래일→달력일 환산(+여유)
+        config.console.print(
+            f"[yellow]⚠ OOS 폴드당 {fold_size}거래일은 추세추종 사이클(권장 {min_fold_days}거래일↑)보다 짧습니다.\n"
+            f"  짧은 폴드는 추세가 완결되기 전에 잘려 승률 0%·낮은 유지율이 구조적으로 나타납니다.\n"
+            f"  → 시뮬레이션 기간을 {need_days}일 이상으로 늘리거나 폴드 수를 줄여서 실행하세요.[/yellow]")
+        if Prompt.ask("그래도 계속 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            return
+
     config.console.print(f"\n[bold magenta]━━━ Walk-Forward 검증 ({name}) ━━━[/]")
-    config.console.print(f"[dim]분석 {analysis_len}행 | 초기 학습 40% | OOS {n_splits}폴드 | 후보 가중치 {len(candidate_weights)}종 (매도/리스크 파라미터는 입력값 고정)[/dim]\n")
+    config.console.print(f"[dim]분석 {analysis_len}행 | 초기 학습 40% | OOS {n_splits}폴드 | 후보 조합 {len(candidates)}종 (대상: {dims_label} / 그 외 파라미터는 입력값 고정)[/dim]\n")
 
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("폴드", justify="center")
     table.add_column("OOS 기간", justify="center")
-    table.add_column("선택 가중치(IS 최적)", justify="left")
+    table.add_column("선택 조합(IS 최적)", justify="left")
     table.add_column("IS 수익률", justify="right")
     table.add_column("OOS 수익률", justify="right")
     table.add_column("OOS 승률", justify="right")
@@ -1145,17 +1221,17 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             if oos_end - oos_start < 20:
                 continue
 
-            # 1) IS(expanding): 분석 시작 ~ OOS 직전. IS에서 최적 가중치 선택
-            best_w, best_is_ret, best_is_res = None, -1e9, None
-            for w in candidate_weights:
-                is_res = _run(start_idx, oos_start, w)
+            # 1) IS(expanding): 분석 시작 ~ OOS 직전. IS에서 최적 조합 선택
+            best_c, best_is_ret, best_is_res = None, -1e9, None
+            for cand in candidates:
+                is_res = _run(start_idx, oos_start, cand)
                 if is_res['total_return'] > best_is_ret:
                     best_is_ret = is_res['total_return']
-                    best_w = w
+                    best_c = cand
                     best_is_res = is_res
 
-            # 2) OOS: 선택된 가중치를 미학습 구간에 적용
-            oos_res = _run(oos_start, oos_end, best_w)
+            # 2) OOS: 선택된 조합을 미학습 구간에 적용
+            oos_res = _run(oos_start, oos_end, best_c)
             oos_ret = oos_res['total_return']
             sells = oos_res['win_trades'] + oos_res['loss_trades']
             oos_wr = (oos_res['win_trades'] / sells * 100) if sells > 0 else 0.0
@@ -1169,7 +1245,7 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             table.add_row(
                 f"{i+1}",
                 f"{_date_str(oos_start)}~{_date_str(oos_end-1)}",
-                best_w["DESC"],
+                best_c["desc"],
                 f"{best_is_ret:+.1f}%",
                 f"{oc}{oos_ret:+.1f}%[/]",
                 f"{oos_wr:.0f}%",
@@ -1603,6 +1679,15 @@ def run_backtest():
         if mode_choice.lower() in ['b', 'q']: continue
         mode_map_dict = dict((k, v) for k, v, _ in mode_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{mode_choice}] {mode_map_dict.get(mode_choice, '')}")
+
+        # [추가] Walk-Forward는 추세 사이클(진입→TS활성화→전개→청산)이 OOS 폴드 안에 완결되도록
+        #  무조건 730일 이상을 기준으로 진행한다 (짧은 폴드로 인한 승률 0%·유지율 왜곡 방지).
+        if mode_choice == "3":
+            if days < 730:
+                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 730일을 기준으로 진행합니다. (설정 기간 {days}일 → 730일 자동 상향)[/yellow]")
+                days = 730
+            else:
+                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 730일을 기준으로 진행합니다. (현재 설정 {days}일 ≥ 730일, 그대로 적용)[/yellow]")
 
         # 3. 데이터 준비
         with Progress(
