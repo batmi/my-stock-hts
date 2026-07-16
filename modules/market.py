@@ -62,10 +62,23 @@ def _daily_prev_close_idx(df_daily, last_price, is_futures):
             return -2
     return -1
 
+def _k200_night_session(now=None):
+    """코스피200 선물 표시 세션 판정 — 야간(CM)=18:00~익일 07:59, 주간(F)=08:00~17:59.
+
+    주간장(08:45~15:45) 마감 후 18시 전까지는 주간 최종치를, 야간장(18:00~익일 06:00)
+    마감 후 아침 8시 전까지는 야간 최종치를 유지 표시한다.
+    """
+    h = (now or datetime.now()).hour
+    return h >= 18 or h < 8
+
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
     # 1. 국내 지수
-    ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
+    #  V코스피200(VKOSPI, 변동성지수)은 KIS 업종코드 0503 전용(모드 1/2)이며 yfinance 티커가
+    #  없다("^VKOSPI"는 자리표시자, yfinance 다운로드에서 제외됨). 토스 모드에선 표시하지 않는다.
+    #  코스피200선물은 KIS 선물 TR 전용(모드 1/2) — 주간(F)/야간(CM)을 시간대로 자동 전환하며
+    #  표시명이 '코스피200선물 F/CM'으로 바뀐다("^K200FUT"는 자리표시자).
+    ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스피200선물", "^K200FUT"), ("V코스피200", "^VKOSPI"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
     # 3. 섹터 및 지표
@@ -90,7 +103,7 @@ INDICES_MAP = dict(ALL_INDICES)
 def _process_index_worker(name, ticker, df_daily, df_intraday):
     """(내부함수) 단일 지수 분석 워커"""
     try:
-        is_domestic_index = name in ["코스피", "코스닥", "코스피200", "코스닥150"]
+        is_domestic_index = name in ["코스피", "코스닥", "코스피200", "코스닥150", "V코스피200", "코스피200선물"]
 
         # [수정] 국내 지수는 yfinance 데이터를 사용하지 않고 KIS API 데이터만 사용
         if is_domestic_index:
@@ -113,14 +126,36 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         is_kis_source = False
         mismatch_msg = None
+        fut_div = None    # [추가] 코스피200선물 세션 ('F'=주간 / 'CM'=야간)
+        fut_quote = None  # [추가] 선물 시세 TR 결과 (현재가/전일대비/등락률)
 
         if is_domestic_index:
             if name == "코스피": m_type = "KOSPI"
             elif name == "코스닥": m_type = "KOSDAQ"
             elif name == "코스피200": m_type = "KOSPI200"
             elif name == "코스닥150": m_type = "KOSDAQ150"
-            
+            elif name == "V코스피200": m_type = "VKOSPI"
+            elif name == "코스피200선물":
+                fut_div = "CM" if _k200_night_session() else "F"
+                m_type = f"K200FUT_{fut_div}"
+
+            # [추가] V코스피200·코스피200선물은 KIS 전용 — 토스 모드는 대체 소스가 없어 스킵
+            #  (표시 자체는 _show_market_indices_core에서 모드 1/2로 제한되며, 여기는 방어 로직)
+            if config.session.is_toss and m_type in ("VKOSPI", "K200FUT_F", "K200FUT_CM"):
+                return {'status': 'skipped', 'name': name}
+
             df_fallback = analysis.get_domestic_index_data(m_type)
+
+            # [추가] 코스피200선물: 현재가/등락률은 시세 TR 값으로 보정한다.
+            #  야간 등락률은 야간 전일봉 대비가 아닌 '주간 종가 대비'가 관행이므로
+            #  차트 봉 차분 대신 KIS futs_prdy_vrss/ctrt를 그대로 쓴다.
+            if fut_div:
+                try:
+                    fut_iscd = api.get_k200_futures_front_code()
+                    if fut_iscd:
+                        fut_quote = api.get_k200_futures_quote(fut_div, fut_iscd)
+                except Exception:
+                    fut_quote = None
             # [수정] 토스 모드: 코스피200·코스닥150은 TradingView(tvDatafeed)로 조회하며,
             #  그마저 실패하면 대체 소스가 없으므로 스킵 → '-' 표시(수신 실패 오탐 방지).
             if config.session.is_toss and m_type in ("KOSPI200", "KOSDAQ150") and (df_fallback is None or df_fallback.empty):
@@ -341,9 +376,15 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 if target_date < today: missing_name = f"{name}(Old:{target_date})"
                 else: missing_name = f"{name}(Last:{prev_date_src})"
                 
+        # [추가] 코스피200선물: 시세 TR 성공 시 현재가/기준가를 KIS 제공값으로 교체
+        #  (prev = 현재가 - 전일대비 → 아래 D단계 diff/rate 계산이 KIS 등락률과 일치)
+        if fut_quote:
+            current = fut_quote['current']
+            prev = current - fut_quote['diff']
+
         if chart_calc_price is None:
             chart_calc_price = current
-            
+
         # [추가] 지표 및 상태 판별용 오리지널 가격 (프록시 적용 시 원본 가격 유지)
         eval_price = chart_calc_price if is_proxy_yield else current
 
@@ -389,7 +430,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         # [장전 폴백] 국내 지수는 NXT 연장거래가 없어 KRX 개장(09:00) 전엔 현재가=전일 종가라
         #  등락률이 0%로 굳는다. 이 구간엔 직전 정규장 최종 등락률(전일 vs 전전일 종가)을 표시한다.
         #  (일봉 마지막 봉이 장전 placeholder(오늘)면 전전일=-3, 오늘 봉이 없으면 전전일=-2)
-        if is_domestic_index and diff == 0 and not df_daily.empty and len(df_daily) >= 2 \
+        if is_domestic_index and fut_div is None and diff == 0 and not df_daily.empty and len(df_daily) >= 2 \
            and api._before_krx_regular_open():
             try:
                 today_d = datetime.strptime(utils.market_today(False), '%Y%m%d').date()
@@ -543,9 +584,13 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             else: cci_str = f"[blue]{cci_str}[/]"
 
         display_name = name
-        
+
+        # [추가] 코스피200선물: 현재 표시 중인 세션을 지수명에 병기 (F=주간 / CM=야간)
+        if fut_div:
+            display_name = f"{name} {fut_div}"
+
         adaptive_targets = [
-            "코스피", "코스닥", "코스피200", "코스닥150",
+            "코스피", "코스닥", "코스피200", "코스닥150", "코스피200선물",
             "나스닥 선물", "나스닥", "S&P500 선물", "S&P500", "다우존스 선물", "다우존스", "러셀2000 선물", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
             "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40", 
@@ -576,9 +621,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     elif eval_price < ma_val:
                         regime_state = "Bear"
                 
-                if regime_state == "Bull": display_name = f"[red]{name}[/]"
-                elif regime_state == "Bear": display_name = f"[blue]{name}[/]"
-                else: display_name = f"[yellow]{name}[/]"
+                # [수정] name 대신 display_name에 색을 입힌다 — 코스피200선물의 'F/CM' 접미사 유지
+                if regime_state == "Bull": display_name = f"[red]{display_name}[/]"
+                elif regime_state == "Bear": display_name = f"[blue]{display_name}[/]"
+                else: display_name = f"[yellow]{display_name}[/]"
             except Exception: pass
         elif name == "미국채 10년물 금리":
             if eval_price >= 5.10: display_name = f"[magenta]{name}[/]"
@@ -666,7 +712,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
             elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
             elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
-        elif name == "VIX (변동성)":
+        elif name in ["VIX (변동성)", "V코스피200"]:
             if current < 15: display_name = f"[green]{name}[/]"
             elif 15 <= current < 20: display_name = f"[yellow]{name}[/]"
             elif 20 <= current < 30: display_name = f"[orange3]{name}[/]"
@@ -752,6 +798,12 @@ def _show_market_indices_core(target_indices=None):
     #  토스 API는 이 지수 시세를 제공하지 않으므로 analysis._fetch_domestic_index_data가
     #  TradingView(tvDatafeed)로 보강한다(모드 무관 출력). 조회 대상에서 더 이상 제외하지 않는다.
 
+    # [추가] V코스피200(업종코드 0503)·코스피200선물(선물 TR)은 KIS 전용 — 대체 소스
+    #  (yfinance/tvDatafeed)가 없으므로 토스 모드(3)에서는 목록에서 제외한다(모드 1/2 전용 표시).
+    if config.session.is_toss:
+        indices_map.pop("V코스피200", None)
+        indices_map.pop("코스피200선물", None)
+
     if target_indices:
         indices_map = {k: v for k, v in indices_map.items() if k in target_indices}
         
@@ -807,8 +859,8 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
 
-                # [추가] 코스닥150은 yfinance를 호출하지 않도록 필터링
-                yf_t_list = [t for t in t_list if t != "^KQ150"]
+                # [추가] 코스닥150·V코스피200·코스피200선물은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
+                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT")]
                 if not yf_t_list:
                     continue
 
@@ -1112,7 +1164,8 @@ def show_market_indices(interval=0):
                         is_overseas = True
                         domestic_map = {
                             "코스피": "KOSPI", "코스피200": "KOSPI200",
-                            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
+                            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150",
+                            "V코스피200": "VKOSPI"
                         }
                         if target_name in domestic_map:
                             target_code = domestic_map[target_name]

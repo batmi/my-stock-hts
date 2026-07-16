@@ -678,6 +678,22 @@ def _fetch_domestic_index_data(market_type):
     tvDatafeed는 4종 지수(코스피·코스닥·코스피200·코스닥150) 모두 지원하며 KRX 정확·당일 종가를
     준다. yfinance(^KS11/^KQ11 등)는 최신 거래일 종가를 NaN으로 주는 일이 잦아 최후 폴백으로 둔다.
     """
+    # [추가] 코스피200 선물 (주간 K200FUT_F / 야간 K200FUT_CM): KIS 전용, 폴백 없음.
+    #  세션별 market_type을 분리해 TTL 캐시가 주간/야간 데이터를 섞지 않게 한다.
+    if market_type in ("K200FUT_F", "K200FUT_CM"):
+        if config.session.is_toss:
+            return None
+        div = "F" if market_type == "K200FUT_F" else "CM"
+        try:
+            iscd = api.get_k200_futures_front_code()
+            if not iscd:
+                return None
+            df = api.get_k200_futures_chart(div, iscd)
+            return df if df is not None and not df.empty else None
+        except Exception as e:
+            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} K200선물 조회 실패: {e}")
+            return None
+
     kis_code = "0001"
     yf_ticker = "^KS11"
 
@@ -690,6 +706,11 @@ def _fetch_domestic_index_data(market_type):
     elif market_type == "KOSDAQ150":
         kis_code = "2203"
         yf_ticker = "^KQ150"
+    elif market_type == "VKOSPI":
+        # V코스피200(코스피200 변동성지수): KIS 업종코드 0503 전용.
+        # yfinance/tvDatafeed 모두 미제공 → 폴백 없음(토스 모드에서는 조회 불가).
+        kis_code = "0503"
+        yf_ticker = None
 
     # 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
     #  사용하므로 두 기간 중 큰 값을 '충분성' 기준으로 삼는다(부족하면 다음 소스로 폴백).
@@ -733,7 +754,8 @@ def _fetch_domestic_index_data(market_type):
             df = tv_df  # attrs['source']='TVDATAFEED' (fetch 함수가 설정)
 
     # 3) yfinance (최후 폴백) — ^KQ150은 실측 데이터가 거의 없어 보통 빈 응답('-')
-    if _insufficient(df):
+    #    (VKOSPI는 yfinance 미제공 → yf_ticker=None이면 건너뜀)
+    if _insufficient(df) and yf_ticker:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} → yfinance({yf_ticker}) 폴백 시도")
         try:
             yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
@@ -1380,8 +1402,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         market_str = std_market if std_market else ("해외" if is_overseas else "KOSPI")
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
-        is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150"]
-        
+        is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI"]
+
         from modules import market
         all_idx_codes = [c for n, c in market.ALL_INDICES]
         is_index = is_domestic_index or (is_overseas and code in all_idx_codes)
@@ -2058,11 +2080,17 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import chart
         if is_domestic_index:
-            yf_ticker = "^KS11"
-            if code == "KOSDAQ": yf_ticker = "^KQ11"
-            elif code == "KOSPI200": yf_ticker = "^KS200"
-            elif code == "KOSDAQ150": yf_ticker = "^KQ150"
-            chart.generate_visual_chart(yf_ticker, name, is_overseas=True)
+            if code == "VKOSPI":
+                # VKOSPI는 yfinance 미제공 → 상세 차트(야후 데이터 기반) 생성 불가
+                config.console.print("[yellow]V코스피200(VKOSPI)은 yfinance 미제공 지수로 상세 차트를 지원하지 않습니다.[/yellow]")
+                yf_ticker = None
+            else:
+                yf_ticker = "^KS11"
+                if code == "KOSDAQ": yf_ticker = "^KQ11"
+                elif code == "KOSPI200": yf_ticker = "^KS200"
+                elif code == "KOSDAQ150": yf_ticker = "^KQ150"
+            if yf_ticker:
+                chart.generate_visual_chart(yf_ticker, name, is_overseas=True)
         else:
             chart.generate_visual_chart(code, name, is_overseas=is_overseas)
 
@@ -4395,8 +4423,8 @@ def _print_period_price_common(code, is_overseas, limit=20):
     df = None
     investor_map = {} # [추가]
     
-    is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150"]
-    
+    is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI"]
+
     from modules import market
     all_idx_codes = [c for n, c in market.ALL_INDICES]
     is_global_index = is_overseas and code in all_idx_codes
@@ -4478,7 +4506,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     if is_index:
         idx_name = code
         if is_domestic_index:
-            d_map = {"KOSPI": "코스피", "KOSDAQ": "코스닥", "KOSPI200": "코스피200", "KOSDAQ150": "코스닥150"}
+            d_map = {"KOSPI": "코스피", "KOSDAQ": "코스닥", "KOSPI200": "코스피200", "KOSDAQ150": "코스닥150", "VKOSPI": "V코스피200"}
             idx_name = d_map.get(code, code)
         else:
             idx_name = next((n for n, c in market.ALL_INDICES if c == code), code)

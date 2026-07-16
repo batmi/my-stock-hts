@@ -2403,6 +2403,128 @@ def get_domestic_index_price(code):
         _set_micro_cache(cache_key, res)
     return res
 
+# ==========================================================
+# [추가] 코스피200 선물 (주간 F / 야간 CM) 시세 — KIS 전용
+#  - 종목코드는 주간/야간 공통(예: A01609), 시장분류코드로 세션을 가른다.
+#  - 야간(KRX 야간파생시장, 18:00~익일 06:00)은 FID_COND_MRKT_DIV_CODE='CM'.
+# ==========================================================
+def get_k200_futures_front_code(now=None):
+    """코스피200 선물 근월물 종목코드(예: 'A01609')를 계산한다.
+
+    결제월은 3/6/9/12월, 만기(최종거래일)는 결제월 두 번째 목요일.
+    만기일 주간장 마감(15:45) 이후에는 차근월물로 롤오버한다.
+    (마스터파일 fo_cme_code.mst의 코드 체계: 'A01' + 연도 끝자리 + 결제월 2자리)
+    """
+    if now is None:
+        now = datetime.now()
+    d = now.date()
+    y, m = d.year, d.month
+    for _ in range(8):
+        qm = ((m - 1) // 3 + 1) * 3  # 3/6/9/12월로 올림
+        first_wd = datetime(y, qm, 1).weekday()
+        expiry = datetime(y, qm, 1 + (3 - first_wd) % 7 + 7).date()  # 두 번째 목요일
+        if d < expiry or (d == expiry and now.hour < 16):
+            return f"A01{y % 10}{qm:02d}"
+        # 만기 경과 → 다음 분기월로 이동
+        m = qm + 1
+        if m > 12:
+            m = 1
+            y += 1
+    return None
+
+def get_k200_futures_quote(mrkt_div_code, iscd):
+    """코스피200 선물 현재가/전일대비/등락률 조회 (FHMIF10000000).
+
+    mrkt_div_code: 'F'(주간) / 'CM'(야간). 야간 등락률은 주간 종가 대비(KIS 제공값 그대로).
+    성공 시 {'current','diff','rate'} dict, 실패 시 None.
+    """
+    if config.session.is_toss:
+        return None
+    url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["FUT_PRICE"]
+    params = {"FID_COND_MRKT_DIV_CODE": mrkt_div_code, "FID_INPUT_ISCD": iscd}
+    data = call_api(url, "domestic", "quotations", "fut_price", params=params, tr_id="FHMIF10000000", retries=0)
+    if data.get('rt_cd') == '0':
+        out = data.get('output1') or {}
+        try:
+            current = float(out.get('futs_prpr'))
+            diff = float(out.get('futs_prdy_vrss'))
+            rate = float(out.get('futs_prdy_ctrt'))
+            if current > 0:
+                return {'current': current, 'diff': diff, 'rate': rate}
+        except (TypeError, ValueError):
+            pass
+    else:
+        logger.debug(f"[API] K200선물 시세({mrkt_div_code}/{iscd}) 조회 실패: {data.get('msg1')}")
+    return None
+
+def get_k200_futures_chart(mrkt_div_code, iscd):
+    """코스피200 선물 일봉 조회 (FHKIF03020100, 1콜 최대 100건 → 기간 분할로 최대 ~300봉).
+
+    mrkt_div_code: 'F'(주간) / 'CM'(야간). 반환 스키마는 지수 차트와 동일:
+    ['date','open','high','low','close','volume'] (오름차순, attrs['source']='KIS').
+    근월물 상장기간이 짧으면 확보되는 만큼만 반환한다.
+    """
+    if config.session.is_toss:
+        return pd.DataFrame()
+
+    url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["FUT_CHART"]
+    now = datetime.now()
+    all_items = []
+    current_end_date = now.strftime("%Y%m%d")
+    retry_count = 0
+    while len(all_items) < 300 and retry_count < 10:
+        params = {
+            "FID_COND_MRKT_DIV_CODE": mrkt_div_code,
+            "FID_INPUT_ISCD": iscd,
+            "FID_INPUT_DATE_1": (now - timedelta(days=730)).strftime("%Y%m%d"),
+            "FID_INPUT_DATE_2": current_end_date,
+            "FID_PERIOD_DIV_CODE": "D"
+        }
+        data = call_api(url_path, "domestic", "quotations", "fut_chart", params=params, tr_id="FHKIF03020100", retries=0)
+        if data.get('rt_cd') == '0':
+            items = data.get('output2', [])
+            # 빈 행(과거 미상장 구간) 제거
+            items = [it for it in items if it.get('stck_bsop_date')]
+            if items:
+                all_items.extend(items)
+                last_date = items[-1]['stck_bsop_date']
+                current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                retry_count += 1
+                time.sleep(0.1)
+            else:
+                break
+        elif data.get('msg_cd') == 'EGW00201':
+            time.sleep(0.5)
+            retry_count += 1
+        else:
+            if not all_items:
+                logger.warning(f"[API] K200선물 차트({mrkt_div_code}/{iscd}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+            break
+
+    if not all_items:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_items)
+    df.drop_duplicates(subset=['stck_bsop_date'], inplace=True)
+    rename_map = {
+        'stck_bsop_date': 'date',
+        'futs_prpr': 'close',
+        'futs_oprc': 'open',
+        'futs_hgpr': 'high',
+        'futs_lwpr': 'low',
+        'acml_vol': 'volume'
+    }
+    df.rename(columns=rename_map, inplace=True)
+    for col in ['close', 'open', 'high', 'low', 'volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            df[col] = 0.0
+    df = df[['date', 'open', 'high', 'low', 'close', 'volume']].dropna(subset=['close'])
+    df = df.sort_values('date', ascending=True).reset_index(drop=True)
+    df.attrs['source'] = 'KIS'
+    return df
+
 def _nxt_quote_window():
     """NXT(대체거래소) 보조 시세 조회가 의미있는 시간대인지 판단한다(TPS 절감용 시간대 게이트).
 

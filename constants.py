@@ -69,7 +69,10 @@ API_URLS = {
             "INDEX_PRICE": "/uapi/domestic-stock/v1/quotations/inquire-index-price",
             "INDEX_CHART": "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
             "INDEX_INVESTOR_CURRENT": "/uapi/domestic-stock/v1/quotations/inquire-index-investor",
-            "DAILY_PRICE": "/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+            "DAILY_PRICE": "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+            # [추가] 국내 선물옵션 시세 (코스피200 선물 주간 F / 야간 CM 겸용)
+            "FUT_PRICE": "/uapi/domestic-futureoption/v1/quotations/inquire-price",
+            "FUT_CHART": "/uapi/domestic-futureoption/v1/quotations/inquire-daily-fuopchartprice"
         },
         "TRADING": {
             "BUY": "/uapi/domestic-stock/v1/trading/order-cash",
