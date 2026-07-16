@@ -291,8 +291,12 @@ class GlobalSettings(BaseModel):
         "TRAILING_STOP_CALLBACK_RATE": 5.0,    # [트레일링 스탑] 최고가 대비 최소 이탈률(매도 조건). ATR 동적 콜백의 하한
         # [샹들리에 엑시트] TS 전용 ATR 배수. 손절용 ATR_STOP_MULTIPLIER(2.0)와 분리하여,
         # 급등주는 변동성(ATR)에 비례해 콜백이 자동으로 넓어져 추세를 끝까지 추종한다.
-        # 실효 콜백 = clamp(TRAILING_ATR_MULTIPLIER×ATR/고점, 최소 CALLBACK_RATE, 최대수익의 50%)
-        "TRAILING_ATR_MULTIPLIER": 3.0
+        # 실효 콜백 = max(CALLBACK_RATE, TRAILING_ATR_MULTIPLIER×ATR/고점) (+아래 상한 캡 적용 시 clamp)
+        "TRAILING_ATR_MULTIPLIER": 3.0,
+        # [TS 상한 캡] ATR 동적 콜백을 '최대수익 × 이 비율'로 제한. 0 이하 = 캡 해제(순수 샹들리에).
+        # 백테스트(관심목록 52종목×2년): 캡 0.5가 TS 청산 건당 수익을 +29.8%→+17.1%로 깎아
+        # fat-tail 추세를 조기에 끊는 것으로 확인 → 추세추종 기조로 기본 해제(0.0).
+        "TS_MAX_GIVEBACK_RATIO": 0.0
     }
 
     # ==========================================================
@@ -900,7 +904,7 @@ def reset_all_settings():
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
-            "TRAILING_ATR_MULTIPLIER": 3.0
+            "TRAILING_ATR_MULTIPLIER": 3.0, "TS_MAX_GIVEBACK_RATIO": 0.0
         }
         settings.SCORING_WEIGHTS = {
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0

@@ -467,8 +467,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if use_atr_stop and atr_val > 0:
                         dynamic_callback = (atr_val * ts_atr_mult / ts_highest_price) * 100
                         # [추가] 트레일링 스탑 하/상한선 방어 로직 동기화
-                        max_allowed_callback = max(ts_callback, max_profit_rate * 0.5)
-                        actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
+                        #  (TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제 — engine.analyze_sell과 동일)
+                        giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.5)
+                        if giveback_ratio > 0:
+                            max_allowed_callback = max(ts_callback, max_profit_rate * giveback_ratio)
+                            actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
+                        else:
+                            actual_ts_callback = max(ts_callback, dynamic_callback)
                         
                     if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
                     

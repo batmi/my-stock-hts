@@ -254,9 +254,14 @@ class DefaultStrategy:
                     
                     # [리스크 관리 방어 로직 추가]
                     # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
-                    # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 50% 이상을 반납하는 것 방지
-                    max_allowed_callback = max(ts_callback, max_profit_rate * 0.5)
-                    actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
+                    # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 일정 비율(기본 50%) 이상을
+                    #    반납하는 것 방지. TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제(순수 샹들리에).
+                    giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.5)
+                    if giveback_ratio > 0:
+                        max_allowed_callback = max(ts_callback, max_profit_rate * giveback_ratio)
+                        actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
+                    else:
+                        actual_ts_callback = max(ts_callback, dynamic_callback)
                     
                 if drop_rate >= actual_ts_callback:
                     ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
