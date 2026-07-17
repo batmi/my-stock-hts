@@ -74,10 +74,12 @@ def _k200_night_session(now=None):
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
     # 1. 국내 지수
-    #  V코스피200(VKOSPI, 변동성지수)은 KIS 업종코드 0503 전용(모드 1/2)이며 yfinance 티커가
-    #  없다("^VKOSPI"는 자리표시자, yfinance 다운로드에서 제외됨). 토스 모드에선 표시하지 않는다.
-    #  코스피200선물은 KIS 선물 TR 전용(모드 1/2) — 주간(F)/야간(CM)을 시간대로 자동 전환하며
+    #  V코스피200(VKOSPI, 변동성지수)은 KIS 업종코드 0503 전용이며 yfinance 티커가 없다
+    #  ("^VKOSPI"는 자리표시자, yfinance 다운로드에서 제외됨).
+    #  코스피200선물은 KIS 선물 TR 전용 — 주간(F)/야간(CM)을 시간대로 자동 전환하며
     #  표시명이 '코스피200선물 F/CM'으로 바뀐다("^K200FUT"는 자리표시자).
+    #  두 지수 모두 KIS '실전' 서버 전용(모드 2)이다: 모의서버는 해당 TR 미지원/불안정하고
+    #  모의 모드에서 실전 서버는 사용하지 않으므로 토스(3)·모의(1)에서는 표시하지 않는다.
     ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스피200선물", "^K200FUT"), ("V코스피200", "^VKOSPI"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
     # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
@@ -139,9 +141,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 fut_div = "CM" if _k200_night_session() else "F"
                 m_type = f"K200FUT_{fut_div}"
 
-            # [추가] V코스피200·코스피200선물은 KIS 전용 — 토스 모드는 대체 소스가 없어 스킵
-            #  (표시 자체는 _show_market_indices_core에서 모드 1/2로 제한되며, 여기는 방어 로직)
-            if config.session.is_toss and m_type in ("VKOSPI", "K200FUT_F", "K200FUT_CM"):
+            # [추가] V코스피200·코스피200선물은 KIS 실전 전용 — 토스는 대체 소스가 없고,
+            #  모의서버는 해당 TR 미지원/불안정 + 모의 모드에서 실전 서버 미사용(운영 방침) → 스킵
+            #  (표시 자체는 _show_market_indices_core에서 모드 2로 제한되며, 여기는 방어 로직)
+            if (config.session.is_toss or config.session.is_simulation) and m_type in ("VKOSPI", "K200FUT_F", "K200FUT_CM"):
                 return {'status': 'skipped', 'name': name}
 
             df_fallback = analysis.get_domestic_index_data(m_type)
@@ -281,7 +284,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 is_delayed = True
 
             if df_daily.empty:
-                return {'status': 'failed', 'name': name}
+                # [수정] 국내 지수는 KIS 계열 소스라 'yfinance 응답 없음' 문구가 오해를 줌 → 소스 구분 전달
+                return {'status': 'failed', 'name': name, 'src': 'KIS' if is_domestic_index else 'yfinance'}
 
             # [최적화] 분봉(5m)은 fast_info 실패(지연) 시에만 단건 지연조회한다.
             # (평상시 불필요한 bulk 5m 다운로드를 제거하여 콜드스타트 지연을 줄임)
@@ -798,9 +802,10 @@ def _show_market_indices_core(target_indices=None):
     #  토스 API는 이 지수 시세를 제공하지 않으므로 analysis._fetch_domestic_index_data가
     #  TradingView(tvDatafeed)로 보강한다(모드 무관 출력). 조회 대상에서 더 이상 제외하지 않는다.
 
-    # [추가] V코스피200(업종코드 0503)·코스피200선물(선물 TR)은 KIS 전용 — 대체 소스
-    #  (yfinance/tvDatafeed)가 없으므로 토스 모드(3)에서는 목록에서 제외한다(모드 1/2 전용 표시).
-    if config.session.is_toss:
+    # [추가] V코스피200(업종코드 0503)·코스피200선물(선물 TR)은 KIS 실전 전용 — 대체 소스
+    #  (yfinance/tvDatafeed)가 없고, 모의서버는 해당 TR 미지원/불안정(MCI 오류)이며 모의 모드에서
+    #  실전 서버는 사용하지 않는다(운영 방침) → 토스(3)·모의(1) 모드에서는 목록에서 제외(모드 2 전용).
+    if config.session.is_toss or config.session.is_simulation:
         indices_map.pop("V코스피200", None)
         indices_map.pop("코스피200선물", None)
 
@@ -1058,7 +1063,8 @@ def _show_market_indices_core(target_indices=None):
                         # [추가] 토스 모드 코스닥150 등 미지원 지수: 재시도 없이 '-'만 표시
                         table.add_row(name, "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                     elif res['status'] == 'failed':
-                        table.add_row(name, "[red]수신 실패[/]", "[dim]yfinance 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
+                        fail_src = res.get('src', 'yfinance')
+                        table.add_row(name, "[red]수신 실패[/]", f"[dim]{fail_src} 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                         failed_tickers.append(name)
                     else:
                         if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:

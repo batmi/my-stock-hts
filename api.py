@@ -2315,44 +2315,52 @@ def get_domestic_index_chart(code):
     def fetch_func():
         # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)
         url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_CHART"]
-        tr_id = "FHKUP03500100" 
-        
+        tr_id = "FHKUP03500100"
+
         now = datetime.now()
         today = now.strftime("%Y%m%d")
         start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
-        
-        all_items = []
-        current_end_date = today
-        
-        retry_count = 0
-        while len(all_items) < 300 and retry_count < 10:
-            params = {
-                "FID_COND_MRKT_DIV_CODE": "U",
-                "FID_INPUT_ISCD": code,        
-                "FID_INPUT_DATE_1": start_date,
-                "FID_INPUT_DATE_2": current_end_date,
-                "FID_PERIOD_DIV_CODE": "D"     
-            }
-            
-            data = call_api(url_path, "domestic", "quotations", "index_chart", params=params, tr_id=tr_id, retries=0)
-            
-            if data.get('rt_cd') == '0':
-                items = data.get('output2', [])
-                if items:
-                    all_items.extend(items)
-                    last_date = items[-1]['stck_bsop_date']
-                    current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+
+        def _fetch_pages(api_caller, log_fail=True):
+            """기간 분할 페이지네이션 공통 루프 (api_caller: params → 응답 dict)"""
+            all_items = []
+            current_end_date = today
+            retry_count = 0
+            while len(all_items) < 300 and retry_count < 10:
+                params = {
+                    "FID_COND_MRKT_DIV_CODE": "U",
+                    "FID_INPUT_ISCD": code,
+                    "FID_INPUT_DATE_1": start_date,
+                    "FID_INPUT_DATE_2": current_end_date,
+                    "FID_PERIOD_DIV_CODE": "D"
+                }
+                data = api_caller(params)
+                if data.get('rt_cd') == '0':
+                    # 빈 행/None 응답 방어
+                    items = [it for it in (data.get('output2') or []) if it.get('stck_bsop_date')]
+                    if items:
+                        all_items.extend(items)
+                        last_date = items[-1]['stck_bsop_date']
+                        current_end_date = (datetime.strptime(last_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        retry_count += 1
+                        time.sleep(0.1)
+                    else:
+                        break
+                elif data.get('msg_cd') == 'EGW00201':
+                    time.sleep(0.5)
                     retry_count += 1
-                    time.sleep(0.1) 
                 else:
+                    if not all_items and log_fail:
+                        logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
                     break
-            elif data.get('msg_cd') == 'EGW00201':
-                time.sleep(0.5)
-                retry_count += 1
-            else:
-                if not all_items:
-                    logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
-                break
+            return all_items
+
+        # 모의서버 업종 TR은 'MCI전송 오류(OPSQ0008)' 등으로 간헐 실패한다. 모의 모드에서
+        # 실전 서버는 사용하지 않으며(운영 방침), 실패 시 상위 폴백 체인(tvDatafeed→yfinance)이
+        # 코스피·코스닥·코스피200·코스닥150을 받쳐준다 (VKOSPI는 폴백이 없어 모드 1 목록 제외).
+        all_items = _fetch_pages(
+            lambda p: call_api(url_path, "domestic", "quotations", "index_chart", params=p, tr_id=tr_id, retries=0)
+        )
 
         if all_items:
             df = pd.DataFrame(all_items)
@@ -2432,6 +2440,17 @@ def get_k200_futures_front_code(now=None):
             y += 1
     return None
 
+def _call_k200_futures_api(url_path, action, tr_id, params):
+    """국내선물옵션 시세 TR 호출 (조회 전용, 실전 모드 전용).
+
+    모의투자 서버는 선물 TR을 지원하지 않는다(현재가 HTTP 500, 차트 'MCI전송 오류').
+    모의 모드에서 실전 서버를 사용하지 않는다는 운영 방침에 따라 우회 없이 실패를 반환하며,
+    코스피200선물 지수는 표시 계층(market)에서 모드 1/토스 시 목록에서 제외된다.
+    """
+    if config.session.is_simulation:
+        return {'rt_cd': '9999', 'msg1': '모의투자 서버는 국내선물옵션 시세 TR을 지원하지 않습니다'}
+    return call_api(url_path, "domestic", "quotations", action, params=params, tr_id=tr_id, retries=0)
+
 def get_k200_futures_quote(mrkt_div_code, iscd):
     """코스피200 선물 현재가/전일대비/등락률 조회 (FHMIF10000000).
 
@@ -2442,7 +2461,7 @@ def get_k200_futures_quote(mrkt_div_code, iscd):
         return None
     url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["FUT_PRICE"]
     params = {"FID_COND_MRKT_DIV_CODE": mrkt_div_code, "FID_INPUT_ISCD": iscd}
-    data = call_api(url, "domestic", "quotations", "fut_price", params=params, tr_id="FHMIF10000000", retries=0)
+    data = _call_k200_futures_api(url, "fut_price", "FHMIF10000000", params)
     if data.get('rt_cd') == '0':
         out = data.get('output1') or {}
         try:
@@ -2480,7 +2499,7 @@ def get_k200_futures_chart(mrkt_div_code, iscd):
             "FID_INPUT_DATE_2": current_end_date,
             "FID_PERIOD_DIV_CODE": "D"
         }
-        data = call_api(url_path, "domestic", "quotations", "fut_chart", params=params, tr_id="FHKIF03020100", retries=0)
+        data = _call_k200_futures_api(url_path, "fut_chart", "FHKIF03020100", params)
         if data.get('rt_cd') == '0':
             items = data.get('output2', [])
             # 빈 행(과거 미상장 구간) 제거
