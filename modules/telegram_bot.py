@@ -1580,14 +1580,20 @@ class TelegramCommander:
         
         # [수정] 통합 지수 리스트 사용
         targets = market.ALL_INDICES
-        
+
+        # [추가] KIS 실전 전용 지수(코스피200선물·V코스피200)는 모의(1)/토스(3) 모드에서 제외
+        #  (모의서버는 해당 TR 미지원/불안정, 토스는 대체 소스 없음 — 화면 출력 정책과 동일)
+        if config.session.is_toss or config.session.is_simulation:
+            targets = [(n, c) for n, c in targets if n not in ("코스피200선물", "V코스피200")]
+
         # 구분선(공백라인)을 넣을 지수명 리스트
         section_keys = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]
-        
+
         # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
         domestic_map = {
             "코스피": "KOSPI", "코스피200": "KOSPI200",
-            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150"
+            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150",
+            "V코스피200": "VKOSPI"
         }
 
         # [추가] 다중 그룹 필터링 로직
@@ -1620,8 +1626,18 @@ class TelegramCommander:
             try:
                 current = None
                 prev = None
-                
-                if name in domestic_map:
+
+                if name == "코스피200선물":
+                    # [추가] 주간(F)/야간(CM) 세션 자동 전환 — 화면(메뉴 1)과 동일하게 시세 TR 사용
+                    #  (야간 등락률 = 주간 종가 대비 KIS 제공값. 모드 1/3은 위에서 이미 제외됨)
+                    fut_div = "CM" if market._k200_night_session() else "F"
+                    fut_iscd = api.get_k200_futures_front_code()
+                    fut_q = api.get_k200_futures_quote(fut_div, fut_iscd) if fut_iscd else None
+                    if fut_q:
+                        current = fut_q['current']
+                        prev = current - fut_q['diff']
+                        name = f"{name} {fut_div}"
+                elif name in domestic_map:
                     # 국내 지수는 기존 방식대로 데이터 조회
                     df = analysis.get_domestic_index_data(domestic_map[name])
                     if df is not None and not df.empty:
