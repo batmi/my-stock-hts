@@ -3010,6 +3010,21 @@ def get_order_book(code, is_overseas=False):
                     return res
         return {'rt_cd': '9999'}
 
+def is_toss_ask_bid_window():
+    """[토스] 매도잔량비 유효 시간창(NXT 운영시간 08:00~20:00, 휴장일 제외) 여부.
+
+    KIS 모드의 체결강도 표시 시간창과 동일. 표시 경로(테이블 헤더/셀)와
+    get_ask_bid_ratio 게이트가 공유해 '값 미제공 시 컬럼 표기 자체를 생략'을 일관 처리한다.
+    """
+    try:
+        if is_holiday_today():
+            return False
+    except Exception:
+        pass
+    _now_hhmm = datetime.now().strftime("%H%M")
+    return "0800" <= _now_hhmm <= "2000"
+
+
 def get_ask_bid_ratio(code, is_overseas=False):
     """매도/매수 총잔량 비율(비대칭성)만 필요한 수급 게이트용 헬퍼.
 
@@ -3019,6 +3034,13 @@ def get_ask_bid_ratio(code, is_overseas=False):
 
     반환: float 비율(매도/매수). 매수잔량 0·매도만 존재 시 99.9. 데이터 없으면 None.
     """
+    # [토스] 매도잔량비 유효 시간창 게이트 — KIS 모드의 체결강도 표시와 동일하게
+    #  NXT 운영시간(프리 08:00 개장 ~ 애프터 20:00 마감, 휴장일 제외)에만 유효값을 반환한다.
+    #  그 외 시간대의 토스 호가는 마지막 스냅샷(동결)이라 수급 지표로서 의미가 없어
+    #  None(표시 경로에서는 매도비 표기 자체를 생략)으로 처리한다. 자동매매는 어차피 이 시간창 안에서만 돌므로 영향 없음.
+    if config.session.is_toss and not is_overseas and not is_toss_ask_bid_window():
+        return None
+
     # [WS] 국내주식 실시간 호가 총잔량 우선 사용(REST 절감)
     if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
         try:

@@ -172,3 +172,36 @@ def test_get_ask_bid_ratio_only_ask_returns_sentinel(mock_call):
     config.session.is_toss = False
     ratio = api.get_ask_bid_ratio("005930", is_overseas=False)
     assert ratio == pytest.approx(99.9)
+
+
+@patch('api.is_holiday_today', return_value=False)
+def test_get_ask_bid_ratio_toss_nxt_hours_gate(mock_holiday):
+    """토스: 매도잔량비는 NXT 운영시간(08:00~20:00)에만 유효값을 반환하고, 그 외 시간은 None"""
+    from datetime import datetime as real_dt
+    orig = config.session.is_toss
+    config.session.is_toss = True
+    try:
+        # 야간(22:30) → 게이트 차단(None)
+        with patch('api.datetime') as mock_dt:
+            mock_dt.now.return_value = real_dt(2026, 7, 17, 22, 30)
+            assert api.get_ask_bid_ratio("005930", is_overseas=False) is None
+
+        # NXT 애프터(16:00) → 정상 계산
+        with patch('api.datetime') as mock_dt, \
+             patch('api.get_order_book', return_value={
+                 'rt_cd': '0',
+                 'output1': {'total_askp_rsqn': '3000', 'total_bidp_rsqn': '1500'},
+             }):
+            mock_dt.now.return_value = real_dt(2026, 7, 17, 16, 0)
+            assert api.get_ask_bid_ratio("005930", is_overseas=False) == pytest.approx(2.0)
+
+        # NXT 프리마켓(08:10) → 정상 계산
+        with patch('api.datetime') as mock_dt, \
+             patch('api.get_order_book', return_value={
+                 'rt_cd': '0',
+                 'output1': {'total_askp_rsqn': '1000', 'total_bidp_rsqn': '2000'},
+             }):
+            mock_dt.now.return_value = real_dt(2026, 7, 17, 8, 10)
+            assert api.get_ask_bid_ratio("005930", is_overseas=False) == pytest.approx(0.5)
+    finally:
+        config.session.is_toss = orig

@@ -839,12 +839,17 @@ def test_print_table_worker_toss_shows_ask_bid_ratio():
 
     config.session.is_toss = True
     try:
+        # [추가] 매도잔량비는 NXT 운영시간(08:00~20:00) 게이트가 적용되므로 장중 시각으로 고정
+        from datetime import datetime as real_dt
         with patch("api.get_current_price_data", return_value=curr), \
              patch("api.get_chart_data", return_value=df.copy()), \
              patch("api.get_investor_trend", return_value=[]), \
              patch("api.get_order_book", return_value=ob), \
              patch("api.get_realtime_vol_strength", return_value=None), \
+             patch("api.is_holiday_today", return_value=False), \
+             patch("api.datetime") as mock_api_dt, \
              patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")):
+            mock_api_dt.now.return_value = real_dt(2026, 7, 17, 10, 0)
             result = analysis._print_table_worker(
                 ("삼성전자", "005930"), "국내 주식 기술적 분석",
                 False, False, set(), {}, {}, set(), set())
@@ -855,6 +860,47 @@ def test_print_table_worker_toss_shows_ask_bid_ratio():
     assert "2.00" in rate_str     # 매도잔량비 숫자만 표시
     assert "배" not in rate_str    # '배' 단위 제거
     assert "[0%]" not in rate_str  # 체결강도(강도) 형식 아님
+
+
+def test_print_table_worker_toss_hides_ask_bid_outside_nxt_hours():
+    """토스 모드: NXT 운영시간(08:00~20:00) 밖에는 매도비 표기를 셀에서 생략한다."""
+    import pandas as pd
+    from datetime import datetime as real_dt
+    from modules import analysis
+
+    n = 250
+    closes = [50000 + i * 100 for i in range(n)]
+    df = pd.DataFrame({
+        'date': [f"2025{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': [float(c) for c in closes],
+        'high': [c * 1.01 for c in closes],
+        'low': [c * 0.99 for c in closes],
+        'close': [float(c) for c in closes],
+        'volume': [1000.0 + i for i in range(n)],
+    })
+    curr = {'rt_cd': '0', 'output': {'stck_prpr': str(closes[-1])}}
+    ob = {'rt_cd': '0', 'output1': {'total_askp_rsqn': '2000', 'total_bidp_rsqn': '1000'}}
+
+    config.session.is_toss = True
+    try:
+        with patch("api.get_current_price_data", return_value=curr), \
+             patch("api.get_chart_data", return_value=df.copy()), \
+             patch("api.get_investor_trend", return_value=[]), \
+             patch("api.get_order_book", return_value=ob), \
+             patch("api.get_realtime_vol_strength", return_value=None), \
+             patch("api.is_holiday_today", return_value=False), \
+             patch("api.datetime") as mock_api_dt, \
+             patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")):
+            mock_api_dt.now.return_value = real_dt(2026, 7, 17, 22, 30)  # NXT 마감 후 야간
+            result = analysis._print_table_worker(
+                ("삼성전자", "005930"), "국내 주식 기술적 분석",
+                False, False, set(), {}, {}, set(), set())
+    finally:
+        config.session.is_toss = False
+
+    rate_str = result[0][4]  # 등락폭 (등락률) 셀 — 매도비 접미사 자체가 없어야 함
+    assert "2.00" not in rate_str
+    assert "[-]" not in rate_str
 
 
 def test_print_table_worker_toss_us_52w_from_chart_perpbr_na():

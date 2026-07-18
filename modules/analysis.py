@@ -3706,7 +3706,11 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 if config.session.is_toss:
                     # 토스: 체결강도 미제공 → 매도잔량비(매도/매수 총잔량)로 대체 표시(숫자만)
                     # 색상: 기준 1.0배 중심 5단계(체결강도 100% 밴딩과 동일 방향, 높을수록 빨강 계열)
-                    if ask_bid_ratio is not None:
+                    # [수정] NXT 운영시간(08:00~20:00) 밖에는 매도비 표기 자체를 생략
+                    #  (print_table 헤더의 ' [매도비]' 접미사 생략과 짝 — 컬럼 표기 삭제)
+                    if not api.is_toss_ask_bid_window():
+                        strength_display = ""
+                    elif ask_bid_ratio is not None:
                         if ask_bid_ratio >= 2.0: ab_color = "[magenta]"
                         elif ask_bid_ratio >= 1.5: ab_color = "[red]"
                         elif ask_bid_ratio > 1.0: ab_color = "[orange3]"
@@ -4070,7 +4074,13 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     table.add_column("현재가", justify="right")
     col_header = "등락폭 (등락률)"
     if not is_overseas and not use_investor_data:
-        col_header += " [매도비]" if config.session.is_toss else " [강도]"
+        if config.session.is_toss:
+            # [수정] 토스 매도비는 NXT 운영시간(08:00~20:00)에만 표시 — 시간창 밖에는
+            #  셀 표기와 함께 헤더의 컬럼 표기도 생략 (KIS 체결강도 표시 창과 동일 동작)
+            if api.is_toss_ask_bid_window():
+                col_header += " [매도비]"
+        else:
+            col_header += " [강도]"
     table.add_column(col_header, justify="right")
     table.add_column("52주", justify="right")
     table.add_column("EMA(5)", justify="right")
