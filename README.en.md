@@ -7,6 +7,8 @@
 A Python-based personal stock auto-trading and analysis system utilizing the Korea Investment & Securities (KIS) and Toss Securities Open APIs.
 It operates in a terminal (Console) environment and provides real-time market quotes, precise technical analysis, and strategy-based auto-trading features.
 
+> **The fundamental principle of this trading system is Trend Following.** Losses are cut fast and profits run until the trend breaks (no fixed take profit; the Chandelier trailing stop is the primary exit), and only strong, durable trends are bought. Settings that violate this principle (fixed take profit, half take-profit, RSI overheating sell, defensive half sell, mean-reversion buying) are preserved in code but disabled by default and hidden from the settings menus.
+
 ## Disclaimer
 
 > **[IMPORTANT] Please read this before using the software.**
@@ -90,8 +92,8 @@ Buying is executed when both the composite score calculated through the **Quant 
     *   For held positions whose return is at or above the trigger (`PYRAMIDING_PROFIT_TRIGGER`, default +10%) with the buy signal (trend) still intact, the position is increased by a ratio of the held quantity (`PYRAMIDING_RATIO`, default 50%), limited to once per position by default.
     *   The exact opposite of averaging down — **it never fires on losing positions.** The stop-loss rate for the added tranche is recalculated from the ATR at the time of scaling and feeds into the weighted-average stop.
 
-*   **Downtrend Exclusive: Oversold Mean Reversion** — **disabled by default**:
-    *   A strategy aiming for a technical rebound in oversold zones. As a counter-trend edge that conflicts with the trend-following doctrine, it is **disabled in the defaults and in every preset** for clean performance attribution. (Opt-in via `USE_MEAN_REVERSION`.)
+*   **Downtrend Exclusive: Oversold Mean Reversion** — **disabled by default (hidden from menus)**:
+    *   A strategy aiming for a technical rebound in oversold zones. As a counter-trend edge that conflicts with the trend-following doctrine (it needs short reversion targets and tight stops, mismatching the system's wide trend-following exits) and competes for scarce position slots, it is **disabled in the defaults and in every preset and is not exposed in the settings menus**. (Re-enabling is only possible by editing `json/dynamic_config.json` directly.)
 
 ### 2. Sell Strategy
 Following the trend-following doctrine — **"cut losses fast, keep the upside open until the trend breaks"** — the exit conditions are monitored in the following priority order, with no fixed take-profit ceiling.
@@ -99,10 +101,10 @@ Following the trend-following doctrine — **"cut losses fast, keep the upside o
 1.  **Stop Loss**: Immediate sell when the loss rate reaches the limit. With `USE_ATR_STOP`, a dynamic stop based on the volatility (ATR) at purchase time is applied per stock.
     *   **Break Even Stop**: When the maximum return achieved reaches the trigger level, the stop-loss line is automatically raised to the break-even profit zone (+0.5%) so a winner cannot turn into a loser.
 2.  **Time-based Stop**: Only stocks that are **still at a loss** after the set period and have lost upward momentum are liquidated. (Profitable positions are never sold on time; postponed while the uptrend holds.)
-3.  **Trailing Stop — Primary Exit (Chandelier Exit)**: After the activation return is reached, sell when the price drops from the peak by a dynamic callback based on the dedicated trailing ATR multiplier. Volatile leaders get a proportionally wider callback so the trend can be followed to the end, and in no case is more than 50% of the maximum gain given back.
+3.  **Trailing Stop — Primary Exit (Chandelier Exit)**: After the activation return is reached, sell when the price drops from the peak by a dynamic callback based on the dedicated trailing ATR multiplier. Volatile leaders get a proportionally wider callback so the trend can be followed to the end. (The default `TS_MAX_GIVEBACK_RATIO=0` removes the giveback cap — a pure Chandelier; set it to a positive ratio to cap how much of the maximum gain can be given back.)
 4.  **Trend Broken**: Full liquidation if the composite score drops below the sell threshold or the state is classified as 'Sell'.
 
-> **Disabled-by-default options (upside limiters)**: Fixed take profit (`TAKE_PROFIT_RATE=0`), half take-profit (`HALF_TAKE_PROFIT_USE=False`), RSI overheating sell (`TAKE_PROFIT_RSI=0`), and defensive half sell (`DEFENSIVE_HALF_SELL_USE=False`) cut off the fat tail of profits, so they are turned off in the defaults and in every preset. They can be re-enabled in settings.
+> **Disabled-by-default options (upside limiters, hidden from menus)**: Fixed take profit (`TAKE_PROFIT_RATE=0`), half take-profit (`HALF_TAKE_PROFIT_USE=False`), RSI overheating sell (`TAKE_PROFIT_RSI=0`), and defensive half sell (`DEFENSIVE_HALF_SELL_USE=False`) cut off the fat tail of profits, so they are turned off in the defaults and in every preset, and **are not exposed in the settings menus to protect the trend-following principle**. Re-enabling is only possible by editing `json/dynamic_config.json` directly or via per-stock custom rules (auto-trading menu).
 
 ### 3. Scoring System
 The composite score determining whether to buy is calculated based on the **Quant Multi-Factor Model**. (Total 10 points, 0.5 point increments)
@@ -163,7 +165,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Interest MA60 Proximity Ratio (`INTEREST_MA60_NEAR`)**: Default **0.97**. If the current price is at or above this ratio of the 60-day line (e.g., 97%), it counts as an 'MA60 breakout attempt' early signal even while still below the 60-day line.
 *   **Maximum Buy Allowed RSI (`BUY_RSI_MAX`)**: Default **70**. Even if the buy score is met, we do not enter if the RSI is above this value, considering it already overheated.
 *   **Buy Volume Strength (`BUY_VOL_STRENGTH`)**: Default **100.0%**. The volume strength at the time of purchase must be at least this value (buying pressure dominance).
-*   **Mean Reversion (`USE_MEAN_REVERSION`)**: Catches the point where indicators rebound after reaching oversold in a downtrend or sudden drop. **(Disabled in defaults and all presets per the trend-following doctrine; opt-in.)**
+*   **Mean Reversion (`USE_MEAN_REVERSION`)**: Catches the point where indicators rebound after reaching oversold in a downtrend or sudden drop. **(Disabled in defaults and all presets per the trend-following doctrine and hidden from the settings menus; re-enabling requires editing `json/dynamic_config.json` directly.)**
     *   `MR_RSI_MAX`: Maximum allowed RSI for mean reversion entry (Default 40.0)
     *   `MR_DISPARITY_MAX`: Disparity limit compared to 20-day MA (Default 90.0% or less)
     *   `MR_VOL_STRENGTH`: High volume strength to confirm buying pressure at the bottom (Default 120.0%)
@@ -184,10 +186,10 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Time-based Stop**: If `TIME_STOP_USE` is True, sell when — after the set days (`TIME_STOP_DAYS`, default 20 days) — the return is below `TIME_STOP_MIN_PROFIT_RATE` (default **0.0%**, i.e., only positions still at a loss) and upward momentum has been lost. (Postponed if uptrend is maintained)
 *   **Trailing Stop — Primary Exit (Chandelier Exit)**:
     *   **Trigger Condition**: Start monitoring upon reaching **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) maximum return.
-    *   **Sell Condition**: Effective callback = clamp(`TRAILING_ATR_MULTIPLIER` (default 3.0) × ATR ÷ peak, minimum `TRAILING_STOP_CALLBACK_RATE` (default 5.0%), 50% of the maximum gain). Volatile leaders get a proportionally wider callback to follow the trend longer. (The trailing ATR multiplier is separate from the stop-loss `ATR_STOP_MULTIPLIER`.)
+    *   **Sell Condition**: Effective callback = max(`TRAILING_ATR_MULTIPLIER` (default 3.0) × ATR ÷ peak, minimum `TRAILING_STOP_CALLBACK_RATE` (default 5.0%)). Volatile leaders get a proportionally wider callback to follow the trend longer. (The trailing ATR multiplier is separate from the stop-loss `ATR_STOP_MULTIPLIER`. `TS_MAX_GIVEBACK_RATIO` (default 0 = cap removed, pure Chandelier) can be set to a positive ratio to cap the giveback of the maximum gain.)
 *   **Trend Broken Sell**: Sell if the composite score falls below **5 points** (`SELL_SCORE`) or the state is classified as 'Sell'.
 *   **Grace Period Stop Loss (`MR_GRACE_LOSS_RATE`)**: The maximum allowable loss rate during the grace period for stocks entered via mean reversion. (Default -7.0%; irrelevant while mean reversion is disabled)
-*   **Disabled-by-default options (upside limiters — opt-in if needed)**:
+*   **Disabled-by-default options (upside limiters — hidden from menus; enable only via direct `dynamic_config.json` edits or per-stock custom rules)**:
     *   **Take Profit**: `TAKE_PROFIT_RATE` = **0 (unused)**. If set, full liquidation at that return.
     *   **Half Take-Profit**: `HALF_TAKE_PROFIT_USE` = **False**. If enabled, 50% is pre-sold at half the take-profit target.
     *   **Overheating Sell**: `TAKE_PROFIT_RSI` = **0 (unused)**. If set, preemptive sell when RSI exceeds it. (`SUPER_TAKE_PROFIT_RSI` applies under Super Momentum.)
@@ -225,7 +227,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 ### 5. Scoring Weights Optimization
 *   **Overview**: Allows users to manually configure or optimize the weights for each factor (Trend, Momentum, Strength, Synergy) in the buy score.
 *   **Settings**: `TREND` (4.0), `MOMENTUM` (2.5), `STRENGTH` (1.5), `SYNERGY` (2.0).
-*   **Optimization**: Use the 'Weight Optimization' feature in the backtesting menu to find the best combination based on historical data.
+*   **Optimization**: Use the 'Weight Optimization' feature in the backtesting menu to find the best combination based on historical data. The take-profit/stop-loss sweep in the single backtest run includes a **"no take profit (trailing-stop driven)" baseline** — fixed take-profit combinations are shown for reference against the trend-following doctrine.
 
 ### 6. Adaptive Thresholds
 *   **Overview**: Dynamically adjusts the buy criteria score (`BUY_SCORE`) by analyzing the market phase (Bull/Bear/Sideways) in real-time.
@@ -486,7 +488,7 @@ By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use
     2.  **Market-Leading Theme Analysis**: Analyzes top 5 themes and leading stocks.
     3.  **AI Pre-market Briefing**: Daily morning briefings summarizing global markets and hot issues.
     4.  **Interactive Q&A (`/ask`)**: Ask free-form questions about stocks/economy based on the latest news.
-    5.  **AI Backtesting Diagnostics**: Proposes optimal buy/sell parameters evaluating backtest results.
+    5.  **AI Backtesting Diagnostics**: Proposes optimal parameters (entry hurdles, stop width, trailing multiplier, weights — within the trend-following framework) evaluating backtest results. (All trading-advisory prompts state the trend-following doctrine so counter-trend advice such as fixed take profits is not generated.)
     6.  **AI Trading Autopsy**: Analyzes your trading results after selling and advises on future strategies.
     7.  **AI Closing Briefing (`/closing`)**: Daily market review and analysis of held stocks.
     8.  **AI Curation (`/curate`)**: Discovers leading themes and recommends stocks based on real-time macro indicators.

@@ -1582,8 +1582,10 @@ def _prompt_sub_condition(choice, base_price, is_overseas):
     if choice == "4":  # SMART_MONEY
         return {"type": "SMART_MONEY", "value": None, "_label": "수급전환"}
     if choice == "5":  # STATE
-        st = Prompt.ask("1: 강매수, 2: 매수, 3: 역매수", choices=["1", "2", "3"], default="1")
-        sv = {"1": "강매수", "2": "매수", "3": "역매수"}[st]
+        # [추세추종] 역매수 상태는 USE_MEAN_REVERSION OFF 고정으로 분류 자체가 발생하지 않아
+        #  예약 조건으로 걸어도 영원히 발동하지 않으므로 신규 등록 옵션에서 제외 (기존 주문 감시는 유지)
+        st = Prompt.ask("1: 강매수, 2: 매수", choices=["1", "2"], default="1")
+        sv = {"1": "강매수", "2": "매수"}[st]
         return {"type": "STATE", "value": sv, "_label": f"상태={sv}"}
     if choice == "6":  # PRICE
         config.console.print("[dim]  - 절대가: 50000 / 기준가 대비 %: +5%, -3%[/dim]")
@@ -1648,7 +1650,7 @@ def _build_composite_conditions(base_price, is_overseas):
         ("2", "RSI 지표", "RSI 수치"),
         ("3", "이평선 위치 (EMA)", "현재가의 N일선 상회/하회"),
         ("4", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환"),
-        ("5", "시스템 상태 (STATE)", "강매수/매수/역매수 진입"),
+        ("5", "시스템 상태 (STATE)", "강매수/매수 진입"),
         ("6", "지정가/가격 도달 (LIMIT)", "절대가 또는 기준가 대비 % (이상/이하)"),
         ("7", "특정 시간 도달 (TIME)", "지정 시각(HHMM) 이후"),
         ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신"),
@@ -1766,7 +1768,7 @@ def register_reserved_order():
         ("4", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
         ("5", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시"),
         ("6", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환 시 (매수 전용)"),
-        ("7", "상태 진입 (STATE)", "강매수/매수/역매수 상태 진입 시 (매수 전용)"),
+        ("7", "상태 진입 (STATE)", "강매수/매수 상태 진입 시 (매수 전용)"),
         ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신 시 (추세추종 강세 진입)"),
         ("9", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND) 시 다중조건 결합")
     ]
@@ -1838,13 +1840,15 @@ def register_reserved_order():
         config.console.print("[dim]※ 외국인/기관 수급이 순매수로 전환되는 신호를 포착하면 발동합니다. 별도 입력값이 없습니다.[/dim]")
         target_price = 0.0
     elif condition_type == "STATE":
+        # [추세추종] 역매수(STATE_MR) 옵션 제거 — USE_MEAN_REVERSION OFF 고정으로 역매수 상태가
+        #  분류되지 않아 영원히 발동하지 않는 죽은 조건이 됨 (기존 등록분 감시는 monitor가 계속 지원)
         config.console.print(f"\n[cyan]◆ 진입을 감지할 시스템 상태 선택[/cyan]")
-        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건 / 역매수: 낙폭과대 반등[/dim]")
-        st = Prompt.ask("상태 선택 (1: 강매수, 2: 매수, 3: 역매수)", choices=["1", "2", "3", "b", "q"], default="1")
+        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
+        st = Prompt.ask("상태 선택 (1: 강매수, 2: 매수)", choices=["1", "2", "b", "q"], default="1")
         if st.lower() in ['b', 'q']:
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
-        condition_type = {"1": "STATE_STRONGBUY", "2": "STATE_BUY", "3": "STATE_MR"}[st]
+        condition_type = {"1": "STATE_STRONGBUY", "2": "STATE_BUY"}[st]
         target_price = 0.0
     elif condition_type == "NEW_HIGH":
         config.console.print(f"\n[cyan]◆ 신고가 돌파 기준 선택[/cyan]")

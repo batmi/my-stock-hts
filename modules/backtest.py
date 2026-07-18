@@ -2350,7 +2350,10 @@ def run_backtest():
         best_mdd = -999.0
         
         # 테스트할 범위 설정
-        tp_candidates = [10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
+        # [추세추종] 0.0 = 고정 익절 미사용(샹들리에 TS 주도) — 시스템 기본 기조의 기준선.
+        #  고정 익절 후보만 비교하면 도구가 항상 '익절 +X%'를 추천해 반추세 설정을 유도하므로
+        #  미사용 케이스를 반드시 포함해 기조 대비 실익을 비교할 수 있게 한다.
+        tp_candidates = [0.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0]
         sl_candidates = [-3.0, -5.0, -7.0, -10.0, -15.0]
 
         row_count = 0
@@ -2387,7 +2390,8 @@ def run_backtest():
                         best_mdd = res['mdd']
                         best_mdd_set = (tp, sl)
                     
-                    label = f"익절 +{tp}% / 손절 {sl}%"
+                    tp_label = "익절 미사용(TS)" if tp <= 0 else f"익절 +{tp}%"
+                    label = f"{tp_label} / 손절 {sl}%"
                     r_color = "[red]" if res['total_return'] > 0 else "[blue]"
                     table.add_row(label, f"{r_color}{res['total_return']:+.2f}%[/]", f"{win_rate:.1f}%", f"{res['mdd']:.2f}%", f"{total_trades}건", f"{pf:.2f}")
                     
@@ -2397,10 +2401,14 @@ def run_backtest():
         
         config.console.print(table)
         
+        def _tp_set_label(tp_val):
+            return "익절 미사용(TS)" if tp_val <= 0 else f"익절 +{tp_val}%"
+
         if best_return_set:
-            config.console.print(f"\n[green]추천 (수익률):[/] 익절 +{best_return_set[0]}% / 손절 {best_return_set[1]}% (수익률 {best_return:+.2f}%)")
+            config.console.print(f"\n[green]추천 (수익률):[/] {_tp_set_label(best_return_set[0])} / 손절 {best_return_set[1]}% (수익률 {best_return:+.2f}%)")
         if best_mdd_set:
-            config.console.print(f"[cyan]추천 (안정성):[/] 익절 +{best_mdd_set[0]}% / 손절 {best_mdd_set[1]}% (MDD {best_mdd:.2f}%)")
+            config.console.print(f"[cyan]추천 (안정성):[/] {_tp_set_label(best_mdd_set[0])} / 손절 {best_mdd_set[1]}% (MDD {best_mdd:.2f}%)")
+        config.console.print("[dim]※ 시스템 기본 기조는 추세추종(고정 익절 미사용, 샹들리에 TS 주청산)입니다. 고정 익절 추천값은 참고용 비교 결과입니다.[/dim]")
 
         # === 피라미딩 차수 최적화 모드 ===
         # 각 차수는 발동 조건(수익률 트리거 + 매수/강매수 상태 유지)이 허용하는 한 해당 차수까지 최대로 증액했을 때의 결과

@@ -2151,11 +2151,13 @@ class TelegramCommander:
         msg += f"• 비대칭성 자동 연동: {auto_adj}\n"
         msg += f"• 매도잔량 비대칭성: {buy_ask_bid}배 이상 (100% 기준)\n"
         
-        msg += f"\n[역추세 매수 (낙폭과대 반등)]\n"
+        # [추세추종] 역매수는 OFF 고정 기조 — 켜져 있을 때만(비정상 상태 인지용) 상세를 표기
         use_mr = config.ANALYSIS_THRESHOLDS.get('USE_MEAN_REVERSION', True)
-        msg += f"• 사용 여부: {'ON' if use_mr else 'OFF'}\n"
-        msg += f"• 발동 조건: RSI < {config.ANALYSIS_THRESHOLDS.get('MR_RSI_MAX', 40.0)} & 20일선 이격도 < {config.ANALYSIS_THRESHOLDS.get('MR_DISPARITY_MAX', 90.0)}%\n"
-        msg += f"• 최소 체결강도: {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 120.0)}% 이상\n"
+        if use_mr:
+            msg += f"\n[역추세 매수 (낙폭과대 반등)]\n"
+            msg += f"• 사용 여부: ON ⚠️ (추세추종 기조는 OFF 권장)\n"
+            msg += f"• 발동 조건: RSI < {config.ANALYSIS_THRESHOLDS.get('MR_RSI_MAX', 40.0)} & 20일선 이격도 < {config.ANALYSIS_THRESHOLDS.get('MR_DISPARITY_MAX', 90.0)}%\n"
+            msg += f"• 최소 체결강도: {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 120.0)}% 이상\n"
 
         # 매도 관련
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
@@ -2172,11 +2174,14 @@ class TelegramCommander:
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
         msg += f"\n[매도 조건]\n"
-        msg += f"• 익절: +{tp}%\n"
-        
-        half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else "OFF"
-        msg += f"• 반익절: {half_tp_str}\n"
-        
+        # [추세추종] 고정 익절/반익절은 미사용 기조 — 켜져 있을 때만(비정상 상태 인지용) 표기
+        if tp > 0:
+            msg += f"• 익절: +{tp}% ⚠️ (추세추종 기조는 미사용 권장)\n"
+            half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else "OFF"
+            msg += f"• 반익절: {half_tp_str}\n"
+        else:
+            msg += f"• 익절: 미사용 (트레일링 스탑 주도)\n"
+
         fixed_sl_status = "OFF" if use_atr else "ON"
         msg += f"• 고정 손절: {fixed_sl_status} ({sl}%)\n"
 
@@ -2186,9 +2191,10 @@ class TelegramCommander:
         time_stop_str = f"ON ({time_stop_days}일 경과 & 수익 < {time_stop_min}%)" if use_time_stop else "OFF"
         msg += f"• 시간 청산: {time_stop_str}\n"
 
-        msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시\n"
-        msg += f"• 과열 매도: RSI {tp_rsi} 초과\n"
-        msg += f"• 추세 이탈: 점수 {sell_score}점 미만\n"
+        msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시 (샹들리에 ATR 동적 확대)\n"
+        if tp_rsi > 0:
+            msg += f"• 과열 매도: RSI {tp_rsi} 초과 ⚠️ (추세추종 기조는 미사용 권장)\n"
+        msg += f"• 추세 이탈: 점수 {sell_score}점 미만 + 60일선 이탈\n"
         
         # [추가] 스코어링 가중치
         weights = config.SCORING_WEIGHTS
