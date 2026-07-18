@@ -285,8 +285,9 @@ class DefaultStrategy:
         # [추가] 반익절 이후 Let profit run 시, 최소 수익 보존선 (Profit Lock-in)
         # 목표가를 한 번 뚫고 내려올 경우 TS(예: 4%) 발동 전이라도 목표가-3%에서 즉시 매도하여 수익 방어
         # (미발동 시 체인이 계속 흐르도록 판정 조건을 elif 조건식 안에 인라인)
+        # [Fix] 보존선 하한 +0.5% — 익절 목표를 3% 이하로 설정한 경우 '수익보존' 명목의 손실 매도 방지
         elif (tp_rate > 0 and use_half_tp and already_half_sold and highest_price > 0
-              and max_profit_rate >= tp_rate and profit_rate <= tp_rate - 3.0):
+              and max_profit_rate >= tp_rate and profit_rate <= max(tp_rate - 3.0, 0.5)):
             reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
         elif sl_rate != 0 and profit_rate <= sl_rate:
             if is_bep_applied:
@@ -381,6 +382,10 @@ class OrderManager:
         #  잔고가 0이 되어야만 체결로 보던 기존 방식은 부분매도를 감지하지 못해
         #  (실시간 감지 실패 → 미체결 타임아웃 우회 경로로 수 분 지연 발생) 보강한다.
         self.sell_pre_qty = {}
+        # [Fix] 전량 매도 앵커 정리 유예 큐 {odno: code} — 접수 시점이 아닌 '체결 확정(FILLED)'
+        #  시점에 트레일링 최고가·반익절 기록을 정리한다. 접수 시점에 지우면 주문이 미체결
+        #  취소될 때 포지션은 남는데 앵커만 리셋되어 샹들리에 TS가 느슨해지는 문제가 있었다.
+        self.sell_cleanup_odnos = {}
         # [최적화] 누적 주문 접수 카운터 — 루프에서 '이번 주기에 주문이 나갔는가'를 판단해
         #  주문이 없으면 루프 말미 잔고/예수금 재조회를 생략하기 위한 단조 증가 값
         self.orders_sent_count = 0
@@ -404,6 +409,19 @@ class OrderManager:
                             del self.pending_orders[code]
                         self.sell_pre_qty.pop(str(odno), None)
                         self.trader.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
+
+                        # [Fix] 전량 매도 앵커 정리는 체결 확정 시에만 수행 (취소/거부 시 앵커 보존)
+                        cleanup_code = self.sell_cleanup_odnos.pop(str(odno), None)
+                        if cleanup_code and status == OrderStatus.FILLED:
+                            try:
+                                self.trader.half_tp_cache.discard(cleanup_code)
+                                db_manager.db.delete_half_tp(cleanup_code)
+                                db_manager.db.delete_trailing_stop(cleanup_code)
+                                with self.trader._lock:
+                                    self.trader.trailing_stop_cache.pop(cleanup_code, None)
+                                self.trader.log(f"[TrailingStop] 전량 매도 체결 확정 → 감시 기록 정리: {cleanup_code}")
+                            except Exception as e:
+                                self.trader.log(f"[TrailingStop] 매도 체결 후 기록 정리 실패: {e}")
                         
                         # 체결 완료 시 지연 후 보유 종목 리스트 갱신 출력
                         if status == OrderStatus.FILLED:

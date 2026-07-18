@@ -462,8 +462,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 # 반익절 후 잔여 물량은 천장 해제 (Let profit run) — 해당 케이스는 체인을 소비하지 않아
                 # 아래 손절/시간청산/트레일링 스탑 판정이 계속 동작한다 (실매매 engine.analyze_sell과 동일)
                 sell_signal = True; reason = "익절"
-            elif take_profit_limit > 0 and use_half_tp and half_tp_executed and max_profit_rate >= take_profit_limit and loss_rate <= take_profit_limit - 3.0:
+            elif take_profit_limit > 0 and use_half_tp and half_tp_executed and max_profit_rate >= take_profit_limit and loss_rate <= max(take_profit_limit - 3.0, 0.5):
                 # [동기화] 수익보존 (Profit Lock-in): 목표 돌파 후 목표-3% 아래로 되돌리면 잔량 매도
+                # (하한 +0.5%: 익절 목표 3% 이하 설정 시 손실 매도 방지 — 실매매 engine.analyze_sell과 동일)
                 sell_signal = True; reason = "수익보존"
             elif sl_rate_to_use != 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
                 sell_signal = True

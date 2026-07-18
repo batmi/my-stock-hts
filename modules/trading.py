@@ -1234,7 +1234,9 @@ def send_order(order_type):
                 api.send_telegram_message(msg)
                 
                 # 매도 시 트레일링 스탑 초기화
-                if order_type == 'sell':
+                # [Fix] '전량' 매도일 때만 초기화 — 부분 매도 시 앵커를 지우면 잔여 물량의
+                #  샹들리에 TS가 현재가부터 다시 시작해 감시가 느슨해지므로 앵커를 보존한다
+                if order_type == 'sell' and int(qty) >= int(max_qty):
                     db_manager.db.delete_trailing_stop(stock_code)
                     with trader._lock:
                         trader.trailing_stop_cache.pop(stock_code, None)

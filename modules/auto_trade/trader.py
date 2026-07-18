@@ -3307,11 +3307,11 @@ class AutoTrader:
                             self.log(f"[예약취소] 전량 매도로 인해 대기 중이던 {name} 매도 예약 주문 {canceled_cnt}건 자동 취소")
                             api.send_telegram_message(f"🗑 [예약 취소] {name}({code}) 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.")
                             
-                        self.half_tp_cache.discard(code)
-                        db_manager.db.delete_half_tp(code)
-                        db_manager.db.delete_trailing_stop(code)
-                        with self._lock:
-                            if code in self.trailing_stop_cache: del self.trailing_stop_cache[code]
+                        # [Fix] 앵커(트레일링 최고가·반익절 기록) 정리는 체결 확정(FILLED) 시점으로 유예.
+                        #  접수 시점에 지우면 미체결 취소 시 포지션은 남는데 앵커만 현재가로 리셋되어
+                        #  샹들리에 TS 감시가 느슨해지는 문제가 있었다 (정리는 OrderManager.update_order_status에서 수행)
+                        with self.order_manager._lock:
+                            self.order_manager.sell_cleanup_odnos[str(odno)] = code
                             
                     # [추가] 매수 로직(상관관계 분석 등)에서 이미 매도한 종목을 보유 중인 것으로 오인하지 않도록 메모리 잔고 즉시 차감
                     try:
@@ -3319,7 +3319,7 @@ class AutoTrader:
                     except Exception: pass
             else:
                 # [추세추종] 보유 판정 시 피라미딩(수익 포지션 증액) 평가
-                self._try_pyramid_buy(code, name, qty, current_price, profit_rate, result, last_buy, is_market_open)
+                self._try_pyramid_buy(code, name, qty, current_price, profit_rate, result, last_buy, is_market_open, rule=rule)
 
         # 병렬 처리 실행
         # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
@@ -3329,7 +3329,7 @@ class AutoTrader:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
 
-    def _try_pyramid_buy(self, code, name, held_qty, current_price, profit_rate, result, last_buy, is_market_open):
+    def _try_pyramid_buy(self, code, name, held_qty, current_price, profit_rate, result, last_buy, is_market_open, rule=None):
         """[추세추종] 수익 포지션 증액(피라미딩) 시도
 
         보유분석에서 '보유' 판정된 종목에 대해, 수익으로 추세가 검증되었고(수익률 트리거 이상)
@@ -3376,11 +3376,19 @@ class AutoTrader:
                 add_qty = max_qty
 
             # 증액분 손절률: 신규 매수와 동일하게 현재 ATR 기준으로 계산 (가중평균 손절선에 자동 반영)
+            # [Fix] 신규 매수 경로(_execute_buy_orders)와 동일하게 개별 룰의 손절 설정을 우선 적용
             sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+            if rule:
+                sl_rate = rule.get('stop_loss', sl_rate)
+                if rule.get('use_atr_stop') is not None:
+                    use_atr_stop = bool(rule['use_atr_stop'])
+                if rule.get('atr_stop_multiplier') is not None:
+                    atr_mult = rule['atr_stop_multiplier']
             ind = result.get('ind') or {}
             atr_val = ind.get('atr', 0) or 0
-            if config.SELL_STRATEGY.get("USE_ATR_STOP", False) and atr_val > 0 and current_price > 0:
-                atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+            if use_atr_stop and atr_val > 0 and current_price > 0:
                 sl_rate = -((atr_val * atr_mult / current_price) * 100)
                 max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
                 if max_atr_sl != 0 and sl_rate < max_atr_sl:
