@@ -2683,6 +2683,13 @@ def _nxt_quote_phase():
 
 # [최적화] 관심종목 멀티시세 세션 비활성 플래그 (TR 미지원 서버에서 1회 실패 후 재시도 방지)
 _MULTI_PRICE_DISABLED = False
+_MULTI_PRICE_DISABLED_AT = 0.0
+# [Fix] 멀티시세 배치 실패 시 '세션 영구 비활성' → '쿨다운 일시 비활성'.
+#  EGW00201(초당 거래건수 초과)·타임아웃 같은 일시 오류 1회로 세션 내내 배치가 꺼지면,
+#  장전/장후(NXT)엔 현재가만 전일 종가로 굳고(등락률 0%) 체결강도는 별도 콜이라 신선하게
+#  갱신되는 비대칭 stale이 생긴다(실측: 현대건설 강도 132%·등락률 0%). 쿨다운 후 재시도해
+#  일시 오류에서 자동 복구한다. (TR 미지원 환경이어도 쿨다운당 1콜 낭비에 그침)
+_MULTI_PRICE_RETRY_COOLDOWN_SEC = 600
 
 def get_multi_current_prices(codes, market_div="J"):
     """[최적화] 관심종목(멀티종목) 시세조회(FHKST11300006)로 국내 현재가를 30종목/1콜 일괄 수집.
@@ -2697,10 +2704,15 @@ def get_multi_current_prices(codes, market_div="J"):
     호출측(_analyze_table_row)이 차트(250봉)로 보강한다.
 
     반환: {code: 정규화 output dict}. TR 미지원(모의 등)·오류 시 None을 반환하며,
-    이후 세션 동안 비활성화되어 호출측이 즉시 종목별 조회로 폴백한다.
+    쿨다운(_MULTI_PRICE_RETRY_COOLDOWN_SEC) 동안 비활성화되어 호출측이 종목별 조회로 폴백한다.
+    (쿨다운 경과 후 자동 재시도 — 일시 오류로 세션 전체가 영구 비활성되지 않도록)
     """
-    global _MULTI_PRICE_DISABLED
-    if _MULTI_PRICE_DISABLED or not codes or config.session.is_toss:
+    global _MULTI_PRICE_DISABLED, _MULTI_PRICE_DISABLED_AT
+    if _MULTI_PRICE_DISABLED:
+        if time.time() - _MULTI_PRICE_DISABLED_AT < _MULTI_PRICE_RETRY_COOLDOWN_SEC:
+            return None
+        _MULTI_PRICE_DISABLED = False  # 쿨다운 경과 → 재시도 허용
+    if not codes or config.session.is_toss:
         return None
     if not getattr(config, 'USE_MULTI_PRICE', True):
         return None
@@ -2759,16 +2771,24 @@ def get_multi_current_prices(codes, market_div="J"):
         return result
     except Exception as e:
         _MULTI_PRICE_DISABLED = True
-        logger.info(f"[MultiPrice] 관심종목 멀티시세 비활성(세션 유지): {e} → 종목별 현재가 조회로 폴백")
+        _MULTI_PRICE_DISABLED_AT = time.time()
+        logger.info(f"[MultiPrice] 관심종목 멀티시세 일시 비활성({_MULTI_PRICE_RETRY_COOLDOWN_SEC}s): {e} → 종목별 현재가 조회로 폴백")
         return None
 
-# [최적화] NXT 멀티시세 세션 비활성 플래그 (KRX 'J' 멀티시세와 분리 — NX 미지원이 J를 끄지 않도록)
+# [최적화] NXT 멀티시세 비활성 플래그 (KRX 'J' 멀티시세와 분리 — NX 미지원이 J를 끄지 않도록)
+#  [Fix] J와 동일하게 쿨다운 일시 비활성: 장전/장후 EGW00201 1회로 NX 병합이 세션 내내 꺼지면
+#  현재가가 KRX(전일 종가)로 굳어 '강도만 신선한' stale 증상이 재발하므로 쿨다운 후 재시도한다.
 _MULTI_PRICE_NXT_DISABLED = False
+_MULTI_PRICE_NXT_DISABLED_AT = 0.0
 
 def _fetch_multi_nxt_raw(codes):
-    """NXT(NX) 멀티시세 배치 → {code: {'prpr':int,'vol':int}}. 미지원/오류 시 빈 dict(세션 비활성)."""
-    global _MULTI_PRICE_NXT_DISABLED
-    if _MULTI_PRICE_NXT_DISABLED or not codes or config.session.is_simulation:
+    """NXT(NX) 멀티시세 배치 → {code: {'prpr':int,'vol':int}}. 미지원/오류 시 빈 dict(쿨다운 비활성)."""
+    global _MULTI_PRICE_NXT_DISABLED, _MULTI_PRICE_NXT_DISABLED_AT
+    if _MULTI_PRICE_NXT_DISABLED:
+        if time.time() - _MULTI_PRICE_NXT_DISABLED_AT < _MULTI_PRICE_RETRY_COOLDOWN_SEC:
+            return {}
+        _MULTI_PRICE_NXT_DISABLED = False  # 쿨다운 경과 → 재시도 허용
+    if not codes or config.session.is_simulation:
         return {}
     out = {}
     try:
@@ -2791,7 +2811,8 @@ def _fetch_multi_nxt_raw(codes):
         return out
     except Exception as e:
         _MULTI_PRICE_NXT_DISABLED = True
-        logger.info(f"[MultiPrice] NXT 멀티시세 비활성(세션 유지): {e} → NXT 병합 생략(KRX 대표가 사용)")
+        _MULTI_PRICE_NXT_DISABLED_AT = time.time()
+        logger.info(f"[MultiPrice] NXT 멀티시세 일시 비활성({_MULTI_PRICE_RETRY_COOLDOWN_SEC}s): {e} → NXT 병합 생략(KRX 대표가 사용)")
         return {}
 
 def get_multi_current_prices_nxt(codes):

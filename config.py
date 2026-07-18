@@ -106,6 +106,13 @@ class GlobalSettings(BaseModel):
     SYSTEM_RISK_PER_TRADE: float = Field(default=4.0, ge=0.0)      # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
                                             #   [추세추종] 4슬롯×25% 전환에 맞춰 5.0→4.0 하향: 슬롯당 비중 확대로 손절 1회 충격이
                                             #   커지는 것을 리스크 한도가 견제 (드로다운 백테스트의 'MDD 통제 적정선 3~4%'와 정합)
+    SYSTEM_MAX_PORTFOLIO_RISK: float = Field(default=10.0, ge=0.0) # [안전장치] 포트폴리오 히트(총 오픈 리스크) 한도 (%) (0.0이면 미사용)
+                                            #   보유 전 종목이 '현재가→유효 손절선(고정/ATR 손절, BEP·트레일링 상향 반영)'까지
+                                            #   동시에 하락했을 때의 잠재 손실 합을 계좌 대비 이 비율 이하로 제한한다.
+                                            #   SYSTEM_RISK_PER_TRADE(종목당 한도)가 개별 통제라면 이것은 '동시 다발 손절'의
+                                            #   합산 통제: 신규 매수는 남은 리스크 예산에 맞춰 투자금이 축소되거나 보류되고,
+                                            #   피라미딩 증액도 예산 초과 시 보류된다. (기본 10% = 4슬롯×4% 최악 16%를 견제.
+                                            #   기존 포지션의 손절선이 BEP/트레일링으로 올라오면 예산이 회복되어 자연히 재개)
 
     # [설정] 변동성 타겟팅 (Volatility Targeting)
     USE_VOLATILITY_TARGETING: bool = True   # 변동성 타겟팅 사용 여부
@@ -971,6 +978,7 @@ CONFIG_DESCRIPTIONS = {
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
     "SYSTEM_DAILY_LOSS_LIMIT": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)",
     "SYSTEM_RISK_PER_TRADE": "1회 매매 시 계좌 대비 최대 허용 손실률",
+    "SYSTEM_MAX_PORTFOLIO_RISK": "포트폴리오 총 오픈 리스크(히트) 한도 (0%면 미사용)",
     "USE_VOLATILITY_TARGETING": "변동성(ATR) 타겟팅 비중 조절 사용 여부",
     "TARGET_VOLATILITY": "목표 연간 변동성",
     "VOLATILITY_SCALING_MAX": "변동성 비중 확대 최대 배수",

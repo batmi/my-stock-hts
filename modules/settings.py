@@ -52,6 +52,7 @@ def _save_dynamic_config():
         "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0800"),
         "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000"),
         "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0),
+        "SYSTEM_MAX_PORTFOLIO_RISK": getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0),
         "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
         "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.30),
         "VOLATILITY_SCALING_MAX": getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0),
@@ -281,6 +282,7 @@ def view_system_config(group=None):
         row("연속 에러 허용", "시스템 중단 임계값", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}", key="SYSTEM_MAX_CONSECUTIVE_ERRORS")
         row("일일 손실 제한 (%)", "비상 정지 기준 손실률 (0%면 비상 정지 OFF)", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}", key="SYSTEM_DAILY_LOSS_LIMIT")
         row("1회 최대 리스크 (%)", "계좌 대비 1회 매매 최대 손실폭", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0)}", key="SYSTEM_RISK_PER_TRADE")
+        row("총 오픈 리스크 한도 (%)", "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)", "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
 
     # =========================================================
     # 4. 기술적 지표 파라미터
@@ -908,6 +910,8 @@ def _risk_portfolio_items():
          "get": lambda: getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', v)},
         {"desc": "1회 최대 리스크 (%)", "help": "계좌 대비 1회 매매 최대 손실폭", "name": "SYSTEM_RISK_PER_TRADE", "type": "float", "section": "3-3. 비상 안전장치",
          "get": lambda: getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 5.0), "set": lambda v: setattr(config.settings, 'SYSTEM_RISK_PER_TRADE', v)},
+        {"desc": "총 오픈 리스크 한도 (%)", "help": "보유 전체 '현재가→손절선' 잠재손실 합의 상한 (0%면 미사용)", "name": "SYSTEM_MAX_PORTFOLIO_RISK", "type": "float", "section": "3-3. 비상 안전장치",
+         "get": lambda: getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', v)},
     ])
     return items
 
@@ -1363,6 +1367,7 @@ def manage_custom_settings():
             "SYSTEM_MAX_CONSECUTIVE_ERRORS": "연속 에러 허용",
             "SYSTEM_DAILY_LOSS_LIMIT": "일일 손실 제한 (%)",
             "SYSTEM_RISK_PER_TRADE": "1회 최대 리스크 (%)",
+            "SYSTEM_MAX_PORTFOLIO_RISK": "총 오픈 리스크 한도 (%)",
             "USE_CORRELATION_FILTER": "상관계수 필터링 사용",
             "CORRELATION_THRESHOLD": "상관계수 임계값",
             "CHART_LOOKBACK_DAYS": "데이터 조회 기간",
@@ -1476,6 +1481,7 @@ def manage_custom_settings():
             "SYSTEM_MAX_CONSECUTIVE_ERRORS": (_CAT3, "3-3. 비상 안전장치"),
             "SYSTEM_DAILY_LOSS_LIMIT": (_CAT3, "3-3. 비상 안전장치"),
             "SYSTEM_RISK_PER_TRADE": (_CAT3, "3-3. 비상 안전장치"),
+            "SYSTEM_MAX_PORTFOLIO_RISK": (_CAT3, "3-3. 비상 안전장치"),
             "CHART_LOOKBACK_DAYS": (_CAT4, "4-1. 데이터 조회"),
             "SAR_AF_START": (_CAT4, "4-2. 추세"),
             "SAR_AF_STEP": (_CAT4, "4-2. 추세"),

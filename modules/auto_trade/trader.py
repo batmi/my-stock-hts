@@ -96,6 +96,7 @@ class AutoTrader:
             cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
             cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
+            cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
             cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
@@ -3038,7 +3039,9 @@ class AutoTrader:
         except Exception: pass
 
         # [최적화] 인자로 전달받은 holdings 사용
-        if not holdings: return
+        if not holdings:
+            self.portfolio_heat_amt = 0.0  # 보유 없음 = 오픈 리스크 0 (매수 경로의 히트 캡 판정용)
+            return
 
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
         if rules_map is None:
@@ -3056,6 +3059,12 @@ class AutoTrader:
         _all_hold_codes = [h['pdno'] for h in holdings]
         latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes)
         buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes)
+
+        # [추가] 포트폴리오 히트(총 오픈 리스크) 스냅샷 갱신 — 같은 주기의 피라미딩/신규 매수 캡 판정에 사용
+        try:
+            self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(holdings, buy_trades_map)
+        except Exception:
+            self.portfolio_heat_amt = 0.0
 
         # [최적화] 보유 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []
@@ -3394,8 +3403,27 @@ class AutoTrader:
                 if max_atr_sl != 0 and sl_rate < max_atr_sl:
                     sl_rate = max_atr_sl
 
+            # [추가] 포트폴리오 히트 캡: 증액분 리스크가 남은 예산을 넘으면 피라미딩 보류.
+            #  (_sell_worker 스레드 동시 실행 대비, 예산 확인과 선점을 락으로 원자화)
+            add_risk = (add_qty * order_price) * (abs(sl_rate) / 100.0) if sl_rate < 0 else 0.0
+            reserved_heat = False
+            if add_risk > 0:
+                with self._lock:
+                    budget_left = self.risk_manager.portfolio_risk_budget_left()
+                    if budget_left is not None:
+                        if add_risk > budget_left:
+                            cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+                            self.log(f"피라미딩 보류: {name} - 포트폴리오 총 리스크 한도({cap:.0f}%) 초과 "
+                                     f"(증액 리스크 {add_risk:,.0f}원 > 남은 예산 {max(budget_left, 0):,.0f}원)")
+                            return
+                        self.portfolio_heat_amt += add_risk
+                        reserved_heat = True
+
             self.log(f"피라미딩 실행: {name} +{add_qty}주 - {reason}")
             odno = self.order_manager.send_order(code, add_qty, "buy", name=name, reason=reason, score=result['score'], price=order_price, stop_loss_rate=sl_rate)
+            if not odno and reserved_heat:
+                with self._lock:
+                    self.portfolio_heat_amt -= add_risk  # 주문 실패 시 선점분 반납
             if odno:
                 record = {
                     "type": "buy", "code": code, "name": name, "qty": add_qty,
@@ -3965,7 +3993,25 @@ class AutoTrader:
 
             # 최소 주문 금액 보정 (할당된 예산이 1주 가격보다 적을 때 가용 예수금 전체를 쓰는 버그 방지)
             if invest_amt < order_price: invest_amt = order_price
-            
+
+            # [추가] 포트폴리오 히트 캡: 보유 전체 오픈 리스크 + 신규 리스크가 한도를 넘으면 축소/보류.
+            #  종목당 한도(SYSTEM_RISK_PER_TRADE)와 별개로 '동시 다발 손절' 합산 손실을 통제한다.
+            #  손절률이 없는(>=0) 경우 리스크 추정이 불가하므로 게이트를 건너뛴다(allocate_budget과 동일 기조).
+            if sl_rate and sl_rate < 0:
+                budget_left = self.risk_manager.portfolio_risk_budget_left()
+                if budget_left is not None:
+                    cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+                    new_risk = invest_amt * (abs(sl_rate) / 100.0)
+                    if new_risk > budget_left:
+                        allowed_amt = int(max(budget_left, 0) / (abs(sl_rate) / 100.0))
+                        if allowed_amt < order_price:
+                            self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 한도({cap:.0f}%) 도달 "
+                                     f"(현재 오픈 리스크 {self.portfolio_heat_amt:,.0f}원, 남은 예산 {max(budget_left, 0):,.0f}원)")
+                            continue
+                        self.log(f"[히트 캡] {cand['name']} 투자금 축소: {invest_amt:,}원 → {allowed_amt:,}원 "
+                                 f"(총 오픈 리스크 한도 {cap:.0f}% 준수)")
+                        invest_amt = allowed_amt
+
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
             # 지정가 주문 시 해당 가격 기준으로 조회
             max_qty = api.fetch_buyable_quantity(cand['code'], order_price)
@@ -4054,6 +4100,10 @@ class AutoTrader:
                 self.half_tp_cache.discard(cand['code']) # 신규 매수 시 기존 반익절 캐시 방어적 초기화
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
+                # [추가] 히트 캡 스냅샷에 신규 포지션 리스크 반영 (같은 주기의 후순위 후보 판정용)
+                if sl_rate and sl_rate < 0:
+                    with self._lock:
+                        self.portfolio_heat_amt += (qty * order_price) * (abs(sl_rate) / 100.0)
                 record = {
                     "type": "buy",
                     "code": cand['code'],

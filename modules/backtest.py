@@ -239,6 +239,75 @@ def compute_price_indicators(df):
     df['TREND_PERSIST'] = (df['close'] > df['EMA60']).rolling(persist_lb, min_periods=persist_lb).mean() * 100
     return df
 
+# [동기화] 실매매 시장 필터(USE_MARKET_FILTER)의 백테스트 모델링 상태.
+#  run_backtest가 종목 선택 후 prepare_market_filter()로 준비하면, 이후 모든 시뮬레이션
+#  (단일/몬테카를로/워크포워드/최적화)이 같은 차단일 집합을 공유한다.
+#  dates=None이면 필터 미적용(설정 OFF·데이터 실패·직접 호출 하위호환).
+_MARKET_FILTER_STATE = {"dates": None, "desc": "", "key": None}
+
+
+def prepare_market_filter(code, is_overseas, days):
+    """설정값(USE_MARKET_FILTER, MARKET_FILTER_MA)을 읽어 백테스트용 '신규 매수 차단일' 집합을 준비.
+
+    실매매 필터(trader._update_market_indices_status)와 동일 기준: 지수 종가 < SMA(MARKET_FILTER_MA)
+    인 날짜에 신규 진입을 차단한다(매도·피라미딩은 실매매와 동일하게 영향 없음).
+    국내는 stock.json exchange로 KOSPI/KOSDAQ 지수를 구분하고, 해외는 S&P500을 사용한다.
+    반환: (차단일수, 설명) 또는 None(미사용/실패 — 이때 필터 없이 시뮬레이션됨)
+    """
+    use_filter = getattr(config, 'USE_MARKET_FILTER', True)
+    ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+
+    if is_overseas:
+        idx_ticker, idx_name = "^GSPC", "S&P500"
+    else:
+        market = "KOSPI"
+        for key in ("stocks_kr", "etfs_kr"):
+            for item in config.session.stock_data.get(key, []):
+                if item.get('code') == code and item.get('exchange'):
+                    market = str(item['exchange']).upper()
+                    break
+        if market == "KOSDAQ":
+            idx_ticker, idx_name = "^KQ11", "KOSDAQ"
+        else:
+            idx_ticker, idx_name = "^KS11", "KOSPI"
+
+    cache_key = (idx_ticker, ma, days, use_filter)
+    if _MARKET_FILTER_STATE["key"] == cache_key:
+        dates = _MARKET_FILTER_STATE["dates"]
+        return (len(dates), _MARKET_FILTER_STATE["desc"]) if dates is not None else None
+
+    _MARKET_FILTER_STATE["dates"] = None
+    _MARKET_FILTER_STATE["desc"] = ""
+    _MARKET_FILTER_STATE["key"] = cache_key
+
+    if not use_filter:
+        return None
+
+    try:
+        # 지수 SMA 워밍업까지 커버 (종목 데이터와 동일한 +400일 여유)
+        start_str = (datetime.now() - timedelta(days=days + 400 + ma * 2)).strftime("%Y-%m-%d")
+        idx_df = api.fetch_yfinance_data(idx_ticker, start=start_str)
+        if idx_df is None or idx_df.empty:
+            return None
+        if isinstance(idx_df.columns, pd.MultiIndex):
+            try: idx_df = idx_df.xs(idx_ticker, axis=1, level=1)
+            except Exception: pass
+        idx_df.columns = [c.lower() for c in idx_df.columns]
+        idx_df = idx_df.reset_index()
+        idx_df.rename(columns={'Date': 'date', 'Close': 'close'}, inplace=True)
+        idx_df['date'] = idx_df['date'].apply(lambda x: x.strftime('%Y%m%d') if isinstance(x, datetime) else str(x).replace('-', '')[:8])
+
+        sma = idx_df['close'].rolling(window=ma).mean()
+        blocked = set(idx_df.loc[idx_df['close'] < sma, 'date'].astype(str))
+
+        desc = f"{idx_name} < SMA{ma}"
+        _MARKET_FILTER_STATE["dates"] = blocked
+        _MARKET_FILTER_STATE["desc"] = desc
+        return len(blocked), desc
+    except Exception:
+        return None
+
+
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
                       stop_loss_rate=None, take_profit_rate=None,
                       take_profit_rsi=None, sell_score=None,
@@ -265,6 +334,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     missed_caution_count = 0
     missed_danger_count = 0
     missed_trades = [] # [추가] 매수 보류 상세 내역
+
+    # [동기화] 시장 필터 차단일 (prepare_market_filter로 준비된 경우에만 적용)
+    mf_dates = _MARKET_FILTER_STATE.get("dates")
+    mf_desc = _MARKET_FILTER_STATE.get("desc") or "시장 필터"
+    missed_market_filter_count = 0
     
     # 매도 설정값 로드 (Config 참조)
     stop_loss_limit = stop_loss_rate if stop_loss_rate is not None else config.SELL_STRATEGY["STOP_LOSS_RATE"]
@@ -633,8 +707,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
         is_rsi_ok = row['RSI'] < actual_buy_rsi
         
+        # [동기화] 시장 필터: 지수 < SMA인 날은 신규 진입 차단 (실매매 _check_buy_conditions와 동일,
+        #  보유 포지션의 매도·피라미딩은 실매매와 동일하게 영향 없음)
+        market_blocked = (mf_dates is not None and str(date) in mf_dates)
+
         # [수정] 실제 자동매매 시스템과 동일하게 이미 보유 중인 경우 추가 매수 금지
-        if position['qty'] == 0 and (is_score_ok or is_mr_buy) and is_rsi_ok and can_buy_state:
+        if position['qty'] == 0 and (is_score_ok or is_mr_buy) and is_rsi_ok and can_buy_state and not market_blocked:
             # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
             slippage_mult = 1.0
             if execution_noise:
@@ -712,6 +790,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 missed_reason = state_reason
                 if not can_buy_state: missed_reason = f"{state}: {state_reason}"
                 elif not is_rsi_ok: missed_reason = f"RSI 과열 ({row['RSI']:.1f} >= {actual_buy_rsi})"
+                elif market_blocked:
+                    missed_market_filter_count += 1
+                    missed_reason = f"시장 필터 차단 ({mf_desc})"
 
                 missed_trades.append({
                     "date": date, "score": raw_score, "state": state, "reason": missed_reason,
@@ -739,6 +820,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "score_8_count": score_8_count,
         "missed_caution_count": missed_caution_count,
         "missed_danger_count": missed_danger_count,
+        "missed_market_filter_count": missed_market_filter_count,
         "missed_trades": missed_trades
     }
 
@@ -1765,6 +1847,17 @@ def run_backtest():
                 if actual_days < days * 0.9: # 90% 미만일 때만 경고
                     config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
 
+        # [동기화] 실매매 시장 필터를 백테스트에 반영 (설정값 USE_MARKET_FILTER/MARKET_FILTER_MA 그대로 사용)
+        #  모든 모드(단일/몬테카를로/워크포워드/최적화)가 이 차단일 집합을 공유한다.
+        mf_result = prepare_market_filter(code, is_overseas, days)
+        if mf_result:
+            mf_cnt, mf_desc = mf_result
+            config.console.print(f"[dim]🛡 시장 필터 반영: {mf_desc} 인 날짜 신규 진입 차단 (기간 내 차단 후보일 {mf_cnt}일, 실매매와 동일 기준)[/dim]")
+        elif getattr(config, 'USE_MARKET_FILTER', True):
+            config.console.print("[dim yellow]🛡 시장 필터: 지수 데이터 조회 실패로 이번 백테스트에는 미반영됩니다. (실매매는 정상 적용)[/dim yellow]")
+        else:
+            config.console.print("[dim]🛡 시장 필터: 설정 OFF (USE_MARKET_FILTER=False) — 백테스트에도 미적용[/dim]")
+
         if mode_choice == "2":
             run_monte_carlo_simulation(df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                        stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback,
@@ -1811,6 +1904,7 @@ def run_backtest():
         score_8_count = res['score_8_count']
         missed_caution = res.get('missed_caution_count', 0)
         missed_danger = res.get('missed_danger_count', 0)
+        missed_market_filter = res.get('missed_market_filter_count', 0)
         missed_trades = res.get('missed_trades', [])
 
         # 4. 결과 출력
@@ -1859,7 +1953,9 @@ def run_backtest():
         # [추가] 매수 보류 통계 출력
         if missed_caution > 0 or missed_danger > 0:
             summary_table.add_row("매수 보류 (상태)", f"[yellow]주의 {missed_caution}회[/] / [blue]매도 {missed_danger}회[/] (점수 충족했으나 진입 불가)")
-        
+        if missed_market_filter > 0:
+            summary_table.add_row("매수 보류 (시장 필터)", f"[cyan]{missed_market_filter}회[/] (지수 약세로 신규 진입 차단 — 실매매와 동일)")
+
         if sell_count > 0:
             summary_table.add_row("승률 (Win Rate)", f"{win_rate:.1f}% ({win_trades}승 {loss_trades}패)")
             

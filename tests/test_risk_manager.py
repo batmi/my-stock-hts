@@ -145,10 +145,100 @@ def test_check_loss_limit_safe(risk_manager):
     """손실 한도 이내일 때 테스트"""
     risk_manager.trader.initial_asset = 10_000_000
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
-    
+
     # Current asset: 9,600,000 (-4% loss)
     current_total = 9_600_000
-    
+
     with patch.object(risk_manager.trader, 'stop') as mock_stop:
         risk_manager.check_loss_limit(current_total)
         mock_stop.assert_not_called()
+
+
+# =========================================================
+# [추가] 포트폴리오 히트(총 오픈 리스크) 계산·예산 테스트
+# =========================================================
+import threading
+
+class MockHeatTrader(MockTrader):
+    """compute_portfolio_heat가 참조하는 트레일링 캐시/락 포함 Mock"""
+    def __init__(self, initial_asset=10_000_000):
+        super().__init__(initial_asset)
+        self._lock = threading.RLock()
+        self.trailing_stop_cache = {}
+        self.portfolio_heat_amt = 0.0
+
+
+def _holding(code, qty, buy, cur):
+    return {'pdno': code, 'hldg_qty': str(qty), 'pchs_avg_pric': str(buy), 'prpr': str(cur)}
+
+
+def test_portfolio_heat_basic(monkeypatch):
+    """오픈 리스크 = 수량 × (현재가 - 손절선). 손절률은 매수기록 수량가중 평균 사용"""
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+    trader.trailing_stop_cache['005930'] = 10000.0  # 최고가=매수가 → BEP/TS 미발동
+
+    heat = rm.compute_portfolio_heat(
+        [_holding('005930', 10, 10000, 10000)],
+        {'005930': [{'qty': 10, 'stop_loss_rate': -5.0}]},
+    )
+    # 손절선 = 10000×0.95=9500 → 리스크 = 10주 × 500원
+    assert heat == pytest.approx(10 * 500)
+
+
+def test_portfolio_heat_bep_and_ts_uplift(monkeypatch):
+    """BEP/트레일링 발동 이력이 있으면 손절선이 상향되어 오픈 리스크가 줄어든다"""
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+
+    # BEP: 최고가 +6% ≥ 손절폭 5%(ATR 동기화) → 손절선 본전(매수가) 상향
+    trader.trailing_stop_cache['000001'] = 10600.0
+    heat = rm.compute_portfolio_heat(
+        [_holding('000001', 10, 10000, 10300)],
+        {'000001': [{'qty': 10, 'stop_loss_rate': -5.0}]},
+    )
+    assert heat == pytest.approx(10 * 300)
+
+    # TS: 최고가 +20% ≥ 발동 10% → 손절선 = 12000×(1-5%)=11400
+    trader.trailing_stop_cache['000002'] = 12000.0
+    heat2 = rm.compute_portfolio_heat(
+        [_holding('000002', 10, 10000, 11500)],
+        {'000002': [{'qty': 10, 'stop_loss_rate': -5.0}]},
+    )
+    assert heat2 == pytest.approx(10 * 100)
+
+
+def test_portfolio_heat_locked_position_zero_risk(monkeypatch):
+    """손절선이 현재가 위(이익 잠김)면 해당 포지션 리스크는 0"""
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+
+    # 최고가 15000 → TS선 14250 > 현재가 14000 → 리스크 0 (음수 아님)
+    trader.trailing_stop_cache['000003'] = 15000.0
+    heat = rm.compute_portfolio_heat(
+        [_holding('000003', 10, 10000, 14000)],
+        {'000003': [{'qty': 10, 'stop_loss_rate': -5.0}]},
+    )
+    assert heat == 0.0
+
+
+def test_portfolio_risk_budget_left(monkeypatch):
+    """히트 캡까지 남은 예산 계산 및 캡 미사용(0) 시 None"""
+    trader = MockHeatTrader(10_000_000)
+    rm = RiskManager(trader)
+
+    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
+    trader.portfolio_heat_amt = 400_000
+    assert rm.portfolio_risk_budget_left() == pytest.approx(600_000)
+
+    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0, raising=False)
+    assert rm.portfolio_risk_budget_left() is None

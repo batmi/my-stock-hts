@@ -91,14 +91,56 @@ def test_multi_price_chunking_over_30():
 
 
 def test_multi_price_failure_disables_for_session():
-    """TR 미지원(rt_cd!=0) 시 None 반환 + 세션 동안 재시도하지 않는지 확인."""
+    """TR 미지원(rt_cd!=0) 시 None 반환 + 쿨다운 동안 재시도하지 않는지 확인."""
     with patch('api.call_api', return_value={'rt_cd': '1', 'msg1': 'not supported'}) as mock_call:
         assert api.get_multi_current_prices(['005930']) is None
         assert api._MULTI_PRICE_DISABLED is True
-        # 두 번째 호출은 call_api 없이 즉시 폴백(None)
+        # 두 번째 호출은 쿨다운 중이므로 call_api 없이 즉시 폴백(None)
         assert api.get_multi_current_prices(['005930']) is None
 
     assert mock_call.call_count == 1
+
+
+def test_multi_price_reenables_after_cooldown(monkeypatch):
+    """[Fix] 일시 오류(EGW00201 등)로 비활성돼도 쿨다운 경과 후 자동 재시도한다.
+    (기존 '세션 영구 비활성'은 장전/장후 NXT 병합이 꺼진 채 현재가만 전일 종가로 굳는
+    stale — 강도는 별도 콜이라 신선 — 을 만들었음)"""
+    with patch('api.call_api', return_value={'rt_cd': '1', 'msg1': 'transient'}):
+        assert api.get_multi_current_prices(['005930']) is None
+    assert api._MULTI_PRICE_DISABLED is True
+
+    # 쿨다운 경과 시점으로 되돌리면 재시도되어 정상 복구
+    monkeypatch.setattr(api, '_MULTI_PRICE_DISABLED_AT',
+                        api._MULTI_PRICE_DISABLED_AT - api._MULTI_PRICE_RETRY_COOLDOWN_SEC - 1)
+    with patch('api.call_api', return_value=_mk_multi_response(['005930'])) as mock_call:
+        res = api.get_multi_current_prices(['005930'])
+    assert mock_call.call_count == 1
+    assert res['005930']['stck_prpr'] == '70000'
+    assert api._MULTI_PRICE_DISABLED is False
+
+
+def test_multi_price_nxt_reenables_after_cooldown(monkeypatch):
+    """[Fix] NXT(NX) 배치도 쿨다운 경과 후 자동 재시도 — NX 병합이 세션 내내 꺼져
+    장전/장후 현재가가 KRX 전일 종가로 굳는(등락률 0%) 증상을 방지한다."""
+    monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+
+    with patch('api.call_api', return_value={'rt_cd': '1', 'msg1': 'transient'}):
+        assert api._fetch_multi_nxt_raw(['005930']) == {}
+    assert api._MULTI_PRICE_NXT_DISABLED is True
+
+    # 쿨다운 중에는 호출 없이 즉시 빈 dict
+    with patch('api.call_api') as mock_call:
+        assert api._fetch_multi_nxt_raw(['005930']) == {}
+    mock_call.assert_not_called()
+
+    # 쿨다운 경과 → 재시도 성공 시 플래그 해제 및 정상 병합 데이터 반환
+    monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED_AT',
+                        api._MULTI_PRICE_NXT_DISABLED_AT - api._MULTI_PRICE_RETRY_COOLDOWN_SEC - 1)
+    with patch('api.call_api', return_value=_mk_nxt_response(['005930'])):
+        out = api._fetch_multi_nxt_raw(['005930'])
+    assert out['005930']['prpr'] == 71000
+    assert api._MULTI_PRICE_NXT_DISABLED is False
 
 
 def test_multi_price_market_name_fallback_from_stock_json(monkeypatch):

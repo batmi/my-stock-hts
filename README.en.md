@@ -211,7 +211,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
     *   **Method**: Injects ±1% random noise into the price data, reflects uncertainties like slippage variation and execution failures (1%), and runs 1000 times.
     *   **Result**: Validates whether the strategy is based on luck or skill via average returns, worst case (VaR 95%), standard deviation, etc.
 
-*   **Market Index Filtering**: Automatically suspends new buys if the KOSPI/KOSDAQ index falls below a moving average (default 30 days), treating it as a 'downtrend'.
+*   **Market Index Filtering**: Automatically suspends new buys if the KOSPI/KOSDAQ index falls below a moving average (default 60 days, `MARKET_FILTER_MA`), treating it as a 'downtrend'. **The same rule (using your current settings) is also modeled in backtests**, so new entries on index-weak days are blocked in simulations as well (live/backtest parity).
 *   **Relative Strength (RS) Filter**: Suspends new buys whose 6-month (126 trading days) return is at or below that of their home index (KOSPI/KOSDAQ) — an implementation of the trend-following principle that a stock unable to beat its own index is not a "clear trend". Reuses the shared index-data cache (no extra API load) and fails open on index-data failure or insufficient stock history so a data outage never halts buying entirely. (`USE_RS_FILTER`)
 *   **Correlation Filtering**: Prevents new buys if the candidate stock shows high correlation (e.g., 0.7 or above) with currently held stocks to avoid concentration risk.
 *   **Technical Filtering**: 
@@ -222,6 +222,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Kill Switch**: Transitions to standby mode to protect the account if continuous API or system errors occur (default 5 times).
 *   **Order State Machine**: Strictly manages the order lifecycle to prevent duplicate buys or phantom positions.
 *   **Risk-based Position Sizing**: Limits the maximum loss width (default 4%) per trade against the total account, automatically reducing buy weight for highly volatile stocks.
+*   **Portfolio Heat Cap (Total Open-Risk Limit)**: Caps the combined potential loss of all holdings — measured from current price down to each position's effective stop (including break-even/trailing uplifts) — at a set percentage of the account (default 10%, `SYSTEM_MAX_PORTFOLIO_RISK`). While the per-trade risk limit controls each position individually, this cap controls the 'simultaneous stop-out' scenario in aggregate: new buys are shrunk or held to fit the remaining risk budget, and pyramiding add-ons are also held when over budget. As existing positions' stops rise to break-even/trailing levels, the budget naturally recovers and buying resumes.
 *   **Volatility Targeting**: Increases cash ratio when market volatility is high and expands investments when low.
 
 ### 5. Scoring Weights Optimization

@@ -846,6 +846,95 @@ class RiskManager:
     def __init__(self, trader):
         self.trader = trader
 
+    def compute_portfolio_heat(self, holdings, buy_trades_map=None):
+        """포트폴리오 히트(총 오픈 리스크, 원) 계산
+
+        보유 각 포지션이 '현재가 → 유효 손절선'까지 하락했을 때의 잠재 손실을 합산한다.
+        SYSTEM_RISK_PER_TRADE가 종목당 손실을 통제한다면, 이 값은 '전 종목 동시 손절'
+        시나리오의 합산 손실을 SYSTEM_MAX_PORTFOLIO_RISK 이하로 묶기 위한 기준값이다.
+
+        유효 손절선 추정(매도 로직의 근사, 보수적 = 리스크 과대평가 방향):
+          ① 매수가 × (1 + 손절률): 손절률은 보유분 매수 기록의 수량가중 평균(ATR 손절 저장값),
+             없으면 전역 STOP_LOSS_RATE.
+          ② 최고가 기준 max_profit이 BEP 발동선(ATR 손절 시 손절폭과 동일) 이상이면 본전(매수가)으로 상향.
+          ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-콜백%)으로 상향.
+        손절선이 현재가 위(이미 이익 잠김)면 해당 포지션 리스크는 0으로 본다.
+        """
+        total_risk = 0.0
+        if not holdings:
+            return total_risk
+
+        sell_cfg = config.SELL_STRATEGY
+        default_sl = sell_cfg.get("STOP_LOSS_RATE", -5.0)
+        use_atr_stop = sell_cfg.get("USE_ATR_STOP", False)
+        bep_rate_cfg = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
+        ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_cb = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+
+        for h in holdings:
+            try:
+                qty = api.safe_int(h.get('hldg_qty', 0))
+                if qty <= 0:
+                    continue
+                buy_price = float(h.get('pchs_avg_pric') or 0)
+                cur = float(h.get('prpr') or 0)
+                if buy_price <= 0 or cur <= 0:
+                    continue
+                code = h.get('pdno')
+
+                sl_rate = None
+                trades = (buy_trades_map or {}).get(code) or []
+                tq, ws = 0, 0.0
+                for t in trades:
+                    q = api.safe_int(t.get('qty', 0))
+                    try:
+                        s = float(t.get('stop_loss_rate') or 0.0)
+                    except (TypeError, ValueError):
+                        s = 0.0
+                    if q > 0 and s != 0.0:
+                        tq += q
+                        ws += q * s
+                if tq > 0:
+                    sl_rate = ws / tq
+                if sl_rate is None or sl_rate >= 0:
+                    sl_rate = default_sl if default_sl < 0 else -5.0
+
+                stop_price = buy_price * (1 + sl_rate / 100.0)
+
+                highest = 0.0
+                try:
+                    with self.trader._lock:
+                        highest = self.trader.trailing_stop_cache.get(code) or 0.0
+                    if highest <= 0:
+                        highest = db_manager.db.get_highest_price(code) or 0.0
+                except Exception:
+                    highest = 0.0
+
+                if highest > 0:
+                    max_profit = (highest - buy_price) / buy_price * 100.0
+                    bep_threshold = abs(sl_rate) if use_atr_stop else bep_rate_cfg
+                    if bep_threshold > 0 and max_profit >= bep_threshold:
+                        stop_price = max(stop_price, buy_price)
+                    if ts_act > 0 and ts_cb > 0 and max_profit >= ts_act:
+                        stop_price = max(stop_price, highest * (1 - ts_cb / 100.0))
+
+                total_risk += qty * max(0.0, cur - stop_price)
+            except Exception:
+                continue
+
+        return total_risk
+
+    def portfolio_risk_budget_left(self):
+        """히트 캡까지 남은 리스크 예산(원). 캡 미사용(0)·기준자산 미확보 시 None(제한 없음)"""
+        cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+        if cap <= 0:
+            return None
+        equity = self.trader.initial_asset
+        if equity <= 0:
+            return None
+        heat = getattr(self.trader, 'portfolio_heat_amt', 0.0)
+        return equity * (cap / 100.0) - heat
+
     def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
         """자산 배분 계산
 

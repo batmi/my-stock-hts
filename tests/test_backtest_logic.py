@@ -207,3 +207,82 @@ def test_backtest_time_stop_momentum_grace(mock_status):
             buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
         )
     assert any("시간청산" in t['type'] for t in res['trades']), "상방 모멘텀 상실 시 시간청산되어야 함"
+
+
+# =========================================================
+# [동기화] 시장 필터(USE_MARKET_FILTER) 백테스트 모델링 테스트
+# =========================================================
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_market_filter_blocks_new_entry(mock_status, monkeypatch):
+    """시장 필터 차단일에는 점수 충족해도 신규 진입하지 않고, 해제일부터 진입한다."""
+    df = _make_bt_df([50000, 51000, 52000, 52500, 53000])
+    mock_status.side_effect = [(9.0, 9.0, True, "매수", "강세")] * 5
+    dates = list(df['date'])
+
+    # 1~2일차를 지수 약세(차단일)로 지정
+    monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE',
+                        {"dates": {dates[0], dates[1]}, "desc": "KOSPI < SMA60", "key": None})
+
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_OFF), patch.dict(config.SELL_STRATEGY, _TF_SELL):
+        res = backtest.simulate_strategy(
+            sim_df=df, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+
+    buys = [t for t in res['trades'] if t['type'].startswith("매수")]
+    assert buys, "차단 해제일(3일차)부터는 진입해야 함"
+    assert buys[0]['date'] == dates[2]
+    assert res.get('missed_market_filter_count', 0) == 2
+    mf_missed = [m for m in res.get('missed_trades', []) if '시장 필터' in m.get('reason', '')]
+    assert len(mf_missed) == 2
+
+
+@patch('modules.backtest.calculate_daily_status')
+def test_backtest_market_filter_absent_no_effect(mock_status, monkeypatch):
+    """차단일 집합이 준비되지 않으면(필터 OFF·직접 호출) 기존과 동일하게 1일차 진입."""
+    df = _make_bt_df([50000, 51000, 52000, 52500, 53000])
+    mock_status.side_effect = [(9.0, 9.0, True, "매수", "강세")] * 5
+    monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE', {"dates": None, "desc": "", "key": None})
+
+    with patch.dict(config.ANALYSIS_THRESHOLDS, _PYR_OFF), patch.dict(config.SELL_STRATEGY, _TF_SELL):
+        res = backtest.simulate_strategy(
+            sim_df=df, prev_row_init=None, initial_capital=10_000_000,
+            buy_score_limit=8.0, buy_rsi_limit=70.0, is_overseas=False
+        )
+
+    buys = [t for t in res['trades'] if t['type'].startswith("매수")]
+    assert buys and buys[0]['date'] == df['date'].iloc[0]
+    assert res.get('missed_market_filter_count', 0) == 0
+
+
+def test_prepare_market_filter_uses_settings(monkeypatch):
+    """prepare_market_filter가 설정값(USE_MARKET_FILTER/MARKET_FILTER_MA)을 그대로 읽어
+    '지수 종가 < SMA(설정 MA)' 날짜 집합을 만드는지 검증."""
+    monkeypatch.setattr(config, 'USE_MARKET_FILTER', True, raising=False)
+    monkeypatch.setattr(config, 'MARKET_FILTER_MA', 3, raising=False)
+    monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE', {"dates": None, "desc": "", "key": None})
+
+    idx = pd.DataFrame(
+        {'Close': [100.0, 100.0, 100.0, 100.0, 50.0]},
+        index=pd.date_range('2023-10-01', periods=5, name='Date'),
+    )
+    with patch('api.fetch_yfinance_data', return_value=idx):
+        result = backtest.prepare_market_filter('005930', is_overseas=False, days=30)
+
+    assert result is not None
+    cnt, desc = result
+    assert 'SMA3' in desc and 'KOSPI' in desc
+    assert cnt == 1  # 마지막 날(50 < SMA3)만 차단
+    assert '20231005' in backtest._MARKET_FILTER_STATE['dates']
+
+
+def test_prepare_market_filter_off(monkeypatch):
+    """USE_MARKET_FILTER=False면 차단일을 만들지 않는다(백테스트 미적용)."""
+    monkeypatch.setattr(config, 'USE_MARKET_FILTER', False, raising=False)
+    monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE', {"dates": None, "desc": "", "key": None})
+
+    with patch('api.fetch_yfinance_data') as mock_fetch:
+        assert backtest.prepare_market_filter('005930', is_overseas=False, days=30) is None
+    mock_fetch.assert_not_called()
+    assert backtest._MARKET_FILTER_STATE['dates'] is None
