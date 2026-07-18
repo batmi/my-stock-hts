@@ -193,13 +193,8 @@ def view_system_config(group=None):
         row("과열 이격도 상한", "20일선 기준 이 비율 이상 시 단기과열", "ANALYSIS_THRESHOLDS['DISPARITY_UPPER']", f"{thresholds.get('DISPARITY_UPPER', 110.0)}%", key="DISPARITY_UPPER")
         row("침체 이격도 하한", "20일선 기준 이 비율 이하 시 과매도", "ANALYSIS_THRESHOLDS['DISPARITY_LOWER']", f"{thresholds.get('DISPARITY_LOWER', 90.0)}%", key="DISPARITY_LOWER")
 
-        subheader("1-2. 서브전략 (역추세/슈퍼 모멘텀)")
-        row("역추세 매수 사용", "낙폭과대 반등 노리기", "ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION']", f"{thresholds.get('USE_MEAN_REVERSION', True)}", key="USE_MEAN_REVERSION")
-        if thresholds.get('USE_MEAN_REVERSION', True):
-            row("역추세 RSI", "과매도/침체 기준", "ANALYSIS_THRESHOLDS['MR_RSI_MAX']", f"{thresholds.get('MR_RSI_MAX', 40.0)}", key="MR_RSI_MAX", indent=True)
-            row("역추세 이격도", "20일선 기준 하락폭 한계", "ANALYSIS_THRESHOLDS['MR_DISPARITY_MAX']", f"{thresholds.get('MR_DISPARITY_MAX', 90.0)}%", key="MR_DISPARITY_MAX", indent=True)
-            row("역추세 체결강도", "바닥 매수세 확증 기준", "ANALYSIS_THRESHOLDS['MR_VOL_STRENGTH']", f"{thresholds.get('MR_VOL_STRENGTH', 120.0)}%", key="MR_VOL_STRENGTH", indent=True)
-            row("역매수 유예 손실", "역매수 종목 유예 기간 내 허용 하락폭", "SELL_STRATEGY['MR_GRACE_LOSS_RATE']", f"{sell.get('MR_GRACE_LOSS_RATE', -5.0)}%", key="MR_GRACE_LOSS_RATE", indent=True)
+        subheader("1-2. 서브전략 (슈퍼 모멘텀/피라미딩)")
+        # [추세추종 보호] 역매수(역추세) 관련 설정은 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
         row("슈퍼 모멘텀 (RSI 유연화)", "주도주 랠리 시 RSI 허용치 완화", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE']", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}", key="SUPER_MOMENTUM_USE")
         if thresholds.get('SUPER_MOMENTUM_USE', True):
             row("슈퍼 매수 발동 점수", "기준 점수 이상 & 신고가 90% 이상 시 발동", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_SCORE']", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}", key="SUPER_MOMENTUM_SCORE", indent=True)
@@ -539,6 +534,11 @@ ANTI_TREND_HIDDEN_KEYS = {
     "TAKE_PROFIT_RSI",         # RSI 과열 매도
     "SUPER_TAKE_PROFIT_RSI",   # RSI 과열 매도의 슈퍼 모멘텀 완화 기준 (부속 설정)
     "DEFENSIVE_HALF_SELL_USE", # 방어적 반매도
+    "USE_MEAN_REVERSION",      # 역매수(낙폭과대 역추세 진입) — 추세추종 청산 체계와 부정합
+    "MR_RSI_MAX",              # 역매수 RSI 상한 (부속 설정)
+    "MR_DISPARITY_MAX",        # 역매수 이격도 상한 (부속 설정)
+    "MR_VOL_STRENGTH",         # 역매수 체결강도 기준 (부속 설정)
+    "MR_GRACE_LOSS_RATE",      # 역매수 보유분 점수매도 유예 손실폭 (부속 설정)
 }
 
 
@@ -1093,7 +1093,6 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     summary_data = [
         ("매수 허들 (점수/RSI/체결/잔량비)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 잔량비 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)}배↑ (자동연동: {'ON' if config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True) else 'OFF'})"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
-        ("역추세 매수 (RSI/체결강도)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 100.0)}% 이상)"),
         ("매도 허들 (추세이탈)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 4.0)} 미만+60일선 이탈"),
         ("손절", f"{config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 3.0)}%"),
@@ -1426,16 +1425,16 @@ def manage_custom_settings():
             "BUY_ASK_BID_RATIO": (_CAT1, "1-1. 기본 진입 조건"),
             "DISPARITY_UPPER": (_CAT1, "1-1. 기본 진입 조건"),
             "DISPARITY_LOWER": (_CAT1, "1-1. 기본 진입 조건"),
-            "USE_MEAN_REVERSION": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "MR_RSI_MAX": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "MR_DISPARITY_MAX": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "MR_VOL_STRENGTH": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "MR_GRACE_LOSS_RATE": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "SUPER_MOMENTUM_USE": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "SUPER_MOMENTUM_SCORE": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "SUPER_MOMENTUM_W52_POS": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "SUPER_BUY_RSI_MAX": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "SUPER_TAKE_PROFIT_RSI": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
+            "USE_MEAN_REVERSION": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "MR_RSI_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "MR_DISPARITY_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "MR_VOL_STRENGTH": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "MR_GRACE_LOSS_RATE": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "SUPER_MOMENTUM_USE": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "SUPER_MOMENTUM_SCORE": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "SUPER_MOMENTUM_W52_POS": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "SUPER_BUY_RSI_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
+            "SUPER_TAKE_PROFIT_RSI": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
             "TAKE_PROFIT_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
             "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
             "TAKE_PROFIT_RSI": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
@@ -1527,7 +1526,7 @@ def manage_custom_settings():
         }
 
         sub_category_order = {
-            "1-1. 기본 진입 조건": 1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)": 2,
+            "1-1. 기본 진입 조건": 1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)": 2,
             "1-3. 매도/청산 — 트레일링 스탑": 3, "1-4. 매도/청산 — 손절": 4, "1-5. 매도/청산 — 기타": 5,
             "2-1. 스코어링 가중치": 1, "2-2. 적응형 임계값 (시장국면)": 2,
             "3-1. 자산 배분/포지션": 1, "3-2. 매수 필터": 2, "3-3. 비상 안전장치": 3,
@@ -1667,7 +1666,7 @@ def system_config_menu():
         if choice == "1":
             sub_items = [
                 ("1", "기본 진입 조건", "Entry"),
-                ("2", "서브전략 (역추세/슈퍼 모멘텀)", "Sub-Strategy"),
+                ("2", "서브전략 (슈퍼 모멘텀/피라미딩)", "Sub-Strategy"),
                 ("3", "매도/청산 — 트레일링 스탑", "Trailing Stop"),
                 ("4", "매도/청산 — 손절", "Stop Loss"),
                 ("5", "매도/청산 — 기타", "Exit Etc")

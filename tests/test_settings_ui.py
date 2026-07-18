@@ -38,8 +38,10 @@ def test_anti_trend_keys_hidden_from_menus():
     assert not (settings.ANTI_TREND_HIDDEN_KEYS & entry_names)
     # 내부 설정 키 자체는 유지되어야 한다 (로직/백테스트 호환)
     for key in ["TAKE_PROFIT_RATE", "HALF_TAKE_PROFIT_USE", "TAKE_PROFIT_RSI",
-                "SUPER_TAKE_PROFIT_RSI", "DEFENSIVE_HALF_SELL_USE"]:
+                "SUPER_TAKE_PROFIT_RSI", "DEFENSIVE_HALF_SELL_USE", "MR_GRACE_LOSS_RATE"]:
         assert key in config.SELL_STRATEGY
+    for key in ["USE_MEAN_REVERSION", "MR_RSI_MAX", "MR_DISPARITY_MAX", "MR_VOL_STRENGTH"]:
+        assert key in config.ANALYSIS_THRESHOLDS
 
 @patch('rich.prompt.Prompt.ask')
 def test_modify_indicator_params_ui(mock_ask):

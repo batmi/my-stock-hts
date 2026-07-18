@@ -4021,10 +4021,20 @@ class AutoTrader:
             if atr_msg:
                 reason += f" {atr_msg}"
 
+            # [Fix] 신규 포지션 매수 전 이전 보유분의 잔존 상태 초기화.
+            #  외부(MTS/HTS) 전량 매도는 엔진 매도 경로를 거치지 않아 트레일링 최고가·반익절
+            #  DB 기록이 남는데(최고가 UPSERT는 단조 증가), 재시작 후 재매수 시 잔존 최고가로
+            #  max_profit이 과대 계산되어 매수 직후 BEP/TS가 오발동(신규 포지션 즉시 청산)하는
+            #  것을 방지한다. (후보군은 보유 종목을 제외하므로 이 시점은 항상 신규 포지션)
+            db_manager.db.delete_trailing_stop(cand['code'])
+            db_manager.db.delete_half_tp(cand['code'])
+            with self._lock:
+                self.trailing_stop_cache.pop(cand['code'], None)
+
             self.log(f"매수 실행: {cand['name']} - {reason}")
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
-            if odno: 
+            if odno:
                 # [추가] 매수 주문 성공 시 대기 중인 예약 매수 취소 방어 로직 (중복 진입 방지)
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd

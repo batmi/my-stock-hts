@@ -241,7 +241,7 @@ def _input_and_save_rule(code, name):
         if val.lower() in ['b', 'q']: raise QuitInput()
         new_strategy['half_take_profit_use'] = 1 if val.lower() == 'y' else 0
         
-        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', f"익절 RSI 기준 (기본: {defaults['take_profit_rsi']})", "RSI가 이 값을 초과하면 과열로 판단하여 매도", float)
+        new_strategy['take_profit_rsi'] = ask_val('take_profit_rsi', f"익절 RSI 기준 (기본: {defaults['take_profit_rsi']}, 0: 미사용)", "RSI가 이 값을 초과하면 과열로 판단하여 매도 (0: 미사용)", float)
         new_strategy['sell_score'] = ask_val('sell_score', f"매도(추세이탈) 기준 점수 (기본: {defaults['sell_score']}점)", "점수가 이 값 미만으로 떨어지면 매도", float)
         new_strategy['ts_activation'] = ask_val('ts_activation', f"트레일링 스탑 발동 수익률(%) (기본: {defaults['ts_activation']}%)", "수익률이 이 값 이상일 때 트레일링 스탑 감시 시작", float)
         new_strategy['ts_callback'] = ask_val('ts_callback', f"트레일링 스탑 하락 감지율(%) (기본: {defaults['ts_callback']}%)", "최고가 대비 이 비율만큼 하락 시 매도", float)
