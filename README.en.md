@@ -47,6 +47,7 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 *   **AI Investment Assistant:** Utilizes Google Gemini LLM to provide in-depth stock diagnostics, analysis of market-leading themes, interactive Q&A, and pre-market briefings.
 *   **DART (Electronic Disclosure) Integration:** Utilizes OpenDART API for interest stock **disclosure monitoring** (importance classification + AI good/bad news interpretation), **dividend/earnings calendar** (ex-dividend dates by dividend cycle, earnings submission deadlines), and **real-time Telegram alerts for major disclosures** (capital increase, capital reduction, treasury stock, administrative issue designation, etc.).
 *   **Market Index Filtering:** Risk management feature that analyzes the trend of KOSPI/KOSDAQ indices and automatically suspends buying in a downtrend.
+*   **Relative Strength (RS) Filter:** Automatically excludes new buys whose 6-month return trails their home index (KOSPI/KOSDAQ) — blocking entries into weak trends that cannot even beat the market.
 *   **Real-time Market Halt Alerts (Circuit Breaker / VI):** Detects market-wide circuit breakers (CB) and per-stock Volatility Interruptions (VI) based on actual exchange status flags and instantly notifies via Telegram. (CB on by default; VI is optional.)
 *   **Portfolio De-synchronization (Correlation Filtering):** Prevents duplicate purchases of stocks that have similar price movements (correlation coefficient of 0.7 or higher) to currently held stocks, inducing portfolio diversification.
 *   **Real-time Configuration Changes:** The ability to immediately change and permanently apply buy/sell conditions and investment weights while system trading is running.
@@ -65,7 +66,7 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 
 This system is based on a **Trend Following** strategy, catching high-probability entry points through multi-faceted technical analysis and executing strict risk management.
 
-> **Trend-Following Doctrine (Core Principles)**: ① Cut losses short, let profits run — there is no fixed take-profit ceiling; the **trailing stop (Chandelier Exit)** is the primary exit. ② Buy strength — buy candidates are prioritized by 52-week-high proximity and volume strength, and only positions validated by profit are **pyramided (scaled up)**. Averaging down into losers is structurally impossible. ③ The trend is the market — new buys are suspended when the index is below its reference moving average.
+> **Trend-Following Doctrine (Core Principles)**: ① Cut losses short, let profits run — there is no fixed take-profit ceiling; the **trailing stop (Chandelier Exit)** is the primary exit. ② Buy strong, durable trends — buy candidates are prioritized by **trend quality (regression momentum)** → score → 52-week-high proximity → volume strength, and the **Relative Strength (RS) filter** blocks entries that trail their home index outright. Only positions validated by profit are **pyramided (scaled up)**; averaging down into losers is structurally impossible. ③ The trend is the market — new buys are suspended when the index is below its reference moving average.
 
 > This section explains the **concepts** of the strategy. For the trigger thresholds (defaults) and parameter details of each condition, see **[3. Configuration](#3-configuration)**. (All values are configurable.)
 
@@ -77,8 +78,10 @@ Buying is executed when both the composite score calculated through the **Quant 
     2.  **Overheating Prevention**: RSI under the allowed ceiling (`BUY_RSI_MAX`) (relaxed when Super Momentum triggers)
     3.  **Supply & Demand Check**: Volume strength at or above the threshold (`BUY_VOL_STRENGTH`) (buying pressure dominance)
     4.  **Market Filter**: KOSPI/KOSDAQ index located above the reference moving average (`MARKET_FILTER_MA`) (avoiding downtrends)
+    5.  **Relative Strength (RS) Filter**: The stock's 6-month (`MOMENTUM_LOOKBACK`) return must **exceed** that of its home index (KOSPI/KOSDAQ) (`USE_RS_FILTER`) — a +15% stock in a +20% market is a laggard; stocks with no excess return over the index are not considered "clear trends" and are excluded. (Passes automatically on index-data failure or insufficient stock history.)
 
-*   **Buy Priority (Strength First)**: When multiple candidates pass the entry conditions, they are bought in order of **① composite score → ② 52-week-high proximity → ③ volume strength**.
+*   **Buy Priority (Gate vs. Ranking separation)**: When multiple candidates pass the entry conditions (the gate), they are bought in order of **① trend quality → ② composite score → ③ 52-week-high proximity → ④ volume strength**.
+    *   **Trend Quality (Regression Momentum)**: The **annualized slope × R²** of a linear regression over the last 90 days (`TREND_QUALITY_LOOKBACK`) of log closes (Clenow momentum). The slope measures trend strength and R² measures smoothness (a proxy for persistence), so stocks that stumbled into alignment through wild swings rank behind steadily rising leaders. Since the score is a sum of binary signals with frequent ties, it serves only as the entry gate, while the continuous trend-quality value decides priority among candidates.
 
 *   **Leading Stock Following: Super Momentum**:
     *   For leading stocks making strong rallies near 52-week highs, the standard overheating criteria (allowed buy/sell RSI) are relaxed to follow the market's strong trend to the end.
@@ -106,8 +109,9 @@ The composite score determining whether to buy is calculated based on the **Quan
 *The weight of each factor can be adjusted via settings (`SCORING_WEIGHTS`); below are default values.*
 
 1.  **Trend Factor [Default 4.0]**
-    *   **Moving Average**: Current > 20MA (+0.5), 20/60/120MA Alignment (+1.0), 5MA > 20MA (+0.5)
+    *   **Moving Average**: Current > 20MA (+0.5), 20/60/120MA Alignment (+1.0), 5MA > 20MA (+0.5) — the highly correlated EMA signal cluster is **capped at 2.0 points** in total (prevents over-crediting)
     *   **Early Trend Reversal**: If 20MA <= 60MA, current price crosses above 60MA (+0.5)
+    *   **Trend Persistence**: Close was above the 60MA for ≥ 70% (`TREND_PERSIST_MIN`) of the last 120 days (`TREND_PERSIST_LOOKBACK`) (+0.5) — a durability signal measuring "how long the trend has held" rather than the current snapshot, separating freshly crossed, unproven trends from long-sustained ones.
     *   **MACD**: MACD > Signal Golden Cross (+0.5), MACD Histogram positive or rising (+0.5)
     *   **SAR**: Current price > SAR (Uptrend +0.5)
 
@@ -115,6 +119,8 @@ The composite score determining whether to buy is calculated based on the **Quan
     *   **RSI**: RSI >= 50 Bullish (+0.5), RSI >= 60 Momentum expansion (+0.5), 40 <= RSI < 50 Upside potential (+0.5)
     *   **CCI**: CCI > 0 Uptrend (+0.5), CCI > -100 Escaping oversold (+0.5)
     *   **DMI**: +DI > -DI Cross (+0.5)
+    *   **Price Momentum (Absolute Momentum)**: 6-month (`MOMENTUM_LOOKBACK`) return positive AND 52-week position ≥ 80% (`MOMENTUM_W52_NEAR`) — bonus for leaders near their highs (+0.5).
+        *   **Multi-horizon Alignment Gate**: The bonus is withheld if the 1-month or 3-month (`MOMENTUM_LOOKBACK_1M/3M`) return is negative — blocking top-of-trend entries into **"cooling trends"** whose 6-month figure looks good but whose recent momentum has rolled over.
 
 3.  **Strength & Volume Factor [Default 1.5]**
     *   **ADX**: ADX >= 20 Trend formation confirmed (+0.5)
@@ -204,6 +210,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
     *   **Result**: Validates whether the strategy is based on luck or skill via average returns, worst case (VaR 95%), standard deviation, etc.
 
 *   **Market Index Filtering**: Automatically suspends new buys if the KOSPI/KOSDAQ index falls below a moving average (default 30 days), treating it as a 'downtrend'.
+*   **Relative Strength (RS) Filter**: Suspends new buys whose 6-month (126 trading days) return is at or below that of their home index (KOSPI/KOSDAQ) — an implementation of the trend-following principle that a stock unable to beat its own index is not a "clear trend". Reuses the shared index-data cache (no extra API load) and fails open on index-data failure or insufficient stock history so a data outage never halts buying entirely. (`USE_RS_FILTER`)
 *   **Correlation Filtering**: Prevents new buys if the candidate stock shows high correlation (e.g., 0.7 or above) with currently held stocks to avoid concentration risk.
 *   **Technical Filtering**: 
     *   **General Filter**: Suspends new buys if the trend breaks (MACD death cross, major MA breakdown).
