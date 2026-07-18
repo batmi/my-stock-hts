@@ -326,6 +326,7 @@ class GlobalSettings(BaseModel):
         "BOX_VALUE_AREA_PCT": 50.0,    # [추가] 박스권 매물대 %
         "MOMENTUM_LOOKBACK": 126,      # 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일) - 스코어링 '가격 모멘텀' 항목에 사용
         "MOMENTUM_W52_NEAR": 80,       # 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도) - 스코어링 '가격 모멘텀' 항목에 사용
+        "TREND_QUALITY_LOOKBACK": 90,  # [추세추종] 추세 품질(회귀 모멘텀=연환산 기울기×R²) 룩백 기간 - 동시 매수 후보 우선순위 랭킹에 사용
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
         "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
@@ -919,7 +920,7 @@ def reset_all_settings():
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
             "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0,
-            "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80,
+            "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80, "TREND_QUALITY_LOOKBACK": 90,
             "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
             "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
             "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0
@@ -1048,7 +1049,8 @@ CONFIG_DESCRIPTIONS = {
     "SCORE_ADX_MIN": "스코어링 추세 기준 ADX",
     "SCORE_CCI_STRONG": "스코어링 추세 기준 CCI",
     "MOMENTUM_LOOKBACK": "가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (거래일)",
-    "MOMENTUM_W52_NEAR": "가격 모멘텀 가점 기준 52주 위치(%)"
+    "MOMENTUM_W52_NEAR": "가격 모멘텀 가점 기준 52주 위치(%)",
+    "TREND_QUALITY_LOOKBACK": "추세 품질(회귀 모멘텀) 룩백 기간 (거래일, 매수 후보 랭킹용)"
 }
 
 # 모듈 로드 시 자동 실행

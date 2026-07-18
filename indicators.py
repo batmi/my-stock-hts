@@ -168,6 +168,40 @@ def get_macd_full_series(df, fast=None, slow=None, signal=None):
     macd_hist = macd_line - signal_line
     return macd_line, signal_line, macd_hist
 
+def get_trend_quality(df, lookback=None):
+    """[추세추종] 회귀 모멘텀 기반 추세 품질 지수 (연환산 기울기 × R², Clenow 모멘텀)
+
+    최근 lookback 거래일의 로그 종가에 선형회귀를 적용해
+      - 기울기(연환산 수익률 %): 추세의 '강도'
+      - 결정계수 R²           : 추세의 '매끄러움' (지속성의 대리 지표)
+    를 곱한 값을 반환한다. 급등락을 반복하다 우연히 정배열에 걸린 종목은 R²가
+    낮아 값이 깎이고, 꾸준히 우상향한 주도주가 높은 값을 받는다.
+    매수 게이트(점수)와 별개인 '동시 후보 간 우선순위(랭킹)' 전용 지표.
+
+    데이터가 lookback에 못 미치면 None을 반환한다 (검증 이력 부족 → 랭킹 최하순위).
+    """
+    if lookback is None: lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    try:
+        closes = pd.to_numeric(df['close'], errors='coerce').dropna().tail(lookback)
+        if len(closes) < lookback:
+            return None
+        arr = closes.to_numpy(dtype=float)
+        if (arr <= 0).any():
+            return None
+        y = np.log(arr)
+        if not np.isfinite(y).all():
+            return None
+        x = np.arange(len(y), dtype=float)
+        slope, intercept = np.polyfit(x, y, 1)
+        fitted = slope * x + intercept
+        ss_res = float(np.sum((y - fitted) ** 2))
+        ss_tot = float(np.sum((y - y.mean()) ** 2))
+        r2 = 0.0 if ss_tot <= 0 else max(0.0, 1.0 - ss_res / ss_tot)
+        annualized_pct = (np.exp(slope * 252) - 1) * 100
+        return round(annualized_pct * r2, 2)
+    except Exception:
+        return None
+
 def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     if af_start is None: af_start = config.INDICATOR_PARAMS["SAR_AF_START"]
     if af_step is None: af_step = config.INDICATOR_PARAMS["SAR_AF_STEP"]

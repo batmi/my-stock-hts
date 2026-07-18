@@ -50,6 +50,20 @@ def _pkg():
     return _at
 
 
+def candidate_priority_key(c):
+    """[추세추종] 매수 후보 우선순위 정렬 키 — 게이트(매수 점수 통과)와 랭킹을 분리한다.
+
+    점수는 이진 신호 합산이라 동점이 흔하고 '추세의 강도·지속성'을 구분하지 못하므로,
+    게이트를 통과한 후보끼리는 연속값인 추세 품질(회귀 모멘텀 = 연환산 기울기 × R²)로
+    1차 정렬한다. R²가 '매끄러운 추세'를 우대해 급등락 끝에 우연히 정배열에 걸린
+    약추세 종목을 뒤로 보낸다. 이력 부족(None)은 검증 불가로 보아 최하순위.
+    (2순위 이하: 점수 → 52주 위치 → 체결강도)
+    """
+    tq = c.get('trend_quality')
+    return (-(tq if tq is not None else float('-inf')),
+            -c['score'], -(c.get('w52_pos') or 0.0), -(c.get('vol_strength') or 0.0))
+
+
 class AutoTrader:
     _instance = None
     
@@ -3709,6 +3723,7 @@ class AutoTrader:
                     'code': code, 'name': name, 'price': current_price,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
                     'w52_pos': result.get('w52_pos', 0.0),  # [추세추종] 52주 위치 (우선순위 정렬용)
+                    'trend_quality': result.get('trend_quality'),  # [추세추종] 추세 품질(회귀 모멘텀, 랭킹 1순위 키)
                     'ask_bid_ratio': result.get('ask_bid_ratio'),  # [추가] 토스 수급 지표(체결강도 대체)
                     'is_custom_rule': bool(rule), 'rule': rule, 'state': result['state'],
                     'state_reason': result.get('state_reason', ''),
@@ -3829,18 +3844,17 @@ class AutoTrader:
         if correlation_skipped_stocks:
             self.log(f"[상관관계 보류] 보유 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
 
-        # [추세추종] 우선순위 정렬 (1. 점수 높은 순, 2. 52주 고점 근접도 높은 순, 3. 체결강도 높은 순)
-        # '강한 종목을 매수하라' 원칙에 따라 동점이면 구조적 강도(52주 위치)와 당일 수급 강도가
-        # 높은 종목을 우선합니다. (기존 'RSI 낮은 순'은 역추세적 가정이라 제거)
-        candidates.sort(key=lambda x: (-x['score'], -(x.get('w52_pos') or 0.0), -(x.get('vol_strength') or 0.0)))
+        # [추세추종] 우선순위 정렬 — 추세 품질(회귀 모멘텀) 1순위 (근거는 candidate_priority_key docstring)
+        candidates.sort(key=candidate_priority_key)
 
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
             self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순):")
             for i, c in enumerate(candidates):
+                tq_disp = f"{c['trend_quality']:.0f}" if c.get('trend_quality') is not None else "-"
                 w52_disp = f"{c['w52_pos']:.0f}%" if c.get('w52_pos') else "-"
                 vol_disp = f"{c['vol_strength']:.1f}%" if c.get('vol_strength') else "-"
-                self.log(f"   {i+1}순위: {c['name']} (점수:{c['score']}, 52주위치:{w52_disp}, 체결:{vol_disp})")
+                self.log(f"   {i+1}순위: {c['name']} (추세품질:{tq_disp}, 점수:{c['score']}, 52주위치:{w52_disp}, 체결:{vol_disp})")
         
         return candidates
 

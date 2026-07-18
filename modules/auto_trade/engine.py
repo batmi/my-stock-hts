@@ -71,7 +71,11 @@ class DefaultStrategy:
             l52 = recent_df['low'].min()
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
-                
+
+        # [추세추종] 추세 품질(회귀 모멘텀 = 연환산 기울기 × R²) — 동시 매수 후보 간 우선순위 랭킹용.
+        #   매수 게이트(점수/상태)에는 관여하지 않으며, 이력 부족 시 None(랭킹 최하순위).
+        trend_quality = indicators.get_trend_quality(df)
+
         is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
         sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
@@ -137,7 +141,8 @@ class DefaultStrategy:
             'min_ask_bid_ratio': min_ask_bid_ratio,  # [추가] 재진입 허들 등에서 재사용
             'vol_reject_reason': vol_reject_reason,
             'smart_money': sm_flag,
-            'w52_pos': w52_pos  # [추세추종] 매수 후보 우선순위(강한 종목 우선) 정렬용 52주 위치
+            'w52_pos': w52_pos,  # [추세추종] 매수 후보 우선순위(강한 종목 우선) 정렬용 52주 위치
+            'trend_quality': trend_quality  # [추세추종] 추세 품질(회귀 모멘텀) — 후보 랭킹 1순위 키
         }
 
     def analyze_pyramid(self, profit_rate, state, score, pyramid_count, thresholds=None):
