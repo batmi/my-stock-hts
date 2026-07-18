@@ -3574,12 +3574,14 @@ def _prelisting_last_regular_change(chart_df, curr):
 
     apply_realtime_price가 장전에 당일(오늘) 봉을 새로 추가하므로 마지막 봉이 오늘이면
     전전일은 -3, (당일 봉이 없어) 마지막 봉이 전일이면 전전일은 -2다. 산출 불가 시 None.
+    기준일은 달력 날짜(오늘)를 쓴다 — market_today는 휴장일에 직전 거래일을 반환해
+    주말엔 마지막 봉(금요일)이 '오늘 봉'으로 오인돼 전전일이 -3(하루 더 과거)으로 밀린다.
     반환: (diff:int, rate:float)
     """
     try:
         if chart_df is None or chart_df.empty or len(chart_df) < 2:
             return None
-        today = utils.market_today(False)
+        today = datetime.now().strftime('%Y%m%d')
         idx = -3
         if 'date' in chart_df.columns:
             last_val = chart_df.iloc[-1]['date']

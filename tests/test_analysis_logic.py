@@ -49,3 +49,43 @@ def test_diagnose_stock_indicators(mock_ask, mock_calc, mock_get_chart, mock_df)
         analysis.diagnose_stock("005930", "Samsung", False)
         # 테이블 출력 확인 (호출 횟수로 간접 확인)
         assert mock_print.call_count > 5
+
+def _make_daily_df(dates_closes):
+    return pd.DataFrame({
+        'date': pd.to_datetime([d for d, _ in dates_closes]),
+        'close': [c for _, c in dates_closes],
+    })
+
+
+def test_prelisting_last_regular_change_weekday_preopen():
+    """거래일 장전(오늘 봉 없음): 마지막 봉=전일 → 전전일은 -2."""
+    df = _make_daily_df([('2026-07-15', 280000.0), ('2026-07-16', 282000.0), ('2026-07-17', 285000.0)])
+    frozen = MagicMock()
+    frozen.now.return_value.strftime.return_value = '20260720'  # 월요일(달력 오늘) > 마지막 봉(금)
+    with patch('modules.analysis.datetime', frozen):
+        res = analysis._prelisting_last_regular_change(df, 285000.0)
+    # 전전일 = -2(282000): 전일(285000) vs 전전일 → +3000 (+1.06%)
+    assert res == (3000, pytest.approx(3000 / 282000 * 100))
+
+
+def test_prelisting_last_regular_change_weekend_uses_calendar_today():
+    """주말: market_today는 금요일을 반환하지만 달력 오늘 기준으로 -2(목요일 종가)를 써야 한다."""
+    df = _make_daily_df([('2026-07-15', 280000.0), ('2026-07-16', 282000.0), ('2026-07-17', 285000.0)])
+    frozen = MagicMock()
+    frozen.now.return_value.strftime.return_value = '20260718'  # 토요일(달력 오늘)
+    with patch('modules.analysis.datetime', frozen), \
+         patch('modules.analysis.utils.market_today', return_value='20260717'):
+        res = analysis._prelisting_last_regular_change(df, 285000.0)
+    # 마지막 봉(금 285000) < 오늘(토) → 전전일 = -2(목 282000). -3(수 280000)이면 회귀.
+    assert res == (3000, pytest.approx(3000 / 282000 * 100))
+
+
+def test_prelisting_last_regular_change_today_bar_exists():
+    """장전 placeholder로 오늘 봉이 이미 있으면 전전일은 -3."""
+    df = _make_daily_df([('2026-07-15', 280000.0), ('2026-07-16', 282000.0), ('2026-07-17', 285000.0)])
+    frozen = MagicMock()
+    frozen.now.return_value.strftime.return_value = '20260717'  # 마지막 봉 날짜 == 오늘
+    with patch('modules.analysis.datetime', frozen):
+        res = analysis._prelisting_last_regular_change(df, 282000.0)
+    # 전전일 = -3(280000): 전일(282000) vs 전전일 → +2000 (+0.71%)
+    assert res == (2000, pytest.approx(2000 / 280000 * 100))

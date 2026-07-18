@@ -726,6 +726,25 @@ def test_toss_before_nxt_open_boundary():
             assert api._toss_before_nxt_open() is expected, hhmm
 
 
+def test_toss_before_nxt_open_holiday_all_day():
+    """휴장일(주말·공휴일, market_today != 오늘): 시각과 무관하게 항상 True — 다음 NXT 개장까지 유지."""
+    import api
+    from datetime import datetime as _dt
+
+    class _FrozenDT(_dt):
+        _now = None
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    # 2026-07-18(토): 직전 거래일은 2026-07-17(금)
+    for hhmm in ('0700', '0800', '1200', '2300'):
+        _FrozenDT._now = _dt.strptime('20260718' + hhmm, '%Y%m%d%H%M')
+        with patch.object(api, 'datetime', _FrozenDT), \
+             patch.object(api, 'market_today', return_value='20260717'):
+            assert api._toss_before_nxt_open() is True, hhmm
+
+
 def test_order_book_adapter_totals():
     import api
     ob = {
