@@ -30,6 +30,7 @@ def _save_dynamic_config():
         "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
+        "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', True),
         "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 20),
         "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
@@ -280,6 +281,7 @@ def view_system_config(group=None):
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")
         if getattr(config.settings, 'USE_MARKET_FILTER', True):
             row("시장 필터링 SMA (일)", "지수 추세 판단용 단순이동평균선", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 50)}", key="MARKET_FILTER_MA", indent=True)
+        row("상대강도(RS) 필터 사용", "지수 대비 약세 종목 신규 매수 제외", "USE_RS_FILTER", f"{getattr(config.settings, 'USE_RS_FILTER', True)}", key="USE_RS_FILTER")
         row("상관계수 필터링 사용", "유사 테마 종목 중복 매수 방지", "USE_CORRELATION_FILTER", f"{getattr(config.settings, 'USE_CORRELATION_FILTER', True)}", key="USE_CORRELATION_FILTER")
         if getattr(config.settings, 'USE_CORRELATION_FILTER', True):
             row("상관계수 임계값", "동조화 판단 기준치 (0.0~1.0)", "CORRELATION_THRESHOLD", f"{getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)}", key="CORRELATION_THRESHOLD", indent=True)
@@ -876,6 +878,8 @@ def _risk_portfolio_items():
          "get": lambda: getattr(config.settings, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_MARKET_FILTER', v)},
         {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 50), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
+        {"desc": "상대강도(RS) 필터 사용", "help": "6개월 수익률이 소속 지수를 밑도는 종목 신규 매수 제외", "name": "USE_RS_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
+         "get": lambda: getattr(config.settings, 'USE_RS_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_RS_FILTER', v)},
         {"desc": "상관계수 필터링 사용", "help": "유사 테마 종목 중복 매수 방지", "name": "USE_CORRELATION_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'USE_CORRELATION_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_CORRELATION_FILTER', v)},
         {"desc": "상관계수 임계값", "help": "이 값 이상일 때 동조화로 판단 (0.0~1.0)", "name": "CORRELATION_THRESHOLD", "type": "float", "section": "3-2. 매수 필터",

@@ -3642,6 +3642,26 @@ class AutoTrader:
                             self.set_stock_state(code, None)
                             return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
 
+            # [추세추종] 상대강도(RS) 게이트: 소속 지수(KOSPI/KOSDAQ)보다 약한 종목의 신규 진입 차단.
+            #   같은 +15%라도 지수가 +20%인 장에서는 열등주 — 지수 대비 초과수익이 없는 종목은
+            #   '확실한 추세'가 아니라고 보고 게이트에서 제외한다 (약추세 진입 = 큰 손실의 원천).
+            #   룩백은 스코어링 '가격 모멘텀'과 동일(MOMENTUM_LOOKBACK). 종목 이력 부족·지수
+            #   조회 실패 시에는 통과(fail-open — 데이터 장애가 매수 전면 중단으로 번지지 않게).
+            if getattr(config, 'USE_RS_FILTER', True) and not is_overseas_stock:
+                mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+                if len(df) > mom_lb:
+                    try:
+                        past_close = float(df['close'].iloc[-(mom_lb + 1)])
+                    except (TypeError, ValueError):
+                        past_close = 0.0
+                    if past_close > 0:
+                        stock_mom = (current_price / past_close - 1) * 100
+                        idx_mom = analysis.get_index_momentum(self._get_stock_market_type(code))
+                        if idx_mom is not None and stock_mom <= idx_mom:
+                            self.set_stock_state(code, None)
+                            return {'type': 'rs_skip', 'name': name,
+                                    'log': f"[RS필터] {name}({code}): {mom_lb}일 수익률 {stock_mom:+.1f}% ≤ 지수 {idx_mom:+.1f}% (지수 대비 약세)"}
+
             # 룰 및 임계값 설정
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
@@ -3741,6 +3761,7 @@ class AutoTrader:
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
+        rs_skipped_stocks = [] # [추세추종] 상대강도(RS) 필터 스킵 리스트
 
         # [추가] 트레이딩 제한 종목 로드 (현재 시스템 트레이딩 계좌 기준으로 필터링)
         #  ([최적화] 루프에서 주기당 1회 로드해 전달받으면 파일 재조회 생략)
@@ -3829,6 +3850,9 @@ class AutoTrader:
                         elif res['type'] == 'correlation_skip':
                             self.log(res['log'])
                             correlation_skipped_stocks.append(res['name'])
+                        elif res['type'] == 'rs_skip':
+                            self.log(res['log'])
+                            rs_skipped_stocks.append(res['name'])
         finally:
             io_pool.shutdown(wait=False)
 
@@ -3843,6 +3867,10 @@ class AutoTrader:
         # [추가] 상관관계 보류 종목 로그 기록
         if correlation_skipped_stocks:
             self.log(f"[상관관계 보류] 보유 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
+
+        # [추세추종] 상대강도(RS) 필터 보류 종목 로그 기록
+        if rs_skipped_stocks:
+            self.log(f"[RS필터 보류] 지수 대비 약세로 매수 제외 ({len(rs_skipped_stocks)}종목): {', '.join(rs_skipped_stocks)}")
 
         # [추세추종] 우선순위 정렬 — 추세 품질(회귀 모멘텀) 1순위 (근거는 candidate_priority_key docstring)
         candidates.sort(key=candidate_priority_key)

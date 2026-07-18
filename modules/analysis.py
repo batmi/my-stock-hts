@@ -859,6 +859,31 @@ def get_market_regime(market_type="KOSPI"):
         logger.error(f"시장 국면 판단 오류: {e}")
         return "Sideways", 0.0
 
+def get_index_momentum(market_type="KOSPI", lookback=None):
+    """[추세추종] 지수 모멘텀(%) — 최근 lookback 거래일 지수 수익률 (상대강도 RS 필터 기준선).
+
+    종목의 절대 모멘텀(스코어링 '가격 모멘텀')과 같은 룩백(MOMENTUM_LOOKBACK)을 사용해
+    "같은 기간 동안 지수보다 강했는가"를 비교할 수 있게 한다.
+    지수 데이터는 get_domestic_index_data 공유 캐시를 그대로 사용하므로 추가 API 부담 없음.
+    데이터 부족/조회 실패 시 None을 반환한다 — 호출부는 필터를 통과시켜야 한다(fail-open,
+    지수 조회 장애가 매수 전면 중단으로 번지는 것을 방지).
+    """
+    if lookback is None:
+        lookback = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+    try:
+        df = get_domestic_index_data(market_type)
+        if df is None or df.empty or len(df) <= lookback:
+            return None
+        closes = pd.to_numeric(df['close'], errors='coerce')
+        cur = float(closes.iloc[-1])
+        past = float(closes.iloc[-(lookback + 1)])
+        if not (past > 0) or pd.isna(cur):
+            return None
+        return (cur / past - 1) * 100
+    except Exception as e:
+        logger.debug(f"지수 모멘텀 계산 실패({market_type}): {e}")
+        return None
+
 def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None):
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
