@@ -216,10 +216,10 @@ Also, you can modify global settings in real-time during execution via the **'Ma
     *   **General Filter**: Suspends new buys if the trend breaks (MACD death cross, major MA breakdown).
     *   **Absolute Defense Filter**: Blocks new buys completely regardless of the score during "Super Panic" selling zones (ADX 45+ with strong sell pressure) to avoid fake rebounds.
 *   **Daily Loss Limit**: Automatically pauses the system if the daily estimated asset drops beyond a set limit (e.g., -10%).
-*   **Max Holding Stocks**: Limits the maximum number of stocks to hold in the portfolio (default 5).
+*   **Max Holding Stocks**: Limits the maximum number of stocks to hold in the portfolio (default 4 × 25% per stock — sized so that each slot clears the minimum tradable unit and keeps pyramiding functional; consider expanding to 5–6 slots for larger seeds).
 *   **Kill Switch**: Transitions to standby mode to protect the account if continuous API or system errors occur (default 5 times).
 *   **Order State Machine**: Strictly manages the order lifecycle to prevent duplicate buys or phantom positions.
-*   **Risk-based Position Sizing**: Limits the maximum loss width (default 5%) per trade against the total account, automatically reducing buy weight for highly volatile stocks.
+*   **Risk-based Position Sizing**: Limits the maximum loss width (default 4%) per trade against the total account, automatically reducing buy weight for highly volatile stocks.
 *   **Volatility Targeting**: Increases cash ratio when market volatility is high and expands investments when low.
 
 ### 5. Scoring Weights Optimization

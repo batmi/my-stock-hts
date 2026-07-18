@@ -71,18 +71,21 @@ class GlobalSettings(BaseModel):
     SYSTEM_TRADING_INTERVAL: int = Field(default=180, gt=0)
 
     # [종목당 최대 투자 비중]
-    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.2 = 20%)
-    # - [정합성] SYSTEM_MAX_HOLDINGS(기본 5종목)와 곱했을 때 1.0(100%)을 넘지 않도록 0.2로 설정합니다.
-    #   (0.3 × 5 = 1.5 → 앞순위 종목이 현금을 과다 소진해 뒷순위 슬롯이 굶는 문제를 방지하기 위함)
+    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.25 = 25%)
+    # - [정합성] SYSTEM_MAX_HOLDINGS(기본 4종목)와 곱했을 때 1.0(100%)을 넘지 않도록 0.25로 설정합니다.
+    #   (0.3 × 4 = 1.2 → 앞순위 종목이 현금을 과다 소진해 뒷순위 슬롯이 굶는 문제를 방지하기 위함)
     #   균등비중 운용을 원하면 (1.0 / SYSTEM_MAX_HOLDINGS) 값으로 맞추세요.
     # - 리스크 기반 포지션 사이징(SYSTEM_RISK_PER_TRADE)과 함께 사용될 경우,
     #   두 방식 중 '더 적은 금액'이 최종 투자 금액으로 결정됩니다. (이중 안전장치: 몰빵 방지 + 리스크 관리)
     # - 만약 리스크 기반 사이징만 전적으로 따르고 싶다면 이 값을 1.0(100%)으로 설정하세요.
-    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.2, gt=0.0, le=1.0)
+    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.25, gt=0.0, le=1.0)
 
     # [최대 보유 종목 수]
-    # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 5)
-    SYSTEM_MAX_HOLDINGS: int = Field(default=5, gt=0)
+    # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 4)
+    # - [추세추종] 슬롯당 투입액(시드×25%)이 '2주 이상 매수 + 피라미딩(보유량 50% 증액) 작동'
+    #   하한을 확보하면서, 승률 ~26% 구조에서 동시 보유 중 승자가 존재할 확률(~71%)과
+    #   승자 1종목의 계좌 기여(25%)의 균형점. 시드 규모가 크면 5~6개로 확장 검토.
+    SYSTEM_MAX_HOLDINGS: int = Field(default=4, gt=0)
 
     # [추가] 자동매매 대상에 ETF 포함 여부
     # 기본값: False (관심종목 중 국내 주식만 시스템 트레이딩 대상으로 함)
@@ -100,7 +103,9 @@ class GlobalSettings(BaseModel):
                                             #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
     SYSTEM_DAILY_LOSS_LIMIT: float = Field(default=10.0, ge=0.0)   # [안전장치] 일일 손실률 도달 시 자동 중단(비상 정지). 0.0%면 비상 정지 OFF(미사용)
-    SYSTEM_RISK_PER_TRADE: float = Field(default=5.0, ge=0.0)      # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
+    SYSTEM_RISK_PER_TRADE: float = Field(default=4.0, ge=0.0)      # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
+                                            #   [추세추종] 4슬롯×25% 전환에 맞춰 5.0→4.0 하향: 슬롯당 비중 확대로 손절 1회 충격이
+                                            #   커지는 것을 리스크 한도가 견제 (드로다운 백테스트의 'MDD 통제 적정선 3~4%'와 정합)
 
     # [설정] 변동성 타겟팅 (Volatility Targeting)
     USE_VOLATILITY_TARGETING: bool = True   # 변동성 타겟팅 사용 여부
