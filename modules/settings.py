@@ -205,17 +205,14 @@ def view_system_config(group=None):
             row("슈퍼 매수 발동 점수", "기준 점수 이상 & 신고가 90% 이상 시 발동", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_SCORE']", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.5)}", key="SUPER_MOMENTUM_SCORE", indent=True)
             row("슈퍼 52주 위치 기준", "신고가 근접 여부 (예: 90.0% 이상)", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_W52_POS']", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%", key="SUPER_MOMENTUM_W52_POS", indent=True)
             row("완화된 매수 RSI 상한", "발동 시 적용되는 진입 최대 RSI", "ANALYSIS_THRESHOLDS['SUPER_BUY_RSI_MAX']", f"{thresholds.get('SUPER_BUY_RSI_MAX', 75.0)}", key="SUPER_BUY_RSI_MAX", indent=True)
-            row("슈퍼 매도 과열 RSI", "추세 유지 시 매도 지연 RSI 기준", "SELL_STRATEGY['SUPER_TAKE_PROFIT_RSI']", f"{sell.get('SUPER_TAKE_PROFIT_RSI', 85.0)}", key="SUPER_TAKE_PROFIT_RSI", indent=True)
         row("피라미딩 (수익 증액)", "수익으로 추세 검증된 포지션만 증액 (물타기 반대)", "ANALYSIS_THRESHOLDS['PYRAMIDING_USE']", f"{thresholds.get('PYRAMIDING_USE', True)}", key="PYRAMIDING_USE")
         if thresholds.get('PYRAMIDING_USE', True):
             row("증액 발동 수익률", "이 수익률 이상 & 매수신호 유지 시 증액", "ANALYSIS_THRESHOLDS['PYRAMIDING_PROFIT_TRIGGER']", f"{thresholds.get('PYRAMIDING_PROFIT_TRIGGER', 10.0)}%", key="PYRAMIDING_PROFIT_TRIGGER", indent=True)
             row("증액 비율", "보유 수량 대비 증액 수량 비율", "ANALYSIS_THRESHOLDS['PYRAMIDING_RATIO']", f"{thresholds.get('PYRAMIDING_RATIO', 0.5)}", key="PYRAMIDING_RATIO", indent=True)
             row("최대 증액 횟수", "포지션당 피라미딩 허용 횟수", "ANALYSIS_THRESHOLDS['PYRAMIDING_MAX_COUNT']", f"{thresholds.get('PYRAMIDING_MAX_COUNT', 1)}회", key="PYRAMIDING_MAX_COUNT", indent=True)
 
-        subheader("1-3. 매도/청산 — 익절")
-        row("익절 수익률", "목표 수익 달성 시 매도", "SELL_STRATEGY['TAKE_PROFIT_RATE']", f"{sell.get('TAKE_PROFIT_RATE')}%", key="TAKE_PROFIT_RATE")
-        row("반익절 사용", "익절 수익률의 절반 도달 시 50% 선매도", "SELL_STRATEGY['HALF_TAKE_PROFIT_USE']", f"{sell.get('HALF_TAKE_PROFIT_USE', True)}", key="HALF_TAKE_PROFIT_USE")
-        row("과열 매도 RSI", "RSI 과열 시 선제 매도", "SELL_STRATEGY['TAKE_PROFIT_RSI']", f"{sell.get('TAKE_PROFIT_RSI')}", key="TAKE_PROFIT_RSI")
+        subheader("1-3. 매도/청산 — 트레일링 스탑")
+        # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
         row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
         row("TS 하락 감지율", "최고가 대비 최소 하락률 (ATR 동적 콜백의 하한)", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%", key="TRAILING_STOP_CALLBACK_RATE")
         row("TS ATR 배수", "샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대", "SELL_STRATEGY['TRAILING_ATR_MULTIPLIER']", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}", key="TRAILING_ATR_MULTIPLIER")
@@ -235,7 +232,6 @@ def view_system_config(group=None):
             row("청산 기준일", "매수 후 경과 일수 (달력 기준)", "SELL_STRATEGY['TIME_STOP_DAYS']", f"{sell.get('TIME_STOP_DAYS', 5)}일", key="TIME_STOP_DAYS", indent=True)
             row("최소 기대 수익", "해당 기간 내 도달해야 할 수익률", "SELL_STRATEGY['TIME_STOP_MIN_PROFIT_RATE']", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 3.0)}%", key="TIME_STOP_MIN_PROFIT_RATE", indent=True)
         row("매도(추세이탈) 점수", "점수 하락 시 매도", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}", key="SELL_SCORE")
-        row("방어적 반매도 사용", "하락 반전 시 50% 선매도", "SELL_STRATEGY['DEFENSIVE_HALF_SELL_USE']", f"{sell.get('DEFENSIVE_HALF_SELL_USE', True)}", key="DEFENSIVE_HALF_SELL_USE")
 
     # =========================================================
     # 2. 스코어링 및 시장 국면 설정
@@ -533,6 +529,19 @@ def _edit_section(title, items_source, prefix):
         return [it for it in items if it.get('section', '').startswith(prefix)]
     return _edit_config_table(title, get_items)
 
+# [추세추종 보호] 추세추종 원칙(이익은 달리게, 청산은 손절/샹들리에 TS/추세이탈로)에 위배될 수 있는
+#  청산 설정(고정 익절·반익절·RSI 과열 매도·방어적 반매도)은 시스템 설정 메뉴(메인메뉴 0)에서 숨겨
+#  임의 변경을 차단한다. 설정 키와 매도 로직 자체는 내부적으로 그대로 유지되며(기본 OFF),
+#  dynamic_config.json 직접 편집 또는 자동매매 메뉴의 '종목별 개별 룰'로만 활성화할 수 있다.
+ANTI_TREND_HIDDEN_KEYS = {
+    "TAKE_PROFIT_RATE",        # 고정 익절
+    "HALF_TAKE_PROFIT_USE",    # 반익절
+    "TAKE_PROFIT_RSI",         # RSI 과열 매도
+    "SUPER_TAKE_PROFIT_RSI",   # RSI 과열 매도의 슈퍼 모멘텀 완화 기준 (부속 설정)
+    "DEFENSIVE_HALF_SELL_USE", # 방어적 반매도
+}
+
+
 def _entry_strategy_items():
     """매수/진입 조건 + 서브전략 항목 (섹션 1-1, 1-2)"""
     items = [
@@ -590,23 +599,29 @@ def _entry_strategy_items():
     if config.session.is_toss:
         _toss_hidden = {"BUY_VOL_STRENGTH", "AUTO_ADJUST_ASK_BID_RATIO", "MR_VOL_STRENGTH"}
         items = [it for it in items if it["name"] not in _toss_hidden]
+    # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
+    items = [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
     return items
 
 def modify_analysis_thresholds():
     return _edit_config_table("매수/진입 조건 설정 (ANALYSIS_THRESHOLDS)", _entry_strategy_items)
 
 def _sell_strategy_items():
-    """매도/청산 전략 항목 (섹션 1-3 ~ 1-5)"""
-    return [
-        {"desc": "익절 수익률(%)", "help": "목표 수익 달성 시 매도 (0: 미사용)", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "1-3. 매도/청산 — 익절",
+    """매도/청산 전략 항목 (섹션 1-3 ~ 1-5)
+
+    반추세성 청산 설정(고정 익절/반익절/RSI 과열 매도/방어적 반매도)은
+    ANTI_TREND_HIDDEN_KEYS 필터로 목록에서 제외된다 (내부 로직·설정 키는 유지).
+    """
+    items = [
+        {"desc": "익절 수익률(%)", "help": "목표 수익 달성 시 매도 (0: 미사용)", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": v})},
-        {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 매도/청산 — 익절",
+        {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
-        {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 매도/청산 — 익절",
+        {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
-        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 매도/청산 — 익절",
+        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
-        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "1-3. 매도/청산 — 익절",
+        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
         {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
          "get": lambda: config.SELL_STRATEGY["STOP_LOSS_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"STOP_LOSS_RATE": v})},
@@ -631,6 +646,8 @@ def _sell_strategy_items():
         {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"], "section": "1-5. 매도/청산 — 기타",
          "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})},
     ]
+    # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
+    return [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
 
 def modify_sell_strategy():
     return _edit_config_table("매도/청산 전략 설정 (SELL_STRATEGY)", _sell_strategy_items)
@@ -1077,8 +1094,8 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("매수 허들 (점수/RSI/체결/잔량비)", f"{config.ANALYSIS_THRESHOLDS['BUY_SCORE']}점 이상 / RSI {config.ANALYSIS_THRESHOLDS['BUY_RSI_MAX']} 미만 / 체결 {config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0)}%↑ / 잔량비 {config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)}배↑ (자동연동: {'ON' if config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True) else 'OFF'})"),
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
         ("역추세 매수 (RSI/체결강도)", f"{'ON' if config.ANALYSIS_THRESHOLDS['USE_MEAN_REVERSION'] else 'OFF'} (RSI {config.ANALYSIS_THRESHOLDS['MR_RSI_MAX']} 이하 / 체결강도 {config.ANALYSIS_THRESHOLDS.get('MR_VOL_STRENGTH', 100.0)}% 이상)"),
-        ("매도 허들 (점수/RSI)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 4.0)} 미만+60일선 이탈 / RSI {config.SELL_STRATEGY.get('TAKE_PROFIT_RSI', 75.0)} 초과"),
-        ("익절 / 손절", f"+{config.SELL_STRATEGY['TAKE_PROFIT_RATE']}% (반익절: {'ON' if config.SELL_STRATEGY.get('HALF_TAKE_PROFIT_USE', True) else 'OFF'}) / {config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
+        ("매도 허들 (추세이탈)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 4.0)} 미만+60일선 이탈"),
+        ("손절", f"{config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 3.0)}%"),
         ("본전 청산 (방어)", f"수익 +{config.SELL_STRATEGY.get('BREAK_EVEN_PROFIT_RATE', 7.0)}% 도달 시 손절선 +{config.SELL_STRATEGY.get('BREAK_EVEN_STOP_RATE', 0.5)}%로 상향"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
@@ -1175,6 +1192,9 @@ def _edit_single_preset(preset_type):
         if config.session.is_toss:
             _toss_hidden = {"BUY_VOL_STRENGTH", "AUTO_ADJUST_ASK_BID_RATIO", "MR_VOL_STRENGTH"}
             items = [it for it in items if it["name"] not in _toss_hidden]
+
+        # [추세추종 보호] 커스텀 프리셋 경로로도 반추세성 청산 설정이 켜지지 않도록 동일하게 숨김
+        items = [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
 
         acted = _edit_config_table(title, items, check_preset=False)
         if not acted: break
@@ -1416,11 +1436,11 @@ def manage_custom_settings():
             "SUPER_MOMENTUM_W52_POS": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
             "SUPER_BUY_RSI_MAX": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
             "SUPER_TAKE_PROFIT_RSI": (_CAT1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)"),
-            "TAKE_PROFIT_RATE": (_CAT1, "1-3. 매도/청산 — 익절"),
-            "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 매도/청산 — 익절"),
-            "TAKE_PROFIT_RSI": (_CAT1, "1-3. 매도/청산 — 익절"),
-            "TRAILING_STOP_ACTIVATION_RATE": (_CAT1, "1-3. 매도/청산 — 익절"),
-            "TRAILING_STOP_CALLBACK_RATE": (_CAT1, "1-3. 매도/청산 — 익절"),
+            "TAKE_PROFIT_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
+            "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
+            "TAKE_PROFIT_RSI": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
+            "TRAILING_STOP_ACTIVATION_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
+            "TRAILING_STOP_CALLBACK_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
             "STOP_LOSS_RATE": (_CAT1, "1-4. 매도/청산 — 손절"),
             "USE_ATR_STOP": (_CAT1, "1-4. 매도/청산 — 손절"),
             "ATR_STOP_MULTIPLIER": (_CAT1, "1-4. 매도/청산 — 손절"),
@@ -1508,7 +1528,7 @@ def manage_custom_settings():
 
         sub_category_order = {
             "1-1. 기본 진입 조건": 1, "1-2. 서브전략 (역추세/슈퍼 모멘텀)": 2,
-            "1-3. 매도/청산 — 익절": 3, "1-4. 매도/청산 — 손절": 4, "1-5. 매도/청산 — 기타": 5,
+            "1-3. 매도/청산 — 트레일링 스탑": 3, "1-4. 매도/청산 — 손절": 4, "1-5. 매도/청산 — 기타": 5,
             "2-1. 스코어링 가중치": 1, "2-2. 적응형 임계값 (시장국면)": 2,
             "3-1. 자산 배분/포지션": 1, "3-2. 매수 필터": 2, "3-3. 비상 안전장치": 3,
             "4-1. 데이터 조회": 1, "4-2. 추세": 2, "4-3. 모멘텀": 3,
@@ -1648,7 +1668,7 @@ def system_config_menu():
             sub_items = [
                 ("1", "기본 진입 조건", "Entry"),
                 ("2", "서브전략 (역추세/슈퍼 모멘텀)", "Sub-Strategy"),
-                ("3", "매도/청산 — 익절", "Take Profit"),
+                ("3", "매도/청산 — 트레일링 스탑", "Trailing Stop"),
                 ("4", "매도/청산 — 손절", "Stop Loss"),
                 ("5", "매도/청산 — 기타", "Exit Etc")
             ]

@@ -272,22 +272,22 @@ class DefaultStrategy:
                     ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
 
         # 2. 고정 익절/손절 및 시간 청산
+        # [수정] 반익절 후 잔여 물량(천장 해제, Let profit run)은 이 elif 체인을 '소비'하면 안 된다.
+        #  기존에는 목표 도달 시 pass로 체인이 끝나 아래 손절/시간청산/트레일링 스탑이 전부 차단되어,
+        #  고수익 구간에서 TS가 영원히 발동하지 않는 버그가 있었다. 해당 케이스를 조건에서 제외해
+        #  체인이 계속 흐르도록 한다.
         if tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
             reason = f"반익절({profit_rate:.1f}%)"
             sell_ratio = 0.5
-        elif tp_rate > 0 and profit_rate >= tp_rate:
-            if use_half_tp and already_half_sold:
-                pass # [수정] 반익절 후 남은 물량은 천장을 해제하고 트레일링 스탑에 맡김 (Let profit run)
-            else:
-                reason = f"익절({profit_rate}%)"
-                
+        elif tp_rate > 0 and profit_rate >= tp_rate and not (use_half_tp and already_half_sold):
+            reason = f"익절({profit_rate}%)"
+
         # [추가] 반익절 이후 Let profit run 시, 최소 수익 보존선 (Profit Lock-in)
         # 목표가를 한 번 뚫고 내려올 경우 TS(예: 4%) 발동 전이라도 목표가-3%에서 즉시 매도하여 수익 방어
-        elif tp_rate > 0 and use_half_tp and already_half_sold and highest_price > 0:
-            max_profit_rate_so_far = ((highest_price - buy_price) / buy_price) * 100
-            profit_lock_rate = tp_rate - 3.0
-            if max_profit_rate_so_far >= tp_rate and profit_rate <= profit_lock_rate:
-                reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
+        # (미발동 시 체인이 계속 흐르도록 판정 조건을 elif 조건식 안에 인라인)
+        elif (tp_rate > 0 and use_half_tp and already_half_sold and highest_price > 0
+              and max_profit_rate >= tp_rate and profit_rate <= tp_rate - 3.0):
+            reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
         elif sl_rate != 0 and profit_rate <= sl_rate:
             if is_bep_applied:
                 reason = f"본전청산({profit_rate:.1f}%)"

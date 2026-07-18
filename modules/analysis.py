@@ -972,7 +972,12 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     # [수정] 1순위 절대 방어 필터를 가장 위로 끌어올림 (역추세 매수보다 우선 적용하여 떨어지는 칼날 완벽 방어)
     if plus_di is not None and minus_di is not None and minus_di > plus_di:
         if adx is not None and adx >= 45: # ADX 45 이상의 초강력 하락장
-            return "매도", "[blue]", "초강력 투매 패닉 구간 (ADX 과열 및 -DI 우위)"
+            # [추세추종] ADX는 방향 무관 지표라 강한 상승추세 직후의 급락 눌림에서도 45 이상이
+            #  유지된 채 -DI가 역전될 수 있음. 추세 구조(60일선)가 살아있는 동안은 광폭 손절
+            #  (ATR 손절/샹들리에 TS)에 청산을 맡기고, 구조 훼손을 동반한 경우에만 즉시 '매도'로 분류
+            #  (승자 포지션의 반추세성 조기 전량청산 방지. 매수 게이트는 -DI 우위 hard_caution이 계속 차단)
+            if price < ema60:
+                return "매도", "[blue]", "초강력 투매 패닉 구간 (ADX 과열 및 -DI 우위)"
 
     # [추가] 2. 낙폭과대(역추세) 반등 조건 확인
     use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)

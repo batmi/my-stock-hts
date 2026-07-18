@@ -401,6 +401,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         if position['qty'] > 0:
             # [Fix: Point 4] 가중 평균 ATR 손절률 계산
             sl_rate_to_use = stop_loss_limit
+            atr_sl_applied = False
             if use_atr_stop:
                 total_qty_trade = 0
                 weighted_sl_sum = 0
@@ -410,19 +411,23 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if qty_trade > 0 and sl_rate_trade != 0.0:
                         total_qty_trade += qty_trade
                         weighted_sl_sum += qty_trade * sl_rate_trade
-                
+
                 if total_qty_trade > 0:
                     avg_sl_rate = weighted_sl_sum / total_qty_trade
                     if avg_sl_rate != 0.0:
                         sl_rate_to_use = avg_sl_rate
-            
+                        atr_sl_applied = True
+
             loss_rate = (price - position['avg_price']) / position['avg_price'] * 100
             if high_price > ts_highest_price: ts_highest_price = high_price
-            
+
             max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100 if position['avg_price'] > 0 else 0
-            
+
             # [추가] 본전 청산(BEP) 로직 적용
             bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+            # [동기화] ATR 동적 손절 적용 시 BEP 발동 기준을 손절폭(절대값)과 1:1 동기화 (실매매와 동일)
+            if atr_sl_applied and sl_rate_to_use < 0:
+                bep_activation = abs(sl_rate_to_use)
             bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
             is_bep_applied = False
             if max_profit_rate >= bep_activation:
@@ -453,10 +458,10 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             #  (기본 설정은 TAKE_PROFIT_RATE=0으로 모두 비활성이나, 옵션을 켜면 실매매와 동일하게 재현)
             if take_profit_limit > 0 and use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
                 sell_signal = True; reason = "반익절"; sell_ratio = 0.5
-            elif take_profit_limit > 0 and loss_rate >= take_profit_limit:
-                if not (use_half_tp and half_tp_executed):
-                    sell_signal = True; reason = "익절"
-                # else: 반익절 후 잔여 물량은 천장 해제 (Let profit run) - 실매매와 동일하게 이번 주기 소비
+            elif take_profit_limit > 0 and loss_rate >= take_profit_limit and not (use_half_tp and half_tp_executed):
+                # 반익절 후 잔여 물량은 천장 해제 (Let profit run) — 해당 케이스는 체인을 소비하지 않아
+                # 아래 손절/시간청산/트레일링 스탑 판정이 계속 동작한다 (실매매 engine.analyze_sell과 동일)
+                sell_signal = True; reason = "익절"
             elif take_profit_limit > 0 and use_half_tp and half_tp_executed and max_profit_rate >= take_profit_limit and loss_rate <= take_profit_limit - 3.0:
                 # [동기화] 수익보존 (Profit Lock-in): 목표 돌파 후 목표-3% 아래로 되돌리면 잔량 매도
                 sell_signal = True; reason = "수익보존"

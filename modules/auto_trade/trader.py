@@ -3137,13 +3137,8 @@ class AutoTrader:
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             score_adj = market_regime_adj.get(market_type, 0.0)
             
-            ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-            ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
-            
             thresholds = None
             if rule:
-                ts_activation = rule['ts_activation']
-                ts_callback = rule['ts_callback']
                 thresholds = {
                     "TAKE_PROFIT_RATE": rule['take_profit'],
                     "STOP_LOSS_RATE": rule['stop_loss'],
@@ -3152,8 +3147,15 @@ class AutoTrader:
                     "WEIGHTS": rule.get('weights'),
                     "BUY_SCORE": rule['buy_score'],
                     "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)),
-                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)))
+                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True))),
+                    # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
+                    #  (기존: 지역변수로만 읽고 미사용 → 룰 TS가 무시되고 항상 전역 설정으로 동작)
+                    "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
+                    "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
                 }
+                # [Fix] 룰의 ATR 손절 사용 여부를 TS 동적 콜백(샹들리에) 판정에도 일관 적용
+                if rule.get('use_atr_stop') is not None:
+                    thresholds["USE_ATR_STOP"] = bool(rule['use_atr_stop'])
             else:
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
@@ -3188,13 +3190,12 @@ class AutoTrader:
             if applied_sl_rate is not None:
                 if thresholds is None: thresholds = {}
                 thresholds["STOP_LOSS_RATE"] = applied_sl_rate
-                
-                # [수정] 실제 매도 평가에 사용될 손절선 변수(sl_rate) 갱신
-                sl_rate = applied_sl_rate
-                
-                # [추가] ATR 동적 손절 사용 시, 본전 청산 발동 기준을 손절폭(절대값)과 1:1로 자동 동기화
+
+                # [Fix] ATR 동적 손절 사용 시, 본전 청산(BEP) 발동 기준을 손절폭(절대값)과 1:1로 동기화
+                #  (기존: 지역변수에만 대입되고 analyze_sell에 미전달 → 항상 기본 +5%에 조기 발동되어
+                #   ATR 손절폭이 넓은 변동성 종목이 정상 눌림에서 본전청산으로 조기 청산되는 문제)
                 if applied_sl_rate < 0:
-                    bep_activation = abs(applied_sl_rate)
+                    thresholds["BREAK_EVEN_PROFIT_RATE"] = abs(applied_sl_rate)
                 
             holding_days = 0
             is_mr_holding = False
