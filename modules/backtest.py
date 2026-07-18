@@ -81,7 +81,8 @@ def calculate_daily_status(row, prev_row, thresholds=None):
         thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money,
         plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
         ema_5=ema_5, macd_hist=macd_hist, prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        is_yangbong=is_yangbong_flag, mom_ret=row.get('MOM_RET')  # [추세추종] 가격 모멘텀 팩터 (상태 분류 내부 점수도 동일 입력 사용)
+        is_yangbong=is_yangbong_flag, mom_ret=row.get('MOM_RET'),  # [추세추종] 가격 모멘텀 팩터 (상태 분류 내부 점수도 동일 입력 사용)
+        mom_ret_1m=row.get('MOM_RET_1M'), mom_ret_3m=row.get('MOM_RET_3M'), trend_persist=row.get('TREND_PERSIST')  # [추세추종] 다중 기간 정합·추세 지속 이력
     )
     
     # 2. 점수 계산
@@ -91,7 +92,8 @@ def calculate_daily_status(row, prev_row, thresholds=None):
         ema_5=ema_5, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
         weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
         macd_hist=macd_hist, prev_macd_hist=prev_macd_hist,
-        w52_pos=w52_pos, mom_ret=row.get('MOM_RET')  # [추가] 가격 모멘텀 팩터 (라이브와 동기화)
+        w52_pos=w52_pos, mom_ret=row.get('MOM_RET'),  # [추가] 가격 모멘텀 팩터 (라이브와 동기화)
+        mom_ret_1m=row.get('MOM_RET_1M'), mom_ret_3m=row.get('MOM_RET_3M'), trend_persist=row.get('TREND_PERSIST')  # [추세추종] 다중 기간 정합·추세 지속 이력
     )
     raw_score = round(raw_score, 1) # [Fix] 부동소수점 오차 제거 (예: 6.9999 -> 7.0)
     
@@ -227,6 +229,14 @@ def compute_price_indicators(df):
     # [추가] 가격 모멘텀(절대 모멘텀): 라이브(calculate_score 내부 df 계산)와 동일 정의로 사전계산
     mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
     df['MOM_RET'] = df['close'].pct_change(periods=mom_lb, fill_method=None) * 100
+
+    # [추세추종] 다중 기간 모멘텀(1·3개월)·추세 지속 이력: 라이브 동적 계산과 동일 정의로 사전계산
+    mom_lb_1m = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_1M', 21)
+    mom_lb_3m = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_3M', 63)
+    df['MOM_RET_1M'] = df['close'].pct_change(periods=mom_lb_1m, fill_method=None) * 100
+    df['MOM_RET_3M'] = df['close'].pct_change(periods=mom_lb_3m, fill_method=None) * 100
+    persist_lb = config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)
+    df['TREND_PERSIST'] = (df['close'] > df['EMA60']).rolling(persist_lb, min_periods=persist_lb).mean() * 100
     return df
 
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
@@ -319,6 +329,15 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     if 'MOM_RET' not in sim_df.columns:
         mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
         sim_df['MOM_RET'] = sim_df['close'].pct_change(periods=mom_lb, fill_method=None) * 100
+    if 'MOM_RET_1M' not in sim_df.columns:
+        lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_1M', 21)
+        sim_df['MOM_RET_1M'] = sim_df['close'].pct_change(periods=lb, fill_method=None) * 100
+    if 'MOM_RET_3M' not in sim_df.columns:
+        lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_3M', 63)
+        sim_df['MOM_RET_3M'] = sim_df['close'].pct_change(periods=lb, fill_method=None) * 100
+    if 'TREND_PERSIST' not in sim_df.columns and 'EMA60' in sim_df.columns:
+        persist_lb = config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)
+        sim_df['TREND_PERSIST'] = (sim_df['close'] > sim_df['EMA60']).rolling(persist_lb, min_periods=persist_lb).mean() * 100
     
     # [추가] 시뮬레이션용 임계값 설정 (상태 분류 동기화)
     # ※ 백테스팅은 사용자가 설정한 기준 점수 검증이 목적이므로, 

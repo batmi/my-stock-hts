@@ -328,6 +328,10 @@ class GlobalSettings(BaseModel):
         "MOMENTUM_LOOKBACK": 126,      # 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일) - 스코어링 '가격 모멘텀' 항목에 사용
         "MOMENTUM_W52_NEAR": 80,       # 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도) - 스코어링 '가격 모멘텀' 항목에 사용
         "TREND_QUALITY_LOOKBACK": 90,  # [추세추종] 추세 품질(회귀 모멘텀=연환산 기울기×R²) 룩백 기간 - 동시 매수 후보 우선순위 랭킹에 사용
+        "MOMENTUM_LOOKBACK_1M": 21,    # [추세추종] 다중 기간 모멘텀 정합용 단기 룩백 (약 1개월) - 음수면 6개월 가격 모멘텀 가점 보류
+        "MOMENTUM_LOOKBACK_3M": 63,    # [추세추종] 다중 기간 모멘텀 정합용 중기 룩백 (약 3개월) - 음수면 6개월 가격 모멘텀 가점 보류
+        "TREND_PERSIST_LOOKBACK": 120, # [추세추종] 추세 지속 이력 측정 기간 (거래일) - 종가>60일선 유지 비율 산정 구간
+        "TREND_PERSIST_MIN": 70,       # [추세추종] 추세 지속 가점 기준 비율(%) - 측정 기간 중 60일선 위 비율이 이 값 이상이면 +0.5
         "EMA_SHORT": 5,                # [추가] 단기 이평선(EMA) 기간 (Early 추세용)
         "VOLUME_MA_PERIOD": 20,        # [추가] 거래량 이동평균 기간 (Volume Spike용)
         "VOLUME_SPIKE_RATIO": 2.0,     # [추가] 거래량 폭발 기준 (200% 이상)
@@ -922,6 +926,7 @@ def reset_all_settings():
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
             "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0,
             "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80, "TREND_QUALITY_LOOKBACK": 90,
+            "MOMENTUM_LOOKBACK_1M": 21, "MOMENTUM_LOOKBACK_3M": 63, "TREND_PERSIST_LOOKBACK": 120, "TREND_PERSIST_MIN": 70,
             "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
             "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
             "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0
@@ -1052,7 +1057,11 @@ CONFIG_DESCRIPTIONS = {
     "SCORE_CCI_STRONG": "스코어링 추세 기준 CCI",
     "MOMENTUM_LOOKBACK": "가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (거래일)",
     "MOMENTUM_W52_NEAR": "가격 모멘텀 가점 기준 52주 위치(%)",
-    "TREND_QUALITY_LOOKBACK": "추세 품질(회귀 모멘텀) 룩백 기간 (거래일, 매수 후보 랭킹용)"
+    "TREND_QUALITY_LOOKBACK": "추세 품질(회귀 모멘텀) 룩백 기간 (거래일, 매수 후보 랭킹용)",
+    "MOMENTUM_LOOKBACK_1M": "다중 기간 모멘텀 정합용 단기 룩백 (거래일, 약 1개월)",
+    "MOMENTUM_LOOKBACK_3M": "다중 기간 모멘텀 정합용 중기 룩백 (거래일, 약 3개월)",
+    "TREND_PERSIST_LOOKBACK": "추세 지속 이력 측정 기간 (거래일)",
+    "TREND_PERSIST_MIN": "추세 지속 가점 기준 비율(%) (60일선 위 유지 비율)"
 }
 
 # 모듈 로드 시 자동 실행

@@ -309,7 +309,7 @@ def check_smart_money_turnaround(code, is_overseas=False):
         logger.debug(f"Smart Money Check Error for {code}: {e}")
         return False, ""
 
-def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, w52_pos=None, mom_ret=None):
+def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, w52_pos=None, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
 
@@ -422,18 +422,42 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                     past_close = float(df['close'].iloc[-(mom_lb + 1)])
                     if past_close > 0:
                         mom_ret = (price / past_close - 1) * 100
+            # [추세추종] 다중 기간 모멘텀(1·3개월) — 6개월 가격 모멘텀 가점의 정합 게이트 입력
+            if mom_ret_1m is None and price is not None:
+                lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_1M', 21)
+                if len(df) > lb:
+                    past_close = float(df['close'].iloc[-(lb + 1)])
+                    if past_close > 0:
+                        mom_ret_1m = (price / past_close - 1) * 100
+            if mom_ret_3m is None and price is not None:
+                lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_3M', 63)
+                if len(df) > lb:
+                    past_close = float(df['close'].iloc[-(lb + 1)])
+                    if past_close > 0:
+                        mom_ret_3m = (price / past_close - 1) * 100
+            # [추세추종] 추세 지속 이력 — 최근 N일 중 종가가 60일선 위였던 비율(%).
+            #   오래 유지된 추세가 계속될 확률이 높다는 지속성 원칙의 직접 측정치.
+            if trend_persist is None:
+                persist_lb = config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)
+                if len(df) >= persist_lb:
+                    ema60_series = df['close'].ewm(span=60, adjust=False).mean()
+                    above = df['close'].tail(persist_lb).to_numpy(dtype=float) > ema60_series.tail(persist_lb).to_numpy(dtype=float)
+                    trend_persist = float(above.mean() * 100)
         except Exception:
             pass
 
     if price is None:
         return 0.0, details
 
-    # 1. Trend Factor (4.0점)
+    # 1. Trend Factor (4.0점) — MA 군집(상한 2.0) + 추세 지속 이력 0.5 + MACD 0선 0.5 + MACD GC/확산 0.5 + SAR 0.5
     # [개선 #2] 이동평균선(EMA) 기반 신호들은 상호 상관(collinearity)이 매우 높아
     #          정배열 상승장에서 동시 충족되며 추세추종으로 점수가 편향됨.
-    #          → MA 포지션 점수 합계를 상한(2.5점)으로 제한하고, 나머지 1.5점은
+    #          → MA 포지션 점수 합계를 상한으로 제한하고, 나머지는
     #            상대적으로 독립적인 확인 신호(MACD 0선/추세확산, SAR)로 채워
     #            'MA 군집 단독'으로는 TREND 만점을 받지 못하도록 재구성.
+    # [추세추종] MA 상한 2.5 → 2.0: 절감분 0.5는 '추세 지속 이력'(아래) 가점으로 이관.
+    #          현재 상태(정배열)만 보는 MA 군집과 달리 '얼마나 오래 유지됐는가'를 재는
+    #          독립 신호로, 갓 골든크로스한 미검증 추세와 장기 지속 추세를 점수로 구분한다.
     ma_trend_score = 0.0
     ma_details = []
     if ema20 is not None and price > ema20:
@@ -451,12 +475,19 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 장기 지지(현재가>120일선) (+{s:.2f})")
 
     # [개선 #2] MA 포지션 점수 상한 적용 (상관 신호의 과대 가점 방지)
-    ma_cap = round(2.5 * r_trend, 2)
+    ma_cap = round(2.0 * r_trend, 2)
     details.extend(ma_details)
     if ma_trend_score > ma_cap:
         details.append(f"[상한] EMA 군집 신호 상한 적용 ({ma_cap:.2f})")
         ma_trend_score = ma_cap
     score += ma_trend_score
+
+    # [추세추종] 추세 지속 이력: 최근 TREND_PERSIST_LOOKBACK일 중 종가가 60일선 위였던
+    #   비율이 기준(TREND_PERSIST_MIN%) 이상일 때 가점. 순간 상태가 아닌 '유지된 기간'을
+    #   재는 지속성 신호로, MA 상한 축소분(0.5)을 이관받았다. (NaN은 비교식에서 자동 False)
+    if trend_persist is not None and trend_persist >= config.INDICATOR_PARAMS.get('TREND_PERSIST_MIN', 70):
+        s = round(0.5 * r_trend, 2); score += s
+        details.append(f"추세 지속: 최근 {config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)}일 중 {trend_persist:.0f}% 60일선 위 (+{s:.2f})")
 
     # [개선 #2] MACD 0선 위(추세 확립): MA 포지션과 독립적인 추세 확인 신호
     if macd is not None and macd > 0:
@@ -510,10 +541,20 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     # [추세추종] 가격 모멘텀 (절대 모멘텀 + 52주 신고가 근접) — '강한 종목을 매수하라' 핵심 팩터.
     #   6개월(MOMENTUM_LOOKBACK) 수익률이 양수이고 52주 위치가 기준(MOMENTUM_W52_NEAR) 이상인
     #   주도주에만 가점하여, 지표만 좋은 바닥권 종목과 신고가 랠리 종목을 점수로 구분한다.
+    # [추세추종] 다중 기간 모멘텀 정합: 1·3개월 수익률이 명시적으로 음수면 6개월 가점을 보류.
+    #   6개월 수치만 좋고 최근 1~3개월이 꺾인 '식어가는 추세'의 고점 진입을 걸러낸다.
+    #   단기 수익률을 알 수 없으면(None/NaN) 게이트를 적용하지 않는다(fail-open, 기존 호출자 호환).
+    mom_align_ok = True
+    if mom_ret_1m is not None and mom_ret_1m <= 0: mom_align_ok = False
+    if mom_ret_3m is not None and mom_ret_3m <= 0: mom_align_ok = False
+
     mom_w52_near = config.INDICATOR_PARAMS.get('MOMENTUM_W52_NEAR', 80)
     if mom_ret is not None and mom_ret > 0 and w52_pos is not None and w52_pos >= mom_w52_near:
-        s = round(0.5 * r_mom, 2); score += s
-        details.append(f"가격 모멘텀: 6개월 +{mom_ret:.1f}% & 52주 위치 {w52_pos:.0f}% (+{s:.2f})")
+        if mom_align_ok:
+            s = round(0.5 * r_mom, 2); score += s
+            details.append(f"가격 모멘텀: 6개월 +{mom_ret:.1f}% & 52주 위치 {w52_pos:.0f}% (+{s:.2f})")
+        else:
+            details.append("가격 모멘텀 보류: 단기(1·3개월) 모멘텀 이탈 (식어가는 추세)")
 
     # 3. Strength & Volume Factor (1.5점)
     adx_min = config.INDICATOR_PARAMS.get('SCORE_ADX_MIN', 20)
@@ -884,7 +925,7 @@ def get_index_momentum(market_type="KOSPI", lookback=None):
         logger.debug(f"지수 모멘텀 계산 실패({market_type}): {e}")
         return None
 
-def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None):
+def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
         ema20 = ind.get('ema_20')
@@ -971,7 +1012,8 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money,
         plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist,
         prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        w52_pos=w52_pos, mom_ret=mom_ret  # [추세추종] 가격 모멘텀 팩터 입력 전달 (df 없이 호출되는 백테스트 경로 패리티)
+        w52_pos=w52_pos, mom_ret=mom_ret,  # [추세추종] 가격 모멘텀 팩터 입력 전달 (df 없이 호출되는 백테스트 경로 패리티)
+        mom_ret_1m=mom_ret_1m, mom_ret_3m=mom_ret_3m, trend_persist=trend_persist  # [추세추종] 다중 기간 정합·추세 지속 이력 동일 전달
     )
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
