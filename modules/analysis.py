@@ -183,8 +183,23 @@ def _merge_index_volume_from_yfinance(df, yf_ticker):
 #  4.17% vs 선물 3.99%) tvDatafeed가 유일한 현물 소스. TV 일봉 마지막 봉은 장중 실시간
 #  갱신되므로 짧은 TTL 캐시로 준실시간을 유지한다.
 _US_TREASURY_SPOT_CACHE = {}   # symbol -> {"df": DataFrame, "time": datetime, "fail": datetime|None}
-_US_TREASURY_TTL_SEC = 300
-_US_TREASURY_NEG_TTL_SEC = 600  # 실패 음성 캐시(익명 웹소켓 다운 시 매 조회 재시도로 UI 지연 방지)
+_US_TREASURY_TTL_SEC = 120     # 미국 장중 금리 변동 대응 (다른 지수 fast_info 60s와 유사 수준)
+_US_TREASURY_NEG_TTL_SEC = 180  # 실패 음성 캐시(익명 웹소켓 다운 시 매 조회 재시도로 UI 지연 방지)
+# [추가] 회로차단 — 한 심볼이 전 재시도 실패(TV 전면 장애 가능성)하면 직후 다른 심볼은
+#  재시도 1회만 수행해 지수 화면 콜드스타트가 수십 초 지연되는 것을 막는다.
+_US_TREASURY_ANY_FAIL_TIME = None
+_US_TREASURY_CIRCUIT_SEC = 120
+
+def reset_us_treasury_spot_failures():
+    """국채 현물(TVC) 음성 캐시·회로차단을 해제한다.
+
+    사용자가 지수 화면에서 명시적으로 재시도(y)할 때 호출 — 해제하지 않으면
+    음성 캐시(600s) 동안 재시도가 즉시 실패를 반환해 무의미해진다.
+    """
+    global _US_TREASURY_ANY_FAIL_TIME
+    _US_TREASURY_ANY_FAIL_TIME = None
+    for ent in _US_TREASURY_SPOT_CACHE.values():
+        ent["fail"] = None
 
 def get_us_treasury_spot_data(symbol, n_bars=300):
     """미국채 현물 금리(TVC:USxxY) 일봉을 tvDatafeed로 조회한다(5분 TTL 캐시).
@@ -193,6 +208,7 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
     반환 스키마는 지수 경로와 동일: ['date','open','high','low','close','volume']
     (volume=0 — 금리 지수라 OBV 불가, attrs['source']='TVDATAFEED'). 실패 시 None.
     """
+    global _US_TREASURY_ANY_FAIL_TIME
     now = datetime.now()
     ent = _US_TREASURY_SPOT_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
     cached = ent["df"]
@@ -209,8 +225,15 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
     except Exception:
         return cached
 
+    # 회로차단: 직전 다른 심볼이 전 재시도 실패였다면 이번 심볼은 1회만 시도.
+    # 콜드스타트(성공 캐시 없음)는 실패 시 표시할 값 자체가 없으므로(특히 2년물은 폴백도 없음)
+    # 재시도를 6회로 늘려 간헐 실패 버스트를 견딘다.
+    circuit_open = (_US_TREASURY_ANY_FAIL_TIME and
+                    (now - _US_TREASURY_ANY_FAIL_TIME).total_seconds() < _US_TREASURY_CIRCUIT_SEC)
+    max_attempts = 1 if circuit_open else (6 if cached is None else 4)
+
     df = None
-    for attempt in range(4):  # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
+    for attempt in range(max_attempts):  # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
         try:
             with _TVDATAFEED_LOCK:
                 df = tv.get_hist(symbol=symbol, exchange="TVC",
@@ -220,12 +243,22 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         except Exception as e:
             logger.debug(f"[TVDATAFEED] {symbol} 조회 오류(attempt={attempt}): {e}")
             df = None
-        if attempt < 3:
+        if attempt < max_attempts - 1:
+            # 실패 버스트가 이어지면 마지막 시도 전 익명 인스턴스를 재생성해 웹소켓
+            # 불량 상태를 리셋한다(익명이라 재-signin/캡차 위험 없음).
+            if attempt == max_attempts - 2:
+                global _TVDATAFEED_INSTANCE
+                with _TVDATAFEED_LOCK:
+                    _TVDATAFEED_INSTANCE = None
+                tv = _get_tvdatafeed()
+                if tv is None:
+                    break
             time.sleep(0.8 * (attempt + 1))
 
     if df is None or df.empty:
         logger.debug(f"[TVDATAFEED] {symbol} 데이터 없음")
         ent["fail"] = now
+        _US_TREASURY_ANY_FAIL_TIME = now
         return cached
 
     try:
@@ -239,6 +272,7 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         ent["df"] = out
         ent["time"] = now
         ent["fail"] = None
+        _US_TREASURY_ANY_FAIL_TIME = None  # 성공 → 회로차단 해제
         return out
     except Exception as e:
         logger.debug(f"[TVDATAFEED] {symbol} 스키마 변환 실패: {e}")
@@ -1546,7 +1580,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         market_str = std_market if std_market else ("해외" if is_overseas else "KOSPI")
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
-        is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI"]
+        is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI", "K200FUT_F", "K200FUT_CM"]
 
         from modules import market
         all_idx_codes = [c for n, c in market.ALL_INDICES]
@@ -1631,9 +1665,18 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         inv_data = None
         ask_bid_ratio = None
 
+        # [추가] 미국채 금리는 지수 화면과 동일하게 tvDatafeed 현물(TVC:USxxY)을 1차 소스로
+        #  사용한다 — yfinance 경로만 쓰면 표(현물)와 심층 분석(2년물은 죽은 선물) 값이 어긋난다.
+        treasury_sym = config.US_TREASURY_SPOT_SYMBOLS.get(name) if is_overseas else None
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             if is_domestic_index:
                 fut_chart = ex.submit(get_domestic_index_data, code)
+                fut_vol = None
+                fut_inv = None
+                fut_ab = None
+            elif treasury_sym:
+                fut_chart = ex.submit(get_us_treasury_spot_data, treasury_sym)
                 fut_vol = None
                 fut_inv = None
                 fut_ab = None
@@ -1649,20 +1692,28 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             inv_data = fut_inv.result() if fut_inv else None
             ask_bid_ratio = fut_ab.result() if fut_ab else None
 
-        # [Fix] 국내 지수 df는 공유 캐시 객체이므로 복사 후 사용
+        # [추가] 국채 현물 실패 폴백: 5/10/30년은 야후 현물 지수(^FVX류)로 대체(죽은 값 아님),
+        #  2년물은 대체 소스가 없어(자리표시자 ^US02Y) 아래 공통 오류 처리로 종료된다.
+        if treasury_sym and (df is None or df.empty) and code != "^US02Y":
+            df = api.get_chart_data(code, is_overseas=True)
+            treasury_sym = None  # yfinance 소스로 진행 (실시간 보정도 야후 기준)
+
+        # [Fix] 국내 지수·국채 현물 df는 공유 캐시 객체이므로 복사 후 사용
         #  (apply_realtime_price의 당일 봉 덮어쓰기/추가가 캐시를 오염시키지 않도록)
-        if is_domestic_index and df is not None:
+        if (is_domestic_index or treasury_sym) and df is not None:
             df = df.copy()
 
         if df is None or df.empty:
             config.console.print("[red]차트 데이터를 불러올 수 없습니다.[/red]")
             return
-            
+
         # [추가] 실시간 현재가 조회 및 차트 데이터 최신화 (점수 불일치 방지)
-        try:
-            rt_price = api.get_current_price(code, is_overseas=is_overseas)
-            indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
-        except Exception: pass
+        #  (국채 현물은 TV 일봉 마지막 봉이 실시간 값 — 야후 시세를 덮어쓰면 소스가 섞이므로 제외)
+        if not treasury_sym:
+            try:
+                rt_price = api.get_current_price(code, is_overseas=is_overseas)
+                indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
+            except Exception: pass
 
         # 2. 지표 계산
         progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")

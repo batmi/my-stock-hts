@@ -87,9 +87,10 @@ ALL_INDICES = [
     ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
-    #  미국채 2년물은 야후에 현물 금리 지수 티커(^FVX류)가 없어 CBOT 2년물 금리선물(2YY=F)을 사용한다.
-    #  금리 % 단위로 직접 호가되며 거의 24시간 거래라 아시아장 선물 프록시(fut_mapping) 없이도 실시간 갱신된다.
-    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 금리", "2YY=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    #  미국채 2년물은 야후에 현물 금리 지수 티커(^FVX류)가 없고 CBOT 금리선물(2YY=F)은 유동성
+    #  고갈로 시세가 수일 지연되는 죽은 값이라 사용하지 않는다 → tvDatafeed 현물(TVC:US02Y) 전용.
+    #  ("^US02Y"는 자리표시자, yfinance 다운로드에서 제외되며 현물 실패 시 수신 실패로 표시)
+    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 금리", "^US02Y"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     # 5. 글로벌 지수
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("UK - FTSE 100", "^FTSE"), ("France - CAC 40", "^FCHI"), ("Germany - DAX 40", "^GDAXI"), ("Europe - STOXX 50", "^STOXX50E"),
@@ -223,15 +224,13 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         # [추가] 미국채 금리: 현물(TVC:USxxY)을 tvDatafeed로 1차 조회한다. 현물 금리는
         #  아시아장에도 거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다.
-        #  성공 시 현재가·전일대비·52주고·지표를 모두 현물 일봉으로 계산하고, 실패 시에만
-        #  기존 경로(5/10/30년: ^FVX류+아시아장 선물 프록시 (F) / 2년: 2YY=F 선물 (F))로 폴백.
-        treasury_spot_map = {
-            "미국채 2년물 금리": "US02Y", "미국채 5년물 금리": "US05Y",
-            "미국채 10년물 금리": "US10Y", "미국채 30년물 금리": "US30Y",
-        }
-        if name in treasury_spot_map:
+        #  성공 시 현재가·전일대비·52주고·지표를 모두 현물 일봉으로 계산한다. 폴백은
+        #  5/10/30년만 기존 경로(^FVX류+아시아장 선물 프록시 (F)) 사용 — 2년물은 대체 소스가
+        #  없어(야후 현물 지수 부재, 2YY=F 선물은 유동성 고갈로 수일 지연되는 죽은 시세)
+        #  죽은 값을 표시하는 대신 수신 실패로 처리한다.
+        if name in config.US_TREASURY_SPOT_SYMBOLS:
             try:
-                tv_df = analysis.get_us_treasury_spot_data(treasury_spot_map[name])
+                tv_df = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_SYMBOLS[name])
                 if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
                     df_daily = tv_df.copy()
                     df_daily['date'] = pd.to_datetime(df_daily['date'])
@@ -239,11 +238,15 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     current = float(df_daily['close'].iloc[-1])
                     prev = float(df_daily['close'].iloc[-2])
                     chart_calc_price = current
-                    high_52 = float(df_daily['close'].tail(250).max())
+                    # 52주 고점은 다른 지수와 동일하게 일중 고가 기준(고가 미제공 시 종가)
+                    hi_max = float(df_daily['high'].tail(250).max() or 0)
+                    high_52 = hi_max if hi_max > 0 else float(df_daily['close'].tail(250).max())
                     use_fast_info = True
                     is_treasury_spot = True
             except Exception as e:
-                logger.debug(f"{name} 현물(TV) 조회 실패, 기존 경로 폴백: {e}")
+                logger.debug(f"{name} 현물(TV) 조회 실패: {e}")
+            if name == "미국채 2년물 금리" and not is_treasury_spot:
+                return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
         if not is_domestic_index and not is_treasury_spot:
             try:
@@ -658,34 +661,14 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 elif regime_state == "Bear": display_name = f"[blue]{display_name}[/]"
                 else: display_name = f"[yellow]{display_name}[/]"
             except Exception: pass
-        elif name == "미국채 10년물 금리":
-            if eval_price >= 5.10: display_name = f"[magenta]{name}[/]"
-            elif 4.80 <= eval_price < 5.10: display_name = f"[red]{name}[/]"
-            elif 4.40 <= eval_price < 4.80: display_name = f"[orange3]{name}[/]"
-            elif 4.00 <= eval_price < 4.40: display_name = f"[green]{name}[/]"
-            elif 3.50 <= eval_price < 4.00: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 3.50: display_name = f"[blue]{name}[/]"
-        elif name == "미국채 2년물 금리":
-            if eval_price >= 4.90: display_name = f"[magenta]{name}[/]"
-            elif 4.50 <= eval_price < 4.90: display_name = f"[red]{name}[/]"
-            elif 4.00 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
-            elif 3.40 <= eval_price < 4.00: display_name = f"[green]{name}[/]"
-            elif 2.80 <= eval_price < 3.40: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 2.80: display_name = f"[blue]{name}[/]"
-        elif name == "미국채 5년물 금리":
-            if eval_price >= 5.00: display_name = f"[magenta]{name}[/]"
-            elif 4.70 <= eval_price < 5.00: display_name = f"[red]{name}[/]"
-            elif 4.20 <= eval_price < 4.70: display_name = f"[orange3]{name}[/]"
-            elif 3.70 <= eval_price < 4.20: display_name = f"[green]{name}[/]"
-            elif 3.20 <= eval_price < 3.70: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 3.20: display_name = f"[blue]{name}[/]"
-        elif name == "미국채 30년물 금리":
-            if eval_price >= 5.50: display_name = f"[magenta]{name}[/]"
-            elif 5.10 <= eval_price < 5.50: display_name = f"[red]{name}[/]"
-            elif 4.60 <= eval_price < 5.10: display_name = f"[orange3]{name}[/]"
-            elif 4.10 <= eval_price < 4.60: display_name = f"[green]{name}[/]"
-            elif 3.70 <= eval_price < 4.10: display_name = f"[yellow]{name}[/]"
-            elif eval_price < 3.70: display_name = f"[blue]{name}[/]"
+        elif name in config.US_TREASURY_YIELD_BANDS:
+            # [수정] 밴드 정의는 config.US_TREASURY_YIELD_BANDS 단일 소스 사용
+            #  (상태 문구는 theme_analysis, 도움말은 main.show_help가 같은 소스를 공유)
+            for band in config.US_TREASURY_YIELD_BANDS[name]["bands"]:
+                thr, color = band[0], band[1]
+                if thr is None or eval_price >= thr:
+                    display_name = f"[{color}]{name}[/]"
+                    break
         elif name == "SOX (반도체)":
             if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
             elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
@@ -806,9 +789,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
             elif current < 400: display_name = f"[blue]{name}[/]"
 
-        #  2년물은 현물(TVC:US02Y) 실패로 CBOT 금리선물(2YY=F) 폴백 시에만 (F)를 표기한다
-        #  (5/10/30년 폴백은 is_proxy_yield가 아시아장 선물 프록시 적용 시에만 (F)를 붙인다)
-        if is_proxy_yield or (name == "미국채 2년물 금리" and not is_treasury_spot):
+        if is_proxy_yield:
             display_name += " [dim](F)[/dim]"
 
         return {
@@ -860,6 +841,7 @@ def _show_market_indices_core(target_indices=None):
     missing_tickers = []
     mismatch_tickers = []
     failed_tickers = []
+    failed_srcs = set()   # [추가] 실패 지수의 실제 소스 (하단 경고 문구용 — yfinance 하드코딩 방지)
     delayed_tickers = []
 
     try:
@@ -901,8 +883,8 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
 
-                # [추가] 코스닥150·V코스피200·코스피200선물은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
-                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT")]
+                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
+                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y")]
                 if not yf_t_list:
                     continue
 
@@ -1103,6 +1085,7 @@ def _show_market_indices_core(target_indices=None):
                         fail_src = res.get('src', 'yfinance')
                         table.add_row(name, "[red]수신 실패[/]", f"[dim]{fail_src} 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
                         failed_tickers.append(name)
+                        failed_srcs.add(fail_src)
                     else:
                         if config.SCREEN_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                             config.console.print(f"[bold red][DEBUG] 에러 발생({name}): {res.get('error')}[/bold red]")
@@ -1142,7 +1125,9 @@ def _show_market_indices_core(target_indices=None):
 
     if failed_tickers:
         targets = ", ".join(failed_tickers)
-        config.console.print(f"[dim][red] ⚠️ 데이터 수신 실패: {targets} - yfinance 서버 장애 또는 일시적 통신 오류일 수 있습니다. 잠시 후 다시 시도하세요.[/red][/dim]")
+        # [수정] 실패 소스를 그대로 안내 (국채 현물은 TradingView — yfinance로 오인되지 않도록)
+        srcs = ", ".join(sorted(failed_srcs)) or "yfinance"
+        config.console.print(f"[dim][red] ⚠️ 데이터 수신 실패: {targets} - {srcs} 서버 장애 또는 일시적 통신 오류일 수 있습니다. 잠시 후 다시 시도하세요.[/red][/dim]")
 
     return failed_tickers
 
@@ -1199,18 +1184,26 @@ def show_market_indices(interval=0):
                 
                 if '8' in keys:
                     indices_list = ALL_INDICES
+                    # [추가] KIS 실전 전용 지수는 토스·모의 모드 목록에서 제외 (지수 화면과 동일 정책)
+                    if config.session.is_toss or config.session.is_simulation:
+                        indices_list = [(n, c) for n, c in indices_list if n not in ("V코스피200", "코스피200선물")]
                     dict_list = [{'name': n, 'code': c} for n, c in indices_list]
                     idx, item = utils.search_stock_in_list(dict_list, title="개별 지수 분석 대상 선택")
                     if item:
                         target_name, target_code = item['name'], item['code']
-                        
+
                         is_overseas = True
                         domestic_map = {
                             "코스피": "KOSPI", "코스피200": "KOSPI200",
                             "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150",
                             "V코스피200": "VKOSPI"
                         }
-                        if target_name in domestic_map:
+                        if target_name == "코스피200선물":
+                            # [Fix] 자리표시자(^K200FUT)가 yfinance로 넘어가 분석이 실패하던 문제 —
+                            #  지수 화면과 동일하게 세션(주간 F/야간 CM)별 KIS 선물 차트로 분석한다.
+                            target_code = f"K200FUT_{'CM' if _k200_night_session() else 'F'}"
+                            is_overseas = False
+                        elif target_name in domestic_map:
                             target_code = domestic_map[target_name]
                             is_overseas = False
                             
@@ -1269,6 +1262,10 @@ def show_market_indices(interval=0):
                         try:
                             if Prompt.ask(f"[yellow]⚠️ 조회 실패한 {len(failed_list)}개 지수를 다시 시도하시겠습니까?[/yellow]", choices=["y", "n"], default="y") == "y":
                                 config.console.print()
+                                # [추가] 국채 현물(TVC) 음성 캐시·회로차단 해제 — 해제 없이는
+                                #  음성 캐시(600s) 동안 재시도가 즉시 실패해 무의미하다.
+                                if any(n in config.US_TREASURY_SPOT_SYMBOLS for n in failed_list):
+                                    analysis.reset_us_treasury_spot_failures()
                                 target_indices = failed_list
                                 continue
                         except StopIteration:

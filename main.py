@@ -303,37 +303,22 @@ def show_help():
     table.add_row("", "그 외 구간", "[yellow]노란색[/]", "횡보장 (Sideways)")
     table.add_section()
 
-    table.add_row("미 국채 2년", "금리 ≥ 4.90", "[magenta]보라색[/]", "초긴축 발작/정책 쇼크")
-    table.add_row("(단기 정책금리 기대)", "4.50 ≤ 금리 < 4.90", "[red]빨간색[/]", "추가 긴축 공포")
-    table.add_row("", "4.00 ≤ 금리 < 4.50", "[orange3]주황색[/]", "긴축 유지/금리 인하 지연")
-    table.add_row("", "3.40 ≤ 금리 < 4.00", "[green]초록색[/]", "중립 회귀/적정 정책금리")
-    table.add_row("", "2.80 ≤ 금리 < 3.40", "[yellow]노란색[/]", "금리 인하 사이클 선반영")
-    table.add_row("", "금리 < 2.80", "[blue]파란색[/]", "공격적 인하/침체 우려")
-    table.add_section()
-
-    table.add_row("미 국채 5년", "금리 ≥ 5.00", "[magenta]보라색[/]", "단기 유동성 위기/초긴축 발작")
-    table.add_row("(중기 통화정책 반영)", "4.70 ≤ 금리 < 5.00", "[red]빨간색[/]", "긴축 강화/금리 재인상 공포")
-    table.add_row("", "4.20 ≤ 금리 < 4.70", "[orange3]주황색[/]", "중립 상단/불확실성 상존")
-    table.add_row("", "3.70 ≤ 금리 < 4.20", "[green]초록색[/]", "안정/적정 수준 유동성")
-    table.add_row("", "3.20 ≤ 금리 < 3.70", "[yellow]노란색[/]", "금리 인하 기대감 선반영")
-    table.add_row("", "금리 < 3.20", "[blue]파란색[/]", "금리 급락/단기 유동성 경색 또는 침체 우려")
-    table.add_section()
-
-    table.add_row("미 국채 10년", "금리 ≥ 5.10", "[magenta]보라색[/]", "시스템 위기/주식 Valuation 붕괴")
-    table.add_row("(글로벌 벤치마크)", "4.80 ≤ 금리 < 5.10", "[red]빨간색[/]", "임계점/고금리 쇼크 (기술주 부담 가중)")
-    table.add_row("", "4.40 ≤ 금리 < 4.80", "[orange3]주황색[/]", "고금리 지속/인플레이션 끈적임 경계")
-    table.add_row("", "4.00 ≤ 금리 < 4.40", "[green]초록색[/]", "골디락스/적정 성장과 물가의 균형점 (뉴노멀)")
-    table.add_row("", "3.50 ≤ 금리 < 4.00", "[yellow]노란색[/]", "수요 둔화/금리 인하 선반영")
-    table.add_row("", "금리 < 3.50", "[blue]파란색[/]", "침체 확정/안전 자산 선호 (Flight to Quality)")
-    table.add_section()
-
-    table.add_row("미 국채 30년", "금리 ≥ 5.50", "[magenta]보라색[/]", "재정 적자 심화/기간 프리미엄 극대화")
-    table.add_row("(장기 기대 인플레)", "5.10 ≤ 금리 < 5.50", "[red]빨간색[/]", "장기 인플레 우려/국채 발행 부담")
-    table.add_row("", "4.60 ≤ 금리 < 5.10", "[orange3]주황색[/]", "구조적 고금리 안착 경계")
-    table.add_row("", "4.10 ≤ 금리 < 4.60", "[green]초록색[/]", "장기 안정/수급 균형")
-    table.add_row("", "3.70 ≤ 금리 < 4.10", "[yellow]노란색[/]", "장기 성장률 둔화 우려")
-    table.add_row("", "금리 < 3.70", "[blue]파란색[/]", "장기 저성장/디플레이션 우려")
-    table.add_section()
+    # [수정] 미국채 금리 밴드는 config.US_TREASURY_YIELD_BANDS 단일 소스에서 생성한다
+    #  (지수명 색상은 market, 상태 문구는 theme_analysis가 같은 소스를 공유 — 수정 누락 방지)
+    color_kr = {"magenta": "보라색", "red": "빨간색", "orange3": "주황색",
+                "green": "초록색", "yellow": "노란색", "blue": "파란색"}
+    for t_name, t_meta in config.US_TREASURY_YIELD_BANDS.items():
+        bands = t_meta["bands"]
+        for i, (thr, color, _status, help_desc) in enumerate(bands):
+            if i == 0:
+                col1, cond = t_meta["title"], f"금리 ≥ {thr:.2f}"
+            elif thr is None:
+                col1, cond = "", f"금리 < {bands[i-1][0]:.2f}"
+            else:
+                col1 = f"({t_meta['subtitle']})" if i == 1 else ""
+                cond = f"{thr:.2f} ≤ 금리 < {bands[i-1][0]:.2f}"
+            table.add_row(col1, cond, f"[{color}]{color_kr[color]}[/]", help_desc)
+        table.add_section()
 
     table.add_row("브랜트유", "가격 ≥ 105", "[magenta]보라색[/]", "에너지 쇼크 (강제적 수요 파괴 및 스태그플레이션)")
     table.add_row("", "95 ≤ 가격 < 105", "[red]빨간색[/]", "인플레 재발 우려 (고금리 장기화 강요)")

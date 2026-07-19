@@ -249,34 +249,14 @@ def _fetch_theme_detail(theme):
 def evaluate_market_indicator(name, price, yh_rate=None):
     """지표의 현재가를 바탕으로 사용자 정의 룰에 따른 상태를 반환합니다."""
     status_desc = ""
-    if name == "미국채 10년물 금리":
-        if price >= 5.10: status_desc = "시스템 위기/Valuation 붕괴"
-        elif 4.80 <= price < 5.10: status_desc = "임계점/고금리 쇼크"
-        elif 4.40 <= price < 4.80: status_desc = "고금리 지속/인플레 경계"
-        elif 4.00 <= price < 4.40: status_desc = "골디락스/적정 성장"
-        elif 3.50 <= price < 4.00: status_desc = "수요 둔화/금리인하 선반영"
-        elif price < 3.50: status_desc = "침체 확정/안전자산 선호"
-    elif name == "미국채 2년물 금리":
-        if price >= 4.90: status_desc = "초긴축 발작/정책 쇼크"
-        elif 4.50 <= price < 4.90: status_desc = "추가 긴축 공포"
-        elif 4.00 <= price < 4.50: status_desc = "긴축 유지/인하 지연"
-        elif 3.40 <= price < 4.00: status_desc = "중립 회귀/적정 정책금리"
-        elif 2.80 <= price < 3.40: status_desc = "인하 사이클 선반영"
-        elif price < 2.80: status_desc = "공격적 인하/침체 우려"
-    elif name == "미국채 5년물 금리":
-        if price >= 5.00: status_desc = "단기 유동성 위기/초긴축 발작"
-        elif 4.70 <= price < 5.00: status_desc = "긴축 강화/금리 재인상 공포"
-        elif 4.20 <= price < 4.70: status_desc = "중립 상단/통화정책 불확실성"
-        elif 3.70 <= price < 4.20: status_desc = "안정/적정 유동성"
-        elif 3.20 <= price < 3.70: status_desc = "금리 인하 기대 선반영"
-        elif price < 3.20: status_desc = "금리 급락/침체 우려"
-    elif name == "미국채 30년물 금리":
-        if price >= 5.50: status_desc = "재정 적자 우려/기간 프리미엄 극대화"
-        elif 5.10 <= price < 5.50: status_desc = "장기 인플레 우려/발행 부담"
-        elif 4.60 <= price < 5.10: status_desc = "구조적 고금리 안착 경계"
-        elif 4.10 <= price < 4.60: status_desc = "장기 안정/수급 균형"
-        elif 3.70 <= price < 4.10: status_desc = "장기 성장 둔화 우려"
-        elif price < 3.70: status_desc = "장기 저성장/디플레이션 우려"
+    if name in config.US_TREASURY_YIELD_BANDS:
+        # [수정] 밴드 정의는 config.US_TREASURY_YIELD_BANDS 단일 소스 사용
+        #  (지수명 색상은 market, 도움말은 main.show_help가 같은 소스를 공유)
+        for band in config.US_TREASURY_YIELD_BANDS[name]["bands"]:
+            thr, status = band[0], band[2]
+            if thr is None or price >= thr:
+                status_desc = status
+                break
     elif name == "브랜트유":
         if price >= 105: status_desc = "에너지 쇼크/스태그플레이션"
         elif 95 <= price < 105: status_desc = "인플레 재발 우려"
@@ -415,7 +395,7 @@ def _get_macro_context_str():
     core_tickers = [
         ("코스피", "^KS11"), ("코스닥", "^KQ11"),
         ("나스닥", "^IXIC"), ("S&P500", "^GSPC"),
-        ("미국채 2년물 금리", "2YY=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+        ("미국채 2년물 금리", "US02Y"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
         ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("금", "GC=F"), ("구리", "HG=F"), ("밀", "ZW=F"),
         ("달러환율", "KRW=X"), ("달러인덱스", "DX-Y.NYB"),
         ("VIX (변동성)", "^VIX"), ("비트코인", "BTC-USD")
@@ -438,19 +418,18 @@ def _get_macro_context_str():
                     return name, name, curr, rate, high_52
 
             # [추가] 미국채 금리는 현물(TVC:USxxY, tvDatafeed) 우선 — 현물은 아시아장에도
-            #  갱신되어 선물 프록시 추정 불필요. 실패 시 아래 yfinance 경로로 폴백.
-            treasury_spot_map = {
-                "미국채 2년물 금리": "US02Y", "미국채 5년물 금리": "US05Y",
-                "미국채 10년물 금리": "US10Y", "미국채 30년물 금리": "US30Y",
-            }
-            if name in treasury_spot_map:
-                df2 = analysis.get_us_treasury_spot_data(treasury_spot_map[name])
+            #  갱신되어 선물 프록시 추정 불필요. 실패 시 5/10/30년만 yfinance(^FVX류) 폴백,
+            #  2년물은 대체 소스가 없어(2YY=F는 유동성 고갈로 죽은 시세) 지표에서 제외한다.
+            if name in config.US_TREASURY_SPOT_SYMBOLS:
+                df2 = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_SYMBOLS[name])
                 if df2 is not None and not df2.empty and len(df2) >= 2:
                     curr = float(df2['close'].iloc[-1])
                     prev2 = float(df2['close'].iloc[-2])
                     rate = ((curr - prev2) / prev2 * 100) if prev2 > 0 else 0.0
                     yh2 = float(df2['close'].tail(250).max())
                     return name, name, curr, rate, yh2
+                if name == "미국채 2년물 금리":
+                    return name, name, None, None, None
 
             # 2. 해외 지수, 원자재, 환율 등은 yfinance 단건 조회(마이크로 캐시) 활용
             fi = api.get_yf_fast_info(ticker)
