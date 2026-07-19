@@ -671,41 +671,64 @@ def show_help():
     score_table.add_column("점수/행동", justify="center", style="white")
     score_table.add_column("의미", justify="left")
 
-    # 1. Trend Factor
+    # [수정] 표는 analysis.calculate_score 실구현과 1:1 대응 (구식 항목 제거·누락 항목 반영)
+    _ip = config.INDICATOR_PARAMS
+    rsi_mid = _ip.get('SCORE_RSI_MID', 50); rsi_strong = _ip.get('SCORE_RSI_STRONG', 60)
+    rsi_overheat = _ip.get('SCORE_RSI_OVERHEAT', 80); rsi_rebound = _ip.get('SCORE_RSI_REBOUND', 40)
+    score_adx = _ip.get('SCORE_ADX_MIN', 20)
+    persist_lb = _ip.get('TREND_PERSIST_LOOKBACK', 120); persist_min = _ip.get('TREND_PERSIST_MIN', 70)
+    w52_near = _ip.get('MOMENTUM_W52_NEAR', 80)
+
+    # 1. Trend Factor — MA 군집(상한 2.0) + 추세 지속 0.5 + MACD 0선 0.5 + MACD GC/확산 0.5 + SAR 0.5
     score_table.add_row("Trend Factor", "현재가 > 20일선", f"+{0.5 * r_trend:.1f}", "단기 지지")
     score_table.add_row("(추세 4.0)", "EMA 5일선 > 20일선", f"+{0.5 * r_trend:.1f}", "5일선이 20일선 상회 (단기 추세 전환)")
-    score_table.add_row("", "20/60/120선 정배열", f"+{1.0 * r_trend:.1f}", "중장기 이평선 정배열 (0.5+0.5)")
+    score_table.add_row("", "20/60/120선 정배열", f"+{1.0 * r_trend:.1f}", "중장기 이평선 정배열")
     score_table.add_row("", "주가 > 60선 돌파 or 단기급등", f"+{0.5 * r_trend:.1f}", "역배열 초기 돌파 또는 주가>5>20>60 정배열 급등")
-    score_table.add_row("", "MACD > Signal", f"+{0.5 * r_trend:.1f}", "골든크로스")
-    score_table.add_row("", "MACD 히스토그램 개선", f"+{0.5 * r_trend:.1f}", "히스토그램 양수 또는 상승 (MACD 선행)")
+    score_table.add_row("", "현재가 > 120일선", f"+{0.5 * r_trend:.1f}", "장기 지지")
+    score_table.add_row("", "[dim]※ 위 이평선 신호 합산 상한[/dim]", f"[dim]최대 +{2.0 * r_trend:.1f}[/dim]", "[dim]상관 높은 MA 군집의 과대 가점 방지[/dim]")
+    score_table.add_row("", f"최근 {persist_lb}일 중 {persist_min}%↑ 60일선 위", f"+{0.5 * r_trend:.1f}", "추세 지속 이력 (오래 유지된 추세 우대)")
+    score_table.add_row("", "MACD > 0선", f"+{0.5 * r_trend:.1f}", "추세 확립 (MA와 독립적인 확인 신호)")
+    score_table.add_row("", "MACD 신규 골든크로스 or 0선 위 확산", f"+{0.5 * r_trend:.1f}", "히스토그램 신규 양전환 또는 상승 확산")
     score_table.add_row("", "주가 > SAR", f"+{0.5 * r_trend:.1f}", "파라볼릭 매수")
     score_table.add_section()
 
-    # 2. Momentum Factor
-    score_table.add_row("Momentum Factor", "50 ≤ RSI ≤ 75", f"+{0.5 * r_mom:.1f}", "강세 구간 (주도주)")
-    score_table.add_row("(모멘텀 2.5)", "30≤RSI<50 반등 or RSI≥60", f"+{0.5 * r_mom:.1f}", "바닥 반등 시도 또는 모멘텀 확장")
-    score_table.add_row("", "CCI > 0", f"+{0.5 * r_mom:.1f}", "상승 추세")
-    score_table.add_row("", "CCI -100 탈출 or CCI≥50", f"+{0.5 * r_mom:.1f}", "과매도권 탈출 또는 강한 상승 모멘텀 심화")
-    score_table.add_row("", "+DI > -DI 교차", f"+{0.5 * r_mom:.1f}", "매수세가 매도세 역전 (모멘텀 발생)")
+    # 2. Momentum Factor — RSI 1.0 + CCI 0.5 + DMI 0.5 + 가격 모멘텀 0.5
+    score_table.add_row("Momentum Factor", f"RSI ≥ {rsi_mid}", f"+{0.5 * r_mom:.1f}", "강세 구간 (과열이어도 기본 점수 유지)")
+    score_table.add_row("(모멘텀 2.5)", f"{rsi_strong} ≤ RSI < {rsi_overheat}", f"+{0.5 * r_mom:.1f}", f"모멘텀 확장 ({rsi_overheat} 이상 과열은 동결)")
+    score_table.add_row("", f"{rsi_rebound} ≤ RSI < {rsi_mid} & 주가>60일선", f"+{0.5 * r_mom:.1f}", "추세 내 눌림 회복 (강세 구간과 중복 불가)")
+    score_table.add_row("", "CCI > 0 or 과매도(-100) 탈출(추세 내)", f"+{0.5 * r_mom:.1f}", "상승 추세 또는 추세 내 과매도 탈출 (택1)")
+    score_table.add_row("", "+DI > -DI", f"+{0.5 * r_mom:.1f}", "매수세가 매도세 우위 (방향성)")
+    score_table.add_row("", f"6개월 수익률 > 0 & 52주 위치 ≥ {w52_near}%", f"+{0.5 * r_mom:.1f}", "가격 모멘텀 — 신고가 근접 주도주 (1·3개월 음수면 보류)")
     score_table.add_section()
 
     # 3. Strength & Volume
-    score_table.add_row("Strength/Volume", "ADX ≥ 20", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
+    score_table.add_row("Strength/Volume", f"ADX ≥ {score_adx}", f"+{0.5 * r_str:.1f}", "추세 형성 확인")
     score_table.add_row("(강도/수급 1.5)", "거래량 폭증 or 5일>20일 추세상승", f"+{0.5 * r_str:.1f}", "단기 거래량 모멘텀 개선 (안정적 수급)")
     score_table.add_row("", "OBV 상승 or 스마트머니", f"+{0.5 * r_str:.1f}", "보조 지표 및 메이저 수급 턴어라운드")
     score_table.add_section()
 
     # 4. Synergy Bonus
-    score_table.add_row("Synergy Bonus", "주가>60선 + MACD골든 + ADX≥15", f"+{1.0 * r_syn:.1f}", "추세 시작 시너지")
-    score_table.add_row("(가산점 2.0)", "MACD골든 + RSI강세 + OBV", f"+{1.0 * r_syn:.1f}", "모멘텀 폭발 (Thrust)")
+    score_table.add_row("Synergy Bonus", f"주가>60선 + MACD확산 + ADX≥{score_adx}", f"+{1.0 * r_syn:.1f}", "추세 시작 시너지")
+    score_table.add_row("(가산점 2.0)", f"MACD확산 + RSI≥{rsi_strong} + OBV", f"+{1.0 * r_syn:.1f}", "모멘텀 폭발 (Thrust)")
+    score_table.add_row("", "[dim]※ 공통 게이트: MACD>0 or 주가>120일선[/dim]", "[dim]필수[/dim]", "[dim]역배열 데드캣 바운스의 시너지 독식 차단[/dim]")
     score_table.add_section()
 
-   # [병합] 점수대별 의미
+    # 5. 추세 악화 감점 (Deterioration Penalty)
+    score_table.add_row("악화 감점", "MACD 데드크로스", f"-{0.5 * r_trend:.1f}", "하락 반전 신호를 점수에 적시 반영")
+    score_table.add_row("", "MACD 0선 이하 하락 가속", f"-{0.5 * r_mom:.1f}", "히스토그램 음수 확대")
+    score_table.add_row("", "-DI 우위", f"-{0.5 * r_str:.1f}", "매도세 강화")
+
+    # [병합] 점수대별 의미 — 실제 임계값(설정 연동)으로 표시
+    _buy = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE", 7.0)
+    _rise = config.ANALYSIS_THRESHOLDS.get("RISE_SCORE", 6.0)
+    _super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
+    _sell = config.SELL_STRATEGY.get("SELL_SCORE", 4.0)
     score_table.add_section()
-    score_table.add_row("점수대별 의미", "8.5 ~ 10.0점", "[red]매수[/]", "강력 매수. 모든 지표 상승 및 상관관계 완벽. 비중 확대 가능.")
-    score_table.add_row("", "7.0 ~ 8.0점", "[orange3]상승[/]", "매수. 추세 확실하나 일부 지표 후행. 분할 매수 권장.")
-    score_table.add_row("", "5.5 ~ 6.5점", "[white]관망[/]", "관망/준비. 상승 초입 또는 추세 약화. 7점대 진입 대기.")
-    score_table.add_row("", "5.0점 미만", "[blue]매도[/]", "매도/진입 금지. 하락 추세 또는 방향성 없는 횡보장.")
+    score_table.add_row("점수대별 의미", f"{_super}점 이상 & 52주 고점 90%↑", "[red]강매수[/]", "슈퍼 모멘텀 — 주도주 랠리 추종 (매수 RSI 상향 허용)")
+    score_table.add_row("", f"{_buy}점 이상", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    score_table.add_row("", f"{_rise} ~ {_buy}점", "[orange3]상승[/]", "상승 초입/지속 (대기 또는 소량)")
+    score_table.add_row("", f"{_sell}점 미만 & 60일선 이탈", "[blue]매도[/]", "추세이탈 청산 (두 조건 동시 충족 시)")
+    score_table.add_row("", "그 외 구간", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
     # [추가] 현재 설정 및 적응형 임계값, 시장 상태 정보
     score_table.add_section()

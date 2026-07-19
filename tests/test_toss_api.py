@@ -956,9 +956,13 @@ def test_overseas_detail_via_tv_for_toss():
 
 def test_rate_limit_group_rps_and_cooldown():
     """그룹별 RPS 설정 및 429 쿨다운 동작."""
-    assert toss_api._group_rps("MARKET_DATA_CHART") == 10  # 토스 최대치(10 TPS)
-    assert toss_api._group_rps("MARKET_DATA") == 10
-    assert toss_api._group_rps("ORDER") == 10
+    # 2026-07-19 tools/toss_tps_probe.py 실측값 (서버 X-RateLimit-Limit 헤더 기준)
+    assert toss_api._group_rps("MARKET_DATA_CHART") == 5   # 실측 5
+    assert toss_api._group_rps("MARKET_DATA") == 10        # 실측 10
+    assert toss_api._group_rps("STOCK") == 5               # 실측 5
+    assert toss_api._group_rps("MARKET_INFO") == 3         # 실측 3
+    assert toss_api._group_rps("RANKING") == 5             # 실측 5
+    assert toss_api._group_rps("ORDER") == 10              # 미실측 — 종전 값 유지
     assert toss_api._group_rps("AUTH") == 2  # 토큰 발급은 보수적 유지
     # 미정의 그룹은 기본값(config.TOSS_TX_PER_SECOND)
     import config as _cfg
@@ -971,7 +975,7 @@ def test_rate_limit_group_rps_and_cooldown():
 
 def test_rate_limit_smooths_calls_within_window():
     """그룹 호출이 최소 간격으로 분산되어 즉시 폭주하지 않는다."""
-    g = "MARKET_DATA_CHART"  # rps=10 → 최소 간격 0.1s
+    g = "MARKET_DATA"  # rps=10 → 최소 간격 0.1s
     toss_api._group_hist[g].clear()
     toss_api._group_cooldown.clear()
 
