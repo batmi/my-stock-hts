@@ -378,9 +378,12 @@ def check_smart_money_turnaround(code, is_overseas=False):
 
     try:
         inv_list = api.get_investor_trend(code)
-        if not inv_list or len(inv_list) < 3: 
+        if not inv_list or len(inv_list) < 3:
+            # [최적화] '수급 데이터 없음'(ETF·미제공 종목)도 부정 결과로 캐시해
+            #  API 마이크로캐시(5분) 만료마다 반복되던 무의미한 재조회를 차단 (예외는 일시 장애일 수 있어 미캐시)
+            _SMART_MONEY_CACHE.set(code, (False, ""))
             return False, ""
-            
+
         flag = False
         reason = ""
         
@@ -857,9 +860,9 @@ def _fetch_domestic_index_data(market_type):
 
     # 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
     #  사용하므로 두 기간 중 큰 값을 '충분성' 기준으로 삼는다(부족하면 다음 소스로 폴백).
-    ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+    ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
     if getattr(config, 'USE_MARKET_FILTER', True):
-        ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 50))
+        ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 60))
 
     def _insufficient(d):
         return d is None or d.empty or len(d) < ma_period
@@ -964,7 +967,7 @@ def get_market_regime(market_type="KOSPI"):
         df = get_domestic_index_data(market_type)
 
         # [수정] 설정된 MA 기간 가져오기
-        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
 
         if df is None or df.empty or len(df) < ma_period:
             return "Sideways", 0.0 # 데이터 부족 시 횡보로 가정
@@ -987,10 +990,10 @@ def get_market_regime(market_type="KOSPI"):
         # 국면 판단 로직
         # 1. 강세장: 지수 > MA & 기울기 > 0 & ADX > 기준
         if current_price > ma_val and slope > 0 and adx >= adx_threshold:
-            result = ("Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -1.0))
+            result = ("Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -0.5))
         # 2. 약세장: 지수 < MA
         elif current_price < ma_val:
-            result = ("Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 1.0))
+            result = ("Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 0.5))
         # 3. 횡보장: 그 외
         else:
             result = ("Sideways", config.MARKET_REGIME_PARAMS.get("SIDEWAYS_SCORE_ADJ", 0.0))
@@ -1136,9 +1139,9 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         interest_ma60_near = thresholds.get("INTEREST_MA60_NEAR", config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97))
 
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0))
         super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
+        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0))
     else:
         buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
@@ -1148,9 +1151,9 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
         interest_ma60_near = config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97)
 
         use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
-        super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+        super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
         super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
-        super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
+        super_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0)
 
     reasons = []
     is_severe_danger = False
@@ -2166,9 +2169,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             min_ask_bid_ratio = round(min_ask_bid_ratio * ratio_multiplier, 2)
                 
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0))
         super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
-        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0))
+        super_rsi = thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0))
         
         is_super = use_super and score >= super_score and w52_pos >= super_w52
         buy_rsi_limit = super_rsi if is_super else thresholds["BUY_RSI_MAX"]

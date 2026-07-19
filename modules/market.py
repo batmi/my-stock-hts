@@ -712,7 +712,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         if name in adaptive_targets:
             try:
-                ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 20)
+                ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
                 adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
                 
                 regime_state = "Sideways"
@@ -967,7 +967,7 @@ def _show_market_indices_core(target_indices=None):
 
                 tickers_to_fetch = []
                 now = datetime.now()
-                ttl_seconds = getattr(config, 'CHART_CACHE_TTL_MINUTES', 180) * 60
+                ttl_seconds = getattr(config, 'CHART_CACHE_TTL_MINUTES', 360) * 60
 
                 # [추가] 지수 캐시 적중(Hit) 검사
                 with _MARKET_YF_CACHE_LOCK:

@@ -290,7 +290,7 @@ def detect_recent_box(df, window=None, value_area_pct=None):
     지정 일수 기준 실제 '거래량(Volume)'이 가장 많이 몰려있는 핵심 매물대 구간을 박스로 산출합니다.
     Mode 1/2/3 모든 API 환경에서 동작할 수 있도록 방어 코드가 포함되어 있습니다.
     """
-    if window is None: window = config.INDICATOR_PARAMS.get("BOX_PERIOD", 20)
+    if window is None: window = config.INDICATOR_PARAMS.get("BOX_PERIOD", 30)
     if value_area_pct is None: value_area_pct = config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0) / 100.0
 
     n = len(df)

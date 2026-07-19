@@ -240,7 +240,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
                          bbox=dict(boxstyle='round', facecolor='white', edgecolor=status_color, alpha=0.8))
                 # 배지 아래에 현재 박스권 설정값 표기 (BOX_PERIOD / BOX_VALUE_AREA_PCT)
                 # BOX_PERIOD는 봉(캔들) 개수이므로 단위는 차트 주기를 따른다 (일봉=일, 분봉=분 등)
-                box_period = config.INDICATOR_PARAMS.get("BOX_PERIOD", 20)
+                box_period = config.INDICATOR_PARAMS.get("BOX_PERIOD", 30)
                 box_va_pct = config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0)
                 box_unit = {'weekly': '주', 'daily': '일', 'hourly': '시간'}.get(period_type, '분')
                 ax1.text(0.99, 0.94, f"{box_period}{box_unit} / {box_va_pct:g}%", transform=ax1.transAxes,

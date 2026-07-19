@@ -661,7 +661,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
     realtime_overlay=False면 캐시 적중 시 현재가 API 오버레이를 생략하고 과거봉 캐시를 그대로 반환한다.
     (호출자가 자체적으로 당일 캔들을 실시간 갱신하는 경우, 중복 현재가 호출을 막아 TPS 부담을 줄인다.)
     """
-    ttl_minutes = getattr(config, 'CHART_CACHE_TTL_MINUTES', 60)
+    ttl_minutes = getattr(config, 'CHART_CACHE_TTL_MINUTES', 360)
     if ttl_minutes <= 0:
         return fetch_func()
 

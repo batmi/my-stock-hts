@@ -295,7 +295,7 @@ def show_help():
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
 
     # [수정] 설정값 로드하여 동적 표시
-    ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+    ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
     obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
@@ -621,7 +621,7 @@ def show_help():
     r_syn = weights.get("SYNERGY", 2.0) / 2.0
 
     regime = config.MARKET_REGIME_PARAMS
-    ma_p = regime.get('REGIME_MA_PERIOD', 60)
+    ma_p = regime.get('REGIME_MA_PERIOD', 5)
     adx_th = regime.get('REGIME_ADX_THRESHOLD', 20)
     
     market_status_info = None
@@ -650,7 +650,7 @@ def show_help():
             # [추가] 실시간 필터링 상태 계산
             if getattr(config, 'USE_MARKET_FILTER', True):
                 filter_info = {}
-                ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 50)
+                ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 60)
                 for m_type in ["KOSPI", "KOSDAQ"]:
                     try:
                         df = analysis.get_domestic_index_data(m_type)
@@ -756,7 +756,7 @@ def show_help():
     # [추가] 시장 필터링 섹션
     score_table.add_section()
     filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
-    ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
+    ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
     score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
@@ -789,10 +789,10 @@ def show_help():
     
     use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
     super_status = "[green]ON[/green]" if use_super else "[red]OFF[/red]"
-    super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+    super_score = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
     super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
-    super_buy_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)
-    super_sell_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
+    super_buy_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0)
+    super_sell_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
     score_table.add_row(f"매수 - 슈퍼 모멘텀 ({super_status})", f"종합 점수 ≥ {super_score}점 & 52주 고점 {super_w52}% 이상 근접", "[magenta]강매수[/]", f"주도주 랠리 추종. 매수 RSI {super_buy_rsi}, 과열 매도 RSI {super_sell_rsi} 까지 허용")
 
     score_table.add_row("관망 - 상승", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
@@ -805,14 +805,14 @@ def show_help():
     take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+    ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
     time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
-    time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
-    bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+    time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
+    bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
     bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
 
     # [수정] 0=미사용 규칙은 (OFF)를 명시 — 값 0이 활성 조건("+0.0% 도달")처럼 보이던 표시 모순 해소
@@ -847,7 +847,7 @@ def show_help():
 
     # [추가] 주문 집행 상세 섹션
     score_table.add_section()
-    slippage_rate = getattr(config, 'SLIPPAGE_RATE', 0.003)
+    slippage_rate = getattr(config, 'SLIPPAGE_RATE', 0.002)
     if slippage_rate > 0:
         slippage_val = slippage_rate * 100
         score_table.add_row("주문 집행", "매수 주문 시", f"[red]+{slippage_val:.2f}%[/]", "체결 확률 확보 (현재가 + 슬리피지)")
@@ -857,7 +857,7 @@ def show_help():
         score_table.add_row("", "매도 주문 시", "[dim]미사용[/]", "현재가로 주문 (슬리피지 없음)")
     
     use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
-    use_risk = getattr(config, 'SYSTEM_RISK_PER_TRADE', 0) > 0
+    use_risk = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0) > 0
     if use_vol or use_risk:
         score_table.add_row("", "자산 배분 (마지막)", "[yellow]비중 조절[/]", "리스크/변동성 한도 내에서 집행")
     else:

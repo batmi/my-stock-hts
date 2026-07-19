@@ -671,12 +671,22 @@ class TelegramCommander:
             # [추가] 시장 국면(적응형 임계값) 보정 적용
             score_adj = 0.0
             if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
-                market_type = "KOSPI"
-                try:
-                    cp = api.get_current_price_data(code, False)
-                    if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
-                        market_type = "KOSDAQ"
-                except Exception: pass
+                # [최적화] 시장구분은 stock.json exchange 정보를 우선 사용 (trader._get_stock_market_type과 동일 기조)
+                #  — 코스닥 판별만을 위한 현재가 REST 1콜 절약. 관심목록에 없으면 API 폴백.
+                market_type = ""
+                for key in ("stocks_kr", "etfs_kr"):
+                    for item in config.session.stock_data.get(key, []):
+                        if item.get('code') == code and str(item.get('exchange', '')).upper() in ("KOSPI", "KOSDAQ"):
+                            market_type = str(item['exchange']).upper()
+                            break
+                    if market_type: break
+                if not market_type:
+                    market_type = "KOSPI"
+                    try:
+                        cp = api.get_current_price_data(code, False)
+                        if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
+                            market_type = "KOSDAQ"
+                    except Exception: pass
                 _, score_adj = analysis.get_market_regime(market_type)
                 
             thresholds = {
@@ -2091,7 +2101,7 @@ class TelegramCommander:
         msg += f"• 매도잔량 비대칭성: {buy_ask_bid}배 이상 (100% 기준)\n"
         
         # [추세추종] 역매수는 OFF 고정 기조 — 켜져 있을 때만(비정상 상태 인지용) 상세를 표기
-        use_mr = config.ANALYSIS_THRESHOLDS.get('USE_MEAN_REVERSION', True)
+        use_mr = config.ANALYSIS_THRESHOLDS.get('USE_MEAN_REVERSION', False)
         if use_mr:
             msg += f"\n[역추세 매수 (낙폭과대 반등)]\n"
             msg += f"• 사용 여부: ON ⚠️ (추세추종 기조는 OFF 권장)\n"
@@ -2104,13 +2114,13 @@ class TelegramCommander:
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
 
         msg += f"\n[매도 조건]\n"
         # [추세추종] 고정 익절/반익절은 미사용 기조 — 켜져 있을 때만(비정상 상태 인지용) 표기
@@ -2148,10 +2158,10 @@ class TelegramCommander:
         use_adaptive = "ON" if regime.get('USE_ADAPTIVE_THRESHOLD') else "OFF"
         msg += f"\n[적응형 임계값 ({use_adaptive})]\n"
         if regime.get('USE_ADAPTIVE_THRESHOLD'):
-            msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -1.0):+.1f}점\n"
-            msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 1.0):+.1f}점\n"
+            msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -0.5):+.1f}점\n"
+            msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 0.5):+.1f}점\n"
             msg += f"• 횡보장 보정: {regime.get('SIDEWAYS_SCORE_ADJ', 0.0):+.1f}점\n"
-            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 20)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
+            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 5)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
             
             # [추가] 현재 시장 국면 정보
             try:
@@ -2184,7 +2194,7 @@ class TelegramCommander:
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
         filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
 

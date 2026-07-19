@@ -346,13 +346,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     take_profit_rsi_limit = take_profit_rsi if take_profit_rsi is not None else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     sell_score_limit = sell_score if sell_score is not None else config.SELL_STRATEGY["SELL_SCORE"]
     
-    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+    ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
     ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
 
     # [동기화] 피라미딩 (수익 포지션 증액) 설정 - 실매매 trader._try_pyramid_buy / engine.analyze_pyramid와 동일 조건
-    pyr_use = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False)
+    pyr_use = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True)
     pyr_trigger = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
     pyr_ratio = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5)
     # [최적화 지원] 피라미딩 최대 차수 오버라이드 (0이면 피라미딩 미사용, 1 이상이면 사용 여부와 무관하게 해당 차수까지 허용)
@@ -364,7 +364,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     pyramid_count = 0
 
     # [추가] 리스크 관리 설정 로드
-    risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+    risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
     
     # [추가] ATR 기반 손절 설정 로드
     use_atr_stop = use_atr_stop_limit if use_atr_stop_limit is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
@@ -467,7 +467,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         # [Fix] 슈퍼 모멘텀 판정을 매도 로직 이전으로 이동
         #  (매도 측 'RSI과열' 기준과 매수 측 'RSI 상한 완화'가 동일 변수를 참조하므로 루프 상단에서 1회 계산)
         use_super = current_thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
-        super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5))
+        super_score = current_thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0))
         super_w52 = current_thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0))
         is_super = use_super and raw_score >= super_score and row.get('w52_pos', 0) >= super_w52
 
@@ -498,7 +498,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100 if position['avg_price'] > 0 else 0
 
             # [추가] 본전 청산(BEP) 로직 적용
-            bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+            bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
             # [동기화] ATR 동적 손절 적용 시 BEP 발동 기준을 손절폭(절대값)과 1:1 동기화 (실매매와 동일)
             if atr_sl_applied and sl_rate_to_use < 0:
                 bep_activation = abs(sl_rate_to_use)
@@ -520,8 +520,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
             
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-            time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+            time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
             
             if time_stop_days <= 0:
                 use_time_stop = False
@@ -567,7 +567,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         dynamic_callback = (atr_val * ts_atr_mult / ts_highest_price) * 100
                         # [추가] 트레일링 스탑 하/상한선 방어 로직 동기화
                         #  (TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제 — engine.analyze_sell과 동일)
-                        giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.5)
+                        giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
                         if giveback_ratio > 0:
                             max_allowed_callback = max(ts_callback, max_profit_rate * giveback_ratio)
                             actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
@@ -577,7 +577,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
                     
             # [추가] 방어적 반매도 로직 동기화
-            defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True)
+            defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False)
             if not sell_signal and defensive_half_tp and not half_tp_executed:
                 psar_val = row.get('SAR')
                 ema5_val = row.get('EMA5')
@@ -588,7 +588,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
             actual_tp_rsi = take_profit_rsi_limit
             if is_super:
-                actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
+                actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
             
             if not sell_signal and take_profit_rsi_limit > 0 and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
             # [동기화] 점수 매도는 추세 구조 훼손(주가<60일선) 동시 충족 시에만 발동 (실매매 engine.analyze_sell과 동일).
@@ -704,7 +704,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         is_mr_buy = (state == "역매수")
         
         # 슈퍼 모멘텀 시 RSI 상한 완화 (use_super/is_super는 매도 로직 이전에 계산됨)
-        actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 75.0)) if is_super else buy_rsi_limit
+        actual_buy_rsi = current_thresholds.get("SUPER_BUY_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0)) if is_super else buy_rsi_limit
         is_rsi_ok = row['RSI'] < actual_buy_rsi
         
         # [동기화] 시장 필터: 지수 < SMA인 날은 신규 진입 차단 (실매매 _check_buy_conditions와 동일,
@@ -1549,12 +1549,12 @@ def run_backtest():
         stop_loss = custom_rule['stop_loss'] if custom_rule else config.SELL_STRATEGY["STOP_LOSS_RATE"]
         take_profit = custom_rule['take_profit'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-        ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-        ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
-        time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+        ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
         use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
-        half_tp_use = bool(custom_rule['half_take_profit_use']) if custom_rule and custom_rule.get('half_take_profit_use') is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
+        half_tp_use = bool(custom_rule['half_take_profit_use']) if custom_rule and custom_rule.get('half_take_profit_use') is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
         # [추가] 피라미딩 최대 차수 오버라이드. None이면 config 기본값(PYRAMIDING_USE 포함) 그대로 사용,
         #        0이면 미사용, 1~5이면 해당 차수까지 증액 허용.
         pyramiding_max = None
@@ -1668,12 +1668,12 @@ def run_backtest():
             if val.lower() in ['b', 'q']: continue
             ts_activation = float(val)
             
-            def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
             val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
             if val.lower() in ['b', 'q']: continue
             ts_callback = float(val)
             
-            def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+            def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
             val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
             if val.lower() in ['b', 'q']: continue
             time_stop_days = int(val)
@@ -1695,7 +1695,7 @@ def run_backtest():
                 stop_loss = float(val)
             
             config.console.print("\n[bold]5. 피라미딩(수익 증액) 차수 설정[/bold]")
-            cur_pyr_on = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False)
+            cur_pyr_on = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True)
             cur_pyr_cnt = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
             cur_pyr_desc = f"{cur_pyr_cnt}차" if cur_pyr_on else "미사용"
             if Prompt.ask(f"피라미딩 차수를 변경하시겠습니까? (현재: {cur_pyr_desc})", choices=["y", "n"], default="n") == "y":
@@ -1761,7 +1761,7 @@ def run_backtest():
         if pyramiding_max is not None:
             pyr_disp = f"최대 {pyramiding_max}차" if pyramiding_max > 0 else "미사용"
         else:
-            pyr_disp = f"최대 {config.ANALYSIS_THRESHOLDS.get('PYRAMIDING_MAX_COUNT', 1)}차" if config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", False) else "미사용"
+            pyr_disp = f"최대 {config.ANALYSIS_THRESHOLDS.get('PYRAMIDING_MAX_COUNT', 1)}차" if config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True) else "미사용"
         msg += f"   [cyan]피라미딩 차수[/cyan]            {pyr_disp}\n"
         if weights:
             msg += f"   [cyan]스코어링 가중치[/cyan]          추세 {weights.get('TREND', 4.0)} / 모멘텀 {weights.get('MOMENTUM', 2.5)} / 강도 {weights.get('STRENGTH', 1.5)} / 시너지 {weights.get('SYNERGY', 2.0)}\n"

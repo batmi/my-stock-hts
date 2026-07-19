@@ -65,8 +65,8 @@ class ConclusionMonitor:
                                                        #  → 체결 알림에서 '(추정)' 문구 제거 및 실제 체결가 사용에 이용
             
             # [수정] 적응형 폴링 설정 로드
-            cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 2)
-            cls._instance.idle_interval = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 180)
+            cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)
+            cls._instance.idle_interval = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)
             cls._instance.active_duration = getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)
             cls._instance.active_until = 0 # 집중 감시 유지 만료 시간
             

@@ -105,7 +105,11 @@ class DBManager:
                         snapshot TEXT
                     )
                 ''')
-                
+
+                # [최적화] 자동매매 주기의 배치 조회(WHERE code IN ...)가 풀스캔하지 않도록 종목코드 인덱스
+                #  (라즈베리파이 SD카드 SQLite I/O 절감. 기존 DB에도 IF NOT EXISTS로 안전 적용)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_code ON trades(code)")
+
                 # 트레일링 스탑 추적 테이블 생성
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS trailing_stops (

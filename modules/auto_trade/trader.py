@@ -402,7 +402,7 @@ class AutoTrader:
             sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
             tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
             ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-            ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+            ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
             sell_score = config.SELL_STRATEGY["SELL_SCORE"]
             tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
             invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
@@ -411,7 +411,7 @@ class AutoTrader:
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
 
             msg += "\n\n⚙️ [적용 전략]"
             if config.session.is_toss:
@@ -865,7 +865,7 @@ class AutoTrader:
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
         regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "🟡 횡보장"}
-        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
 
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
@@ -878,7 +878,7 @@ class AutoTrader:
         # [추가] 시장 지수 요약 정보 및 필터링 상태 (시장 상황 아래 배치)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_str = "ON" if use_filter else "OFF"
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
         msg += f"\n[시장 지수 및 필터링 (필터: {filter_str}, SMA {filter_ma}일 기준)]\n"
         
         is_healthy_k = True
@@ -902,7 +902,7 @@ class AutoTrader:
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                         else:
                             # 대기 상태(WAITING) 등 캐시가 없을 때만 실시간 계산
-                            ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
+                            ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
                             if len(df) >= ma_period:
                                 ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
                                 is_healthy = curr >= ma_val
@@ -1151,7 +1151,7 @@ class AutoTrader:
         regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
         k_regime_str = regime_map.get(kospi_regime, kospi_regime)
         q_regime_str = regime_map.get(kosdaq_regime, kosdaq_regime)
-        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
+        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
         table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점) [dim](EMA {regime_ma}일 기준)[/]")
 
         # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
@@ -1190,7 +1190,7 @@ class AutoTrader:
             if not is_healthy_q or skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
             
             if skip_msg:
-                filter_ma = getattr(config, 'MARKET_FILTER_MA', 50)
+                filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
                 table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일 이탈)[/]")
 
         table.add_section()
@@ -1378,14 +1378,14 @@ class AutoTrader:
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
+        ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         
         use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
 
         # [수정] 0=미사용 규칙은 OFF로 명시 (활성 조건처럼 보이던 표시 모순 해소)
         overheat_str = f"과열 매도 (RSI {tp_rsi} 초과)" if tp_rsi > 0 else "과열 매도 [red]OFF[/]"
@@ -1419,7 +1419,7 @@ class AutoTrader:
         table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})")
 
         # 손실 제한
-        loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+        loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
         if loss_limit > 0:
             safety_msg = "[green]안전[/green]"
             if current_asset is not None and self.initial_asset > 0:
@@ -2620,7 +2620,7 @@ class AutoTrader:
                     if is_log_needed:
                         self.log("모니터링 완료. 대기 중...")
                 
-                interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
+                interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
                 
                 # [수정] 미체결 주문 확인 시 발생하는 API 호출 지연(Delay)이 누적되어
                 # 모니터링 주기가 설정값(180초)을 크게 초과하는 문제를 해결하기 위해 절대 시간 기반 대기 적용
@@ -3154,7 +3154,6 @@ class AutoTrader:
             
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
-            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             score_adj = market_regime_adj.get(market_type, 0.0)
             
             thresholds = None
@@ -3166,12 +3165,12 @@ class AutoTrader:
                     "SELL_SCORE": rule['sell_score'],
                     "WEIGHTS": rule.get('weights'),
                     "BUY_SCORE": rule['buy_score'],
-                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)),
+                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
                     "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
                     # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
                     #  (기존: 지역변수로만 읽고 미사용 → 룰 TS가 무시되고 항상 전역 설정으로 동작)
-                    "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
-                    "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+                    "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+                    "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
                 }
                 # [Fix] 룰의 ATR 손절 사용 여부를 TS 동적 콜백(샹들리에) 판정에도 일관 적용
                 if rule.get('use_atr_stop') is not None:
@@ -3180,7 +3179,7 @@ class AutoTrader:
                 thresholds = {
                     "WEIGHTS": config.SCORING_WEIGHTS,
                     "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
+                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
                 }
 
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
@@ -3423,7 +3422,7 @@ class AutoTrader:
                     budget_left = self.risk_manager.portfolio_risk_budget_left()
                     if budget_left is not None:
                         if add_risk > budget_left:
-                            cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+                            cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
                             self.log(f"피라미딩 보류: {name} - 포트폴리오 총 리스크 한도({cap:.0f}%) 초과 "
                                      f"(증액 리스크 {add_risk:,.0f}원 > 남은 예산 {max(budget_left, 0):,.0f}원)")
                             return
@@ -3988,7 +3987,7 @@ class AutoTrader:
             
             if remaining_slots == 1:
                 # 마지막 종목일 때: 변동성 타겟팅/리스크 관리가 꺼져있다면 잔여 예수금 전액 사용, 켜져 있다면 계산된 금액 준수
-                if not getattr(config, 'USE_VOLATILITY_TARGETING', True) and getattr(config, 'SYSTEM_RISK_PER_TRADE', 0) <= 0:
+                if not getattr(config, 'USE_VOLATILITY_TARGETING', True) and getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0) <= 0:
                     invest_amt = avail_cash
                 else:
                     invest_amt = calc_amt
@@ -4011,7 +4010,7 @@ class AutoTrader:
             if sl_rate and sl_rate < 0:
                 budget_left = self.risk_manager.portfolio_risk_budget_left()
                 if budget_left is not None:
-                    cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+                    cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
                     new_risk = invest_amt * (abs(sl_rate) / 100.0)
                     if new_risk > budget_left:
                         allowed_amt = int(max(budget_left, 0) / (abs(sl_rate) / 100.0))
@@ -4133,7 +4132,7 @@ class AutoTrader:
         # [수정] analysis 모듈의 공통 함수 사용을 위해 리스트로 변경
         target_indices = ["KOSPI", "KOSDAQ"]
         
-        ma_period = getattr(config, 'MARKET_FILTER_MA', 50)
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
         
         for market_name in target_indices:
             try:

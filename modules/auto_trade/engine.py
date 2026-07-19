@@ -152,7 +152,7 @@ class DefaultStrategy:
         반환: (증액 여부, 사유 문자열)
         """
         at = config.ANALYSIS_THRESHOLDS
-        use = thresholds.get("PYRAMIDING_USE", at.get("PYRAMIDING_USE", False)) if thresholds else at.get("PYRAMIDING_USE", False)
+        use = thresholds.get("PYRAMIDING_USE", at.get("PYRAMIDING_USE", True)) if thresholds else at.get("PYRAMIDING_USE", True)
         if not use:
             return False, ""
 
@@ -189,8 +189,8 @@ class DefaultStrategy:
         
         # [추가] 시간 청산 설정 로드
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
-        time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
+        time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
         
         if time_stop_days <= 0:
             use_time_stop = False
@@ -199,12 +199,12 @@ class DefaultStrategy:
         
         # [추가] 본전 청산(BEP) 및 ATR 기반 트레일링 설정 로드
         use_atr_stop = thresholds.get("USE_ATR_STOP", config.SELL_STRATEGY.get("USE_ATR_STOP", True)) if thresholds else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
-        ts_activation = thresholds.get("ts_activation", config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0)
-        ts_callback = thresholds.get("ts_callback", config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 4.0)
+        ts_activation = thresholds.get("ts_activation", config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_callback = thresholds.get("ts_callback", config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
         ts_atr_mult = thresholds.get("TRAILING_ATR_MULTIPLIER", config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
         
-        bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
+        bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
         bep_stop = thresholds.get("BREAK_EVEN_STOP_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
         
         defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False)
@@ -261,7 +261,7 @@ class DefaultStrategy:
                     # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
                     # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 일정 비율(기본 50%) 이상을
                     #    반납하는 것 방지. TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제(순수 샹들리에).
-                    giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.5)
+                    giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
                     if giveback_ratio > 0:
                         max_allowed_callback = max(ts_callback, max_profit_rate * giveback_ratio)
                         actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
@@ -314,9 +314,9 @@ class DefaultStrategy:
         if df is not None and not df.empty:
             # [추가] 슈퍼 모멘텀 동적 매도 평가 로직
             use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
-            super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.5)
+            super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
             super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
-            super_tp_rsi = thresholds.get("SUPER_TAKE_PROFIT_RSI", config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)) if thresholds else config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 85.0)
+            super_tp_rsi = thresholds.get("SUPER_TAKE_PROFIT_RSI", config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)) if thresholds else config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
             
             actual_tp_rsi = tp_rsi
             is_super = False
@@ -926,7 +926,7 @@ class RiskManager:
 
     def portfolio_risk_budget_left(self):
         """히트 캡까지 남은 리스크 예산(원). 캡 미사용(0)·기준자산 미확보 시 None(제한 없음)"""
-        cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0)
+        cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
         if cap <= 0:
             return None
         equity = self.trader.initial_asset
@@ -954,7 +954,7 @@ class RiskManager:
         
         base_amt = target_invest_amt
         
-        risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 5.0)
+        risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
         risk_based_amt = 0
         
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
@@ -993,7 +993,7 @@ class RiskManager:
 
     def check_loss_limit(self, current_total):
         """일일 손실 한도 체크"""
-        loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 0.0)
+        loss_limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
         
         if loss_limit_pct <= 0 or self.trader.initial_asset <= 0: return
         if current_total <= 0: return
