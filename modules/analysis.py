@@ -1086,7 +1086,7 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     # [추가] 2. 낙폭과대(역추세) 반등 조건 확인
     #  패닉 구간(is_panic_regime)에서는 60일선 위라도 역매수를 봉쇄해 '떨어지는 칼날 방어'를 유지한다
     #  (구조 게이트 도입으로 패닉 체크가 return하지 않게 되면서 MR 경로가 열리는 회귀 방지)
-    use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+    use_mr = thresholds.get("USE_MEAN_REVERSION", config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False)) if thresholds else config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False)
     if use_mr and not is_panic_regime and ema20 is not None and prev_rsi is not None and rsi is not None:
         mr_rsi = thresholds.get("MR_RSI_MAX", config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
         mr_disp = thresholds.get("MR_DISPARITY_MAX", config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)

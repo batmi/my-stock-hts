@@ -207,7 +207,7 @@ class DefaultStrategy:
         bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
         bep_stop = thresholds.get("BREAK_EVEN_STOP_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
         
-        defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True)
+        defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False)
 
         # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
@@ -866,7 +866,7 @@ class RiskManager:
 
         sell_cfg = config.SELL_STRATEGY
         default_sl = sell_cfg.get("STOP_LOSS_RATE", -5.0)
-        use_atr_stop = sell_cfg.get("USE_ATR_STOP", False)
+        use_atr_stop = sell_cfg.get("USE_ATR_STOP", True)
         bep_rate_cfg = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
         ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_cb = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)

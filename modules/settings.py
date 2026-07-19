@@ -568,7 +568,7 @@ def _entry_strategy_items():
         {"desc": "침체 이격도 하한", "help": "20일선 대비 과매도 기준 (예: 90.0)", "name": "DISPARITY_LOWER", "type": "float", "section": "1-1. 기본 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_LOWER", 90.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_LOWER": v})},
         {"desc": "역추세(낙폭과대) 사용", "help": "하락장/급락 시 반등 매수", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "1-2. 서브전략 — 역추세",
-         "get": lambda: config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"USE_MEAN_REVERSION": v})},
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"USE_MEAN_REVERSION": v})},
         {"desc": "역추세 RSI 상한", "help": "과매도 진입 기준 (예: 40)", "name": "MR_RSI_MAX", "type": "float", "section": "1-2. 서브전략 — 역추세",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"MR_RSI_MAX": v})},
         {"desc": "역추세 이격도 상한", "help": "20일선 대비 이격도 (예: 90%)", "name": "MR_DISPARITY_MAX", "type": "float", "section": "1-2. 서브전략 — 역추세",
@@ -618,7 +618,7 @@ def _sell_strategy_items():
         {"desc": "익절 수익률(%)", "help": "목표 수익 달성 시 매도 (0: 미사용)", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": v})},
         {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 매도/청산 — 트레일링 스탑",
-         "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
         {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
@@ -628,7 +628,7 @@ def _sell_strategy_items():
         {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
          "get": lambda: config.SELL_STRATEGY["STOP_LOSS_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"STOP_LOSS_RATE": v})},
         {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"], "section": "1-4. 매도/청산 — 손절",
-         "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", False), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
+         "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", True), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
         {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float", "section": "1-4. 매도/청산 — 손절",
          "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})},
         {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
@@ -646,7 +646,7 @@ def _sell_strategy_items():
         {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 매도", "name": "SELL_SCORE", "type": "float", "section": "1-5. 매도/청산 — 기타",
          "get": lambda: config.SELL_STRATEGY["SELL_SCORE"], "set": lambda v: config.SELL_STRATEGY.update({"SELL_SCORE": v})},
         {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"], "section": "1-5. 매도/청산 — 기타",
-         "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})},
+         "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})},
     ]
     # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
     return [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
@@ -1053,7 +1053,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
     config.SELL_STRATEGY.update({
         "TAKE_PROFIT_RATE": vals["TAKE_PROFIT_RATE"],
         "HALF_TAKE_PROFIT_USE": vals["HALF_TAKE_PROFIT_USE"],
-        "DEFENSIVE_HALF_SELL_USE": vals.get("DEFENSIVE_HALF_SELL_USE", True),
+        "DEFENSIVE_HALF_SELL_USE": vals.get("DEFENSIVE_HALF_SELL_USE", False),
         "STOP_LOSS_RATE": vals["STOP_LOSS_RATE"],
         "USE_ATR_STOP": vals.get("USE_ATR_STOP", True),
         "ATR_STOP_MULTIPLIER": vals.get("ATR_STOP_MULTIPLIER", 2.0),

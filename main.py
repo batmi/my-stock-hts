@@ -757,7 +757,7 @@ def show_help():
 
     score_table.add_row("매수 - 진입", f"종합 점수 ≥ {buy_score}점 & RSI < {buy_rsi_max} & 체결강도 > {buy_vol}%", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     
-    use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+    use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False)
     mr_status = "[green]ON[/green]" if use_mr else "[red]OFF[/red]"
     mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
     mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
@@ -783,19 +783,24 @@ def show_help():
     take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
     ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
-    use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+    use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
-    half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
+    half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
     time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
     time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 5)
     time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
     bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 7.0)
     bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
 
-    score_table.add_row("매도 - 익절", f"수익률 +{take_profit}% 도달", "[red]익절[/]", "목표 수익 달성 (최우선)")
-    
-    half_tp_status = "[green]ON[/green]" if half_tp_use else "[red]OFF[/red]"
-    score_table.add_row(f"매도 - 반익절 ({half_tp_status})", f"수익률 +{take_profit/2:.1f}% 도달", "[red]반익절[/]", "절반(50%) 선매도로 수익 확보")
+    # [수정] 0=미사용 규칙은 (OFF)를 명시 — 값 0이 활성 조건("+0.0% 도달")처럼 보이던 표시 모순 해소
+    #  (추세추종 기조: 고정 익절·RSI 과열 익절은 기본 OFF, 주청산은 트레일링 스탑)
+    tp_status = "[green]ON[/green]" if take_profit > 0 else "[red]OFF[/red]"
+    tp_cond = f"수익률 +{take_profit}% 도달" if take_profit > 0 else "미사용 (0 = OFF, 추세추종: TS 주청산)"
+    score_table.add_row(f"매도 - 익절 ({tp_status})", tp_cond, "[red]익절[/]", "목표 수익 달성 (최우선)")
+
+    half_tp_status = "[green]ON[/green]" if (half_tp_use and take_profit > 0) else "[red]OFF[/red]"
+    half_cond = f"수익률 +{take_profit/2:.1f}% 도달" if take_profit > 0 else "미사용 (익절 OFF 시 비활성)"
+    score_table.add_row(f"매도 - 반익절 ({half_tp_status})", half_cond, "[red]반익절[/]", "절반(50%) 선매도로 수익 확보")
     
     fixed_sl_status = "[red]OFF[/red]" if use_atr else "[green]ON[/green]"
     score_table.add_row(f"매도 - 고정손절 ({fixed_sl_status})", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
@@ -808,11 +813,13 @@ def show_help():
     time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
     score_table.add_row(f"매도 - 시간청산 ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}% (최근 5일 고점 갱신 부재)", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
     
-    def_half_status = "[green]ON[/green]" if config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", True) else "[red]OFF[/red]"
+    def_half_status = "[green]ON[/green]" if config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False) else "[red]OFF[/red]"
     score_table.add_row(f"매도 - 방어적 반매도 ({def_half_status})", f"주가 < SAR & 주가 < 5일선 동시 이탈 시", "[blue]반매도[/]", "하락 반전 신호 감지 시 50% 덜어내기 (리스크 방어)")
 
     score_table.add_row("매도 - 트레일링", f"수익 {ts_activation}% 도달 후 고점 대비 하락 시", "[blue]매도[/]", "수익 보전 (ATR 사용 시 동적 변동폭 적용)")
-    score_table.add_row("매도 - 과열", f"RSI > {take_profit_rsi}", "[red]익절[/]", "RSI 과열 시 이익 실현")
+    overheat_status = "[green]ON[/green]" if take_profit_rsi > 0 else "[red]OFF[/red]"
+    overheat_cond = f"RSI > {take_profit_rsi}" if take_profit_rsi > 0 else "미사용 (0 = OFF, 강추세는 과매수 지속 허용)"
+    score_table.add_row(f"매도 - 과열 ({overheat_status})", overheat_cond, "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 - 추세이탈", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
 
     # [추가] 주문 집행 상세 섹션

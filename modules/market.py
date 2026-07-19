@@ -105,6 +105,83 @@ ALL_INDICES = [
 # 이름 -> 티커 매핑 (기존 호환성 유지)
 INDICES_MAP = dict(ALL_INDICES)
 
+# [추가] 그룹 구분선을 시작하는 지수명 — 지수 화면(메뉴 1)과 텔레그램 시장지수가 공유한다
+#  (양쪽에 따로 하드코딩되어 국채 2년물 신설 시 텔레그램만 누락됐던 문제 재발 방지)
+SECTION_START_INDICES = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 금리", "금", "비트코인"]
+
+def fetch_index_quote(name, code):
+    """단일 지수의 경량 시세 (표시명, 현재값, 전일값)을 반환한다. 실패 시 (name, None, None).
+
+    텔레그램 등 외부 표면용 — 소스 선택 규칙은 지수 화면(_process_index_worker)과 동일:
+    코스피200선물=KIS 선물 TR(주/야간 자동 전환), 국내 지수=KIS/tvDatafeed,
+    미국채=tvDatafeed 현물(실패 시 5/10/30년만 야후 현물+아시아장 선물 프록시 '(선물적용)',
+    2년물은 대체 소스가 없어 실패 반환), 그 외 해외=yfinance fast_info(실패 시 일봉 차트).
+    """
+    display_name = name
+    current = prev = None
+    domestic_map = {
+        "코스피": "KOSPI", "코스피200": "KOSPI200",
+        "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150", "V코스피200": "VKOSPI"
+    }
+    try:
+        if name == "코스피200선물":
+            fut_div = "CM" if _k200_night_session() else "F"
+            fut_iscd = api.get_k200_futures_front_code()
+            fut_q = api.get_k200_futures_quote(fut_div, fut_iscd) if fut_iscd else None
+            if fut_q:
+                current = float(fut_q['current'])
+                prev = current - float(fut_q['diff'])
+                display_name = f"{name} {fut_div}"
+        elif name in domestic_map:
+            df = analysis.get_domestic_index_data(domestic_map[name])
+            if df is not None and not df.empty:
+                current = float(df.iloc[-1]['close'])
+                prev = float(df.iloc[-2]['close']) if len(df) > 1 else current
+        elif name in config.US_TREASURY_SPOT_SYMBOLS:
+            tdf = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_SYMBOLS[name])
+            if tdf is not None and not tdf.empty and len(tdf) >= 2:
+                current = float(tdf['close'].iloc[-1])
+                prev = float(tdf['close'].iloc[-2])
+            elif name != "미국채 2년물 금리":
+                fi = api.get_yf_fast_info(code)
+                if fi and fi.get('last_price'):
+                    current = float(fi['last_price'])
+                    prev = float(fi.get('regular_market_previous_close', current))
+                    fut_mapping = {
+                        "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
+                        "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
+                        "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
+                    }
+                    fut_info = fut_mapping[name]
+                    fut_fi = api.get_yf_fast_info(fut_info["ticker"])
+                    if fut_fi and fut_fi.get('last_price') and fut_fi.get('regular_market_previous_close'):
+                        f_curr = float(fut_fi['last_price'])
+                        f_prev = float(fut_fi['regular_market_previous_close'])
+                        if f_prev > 0:
+                            utc_hour = datetime.now(timezone.utc).hour
+                            if utc_hour < 13 or utc_hour >= 21:
+                                f_rate = (f_curr - f_prev) / f_prev * 100
+                                est_yield = current - (f_rate / fut_info["duration"])
+                                prev = current
+                                current = est_yield
+                                display_name = f"{name}(선물적용)"
+        else:
+            try:
+                fi = api.get_yf_fast_info(code)
+                if fi and fi.get('last_price'):
+                    current = float(fi['last_price'])
+                    prev = float(fi.get('regular_market_previous_close', current))
+            except Exception:
+                pass
+            if current is None:
+                df = api.get_chart_data(code, is_overseas=True)
+                if df is not None and not df.empty:
+                    current = float(df.iloc[-1]['close'])
+                    prev = float(df.iloc[-2]['close']) if len(df) > 1 else current
+    except Exception as e:
+        logger.debug(f"fetch_index_quote 실패({name}): {e}")
+    return display_name, current, prev
+
 def _process_index_worker(name, ticker, df_daily, df_intraday):
     """(내부함수) 단일 지수 분석 워커"""
     try:
@@ -1067,7 +1144,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 금리", "금", "비트코인"]:
+                if name in SECTION_START_INDICES:
                     table.add_section()
 
                 res = results_dict.get(name)

@@ -408,9 +408,9 @@ class AutoTrader:
             invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
             
             use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
-            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
-            use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", False)
+            use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
             time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
 
             msg += "\n\n⚙️ [적용 전략]"
@@ -420,12 +420,19 @@ class AutoTrader:
                 msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 매도잔량비 {buy_abr}배↑ [dim](체결강도 대체)[/dim]"
             else:
                 msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
-            msg += f"\n• 매도: {sell_score}점 미만+60일선 이탈 / RSI {tp_rsi} 초과"
-            
-            tp_str = f"+{tp}%"
-            if use_half_tp:
-                half_tp_rate = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", tp / 2.0)
-                tp_str += f" (반익절 +{half_tp_rate:.1f}%)"
+            # [수정] 0=미사용 규칙(RSI 과열·고정 익절)은 조건을 표시하지 않는다
+            #  ("RSI 0.0 초과"/"익절 +0.0%"처럼 OFF 규칙이 활성으로 보이던 표시 모순 해소)
+            msg += f"\n• 매도: {sell_score}점 미만+60일선 이탈"
+            if tp_rsi > 0:
+                msg += f" / RSI {tp_rsi} 초과"
+
+            if tp > 0:
+                tp_str = f"+{tp}%"
+                if use_half_tp:
+                    half_tp_rate = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", tp / 2.0)
+                    tp_str += f" (반익절 +{half_tp_rate:.1f}%)"
+            else:
+                tp_str = "미사용 (추세추종: TS 주청산)"
             
             if use_atr_stop:
                 sl_str = f"ATR 동적손절 (x{atr_mult})"
@@ -1358,7 +1365,7 @@ class AutoTrader:
             table.add_row("매수 조건", f"{buy_score}점↑ / RSI {buy_rsi}↓ / 체결강도 {buy_vol}%↑ / 비대칭 {buy_ask_ratio}배↑ (자동연동: {auto_adj})")
 
         # [추가] 역추세 매수 표시
-        use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", True)
+        use_mr = config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False)
         mr_status = "[green]ON[/]" if use_mr else "[red]OFF[/]"
         mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
         mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
@@ -1373,19 +1380,23 @@ class AutoTrader:
         ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 3.0)
         
-        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True)
+        use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
         time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 3.0)
 
-        table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만 + 60일선 이탈) / 과열 매도 (RSI {tp_rsi} 초과)")
-        
+        # [수정] 0=미사용 규칙은 OFF로 명시 (활성 조건처럼 보이던 표시 모순 해소)
+        overheat_str = f"과열 매도 (RSI {tp_rsi} 초과)" if tp_rsi > 0 else "과열 매도 [red]OFF[/]"
+        table.add_row("매도 조건", f"추세이탈 ({sell_score}점 미만 + 60일선 이탈) / {overheat_str}")
+
         # 익절 / 반익절
-        tp_str = f"익절 (+{tp}%)"
-        half_tp_status = "[green]ON[/]" if use_half_tp else "[red]OFF[/]"
-        tp_str += f" / 반익절 (+{tp/2:.1f}%, 50%) {half_tp_status}"
+        if tp > 0:
+            half_tp_status = "[green]ON[/]" if use_half_tp else "[red]OFF[/]"
+            tp_str = f"익절 (+{tp}%) / 반익절 (+{tp/2:.1f}%, 50%) {half_tp_status}"
+        else:
+            tp_str = "익절/반익절 [red]OFF[/] (추세추종: 트레일링 스탑 주청산)"
         table.add_row("", tp_str)
         
         # ATR손절 / 고정손절
@@ -3156,7 +3167,7 @@ class AutoTrader:
                     "WEIGHTS": rule.get('weights'),
                     "BUY_SCORE": rule['buy_score'],
                     "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)),
-                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True))),
+                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
                     # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
                     #  (기존: 지역변수로만 읽고 미사용 → 룰 TS가 무시되고 항상 전역 설정으로 동작)
                     "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 15.0),
@@ -3172,7 +3183,7 @@ class AutoTrader:
                     "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10)
                 }
 
-            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             if rule and rule.get('use_atr_stop') is not None:
                 use_atr_stop = bool(rule['use_atr_stop'])
 
@@ -3387,7 +3398,7 @@ class AutoTrader:
             # 증액분 손절률: 신규 매수와 동일하게 현재 ATR 기준으로 계산 (가중평균 손절선에 자동 반영)
             # [Fix] 신규 매수 경로(_execute_buy_orders)와 동일하게 개별 룰의 손절 설정을 우선 적용
             sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
             if rule:
                 sl_rate = rule.get('stop_loss', sl_rate)
@@ -3940,7 +3951,7 @@ class AutoTrader:
 
             # [추가] 손절률, ATR 여부 및 투자 비중 확인 (개별 룰 or 전역 설정)
             sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", False)
+            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
             cand_invest_ratio = invest_ratio
 

@@ -1586,118 +1586,57 @@ class TelegramCommander:
         if config.session.is_toss or config.session.is_simulation:
             targets = [(n, c) for n, c in targets if n not in ("코스피200선물", "V코스피200")]
 
-        # 구분선(공백라인)을 넣을 지수명 리스트
-        section_keys = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]
-
-        # [추가] 국내 지수 매핑 (analysis.get_domestic_index_data 호출용)
-        domestic_map = {
-            "코스피": "KOSPI", "코스피200": "KOSPI200",
-            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150",
-            "V코스피200": "VKOSPI"
-        }
+        # [수정] 지수별 시세 산출은 market.fetch_index_quote 공용 함수 사용 —
+        #  메뉴 1과 소스 선택(코스피200선물 TR/국내 KIS/국채 현물/해외 fast_info)이 항상 일치한다.
+        #  구분선 위치도 market.SECTION_START_INDICES 공유 (별도 하드코딩으로 국채 2년물
+        #  신설이 텔레그램에만 누락됐던 문제 재발 방지).
 
         # [추가] 다중 그룹 필터링 로직
         if target_group_names:
             if isinstance(target_group_names, str):
                 target_group_names = [target_group_names]
-                
+
             group_indices = set()
             found_group_labels = []
-            
+
             for g_info in config.INDICES_GROUPS.values():
                 if g_info['name'] in target_group_names:
                     group_indices.update(g_info['indices'])
                     label = g_info['name'].split(" (")[0]
                     if label not in found_group_labels:
                         found_group_labels.append(label)
-            
+
             if group_indices:
                 targets = [(name, code) for name, code in targets if name in group_indices]
                 msg = f"📊 [{' + '.join(found_group_labels)} 현황]\n"
             else:
                 return f"⚠️ 지정한 그룹을 찾을 수 없습니다."
 
-        regime_ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 20)
-        
         for name, code in targets:
-            if name in section_keys:
+            if name in market.SECTION_START_INDICES:
                 msg += "\n"
-            
-            try:
-                current = None
-                prev = None
 
-                if name == "코스피200선물":
-                    # [추가] 주간(F)/야간(CM) 세션 자동 전환 — 화면(메뉴 1)과 동일하게 시세 TR 사용
-                    #  (야간 등락률 = 주간 종가 대비 KIS 제공값. 모드 1/3은 위에서 이미 제외됨)
-                    fut_div = "CM" if market._k200_night_session() else "F"
-                    fut_iscd = api.get_k200_futures_front_code()
-                    fut_q = api.get_k200_futures_quote(fut_div, fut_iscd) if fut_iscd else None
-                    if fut_q:
-                        current = fut_q['current']
-                        prev = current - fut_q['diff']
-                        name = f"{name} {fut_div}"
-                elif name in domestic_map:
-                    # 국내 지수는 기존 방식대로 데이터 조회
-                    df = analysis.get_domestic_index_data(domestic_map[name])
-                    if df is not None and not df.empty:
-                        current = df.iloc[-1]['close']
-                        prev = df.iloc[-2]['close'] if len(df) > 1 else current
-                else:
-                    # 해외 지수는 무거운 차트 데이터 조회를 생략하고 즉시 fast_info 우선 사용
-                    try:
-                        fi = api.get_yf_fast_info(code)
-                        if fi and fi.get('last_price'):
-                            current = float(fi['last_price'])
-                            prev = float(fi.get('regular_market_previous_close', current))
-                            
-                            # 금리 프록시 로직
-                            fut_mapping = {
-                                "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
-                                "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
-                                "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
-                            }
-                            if name in fut_mapping:
-                                fut_info = fut_mapping[name]
-                                fut_fi = api.get_yf_fast_info(fut_info["ticker"])
-                                if fut_fi and fut_fi.get('last_price') and fut_fi.get('regular_market_previous_close'):
-                                    f_curr = float(fut_fi['last_price'])
-                                    f_prev = float(fut_fi['regular_market_previous_close'])
-                                    if f_prev > 0:
-                                        utc_hour = datetime.now(timezone.utc).hour
-                                        if utc_hour < 13 or utc_hour >= 21:
-                                            f_rate = (f_curr - f_prev) / f_prev * 100
-                                            est_yield = current - (f_rate / fut_info["duration"])
-                                            prev = current
-                                            current = est_yield
-                                            name = f"{name}(선물적용)"
-                    except Exception: pass
-                    
-                    # fast_info 실패 시에만 fallback으로 차트 조회 수행
-                    if current is None:
-                        df = api.get_chart_data(code, is_overseas=True)
-                        if df is not None and not df.empty:
-                            current = df.iloc[-1]['close']
-                            prev = df.iloc[-2]['close'] if len(df) > 1 else current
-                
+            try:
+                display_name, current, prev = market.fetch_index_quote(name, code)
+
                 if current is None or prev is None:
-                    msg += f"\n• {name}: 데이터 조회 실패"
+                    msg += f"\n• {display_name}: 데이터 조회 실패"
                     continue
-                
+
                 diff = current - prev
                 rate = (diff / prev) * 100 if prev > 0 else 0
-                
-                if "미국채" in name and "선물" not in name:
-                    val_fmt = f"{current:,.2f}%"
-                    msg += f"\n• {name} {val_fmt} ({diff:+.2f}p)"
+
+                if "미국채" in display_name:
+                    # 지수 화면과 동일하게 소수점 3자리 (선물적용 폴백 표기 포함)
+                    msg += f"\n• {display_name} {current:,.3f}% ({diff:+.3f}p)"
                 else:
                     val_fmt = f"{current:,.2f}"
                     if code == "KRW=X": val_fmt += "원"
-                    msg += f"\n• {name} {val_fmt} ({rate:+.2f}%)"
-                
-            except Exception as e:
+                    msg += f"\n• {display_name} {val_fmt} ({rate:+.2f}%)"
+
+            except Exception:
                 msg += f"\n• {name}: 오류"
-        
+
         return msg
 
     def _resolve_stock(self, keyword):
@@ -2177,7 +2116,7 @@ class TelegramCommander:
         # [추세추종] 고정 익절/반익절은 미사용 기조 — 켜져 있을 때만(비정상 상태 인지용) 표기
         if tp > 0:
             msg += f"• 익절: +{tp}% ⚠️ (추세추종 기조는 미사용 권장)\n"
-            half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else "OFF"
+            half_tp_str = "ON (익절의 절반)" if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else "OFF"
             msg += f"• 반익절: {half_tp_str}\n"
         else:
             msg += f"• 익절: 미사용 (트레일링 스탑 주도)\n"

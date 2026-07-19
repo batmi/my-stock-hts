@@ -3475,6 +3475,35 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
                     if qty > 0: return qty
     return 0
 
+def resolve_overseas_exchange(code):
+    """해외 티커의 KIS 거래소 코드(NAS/NYS/AMS)를 판별해 캐시·stock.json에 저장한다.
+
+    KIS 모드는 시세 응답 기반(find_best_exchange_code)을 쓰고, 토스 모드는 KIS API를
+    쓸 수 없어 TradingView 스캐너의 거래소 접두사(NASDAQ/NYSE/AMEX)로 판별한다.
+    (스캐너 기본 필터는 ETF(type=fund)를 제외하므로 필터를 직접 구성한다)
+    실패 시 None — 표시는 '-' 유지.
+    """
+    cached = config.session.exchange_cache.get(code)
+    if cached:
+        return cached
+    if not config.session.is_toss:
+        return find_best_exchange_code(code)
+    try:
+        from tradingview_screener import Query
+        q = Query().set_markets('america').select('close')
+        q.query['filter'] = [{'left': 'name', 'operation': 'equal', 'right': code}]
+        q.query.pop('filter2', None)
+        _, df = q.get_scanner_data()
+        if df is not None and not df.empty:
+            tv_ex = str(df.iloc[0]['ticker']).split(':')[0]
+            excd = {"NASDAQ": "NAS", "NYSE": "NYS", "AMEX": "AMS"}.get(tv_ex)
+            if excd:
+                config.session.update_cache_and_save(code, excd)
+                return excd
+    except Exception as e:
+        logger.debug(f"[TV] 거래소 판별 실패({code}): {e}")
+    return None
+
 def find_best_exchange_code(stock_code):
     # [추가] 토스: 주문 시 거래소 코드가 불필요(토스 내부 라우팅). 기본값 반환.
     if config.session.is_toss:

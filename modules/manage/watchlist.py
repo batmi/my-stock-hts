@@ -563,8 +563,14 @@ def get_current_price(mode='add'):
                     new_item["exchange"] = "KOSDAQ"
                 else:
                     new_item["exchange"] = "KOSPI"
-            elif code in config.session.exchange_cache: 
+            elif code in config.session.exchange_cache:
                 new_item["exchange"] = config.session.exchange_cache[code]
+            elif is_overseas:
+                # [추가] 토스 모드 등 캐시에 없는 해외 종목: TV/KIS로 거래소를 판별해 저장
+                #  (기존엔 토스 모드에서 거래소를 채울 경로가 없어 목록에 '-'로 표시되던 문제)
+                excd = api.resolve_overseas_exchange(code)
+                if excd:
+                    new_item["exchange"] = excd
             
             target_list = config.session.stock_data.get(target_list_key, [])
             if not any(item['code'] == code for item in target_list):
@@ -1016,6 +1022,16 @@ def view_watchlist():
                 code = s['code']
                 name = s['name']
                 exchange = s.get('exchange', '-')
+                # [추가] 거래소 누락 해외 종목 자동 보정 — 과거(토스 모드 등)에 거래소 판별
+                #  경로가 없어 '-'로 저장된 항목을 표시 시점에 1회 판별·저장한다(성공 시 영구 반영).
+                if exchange == '-' and key in ("stocks_us", "etfs_us"):
+                    try:
+                        resolved = api.resolve_overseas_exchange(code)
+                        if resolved:
+                            exchange = resolved
+                            s['exchange'] = resolved
+                    except Exception:
+                        pass
                 
                 status_tags = []
                 if code in restricted_stocks: status_tags.append("[blue]제한(-)[/]")

@@ -186,7 +186,7 @@ def _input_and_save_rule(code, name):
         "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 10),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0),
-        "half_take_profit_use": 1 if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", True) else 0
+        "half_take_profit_use": 1 if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else 0
     }
     
     current = existing if existing else defaults.copy()

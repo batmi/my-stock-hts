@@ -1095,7 +1095,7 @@ def send_order(order_type):
                     calculated_score = score
 
                     # [추가] ATR 손절 적용 (수동 매수 시에도 계산)
-                    if config.SELL_STRATEGY.get("USE_ATR_STOP", False):
+                    if config.SELL_STRATEGY.get("USE_ATR_STOP", True):
                         atr = ind.get('atr')
                         if atr and atr > 0:
                             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
