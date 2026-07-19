@@ -3734,6 +3734,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
     try:
         name, code = item
         w52_pos_str, per_str, pbr_str, shar_str = "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]"
+        w52_pos_val = 0.0  # 52주 위치(%) — 표시 문자열과 슈퍼 모멘텀 판정이 공유
         foreign_rate_str = "[dim]-[/dim]"
         inv_str = "[dim]-[/dim]"
         cached_ex = config.session.exchange_cache.get(code, "NAS") if is_overseas else None
@@ -3816,7 +3817,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     if val == 0: return "[dim]-[/dim]"
                     abs_val = abs(val)
                     if abs_val >= 1_000_000_000: s = f"{val/1_000_000_000:,.1f}B"
-                    if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                    elif abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
                     elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
                     else: s = f"{val:,}"
                     return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
@@ -3855,6 +3856,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     h52, l52, c = float(out.get('w52_hgpr', 0)), float(out.get('w52_lwpr', 0)), float(out.get('stck_prpr', 0))
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
+                        w52_pos_val = pos
                         if pos >= 90: w_color = "[red]"
                         elif pos >= 80: w_color = "[orange3]"
                         elif pos <= 30: w_color = "[blue]"
@@ -3879,6 +3881,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
+                        w52_pos_val = pos
                         if pos >= 90: w_color = "[red]"
                         elif pos >= 80: w_color = "[orange3]"
                         elif pos <= 30: w_color = "[blue]"
@@ -3956,24 +3959,10 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
                     }
                     
-            # 52주 위치 계산 (슈퍼 모멘텀 마킹용)
-            w52_pos_val = 0.0
-            if not is_overseas:
-                try:
-                    h52, l52, c = float(curr_data['output'].get('w52_hgpr', 0)), float(curr_data['output'].get('w52_lwpr', 0)), float(curr_data['output'].get('stck_prpr', 0))
-                    if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
-                except Exception: pass
-            else:
-                try:
-                    if detail:
-                        h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
-                        if h52 > l52: w52_pos_val = (c - l52)/(h52 - l52)*100
-                except Exception: pass
-
+            # 52주 위치는 위 표시 문자열 계산에서 w52_pos_val로 함께 산출됨 (슈퍼 모멘텀 마킹 공용)
             sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
             class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val, smart_money=sm_flag)
 
-            def fmt(v): return f"{v:,.2f}" if is_overseas else f"{int(v):,}"
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             curr_price_color = "[white]"
@@ -4118,12 +4107,18 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             else:
                 if is_us_stock_context: row_data.extend([per_str, pbr_str])
                 elif is_us_etf_context: row_data.append(shar_str)
-            return row_data, is_restricted, is_custom_rule, is_memo, is_reserved
+            return row_data, is_restricted, is_custom_rule, is_memo, is_reserved, False
         else:
-            return [name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
+            # [Fix] 패딩 컬럼 수는 정의된 컬럼 총수와 일치해야 한다 — 국내 11(총 15칸)·
+            #  미국주식 12(16칸)·미국ETF 11(15칸)·해외 무접미(trading.py title="") 10(14칸).
+            #  기존 국내 14는 컬럼(15)보다 3칸 많아 rich가 빈 유령 컬럼을 추가,
+            #  실패 종목이 하나라도 있으면 테이블 전체 레이아웃이 밀리던 문제.
+            _pad = 11 if not is_overseas else (12 if is_us_stock_context else (11 if is_us_etf_context else 10))
+            return [name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * _pad], False, False, False, False, True
     except Exception as e:
         logger.error(f"[{code}] 분석 오류: {e}")
-        return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * (14 if not is_overseas else (12 if is_us_stock_context else 11))], False, False, False, False
+        _pad = 11 if not is_overseas else (12 if is_us_stock_context else (11 if is_us_etf_context else 10))
+        return [name, code, "[red]Error[/]", "[dim]-[/dim]", *["[dim]-[/dim]"] * _pad], False, False, False, False, True
 
 def _realtime_and_analyze(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, chart_df, preloaded_curr=None):
     """(내부함수) print_table 2단계: 당일 실시간 데이터 수신 + 지표 분석.
@@ -4141,8 +4136,35 @@ def _print_table_worker(item, title, is_overseas, use_investor_data, restricted_
     return _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks,
                               rules_map, market_regime_adj, reserved_codes, m_codes, bundle)
 
+_INV_PROBE_CACHE = {}      # 그룹 첫 종목 코드 -> (판정, 시각) — 반복(@) 조회마다 프로브 API 재호출 방지
+_INV_PROBE_TTL_SEC = 300
+
+def _probe_investor_data(data_list):
+    """국내 그룹의 수급(개/외/기) 컬럼 사용 여부를 판정한다 (최대 3종목 샘플, 5분 캐시).
+
+    기존에는 첫 종목 1건으로만 판정해 첫 종목이 거래정지·신규상장 등으로 수급이 0이면
+    그룹 전체가 OBV로 잘못 폴백되던 문제를 샘플 확대로 보완한다.
+    """
+    key = data_list[0][1]
+    now = time.time()
+    ent = _INV_PROBE_CACHE.get(key)
+    if ent and now - ent[1] < _INV_PROBE_TTL_SEC:
+        return ent[0]
+    use = False
+    for _, code in data_list[:3]:
+        try:
+            test_data = api.get_investor_trend(code)
+        except Exception:
+            continue
+        if test_data:
+            sample = test_data[0]
+            if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']):
+                use = True
+                break
+    _INV_PROBE_CACHE[key] = (use, now)
+    return use
+
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
-    is_domestic_etf = ("ETF" in title and not is_overseas)
     use_investor_data = False
     if not is_overseas and data_list:
         with Progress(
@@ -4153,11 +4175,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
             transient=True
         ) as progress:
             progress.add_task("[cyan]수급 데이터 확인 중 (KIS API)...[/cyan]", total=None)
-            test_data = api.get_investor_trend(data_list[0][1])
-            if test_data:
-                sample = test_data[0]
-                if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']): use_investor_data = True
-    
+            use_investor_data = _probe_investor_data(data_list)
+
     # [이동] 적응형 임계값 준비 (테이블 생성 전으로 이동)
     use_adaptive = False
     if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
@@ -4248,17 +4267,16 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         elif is_us_etf:
             table.add_column("상장주수", justify="right", style="dim")
 
-    # [최적화] 통신+연산 통합 처리를 위한 스레드 수 안정화
-    if is_overseas:
-        max_w = 4 if config.session.is_simulation else 5 # 야후 API 동시 호출 차단 방지
-    else:
-        # KIS API 동시 호출 제한(TPS) 방지를 위해 실전투자 시 5로 하향
-        max_w = 4 if config.session.is_simulation else 5
+    # [최적화] 통신+연산 통합 처리 스레드 수 — 모의서버는 TPS 여유가 작아 4, 실전·해외는 5
+    #  (야후/KIS 동시 호출 차단 방지. 해외·국내 분기가 동일 값이라 단일화)
+    max_w = 4 if config.session.is_simulation else 5
     # [수정] 메뉴1처럼 진행 상태를 '데이터 수집'과 '지표 분석' 2단계로 분리하여 운영자 인지성을 높인다.
-    _fail_cols = 14 if not is_overseas else (12 if is_us_stock else 11)
+    # [Fix] 패딩 수는 실제 정의된 컬럼 총수에서 산출 — 기존 고정값(국내 14)이 컬럼(15)보다
+    #  3칸 많아 rich가 빈 유령 컬럼을 추가해 테이블 레이아웃이 밀리던 문제
+    _fail_cols = len(table.columns) - 4
     def _fail_row(idx):
         name, code = data_list[idx]
-        return ([name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * _fail_cols], False, False, False, False)
+        return ([name, code, "[dim]-[/dim]", "실패", *["[dim]-[/dim]"] * _fail_cols], False, False, False, False, True)
 
     try:
         used_marks = set()
@@ -4367,14 +4385,15 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
                 failed_list.append(data_list[idx])
                 continue
 
-            row_data, is_res, is_cust, is_mem, is_rsv = result_item
+            row_data, is_res, is_cust, is_mem, is_rsv, is_failed = result_item
 
             if is_res: used_marks.add('-')
             if is_cust: used_marks.add('+')
             if is_mem: used_marks.add('=')
             if is_rsv: used_marks.add('*')
 
-            if len(row_data) > 3 and (row_data[3] == "실패" or "Error" in str(row_data[2])):
+            # [수정] 실패 여부는 셀 문자열 매칭 대신 워커가 반환한 플래그로 판정
+            if is_failed:
                 failed_list.append(data_list[idx])
 
             table.add_row(*row_data)
@@ -4414,7 +4433,7 @@ def show_stock_analysis():
             ("5", "전체 보기", "View All"), ("6", "개별 종목 분석", "Individual Analysis"),
             ("7", "전체 종목 분석", "Market Analysis")
         ]
-        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@)[/dim]")
+        choice_str = utils.show_menu("종목 시세 분석 (Stock Analysis)", menu_items, default_choice=last_choice, custom_prompt="번호 입력 [dim](예: 1,3 또는 12 / 반복: 1@ 또는 1@120)[/dim]")
         if choice_str.lower() in ['b', 'q']: return False
         if choice_str.lower() == 'h':
             if getattr(utils, 'show_help', None):
@@ -4423,10 +4442,16 @@ def show_stock_analysis():
             continue
         
 
+        # [수정] 반복 주기 커스텀 지원: '1@'(기본 60초) 또는 '1@120'(120초, 최소 10초)
         interval = 0
-        if choice_str.endswith('@'):
-            interval = 60
-            choice_str = choice_str.rstrip('@')
+        if '@' in choice_str:
+            base, _, suffix = choice_str.partition('@')
+            if suffix and not suffix.isdigit():
+                config.console.print("[red]잘못된 반복 주기입니다. 예: 1@ 또는 1@120[/red]")
+                time.sleep(1)
+                continue
+            interval = max(10, int(suffix)) if suffix else 60
+            choice_str = base
 
         raw_choices = [c.strip() for c in choice_str.split(',') if c.strip()]
         choices = []
@@ -4586,10 +4611,10 @@ def show_stock_analysis():
             logger.error(f"분석 기능 실행 중 치명적 오류: {e}")
             config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
             
+        # [수정] 반복 조회 중단(Ctrl+C) 시 메인 메뉴로 이탈하지 않고 종목 시세 분석 메뉴를 유지
         if interval > 0:
-            return False
-        else:
-            utils.pause()
+            continue
+        utils.pause()
 
 def get_snapshot(code, is_overseas):
     """주문 시점의 종목 상태 스냅샷 생성 (DB 저장용)"""

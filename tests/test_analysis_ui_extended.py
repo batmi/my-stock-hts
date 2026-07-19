@@ -75,10 +75,11 @@ def test_get_analysis_params_custom(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_show_stock_analysis_auto_refresh(mock_ask, mock_print):
     """분석 메뉴 반복 조회(@ 입력) 테스트"""
-    # 1@ 입력 -> 반복 조회 모드 활성화 -> KeyboardInterrupt로 루프 탈출
-    mock_ask.return_value = "1@"
+    # 1@ 입력 -> 반복 조회 모드 활성화 -> KeyboardInterrupt로 반복 중단
+    # [수정] 반복 중단 시 메인 이탈 대신 메뉴 유지로 바뀌어, 두 번째 입력(q)으로 종료한다
+    mock_ask.side_effect = ["1@", "q"]
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
-    
+
     with patch('time.sleep', side_effect=KeyboardInterrupt):
         analysis.show_stock_analysis()
         

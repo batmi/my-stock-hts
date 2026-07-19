@@ -141,7 +141,7 @@ def test_print_table_worker_overseas_etf(mock_detail, mock_chart, mock_cp):
     
     item = ("QQQ", "QQQ")
     # is_overseas=True, is_us_etf_context=True("ETF" in title)
-    row_data, is_res, is_cust, is_mem, is_rsv = analysis._print_table_worker(item, "미국 ETF", True, False, {}, {}, None, set(), set())
+    row_data, is_res, is_cust, is_mem, is_rsv, is_failed = analysis._print_table_worker(item, "미국 ETF", True, False, {}, {}, None, set(), set())
     
     assert "1.5M" in row_data[-1] # 상장주수 1.5M 표기 확인
     assert "[blue]" in row_data[4] # 하락률 파란색 확인
