@@ -177,6 +177,74 @@ def _merge_index_volume_from_yfinance(df, yf_ticker):
     out['volume'] = out['date'].map(_vol_for)
     return out
 
+# [추가] 미국채 현물 금리(TVC:US02Y/US05Y/US10Y/US30Y) 캐시 — 현물 금리는 장외(아시아장)에도
+#  거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다. 2년물은 야후에
+#  현물 지수가 없고 CBOT 금리선물(2YY=F)마저 유동성 고갈로 시세가 수일 지연되므로(현물
+#  4.17% vs 선물 3.99%) tvDatafeed가 유일한 현물 소스. TV 일봉 마지막 봉은 장중 실시간
+#  갱신되므로 짧은 TTL 캐시로 준실시간을 유지한다.
+_US_TREASURY_SPOT_CACHE = {}   # symbol -> {"df": DataFrame, "time": datetime, "fail": datetime|None}
+_US_TREASURY_TTL_SEC = 300
+_US_TREASURY_NEG_TTL_SEC = 600  # 실패 음성 캐시(익명 웹소켓 다운 시 매 조회 재시도로 UI 지연 방지)
+
+def get_us_treasury_spot_data(symbol, n_bars=300):
+    """미국채 현물 금리(TVC:USxxY) 일봉을 tvDatafeed로 조회한다(5분 TTL 캐시).
+
+    symbol: "US02Y"|"US05Y"|"US10Y"|"US30Y".
+    반환 스키마는 지수 경로와 동일: ['date','open','high','low','close','volume']
+    (volume=0 — 금리 지수라 OBV 불가, attrs['source']='TVDATAFEED'). 실패 시 None.
+    """
+    now = datetime.now()
+    ent = _US_TREASURY_SPOT_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
+    cached = ent["df"]
+    if cached is not None and ent["time"] and (now - ent["time"]).total_seconds() < _US_TREASURY_TTL_SEC:
+        return cached
+    if ent["fail"] and (now - ent["fail"]).total_seconds() < _US_TREASURY_NEG_TTL_SEC:
+        return cached  # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용(없으면 None)
+
+    tv = _get_tvdatafeed()
+    if tv is None:
+        return cached
+    try:
+        from tvDatafeed import Interval
+    except Exception:
+        return cached
+
+    df = None
+    for attempt in range(4):  # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
+        try:
+            with _TVDATAFEED_LOCK:
+                df = tv.get_hist(symbol=symbol, exchange="TVC",
+                                 interval=Interval.in_daily, n_bars=n_bars)
+            if df is not None and not df.empty:
+                break
+        except Exception as e:
+            logger.debug(f"[TVDATAFEED] {symbol} 조회 오류(attempt={attempt}): {e}")
+            df = None
+        if attempt < 3:
+            time.sleep(0.8 * (attempt + 1))
+
+    if df is None or df.empty:
+        logger.debug(f"[TVDATAFEED] {symbol} 데이터 없음")
+        ent["fail"] = now
+        return cached
+
+    try:
+        out = df.reset_index().rename(columns={'datetime': 'date'})
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col not in out.columns:
+                out[col] = 0.0
+        out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+        out = out.sort_values('date', ascending=True).reset_index(drop=True)
+        out.attrs['source'] = 'TVDATAFEED'
+        ent["df"] = out
+        ent["time"] = now
+        ent["fail"] = None
+        return out
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {symbol} 스키마 변환 실패: {e}")
+        ent["fail"] = now
+        return cached
+
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
 #  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을
 #  막기 위해 일정 시간 재조회를 건너뛴다. (성공 결과는 api._get_cached_chart가 6시간/디스크 캐싱)

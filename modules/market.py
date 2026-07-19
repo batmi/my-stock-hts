@@ -87,7 +87,9 @@ ALL_INDICES = [
     ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
-    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+    #  미국채 2년물은 야후에 현물 금리 지수 티커(^FVX류)가 없어 CBOT 2년물 금리선물(2YY=F)을 사용한다.
+    #  금리 % 단위로 직접 호가되며 거의 24시간 거래라 아시아장 선물 프록시(fut_mapping) 없이도 실시간 갱신된다.
+    ("달러인덱스", "DX-Y.NYB"), ("달러환율", "KRW=X"), ("미국채 2년물 금리", "2YY=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
     # 5. 글로벌 지수
     ("Japan - 닛케이", "^N225"), ("Taiwan - 대만가권", "^TWII"), ("Hong Kong - 항셍", "^HSI"), ("China - 상해종합", "000001.SS"), 
     ("UK - FTSE 100", "^FTSE"), ("France - CAC 40", "^FCHI"), ("Germany - DAX 40", "^GDAXI"), ("Europe - STOXX 50", "^STOXX50E"),
@@ -217,7 +219,33 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
         use_fast_info = False
-        if not is_domestic_index:
+        is_treasury_spot = False  # [추가] 미국채 '현물' 금리(TVC:USxxY) 소스 적용 여부
+
+        # [추가] 미국채 금리: 현물(TVC:USxxY)을 tvDatafeed로 1차 조회한다. 현물 금리는
+        #  아시아장에도 거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다.
+        #  성공 시 현재가·전일대비·52주고·지표를 모두 현물 일봉으로 계산하고, 실패 시에만
+        #  기존 경로(5/10/30년: ^FVX류+아시아장 선물 프록시 (F) / 2년: 2YY=F 선물 (F))로 폴백.
+        treasury_spot_map = {
+            "미국채 2년물 금리": "US02Y", "미국채 5년물 금리": "US05Y",
+            "미국채 10년물 금리": "US10Y", "미국채 30년물 금리": "US30Y",
+        }
+        if name in treasury_spot_map:
+            try:
+                tv_df = analysis.get_us_treasury_spot_data(treasury_spot_map[name])
+                if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
+                    df_daily = tv_df.copy()
+                    df_daily['date'] = pd.to_datetime(df_daily['date'])
+                    df_daily.set_index('date', inplace=True)
+                    current = float(df_daily['close'].iloc[-1])
+                    prev = float(df_daily['close'].iloc[-2])
+                    chart_calc_price = current
+                    high_52 = float(df_daily['close'].tail(250).max())
+                    use_fast_info = True
+                    is_treasury_spot = True
+            except Exception as e:
+                logger.debug(f"{name} 현물(TV) 조회 실패, 기존 경로 폴백: {e}")
+
+        if not is_domestic_index and not is_treasury_spot:
             try:
                 fi = api.get_yf_fast_info(ticker)
                 if fi:
@@ -469,8 +497,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
             
             if "미국채" in name and "선물" not in name:
-                change_str = f"{diff_color}{diff:+.2f}p ({rate:+.2f}%)[/]"
-                curr_fmt = f"{current:,.2f}%"
+                change_str = f"{diff_color}{diff:+.3f}p ({rate:+.2f}%)[/]"
+                curr_fmt = f"{current:,.3f}%"
             else:
                 change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
                 curr_fmt = f"{current:,.2f}"
@@ -497,7 +525,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif high_52_rate < -20.0: h_color = "[blue]"
             
             if "미국채" in name and "선물" not in name:
-                high_52_str = f"[dim]{high_52:,.2f}%[/] ({h_color}{high_52_rate:.1f}%[/])"
+                high_52_str = f"[dim]{high_52:,.3f}%[/] ({h_color}{high_52_rate:.1f}%[/])"
             else:
                 h52_fmt = f"{high_52:,.0f}" if high_52 >= 1000 else f"{high_52:,.2f}"
                 high_52_str = f"[dim]{h52_fmt}[/] ({h_color}{high_52_rate:.1f}%[/])"
@@ -505,7 +533,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         def fmt_val(val, color_tag):
             if val is None or math.isnan(val): return "[dim]-[/dim]"
             if "미국채" in name and "선물" not in name:
-                s = f"{val:,.2f}%"
+                s = f"{val:,.3f}%"
             else:
                 s = f"{val:,.0f}" if val >= 1000 else f"{val:,.2f}"
             return f"{color_tag}{s}[/]" if color_tag else s
@@ -637,6 +665,13 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 4.00 <= eval_price < 4.40: display_name = f"[green]{name}[/]"
             elif 3.50 <= eval_price < 4.00: display_name = f"[yellow]{name}[/]"
             elif eval_price < 3.50: display_name = f"[blue]{name}[/]"
+        elif name == "미국채 2년물 금리":
+            if eval_price >= 4.90: display_name = f"[magenta]{name}[/]"
+            elif 4.50 <= eval_price < 4.90: display_name = f"[red]{name}[/]"
+            elif 4.00 <= eval_price < 4.50: display_name = f"[orange3]{name}[/]"
+            elif 3.40 <= eval_price < 4.00: display_name = f"[green]{name}[/]"
+            elif 2.80 <= eval_price < 3.40: display_name = f"[yellow]{name}[/]"
+            elif eval_price < 2.80: display_name = f"[blue]{name}[/]"
         elif name == "미국채 5년물 금리":
             if eval_price >= 5.00: display_name = f"[magenta]{name}[/]"
             elif 4.70 <= eval_price < 5.00: display_name = f"[red]{name}[/]"
@@ -771,7 +806,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 400 <= current < 500: display_name = f"[yellow]{name}[/]"
             elif current < 400: display_name = f"[blue]{name}[/]"
 
-        if is_proxy_yield:
+        #  2년물은 현물(TVC:US02Y) 실패로 CBOT 금리선물(2YY=F) 폴백 시에만 (F)를 표기한다
+        #  (5/10/30년 폴백은 is_proxy_yield가 아시아장 선물 프록시 적용 시에만 (F)를 붙인다)
+        if is_proxy_yield or (name == "미국채 2년물 금리" and not is_treasury_spot):
             display_name += " [dim](F)[/dim]"
 
         return {
@@ -1048,7 +1085,7 @@ def _show_market_indices_core(target_indices=None):
                         progress.advance(task)
 
             for name, ticker in indices_map.items():
-                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 5년물 금리", "금", "비트코인"]:
+                if name in ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 금리", "금", "비트코인"]:
                     table.add_section()
 
                 res = results_dict.get(name)

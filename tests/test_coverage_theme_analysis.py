@@ -35,13 +35,21 @@ def test_fetch_realtime_news(mock_get):
     res_fail = theme_analysis.fetch_realtime_news("삼성전자")
     assert res_fail == ""
 
+@patch('modules.analysis.get_us_treasury_spot_data')
 @patch('modules.analysis.get_domestic_index_data')
 @patch('api.get_yf_fast_info')
-def test_get_macro_context_str(mock_fast_info, mock_dom_idx):
+def test_get_macro_context_str(mock_fast_info, mock_dom_idx, mock_treasury):
     """매크로 지표 컨텍스트 데이터 수집 파이프라인 테스트"""
     import pandas as pd
     # 국내 지수 모킹
     mock_dom_idx.return_value = pd.DataFrame({'close': [2500, 2600]})
+    # 미국채 현물(TVC:USxxY) 모킹 — 실 tvDatafeed 네트워크 호출 차단.
+    # 5년물은 현물 실패로 두어 아래 yfinance(^FVX)+선물 프록시(선물적용) 분기를 검증한다.
+    def treasury_side_effect(symbol, n_bars=300):
+        if symbol == "US05Y":
+            return None
+        return pd.DataFrame({'close': [4.1, 4.15]})
+    mock_treasury.side_effect = treasury_side_effect
     
     # 해외 지수 모킹 (미국채 선물 프록시 로직 포함)
     def fast_info_side_effect(ticker):

@@ -256,6 +256,13 @@ def evaluate_market_indicator(name, price, yh_rate=None):
         elif 4.00 <= price < 4.40: status_desc = "골디락스/적정 성장"
         elif 3.50 <= price < 4.00: status_desc = "수요 둔화/금리인하 선반영"
         elif price < 3.50: status_desc = "침체 확정/안전자산 선호"
+    elif name == "미국채 2년물 금리":
+        if price >= 4.90: status_desc = "초긴축 발작/정책 쇼크"
+        elif 4.50 <= price < 4.90: status_desc = "추가 긴축 공포"
+        elif 4.00 <= price < 4.50: status_desc = "긴축 유지/인하 지연"
+        elif 3.40 <= price < 4.00: status_desc = "중립 회귀/적정 정책금리"
+        elif 2.80 <= price < 3.40: status_desc = "인하 사이클 선반영"
+        elif price < 2.80: status_desc = "공격적 인하/침체 우려"
     elif name == "미국채 5년물 금리":
         if price >= 5.00: status_desc = "단기 유동성 위기/초긴축 발작"
         elif 4.70 <= price < 5.00: status_desc = "긴축 강화/금리 재인상 공포"
@@ -408,7 +415,7 @@ def _get_macro_context_str():
     core_tickers = [
         ("코스피", "^KS11"), ("코스닥", "^KQ11"),
         ("나스닥", "^IXIC"), ("S&P500", "^GSPC"),
-        ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
+        ("미국채 2년물 금리", "2YY=F"), ("미국채 5년물 금리", "^FVX"), ("미국채 10년물 금리", "^TNX"), ("미국채 30년물 금리", "^TYX"),
         ("WTI 원유", "CL=F"), ("천연가스", "NG=F"), ("금", "GC=F"), ("구리", "HG=F"), ("밀", "ZW=F"),
         ("달러환율", "KRW=X"), ("달러인덱스", "DX-Y.NYB"),
         ("VIX (변동성)", "^VIX"), ("비트코인", "BTC-USD")
@@ -429,6 +436,21 @@ def _get_macro_context_str():
                     rate = ((curr - prev) / prev * 100) if prev > 0 else 0.0
                     high_52 = float(df['close'].tail(250).max())
                     return name, name, curr, rate, high_52
+
+            # [추가] 미국채 금리는 현물(TVC:USxxY, tvDatafeed) 우선 — 현물은 아시아장에도
+            #  갱신되어 선물 프록시 추정 불필요. 실패 시 아래 yfinance 경로로 폴백.
+            treasury_spot_map = {
+                "미국채 2년물 금리": "US02Y", "미국채 5년물 금리": "US05Y",
+                "미국채 10년물 금리": "US10Y", "미국채 30년물 금리": "US30Y",
+            }
+            if name in treasury_spot_map:
+                df2 = analysis.get_us_treasury_spot_data(treasury_spot_map[name])
+                if df2 is not None and not df2.empty and len(df2) >= 2:
+                    curr = float(df2['close'].iloc[-1])
+                    prev2 = float(df2['close'].iloc[-2])
+                    rate = ((curr - prev2) / prev2 * 100) if prev2 > 0 else 0.0
+                    yh2 = float(df2['close'].tail(250).max())
+                    return name, name, curr, rate, yh2
 
             # 2. 해외 지수, 원자재, 환율 등은 yfinance 단건 조회(마이크로 캐시) 활용
             fi = api.get_yf_fast_info(ticker)

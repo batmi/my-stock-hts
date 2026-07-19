@@ -467,6 +467,7 @@ YF_TO_TV_EXACT = {
     "^TNX": "TVC:US10Y",           # 미국채 10년물
     "^FVX": "TVC:US05Y",           # 미국채 5년물
     "^TYX": "TVC:US30Y",           # 미국채 30년물
+    "2YY=F": "TVC:US02Y",          # 미국채 2년물 금리 (야후는 금리선물 2YY=F, TV는 현물 금리)
     "ZT=F": "CBOT:ZT1!",           # 미국채 2년물 선물
     "ZF=F": "CBOT:ZF1!",           # 미국채 5년물 선물
     "ZN=F": "CBOT:ZN1!",           # 미국채 10년물 선물

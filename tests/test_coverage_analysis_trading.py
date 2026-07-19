@@ -91,10 +91,12 @@ def test_modify_order_error_40330000(mock_revise, mock_show, mock_ask):
         mock_insert.assert_called()
 
 # --- market.py coverage ---
+@patch('modules.market.analysis.get_us_treasury_spot_data', return_value=None)
 @patch('modules.market.api.get_yf_fast_info')
 @patch('modules.market.analysis.get_domestic_index_data')
-def test_process_index_worker_futures_proxy(mock_dom, mock_fi):
-    """해외 지수 마이크로 캐시를 통한 미국채 금리 추정(선물 적용) 분기 테스트"""
+def test_process_index_worker_futures_proxy(mock_dom, mock_fi, mock_treasury_spot):
+    """해외 지수 마이크로 캐시를 통한 미국채 금리 추정(선물 적용) 분기 테스트
+    (미국채 현물(TVC) 조회는 실패로 모킹해 선물 프록시 폴백 분기를 검증)"""
     mock_dom.return_value = None
     
     # 선물 fast_info
