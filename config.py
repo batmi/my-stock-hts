@@ -822,6 +822,24 @@ def setup_logging():
     #  자동 재시도로 자가 치유하는 정상 동작이라 로그 노이즈일 뿐이다.
     #  (특히 모의투자(2 TPS)는 요청 간격이 길어 연결이 오래 idle→더 빈번). ERROR로 올려 숨긴다.
     logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+
+    # [추가] 데이터 라이브러리의 '예상된 실패' ERROR를 DEBUG로 강등.
+    #  야후 미제공 심볼(^K200FUT/^VKOSPI/^KQ150/^US02Y 등)의 404/"possibly delisted"와
+    #  tvDatafeed 익명 웹소켓의 일시 끊김("Connection ... lost", "no data")은 자체 폴백·재시도로
+    #  처리되는 설계상 정상 경로라 ERROR가 아니다. 핸들러 필터로 레벨을 낮춰(자식 로거 전파 포함)
+    #  FILE_DEBUG_LEVEL=DEBUG일 때만 [DEBUG]로 기록한다. 우리 코드의 ERROR는 영향 없음.
+    class _DemoteExpectedLibErrors(logging.Filter):
+        _NOISY = ("yfinance", "tvDatafeed", "websocket")
+
+        def filter(self, record):
+            if record.levelno >= logging.ERROR and any(
+                    record.name == n or record.name.startswith(n + ".") for n in self._NOISY):
+                record.levelno = logging.DEBUG
+                record.levelname = "DEBUG"
+                return numeric_level <= logging.DEBUG
+            return True
+
+    file_handler.addFilter(_DemoteExpectedLibErrors())
         
     logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
 

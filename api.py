@@ -4867,4 +4867,8 @@ from modules.dart_api import (DART_BASE_URL, call_dart, get_dart_corp_map,
                               get_dart_insider_trades, get_dart_major_holdings,
                               get_dart_financials, get_dart_paid_increase_detail,
                               get_dart_bond_issue_detail, get_dart_document_text,
-                              get_dart_earnings_brief)
+                              get_dart_earnings_brief,
+                              get_dart_treasury_decisions, get_dart_free_increase_detail,
+                              get_dart_capital_reduction_detail, get_dart_financial_index,
+                              get_dart_dividend_decision, get_dart_shares_outstanding,
+                              DART_INDEX_CLASSES)

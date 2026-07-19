@@ -1063,16 +1063,13 @@ def manage_stock_menu():
         utils.clear_screen()
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
+        # [이동] 배당/공시/수급/재무 메뉴는 메인메뉴 6(종목발굴·재무분석)의 5~8번으로 이전됨
         menu_items = [
             ("1", "관심 종목 전체 조회", "View Watchlist"),
             ("2", "관심 종목 추가", "Add Stock"),
             ("3", "관심 종목 삭제", "Delete Stock"),
             ("4", "관심 종목 정보 변경", "Modify Stock Info"),
-            ("5", "관심 종목 메모 관리", "Manage Memo"),
-            ("6", "배당 · 실적 캘린더", "Dividend & Earnings Calendar"),
-            ("7", "공시 모니터링", "Disclosure Monitoring"),
-            ("8", "내부자 매매 동향", "Insider Trading"),
-            ("9", "재무 스냅샷", "Financial Snapshot")
+            ("5", "관심 종목 메모 관리", "Manage Memo")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -1098,22 +1095,6 @@ def manage_stock_menu():
             if modify_stock_info() is not False: is_success = True
         elif choice == "5":
             manage_stock_memos_by_mode('view')
-            is_success = True
-        elif choice == "6":
-            from modules.manage import events
-            events.show_calendar()
-            is_success = True
-        elif choice == "7":
-            from modules.manage import disclosure
-            disclosure.show_disclosures()
-            is_success = True
-        elif choice == "8":
-            from modules.manage import insider
-            insider.show_insider_trades()
-            is_success = True
-        elif choice == "9":
-            from modules.manage import financials
-            financials.show_financial_snapshot()
             is_success = True
 
         if is_success:

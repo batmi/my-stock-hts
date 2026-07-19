@@ -1268,7 +1268,7 @@ def _analyze_stock_ui():
 # ==========================================================
 # [공용] TradingView 스크리너 - 단일 관리 지점 (Single Source of Truth)
 # ----------------------------------------------------------
-# 메뉴6(종목 트렌드 분석)과 텔레그램봇 양쪽에서 동일하게 사용한다.
+# 메뉴6(종목발굴·재무분석)과 텔레그램봇 양쪽에서 동일하게 사용한다.
 # 프리셋 조건/유동성 필터/정렬/리밋/후처리를 이 한 곳에서만 정의한다.
 # ==========================================================
 SCREENER_SELECT_COLS = [
@@ -1728,7 +1728,7 @@ def _run_tradingview_screener():
         logger.error(f"TradingView Screener Error: {e}", exc_info=True)
 
 def run_theme_analysis():
-    """종목 트랜드 분석 메인 함수 (서브 메뉴)"""
+    """종목발굴·재무분석 메인 함수 (서브 메뉴)"""
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "1"
     while True:
@@ -1738,19 +1738,23 @@ def run_theme_analysis():
             ("1", "네이버 금융 테마 순위", "Naver Theme Ranking"),
             ("2", "트레이딩뷰 종목 검색", "TradingView Screener"),
             ("3", "AI 시장 테마 분석", "AI Market Theme Analysis"),
-            ("4", "AI 종목 심층 진단", "AI Stock Analysis")
+            ("4", "AI 종목 심층 진단", "AI Stock Analysis"),
+            ("5", "배당 · 실적 캘린더", "Dividend & Earnings Calendar"),
+            ("6", "공시 모니터링", "Disclosure Monitoring"),
+            ("7", "수급 · 물량 신호", "Supply-Demand & Overhang"),
+            ("8", "재무 스냅샷", "Financial Snapshot")
         ]
-        choice = utils.show_menu("종목 트랜드 분석 (Stock Trend Analysis)", menu_items, default_choice=last_choice)
+        choice = utils.show_menu("종목발굴·재무분석 (Discovery & Financials)", menu_items, default_choice=last_choice)
         if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
                 utils.show_help()
                 utils.pause()
             continue
-        
+
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map.get(choice, '')}")
-        
+
         is_success = False
         if choice == '1':
             _show_naver_themes()
@@ -1761,7 +1765,23 @@ def run_theme_analysis():
             if _analyze_with_gemini_ui() is not False: is_success = True
         elif choice == '4':
             if _analyze_stock_ui() is not False: is_success = True
-            
+        elif choice == '5':
+            from modules.manage import events
+            events.show_calendar()
+            is_success = True
+        elif choice == '6':
+            from modules.manage import disclosure
+            disclosure.show_disclosures()
+            is_success = True
+        elif choice == '7':
+            from modules.manage import insider
+            insider.show_insider_trades()
+            is_success = True
+        elif choice == '8':
+            from modules.manage import financials
+            financials.show_financial_snapshot()
+            is_success = True
+
         if is_success:
             last_choice = choice
             utils.pause()

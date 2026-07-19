@@ -89,7 +89,7 @@ def _gather(codes, days, min_level):
     if not codes:
         return events
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  BarColumn(), console=config.console, transient=True) as progress:
+                  BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
         task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             futs = {ex.submit(collect_disclosures, c, n, days, min_level): c for c, n in codes}
@@ -142,9 +142,15 @@ def _detail_eligible(e):
     nm = e["report_nm"]
     if e["category"] == "실적·IR" and any(k in nm for k in _EARNINGS_DOC_KEYWORDS):
         return True
-    if e["category"] == "증자·감자" and "유상증자" in nm:
+    if e["category"] == "증자·감자" and ("유상증자" in nm or "감자결정" in nm or "감자 결정" in nm):
         return True
     if e["category"] == "메자닌(CB/BW)":
+        return True
+    if e["category"] == "수주·공급계약" and "공급계약" in nm:
+        return True
+    if e["category"] == "자기주식" and "결정" in nm:
+        return True
+    if e["category"] == "무상증자" and "결정" in nm:
         return True
     return False
 
@@ -233,6 +239,119 @@ def _bond_note(e):
     return " · ".join(parts)
 
 
+def _supply_contract_note(e):
+    """단일판매ㆍ공급계약체결 원문 -> '계약 1,234억 · 매출대비 12.3% · 상대 · ~종료일' 요약.
+
+    공시 서식 표에 계약금액 총액·최근 매출액·매출액 대비(%)가 포함되어 있어 원문에서 직접 추출한다.
+    """
+    text = api.get_dart_document_text(e["rcept_no"])
+    if not text:
+        return ""
+    import re
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def _next_num(i, limit=6):
+        for nxt in lines[i + 1:i + 1 + limit]:
+            n = _num(nxt.replace(" ", "").rstrip("%"))
+            if n is not None and n != 0:
+                return n
+        return None
+
+    def _next_text(i, limit=4):
+        for nxt in lines[i + 1:i + 1 + limit]:
+            t = nxt.strip()
+            if t and t != "-" and _num(t.replace(" ", "")) is None:
+                return t
+        return None
+
+    amount = sales_pct = end_date = None
+    counterparty = None
+    for i, ln in enumerate(lines):
+        compact = ln.replace(" ", "")
+        if amount is None and ("계약금액총액" in compact or compact == "계약금액" or "계약금액(원)" in compact):
+            amount = _next_num(i)
+        elif sales_pct is None and "매출액대비" in compact:
+            sales_pct = _next_num(i)
+        elif counterparty is None and ("계약상대방" in compact or compact == "계약상대"):
+            counterparty = _next_text(i)
+        elif end_date is None and compact in ("종료일", "종료일자"):
+            for nxt in lines[i + 1:i + 5]:
+                m = re.search(r"(20\d{2})[.\-/년\s]*(\d{1,2})[.\-/월\s]*(\d{1,2})", nxt)
+                if m:
+                    end_date = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                    break
+    parts = []
+    if amount:
+        parts.append(f"계약 {_fmt_eok(amount)}")
+    if sales_pct:
+        color = "red" if sales_pct >= 10 else "yellow"
+        parts.append(f"[{color}]매출대비 {sales_pct:.1f}%[/]")
+    if counterparty:
+        parts.append(counterparty[:16])
+    if end_date:
+        parts.append(f"~{end_date}")
+    return " · ".join(parts)
+
+
+def _treasury_note(e):
+    """자기주식 취득/처분/신탁 결정 -> 예정금액·수량·기간 요약."""
+    bgn, end = _detail_date_range(e)
+    rows = api.get_dart_treasury_decisions(e["code"], bgn, end)
+    row = next((r for r in rows if r.get("rcept_no") == e["rcept_no"]), rows[0] if rows else None)
+    if not row:
+        return ""
+    parts = [row["kind"]]
+    if row.get("amount"):
+        parts.append(f"예정 {_fmt_eok(row['amount'])}")
+    if row.get("qty"):
+        parts.append(f"{row['qty']:,.0f}주")
+    if row.get("bgd") and row.get("edd"):
+        parts.append(f"{row['bgd'][:10]}~{row['edd'][:10]}")
+    return " · ".join(parts)
+
+
+def _free_increase_note(e):
+    """무상증자결정 -> 1주당 배정·신주 수·기준일 요약."""
+    bgn, end = _detail_date_range(e)
+    rows = api.get_dart_free_increase_detail(e["code"], bgn, end)
+    row = next((r for r in rows if r.get("rcept_no") == e["rcept_no"]),
+               max(rows, key=lambda r: r.get("rcept_no", "")) if rows else None)
+    if not row:
+        return ""
+    parts = []
+    ratio = _num(row.get("nstk_ascnt_ps_ostk"))
+    if ratio:
+        parts.append(f"1주당 {ratio:g}주 배정")
+    new_cnt = _num(row.get("nstk_ostk_cnt"))
+    if new_cnt:
+        parts.append(f"신주 {new_cnt:,.0f}주")
+    std = (row.get("nstk_asstd") or "").strip()
+    if std:
+        parts.append(f"기준일 {std[:10]}")
+    return " · ".join(parts)
+
+
+def _capital_reduction_note(e):
+    """감자결정 -> 감자비율·방법·기준일 요약."""
+    bgn, end = _detail_date_range(e)
+    rows = api.get_dart_capital_reduction_detail(e["code"], bgn, end)
+    row = next((r for r in rows if r.get("rcept_no") == e["rcept_no"]),
+               max(rows, key=lambda r: r.get("rcept_no", "")) if rows else None)
+    if not row:
+        return ""
+    parts = []
+    rt = _num(row.get("cr_rt_ostk"))
+    if rt:
+        parts.append(f"감자비율 {rt:g}%")
+    mth = " ".join((row.get("cr_mth") or "").split())
+    if mth:
+        parts.append(mth[:16])
+    std = (row.get("cr_std") or "").strip()
+    if std:
+        parts.append(f"기준일 {std[:10]}")
+    return " · ".join(parts)
+
+
 def build_detail_note(e):
     """공시 1건의 상세 요약 문자열 (부적합/실패 시 '')."""
     try:
@@ -241,8 +360,16 @@ def build_detail_note(e):
             return _earnings_note(e)
         if e["category"] == "증자·감자" and "유상증자" in nm:
             return _paid_increase_note(e)
+        if e["category"] == "증자·감자" and "감자" in nm:
+            return _capital_reduction_note(e)
         if e["category"] == "메자닌(CB/BW)":
             return _bond_note(e)
+        if e["category"] == "수주·공급계약" and "공급계약" in nm:
+            return _supply_contract_note(e)
+        if e["category"] == "자기주식" and "결정" in nm:
+            return _treasury_note(e)
+        if e["category"] == "무상증자" and "결정" in nm:
+            return _free_increase_note(e)
     except Exception:
         pass
     return ""
@@ -254,8 +381,8 @@ def _enrich_details(events, limit=12):
     if not targets:
         return
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  console=config.console, transient=True) as progress:
-        progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=None)
+                  BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
+        task = progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=len(targets))
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futs = {ex.submit(build_detail_note, e): e for e in targets}
             for fut in concurrent.futures.as_completed(futs):
@@ -263,6 +390,7 @@ def _enrich_details(events, limit=12):
                     futs[fut]["note"] = fut.result()
                 except Exception:
                     futs[fut]["note"] = ""
+                progress.advance(task)
 
 
 def show_disclosures(days=14):

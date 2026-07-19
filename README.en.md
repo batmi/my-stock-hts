@@ -47,7 +47,7 @@ Without the need for a heavy HTS (Home Trading System), you can quickly and intu
 *   **Individual Stock Strategy Settings:** Allows setting different buy/sell criteria (score, RSI) and take-profit/stop-loss/trailing-stop ratios individually per stock.
 *   **In-depth Index Analysis:** Provides detailed charts for market indices such as KOSPI and NASDAQ, along with AI in-depth reports combined with macro environments.
 *   **AI Investment Assistant:** Utilizes Google Gemini LLM to provide in-depth stock diagnostics, analysis of market-leading themes, interactive Q&A, and pre-market briefings.
-*   **DART (Electronic Disclosure) Integration:** Utilizes OpenDART API for interest stock **disclosure monitoring** (importance classification + AI good/bad news interpretation), **dividend/earnings calendar** (ex-dividend dates by dividend cycle, earnings submission deadlines), and **real-time Telegram alerts for major disclosures** (capital increase, capital reduction, treasury stock, administrative issue designation, etc.).
+*   **DART (Electronic Disclosure) Integration:** Utilizes OpenDART API for watchlist **disclosure monitoring** (importance classification + AI good/bad news interpretation + auto-extracted details for supply contracts, treasury stock, bonus issues, etc.), **dividend/earnings calendar** (confirmed record-date parsing, estimated earnings dates), **supply-demand & overhang signals** (treasury stock decisions, mezzanine overhang, insider/5% reports), **financial snapshot** (standalone quarterly earnings, ROE, debt ratio), and **real-time Telegram alerts for major disclosures**.
 *   **Market Index Filtering:** Risk management feature that analyzes the trend of KOSPI/KOSDAQ indices and automatically suspends buying in a downtrend.
 *   **Relative Strength (RS) Filter:** Automatically excludes new buys whose 6-month return trails their home index (KOSPI/KOSDAQ) — blocking entries into weak trends that cannot even beat the market.
 *   **Real-time Market Halt Alerts (Circuit Breaker / VI):** Detects market-wide circuit breakers (CB) and per-stock Volatility Interruptions (VI) based on actual exchange status flags and instantly notifies via Telegram. (CB on by default; VI is optional.)
@@ -340,8 +340,8 @@ my-stock-hts/
     │   ├── conclusion.py #   ├ Fill monitoring/confirmation (ConclusionMonitor)
     │   ├── trader.py     #   ├ AutoTrader main loop (analyze→buy/sell→report)
     │   └── menu.py       #   └ Trading rules/restricted stocks menu UI
-    ├── theme_analysis.py # [6] Stock trend analysis + AI (Gemini) analysis/disclosure summary
-    ├── manage/           # [7] Watchlist Management package
+    ├── theme_analysis.py # [6] Discovery & Financials + AI (Gemini) analysis/disclosure summary
+    ├── manage/           # [7] Watchlist Management + [6-5~8] fundamentals package
     │   ├── watchlist.py  #   ├ Watchlist add/delete/view & menu UI
     │   ├── events.py     #   ├ Dividend/Earnings Calendar (DART + yfinance)
     │   └── disclosure.py #   └ Disclosure monitoring/earnings tracking + Telegram alerts (DART)
@@ -471,14 +471,16 @@ Register `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config.py` or as enviro
 
 ## 9. Disclosure Integration (OpenDART)
 
-By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use features like disclosure monitoring, dividend/earnings calendars, and real-time Telegram alerts for major disclosures. (Menu `[7]`)
+By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use features like disclosure monitoring, dividend/earnings calendars, supply-demand & overhang signals, financial snapshots, and real-time Telegram alerts for major disclosures. (Under Menu `[6] Discovery & Financials`)
 > The DART API Key is **optional**.
 
 1.  **Issue API Key (Free)**: Apply on the OpenDART website.
 2.  **Environment Variable**: Register `DART_API_KEY`.
-3.  **Features**:
-    *   `[6] Dividend/Earnings Calendar`: Automatically calculates expected ex-dividend dates and earnings deadlines.
-    *   `[7] Disclosure Monitoring`: Filters recent disclosures and provides Gemini AI summaries of Good/Bad news.
+3.  **Features** (Menu `[6]` Discovery & Financials):
+    *   `[5] Dividend/Earnings Calendar`: Estimates the next ex-dividend date per dividend cycle, and when a cash/in-kind dividend decision disclosure exists, parses the document to replace the estimate with the **confirmed record date and dividend per share**. Also shows estimated Korean earnings announcement dates (based on last year's provisional-earnings filing pattern) and the next statutory report deadline.
+    *   `[6] Disclosure Monitoring`: Classifies recent disclosures by importance with Gemini AI good/bad-news summaries. Auto-extracts details: provisional earnings (revenue/OP/NP with YoY), paid-in capital increases (dilution), CB/BW terms, **supply contracts (amount, % of revenue, counterparty)**, **treasury stock decisions (amount, period)**, **bonus issues (allotment ratio)**, and **capital reductions (ratio)**.
+    *   `[7] Supply-Demand & Overhang Signals`: (1) **Treasury stock acquisition/disposal/trust decisions** (company-level supply signal), (2) **mezzanine (CB/BW/EB) overhang watch** — conversion price vs. current price, potential conversion volume vs. shares outstanding, recent conversion-exercise filings, (3) **bonus issue decisions**, (4) insider (elestock) and 5% holder (majorstock) net buy/sell summary.
+    *   `[8] Financial Snapshot`: Revenue/operating profit/net profit with YoY from the latest periodic report, **standalone quarterly operating profit** (cumulative-difference method), and DART-computed **ROE / debt ratio**.
     *   **Telegram Alerts**: Sends instant pushes for major disclosures (capital increase, administrative issues, etc.).
 
 ## 10. AI-Powered Assistant

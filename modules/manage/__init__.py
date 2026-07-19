@@ -1,10 +1,10 @@
 # modules/manage/__init__.py
 """관심 종목 관리 패키지.
 
-기존 단일 파일들을 메뉴 [7] 단위로 묶어 분해:
+기존 단일 파일들을 관심종목·펀더멘털 단위로 묶어 분해:
   - watchlist.py       : [7] 관심 종목 관리 (기존 modules/manage.py)
   - events.py          : 배당·실적 캘린더 (DART + yfinance)
-  - disclosure.py      : [7-7/7-8] 공시 모니터링·실적 추적 + 공시 텔레그램 알림
+  - disclosure.py      : [6-6] 공시 모니터링·실적 추적 + 공시 텔레그램 알림
 
 기존 인터페이스(modules.manage.X) 완전 호환:
 watchlist의 이름들을 패키지 네임스페이스로 승격(재수출)하므로, 호출 코드와

@@ -356,6 +356,133 @@ def get_dart_bond_issue_detail(stock_code, bgn_de, end_de, kind="CB"):
     return rows if isinstance(rows, list) else []
 
 
+def _decsn_rows(stock_code, endpoint, bgn_de, end_de):
+    """주요사항보고서 결정 계열(기간 조회) 공통 래퍼. 없으면 []."""
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return []
+    rows = _api().call_dart(endpoint, {
+        "corp_code": corp, "bgn_de": bgn_de, "end_de": end_de
+    })
+    return rows if isinstance(rows, list) else []
+
+
+def get_dart_treasury_decisions(stock_code, bgn_de, end_de):
+    """자기주식 취득/처분/신탁계약 체결 결정 (수급 신호 — 회사 단위 매수는 내부자 개인 매매보다 강함).
+
+    반환: [{kind, rcept_no, rcept_dt, qty, amount, bgd, edd, note}, ...] (최신순)
+    kind: '취득'|'처분'|'신탁체결'. amount=예정금액(원), qty=예정주식수(보통주).
+    """
+    out = []
+    # 1) 직접 취득 결정
+    for r in _decsn_rows(stock_code, "tsstkAqDecsn.json", bgn_de, end_de):
+        out.append({
+            "kind": "취득", "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+            "qty": _dart_num(r.get("aqpln_stk_ostk")),
+            "amount": _dart_num(r.get("aqpln_prc_ostk")),
+            "bgd": (r.get("aqexpd_bgd") or "").strip(),
+            "edd": (r.get("aqexpd_edd") or "").strip(),
+            "note": " ".join((r.get("aq_pp") or "").split()),  # 취득목적
+        })
+    # 2) 처분 결정
+    for r in _decsn_rows(stock_code, "tsstkDpDecsn.json", bgn_de, end_de):
+        out.append({
+            "kind": "처분", "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+            "qty": _dart_num(r.get("dppln_stk_ostk")),
+            "amount": _dart_num(r.get("dppln_prc_ostk")),
+            "bgd": (r.get("dpprpd_bgd") or "").strip(),
+            "edd": (r.get("dpprpd_edd") or "").strip(),
+            "note": " ".join((r.get("dp_pp") or "").split()),  # 처분목적
+        })
+    # 3) 신탁계약 체결 결정 (간접 취득)
+    for r in _decsn_rows(stock_code, "tsstkAqTrctrCnsDecsn.json", bgn_de, end_de):
+        out.append({
+            "kind": "신탁체결", "rcept_no": r.get("rcept_no", ""),
+            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+            "qty": None,
+            "amount": _dart_num(r.get("ctr_prc")),
+            "bgd": (r.get("ctr_pd_bgd") or "").strip(),
+            "edd": (r.get("ctr_pd_edd") or "").strip(),
+            "note": "신탁계약",
+        })
+    out.sort(key=lambda r: r["rcept_dt"], reverse=True)
+    return out
+
+
+def get_dart_free_increase_detail(stock_code, bgn_de, end_de):
+    """무상증자 결정 세부내역 (fricDecsn.json). 없으면 [].
+
+    주요 필드: nstk_ostk_cnt(신주 보통주 수), nstk_ascnt_ps_ostk(1주당 배정 주식수),
+    nstk_asstd(신주배정기준일), bfic_tisstk_ostk(증자 전 발행주식총수).
+    """
+    return _decsn_rows(stock_code, "fricDecsn.json", bgn_de, end_de)
+
+
+def get_dart_capital_reduction_detail(stock_code, bgn_de, end_de):
+    """감자 결정 세부내역 (crDecsn.json). 없으면 [].
+
+    주요 필드: cr_rt_ostk(감자비율 %), cr_std(감자기준일), cr_mth(감자방법), cr_rs(감자사유).
+    """
+    return _decsn_rows(stock_code, "crDecsn.json", bgn_de, end_de)
+
+
+_dart_shares_cache = {}  # 종목코드 -> (발행주식총수, 유통주식수) — 정기보고서 기준이라 프로세스 캐시로 충분
+
+
+def get_dart_shares_outstanding(stock_code):
+    """주식의 총수 현황 (stockTotqySttus.json) — (발행주식총수, 유통주식수) 또는 (None, None).
+
+    최근 사업/분기보고서 순으로 조회. 오버행(전환물량) 비중 계산 등에 사용.
+    """
+    if stock_code in _dart_shares_cache:
+        return _dart_shares_cache[stock_code]
+    corp = _api().get_dart_corp_map().get(stock_code)
+    result = (None, None)
+    if corp:
+        y = datetime.now().year
+        for year, reprt in ((y - 1, "11011"), (y - 2, "11011")):
+            rows = _api().call_dart("stockTotqySttus.json", {
+                "corp_code": corp, "bsns_year": str(year), "reprt_code": reprt})
+            if not isinstance(rows, list):
+                continue
+            for r in rows:
+                se = (r.get("se") or "").replace(" ", "")
+                if "보통주" in se or "합계" in se:
+                    tot = _dart_num(r.get("istc_totqy"))
+                    distb = _dart_num(r.get("distb_stock_co"))
+                    if tot:
+                        result = (tot, distb)
+                        break
+            if result[0]:
+                break
+    _dart_shares_cache[stock_code] = result
+    return result
+
+
+# 재무지표 분류코드 (fnlttSinglIndx.json idx_cl_code)
+DART_INDEX_CLASSES = {
+    "M210000": "수익성", "M220000": "안정성", "M230000": "성장성", "M240000": "활동성",
+}
+
+
+def get_dart_financial_index(stock_code, year, reprt_code, idx_cl_code):
+    """단일회사 주요 재무지표 (fnlttSinglIndx.json) — DART가 계산한 지표 원본 rows.
+
+    idx_cl_code: M210000 수익성 / M220000 안정성 / M230000 성장성 / M240000 활동성.
+    row 필드: idx_nm(지표명), idx_val(값), bsns_year, stlm_dt. 없으면 None.
+    """
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if not corp:
+        return None
+    rows = _api().call_dart("fnlttSinglIndx.json", {
+        "corp_code": corp, "bsns_year": str(year), "reprt_code": reprt_code,
+        "idx_cl_code": idx_cl_code,
+    })
+    return rows if isinstance(rows, list) else None
+
+
 # ---------------------------------------------------------------------------
 # 공시 원문(document.xml) 기반 잠정실적 파싱
 # ---------------------------------------------------------------------------
@@ -465,3 +592,72 @@ def parse_earnings_brief(text):
 def get_dart_earnings_brief(rcept_no):
     """잠정실적 공시 원문에서 주요 수치 추출. 실패 시 None."""
     return parse_earnings_brief(_api().get_dart_document_text(rcept_no))
+
+
+# ---------------------------------------------------------------------------
+# 배당 결정 공시(현금ㆍ현물배당결정 — 거래소 수시공시) 원문 파싱
+#  주요사항보고서 구조화 API가 없어(DS005 36종에 배당 없음) 원문에서 추출한다.
+# ---------------------------------------------------------------------------
+_DIV_DECISION_TITLE = ("현금ㆍ현물배당", "현금·현물배당", "현금배당", "현물배당")
+
+
+def _find_date_after(lines, i, limit=6):
+    """라벨 라인 이후 limit줄 안에서 날짜(YYYY-MM-DD류) 탐색 → 'YYYYMMDD'."""
+    import re
+    for nxt in lines[i + 1:i + 1 + limit]:
+        m = re.search(r"(20\d{2})[.\-/년\s]*(\d{1,2})[.\-/월\s]*(\d{1,2})", nxt)
+        if m:
+            return f"{m.group(1)}{int(m.group(2)):02d}{int(m.group(3)):02d}"
+    return None
+
+
+def parse_dividend_decision(text):
+    """배당결정 공시 텍스트에서 1주당 배당금·배당기준일·지급예정일 추출 (best-effort).
+
+    반환: {"dps": float|None, "record_date": 'YYYYMMDD'|None,
+           "pay_date": 'YYYYMMDD'|None, "yield": float|None} 또는 None.
+    """
+    if not text:
+        return None
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    out = {"dps": None, "record_date": None, "pay_date": None, "yield": None}
+    for i, ln in enumerate(lines):
+        compact = ln.replace(" ", "")
+        if out["dps"] is None and "1주당배당금" in compact:
+            for nxt in lines[i + 1:i + 7]:
+                num = _dart_num(nxt.replace(" ", ""))
+                if num is not None and num > 0:
+                    out["dps"] = num
+                    break
+        elif out["record_date"] is None and "배당기준일" in compact:
+            out["record_date"] = _find_date_after(lines, i)
+        elif out["pay_date"] is None and ("지급예정" in compact and "일" in compact):
+            out["pay_date"] = _find_date_after(lines, i)
+        elif out["yield"] is None and "시가배당" in compact:
+            for nxt in lines[i + 1:i + 5]:
+                num = _dart_num(nxt.replace(" ", "").replace("%", ""))
+                if num is not None and 0 < num < 100:
+                    out["yield"] = num
+                    break
+    if out["dps"] is None and out["record_date"] is None:
+        return None
+    return out
+
+
+def get_dart_dividend_decision(stock_code, days=200):
+    """최근 배당결정 공시(현금ㆍ현물배당결정)를 찾아 원문에서 확정 배당 정보를 추출.
+
+    반환: {"dps", "record_date", "pay_date", "yield", "rcept_dt", "rcept_no"} 또는 None.
+    분기·결산 배당의 '확정' 기준일을 제공한다 (캘린더의 추정 배당락일을 확정값으로 대체).
+    """
+    rows = _api().get_dart_disclosures(stock_code, days=days)
+    for r in rows:  # 최신순 — 첫 매칭이 최근 결정
+        nm = r.get("report_nm", "")
+        if not any(k in nm for k in _DIV_DECISION_TITLE):
+            continue
+        parsed = parse_dividend_decision(_api().get_dart_document_text(r["rcept_no"]))
+        if parsed:
+            parsed["rcept_dt"] = r.get("rcept_dt", "")
+            parsed["rcept_no"] = r.get("rcept_no", "")
+            return parsed
+    return None

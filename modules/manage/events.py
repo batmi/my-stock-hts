@@ -171,6 +171,23 @@ def _collect_kr(code, name):
             ex_date = _next_kr_ex_date(months, today)
         except Exception:
             ex_date = None
+
+    # 3) [확정 대체] 최근 '현금ㆍ현물배당결정' 공시가 있으면 배당기준일에서 확정 배당락일 산출
+    #    (배당락일 = 기준일의 직전 거래일). 기준일이 미래인 결정만 유효 — 과거 결정은 추정 유지.
+    confirmed = False
+    decl_dps = None
+    try:
+        dec = api.get_dart_dividend_decision(code, days=200)
+        if dec and dec.get("record_date"):
+            rec = datetime.strptime(dec["record_date"], "%Y%m%d").date()
+            if rec >= today:
+                ex_date = _prev_trading_day(rec)
+                exact = True
+                confirmed = True
+                decl_dps = dec.get("dps")
+    except Exception:
+        pass
+
     return {
         "code": code, "name": name, "overseas": False,
         "year": info.get("year", "-"),
@@ -180,7 +197,38 @@ def _collect_kr(code, name):
         "ex_date": ex_date,
         "freq_label": freq_label,
         "exact": exact,
+        "confirmed": confirmed,
+        "decl_dps": decl_dps,
     }
+
+
+_EARNINGS_TITLE_KEYWORDS = ("잠정실적", "손익구조", "매출액또는손익")
+
+
+def _collect_kr_earnings_est(code, name):
+    """전년 잠정실적 공시일 패턴으로 다음 실적발표 예상일 산출 (best-effort).
+
+    최근 400일 공시에서 잠정실적류 공시일을 찾아 +1년(같은 요일대 보정 없이 달력일)으로 예상.
+    미래 5~370일 범위일 때만 이벤트 반환.
+    """
+    try:
+        today = datetime.now().date()
+        candidates = []
+        for d in api.get_dart_disclosures(code, days=400):
+            nm = (d.get("report_nm") or "").replace(" ", "")
+            if not any(k in nm for k in _EARNINGS_TITLE_KEYWORDS):
+                continue
+            rcept = datetime.strptime(d["rcept_dt"], "%Y%m%d").date()
+            est = rcept + timedelta(days=365)
+            if today + timedelta(days=5) <= est <= today + timedelta(days=370):
+                candidates.append(est)
+        if candidates:
+            # 전년 각 분기 공시일 +1년 중 가장 가까운 미래 = 다음 발표 예상일
+            return {"code": code, "name": name, "type": "실적발표",
+                    "date": min(candidates), "estimated": True, "basis": "전년 공시일 +1년"}
+    except Exception:
+        pass
+    return None
 
 
 def _parse_us_date(val):
@@ -275,15 +323,19 @@ def show_calendar():
 
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-        BarColumn(), console=config.console, transient=True
+        BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
     ) as progress:
-        task = progress.add_task("[cyan]배당/실적 일정 조회 중...[/cyan]", total=len(kr) + len(us))
+        # 국내는 종목당 2개 작업(배당 수집 + 실적발표 예상일)이라 총량도 2배로 잡는다
+        #  (총량을 종목 수로 잡으면 절반만 끝나도 100%가 되어 완료된 척 몇 초 머무는 문제)
+        total = (len(kr) * 2 if config.DART_API_KEY else 0) + len(us)
+        task = progress.add_task("[cyan]배당/실적 일정 조회 중...[/cyan]", total=total)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             futures = {}
             if config.DART_API_KEY:
                 for code, name in kr:
                     futures[ex.submit(_collect_kr, code, name)] = ("kr", code)
+                    futures[ex.submit(_collect_kr_earnings_est, code, name)] = ("kr_earn", code)
             for code, name in us:
                 futures[ex.submit(_collect_us, code, name)] = ("us", code)
 
@@ -296,13 +348,14 @@ def show_calendar():
                 if res:
                     if kind == "kr":
                         kr_rows.append(res)
+                    elif kind == "kr_earn":
+                        us_events.append(res)  # 예정 일정 테이블에 합류
                     else:
                         us_events.extend(res)
                 progress.advance(task)
-            # 진행률 보정 (DART 키 없을 때 kr 미제출분)
-            progress.update(task, completed=len(kr) + len(us))
+            progress.update(task, completed=total)
 
-    # 국내 예상 배당락일(추정)을 예정 일정에 합류
+    # 국내 예상 배당락일(추정/확정)을 예정 일정에 합류
     events = list(us_events)
     for r in kr_rows:
         if r.get("ex_date"):
@@ -311,10 +364,30 @@ def show_calendar():
                 "date": r["ex_date"], "estimated": True,
                 "freq": r.get("freq_label", ""),
                 "exact": r.get("exact", False),
+                "confirmed": r.get("confirmed", False),
+                "decl_dps": r.get("decl_dps"),
             })
 
+    _print_report_deadline()
     _render_upcoming(events)
     _render_kr_dividends(kr_rows)
+
+
+def _print_report_deadline():
+    """다음 정기보고서 법정 제출기한 안내 (국내 실적공시 데드라인)."""
+    today = datetime.now().date()
+    y = today.year
+    schedule = [
+        (date(y, 3, 31), "사업보고서(연간)"), (date(y, 5, 15), "1분기보고서"),
+        (date(y, 8, 14), "반기보고서"), (date(y, 11, 14), "3분기보고서"),
+        (date(y + 1, 3, 31), "사업보고서(연간)"),
+    ]
+    for deadline, label in schedule:
+        if deadline >= today:
+            d = (deadline - today).days
+            config.console.print(f"[dim]▸ 다음 정기보고서 법정 제출기한: {deadline.strftime('%Y-%m-%d')} "
+                                 f"({label}, D-{d}) — 국내 실적은 늦어도 이 시점까지 공시됩니다.[/dim]\n")
+            return
 
 
 def _render_upcoming(events):
@@ -323,7 +396,7 @@ def _render_upcoming(events):
     upcoming = sorted([e for e in events if e["date"] >= today], key=lambda e: e["date"])
 
     config.console.print("[bold]▸ 예정 일정[/bold]")
-    config.console.print("  [dim]※ 실적발표 일정은 해외 종목만 제공됩니다. (국내 기업은 예정일을 공시하지 않음) · ETF는 배당·실적 공시 대상이 아니라 제외됩니다.[/dim]")
+    config.console.print("  [dim]※ 해외 실적발표=yfinance 예정일 · 국내 실적발표=전년 잠정실적 공시일 기반 예상 · ETF는 배당·실적 공시 대상이 아니라 제외됩니다.[/dim]")
     if not upcoming:
         config.console.print("  [dim]표시할 예정 일정이 없습니다.[/dim]\n")
         return
@@ -341,7 +414,15 @@ def _render_upcoming(events):
         dday = "D-DAY" if d == 0 else f"D-{d}"
         type_color = "yellow" if e["type"] == "배당락" else "cyan"
         note = ""
-        if e.get("estimated"):
+        if e.get("confirmed"):
+            # 배당결정 공시에서 확정된 기준일 기반 — 추정 아님
+            note = "[green]확정(배당결정 공시)[/green]"
+            if e.get("decl_dps"):
+                note += f" [dim]주당 {e['decl_dps']:,.0f}원[/dim]"
+        elif e.get("basis"):
+            note = f"[dim]{e['basis']}[/dim]"
+            has_estimated = True
+        elif e.get("estimated"):
             freq = e.get("freq", "")
             basis = "전년패턴" if e.get("exact") else "추정"
             note = f"[dim]{freq}·{basis}[/dim]" if freq else f"[dim]{basis}[/dim]"
