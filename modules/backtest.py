@@ -738,23 +738,31 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             sl_for_risk_calc = atr_sl_rate if use_atr_stop else stop_loss_limit
             if risk_per_trade > 0 and sl_for_risk_calc and abs(sl_for_risk_calc) > 0:
                 max_loss_amt = balance * (risk_per_trade / 100.0)
-                sl_ratio = abs(sl_for_risk_calc) / 100.0
+                # [갭 버퍼] 실매매(allocate_budget)와 동일하게 손절폭에 갭 리스크 배수를 곱해 보수 사이징
+                try:
+                    gap_buffer = max(1.0, float((getattr(config, 'RISK_SCALING_PARAMS', {}) or {}).get("GAP_RISK_BUFFER", 1.2)))
+                except (TypeError, ValueError):
+                    gap_buffer = 1.2
+                sl_ratio = (abs(sl_for_risk_calc) / 100.0) * gap_buffer
                 risk_based_amt = int(max_loss_amt / sl_ratio)
                 invest_amt = min(balance, risk_based_amt)
-                
+
             # [추가] 변동성 타겟팅 스케일링 (간이 구현)
             if use_vol_target and atr_val > 0:
                 daily_vol = atr_val / buy_price
                 annual_vol = daily_vol * np.sqrt(252)
-                
-                target_vol = getattr(config, 'TARGET_VOLATILITY', 0.30)
+
+                target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
                 scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-                scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
-                
+                scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.4)
+
                 if annual_vol > 0:
                     scale = target_vol / annual_vol
                     scale = max(scale_min, min(scale_max, scale))
                     invest_amt = int(invest_amt * scale)
+                    # [Fix] 확대 스케일이 잔고를 초과 투자(음수 잔고)하지 않도록 클램프
+                    #  (실매매의 '기초 비중 초과 불가' 클램프와 동일 취지 — 백테스트는 단일 종목이라 잔고가 상한)
+                    invest_amt = min(invest_amt, balance)
 
             buy_qty = int(invest_amt / buy_price)
             

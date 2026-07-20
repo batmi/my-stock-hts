@@ -883,6 +883,17 @@ class DBManager:
             return row[0] if row else None
         except Exception:
             return None
+
+    def get_max_daily_asset(self, start_date, account):
+        """특정 날짜 이후의 자산 고점(HWM) 조회 (드로다운 기반 리스크 스케일링용)"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(asset) FROM daily_asset_history WHERE account = ? AND date >= ?", (account, start_date))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+        except Exception:
+            return None
             
     def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None, composite_json=None):
         with self.lock:

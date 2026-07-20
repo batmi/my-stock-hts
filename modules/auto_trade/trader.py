@@ -87,6 +87,9 @@ class AutoTrader:
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
             cls._instance.stock_state_cache = {}      # [추가] 분석된 종목 상태 캐시 (텔레그램 연동용)
             cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
+            cls._instance.current_total_asset = 0     # [리스크 스케일링] 최근 조회된 현재 평가자산 (히트 캡 기준자산·드로다운 계산용)
+            cls._instance.risk_scale = 1.0            # [리스크 스케일링] 신규 진입 리스크 한도 배수 (약세 국면·드로다운 반영, 1.0=축소 없음)
+            cls._instance.risk_scale_reason = ""      # [리스크 스케일링] 현재 배수의 사유 (로그 표시용)
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
             cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
@@ -2514,6 +2517,9 @@ class AutoTrader:
                         if getattr(config, 'USE_MARKET_FILTER', True):
                             self._update_market_indices_status()
 
+                        # [리스크 스케일링] 약세 국면·계좌 드로다운 반영 리스크 한도 배수 갱신 (주기당 1회)
+                        self._update_risk_scale()
+
                         # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
                         # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
                         acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
@@ -2965,6 +2971,11 @@ class AutoTrader:
                         self.log(f"[증권 자산 현황] 증권 매입 금액: {tot_pchs:,}원 | 증권 평가 금액: {total_eval:,}원 | 증권 평가 손익: {total_profit:+,}원 ({profit_rate:+.2f}%) | 주문 가능 금액: {order_possible:,}원")
                         self.log(f"[오늘 자산 현황] 오늘 시작 자산: {self.initial_asset:,}원 | 오늘 현재 자산: {current_total:,}원 | 오늘 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)")
 
+                        # [리스크 스케일링] 최근 평가자산 갱신 (히트 캡 기준자산·드로다운 산출용)
+                        # check_loss_limit과 동일하게 비정상 급감(API 누락 의심) 데이터는 반영하지 않는다.
+                        if current_total > 0 and not (self.initial_asset > 0 and current_total < self.initial_asset * 0.5):
+                            self.current_total_asset = current_total
+
                         self.risk_manager.check_loss_limit(current_total)
                     else:
                         self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
@@ -3371,6 +3382,16 @@ class AutoTrader:
             if not ok:
                 return
 
+            # [리스크 관리] 시장 필터 게이트: 신규 매수가 차단되는 약세 시장(지수<SMA)에서는
+            # 검증된 포지션이라도 증액(노출 확대)을 보류한다. (기존 보유·청산에는 영향 없음)
+            if (getattr(config, 'USE_MARKET_FILTER', True)
+                    and config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True)):
+                m_type = self._get_stock_market_type(code)
+                m_stat = self.market_index_status.get(m_type)
+                if isinstance(m_stat, dict) and not m_stat.get('is_healthy', True):
+                    self.log(f"피라미딩 보류: {name} - {m_type} 지수 약세(시장 필터)로 증액 보류")
+                    return
+
             if not is_market_open:
                 self.log(f"[장마감] 피라미딩 신호 감지 (주문 미전송): {name} - {reason}")
                 return
@@ -3422,8 +3443,8 @@ class AutoTrader:
                     budget_left = self.risk_manager.portfolio_risk_budget_left()
                     if budget_left is not None:
                         if add_risk > budget_left:
-                            cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
-                            self.log(f"피라미딩 보류: {name} - 포트폴리오 총 리스크 한도({cap:.0f}%) 초과 "
+                            cap = self.risk_manager.effective_portfolio_cap()
+                            self.log(f"피라미딩 보류: {name} - 포트폴리오 총 리스크 한도({cap:.1f}%) 초과 "
                                      f"(증액 리스크 {add_risk:,.0f}원 > 남은 예산 {max(budget_left, 0):,.0f}원)")
                             return
                         self.portfolio_heat_amt += add_risk
@@ -4010,16 +4031,16 @@ class AutoTrader:
             if sl_rate and sl_rate < 0:
                 budget_left = self.risk_manager.portfolio_risk_budget_left()
                 if budget_left is not None:
-                    cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
+                    cap = self.risk_manager.effective_portfolio_cap()
                     new_risk = invest_amt * (abs(sl_rate) / 100.0)
                     if new_risk > budget_left:
                         allowed_amt = int(max(budget_left, 0) / (abs(sl_rate) / 100.0))
                         if allowed_amt < order_price:
-                            self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 한도({cap:.0f}%) 도달 "
+                            self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 한도({cap:.1f}%) 도달 "
                                      f"(현재 오픈 리스크 {self.portfolio_heat_amt:,.0f}원, 남은 예산 {max(budget_left, 0):,.0f}원)")
                             continue
                         self.log(f"[히트 캡] {cand['name']} 투자금 축소: {invest_amt:,}원 → {allowed_amt:,}원 "
-                                 f"(총 오픈 리스크 한도 {cap:.0f}% 준수)")
+                                 f"(총 오픈 리스크 한도 {cap:.1f}% 준수)")
                         invest_amt = allowed_amt
 
             # [수정] 단순 계산 대신 API를 통해 정확한 매수 가능 수량 조회
@@ -4167,6 +4188,94 @@ class AutoTrader:
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e}")
                 self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
+
+    def _update_risk_scale(self):
+        """[리스크 스케일링] 시장 국면(약세)·계좌 드로다운에 따른 신규 진입 리스크 한도 배수 갱신
+
+        [추세추종 2원칙] "자본대비 리스크에 한도를 둬야 한다" — 약세 국면·손실 구간에서는
+        같은 한도라도 절대 금액을 줄여 드로다운을 단계적으로 통제한다(터틀식).
+        결과(self.risk_scale)는 RiskManager가 종목당 리스크(SYSTEM_RISK_PER_TRADE)와
+        히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에 곱해 사용한다. 청산 로직에는 관여하지 않는다.
+        국면 배수 × 드로다운 배수가 곱으로 결합된다."""
+        params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+        scale = 1.0
+        reasons = []
+        try:
+            # 1) 시장 국면: KOSPI/KOSDAQ 중 하나라도 약세(Bear)면 배수 적용 (보수적 — "추세는 시장이다")
+            if params.get("USE_REGIME_RISK_SCALING", True):
+                try:
+                    bear_scale = float(params.get("BEAR_RISK_SCALE", 0.75))
+                except (TypeError, ValueError):
+                    bear_scale = 0.75
+                if 0 < bear_scale < 1.0:
+                    for m_type in ("KOSPI", "KOSDAQ"):
+                        regime, _ = analysis.get_market_regime(m_type)
+                        if regime == "Bear":
+                            scale *= bear_scale
+                            reasons.append(f"약세국면 {m_type} x{bear_scale:g}")
+                            break
+
+            # 2) 계좌 드로다운: 자산 고점(HWM) 대비 하락률에 따라 단계적 감속
+            if params.get("USE_DRAWDOWN_RISK_SCALING", True):
+                dd = self._get_account_drawdown_pct(params)
+                try:
+                    lv1, sc1 = float(params.get("DD_LEVEL_1", 5.0)), float(params.get("DD_SCALE_1", 0.75))
+                    lv2, sc2 = float(params.get("DD_LEVEL_2", 10.0)), float(params.get("DD_SCALE_2", 0.5))
+                except (TypeError, ValueError):
+                    lv1, sc1, lv2, sc2 = 5.0, 0.75, 10.0, 0.5
+                if lv2 > 0 and dd >= lv2 and 0 < sc2 < 1.0:
+                    scale *= sc2
+                    reasons.append(f"드로다운 {dd:.1f}% x{sc2:g}")
+                elif lv1 > 0 and dd >= lv1 and 0 < sc1 < 1.0:
+                    scale *= sc1
+                    reasons.append(f"드로다운 {dd:.1f}% x{sc1:g}")
+        except Exception as e:
+            logger.debug(f"[리스크 스케일링] 배수 계산 실패 (기존값 유지): {e}")
+            return
+
+        prev = getattr(self, 'risk_scale', 1.0)
+        self.risk_scale = scale
+        self.risk_scale_reason = ", ".join(reasons)
+        if abs(scale - prev) > 1e-9:
+            if scale < 1.0:
+                rpt = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
+                cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
+                self.log(f"[리스크 스케일링] 신규 진입 리스크 한도 축소 x{scale:.2f} ({self.risk_scale_reason}) "
+                         f"— 종목당 {rpt * scale:.1f}%, 히트 캡 {cap * scale:.1f}% (청산 로직 영향 없음)")
+            else:
+                self.log("[리스크 스케일링] 리스크 한도 정상 복원 (x1.00)")
+
+    def _get_account_drawdown_pct(self, params=None):
+        """계좌 드로다운(%) — 최근 DD_LOOKBACK_DAYS 일간 자산 고점(HWM) 대비 현재 평가자산 하락률
+
+        HWM은 daily_asset_history(일일 시작자산 스냅샷)의 룩백 구간 최대값과 당일 시작자산 중
+        큰 값을 사용한다. 룩백 제한은 오래된 고점·입출금으로 인한 왜곡을 완화하기 위함이다.
+        DB 조회는 하루 1회만 수행하고 캐싱한다."""
+        params = params or getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+        equity = getattr(self, 'current_total_asset', 0) or self.initial_asset
+        if equity <= 0:
+            return 0.0
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, '_hwm_cache_date', None) != today:
+            hwm = 0.0
+            try:
+                lookback = int(params.get("DD_LOOKBACK_DAYS", 90))
+                if lookback <= 0:
+                    lookback = 90
+                start_date = (datetime.now() - timedelta(days=lookback)).strftime("%Y-%m-%d")
+                cano, acnt = _get_trade_account()
+                account_key = f"{cano}-{acnt}"
+                hwm = float(db_manager.db.get_max_daily_asset(start_date, account_key) or 0.0)
+            except Exception:
+                hwm = 0.0
+            self._hwm_cache = hwm
+            self._hwm_cache_date = today
+
+        hwm = max(getattr(self, '_hwm_cache', 0.0), float(self.initial_asset or 0))
+        if hwm <= 0:
+            return 0.0
+        return max(0.0, (hwm - equity) / hwm * 100.0)
 
     def _get_stock_market_type(self, code):
         """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (캐싱 적용)"""

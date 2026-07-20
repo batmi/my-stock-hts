@@ -116,6 +116,7 @@ def test_allocate_budget_risk_based_reduction():
     """손절폭이 넓으면 리스크 한도(SYSTEM_RISK_PER_TRADE)에 맞춰 비중을 축소한다."""
     config.SYSTEM_RISK_PER_TRADE = 1.0  # 거래당 최대 손실 1%
     config.USE_VOLATILITY_TARGETING = False
+    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS, GAP_RISK_BUFFER=1.0)  # 갭 버퍼 격리
     om, trader = _om(10_000_000)
 
     # max_loss=10M*1%=100k, 손절 -20% → risk_amt=100k/0.2=500k < 기초 1M → 500k
@@ -133,17 +134,31 @@ def test_allocate_budget_zero_initial_uses_cash():
     assert amt == 200_000
 
 
-def test_allocate_budget_volatility_scaling():
-    """변동성 타겟팅 활성 시 종목 변동성에 따라 비중을 스케일한다."""
+def test_allocate_budget_volatility_scaling_down():
+    """변동성 타겟팅 활성 시 고변동성 종목은 비중을 축소한다 (scale<1)."""
     config.SYSTEM_RISK_PER_TRADE = 0
     config.USE_VOLATILITY_TARGETING = True
-    config.TARGET_VOLATILITY = 0.30
+    config.TARGET_VOLATILITY = 0.20
     config.VOLATILITY_SCALING_MAX = 2.0
-    config.VOLATILITY_SCALING_MIN = 0.5
+    config.VOLATILITY_SCALING_MIN = 0.4
     om, trader = _om(10_000_000)
 
-    # atr/price=0.01 → 연환산 0.01*sqrt(252)≈0.1587, scale=0.30/0.1587≈1.89 (저변동성 → 비중 확대)
-    annual_vol = 0.01 * math.sqrt(252)
-    expected_scale = max(0.5, min(2.0, 0.30 / annual_vol))
-    amt = om.allocate_budget(50_000_000, 0.1, atr=100, current_price=10000)
+    # atr/price=0.03 → 연환산 0.03*sqrt(252)≈0.476, scale=0.20/0.476≈0.42 (고변동성 → 축소)
+    annual_vol = 0.03 * math.sqrt(252)
+    expected_scale = max(0.4, min(2.0, 0.20 / annual_vol))
+    amt = om.allocate_budget(50_000_000, 0.1, atr=300, current_price=10000)
     assert amt == int(1_000_000 * expected_scale)
+
+
+def test_allocate_budget_volatility_scaleup_capped_at_base():
+    """[집중 캡] 저변동성 확대 스케일은 기초 비중(base)을 초과하지 못한다."""
+    config.SYSTEM_RISK_PER_TRADE = 0
+    config.USE_VOLATILITY_TARGETING = True
+    config.TARGET_VOLATILITY = 0.20
+    config.VOLATILITY_SCALING_MAX = 2.0
+    config.VOLATILITY_SCALING_MIN = 0.4
+    om, trader = _om(10_000_000)
+
+    # 저변동성 → scale≈1.26(>1)이지만 base(100만)로 클램프
+    amt = om.allocate_budget(50_000_000, 0.1, atr=100, current_price=10000)
+    assert amt == 1_000_000

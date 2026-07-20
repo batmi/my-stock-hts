@@ -25,6 +25,7 @@ def _save_dynamic_config():
         "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
         "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
         "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
+        "RISK_SCALING_PARAMS": config.RISK_SCALING_PARAMS,
         "SYSTEM_INVEST_PER_STOCK": config.settings.SYSTEM_INVEST_PER_STOCK,
         "SYSTEM_MAX_HOLDINGS": config.settings.SYSTEM_MAX_HOLDINGS,
         "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180),
@@ -55,9 +56,9 @@ def _save_dynamic_config():
         "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0),
         "SYSTEM_MAX_PORTFOLIO_RISK": getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0),
         "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
-        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.30),
+        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.20),
         "VOLATILITY_SCALING_MAX": getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0),
-        "VOLATILITY_SCALING_MIN": getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5),
+        "VOLATILITY_SCALING_MIN": getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4),
         "SLIPPAGE_RATE": getattr(config.settings, 'SLIPPAGE_RATE', 0.002),
         "USE_CORRELATION_FILTER": getattr(config.settings, 'USE_CORRELATION_FILTER', True),
         "CORRELATION_THRESHOLD": getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)
@@ -267,8 +268,8 @@ def view_system_config(group=None):
         row("슬리피지 비율", "주문가 보정 및 백테스트 비용", "SLIPPAGE_RATE", slippage_str, key="SLIPPAGE_RATE")
         row("변동성 타겟팅", "ATR 기반 비중 조절 사용 여부", "USE_VOLATILITY_TARGETING", f"{getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)}", key="USE_VOLATILITY_TARGETING")
         if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
-            row("목표 변동성", "연간 변동성 목표치", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.30)}", key="TARGET_VOLATILITY", indent=True)
-            row("스케일링 범위", "비중 조절 최소~최대 배수", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5)} ~ {getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}", indent=True)
+            row("목표 변동성", "연간 변동성 목표치", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.20)}", key="TARGET_VOLATILITY", indent=True)
+            row("스케일링 범위", "비중 조절 최소~최대 배수", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ {getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}", indent=True)
 
         subheader("3-2. 매수 필터")
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")
@@ -288,6 +289,19 @@ def view_system_config(group=None):
         row("일일 손실 제한 (%)", "비상 정지 기준 손실률 (0%면 비상 정지 OFF)", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}", key="SYSTEM_DAILY_LOSS_LIMIT")
         row("1회 최대 리스크 (%)", "계좌 대비 1회 매매 최대 손실폭", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0)}", key="SYSTEM_RISK_PER_TRADE")
         row("총 오픈 리스크 한도 (%)", "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)", "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
+
+        subheader("3-4. 리스크 한도 동적 스케일링")
+        rsp = config.RISK_SCALING_PARAMS
+        row("약세 국면 리스크 축소", "약세장(지수<MA)일 때 신규 진입 리스크 한도 축소", "RISK_SCALING_PARAMS['USE_REGIME_RISK_SCALING']", f"{rsp.get('USE_REGIME_RISK_SCALING', True)}", key="USE_REGIME_RISK_SCALING")
+        if rsp.get('USE_REGIME_RISK_SCALING', True):
+            row("약세 국면 배수", "약세 시 리스크 한도 곱 배수 (예: 0.75)", "RISK_SCALING_PARAMS['BEAR_RISK_SCALE']", f"{rsp.get('BEAR_RISK_SCALE', 0.75)}", key="BEAR_RISK_SCALE", indent=True)
+        row("드로다운 리스크 감속", "계좌 고점 대비 하락 시 단계적 리스크 축소", "RISK_SCALING_PARAMS['USE_DRAWDOWN_RISK_SCALING']", f"{rsp.get('USE_DRAWDOWN_RISK_SCALING', True)}", key="USE_DRAWDOWN_RISK_SCALING")
+        if rsp.get('USE_DRAWDOWN_RISK_SCALING', True):
+            row("드로다운 1단계", "기준 % 이상 하락 시 배수 적용", "RISK_SCALING_PARAMS['DD_LEVEL_1/SCALE_1']", f"{rsp.get('DD_LEVEL_1', 5.0)}% → x{rsp.get('DD_SCALE_1', 0.75)}", indent=True)
+            row("드로다운 2단계", "기준 % 이상 하락 시 배수 적용", "RISK_SCALING_PARAMS['DD_LEVEL_2/SCALE_2']", f"{rsp.get('DD_LEVEL_2', 10.0)}% → x{rsp.get('DD_SCALE_2', 0.5)}", indent=True)
+            row("자산 고점 룩백 (일)", "HWM 산출 기간", "RISK_SCALING_PARAMS['DD_LOOKBACK_DAYS']", f"{rsp.get('DD_LOOKBACK_DAYS', 90)}", key="DD_LOOKBACK_DAYS", indent=True)
+        _gap = rsp.get('GAP_RISK_BUFFER', 1.2)
+        row("갭 리스크 버퍼", "사이징 시 손절폭 배수 (갭하락 대비, 1.0=미사용)", "RISK_SCALING_PARAMS['GAP_RISK_BUFFER']", f"x{_gap}", key="GAP_RISK_BUFFER")
 
     # =========================================================
     # 4. 기술적 지표 파라미터
@@ -890,11 +904,11 @@ def _risk_portfolio_items():
     if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
         items.extend([
             {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%, 0.3=30%", "name": "TARGET_VOLATILITY", "type": "float", "section": "3-1. 자산 배분/포지션",
-             "get": lambda: getattr(config.settings, 'TARGET_VOLATILITY', 0.30), "set": lambda v: setattr(config.settings, 'TARGET_VOLATILITY', v)},
+             "get": lambda: getattr(config.settings, 'TARGET_VOLATILITY', 0.20), "set": lambda v: setattr(config.settings, 'TARGET_VOLATILITY', v)},
             {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "3-1. 자산 배분/포지션",
              "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MAX', v)},
             {"desc": "스케일링 최소 배수", "help": "비중 축소 제한", "name": "VOLATILITY_SCALING_MIN", "type": "float", "section": "3-1. 자산 배분/포지션",
-             "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.5), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MIN', v)}
+             "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MIN', v)}
         ])
 
     items.extend([
@@ -919,6 +933,25 @@ def _risk_portfolio_items():
          "get": lambda: getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0), "set": lambda v: setattr(config.settings, 'SYSTEM_RISK_PER_TRADE', v)},
         {"desc": "총 오픈 리스크 한도 (%)", "help": "보유 전체 '현재가→손절선' 잠재손실 합의 상한 (0%면 미사용)", "name": "SYSTEM_MAX_PORTFOLIO_RISK", "type": "float", "section": "3-3. 비상 안전장치",
          "get": lambda: getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', v)},
+
+        {"desc": "약세 국면 리스크 축소 사용", "help": "약세장(지수<MA)일 때 신규 진입 리스크 한도를 배수만큼 축소", "name": "USE_REGIME_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("USE_REGIME_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_REGIME_RISK_SCALING": v})},
+        {"desc": "약세 국면 배수", "help": "약세 시 리스크 한도 곱 배수 (0<v<1, 예: 0.75)", "name": "BEAR_RISK_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("BEAR_RISK_SCALE", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"BEAR_RISK_SCALE": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "드로다운 리스크 감속 사용", "help": "계좌 고점(HWM) 대비 하락 시 단계적으로 리스크 한도 축소", "name": "USE_DRAWDOWN_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("USE_DRAWDOWN_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_DRAWDOWN_RISK_SCALING": v})},
+        {"desc": "드로다운 1단계 기준 (%)", "help": "고점 대비 이 % 이상 하락 시 1단계 배수 적용", "name": "DD_LEVEL_1", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LEVEL_1", 5.0), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LEVEL_1": v}), "validator": lambda v: v >= 0},
+        {"desc": "드로다운 1단계 배수", "help": "1단계 리스크 곱 배수 (0<v<1, 예: 0.75)", "name": "DD_SCALE_1", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_1", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_1": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "드로다운 2단계 기준 (%)", "help": "고점 대비 이 % 이상 하락 시 2단계 배수 적용", "name": "DD_LEVEL_2", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LEVEL_2", 10.0), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LEVEL_2": v}), "validator": lambda v: v >= 0},
+        {"desc": "드로다운 2단계 배수", "help": "2단계 리스크 곱 배수 (0<v<1, 예: 0.5)", "name": "DD_SCALE_2", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_2", 0.5), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_2": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "자산 고점 룩백 (일)", "help": "HWM(자산 고점) 산출 기간", "name": "DD_LOOKBACK_DAYS", "type": "int", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LOOKBACK_DAYS", 90), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LOOKBACK_DAYS": v}), "validator": lambda v: v > 0},
+        {"desc": "갭 리스크 버퍼", "help": "사이징 시 손절폭에 곱하는 배수 (갭하락 대비, 1.0=미사용)", "name": "GAP_RISK_BUFFER", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("GAP_RISK_BUFFER", 1.2), "set": lambda v: config.RISK_SCALING_PARAMS.update({"GAP_RISK_BUFFER": v}), "validator": lambda v: v >= 1.0},
     ])
     return items
 
@@ -1377,6 +1410,15 @@ def manage_custom_settings():
             "SYSTEM_DAILY_LOSS_LIMIT": "일일 손실 제한 (%)",
             "SYSTEM_RISK_PER_TRADE": "1회 최대 리스크 (%)",
             "SYSTEM_MAX_PORTFOLIO_RISK": "총 오픈 리스크 한도 (%)",
+            "USE_REGIME_RISK_SCALING": "약세 국면 리스크 축소 사용",
+            "BEAR_RISK_SCALE": "약세 국면 배수",
+            "USE_DRAWDOWN_RISK_SCALING": "드로다운 리스크 감속 사용",
+            "DD_LEVEL_1": "드로다운 1단계 기준 (%)",
+            "DD_SCALE_1": "드로다운 1단계 배수",
+            "DD_LEVEL_2": "드로다운 2단계 기준 (%)",
+            "DD_SCALE_2": "드로다운 2단계 배수",
+            "DD_LOOKBACK_DAYS": "자산 고점 룩백 (일)",
+            "GAP_RISK_BUFFER": "갭 리스크 버퍼",
             "USE_CORRELATION_FILTER": "상관계수 필터링 사용",
             "CORRELATION_THRESHOLD": "상관계수 임계값",
             "CHART_LOOKBACK_DAYS": "데이터 조회 기간",
@@ -1493,6 +1535,15 @@ def manage_custom_settings():
             "SYSTEM_DAILY_LOSS_LIMIT": (_CAT3, "3-3. 비상 안전장치"),
             "SYSTEM_RISK_PER_TRADE": (_CAT3, "3-3. 비상 안전장치"),
             "SYSTEM_MAX_PORTFOLIO_RISK": (_CAT3, "3-3. 비상 안전장치"),
+            "USE_REGIME_RISK_SCALING": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "BEAR_RISK_SCALE": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "USE_DRAWDOWN_RISK_SCALING": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "DD_LEVEL_1": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "DD_SCALE_1": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "DD_LEVEL_2": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "DD_SCALE_2": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "DD_LOOKBACK_DAYS": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "GAP_RISK_BUFFER": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "CHART_LOOKBACK_DAYS": (_CAT4, "4-1. 데이터 조회"),
             "SAR_AF_START": (_CAT4, "4-2. 추세"),
             "SAR_AF_STEP": (_CAT4, "4-2. 추세"),

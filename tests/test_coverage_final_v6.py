@@ -169,14 +169,15 @@ def test_risk_manager_volatility_scaling():
     trader.initial_asset = 10_000_000
     rm = auto_trade.RiskManager(trader)
     
-    # ATR이 매우 낮음 -> 비중 확대 (Max 2.0배 제한 확인)
+    # ATR이 매우 낮음 -> 비중 확대 시도 (Max 2.0배)이나 기초 비중(base)으로 클램프됨
     config.USE_VOLATILITY_TARGETING = True
     config.TARGET_VOLATILITY = 0.2
     config.VOLATILITY_SCALING_MAX = 2.0
-    
-    # Price 10000, ATR 10 -> Volatility approx 1.6% -> Scale very high -> Capped at 2.0
+
+    # Price 10000, ATR 10 -> Volatility approx 1.6% -> Scale 2.0(상한)이나 base(100만)로 클램프
+    # [변동성 관리 fix] 확대 스케일은 종목당 명목 상한(base)을 초과할 수 없음
     amt = rm.allocate_budget(10_000_000, 0.1, atr=10, current_price=10000)
-    assert amt == 2_000_000 # 100만 * 2.0
+    assert amt == 1_000_000 # min(100만 * 2.0, base 100만) = 100만
 
 def test_order_manager_register():
     """수동 주문 등록 테스트"""

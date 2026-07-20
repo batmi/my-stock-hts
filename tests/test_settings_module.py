@@ -37,8 +37,8 @@ def test_modify_analysis_thresholds_new_items(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_modify_risk_portfolio_settings_new_items(mock_ask):
     """새로 추가된 리스크 설정 변경 테스트 (일일 손실 제한)"""
-    # USE_VOLATILITY_TARGETING이 켜져 있을 때 일일 손실 제한은 14번째 항목 (3-3. 비상 안전장치 섹션)
-    mock_ask.side_effect = ["14", "15.0", "q"]
+    # USE_VOLATILITY_TARGETING이 켜져 있을 때 일일 손실 제한은 16번째 항목 (3-3. 비상 안전장치 섹션)
+    mock_ask.side_effect = ["16", "15.0", "q"]
     
     orig_loss_limit = getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
     try:

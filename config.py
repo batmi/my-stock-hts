@@ -116,13 +116,37 @@ class GlobalSettings(BaseModel):
                                             #   기존 포지션의 손절선이 BEP/트레일링으로 올라오면 예산이 회복되어 자연히 재개)
 
     # [설정] 변동성 타겟팅 (Volatility Targeting)
+    # [추세추종 2원칙] "자본대비 변동성에 한도를 둬야 한다" — 종목별 연환산 변동성을 목표치로 정규화
     USE_VOLATILITY_TARGETING: bool = True   # 변동성 타겟팅 사용 여부
-    TARGET_VOLATILITY: float = Field(default=0.30, gt=0.0)         # 목표 연간 변동성 (30%)
+    TARGET_VOLATILITY: float = Field(default=0.20, gt=0.0)         # 목표 연간 변동성 (20%)
                                             # - 0.10 ~ 0.15: 보수적/안정적 (생존 우선, MDD 최소화)
-                                            # - 0.15 ~ 0.20: 중립적 (시장 수익률 추구)
-                                            # - 0.25 ~ 0.30: 적극적 (고수익 추구, 변동성 허용) -> 현재 설정
+                                            # - 0.15 ~ 0.20: 중립적 (시장 수익률 추구) -> 현재 설정 (변동성 관리 강조로 0.30→0.20 하향)
+                                            # - 0.25 ~ 0.30: 적극적 (고수익 추구, 변동성 허용)
     VOLATILITY_SCALING_MAX: float = Field(default=2.0, gt=0.0)     # 최대 확대 배수 (2배) - 변동성이 낮을 때 포지션 확대 제한
-    VOLATILITY_SCALING_MIN: float = Field(default=0.5, ge=0.0)     # 최소 축소 배수 (0.5배) - 변동성이 높을 때 최소 포지션 유지 (너무 적은 금액 매수 방지)
+                                            #   ※ 확대 결과가 기초 비중(SYSTEM_INVEST_PER_STOCK)을 넘지 않도록 최종 클램프됨(집중 방지)
+    VOLATILITY_SCALING_MIN: float = Field(default=0.4, ge=0.0)     # 최소 축소 배수 (0.4배) - 변동성이 높을 때 최소 포지션 유지 (너무 적은 금액 매수 방지)
+                                            #   (변동성 관리 강조로 0.5→0.4 하향 — 고변동성 종목 비중을 순수 타겟팅에 더 가깝게 축소)
+
+    # ==========================================================
+    # [설정] 리스크 한도 동적 스케일링 (Risk Scaling)
+    # ==========================================================
+    # [추세추종 2원칙] "자본대비 리스크에 한도를 둬야 한다" — 시장 국면(약세)과 계좌 드로다운에 따라
+    # 신규 진입의 리스크 한도(SYSTEM_RISK_PER_TRADE·SYSTEM_MAX_PORTFOLIO_RISK)를 자동 축소한다.
+    # 진입 '크기'만 조절하며 청산 로직(샹들리에 TS 등)에는 일절 관여하지 않는다. (추세추종 정합)
+    # 국면 배수 × 드로다운 배수가 곱으로 결합된다. (예: 약세 0.75 × DD10% 0.5 = 0.375)
+    RISK_SCALING_PARAMS: dict = {
+        "USE_REGIME_RISK_SCALING": True,   # 약세(Bear) 국면 시 리스크 한도 축소 사용
+        "BEAR_RISK_SCALE": 0.75,           # 약세 국면 배수 (예: 종목당 4%→3%, 히트 캡 10%→7.5%)
+        "USE_DRAWDOWN_RISK_SCALING": True, # 계좌 드로다운 단계적 감속 사용 (터틀식)
+        "DD_LEVEL_1": 5.0,                 # 드로다운 1단계 기준 (%) — 자산 고점 대비 이 값 이상 하락 시
+        "DD_SCALE_1": 0.75,                # 1단계 배수
+        "DD_LEVEL_2": 10.0,                # 드로다운 2단계 기준 (%)
+        "DD_SCALE_2": 0.5,                 # 2단계 배수
+        "DD_LOOKBACK_DAYS": 90,            # 자산 고점(HWM) 산출 룩백(일) — 오래된 고점·입출금 왜곡 완화
+        # [갭 리스크 버퍼] 손절은 소프트 스탑(주기 감시)이라 갭하락 시 손절가 아래 체결될 수 있다.
+        # 리스크 기반 사이징 시 손절폭에 이 배수를 곱해 보수적으로 계산한다. (1.0 = 미사용)
+        "GAP_RISK_BUFFER": 1.2,
+    }
 
     # [추가] 슬리피지 비율 (Slippage Rate)
     # 매수/매도 주문 시 현재가 대비 불리한 가격으로 주문을 내어 체결 확률을 높이고,
@@ -246,7 +270,11 @@ class GlobalSettings(BaseModel):
         "PYRAMIDING_USE": True,           # 피라미딩 사용 여부
         "PYRAMIDING_PROFIT_TRIGGER": 10.0,  # 증액 발동 최소 수익률 (%) - TS 감시 시작(+10%)과 동일선
         "PYRAMIDING_RATIO": 0.5,          # 증액 수량 비율 (현재 보유 수량 대비, 0.5 = 50%)
-        "PYRAMIDING_MAX_COUNT": 1         # 포지션당 최대 증액 횟수 (피라미드 구조 유지를 위해 기본 1회)
+        "PYRAMIDING_MAX_COUNT": 1,        # 포지션당 최대 증액 횟수 (피라미드 구조 유지를 위해 기본 1회)
+        # [리스크 관리] 시장 필터(지수<SMA)가 '보류' 상태인 시장의 종목은 피라미딩 증액도 보류.
+        # 신규 매수 차단과 동일 기준을 증액에 적용해 약세 시장에서의 노출 확대를 방지한다.
+        # (USE_MARKET_FILTER가 꺼져 있으면 이 옵션도 무시됨)
+        "PYRAMIDING_REQUIRE_HEALTHY_MARKET": True
     }
 
     # ==========================================================
@@ -900,7 +928,7 @@ def load_dynamic_config():
             with _settings_lock:
                 current_dict = getattr(settings, 'model_dump', settings.dict)()
                 
-                for key in ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS", "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS"]:
+                for key in ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS", "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS", "RISK_SCALING_PARAMS"]:
                     if key in data:
                         current_dict[key].update(data[key])
                         del data[key]
@@ -991,7 +1019,8 @@ def reset_all_settings():
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
             "SUPER_MOMENTUM_SCORE": 8.0, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 80.0,
-            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 1
+            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 1,
+            "PYRAMIDING_REQUIRE_HEALTHY_MARKET": True
         }
         settings.SELL_STRATEGY = {
             "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False,
@@ -1008,6 +1037,12 @@ def reset_all_settings():
         settings.MARKET_REGIME_PARAMS = {
             "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
             "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 5, "REGIME_ADX_THRESHOLD": 20
+        }
+        settings.RISK_SCALING_PARAMS = {
+            "USE_REGIME_RISK_SCALING": True, "BEAR_RISK_SCALE": 0.75,
+            "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.75,
+            "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.5, "DD_LOOKBACK_DAYS": 90,
+            "GAP_RISK_BUFFER": 1.2
         }
         settings.INDICATOR_PARAMS = {
             "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
@@ -1060,8 +1095,17 @@ CONFIG_DESCRIPTIONS = {
     "SYSTEM_MAX_PORTFOLIO_RISK": "포트폴리오 총 오픈 리스크(히트) 한도 (0%면 미사용)",
     "USE_VOLATILITY_TARGETING": "변동성(ATR) 타겟팅 비중 조절 사용 여부",
     "TARGET_VOLATILITY": "목표 연간 변동성",
-    "VOLATILITY_SCALING_MAX": "변동성 비중 확대 최대 배수",
+    "VOLATILITY_SCALING_MAX": "변동성 비중 확대 최대 배수 (기초 비중 초과 불가)",
     "VOLATILITY_SCALING_MIN": "변동성 비중 축소 최소 배수",
+    "USE_REGIME_RISK_SCALING": "약세 국면 시 리스크 한도 자동 축소 사용",
+    "BEAR_RISK_SCALE": "약세 국면 리스크 한도 배수",
+    "USE_DRAWDOWN_RISK_SCALING": "계좌 드로다운 단계적 리스크 감속 사용",
+    "DD_LEVEL_1": "드로다운 1단계 기준 (%)",
+    "DD_SCALE_1": "드로다운 1단계 리스크 배수",
+    "DD_LEVEL_2": "드로다운 2단계 기준 (%)",
+    "DD_SCALE_2": "드로다운 2단계 리스크 배수",
+    "DD_LOOKBACK_DAYS": "자산 고점(HWM) 산출 룩백 (일)",
+    "GAP_RISK_BUFFER": "갭 리스크 버퍼 (사이징 시 손절폭 배수, 1.0=미사용)",
     "SLIPPAGE_RATE": "주문가 보정 및 백테스트 슬리피지 비율",
     "SYSTEM_TRADING_START_TIME": "거래 시작 시간 (HHMM)",
     "SYSTEM_TRADING_END_TIME": "거래 종료 시간 (HHMM)",

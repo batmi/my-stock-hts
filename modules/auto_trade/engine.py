@@ -924,16 +924,37 @@ class RiskManager:
 
         return total_risk
 
+    def current_risk_scale(self):
+        """[리스크 스케일링] 트레이더가 주기마다 갱신한 리스크 한도 배수 (0<scale≤1)
+
+        약세 국면·계좌 드로다운에 따라 트레이더(_update_risk_scale)가 산출한다.
+        신규 진입 사이징(SYSTEM_RISK_PER_TRADE)과 히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에만
+        적용되며 청산 로직에는 관여하지 않는다. 미산출 시 1.0(축소 없음)."""
+        try:
+            scale = float(getattr(self.trader, 'risk_scale', 1.0) or 1.0)
+        except (TypeError, ValueError):
+            scale = 1.0
+        return min(1.0, scale) if scale > 0 else 1.0
+
+    def effective_portfolio_cap(self):
+        """리스크 스케일이 반영된 실효 히트 캡(%) — 로그 표시용"""
+        cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
+        return cap * self.current_risk_scale()
+
     def portfolio_risk_budget_left(self):
-        """히트 캡까지 남은 리스크 예산(원). 캡 미사용(0)·기준자산 미확보 시 None(제한 없음)"""
+        """히트 캡까지 남은 리스크 예산(원). 캡 미사용(0)·기준자산 미확보 시 None(제한 없음)
+
+        [리스크 스케일링] 약세 국면·드로다운 시 캡이 배수만큼 축소된다.
+        기준자산은 최근 조회된 현재 평가자산을 우선 사용해(폴백: 당일 시작자산),
+        장중 손실이 나면 예산도 함께 줄어드는 보수적 방향으로 동작한다."""
         cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
         if cap <= 0:
             return None
-        equity = self.trader.initial_asset
+        equity = getattr(self.trader, 'current_total_asset', 0) or self.trader.initial_asset
         if equity <= 0:
             return None
         heat = getattr(self.trader, 'portfolio_heat_amt', 0.0)
-        return equity * (cap / 100.0) - heat
+        return equity * (cap * self.current_risk_scale() / 100.0) - heat
 
     def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
         """자산 배분 계산
@@ -943,52 +964,67 @@ class RiskManager:
           1) 기초 비중(invest_ratio): 종목당 명목 상한 (집중 방지). SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하 권장.
           2) 리스크 기반(SYSTEM_RISK_PER_TRADE): '손절 시 계좌 손실액'을 일정 이하로 고정 → 꼬리위험(tail loss) 상한.
              손절폭(ATR 손절이면 ATR 반영)이 넓을수록 비중을 줄인다. min()으로 1)과 결합.
+             [갭 버퍼] 소프트 스탑의 갭하락 미끄러짐을 대비해 손절폭에 GAP_RISK_BUFFER 배수를 곱해 보수 계산.
+             [리스크 스케일링] 약세 국면·드로다운 시 허용 손실액이 risk_scale 배수만큼 축소된다.
           3) 변동성 타겟팅(TARGET_VOLATILITY): 종목의 연환산 변동성을 목표치로 정규화 → 포트폴리오 변동성 균질화.
              2)가 '최악 손실액'을 막는다면 3)은 '평상시 변동성'을 맞춘다. scale 배수로 곱셈 결합.
         즉 2)는 손실액 캡, 3)은 변동성 정규화로 서로 다른 위험을 통제하므로 단순 중복이 아니다.
+        [집중 캡] 변동성 타겟팅의 확대(scale>1) 결과가 기초 비중을 넘지 않도록 최종 클램프한다.
+        기초 비중은 SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하가 되도록 설계된 종목당 명목 상한이므로,
+        어떤 레이어도 이를 초과할 수 없다. (확대는 2)로 축소된 금액을 기초 비중까지 복원하는 용도로만 작동)
         """
         if self.trader.initial_asset > 0:
             target_invest_amt = int(self.trader.initial_asset * invest_ratio)
         else:
             target_invest_amt = int(avail_cash * invest_ratio)
-        
+
         base_amt = target_invest_amt
-        
+
         risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
         risk_based_amt = 0
-        
+        risk_scale = self.current_risk_scale()
+        risk_params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
             total_equity = self.trader.initial_asset if self.trader.initial_asset > 0 else avail_cash
-            max_loss_amt = total_equity * (risk_per_trade / 100.0)
-            sl_ratio = abs(stop_loss_rate) / 100.0
+            max_loss_amt = total_equity * (risk_per_trade * risk_scale / 100.0)
+            try:
+                gap_buffer = max(1.0, float(risk_params.get("GAP_RISK_BUFFER", 1.2)))
+            except (TypeError, ValueError):
+                gap_buffer = 1.2
+            sl_ratio = (abs(stop_loss_rate) / 100.0) * gap_buffer
             risk_based_amt = int(max_loss_amt / sl_ratio)
             target_invest_amt = min(target_invest_amt, risk_based_amt)
-        
+
         scale = 1.0
         if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
-            
-            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.30)
+
+            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
             scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-            scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.5)
-            
+            scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.4)
+
             if annual_vol > 0:
                 scale = target_vol / annual_vol
                 scale = max(scale_min, min(scale_max, scale))
                 target_invest_amt = int(target_invest_amt * scale)
+                # [집중 캡] 확대 스케일이 종목당 명목 상한(기초 비중)을 초과하지 않도록 클램프
+                target_invest_amt = min(target_invest_amt, base_amt)
 
         invest_amt = min(target_invest_amt, avail_cash)
-        
+
         log_msg = f"[자산배분] 기초:{base_amt:,}원"
+        if risk_scale < 1.0:
+            log_msg += f" | 리스크스케일 x{risk_scale:.2f}({getattr(self.trader, 'risk_scale_reason', '') or '축소'})"
         if risk_based_amt > 0:
             log_msg += f" -> 리스크조정:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
         if scale != 1.0:
             log_msg += f" -> 변동성조정(x{scale:.2f}):{target_invest_amt:,}원"
         log_msg += f" -> 최종:{invest_amt:,}원"
-        
+
         self.trader.log(log_msg)
-            
+
         return invest_amt
 
     def check_loss_limit(self, current_total):
