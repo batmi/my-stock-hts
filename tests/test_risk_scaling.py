@@ -33,31 +33,121 @@ def restore_risk_params():
 # =========================================================
 # _update_risk_scale — 시장 국면 연동
 # =========================================================
-def test_risk_scale_bear_regime(trader):
-    """약세(Bear) 국면이면 리스크 배수가 BEAR_RISK_SCALE로 축소된다."""
-    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS,
-                                      USE_REGIME_RISK_SCALING=True, BEAR_RISK_SCALE=0.75,
-                                      USE_DRAWDOWN_RISK_SCALING=False)
-    with patch('modules.auto_trade.trader.analysis.get_market_regime', return_value=("Bear", 0.5)):
+def _patch_regime(regime, whipsaw=None, score_adj=0.0):
+    """국면 상세(get_market_regime_detail) 모킹 헬퍼."""
+    return patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+                 return_value={'regime': regime, 'score_adj': score_adj,
+                               'moved_pct': 0.0, 'whipsaw_ratio': whipsaw, 'segments': 10})
+
+
+def _regime_only_params(**kw):
+    p = dict(config.RISK_SCALING_PARAMS,
+             USE_REGIME_RISK_SCALING=True, USE_WHIPSAW_RISK_SCALING=False,
+             PENDING_DOWN_RISK_SCALE=0.6, BEAR_RISK_SCALE=1.0,
+             USE_DRAWDOWN_RISK_SCALING=False)
+    p.update(kw)
+    return p
+
+
+def test_risk_scale_pending_down_regime(trader):
+    """하락 미확정(PendDown) 국면이면 PENDING_DOWN_RISK_SCALE로 축소된다.
+
+    15년 백테스트상 리스크를 줄여야 할 구간은 확정 Bear가 아니라 추세 붕괴 초기다."""
+    config.RISK_SCALING_PARAMS = _regime_only_params()
+    with _patch_regime("PendDown"):
+        trader._update_risk_scale()
+    assert trader.risk_scale == pytest.approx(0.6)
+
+
+def test_risk_scale_confirmed_bear_no_change_by_default(trader):
+    """확정 약세(Bear)는 기본값(BEAR_RISK_SCALE=1.0)에서 축소하지 않는다.
+
+    이미 확인 기준만큼 하락한 뒤라 향후 수익률이 오히려 양(+)이었기 때문."""
+    config.RISK_SCALING_PARAMS = _regime_only_params()
+    with _patch_regime("Bear"):
+        trader._update_risk_scale()
+    assert trader.risk_scale == pytest.approx(1.0)
+
+
+def test_risk_scale_bear_regime_opt_in(trader):
+    """BEAR_RISK_SCALE를 1.0 미만으로 두면 확정 약세에도 축소가 적용된다(옵트인)."""
+    config.RISK_SCALING_PARAMS = _regime_only_params(BEAR_RISK_SCALE=0.75)
+    with _patch_regime("Bear"):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(0.75)
 
 
 def test_risk_scale_bull_regime_no_change(trader):
-    """강세/횡보 국면이면 국면에 의한 축소는 없다(1.0 유지)."""
-    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS,
-                                      USE_REGIME_RISK_SCALING=True, BEAR_RISK_SCALE=0.75,
-                                      USE_DRAWDOWN_RISK_SCALING=False)
-    with patch('modules.auto_trade.trader.analysis.get_market_regime', return_value=("Bull", -0.5)):
+    """강세/상승 미확정 국면이면 국면에 의한 축소는 없다(1.0 유지)."""
+    config.RISK_SCALING_PARAMS = _regime_only_params()
+    for regime in ("Bull", "PendUp", "Sideways"):
+        trader.risk_scale = 1.0
+        with _patch_regime(regime):
+            trader._update_risk_scale()
+        assert trader.risk_scale == pytest.approx(1.0), regime
+
+
+# =========================================================
+# _update_risk_scale — 휩소율 연동
+# =========================================================
+def _whipsaw_params(**kw):
+    p = dict(config.RISK_SCALING_PARAMS,
+             USE_REGIME_RISK_SCALING=False, USE_WHIPSAW_RISK_SCALING=True,
+             WHIPSAW_LO=0.40, WHIPSAW_HI=0.75, WHIPSAW_MIN_SCALE=0.6,
+             USE_DRAWDOWN_RISK_SCALING=False)
+    p.update(kw)
+    return p
+
+
+@pytest.mark.parametrize("whipsaw,expected", [
+    (0.0,  1.0),    # 교차가 전부 성공 — 추세가 잘 먹히는 장
+    (0.40, 1.0),    # 하한 경계
+    (0.575, 0.8),   # 중간 → 선형 보간
+    (0.75, 0.6),    # 상한 경계 → 최소 배수
+    (1.0,  0.6),    # 상한 초과에도 최소 배수 유지
+    (None, 1.0),    # 산출 불가(교차 표본 부족) → 축소 없음
+])
+def test_whipsaw_risk_scale_interpolation(trader, whipsaw, expected):
+    """휩소율 → 배수 선형 보간이 경계 포함해 의도대로 동작한다."""
+    config.RISK_SCALING_PARAMS = _whipsaw_params()
+    with _patch_regime("Bull", whipsaw=whipsaw):
         trader._update_risk_scale()
-    assert trader.risk_scale == pytest.approx(1.0)
+    assert trader.risk_scale == pytest.approx(expected)
+
+
+def test_whipsaw_and_regime_compound(trader):
+    """국면 배수 × 휩소율 배수는 같은 시장 안에서 곱으로 결합된다."""
+    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS,
+                                      USE_REGIME_RISK_SCALING=True, USE_WHIPSAW_RISK_SCALING=True,
+                                      PENDING_DOWN_RISK_SCALE=0.6, BEAR_RISK_SCALE=1.0,
+                                      WHIPSAW_LO=0.40, WHIPSAW_HI=0.75, WHIPSAW_MIN_SCALE=0.6,
+                                      USE_DRAWDOWN_RISK_SCALING=False)
+    with _patch_regime("PendDown", whipsaw=0.75):
+        trader._update_risk_scale()
+    assert trader.risk_scale == pytest.approx(0.6 * 0.6)
+
+
+def test_worst_of_two_markets_is_used(trader):
+    """KOSPI/KOSDAQ 배수가 다르면 더 보수적인(작은) 쪽을 채택한다 — 곱하지 않는다."""
+    config.RISK_SCALING_PARAMS = _regime_only_params()
+    per_market = {
+        "KOSPI": {'regime': "Bull", 'score_adj': -0.5, 'moved_pct': 8.0,
+                  'whipsaw_ratio': None, 'segments': 10},
+        "KOSDAQ": {'regime': "PendDown", 'score_adj': 0.5, 'moved_pct': -2.0,
+                   'whipsaw_ratio': None, 'segments': 10},
+    }
+    with patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+               side_effect=lambda m: per_market[m]):
+        trader._update_risk_scale()
+    assert trader.risk_scale == pytest.approx(0.6)
+    assert "KOSDAQ" in trader.risk_scale_reason
 
 
 # =========================================================
 # _update_risk_scale — 드로다운 연동
 # =========================================================
 def _patch_regime_neutral():
-    return patch('modules.auto_trade.trader.analysis.get_market_regime', return_value=("Sideways", 0.0))
+    return _patch_regime("Bull")
 
 
 def test_risk_scale_drawdown_level1(trader):
@@ -87,16 +177,17 @@ def test_risk_scale_drawdown_level2(trader):
 
 
 def test_risk_scale_regime_and_drawdown_compound(trader):
-    """약세 국면 × 드로다운 배수는 곱으로 결합된다."""
+    """국면 배수 × 드로다운 배수는 곱으로 결합된다."""
     config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS,
-                                      USE_REGIME_RISK_SCALING=True, BEAR_RISK_SCALE=0.75,
+                                      USE_REGIME_RISK_SCALING=True, USE_WHIPSAW_RISK_SCALING=False,
+                                      PENDING_DOWN_RISK_SCALE=0.6, BEAR_RISK_SCALE=1.0,
                                       USE_DRAWDOWN_RISK_SCALING=True,
                                       DD_LEVEL_1=5.0, DD_SCALE_1=0.75, DD_LEVEL_2=10.0, DD_SCALE_2=0.5)
     trader.current_total_asset = 8_800_000  # DD 12% → 0.5
-    with patch('modules.auto_trade.trader.analysis.get_market_regime', return_value=("Bear", 0.5)), \
+    with _patch_regime("PendDown"), \
          patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=10_000_000):
         trader._update_risk_scale()
-    assert trader.risk_scale == pytest.approx(0.75 * 0.5)
+    assert trader.risk_scale == pytest.approx(0.6 * 0.5)
 
 
 def test_risk_scale_no_drawdown(trader):

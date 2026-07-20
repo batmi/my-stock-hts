@@ -135,8 +135,24 @@ class GlobalSettings(BaseModel):
     # 진입 '크기'만 조절하며 청산 로직(샹들리에 TS 등)에는 일절 관여하지 않는다. (추세추종 정합)
     # 국면 배수 × 드로다운 배수가 곱으로 결합된다. (예: 약세 0.75 × DD10% 0.5 = 0.375)
     RISK_SCALING_PARAMS: dict = {
-        "USE_REGIME_RISK_SCALING": True,   # 약세(Bear) 국면 시 리스크 한도 축소 사용
-        "BEAR_RISK_SCALE": 0.75,           # 약세 국면 배수 (예: 종목당 4%→3%, 히트 캡 10%→7.5%)
+        # [국면 연동] 15년 백테스트 결과, 리스크를 줄여야 할 구간은 '확정 약세(Bear)'가 아니라
+        #  '하락 미확정(PendDown, 추세 붕괴 초기)'이다. 확정 Bear는 이미 -5% 하락한 뒤라
+        #  향후 20일 수익률이 오히려 +2.4%(KOSPI)/+2.7%(KOSDAQ)로 반등 구간이었고,
+        #  거기서 리스크를 줄이면 CAGR만 깎였다(7.65→6.85%). 반면 PendDown은 두 시장 모두
+        #  유일하게 향후 수익률이 음수(-0.5%/-0.6%)이고 하방 위험(20일 하위10%)도 가장 컸다.
+        #  PendDown 배수 0.6 적용 시 KOSPI CAGR 7.65→8.64%, MDD -43.9→-41.7%.
+        "USE_REGIME_RISK_SCALING": True,   # 국면 연동 리스크 한도 축소 사용
+        "PENDING_DOWN_RISK_SCALE": 0.6,    # 하락 미확정 배수 (예: 종목당 4%→2.4%, 히트 캡 10%→6%)
+        "BEAR_RISK_SCALE": 1.0,            # 확정 약세 배수 (1.0 = 미적용 — 위 근거 참조)
+        # [휩소율 연동] 직전 REGIME_WHIPSAW_LOOKBACK개 교차 중 확인 기준 미달 비율이 높을수록
+        #  = 시장이 톱니 상태 → 추세추종이 먹히지 않으므로 진입 크기를 연속적으로 줄인다.
+        #  WHIPSAW_LO 이하면 배수 1.0, WHIPSAW_HI 이상이면 WHIPSAW_MIN_SCALE, 사이는 선형 보간.
+        #  국면 배수와 곱으로 결합. 4상태 단독 대비 MDD를 크게 줄인다
+        #  (KOSPI -41.7→-34.6%, KOSDAQ -47.8→-36.9%, Sharpe 0.45→0.50 / 0.18→0.20).
+        "USE_WHIPSAW_RISK_SCALING": True,  # 휩소율 연동 사용
+        "WHIPSAW_LO": 0.40,                # 이 값 이하 휩소율이면 축소 없음 (배수 1.0)
+        "WHIPSAW_HI": 0.75,                # 이 값 이상이면 최대 축소
+        "WHIPSAW_MIN_SCALE": 0.6,          # 휩소율 연동 최소 배수
         "USE_DRAWDOWN_RISK_SCALING": True, # 계좌 드로다운 단계적 감속 사용 (터틀식)
         "DD_LEVEL_1": 5.0,                 # 드로다운 1단계 기준 (%) — 자산 고점 대비 이 값 이상 하락 시
         "DD_SCALE_1": 0.75,                # 1단계 배수
@@ -294,14 +310,40 @@ class GlobalSettings(BaseModel):
     # ==========================================================
     # [추가] 적응형 임계값 및 시장 국면 설정 (Adaptive Thresholds)
     # ==========================================================
-    # 시장 국면(강세/약세/횡보)에 따라 매수 기준 점수를 동적으로 조절합니다.
+    # 시장 국면에 따라 매수 기준 점수를 동적으로 조절합니다.
+    #
+    # [판정 방식] 에드 세이코타식 이중 EMA 교차 + '추종 확인(follow-through)' 규칙:
+    #   빠른 EMA(9일, β=0.25)가 느린 EMA(41일, β=0.05)를 교차하면 방향 전환으로 보고,
+    #   교차 이후 지수가 REGIME_CONFIRM_PCT 이상 진행해야 '확정 추세'로 인정한다.
+    #   확정 전 구간은 '미확정(Pending)'으로 분리해 별도 취급한다.
+    #
+    #   Bull     : 빠른EMA > 느린EMA, 교차 이후 +5% 이상 진행 (확정 상승추세)
+    #   PendUp   : 빠른EMA > 느린EMA, 아직 5% 미달 (상승 미확정)
+    #   PendDown : 빠른EMA < 느린EMA, 아직 -5% 미달 (하락 미확정 — 추세 붕괴 초기)
+    #   Bear     : 빠른EMA < 느린EMA, 교차 이후 -5% 이상 진행 (확정 하락추세)
+    #
+    # [검증] KOSPI·KOSDAQ 15년 백테스트(2011~2026):
+    #   - 구(舊) 방식(지수 vs EMA5 + ADX)은 연 71~73회 국면이 뒤집혀 사실상 노이즈였고,
+    #     '약세' 판정이 전체 기간의 42%를 차지하면서도 향후 20일 수익률 판별력이 없었다.
+    #   - 신(新) 방식은 연 12~13회로 안정화됐고, 향후 20일 지수 수익률이
+    #     Bull +2.9%/+0.9%, PendDown -0.5%/-0.6% 로 명확히 갈렸다.
+    #   - 확정 Bear는 이미 -5% 하락한 뒤라 오히려 반등 구간(+2.4%/+2.7%)이었다.
+    #     → 리스크 축소의 트리거는 '확정 Bear'가 아니라 'PendDown'이어야 한다.
+    #       (RISK_SCALING_PARAMS의 PENDING_DOWN_RISK_SCALE 참조)
     MARKET_REGIME_PARAMS: dict = {
         "USE_ADAPTIVE_THRESHOLD": True,  # 적응형 임계값 사용 여부
-        "BULL_SCORE_ADJ": -0.5,          # 강세장: 기준 완화 (예: 8.0 -> 7.5)
-        "BEAR_SCORE_ADJ": 0.5,           # 약세장: 기준 강화 (예: 8.0 -> 8.5)
-        "SIDEWAYS_SCORE_ADJ": 0.0,       # 횡보장: 기준 유지
-        "REGIME_MA_PERIOD": 5,           # 추세 판단용 지수이동평균선 (EMA, 일)
-        "REGIME_ADX_THRESHOLD": 20       # 추세장/횡보장 구분 ADX 기준
+        "BULL_SCORE_ADJ": -0.5,          # 확정 상승추세: 기준 완화 (예: 8.0 -> 7.5)
+        "PENDING_UP_SCORE_ADJ": 0.0,     # 상승 미확정: 기준 유지 (확정 전 완화는 금물)
+        "PENDING_DOWN_SCORE_ADJ": 0.5,   # 하락 미확정: 기준 강화 — 판별력상 가장 위험한 구간
+        "BEAR_SCORE_ADJ": 0.5,           # 확정 하락추세: 기준 강화 (예: 8.0 -> 8.5)
+        "SIDEWAYS_SCORE_ADJ": 0.0,       # 판정 불가(데이터 부족) 시 기준 유지
+        "REGIME_EMA_FAST": 9,            # 빠른 EMA 기간 (β=2/(9+1)=0.25)
+        "REGIME_EMA_SLOW": 41,           # 느린 EMA 기간 (β=2/(41+1)≈0.05)
+        "REGIME_CONFIRM_PCT": 5.0,       # 추세 확정에 필요한 교차 이후 진행률 (%)
+        "REGIME_WHIPSAW_LOOKBACK": 8,    # 휩소율 산출용 직전 교차 구간 수
+        # [구 방식 잔여 파라미터] 이중 EMA 데이터가 부족할 때만 쓰이는 폴백 값
+        "REGIME_MA_PERIOD": 5,           # (폴백) 추세 판단용 지수이동평균선 (EMA, 일)
+        "REGIME_ADX_THRESHOLD": 20       # (폴백) 추세장/횡보장 구분 ADX 기준
     }
 
     # ==========================================================
@@ -1035,11 +1077,16 @@ def reset_all_settings():
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
         }
         settings.MARKET_REGIME_PARAMS = {
-            "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5, "BEAR_SCORE_ADJ": 0.5,
-            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_MA_PERIOD": 5, "REGIME_ADX_THRESHOLD": 20
+            "USE_ADAPTIVE_THRESHOLD": True, "BULL_SCORE_ADJ": -0.5,
+            "PENDING_UP_SCORE_ADJ": 0.0, "PENDING_DOWN_SCORE_ADJ": 0.5, "BEAR_SCORE_ADJ": 0.5,
+            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_EMA_FAST": 9, "REGIME_EMA_SLOW": 41,
+            "REGIME_CONFIRM_PCT": 5.0, "REGIME_WHIPSAW_LOOKBACK": 8,
+            "REGIME_MA_PERIOD": 5, "REGIME_ADX_THRESHOLD": 20
         }
         settings.RISK_SCALING_PARAMS = {
-            "USE_REGIME_RISK_SCALING": True, "BEAR_RISK_SCALE": 0.75,
+            "USE_REGIME_RISK_SCALING": True, "PENDING_DOWN_RISK_SCALE": 0.6, "BEAR_RISK_SCALE": 1.0,
+            "USE_WHIPSAW_RISK_SCALING": True, "WHIPSAW_LO": 0.40, "WHIPSAW_HI": 0.75,
+            "WHIPSAW_MIN_SCALE": 0.6,
             "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.75,
             "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.5, "DD_LOOKBACK_DAYS": 90,
             "GAP_RISK_BUFFER": 1.2
@@ -1098,7 +1145,12 @@ CONFIG_DESCRIPTIONS = {
     "VOLATILITY_SCALING_MAX": "변동성 비중 확대 최대 배수 (기초 비중 초과 불가)",
     "VOLATILITY_SCALING_MIN": "변동성 비중 축소 최소 배수",
     "USE_REGIME_RISK_SCALING": "약세 국면 시 리스크 한도 자동 축소 사용",
-    "BEAR_RISK_SCALE": "약세 국면 리스크 한도 배수",
+    "PENDING_DOWN_RISK_SCALE": "하락 미확정(추세 붕괴 초기) 리스크 한도 배수",
+    "BEAR_RISK_SCALE": "확정 약세 국면 리스크 한도 배수 (1.0=미적용)",
+    "USE_WHIPSAW_RISK_SCALING": "휩소율 연동 리스크 한도 축소 사용 여부",
+    "WHIPSAW_LO": "휩소율 하한 — 이 값 이하면 축소 없음",
+    "WHIPSAW_HI": "휩소율 상한 — 이 값 이상이면 최대 축소",
+    "WHIPSAW_MIN_SCALE": "휩소율 연동 최소 리스크 배수",
     "USE_DRAWDOWN_RISK_SCALING": "계좌 드로다운 단계적 리스크 감속 사용",
     "DD_LEVEL_1": "드로다운 1단계 기준 (%)",
     "DD_SCALE_1": "드로다운 1단계 리스크 배수",
@@ -1143,11 +1195,17 @@ CONFIG_DESCRIPTIONS = {
     "STRENGTH": "수급/강도 팩터 가중치 (ADX, OBV)",
     "SYNERGY": "시너지 가산점 가중치",
     "USE_ADAPTIVE_THRESHOLD": "시장 국면에 따른 매수 점수 동적 조절 여부",
-    "BULL_SCORE_ADJ": "강세장 점수 보정값",
-    "BEAR_SCORE_ADJ": "약세장 점수 보정값",
-    "SIDEWAYS_SCORE_ADJ": "횡보장 점수 보정값",
-    "REGIME_MA_PERIOD": "시장 국면 판단용 EMA 기간",
-    "REGIME_ADX_THRESHOLD": "추세장/횡보장 구분 ADX 기준",
+    "BULL_SCORE_ADJ": "강세장(확정 상승추세) 점수 보정값",
+    "PENDING_UP_SCORE_ADJ": "상승 미확정 구간 점수 보정값",
+    "PENDING_DOWN_SCORE_ADJ": "하락 미확정(추세 붕괴 초기) 구간 점수 보정값",
+    "BEAR_SCORE_ADJ": "약세장(확정 하락추세) 점수 보정값",
+    "SIDEWAYS_SCORE_ADJ": "판정 불가(데이터 부족) 시 점수 보정값",
+    "REGIME_EMA_FAST": "국면 판단용 빠른 EMA 기간 (일)",
+    "REGIME_EMA_SLOW": "국면 판단용 느린 EMA 기간 (일)",
+    "REGIME_CONFIRM_PCT": "추세 확정에 필요한 교차 이후 진행률 (%)",
+    "REGIME_WHIPSAW_LOOKBACK": "휩소율 산출용 직전 교차 구간 수",
+    "REGIME_MA_PERIOD": "(폴백) 시장 국면 판단용 EMA 기간",
+    "REGIME_ADX_THRESHOLD": "(폴백) 추세장/횡보장 구분 ADX 기준",
     "TAKE_PROFIT_RATE": "목표 익절 수익률",
     "HALF_TAKE_PROFIT_USE": "목표 익절률의 절반 도달 시 50% 분할 매도 여부",
     "DEFENSIVE_HALF_SELL_USE": "하락 반전 시 50% 방어적 수익실현 여부",

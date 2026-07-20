@@ -135,9 +135,8 @@ def view_system_config(group=None):
     if group:
         title += f" — {group}. {group_names[group]}"
 
+    # [PRESET_RETIRED] 전략 프리셋 폐지로 '*'(프리셋 연동) 범례도 제거한다.
     caption = "그룹 번호(n-m)는 시스템 설정 메뉴의 편집 경로와 동일 (예: 5-5 → 메뉴 5 → 5)"
-    if group in (None, 1, 2, 3):
-        caption = "[cyan]*[/cyan] : 전략 프리셋(메뉴 7) 적용 시 함께 변경되는 항목\n" + caption
 
     console.print()
     table = Table(
@@ -156,8 +155,8 @@ def view_system_config(group=None):
     table.add_column("변수명 (Config Name)", justify="left", style="dim")
     table.add_column("설정값 (Value)", justify="right", style="cyan")
 
-    # 프리셋(메뉴 7) 적용 시 함께 변경되는 항목 표시용
-    preset_keys = set(DEFAULT_PRESETS.get("default", {}))
+    # [PRESET_RETIRED] 프리셋 폐지로 '*'(프리셋 연동) 표시는 더 이상 붙이지 않는다.
+    preset_keys = set()
 
     def row(desc, help_text, var_name, value, key=None, indent=False):
         mark = " [cyan]*[/cyan]" if key in preset_keys else ""
@@ -221,15 +220,27 @@ def view_system_config(group=None):
         if sell.get('USE_ATR_STOP', False):
             row("ATR 손절 배수", "ATR * 배수 만큼 손절폭 설정", "SELL_STRATEGY['ATR_STOP_MULTIPLIER']", f"{sell.get('ATR_STOP_MULTIPLIER', 2.0)}", key="ATR_STOP_MULTIPLIER", indent=True)
             row("ATR 손절 최대 한도", "비정상적인 과도한 손절폭 제한", "SELL_STRATEGY['MAX_ATR_STOP_LOSS_RATE']", f"{sell.get('MAX_ATR_STOP_LOSS_RATE', -15.0)}%", key="MAX_ATR_STOP_LOSS_RATE", indent=True)
-        row("본전 청산 수익률", "손절선 상향 발동 기준 수익률", "SELL_STRATEGY['BREAK_EVEN_PROFIT_RATE']", f"{sell.get('BREAK_EVEN_PROFIT_RATE', 5.0)}%", key="BREAK_EVEN_PROFIT_RATE")
-        row("본전 청산 손절선", "발동 시 상향될 새로운 손절률", "SELL_STRATEGY['BREAK_EVEN_STOP_RATE']", f"{sell.get('BREAK_EVEN_STOP_RATE', 0.5)}%", key="BREAK_EVEN_STOP_RATE")
+        # [추세추종 보호] 본전 청산 다이얼은 숨기고 실제 동작만 읽기 전용으로 안내한다
+        #  (ANTI_TREND_HIDDEN_KEYS 주석 참조). ATR 손절 사용 시 발동 기준은 설정된
+        #  BREAK_EVEN_PROFIT_RATE가 아니라 '손절폭(1R)'이므로 그대로 표시하면 오해를 부른다.
+        _bep_trigger = ("손절폭(1R) 도달 시" if sell.get('USE_ATR_STOP', True)
+                        else f"+{sell.get('BREAK_EVEN_PROFIT_RATE', 5.0)}% 도달 시")
+        table.add_row(
+            f"본전 청산\n[dim]{_bep_trigger} 손절선을 {sell.get('BREAK_EVEN_STOP_RATE', 0.5):+g}%로 상향 "
+            f"(손실 꼬리만 축소 — 대박 종목 조기청산 없음)[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "사용")
 
         subheader("1-5. 매도/청산 — 기타")
         row("시간 청산 사용", "장기 횡보 종목 강제 매도", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}", key="TIME_STOP_USE")
         if sell.get('TIME_STOP_USE', True):
-            row("청산 기준일", "매수 후 경과 일수 (달력 기준)", "SELL_STRATEGY['TIME_STOP_DAYS']", f"{sell.get('TIME_STOP_DAYS', 20)}일", key="TIME_STOP_DAYS", indent=True)
-            row("최소 기대 수익", "해당 기간 내 도달해야 할 수익률", "SELL_STRATEGY['TIME_STOP_MIN_PROFIT_RATE']", f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 0.0)}%", key="TIME_STOP_MIN_PROFIT_RATE", indent=True)
-        row("매도(추세이탈) 점수", "점수 하락 시 매도", "SELL_STRATEGY['SELL_SCORE']", f"{sell.get('SELL_SCORE')}", key="SELL_SCORE")
+            table.add_row(
+                f"  [dim]└ {sell.get('TIME_STOP_DAYS', 20)}일 경과 & 수익 "
+                f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 0.0)}% 미만일 때만 청산\n"
+                f"    (상방 모멘텀 살아있으면 유예 — 수익 종목은 보유)[/dim]",
+                "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "")
+        table.add_row(
+            f"매도(추세이탈) 점수\n[dim]점수가 이 값 미만 [bold]이고[/bold] 주가가 60일선 이탈 시 매도 (동시 충족)[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('SELL_SCORE')}")
 
     # =========================================================
     # 2. 스코어링 및 시장 국면 설정
@@ -244,15 +255,20 @@ def view_system_config(group=None):
         row("강도/수급 팩터", "ADX, OBV", "SCORING_WEIGHTS['STRENGTH']", f"{weights.get('STRENGTH')}", key="STRENGTH")
         row("시너지 가산점", "지표 동조화 보너스", "SCORING_WEIGHTS['SYNERGY']", f"{weights.get('SYNERGY')}", key="SYNERGY")
 
+        # [백테스트 보호] 국면 판정 파라미터·점수 보정은 숨김 (BACKTESTED_HIDDEN_KEYS 주석 참조).
+        #  ON/OFF 킬 스위치만 노출하고, 실제 판정 기준은 아래 요약으로 읽기 전용 안내한다.
         subheader("2-2. 적응형 임계값 (시장국면)")
         regime = config.MARKET_REGIME_PARAMS
         row("사용 여부", "시장 국면 반영", "MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD']", f"{regime.get('USE_ADAPTIVE_THRESHOLD')}", key="USE_ADAPTIVE_THRESHOLD")
         if regime.get('USE_ADAPTIVE_THRESHOLD'):
-            row("강세장 보정", "기준 점수 완화값", "MARKET_REGIME_PARAMS['BULL_SCORE_ADJ']", f"{regime.get('BULL_SCORE_ADJ')}", key="BULL_SCORE_ADJ", indent=True)
-            row("약세장 보정", "기준 점수 강화값", "MARKET_REGIME_PARAMS['BEAR_SCORE_ADJ']", f"{regime.get('BEAR_SCORE_ADJ')}", key="BEAR_SCORE_ADJ", indent=True)
-            row("횡보장 보정", "기준 점수 유지값", "MARKET_REGIME_PARAMS['SIDEWAYS_SCORE_ADJ']", f"{regime.get('SIDEWAYS_SCORE_ADJ')}", key="SIDEWAYS_SCORE_ADJ", indent=True)
-            row("추세 판단 EMA (일)", "시장 국면 판단용 지수이동평균선", "MARKET_REGIME_PARAMS['REGIME_MA_PERIOD']", f"{regime.get('REGIME_MA_PERIOD', 5)}", key="REGIME_MA_PERIOD", indent=True)
-            row("추세 판단 ADX", "강세장 판단용 ADX 기준", "MARKET_REGIME_PARAMS['REGIME_ADX_THRESHOLD']", f"{regime.get('REGIME_ADX_THRESHOLD', 20)}", key="REGIME_ADX_THRESHOLD", indent=True)
+            _ef = regime.get('REGIME_EMA_FAST', 9)
+            _es = regime.get('REGIME_EMA_SLOW', 41)
+            _cp = regime.get('REGIME_CONFIRM_PCT', 5.0)
+            table.add_row(
+                f"  [dim]└ 판정: EMA {_ef}/{_es} 교차 후 {_cp:g}% 진행 시 추세 확정\n"
+                f"    보정: 강세 {regime.get('BULL_SCORE_ADJ', -0.5):+.1f} / 하락 미확정 "
+                f"{regime.get('PENDING_DOWN_SCORE_ADJ', 0.5):+.1f} / 약세 {regime.get('BEAR_SCORE_ADJ', 0.5):+.1f}[/dim]",
+                "[dim](백테스트 검증값 — 조정 잠금)[/dim]", "")
 
     # =========================================================
     # 3. 리스크 및 자산 배분 설정
@@ -266,10 +282,17 @@ def view_system_config(group=None):
         slippage = getattr(config.settings, 'SLIPPAGE_RATE', 0.002)
         slippage_str = f"{slippage} (미사용)" if slippage == 0 else f"{slippage}"
         row("슬리피지 비율", "주문가 보정 및 백테스트 비용", "SLIPPAGE_RATE", slippage_str, key="SLIPPAGE_RATE")
-        row("변동성 타겟팅", "ATR 기반 비중 조절 사용 여부", "USE_VOLATILITY_TARGETING", f"{getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)}", key="USE_VOLATILITY_TARGETING")
-        if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
-            row("목표 변동성", "연간 변동성 목표치", "TARGET_VOLATILITY", f"{getattr(config.settings, 'TARGET_VOLATILITY', 0.20)}", key="TARGET_VOLATILITY", indent=True)
-            row("스케일링 범위", "비중 조절 최소~최대 배수", "VOLATILITY_SCALING_MIN/MAX", f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ {getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}", indent=True)
+        # [추세추종 보호] 변동성 타겟팅은 "자본대비 변동성에 한도를 둔다"는 추세추종 2원칙의
+        #  구현부다. 끄면 전형 수익은 오르지만 MDD가 크게 악화되므로 조회 전용으로만 노출한다.
+        _vt_on = getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)
+        table.add_row(
+            "변동성 타겟팅\n[dim]ATR 기반 비중 조절 — 변동성 큰 종목의 비중을 자동 축소[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{_vt_on}")
+        if _vt_on:
+            table.add_row(
+                f"  [dim]└ 목표 연간 변동성 {getattr(config.settings, 'TARGET_VOLATILITY', 0.20)} / "
+                f"비중 배수 {getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ "
+                f"{getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}[/dim]", "", "")
 
         subheader("3-2. 매수 필터")
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")
@@ -290,18 +313,10 @@ def view_system_config(group=None):
         row("1회 최대 리스크 (%)", "계좌 대비 1회 매매 최대 손실폭", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0)}", key="SYSTEM_RISK_PER_TRADE")
         row("총 오픈 리스크 한도 (%)", "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)", "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
 
-        subheader("3-4. 리스크 한도 동적 스케일링")
-        rsp = config.RISK_SCALING_PARAMS
-        row("약세 국면 리스크 축소", "약세장(지수<MA)일 때 신규 진입 리스크 한도 축소", "RISK_SCALING_PARAMS['USE_REGIME_RISK_SCALING']", f"{rsp.get('USE_REGIME_RISK_SCALING', True)}", key="USE_REGIME_RISK_SCALING")
-        if rsp.get('USE_REGIME_RISK_SCALING', True):
-            row("약세 국면 배수", "약세 시 리스크 한도 곱 배수 (예: 0.75)", "RISK_SCALING_PARAMS['BEAR_RISK_SCALE']", f"{rsp.get('BEAR_RISK_SCALE', 0.75)}", key="BEAR_RISK_SCALE", indent=True)
-        row("드로다운 리스크 감속", "계좌 고점 대비 하락 시 단계적 리스크 축소", "RISK_SCALING_PARAMS['USE_DRAWDOWN_RISK_SCALING']", f"{rsp.get('USE_DRAWDOWN_RISK_SCALING', True)}", key="USE_DRAWDOWN_RISK_SCALING")
-        if rsp.get('USE_DRAWDOWN_RISK_SCALING', True):
-            row("드로다운 1단계", "기준 % 이상 하락 시 배수 적용", "RISK_SCALING_PARAMS['DD_LEVEL_1/SCALE_1']", f"{rsp.get('DD_LEVEL_1', 5.0)}% → x{rsp.get('DD_SCALE_1', 0.75)}", indent=True)
-            row("드로다운 2단계", "기준 % 이상 하락 시 배수 적용", "RISK_SCALING_PARAMS['DD_LEVEL_2/SCALE_2']", f"{rsp.get('DD_LEVEL_2', 10.0)}% → x{rsp.get('DD_SCALE_2', 0.5)}", indent=True)
-            row("자산 고점 룩백 (일)", "HWM 산출 기간", "RISK_SCALING_PARAMS['DD_LOOKBACK_DAYS']", f"{rsp.get('DD_LOOKBACK_DAYS', 90)}", key="DD_LOOKBACK_DAYS", indent=True)
-        _gap = rsp.get('GAP_RISK_BUFFER', 1.2)
-        row("갭 리스크 버퍼", "사이징 시 손절폭 배수 (갭하락 대비, 1.0=미사용)", "RISK_SCALING_PARAMS['GAP_RISK_BUFFER']", f"x{_gap}", key="GAP_RISK_BUFFER")
+        # [백테스트 보호] 3-4 리스크 한도 동적 스케일링(국면·휩소율·드로다운 배수)은
+        #  조회·편집 화면 모두에서 숨긴다 (BACKTESTED_HIDDEN_KEYS 주석 참조).
+        #  현재 적용 중인 배수와 그 사유는 자동매매 상태표·로그에서 실시간 확인할 수 있다.
+        #   예: [리스크 스케일링] 신규 진입 리스크 한도 축소 x0.60 (KOSDAQ 하락 미확정 x0.6)
 
     # =========================================================
     # 4. 기술적 지표 파라미터
@@ -545,6 +560,27 @@ def _edit_section(title, items_source, prefix):
         return [it for it in items if it.get('section', '').startswith(prefix)]
     return _edit_config_table(title, get_items)
 
+# [백테스트 보호] 시장 국면 판정과 리스크 한도 스케일링의 파라미터는 KOSPI·KOSDAQ 15년
+#  백테스트로 도출된 값이다. 임의로 바꾸면 검증 근거가 통째로 무효가 되고, 그 사실이
+#  화면상 드러나지 않은 채 매매가 계속되므로 시스템 설정 메뉴(메인메뉴 0)에서 숨긴다.
+#  설정 키와 로직은 내부적으로 그대로 유지되며, 조정이 필요하면 dynamic_config.json을
+#  직접 편집한다(그 경우 '커스텀 설정 조회'(메뉴 0-6)에 기본값과 다른 항목으로 드러난다).
+#
+#  단, 기능 자체를 끄는 킬 스위치 MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD']는 노출한다 —
+#  운영 중 국면 판정이 이상하게 동작할 때 코드 수정 없이 중단할 수단은 남겨야 한다.
+BACKTESTED_HIDDEN_KEYS = {
+    # 2-2. 적응형 임계값 — 국면별 점수 보정 및 판정 파라미터
+    "BULL_SCORE_ADJ", "PENDING_UP_SCORE_ADJ", "PENDING_DOWN_SCORE_ADJ",
+    "BEAR_SCORE_ADJ", "SIDEWAYS_SCORE_ADJ",
+    "REGIME_EMA_FAST", "REGIME_EMA_SLOW", "REGIME_CONFIRM_PCT", "REGIME_WHIPSAW_LOOKBACK",
+    "REGIME_MA_PERIOD", "REGIME_ADX_THRESHOLD",   # 데이터 부족 시 폴백용 (구 방식 잔여)
+    # 3-4. 리스크 한도 동적 스케일링 — 국면·휩소율·드로다운 배수 일체
+    "USE_REGIME_RISK_SCALING", "PENDING_DOWN_RISK_SCALE", "BEAR_RISK_SCALE",
+    "USE_WHIPSAW_RISK_SCALING", "WHIPSAW_LO", "WHIPSAW_HI", "WHIPSAW_MIN_SCALE",
+    "USE_DRAWDOWN_RISK_SCALING", "DD_LEVEL_1", "DD_SCALE_1", "DD_LEVEL_2", "DD_SCALE_2",
+    "DD_LOOKBACK_DAYS", "GAP_RISK_BUFFER",
+}
+
 # [추세추종 보호] 추세추종 원칙(이익은 달리게, 청산은 손절/샹들리에 TS/추세이탈로)에 위배될 수 있는
 #  청산 설정(고정 익절·반익절·RSI 과열 매도·방어적 반매도)은 시스템 설정 메뉴(메인메뉴 0)에서 숨겨
 #  임의 변경을 차단한다. 설정 키와 매도 로직 자체는 내부적으로 그대로 유지되며(기본 OFF),
@@ -558,6 +594,30 @@ ANTI_TREND_HIDDEN_KEYS = {
     "USE_MEAN_REVERSION",      # 역매수(낙폭과대 역추세 진입) — 추세추종 청산 체계와 부정합
     "MR_RSI_MAX",              # 역매수 RSI 상한 (부속 설정)
     "MR_DISPARITY_MAX",        # 역매수 이격도 상한 (부속 설정)
+    # --- 아래는 '수익 종목을 일찍 잘라내는' 방향으로만 위험한 다이얼 (기능이 아니라 값이 문제) ---
+    #  TIME_STOP_MIN_PROFIT_RATE: 0을 넘기면 +0.1~+2.9% 수익 중인 포지션도 기간 경과 시 강제 청산된다
+    #   (engine.analyze_sell: profit_rate < time_stop_min_profit). '수익 종목은 보유' 원칙으로 3.0→0.0 확정.
+    #  TIME_STOP_DAYS: 추세 전개 시간 확보를 위해 10→20으로 완화한 값. 줄이면 추세 초입을 잘라낸다.
+    #  SELL_SCORE: 60일선 이탈 동시 조건이 코드에 고정돼 있으나, 값을 올리면 정배열 유지 중의
+    #   통상적 눌림목에서도 청산이 잦아져 샹들리에 TS의 fat-tail 추종을 무력화한다. 5.0→4.0 완화 확정.
+    #  변동성 타겟팅: 추세추종 2원칙 "자본대비 변동성에 한도를 둔다"의 구현부. 끄면 전형 수익은
+    #   오르지만(median 8.6→14.9%) MDD가 -20→-30%로 악화된다.
+    #  BREAK_EVEN_STOP_RATE: 30종목×3.8년 백테스트 스윕 결과, 현행 +0.5%는 fat-tail을 전혀
+    #   해치지 않는다(>30% 거래 29건·최고 220.6%가 BEP ON/OFF 동일, 종목별 승패도 14:16 무차이).
+    #   반면 +2.0%로 올리면 평균이익이 17.8%→9.9%로 반토막 나고 PF도 1.71→1.56으로 무너진다.
+    #   '수익을 일찍 확정하는' 방향으로만 위험한 다이얼이므로 잠근다.
+    #  BREAK_EVEN_PROFIT_RATE: ATR 손절 사용 시(기본값) 발동 기준이 손절폭(1R)으로 덮어써져
+    #   이 값 자체는 쓰이지 않는다(backtest.py bep_activation / trader.py thresholds 주입).
+    #   화면에 5.0%가 보이면 실제 동작(1R)과 달라 오해를 부르므로 숨기고 읽기 전용으로 안내한다.
+    "TIME_STOP_MIN_PROFIT_RATE",
+    "TIME_STOP_DAYS",
+    "SELL_SCORE",
+    "BREAK_EVEN_PROFIT_RATE",
+    "BREAK_EVEN_STOP_RATE",
+    "USE_VOLATILITY_TARGETING",
+    "TARGET_VOLATILITY",
+    "VOLATILITY_SCALING_MIN",
+    "VOLATILITY_SCALING_MAX",
     "MR_VOL_STRENGTH",         # 역매수 체결강도 기준 (부속 설정)
     "MR_GRACE_LOSS_RATE",      # 역매수 보유분 점수매도 유예 손실폭 (부속 설정)
 }
@@ -865,15 +925,24 @@ def modify_market_regime_params():
          "get": lambda: config.MARKET_REGIME_PARAMS["USE_ADAPTIVE_THRESHOLD"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"USE_ADAPTIVE_THRESHOLD": v})},
         {"desc": "강세장 점수 보정", "help": "강세장일 때 기준 점수 조정값 (예: -0.5)", "name": "BULL_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["BULL_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BULL_SCORE_ADJ": v})},
+        {"desc": "상승 미확정 점수 보정", "help": "빠른EMA>느린EMA이나 확인 기준 미달 구간 (예: 0.0)", "name": "PENDING_UP_SCORE_ADJ", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("PENDING_UP_SCORE_ADJ", 0.0), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"PENDING_UP_SCORE_ADJ": v})},
+        {"desc": "하락 미확정 점수 보정", "help": "추세 붕괴 초기 구간 — 판별력상 가장 위험 (예: +0.5)", "name": "PENDING_DOWN_SCORE_ADJ", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("PENDING_DOWN_SCORE_ADJ", 0.5), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"PENDING_DOWN_SCORE_ADJ": v})},
         {"desc": "약세장 점수 보정", "help": "약세장일 때 기준 점수 조정값 (예: +0.5)", "name": "BEAR_SCORE_ADJ", "type": "float",
          "get": lambda: config.MARKET_REGIME_PARAMS["BEAR_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"BEAR_SCORE_ADJ": v})},
-        {"desc": "횡보장 점수 보정", "help": "횡보장일 때 기준 점수 조정값 (예: 0.0)", "name": "SIDEWAYS_SCORE_ADJ", "type": "float",
-         "get": lambda: config.MARKET_REGIME_PARAMS["SIDEWAYS_SCORE_ADJ"], "set": lambda v: config.MARKET_REGIME_PARAMS.update({"SIDEWAYS_SCORE_ADJ": v})},
-        {"desc": "추세 판단 EMA (일)", "help": "시장 국면 판단용 지수이동평균선 (기본 20일)", "name": "REGIME_MA_PERIOD", "type": "int",
-         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_MA_PERIOD": v})},
-        {"desc": "추세 판단 ADX", "help": "강세장 판단용 ADX 기준 (기본 20)", "name": "REGIME_ADX_THRESHOLD", "type": "int",
-         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_ADX_THRESHOLD": v})}
+        {"desc": "빠른 EMA (일)", "help": "국면 판단용 단기 지수이동평균 (기본 9일, β=0.25)", "name": "REGIME_EMA_FAST", "type": "int",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_EMA_FAST", 9), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_EMA_FAST": v})},
+        {"desc": "느린 EMA (일)", "help": "국면 판단용 장기 지수이동평균 (기본 41일, β≈0.05)", "name": "REGIME_EMA_SLOW", "type": "int",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_EMA_SLOW", 41), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_EMA_SLOW": v})},
+        {"desc": "추세 확인 기준 (%)", "help": "교차 후 이만큼 진행해야 확정 추세로 인정 (기본 5%)", "name": "REGIME_CONFIRM_PCT", "type": "float",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_CONFIRM_PCT", 5.0), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_CONFIRM_PCT": v})},
+        {"desc": "휩소율 룩백 (회)", "help": "휩소율 산출에 쓸 직전 교차 구간 수 (기본 8회)", "name": "REGIME_WHIPSAW_LOOKBACK", "type": "int",
+         "get": lambda: config.MARKET_REGIME_PARAMS.get("REGIME_WHIPSAW_LOOKBACK", 8), "set": lambda v: config.MARKET_REGIME_PARAMS.update({"REGIME_WHIPSAW_LOOKBACK": v})}
     ]
+    # [백테스트 보호] 판정 파라미터·점수 보정은 편집 목록에서 제외 (BACKTESTED_HIDDEN_KEYS 주석 참조).
+    #  남는 항목은 기능 ON/OFF 킬 스위치뿐이다.
+    items = [it for it in items if it["name"] not in BACKTESTED_HIDDEN_KEYS]
     return _edit_config_table("시장 국면 및 적응형 임계값 (Adaptive Thresholds)", items)
 
 def _validate_time_format(val):
@@ -934,10 +1003,20 @@ def _risk_portfolio_items():
         {"desc": "총 오픈 리스크 한도 (%)", "help": "보유 전체 '현재가→손절선' 잠재손실 합의 상한 (0%면 미사용)", "name": "SYSTEM_MAX_PORTFOLIO_RISK", "type": "float", "section": "3-3. 비상 안전장치",
          "get": lambda: getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0), "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', v)},
 
-        {"desc": "약세 국면 리스크 축소 사용", "help": "약세장(지수<MA)일 때 신규 진입 리스크 한도를 배수만큼 축소", "name": "USE_REGIME_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
+        {"desc": "국면 연동 리스크 축소 사용", "help": "추세 붕괴 초기(하락 미확정) 구간에서 신규 진입 리스크 한도를 배수만큼 축소", "name": "USE_REGIME_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("USE_REGIME_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_REGIME_RISK_SCALING": v})},
-        {"desc": "약세 국면 배수", "help": "약세 시 리스크 한도 곱 배수 (0<v<1, 예: 0.75)", "name": "BEAR_RISK_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
-         "get": lambda: config.RISK_SCALING_PARAMS.get("BEAR_RISK_SCALE", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"BEAR_RISK_SCALE": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "하락 미확정 배수", "help": "추세 붕괴 초기 리스크 한도 곱 배수 (0<v<=1, 예: 0.6)", "name": "PENDING_DOWN_RISK_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("PENDING_DOWN_RISK_SCALE", 0.6), "set": lambda v: config.RISK_SCALING_PARAMS.update({"PENDING_DOWN_RISK_SCALE": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "확정 약세 배수", "help": "확정 하락추세 배수 (1.0=미적용 권장 — 이미 하락한 뒤라 축소가 역효과)", "name": "BEAR_RISK_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("BEAR_RISK_SCALE", 1.0), "set": lambda v: config.RISK_SCALING_PARAMS.update({"BEAR_RISK_SCALE": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "휩소율 연동 리스크 축소 사용", "help": "교차가 확인 기준을 못 채우고 되돌려지는 톱니장일수록 진입 크기 축소", "name": "USE_WHIPSAW_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("USE_WHIPSAW_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_WHIPSAW_RISK_SCALING": v})},
+        {"desc": "휩소율 하한", "help": "이 값 이하 휩소율이면 축소 없음 (0~1, 예: 0.40)", "name": "WHIPSAW_LO", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_LO", 0.40), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_LO": v}), "validator": lambda v: 0 <= v < 1.0},
+        {"desc": "휩소율 상한", "help": "이 값 이상이면 최대 축소 (0~1, 하한보다 커야 함, 예: 0.75)", "name": "WHIPSAW_HI", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_HI", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_HI": v}), "validator": lambda v: 0 < v <= 1.0},
+        {"desc": "휩소율 최소 배수", "help": "휩소율 연동 최소 리스크 배수 (0<v<1, 예: 0.6)", "name": "WHIPSAW_MIN_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+         "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_MIN_SCALE", 0.6), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_MIN_SCALE": v}), "validator": lambda v: 0 < v < 1.0},
         {"desc": "드로다운 리스크 감속 사용", "help": "계좌 고점(HWM) 대비 하락 시 단계적으로 리스크 한도 축소", "name": "USE_DRAWDOWN_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("USE_DRAWDOWN_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_DRAWDOWN_RISK_SCALING": v})},
         {"desc": "드로다운 1단계 기준 (%)", "help": "고점 대비 이 % 이상 하락 시 1단계 배수 적용", "name": "DD_LEVEL_1", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
@@ -953,7 +1032,12 @@ def _risk_portfolio_items():
         {"desc": "갭 리스크 버퍼", "help": "사이징 시 손절폭에 곱하는 배수 (갭하락 대비, 1.0=미사용)", "name": "GAP_RISK_BUFFER", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("GAP_RISK_BUFFER", 1.2), "set": lambda v: config.RISK_SCALING_PARAMS.update({"GAP_RISK_BUFFER": v}), "validator": lambda v: v >= 1.0},
     ])
-    return items
+    # [백테스트 보호] 3-4 리스크 스케일링 항목은 편집 목록에서 제외 (BACKTESTED_HIDDEN_KEYS 주석 참조).
+    #  정의는 남겨 두어 dynamic_config.json 직접 편집 시의 타입·검증 규칙 근거로 삼는다.
+    # [추세추종 보호] 변동성 타겟팅(자본대비 변동성 한도)도 동일하게 제외.
+    return [it for it in items
+            if it["name"] not in BACKTESTED_HIDDEN_KEYS
+            and it["name"] not in ANTI_TREND_HIDDEN_KEYS]
 
 def modify_risk_portfolio_settings():
     return _edit_config_table("리스크 및 자산 배분 설정 (Risk & Portfolio)", _risk_portfolio_items)
@@ -1073,6 +1157,27 @@ def check_and_update_active_preset():
             
     return matched_preset
 
+# [PRESET_RETIRED] 시장 국면별 전략 프리셋(강세/약세/횡보)은 2026-07-20 백테스트 검증 결과
+#  폐지했다. 시스템 설정 메뉴(7번)와 텔레그램 /preset 진입 경로를 제거했으며, 아래 함수와
+#  DEFAULT_PRESETS 정의는 이력 보존·기존 저장값 해석(check_and_update_active_preset)을 위해
+#  남겨 두되 UI에서 호출되지 않는다.
+#
+#  [폐지 근거] 한국 대형/중형 30종목 × 3.8년:
+#   - default 평균수익 17.48% / MDD -19.22% / PF 1.70 / >30% 대박 29건
+#   - bull    17.15% / -19.81% / 1.68 / 29건  → default와 사실상 동일(차등 의미 없음)
+#   - bear     5.00% / -14.05% / 1.29 / 15건  → 수익 1/3 토막, 대박 절반 절단, PF 붕괴
+#   - sideways 3.8년간 매매 0건 → 논리적 자기모순으로 아무것도 사지 못함
+#     (BUY_RSI_MAX=50 + SUPER_MOMENTUM_USE=False. 이 스코어러에서 점수 7.0을 넘으려면
+#      RSI가 50 위여야 하는데 RSI 50 미만을 요구했고, 유일한 예외였던 슈퍼모멘텀마저 꺼버림)
+#   - KOSPI 국면 구간별로 쪼개 봐도 '맞는 프리셋'이 이기지 못했다. 상승 구간에서 bull은
+#     default 대비 +1.1%p 수준, 미확정 구간에서는 모든 프리셋이 손실이었다.
+#
+#  [구조적 문제] 프리셋의 국면 차등이 대부분 추세추종 핵심을 훼손하는 방식이었다 —
+#   주청산(샹들리에 TS) 폭 축소(TRAILING_* 3종), 추세 팩터 가중치 삭감(TREND 4.5→3.0),
+#   주도주 랠리 차단(SUPER_MOMENTUM_USE=False), 진입 RSI 상한 과도 축소.
+#  [대체 수단] 국면 대응은 이미 자동화되어 있다 — 시장 필터(SMA60), 국면 연동 리스크
+#   스케일링(PendDown ×0.6), 휩소율 스케일링, 드로다운 단계 감속, 적응형 매수 임계값.
+#   사람이 국면을 수동 판정해 전략을 통째로 갈아끼우면 이 자동 판정과 이중으로 충돌한다.
 def apply_strategy_preset(preset_type="bull", interactive=True):
     if preset_type not in DEFAULT_PRESETS:
         return "⚠️ 알 수 없는 프리셋입니다. (bull/bear/sideways/default 중 선택)"
@@ -1100,8 +1205,11 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "MAX_ATR_STOP_LOSS_RATE": vals.get("MAX_ATR_STOP_LOSS_RATE", -15.0),
         "BREAK_EVEN_PROFIT_RATE": vals.get("BREAK_EVEN_PROFIT_RATE", 5.0),
         "BREAK_EVEN_STOP_RATE": vals.get("BREAK_EVEN_STOP_RATE", 0.5),
-        "TIME_STOP_DAYS": vals["TIME_STOP_DAYS"],
-        "SELL_SCORE": vals.get("SELL_SCORE", 4.0),
+        # [추세추종 보호] TIME_STOP_DAYS·SELL_SCORE는 프리셋으로 덮어쓰지 않는다.
+        #  약세 프리셋의 과거 값(3일 / 6.0)은 보유 3일 만에 강제 청산하고 정배열 유지 중의
+        #  눌림목에서도 점수 매도를 유발해, 설정 메뉴에서 이 두 키를 잠근 취지를 무력화했다.
+        #  (DEFAULT_PRESETS의 값은 이력 보존을 위해 남겨 두되 적용하지 않는다.)
+        #  프리셋 차등은 진입 조건(BUY_SCORE·BUY_RSI_MAX)과 손절/TS 폭으로만 준다.
         "TAKE_PROFIT_RSI": vals["TAKE_PROFIT_RSI"],
         "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
         "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"],
@@ -1237,7 +1345,10 @@ def _edit_single_preset(preset_type):
             items = [it for it in items if it["name"] not in _toss_hidden]
 
         # [추세추종 보호] 커스텀 프리셋 경로로도 반추세성 청산 설정이 켜지지 않도록 동일하게 숨김
-        items = [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
+        # [백테스트 보호] 국면 판정·리스크 스케일링 파라미터도 프리셋 경로로 우회 변경되지 않도록 제외
+        items = [it for it in items
+                 if it["name"] not in ANTI_TREND_HIDDEN_KEYS
+                 and it["name"] not in BACKTESTED_HIDDEN_KEYS]
 
         acted = _edit_config_table(title, items, check_preset=False)
         if not acted: break
@@ -1390,10 +1501,16 @@ def manage_custom_settings():
             "SYNERGY": "시너지 가산점",
             "USE_ADAPTIVE_THRESHOLD": "적응형 임계값 사용",
             "BULL_SCORE_ADJ": "강세장 점수 보정",
+            "PENDING_UP_SCORE_ADJ": "상승 미확정 점수 보정",
+            "PENDING_DOWN_SCORE_ADJ": "하락 미확정 점수 보정",
             "BEAR_SCORE_ADJ": "약세장 점수 보정",
-            "SIDEWAYS_SCORE_ADJ": "횡보장 점수 보정",
-            "REGIME_MA_PERIOD": "추세 판단 EMA (일)",
-            "REGIME_ADX_THRESHOLD": "추세 판단 ADX",
+            "SIDEWAYS_SCORE_ADJ": "판정 보류 점수 보정",
+            "REGIME_EMA_FAST": "국면 판단 빠른 EMA (일)",
+            "REGIME_EMA_SLOW": "국면 판단 느린 EMA (일)",
+            "REGIME_CONFIRM_PCT": "추세 확인 기준 (%)",
+            "REGIME_WHIPSAW_LOOKBACK": "휩소율 룩백 (회)",
+            "REGIME_MA_PERIOD": "(폴백) 추세 판단 EMA (일)",
+            "REGIME_ADX_THRESHOLD": "(폴백) 추세 판단 ADX",
             "SYSTEM_INVEST_PER_STOCK": "종목당 투자 비중",
             "SYSTEM_MAX_HOLDINGS": "최대 보유 종목 수",
             "SYSTEM_INCLUDE_ETF": "자동매매 대상에 ETF 포함",
@@ -1410,8 +1527,13 @@ def manage_custom_settings():
             "SYSTEM_DAILY_LOSS_LIMIT": "일일 손실 제한 (%)",
             "SYSTEM_RISK_PER_TRADE": "1회 최대 리스크 (%)",
             "SYSTEM_MAX_PORTFOLIO_RISK": "총 오픈 리스크 한도 (%)",
-            "USE_REGIME_RISK_SCALING": "약세 국면 리스크 축소 사용",
-            "BEAR_RISK_SCALE": "약세 국면 배수",
+            "USE_REGIME_RISK_SCALING": "국면 연동 리스크 축소 사용",
+            "PENDING_DOWN_RISK_SCALE": "하락 미확정 배수",
+            "BEAR_RISK_SCALE": "확정 약세 배수",
+            "USE_WHIPSAW_RISK_SCALING": "휩소율 연동 리스크 축소 사용",
+            "WHIPSAW_LO": "휩소율 하한",
+            "WHIPSAW_HI": "휩소율 상한",
+            "WHIPSAW_MIN_SCALE": "휩소율 최소 배수",
             "USE_DRAWDOWN_RISK_SCALING": "드로다운 리스크 감속 사용",
             "DD_LEVEL_1": "드로다운 1단계 기준 (%)",
             "DD_SCALE_1": "드로다운 1단계 배수",
@@ -1513,8 +1635,14 @@ def manage_custom_settings():
             "SYNERGY": (_CAT2, "2-1. 스코어링 가중치"),
             "USE_ADAPTIVE_THRESHOLD": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "BULL_SCORE_ADJ": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "PENDING_UP_SCORE_ADJ": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "PENDING_DOWN_SCORE_ADJ": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "BEAR_SCORE_ADJ": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "SIDEWAYS_SCORE_ADJ": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_EMA_FAST": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_EMA_SLOW": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_CONFIRM_PCT": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
+            "REGIME_WHIPSAW_LOOKBACK": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "REGIME_MA_PERIOD": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "REGIME_ADX_THRESHOLD": (_CAT2, "2-2. 적응형 임계값 (시장국면)"),
             "SYSTEM_INVEST_PER_STOCK": (_CAT3, "3-1. 자산 배분/포지션"),
@@ -1536,7 +1664,12 @@ def manage_custom_settings():
             "SYSTEM_RISK_PER_TRADE": (_CAT3, "3-3. 비상 안전장치"),
             "SYSTEM_MAX_PORTFOLIO_RISK": (_CAT3, "3-3. 비상 안전장치"),
             "USE_REGIME_RISK_SCALING": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "PENDING_DOWN_RISK_SCALE": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "BEAR_RISK_SCALE": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "USE_WHIPSAW_RISK_SCALING": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "WHIPSAW_LO": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "WHIPSAW_HI": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
+            "WHIPSAW_MIN_SCALE": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "USE_DRAWDOWN_RISK_SCALING": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "DD_LEVEL_1": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "DD_SCALE_1": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
@@ -1714,7 +1847,7 @@ def system_config_menu():
             ("4", "기술적 지표 파라미터", "Indicators"),
             ("5", "환경 및 시스템 설정", "Environment & System"),
             ("6", "커스텀 설정 조회 및 초기화", "Manage Custom Settings"),
-            ("7", "시장 국면별 전략 프리셋", "Strategy Presets"),
+            # [추세추종 보호] 7번 '시장 국면별 전략 프리셋' 제거 (PRESET_RETIRED 주석 참조)
             ("8", "데이터 캐시 초기화", "Clear Cache"),
             ("9", "시스템 설정 전체 조회", "View Config"),
             ("0", "설정 초기화", "Reset to Default")
@@ -1814,8 +1947,7 @@ def system_config_menu():
         elif choice == "6":
             manage_custom_settings()
         
-        elif choice == "7":
-            if select_strategy_preset() is not False: utils.pause()
+        # [추세추종 보호] choice == "7" (전략 프리셋) 제거 — PRESET_RETIRED 주석 참조
         elif choice == "8":
             import api
             from modules import market

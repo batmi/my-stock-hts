@@ -60,7 +60,7 @@ class TelegramCommander:
             "/config": self._cmd_config,
             "/history": self._cmd_history,
             "/log": self._cmd_log,
-            "/preset": self._cmd_preset, # [추가] 시장 국면별 프리셋
+            # [PRESET_RETIRED] /preset 제거 — 전략 프리셋 폐지 (settings.py PRESET_RETIRED 주석 참조)
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
             "/closing": self._cmd_closing, # [추가] AI 장 마감 종합 브리핑
@@ -547,8 +547,7 @@ class TelegramCommander:
             "• /stop : 자동매매 중단\n"
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
-            "• /config : 트레이딩 전략 설정값 조회\n"
-            "• /preset [설정] : 시장 설정 프리셋 (b/r/s/d)\n\n"
+            "• /config : 트레이딩 전략 설정값 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
             "• /holdings : 보유 종목 및 수익률 조회\n"
@@ -2159,22 +2158,22 @@ class TelegramCommander:
         msg += f"\n[적응형 임계값 ({use_adaptive})]\n"
         if regime.get('USE_ADAPTIVE_THRESHOLD'):
             msg += f"• 강세장 보정: {regime.get('BULL_SCORE_ADJ', -0.5):+.1f}점\n"
+            msg += f"• 상승 미확정 보정: {regime.get('PENDING_UP_SCORE_ADJ', 0.0):+.1f}점\n"
+            msg += f"• 하락 미확정 보정: {regime.get('PENDING_DOWN_SCORE_ADJ', 0.5):+.1f}점\n"
             msg += f"• 약세장 보정: {regime.get('BEAR_SCORE_ADJ', 0.5):+.1f}점\n"
-            msg += f"• 횡보장 보정: {regime.get('SIDEWAYS_SCORE_ADJ', 0.0):+.1f}점\n"
-            msg += f"• 기준: EMA {regime.get('REGIME_MA_PERIOD', 5)}일선 / ADX {regime.get('REGIME_ADX_THRESHOLD', 20)}\n"
-            
+            msg += (f"• 기준: EMA {regime.get('REGIME_EMA_FAST', 9)}/{regime.get('REGIME_EMA_SLOW', 41)} 교차 "
+                    f"+ {regime.get('REGIME_CONFIRM_PCT', 5.0):g}% 추종 확인\n")
+
             # [추가] 현재 시장 국면 정보
             try:
-                k_regime, k_adj = analysis.get_market_regime("KOSPI")
-                q_regime, q_adj = analysis.get_market_regime("KOSDAQ")
-                
-                r_map = {"Bull": "강세장", "Bear": "약세장", "Sideways": "횡보장"}
-                k_str = r_map.get(k_regime, k_regime)
-                q_str = r_map.get(q_regime, q_regime)
-                
                 msg += f"\n[현재 시장 국면]\n"
-                msg += f"• KOSPI: {k_str} (보정 {k_adj:+.1f}점)\n"
-                msg += f"• KOSDAQ: {q_str} (보정 {q_adj:+.1f}점)\n"
+                for m_type in ("KOSPI", "KOSDAQ"):
+                    info = analysis.get_market_regime_detail(m_type)
+                    label = analysis.format_regime(info['regime'], markup=False)
+                    ws = info.get('whipsaw_ratio')
+                    ws_str = f", 휩소율 {ws*100:.0f}%" if ws is not None else ""
+                    msg += (f"• {m_type}: {label} (보정 {info['score_adj']:+.1f}점, "
+                            f"교차 후 {info['moved_pct']:+.1f}%{ws_str})\n")
             except Exception as e:
                 logger.debug(f"Market regime fetch error: {e}")
 

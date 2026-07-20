@@ -104,6 +104,8 @@ Following the trend-following doctrine — **"cut losses fast, keep the upside o
 3.  **Trailing Stop — Primary Exit (Chandelier Exit)**: After the activation return is reached, sell when the price drops from the peak by a dynamic callback based on the dedicated trailing ATR multiplier. Volatile leaders get a proportionally wider callback so the trend can be followed to the end. (The default `TS_MAX_GIVEBACK_RATIO=0` removes the giveback cap — a pure Chandelier; set it to a positive ratio to cap how much of the maximum gain can be given back.)
 4.  **Trend Broken**: Full liquidation if the composite score drops below the sell threshold or the state is classified as 'Sell'.
 
+> **Strategy presets retired (2026-07-20)**: The market-phase strategy presets (bull/bear/sideways) were retired after backtesting. Over 30 stocks × 3.8 years the bull preset was effectively identical to the defaults (17.15% vs. 17.48%), the bear preset cut returns to a third while halving >30% winners from 29 to 15 trades (PF 1.70→1.29), and the sideways preset made **zero trades in 3.8 years** because `BUY_RSI_MAX=50` logically contradicts a score threshold that requires RSI above 50, with super-momentum — the only escape hatch — also disabled. Phase handling is already automated through the market filter, regime/whipsaw risk scaling, drawdown step-down, and adaptive buy thresholds; having a human classify the regime and swap the whole strategy collides with that automation. (Settings menu 7 and the Telegram `/preset` command were removed.)
+
 > **Disabled-by-default options (upside limiters, hidden from menus)**: Fixed take profit (`TAKE_PROFIT_RATE=0`), half take-profit (`HALF_TAKE_PROFIT_USE=False`), RSI overheating sell (`TAKE_PROFIT_RSI=0`), and defensive half sell (`DEFENSIVE_HALF_SELL_USE=False`) cut off the fat tail of profits, so they are turned off in the defaults and in every preset, and **are not exposed in the settings menus to protect the trend-following principle**. Re-enabling is only possible by editing `json/dynamic_config.json` directly or via per-stock custom rules (auto-trading menu).
 
 ### 3. Scoring System
@@ -226,7 +228,8 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Portfolio Heat Cap (Total Open-Risk Limit)**: Caps the combined potential loss of all holdings — measured from current price down to each position's effective stop (including break-even/trailing uplifts) — at a set percentage of the account (default 10%, `SYSTEM_MAX_PORTFOLIO_RISK`). While the per-trade risk limit controls each position individually, this cap controls the 'simultaneous stop-out' scenario in aggregate: new buys are shrunk or held to fit the remaining risk budget, and pyramiding add-ons are also held when over budget. As existing positions' stops rise to break-even/trailing levels, the budget naturally recovers and buying resumes.
 *   **Volatility Targeting**: Normalizes each stock's annualized volatility toward a target (default 20%, `TARGET_VOLATILITY`) using ATR — shrinking size for high-volatility names and expanding for low-volatility ones. Crucially, **the expansion is clamped so it never exceeds the per-stock nominal cap (base weight)**, preventing over-concentration in a single name. (Sizing respects the risk limits even on the final slot.)
 *   **Dynamic Risk Scaling**: Following the trend-following principle of "capping risk and volatility relative to capital," the risk limits for *new* entries (per-trade risk and portfolio heat cap) are automatically reduced based on market regime and account state. Only entry *size* is adjusted; exit logic (trailing stops, etc.) is never affected.
-    *   **Bear-regime reduction**: If either KOSPI or KOSDAQ is in a bear regime (index < MA), risk limits are scaled by a factor (default ×0.75, `BEAR_RISK_SCALE`).
+    *   **Regime-linked reduction**: The trigger is not a confirmed bear market but the **PendDown regime (the early stage of a trend breakdown)** — default ×0.6, `PENDING_DOWN_RISK_SCALE`. In the 15-year backtest a confirmed bear had already fallen 5%+, so its forward 20-day returns were actually positive and cutting risk there only shaved CAGR; hence the default is off (×1.0).
+    *   **Whipsaw-linked reduction**: The higher the share of the last 8 crossovers that reversed without reaching the 5% confirmation threshold (the whipsaw ratio) — i.e. the choppier the market — the more entry size is continuously reduced. (Default: ≤40% → ×1.0, ≥75% → ×0.6, linearly interpolated in between.) This markedly lowers MDD versus the four-regime signal alone (KOSPI -41.7%→-34.6%, KOSDAQ -47.8%→-36.9%).
     *   **Drawdown step-down (Turtle-style)**: Risk limits are reduced in steps based on the account's drawdown from its high-water mark (HWM). (Default: ≥5% → ×0.75, ≥10% → ×0.5.) Betting shrinks automatically during losing streaks to smooth the max-drawdown curve, and restores on recovery. (Regime and drawdown factors combine multiplicatively.)
     *   **Gap-risk buffer**: Since the soft stop (periodic-check stop-loss) can fill below the stop price on a gap-down, risk-based sizing multiplies the stop distance by a buffer (default ×1.2, `GAP_RISK_BUFFER`) for conservative sizing.
     *   **Pyramiding market gate**: In a bear market where new buys are blocked (index < SMA), even a validated profitable position is held from adding on (no exposure expansion).
@@ -237,11 +240,15 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Optimization**: Use the 'Weight Optimization' feature in the backtesting menu to find the best combination based on historical data. The take-profit/stop-loss sweep in the single backtest run includes a **"no take profit (trailing-stop driven)" baseline** — fixed take-profit combinations are shown for reference against the trend-following doctrine.
 
 ### 6. Adaptive Thresholds
-*   **Overview**: Dynamically adjusts the buy criteria score (`BUY_SCORE`) by analyzing the market phase (Bull/Bear/Sideways) in real-time.
-*   **Operation**:
-    *   **Bull**: Lowers buy criteria (e.g., -0.5 points) for aggressive entry.
-    *   **Bear**: Raises buy criteria (e.g., +0.5 points) for conservative entry.
-    *   **Sideways**: Maintains the default score.
+*   **Overview**: Dynamically adjusts the buy criteria score (`BUY_SCORE`) by classifying the market regime in real-time.
+*   **Classification (dual-EMA crossover + follow-through)**: Uses Ed Seykota's rule. A crossover of the fast EMA (9-day, β=0.25) over the slow EMA (41-day, β=0.05) marks a change of direction, but the trend is only **confirmed once the index has advanced at least 5% since the crossover**. If it reverses before that, the segment is counted as a whipsaw (failed trend).
+*   **Four regimes**:
+    *   **Bull** — fast > slow, +5% achieved since crossover: lowers buy criteria (e.g., -0.5 points).
+    *   **PendUp** — upward crossover but below the 5% threshold: keeps the default score (no easing before confirmation).
+    *   **PendDown** — downward crossover but above -5%, i.e. **the early stage of a trend breakdown**: raises buy criteria (e.g., +0.5 points).
+    *   **Bear** — -5% reached since crossover: raises buy criteria.
+*   **Validation (15-year KOSPI/KOSDAQ backtest)**: The former method (index vs. EMA5 + ADX) flipped 71–73 times per year — effectively noise — and its "bear" label covered 42% of all days while showing no discriminative power over forward returns. The new method stabilizes at 12–13 flips per year, and forward 20-day index returns separate cleanly: Bull +2.9%/+0.9% vs. PendDown -0.5%/-0.6%.
+*   **Configuration**: Adjust the score offsets (`BULL_SCORE_ADJ`, `PENDING_DOWN_SCORE_ADJ`, etc.) and classification parameters (`REGIME_EMA_FAST`, `REGIME_EMA_SLOW`, `REGIME_CONFIRM_PCT`) via `MARKET_REGIME_PARAMS` in `config.py` or the settings menu.
 
 ## 4. Architecture & Stability
 
@@ -468,7 +475,7 @@ We recommend integrating a Telegram Bot to receive trading history notifications
 Register `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config.py` or as environment variables.
 
 ### 4. Main Commands
-*   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/config` (strategy settings), `/preset <phase>` (market preset, b/r/s/d)
+*   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/config` (strategy settings)
 *   **Account & Assets**: `/balance`, `/holdings`, `/pending` (unfilled orders), `/reserves` (reserved orders), `/profit [period]` (realized P&L, d/w/m/n), `/history [period]` (trade history), `/report [period]` (performance report), `/stats [stock]` (per-stock performance)
 *   **Market & Stock Analysis**: `/market [group]` (indices, k/u/s/r/g/c/b), `/signal <stock/index>` (technical diagnosis), `/analyze <stock/index>` (AI in-depth diagnosis), `/chart [period] <stock/index>` (chart, d/h/m), `/briefing` (on-demand AI market briefing), `/closing` (AI closing briefing), `/curate` (AI leading-stock curation), `/scan [market]` (TradingView scan, k/u), `/news <stock>` (AI latest news), `/ask <question>` (free-form AI Q&A)
 *   **Management & Misc**: `/stocks` (watchlist), `/rules [stock]` (per-stock trading rules), `/restrict` (restricted stocks), `/addrestrict <stock> [reason]`, `/delrestrict <stock>`, `/memo [a/d/stock]`, `/log` (recent logs), `/help`

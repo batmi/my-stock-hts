@@ -295,12 +295,17 @@ def show_help():
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
 
     # [수정] 설정값 로드하여 동적 표시
-    ma_period = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
+    _rp = config.MARKET_REGIME_PARAMS
+    ema_fast = _rp.get('REGIME_EMA_FAST', 9)
+    ema_slow = _rp.get('REGIME_EMA_SLOW', 41)
+    confirm_pct = _rp.get('REGIME_CONFIRM_PCT', 5.0)
     obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
-    table.add_row("시장 지수", f"지수 > EMA {ma_period}일선 & 이평선우상향 & ADX조건", "[red]빨간색[/]", "강세장 (Bull)")
-    table.add_row("(글로벌/원자재/코인)", f"지수 < EMA {ma_period}일선", "[blue]파란색[/]", "약세장 (Bear)")
-    table.add_row("", "그 외 구간", "[yellow]노란색[/]", "횡보장 (Sideways)")
+    table.add_row("시장 지수", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
+    table.add_row("(글로벌/원자재/코인)", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[magenta]자홍색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
+    table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
 
     # [수정] 미국채 금리 밴드는 config.US_TREASURY_YIELD_BANDS 단일 소스에서 생성한다
@@ -622,9 +627,10 @@ def show_help():
     r_syn = weights.get("SYNERGY", 2.0) / 2.0
 
     regime = config.MARKET_REGIME_PARAMS
-    ma_p = regime.get('REGIME_MA_PERIOD', 5)
-    adx_th = regime.get('REGIME_ADX_THRESHOLD', 20)
-    
+    ema_f = regime.get('REGIME_EMA_FAST', 9)
+    ema_s = regime.get('REGIME_EMA_SLOW', 41)
+    confirm_p = regime.get('REGIME_CONFIRM_PCT', 5.0)
+
     market_status_info = None
     filter_info = None
     try:
@@ -639,9 +645,8 @@ def show_help():
             kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
             kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
         
-            r_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
-            k_r_str = r_map.get(kospi_regime, kospi_regime) + "*"
-            q_r_str = r_map.get(kosdaq_regime, kosdaq_regime) + "*"
+            k_r_str = analysis.format_regime(kospi_regime) + "*"
+            q_r_str = analysis.format_regime(kosdaq_regime) + "*"
 
             market_status_info = {
                 "kospi_str": k_r_str, "kospi_adj": kospi_adj,
@@ -743,9 +748,12 @@ def show_help():
     
     score_table.add_section()
     adaptive_status = "[green]ON[/green]" if regime.get('USE_ADAPTIVE_THRESHOLD') else "[red]OFF[/red]"
-    score_table.add_row(f"적응형 임계값 ({adaptive_status})", f"강세장: 지수 > EMA {ma_p}일선 & 이평선우상향 & ADX≥{adx_th}", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
-    score_table.add_row("", f"약세장: 지수 < EMA {ma_p}일선", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
-    score_table.add_row("", "횡보장: 그 외 구간", "[yellow]유지[/]", f"매수 기준 {regime['SIDEWAYS_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row(f"적응형 임계값 ({adaptive_status})",
+                        f"[dim]EMA {ema_f}/{ema_s} 교차 후 {confirm_p:g}% 진행해야 '확정 추세'[/dim]", "", "")
+    score_table.add_row("", f"강세장: EMA{ema_f} > EMA{ema_s} & 교차 후 {confirm_p:+g}% 달성", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
+    score_table.add_row("", f"상승 미확정: EMA{ema_f} > EMA{ema_s} & {confirm_p:g}% 미달", "[orange3]유지[/]", f"매수 기준 {regime.get('PENDING_UP_SCORE_ADJ', 0.0):+.1f}점 적용")
+    score_table.add_row("", f"하락 미확정: EMA{ema_f} < EMA{ema_s} & {confirm_p:g}% 미달", "[magenta]강화[/]", f"매수 기준 {regime.get('PENDING_DOWN_SCORE_ADJ', 0.5):+.1f}점 적용 [dim](판별력상 최다 위험구간)[/dim]")
+    score_table.add_row("", f"약세장: EMA{ema_f} < EMA{ema_s} & 교차 후 {-confirm_p:+g}% 달성", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
     
     if market_status_info:
         k_adj_str = f"보정: {market_status_info['kospi_adj']:+.1f}점"

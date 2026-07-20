@@ -136,7 +136,7 @@ def test_get_market_regime_kosdaq(mock_yf, mock_kis):
     mock_yf.return_value = df
     
     regime, adj = analysis.get_market_regime("KOSDAQ")
-    assert regime in ["Bull", "Bear", "Sideways"]
+    assert regime in ["Bull", "PendUp", "PendDown", "Bear", "Sideways"]
 
 @patch('modules.analysis.api.get_chart_data')
 @patch('modules.analysis.api.get_realtime_vol_strength')

@@ -19,6 +19,7 @@ import zipfile
 import threading # [추가]
 import os
 import pandas as pd
+import numpy as np
 import concurrent.futures
 import shutil
 import sqlite3
@@ -858,9 +859,10 @@ def _fetch_domestic_index_data(market_type):
         kis_code = "0503"
         yf_ticker = None
 
-    # 지수 데이터는 국면 판단(EMA, REGIME_MA_PERIOD)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
+    # 지수 데이터는 국면 판단(이중 EMA의 느린 기간)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
     #  사용하므로 두 기간 중 큰 값을 '충분성' 기준으로 삼는다(부족하면 다음 소스로 폴백).
-    ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
+    ma_period = max(config.MARKET_REGIME_PARAMS.get("REGIME_EMA_SLOW", 41),
+                    config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5))
     if getattr(config, 'USE_MARKET_FILTER', True):
         ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 60))
 
@@ -951,59 +953,147 @@ def get_domestic_index_data(market_type, force_refresh=False):
             return stale_df
         return df
 
-def get_market_regime(market_type="KOSPI"):
-    """시장 국면 판단 (Bull/Bear/Sideways)
+# 국면 문자열 -> 점수 보정 설정 키. 국면 상태를 추가할 때 이 표만 갱신하면 된다.
+REGIME_SCORE_ADJ_KEYS = {
+    "Bull": ("BULL_SCORE_ADJ", -0.5),
+    "PendUp": ("PENDING_UP_SCORE_ADJ", 0.0),
+    "PendDown": ("PENDING_DOWN_SCORE_ADJ", 0.5),
+    "Bear": ("BEAR_SCORE_ADJ", 0.5),
+    "Sideways": ("SIDEWAYS_SCORE_ADJ", 0.0),
+}
+
+# 국면 문자열 -> (한글 라벨, rich 색상). 화면·텔레그램·자동매매 로그가 공유한다.
+#  (표시부가 제각각 하드코딩돼 상태 추가 시 일부만 누락되던 문제 방지)
+REGIME_DISPLAY = {
+    "Bull": ("강세장", "red"),
+    "PendUp": ("상승 미확정", "orange3"),
+    "PendDown": ("하락 미확정", "magenta"),
+    "Bear": ("약세장", "blue"),
+    "Sideways": ("판정 보류", "yellow"),
+}
+
+
+def format_regime(regime, markup=True):
+    """국면 문자열을 한글 라벨로 변환. markup=True면 rich 색상 태그를 입힌다."""
+    label, color = REGIME_DISPLAY.get(regime, (regime, "yellow"))
+    return f"[{color}]{label}[/]" if markup else label
+
+
+def classify_regime_from_df(df, params=None):
+    """[국면 판정 핵심] 이중 EMA 교차 + 추종 확인(follow-through) 규칙.
+
+    에드 세이코타 방식: 빠른 EMA(9일, β=0.25)와 느린 EMA(41일, β=0.05)가 교차하면
+    방향 전환으로 보되, 교차 이후 지수가 확인 기준(기본 5%)만큼 진행해야 '확정 추세'로
+    인정한다. 미달 상태에서 다시 교차하면 그 구간은 휩소(실패한 추세)로 집계한다.
+
+    Returns:
+        dict: {
+          'regime': 'Bull'|'PendUp'|'PendDown'|'Bear'|'Sideways',
+          'moved_pct': 교차 이후 현재까지 진행률(%),
+          'whipsaw_ratio': 직전 N개 완료 교차 중 확인 기준 미달 비율(0~1, 산출 불가 시 None),
+          'segments': 집계에 사용한 완료 교차 구간 수,
+        }
+        데이터가 부족하면 regime='Sideways'를 돌려준다(호출부는 중립으로 취급).
+
+    지수 화면(market.py)과 자동매매(analysis.get_market_regime)가 같은 판정을 쓰도록
+    데이터프레임만 받는 순수 함수로 분리했다.
+    """
+    params = params or getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
+    fast = int(params.get("REGIME_EMA_FAST", 9))
+    slow = int(params.get("REGIME_EMA_SLOW", 41))
+    confirm = float(params.get("REGIME_CONFIRM_PCT", 5.0))
+    lookback = int(params.get("REGIME_WHIPSAW_LOOKBACK", 8))
+
+    blank = {'regime': "Sideways", 'moved_pct': 0.0, 'whipsaw_ratio': None, 'segments': 0}
+    if df is None or df.empty or 'close' not in df.columns or len(df) < slow:
+        return blank
+
+    close = pd.to_numeric(df['close'], errors='coerce').dropna()
+    if len(close) < slow:
+        return blank
+
+    ema_f = close.ewm(span=fast, adjust=False).mean().values
+    ema_s = close.ewm(span=slow, adjust=False).mean().values
+    up = ema_f > ema_s
+    prices = close.values
+
+    # 교차 지점(방향이 바뀌는 인덱스)만 뽑아 구간 단위로 처리한다 — 전 구간 루프 불필요
+    starts = [0] + list(np.flatnonzero(up[1:] != up[:-1]) + 1)
+
+    # 완료된 구간(마지막 진행 중 구간 제외)의 확인 기준 달성 여부 → 휩소율
+    successes = []
+    for i in range(len(starts) - 1):
+        a, b = starts[i], starts[i + 1]
+        p0 = prices[a]
+        if p0 <= 0:
+            continue
+        seg = prices[a:b]
+        if up[a]:
+            ext = (seg.max() - p0) / p0 * 100.0
+            successes.append(ext >= confirm)
+        else:
+            ext = (seg.min() - p0) / p0 * 100.0
+            successes.append(ext <= -confirm)
+
+    whipsaw = None
+    if len(successes) >= lookback:
+        recent = successes[-lookback:]
+        whipsaw = 1.0 - (sum(1 for s in recent if s) / float(len(recent)))
+
+    # 현재(진행 중) 구간 판정
+    a = starts[-1]
+    p0 = prices[a]
+    moved = (prices[-1] - p0) / p0 * 100.0 if p0 > 0 else 0.0
+    if up[-1]:
+        regime = "Bull" if moved >= confirm else "PendUp"
+    else:
+        regime = "Bear" if moved <= -confirm else "PendDown"
+
+    return {'regime': regime, 'moved_pct': moved,
+            'whipsaw_ratio': whipsaw, 'segments': len(successes)}
+
+
+def get_market_regime_detail(market_type="KOSPI"):
+    """시장 국면 상세 — classify_regime_from_df 결과에 점수 보정(score_adj)을 더해 반환.
 
     자동매매는 매 주기(매도검사·매수스캔 각각) 시장별로 호출하므로, 짧은 TTL 캐시로
     지수 차트 조회 + 지표 재계산 중복을 제거한다. (국면은 초 단위로 변하지 않음)
-    데이터 부족/오류 폴백("Sideways", 0.0)은 일시 장애일 수 있어 캐시하지 않는다.
+    데이터 부족/오류 폴백은 일시 장애일 수 있어 캐시하지 않는다.
     """
     cached = _MARKET_REGIME_CACHE.get(market_type, ttl=_MARKET_REGIME_TTL_SEC)
     if cached is not None:
         return cached
 
+    neutral = {'regime': "Sideways", 'score_adj': 0.0, 'moved_pct': 0.0,
+               'whipsaw_ratio': None, 'segments': 0}
     try:
-        # [수정] 공통 함수를 통해 데이터 조회 (Fallback 적용)
+        params = getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
         df = get_domestic_index_data(market_type)
+        info = classify_regime_from_df(df, params)
+        if info['regime'] == "Sideways" and info['segments'] == 0:
+            return neutral  # 데이터 부족 — 캐시하지 않음
 
-        # [수정] 설정된 MA 기간 가져오기
-        ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
+        key, default = REGIME_SCORE_ADJ_KEYS.get(info['regime'], ("SIDEWAYS_SCORE_ADJ", 0.0))
+        try:
+            info['score_adj'] = float(params.get(key, default))
+        except (TypeError, ValueError):
+            info['score_adj'] = default
 
-        if df is None or df.empty or len(df) < ma_period:
-            return "Sideways", 0.0 # 데이터 부족 시 횡보로 가정
-
-        current_price = float(df.iloc[-1]['close'])
-
-        # 지표 계산
-        adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-
-        ma_val = df['close'].ewm(span=ma_period, adjust=False).mean().iloc[-1]
-
-        # MA 기울기 (최근 5일)
-        ma_series = df['close'].ewm(span=ma_period, adjust=False).mean()
-        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-
-        # ADX 계산
-        ind = indicators.calculate_indicators(df)
-        adx = ind['adx']
-
-        # 국면 판단 로직
-        # 1. 강세장: 지수 > MA & 기울기 > 0 & ADX > 기준
-        if current_price > ma_val and slope > 0 and adx >= adx_threshold:
-            result = ("Bull", config.MARKET_REGIME_PARAMS.get("BULL_SCORE_ADJ", -0.5))
-        # 2. 약세장: 지수 < MA
-        elif current_price < ma_val:
-            result = ("Bear", config.MARKET_REGIME_PARAMS.get("BEAR_SCORE_ADJ", 0.5))
-        # 3. 횡보장: 그 외
-        else:
-            result = ("Sideways", config.MARKET_REGIME_PARAMS.get("SIDEWAYS_SCORE_ADJ", 0.0))
-
-        _MARKET_REGIME_CACHE.set(market_type, result)
-        return result
+        _MARKET_REGIME_CACHE.set(market_type, info)
+        return info
 
     except Exception as e:
         logger.error(f"시장 국면 판단 오류: {e}")
-        return "Sideways", 0.0
+        return neutral
+
+
+def get_market_regime(market_type="KOSPI"):
+    """시장 국면 판단 — (국면 문자열, 매수 점수 보정) 튜플.
+
+    상세 정보(휩소율 등)가 필요하면 get_market_regime_detail을 쓴다.
+    """
+    info = get_market_regime_detail(market_type)
+    return info['regime'], info['score_adj']
 
 def get_index_momentum(market_type="KOSPI", lookback=None):
     """[추세추종] 지수 모멘텀(%) — 최근 lookback 거래일 지수 수익률 (상대강도 RS 필터 기준선).

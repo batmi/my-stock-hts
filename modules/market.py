@@ -712,31 +712,20 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         if name in adaptive_targets:
             try:
-                ma_period = config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5)
-                adx_threshold = config.MARKET_REGIME_PARAMS.get("REGIME_ADX_THRESHOLD", 20)
-                
-                regime_state = "Sideways"
-                    
+                # [동기화] 자동매매(analysis.get_market_regime)와 동일한 이중 EMA 교차 + 추종 확인 규칙.
+                #  판정 로직이 양쪽에 중복되어 한쪽만 바뀌던 문제를 공통 함수로 통일했다.
+                #  실시간 화면은 장중 현재가(eval_price)를 마지막 종가에 덮어써 즉시 반영한다.
                 target_df = df_calc if not df_calc.empty else df_daily
-                if not target_df.empty and len(target_df) >= ma_period:
-                    ma_series = target_df['close'].ewm(span=ma_period, adjust=False).mean()
-                    ma_val = ma_series.iloc[-1]
-                    
-                    slope = 0
-                    if len(ma_series) >= 5:
-                        slope = (ma_series.iloc[-1] - ma_series.iloc[-5]) / 5
-                    
-                    adx_val = val_adx if val_adx is not None else 0
-                    
-                    if eval_price > ma_val and slope > 0 and adx_val >= adx_threshold:
-                        regime_state = "Bull"
-                    elif eval_price < ma_val:
-                        regime_state = "Bear"
-                
+                regime_state = "Sideways"
+
+                if not target_df.empty and eval_price:
+                    live_df = target_df.copy()
+                    live_df.iloc[-1, live_df.columns.get_loc('close')] = eval_price
+                    regime_state = analysis.classify_regime_from_df(live_df)['regime']
+
                 # [수정] name 대신 display_name에 색을 입힌다 — 코스피200선물의 'F/CM' 접미사 유지
-                if regime_state == "Bull": display_name = f"[red]{display_name}[/]"
-                elif regime_state == "Bear": display_name = f"[blue]{display_name}[/]"
-                else: display_name = f"[yellow]{display_name}[/]"
+                _, regime_color = analysis.REGIME_DISPLAY.get(regime_state, ("", "yellow"))
+                display_name = f"[{regime_color}]{display_name}[/]"
             except Exception: pass
         elif name in config.US_TREASURY_YIELD_BANDS:
             # [수정] 밴드 정의는 config.US_TREASURY_YIELD_BANDS 단일 소스 사용

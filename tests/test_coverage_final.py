@@ -53,7 +53,7 @@ def test_get_market_regime_fallback(mock_get_index, mock_tv):
         mock_yf.return_value = pd.DataFrame({'close': [100]*60})
         regime, adj = analysis.get_market_regime("KOSPI")
         # Fallback이 동작하여 결과가 반환되어야 함
-        assert regime in ["Bull", "Bear", "Sideways"]
+        assert regime in ["Bull", "PendUp", "PendDown", "Bear", "Sideways"]
         mock_yf.assert_called()
 
 @patch('modules.market.api.fetch_yfinance_data')

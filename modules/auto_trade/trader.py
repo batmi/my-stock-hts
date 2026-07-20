@@ -867,14 +867,16 @@ class AutoTrader:
             
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
-        regime_map = {"Bull": "🔴 강세장", "Bear": "🔵 약세장", "Sideways": "🟡 횡보장"}
-        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
+        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "🟣", "Bear": "🔵", "Sideways": "🟡"}
+        rp = config.MARKET_REGIME_PARAMS
+        ema_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)}"
 
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
-                regime, _ = analysis.get_market_regime(m_type)
-                regime_str = regime_map.get(regime, regime)
-                msg += f"• {label}: {regime_str} (EMA {regime_ma}일 기준)\n"
+                info = analysis.get_market_regime_detail(m_type)
+                regime = info['regime']
+                regime_str = f"{emoji_map.get(regime, '🟡')} {analysis.format_regime(regime, markup=False)}"
+                msg += f"• {label}: {regime_str} (교차 후 {info['moved_pct']:+.1f}%, {ema_desc} 기준)\n"
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
 
@@ -1151,11 +1153,11 @@ class AutoTrader:
         table.add_row("마켓 상태", market_status)
         
         # [추가] 시장 국면 상태 표시
-        regime_map = {"Bull": "[red]강세장[/]", "Bear": "[blue]약세장[/]", "Sideways": "[yellow]횡보장[/]"}
-        k_regime_str = regime_map.get(kospi_regime, kospi_regime)
-        q_regime_str = regime_map.get(kosdaq_regime, kosdaq_regime)
-        regime_ma = config.MARKET_REGIME_PARAMS.get('REGIME_MA_PERIOD', 5)
-        table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점) [dim](EMA {regime_ma}일 기준)[/]")
+        k_regime_str = analysis.format_regime(kospi_regime)
+        q_regime_str = analysis.format_regime(kosdaq_regime)
+        rp = config.MARKET_REGIME_PARAMS
+        regime_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)} 교차 + {rp.get('REGIME_CONFIRM_PCT', 5.0):g}% 확인"
+        table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점) [dim]({regime_desc})[/]")
 
         # [추가] 지수 추세 상태 표시 (시장 필터링 사용 시)
         if getattr(config, 'USE_MARKET_FILTER', True):
@@ -4189,31 +4191,75 @@ class AutoTrader:
                 self.log(f"{market_name} 지수 조회 실패: {e}")
                 self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
 
-    def _update_risk_scale(self):
-        """[리스크 스케일링] 시장 국면(약세)·계좌 드로다운에 따른 신규 진입 리스크 한도 배수 갱신
+    @staticmethod
+    def _whipsaw_risk_scale(whipsaw, params=None):
+        """휩소율(0~1) → 리스크 한도 배수. LO 이하 1.0, HI 이상 MIN_SCALE, 사이는 선형 보간.
 
-        [추세추종 2원칙] "자본대비 리스크에 한도를 둬야 한다" — 약세 국면·손실 구간에서는
-        같은 한도라도 절대 금액을 줄여 드로다운을 단계적으로 통제한다(터틀식).
+        휩소율이 높다 = 최근 추세 전환들이 확인 기준(5%)을 채우지 못하고 되돌려졌다
+        = 톱니장이다. 추세추종 시스템이 가장 잃기 쉬운 구간이므로 진입 크기를 줄인다."""
+        params = params if params is not None else (getattr(config, 'RISK_SCALING_PARAMS', {}) or {})
+        try:
+            lo = float(params.get("WHIPSAW_LO", 0.40))
+            hi = float(params.get("WHIPSAW_HI", 0.75))
+            min_scale = float(params.get("WHIPSAW_MIN_SCALE", 0.6))
+        except (TypeError, ValueError):
+            lo, hi, min_scale = 0.40, 0.75, 0.6
+        if whipsaw is None or hi <= lo or not (0 < min_scale < 1.0):
+            return 1.0
+        if whipsaw <= lo:
+            return 1.0
+        if whipsaw >= hi:
+            return min_scale
+        return 1.0 - (whipsaw - lo) / (hi - lo) * (1.0 - min_scale)
+
+    def _update_risk_scale(self):
+        """[리스크 스케일링] 시장 국면·휩소율·계좌 드로다운에 따른 신규 진입 리스크 한도 배수 갱신
+
+        [추세추종 2원칙] "자본대비 리스크에 한도를 둬야 한다" — 추세가 먹히지 않는 구간과
+        손실 구간에서는 같은 한도라도 절대 금액을 줄여 드로다운을 단계적으로 통제한다(터틀식).
         결과(self.risk_scale)는 RiskManager가 종목당 리스크(SYSTEM_RISK_PER_TRADE)와
         히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에 곱해 사용한다. 청산 로직에는 관여하지 않는다.
-        국면 배수 × 드로다운 배수가 곱으로 결합된다."""
+        (국면 배수 × 휩소율 배수) × 드로다운 배수가 곱으로 결합된다."""
         params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
         scale = 1.0
         reasons = []
         try:
-            # 1) 시장 국면: KOSPI/KOSDAQ 중 하나라도 약세(Bear)면 배수 적용 (보수적 — "추세는 시장이다")
-            if params.get("USE_REGIME_RISK_SCALING", True):
-                try:
-                    bear_scale = float(params.get("BEAR_RISK_SCALE", 0.75))
-                except (TypeError, ValueError):
-                    bear_scale = 0.75
-                if 0 < bear_scale < 1.0:
-                    for m_type in ("KOSPI", "KOSDAQ"):
-                        regime, _ = analysis.get_market_regime(m_type)
-                        if regime == "Bear":
-                            scale *= bear_scale
-                            reasons.append(f"약세국면 {m_type} x{bear_scale:g}")
-                            break
+            # 1) 시장 국면 + 휩소율: KOSPI/KOSDAQ 중 더 나쁜(배수가 작은) 쪽을 채택
+            #    (보수적 — "추세는 시장이다". 두 시장 배수를 곱하면 과도하게 축소되므로 최솟값 사용)
+            use_regime = params.get("USE_REGIME_RISK_SCALING", True)
+            use_whipsaw = params.get("USE_WHIPSAW_RISK_SCALING", True)
+            if use_regime or use_whipsaw:
+                best_scale, best_reason = 1.0, None
+                for m_type in ("KOSPI", "KOSDAQ"):
+                    info = analysis.get_market_regime_detail(m_type)
+                    m_scale, m_parts = 1.0, []
+
+                    # 1-a) 국면 배수 — 축소 대상은 '하락 미확정'(추세 붕괴 초기)이 핵심
+                    if use_regime:
+                        key = {"PendDown": ("PENDING_DOWN_RISK_SCALE", 0.6),
+                               "Bear": ("BEAR_RISK_SCALE", 1.0)}.get(info['regime'])
+                        if key:
+                            try:
+                                rs = float(params.get(key[0], key[1]))
+                            except (TypeError, ValueError):
+                                rs = key[1]
+                            if 0 < rs < 1.0:
+                                m_scale *= rs
+                                m_parts.append(f"{analysis.format_regime(info['regime'], markup=False)} x{rs:g}")
+
+                    # 1-b) 휩소율 배수 — 톱니장일수록 연속적으로 축소
+                    if use_whipsaw and info.get('whipsaw_ratio') is not None:
+                        ws_scale = self._whipsaw_risk_scale(info['whipsaw_ratio'], params)
+                        if ws_scale < 1.0:
+                            m_scale *= ws_scale
+                            m_parts.append(f"휩소율 {info['whipsaw_ratio']*100:.0f}% x{ws_scale:.2f}")
+
+                    if m_scale < best_scale:
+                        best_scale, best_reason = m_scale, f"{m_type} " + " ".join(m_parts)
+
+                if best_reason:
+                    scale *= best_scale
+                    reasons.append(best_reason)
 
             # 2) 계좌 드로다운: 자산 고점(HWM) 대비 하락률에 따라 단계적 감속
             if params.get("USE_DRAWDOWN_RISK_SCALING", True):
