@@ -98,6 +98,7 @@ class GlobalSettings(BaseModel):
 
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
     USE_RS_FILTER: bool = True              # [추세추종] 상대강도(RS) 필터 — 6개월 수익률이 소속 지수(KOSPI/KOSDAQ)를 밑도는 종목의 신규 매수 제외
+    RS_FILTER_LOOKBACK: int = Field(default=0, ge=0)  # RS 필터 수익률 비교 룩백(거래일). 0이면 스코어링 '가격 모멘텀' 룩백(MOMENTUM_LOOKBACK, 기본 126일)과 자동 연동
     MARKET_FILTER_MA: int = Field(default=60, gt=0)              # 시장 필터링 기준 단순이동평균선 (SMA, 일)
                                             #   KIS API는 약 50일치 데이터만 제공할 수 있습니다.
                                             #   60일 이상 설정 시 yfinance 데이터로 자동 대체됩니다.
@@ -1051,6 +1052,7 @@ CONFIG_DESCRIPTIONS = {
     "SYSTEM_INCLUDE_ETF": "자동매매 대상에 ETF 포함 여부",
     "USE_MARKET_FILTER": "지수 하락 시 신규 매수 보류 여부",
     "USE_RS_FILTER": "상대강도(RS) 필터 (지수 대비 약세 종목 신규 매수 제외) 사용",
+    "RS_FILTER_LOOKBACK": "RS 필터 수익률 비교 기간 (거래일, 0=가격 모멘텀 룩백 연동)",
     "MARKET_FILTER_MA": "시장 추세 판단용 단순이동평균선 (일)",
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
     "SYSTEM_DAILY_LOSS_LIMIT": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)",

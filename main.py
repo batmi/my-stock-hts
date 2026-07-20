@@ -760,11 +760,32 @@ def show_help():
     score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
-        score_table.add_row("현재 필터링 상태", "확인 불가", "-", "-")
+        score_table.add_row("현재 시장 필터링 상태", "확인 불가", "-", "-")
     elif filter_info:
         k_stat = "[green]허용[/]" if filter_info.get("KOSPI", True) else "[red]보류[/]"
         q_stat = "[green]허용[/]" if filter_info.get("KOSDAQ", True) else "[red]보류[/]"
-        score_table.add_row("현재 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
+        score_table.add_row("현재 시장 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
+
+    # [추가] 상대강도(RS) 필터 섹션 (룩백: RS_FILTER_LOOKBACK>0 우선, 0이면 가격 모멘텀 룩백 연동 — trader RS 게이트와 동일 규칙)
+    score_table.add_section()
+    rs_on = getattr(config, 'USE_RS_FILTER', True)
+    rs_status = "[green]ON[/green]" if rs_on else "[red]OFF[/red]"
+    rs_lb_cfg = getattr(config, 'RS_FILTER_LOOKBACK', 0)
+    rs_lookback = rs_lb_cfg if rs_lb_cfg > 0 else config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+    rs_lb_src = "전용 설정" if rs_lb_cfg > 0 else "가격 모멘텀 룩백 연동"
+    score_table.add_row(f"상대강도(RS) 필터 ({rs_status})", f"종목 {rs_lookback}일 수익률 ≤ 소속 지수(KOSPI/KOSDAQ) 수익률", "[blue]제외[/]", f"지수 대비 약세 종목 신규 매수 제외 (국내 전용, 기간: {rs_lb_src})")
+
+    if rs_on:
+        # 현재 기준값 = 소속 지수의 룩백 기간 수익률 (이 값 이하의 종목이 신규 매수에서 제외됨)
+        rs_k = analysis.get_index_momentum("KOSPI", lookback=rs_lookback)
+        rs_q = analysis.get_index_momentum("KOSDAQ", lookback=rs_lookback)
+        def _rs_colored(v):
+            if v is None: return "확인 불가"
+            color = "red" if v > 0 else ("blue" if v < 0 else "white")
+            return f"[{color}]{v:+.1f}%[/]"
+        rs_k_str = _rs_colored(rs_k)
+        rs_q_str = _rs_colored(rs_q)
+        score_table.add_row("현재 RS 필터 기준값", f"KOSPI: {rs_k_str} / KOSDAQ: {rs_q_str}", "-", f"소속 지수의 {rs_lookback}일 수익률 (기준값 이하 종목 제외)")
 
     # [추가] 매매 필터링 섹션
     score_table.add_section()

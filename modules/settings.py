@@ -31,6 +31,7 @@ def _save_dynamic_config():
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
         "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', True),
+        "RS_FILTER_LOOKBACK": getattr(config.settings, 'RS_FILTER_LOOKBACK', 0),
         "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 60),
         "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
@@ -274,6 +275,10 @@ def view_system_config(group=None):
         if getattr(config.settings, 'USE_MARKET_FILTER', True):
             row("시장 필터링 SMA (일)", "지수 추세 판단용 단순이동평균선", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 60)}", key="MARKET_FILTER_MA", indent=True)
         row("상대강도(RS) 필터 사용", "지수 대비 약세 종목 신규 매수 제외", "USE_RS_FILTER", f"{getattr(config.settings, 'USE_RS_FILTER', True)}", key="USE_RS_FILTER")
+        if getattr(config.settings, 'USE_RS_FILTER', True):
+            _rs_lb = getattr(config.settings, 'RS_FILTER_LOOKBACK', 0)
+            _rs_lb_str = f"{_rs_lb}일" if _rs_lb > 0 else f"연동 ({config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)}일)"
+            row("상대강도(RS) 필터 기간", "지수 대비 수익률 비교 룩백 (0=가격 모멘텀 룩백 연동)", "RS_FILTER_LOOKBACK", _rs_lb_str, key="RS_FILTER_LOOKBACK", indent=True)
         row("상관계수 필터링 사용", "유사 테마 종목 중복 매수 방지", "USE_CORRELATION_FILTER", f"{getattr(config.settings, 'USE_CORRELATION_FILTER', True)}", key="USE_CORRELATION_FILTER")
         if getattr(config.settings, 'USE_CORRELATION_FILTER', True):
             row("상관계수 임계값", "동조화 판단 기준치 (0.0~1.0)", "CORRELATION_THRESHOLD", f"{getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)}", key="CORRELATION_THRESHOLD", indent=True)
@@ -897,8 +902,10 @@ def _risk_portfolio_items():
          "get": lambda: getattr(config.settings, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_MARKET_FILTER', v)},
         {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 60), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
-        {"desc": "상대강도(RS) 필터 사용", "help": "6개월 수익률이 소속 지수를 밑도는 종목 신규 매수 제외", "name": "USE_RS_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
+        {"desc": "상대강도(RS) 필터 사용", "help": "수익률이 소속 지수를 밑도는 종목 신규 매수 제외", "name": "USE_RS_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'USE_RS_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_RS_FILTER', v)},
+        {"desc": "상대강도(RS) 필터 기간 (일)", "help": "지수 대비 수익률 비교 룩백 거래일 (0 = 가격 모멘텀 룩백 연동)", "name": "RS_FILTER_LOOKBACK", "type": "int", "section": "3-2. 매수 필터",
+         "get": lambda: getattr(config.settings, 'RS_FILTER_LOOKBACK', 0), "set": lambda v: setattr(config.settings, 'RS_FILTER_LOOKBACK', v), "validator": lambda v: v >= 0},
         {"desc": "상관계수 필터링 사용", "help": "유사 테마 종목 중복 매수 방지", "name": "USE_CORRELATION_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'USE_CORRELATION_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_CORRELATION_FILTER', v)},
         {"desc": "상관계수 임계값", "help": "이 값 이상일 때 동조화로 판단 (0.0~1.0)", "name": "CORRELATION_THRESHOLD", "type": "float", "section": "3-2. 매수 필터",
@@ -1364,6 +1371,8 @@ def manage_custom_settings():
             "VOLATILITY_SCALING_MIN": "스케일링 최소 배수",
             "USE_MARKET_FILTER": "시장 필터링 사용",
             "MARKET_FILTER_MA": "시장 필터링 SMA (일)",
+            "USE_RS_FILTER": "상대강도(RS) 필터 사용",
+            "RS_FILTER_LOOKBACK": "상대강도(RS) 필터 기간",
             "SYSTEM_MAX_CONSECUTIVE_ERRORS": "연속 에러 허용",
             "SYSTEM_DAILY_LOSS_LIMIT": "일일 손실 제한 (%)",
             "SYSTEM_RISK_PER_TRADE": "1회 최대 리스크 (%)",
@@ -1476,6 +1485,8 @@ def manage_custom_settings():
             "VOLATILITY_SCALING_MIN": (_CAT3, "3-1. 자산 배분/포지션"),
             "USE_MARKET_FILTER": (_CAT3, "3-2. 매수 필터"),
             "MARKET_FILTER_MA": (_CAT3, "3-2. 매수 필터"),
+            "USE_RS_FILTER": (_CAT3, "3-2. 매수 필터"),
+            "RS_FILTER_LOOKBACK": (_CAT3, "3-2. 매수 필터"),
             "USE_CORRELATION_FILTER": (_CAT3, "3-2. 매수 필터"),
             "CORRELATION_THRESHOLD": (_CAT3, "3-2. 매수 필터"),
             "SYSTEM_MAX_CONSECUTIVE_ERRORS": (_CAT3, "3-3. 비상 안전장치"),

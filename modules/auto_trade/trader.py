@@ -3692,10 +3692,10 @@ class AutoTrader:
             # [추세추종] 상대강도(RS) 게이트: 소속 지수(KOSPI/KOSDAQ)보다 약한 종목의 신규 진입 차단.
             #   같은 +15%라도 지수가 +20%인 장에서는 열등주 — 지수 대비 초과수익이 없는 종목은
             #   '확실한 추세'가 아니라고 보고 게이트에서 제외한다 (약추세 진입 = 큰 손실의 원천).
-            #   룩백은 스코어링 '가격 모멘텀'과 동일(MOMENTUM_LOOKBACK). 종목 이력 부족·지수
-            #   조회 실패 시에는 통과(fail-open — 데이터 장애가 매수 전면 중단으로 번지지 않게).
+            #   룩백은 RS_FILTER_LOOKBACK(>0) 우선, 0이면 스코어링 '가격 모멘텀'과 동일(MOMENTUM_LOOKBACK).
+            #   종목 이력 부족·지수 조회 실패 시에는 통과(fail-open — 데이터 장애가 매수 전면 중단으로 번지지 않게).
             if getattr(config, 'USE_RS_FILTER', True) and not is_overseas_stock:
-                mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+                mom_lb = getattr(config, 'RS_FILTER_LOOKBACK', 0) or config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
                 if len(df) > mom_lb:
                     try:
                         past_close = float(df['close'].iloc[-(mom_lb + 1)])
@@ -3703,7 +3703,7 @@ class AutoTrader:
                         past_close = 0.0
                     if past_close > 0:
                         stock_mom = (current_price / past_close - 1) * 100
-                        idx_mom = analysis.get_index_momentum(self._get_stock_market_type(code))
+                        idx_mom = analysis.get_index_momentum(self._get_stock_market_type(code), lookback=mom_lb)
                         if idx_mom is not None and stock_mom <= idx_mom:
                             self.set_stock_state(code, None)
                             return {'type': 'rs_skip', 'name': name,
