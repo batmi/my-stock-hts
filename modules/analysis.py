@@ -1220,9 +1220,16 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
             if is_super: return "강매수", "[magenta]", "매수 조건 충족 (슈퍼 모멘텀 적용)"
             else: return "매수", "[red]", "매수 조건 충족 (얼리 스테이지 반등 포함)"
 
-    # [상승] 주의(약세+위험) 신호가 전혀 없고 점수가 양호 → 추세 정렬이 완성된 강한 상태
+    # [상승/대기] 주의(약세+위험) 신호가 전혀 없고 점수가 양호 → 추세 정렬이 완성된 강한 상태.
+    #   두 하위 케이스를 구분하되 색상·매수 로직상 취급은 '상승'과 동급(sibling)으로 둔다
+    #   (아래 return 지점에서 이 함수를 소비하는 멤버십 목록들이 '상승'과 함께 '대기'도 포함해야 함):
+    #   - 대기: 점수는 매수 기준(buy_score) 충족이나 단기 RSI 과열(actual_buy_rsi_max 이상,
+    #           단 과열 주의선 RSI_UPPER+10 미만)로 진입만 보류 → 눌림목 매수 대기(매수 직전).
+    #   - 상승: 점수가 rise~buy 사이(아직 폭발적 강도 미달) → 점수 축적 대기.
     if not is_caution and score >= rise_score:
-        return "상승", "[orange3]", "상승 추세 (점수 양호)"
+        if score >= buy_score:
+            return "대기", "[orange3]", f"매수 직전 (점수 충족, RSI 과열 눌림 대기 · RSI {rsi:.0f}≥{actual_buy_rsi_max:.0f})"
+        return "상승", "[orange3]", "상승 추세 (점수 양호, 점수 축적 대기)"
 
     # [관심(태동)] 추세 정렬은 미완성('상승' 미달)이나, 위험형 신호가 없고
     #   추세 전환 초기 신호가 INTEREST_SIGNAL_MIN개 이상 포착된 종목.
@@ -2869,13 +2876,13 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         # [수정] 체결강도 조회 최적화: 필터 조건에 맞는 종목만 조회
         vol_strength = None
         
-        # 조회 대상 상태 정의 (기본: 매수, 상승)
-        target_vol_states = ["매수", "강매수", "역매수", "상승"]
-        
+        # 조회 대상 상태 정의 (기본: 매수, 상승/대기)
+        target_vol_states = ["매수", "강매수", "역매수", "상승", "대기"]
+
         if params:
             filter_mode = params.get("OUTPUT_FILTER", "ALL")
             if filter_mode == "BUY": target_vol_states = ["매수", "강매수"]
-            elif filter_mode == "RISE": target_vol_states = ["상승"]
+            elif filter_mode == "RISE": target_vol_states = ["상승", "대기"]
         
         # 현재 상태가 조회 대상에 포함될 때만 체결강도 API 호출
         use_vol = True
@@ -2890,8 +2897,8 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
                     if vol_strength is not None: break
                 except Exception: time.sleep(0.1)
 
-        # [수정] 매수(강매수, 역추세포함) 또는 상승 상태일 경우 체결강도 기준 엄격히 체크 (필터링)
-        if state in ["매수", "강매수", "역매수", "상승"]:
+        # [수정] 매수(강매수, 역추세포함) 또는 상승/대기 상태일 경우 체결강도 기준 엄격히 체크 (필터링)
+        if state in ["매수", "강매수", "역매수", "상승", "대기"]:
             try:
                 if not use_vol:
                     min_vol = 0.0
@@ -2919,8 +2926,8 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             filter_mode = params.get("OUTPUT_FILTER", "BUY")
             target_states = []
             if filter_mode == "BUY": target_states = ["매수", "강매수"]
-            elif filter_mode == "RISE": target_states = ["상승", "관심"]
-            elif filter_mode == "ALL": target_states = ["매수", "강매수", "상승", "관심"]
+            elif filter_mode == "RISE": target_states = ["상승", "대기", "관심"]
+            elif filter_mode == "ALL": target_states = ["매수", "강매수", "상승", "대기", "관심"]
             if state in target_states:
                 is_target = True
         else:
@@ -3613,7 +3620,7 @@ def save_all_market_analysis():
                                 cell = ws.cell(row=row, column=col_state)
                                 val = cell.value
                                 if val in ["매수", "강매수"]: cell.font = Font(color="FF0000", bold=True)
-                                elif val == "상승": cell.font = Font(color="FF8C00", bold=True)
+                                elif val in ["상승", "대기"]: cell.font = Font(color="FF8C00", bold=True)
                                 elif val == "주의": cell.font = Font(color="DAA520", bold=True)
                                 elif val == "매도": cell.font = Font(color="0000FF", bold=True)
                         except ValueError: pass

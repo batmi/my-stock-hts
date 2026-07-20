@@ -36,24 +36,51 @@ def test_classify_stock_state_super_momentum_buy(mock_calc, mock_thresholds):
     assert "슈퍼 모멘텀 적용" in reason
 
     # 케이스 2: 점수 9.0, 고점 95% -> 슈퍼 모멘텀 발동. RSI 78.0 탈락 (75 초과)
+    # 점수는 매수 기준(7.5) 충족이나 RSI 과열로 진입 보류 → '대기'(눌림목 매수 대기)
     state, color, reason = analysis.classify_stock_state(**base_args, rsi=78.0, w52_pos=95.0)
-    assert state == "상승" # 매수 탈락 후 상승으로 강등
+    assert state == "대기" # 매수 탈락(RSI 과열) 후 '대기'로 분류
+    assert "RSI 과열 눌림 대기" in reason
 
     # 케이스 3: 일반 매수. 점수 9.0, 고점 95%. RSI 60.0 통과
     state, color, reason = analysis.classify_stock_state(**base_args, rsi=60.0, w52_pos=95.0)
     assert state == "강매수"
     assert "슈퍼 모멘텀 적용" in reason
 
-    # 케이스 4: 점수 미달로 발동 불가. 점수 8.0, 고점 95%. RSI 72.0 탈락 (기본 65 초과)
+    # 케이스 4: 슈퍼 발동 불가(점수 8.0<8.5). 점수 8.0은 매수 기준(7.5) 충족이나 RSI 72>기본 65 → '대기'
     mock_calc.return_value = (8.0, [])
     state, color, reason = analysis.classify_stock_state(**base_args, rsi=72.0, w52_pos=95.0)
-    assert state == "상승"
+    assert state == "대기"
     assert "슈퍼 모멘텀 적용" not in reason
 
-    # 케이스 5: 고점 미달로 발동 불가. 점수 9.0, 고점 80%. RSI 72.0 탈락 (기본 65 초과)
+    # 케이스 5: 슈퍼 발동 불가(고점 80%<90%). 점수 9.0은 매수 기준 충족이나 RSI 72>기본 65 → '대기'
     mock_calc.return_value = (9.0, [])
     state, color, reason = analysis.classify_stock_state(**base_args, rsi=72.0, w52_pos=80.0)
+    assert state == "대기"
+
+
+@patch('modules.analysis.calculate_score')
+def test_classify_wait_vs_rise_distinction(mock_calc, mock_thresholds):
+    """[대기/상승 구분] score≥buy_score+RSI과열=대기, rise≤score<buy=상승 (색상은 둘 다 orange3)"""
+    base_args = {
+        "price": 10000, "ema20": 9000, "ema60": 8000, "ema120": 7000, "sar": 8000,
+        "prev_rsi": 55.0, "adx": 30, "cci": 50, "obv_trend": True, "thresholds": mock_thresholds
+    }
+    # 시나리오 2 (대기): 점수 7.5≥BUY_SCORE(7.5), RSI 68≥BUY_RSI_MAX(65)이나 과열주의선(80) 미만
+    mock_calc.return_value = (7.5, [])
+    state, color, reason = analysis.classify_stock_state(**base_args, rsi=68.0, w52_pos=50.0)
+    assert state == "대기"
+    assert color == "[orange3]"
+
+    # 시나리오 1 (상승): 점수 6.5 (RISE_SCORE 6.0 ~ BUY_SCORE 7.5 사이), RSI 60 정상
+    mock_calc.return_value = (6.5, [])
+    state, color, reason = analysis.classify_stock_state(**base_args, rsi=60.0, w52_pos=50.0)
     assert state == "상승"
+    assert color == "[orange3]"  # 대기와 동일 색상 (동급 표현)
+
+    # 경계: 점수 6.5인데 RSI 68(과열)이어도 점수 미달이라 '상승' (대기는 점수≥buy_score 전용)
+    state, color, reason = analysis.classify_stock_state(**base_args, rsi=68.0, w52_pos=50.0)
+    assert state == "상승"
+
 
 @patch('modules.auto_trade.analysis.calculate_score')
 @patch('modules.auto_trade.analysis.classify_stock_state')

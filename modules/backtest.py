@@ -552,7 +552,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 # [동기화] 시간청산 유예: 실매매와 동일하게 '매수/상승 상태 유지 + 상방 모멘텀(최근 5일 고점 >= 10일 고점)'
                 #  이중 확인을 모두 통과해야 유예 (기존에는 상태만 확인해 실매매보다 관대했음)
                 time_stop_triggered = True
-                if state in ["매수", "강매수", "역매수", "상승"]:
+                if state in ["매수", "강매수", "역매수", "상승", "대기"]:
                     if row.get('roll_high_5', 0) >= row.get('roll_high_10', 0):
                         time_stop_triggered = False # 상방 모멘텀 유지 → 유예
                 if time_stop_triggered:
@@ -2282,7 +2282,7 @@ def run_backtest():
                 state = m['state']
                 state_color = "white"
                 if state in ["매수", "강매수"]: state_color = "red"
-                elif state == "상승": state_color = "orange3"
+                elif state in ["상승", "대기"]: state_color = "orange3"
                 elif state == "관심": state_color = "green"
                 elif state == "관망": state_color = "white"
                 elif state == "주의": state_color = "yellow"

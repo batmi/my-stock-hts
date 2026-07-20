@@ -1937,7 +1937,7 @@ class TelegramCommander:
             else:
                 sell_result = "🟢 보유 (추세유지)"
 
-            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "대기": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
             state_emoji = state_emoji_map.get(state, "")
 
             msg = f"🔍 [종목 진단{rule_tag}] {name_display}({code})\n"
@@ -2050,7 +2050,7 @@ class TelegramCommander:
                     if is_running:
                         state_str = state_cache.get(code)
                         if state_str:
-                            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+                            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "대기": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
                             emoji = state_emoji_map.get(state_str, "❓")
                             state_display = f" {emoji} {state_str}"
                     

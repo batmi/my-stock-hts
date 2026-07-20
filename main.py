@@ -480,7 +480,8 @@ def show_help():
     rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
     table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
-    table.add_row("", f"{rise_score} ~ {buy_score}점 미만 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
+    table.add_row("", f"{buy_score}점 이상 & RSI≥{buy_rsi} (과열)", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
+    table.add_row("", f"{rise_score} ~ {buy_score}점 미만 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기/소량)")
     table.add_row("", "정렬 미완성 + 추세전환 초기신호 ≥3개 (위험신호 없음)", "[green]관심[/]", "태동 단계/수동 스윙 모니터링 (120일선 아래도 포착)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     table.add_row("", "추세 이탈 / 단기 하락", "[yellow]주의[/]", "신규매수 자제/비중축소 고려")
@@ -726,7 +727,8 @@ def show_help():
     score_table.add_section()
     score_table.add_row("점수대별 의미", f"{_super}점 이상 & 52주 고점 90%↑", "[red]강매수[/]", "슈퍼 모멘텀 — 주도주 랠리 추종 (매수 RSI 상향 허용)")
     score_table.add_row("", f"{_buy}점 이상", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
-    score_table.add_row("", f"{_rise} ~ {_buy}점", "[orange3]상승[/]", "상승 초입/지속 (대기 또는 소량)")
+    score_table.add_row("", f"{_buy}점 이상 & RSI 과열", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
+    score_table.add_row("", f"{_rise} ~ {_buy}점", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기 또는 소량)")
     score_table.add_row("", f"{_sell}점 미만 & 60일선 이탈", "[blue]매도[/]", "추세이탈 청산 (두 조건 동시 충족 시)")
     score_table.add_row("", "그 외 구간", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
@@ -816,7 +818,8 @@ def show_help():
     super_sell_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
     score_table.add_row(f"매수 - 슈퍼 모멘텀 ({super_status})", f"종합 점수 ≥ {super_score}점 & 52주 고점 {super_w52}% 이상 근접", "[magenta]강매수[/]", f"주도주 랠리 추종. 매수 RSI {super_buy_rsi}, 과열 매도 RSI {super_sell_rsi} 까지 허용")
 
-    score_table.add_row("관망 - 상승", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (대기/소량)")
+    score_table.add_row("대기 - 눌림", f"종합 점수 ≥ {buy_score}점 & RSI ≥ {buy_rsi_max} (과열)", "[orange3]대기[/]", "매수 직전 — RSI 식으면 매수 (눌림목 매수 대기)")
+    score_table.add_row("관망 - 상승", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기/소량)")
     score_table.add_row("관망 - 중립", f"종합 점수 < {rise_score}점", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
     
     # [추가] 매도 규칙 섹션

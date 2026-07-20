@@ -298,7 +298,7 @@ class DefaultStrategy:
             time_stop_triggered = True
             # [수정] 매도 최적화 4번: 시간 청산 유예 조건을 가격 상방 모멘텀 유무로 엄격하게 변경
             if df is not None and not df.empty and len(df) >= 10:
-                if state in ["매수", "강매수", "역매수", "상승"]:
+                if state in ["매수", "강매수", "역매수", "상승", "대기"]:
                     recent_5d_high = df['high'].tail(5).max()
                     recent_10d_high = df['high'].tail(10).max()
                     # 최근 5일의 고점이 최근 10일 고점과 같거나 크면 상방 모멘텀이 살아있는 것으로 간주
