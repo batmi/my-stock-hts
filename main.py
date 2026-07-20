@@ -303,7 +303,7 @@ def show_help():
 
     table.add_row("시장 지수", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
     table.add_row("(글로벌/원자재/코인)", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
-    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[magenta]자홍색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[white]흰색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
     table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
     table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()

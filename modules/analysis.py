@@ -967,7 +967,7 @@ REGIME_SCORE_ADJ_KEYS = {
 REGIME_DISPLAY = {
     "Bull": ("강세장", "red"),
     "PendUp": ("상승 미확정", "orange3"),
-    "PendDown": ("하락 미확정", "magenta"),
+    "PendDown": ("하락 미확정", "white"),
     "Bear": ("약세장", "blue"),
     "Sideways": ("판정 보류", "yellow"),
 }

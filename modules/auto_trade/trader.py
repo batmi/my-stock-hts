@@ -867,7 +867,7 @@ class AutoTrader:
             
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
-        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "🟣", "Bear": "🔵", "Sideways": "🟡"}
+        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "⚪", "Bear": "🔵", "Sideways": "🟡"}
         rp = config.MARKET_REGIME_PARAMS
         ema_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)}"
 
