@@ -19,20 +19,24 @@ def test_modify_analysis_thresholds(mock_ask):
 
 @patch('rich.prompt.Prompt.ask')
 def test_modify_analysis_thresholds_new_items(mock_ask):
-    """새로 추가된 분석 임계값 설정 변경 테스트 (비대칭성, 역추세 RSI)"""
-    # 8번 항목(비대칭성) -> 1.8 -> 12번 항목(역추세 RSI) -> 35.0 -> 종료(q)
-    mock_ask.side_effect = ["8", "1.8", "12", "35.0", "q"]
-    
+    """분석 임계값 설정 변경 테스트 (매도잔량 비율 기준)
+
+    항목 번호는 목록에서 조회한다 — 숨김 처리(ANTI_TREND/BACKTESTED/INDICATOR_STANDARD
+    _HIDDEN_KEYS)로 항목이 늘거나 줄어도 깨지지 않게 하드코딩하지 않는다.
+    (역추세 RSI(MR_RSI_MAX)는 추세추종 보호로 영구 숨김되어 편집 대상이 아니므로 제외)
+    """
+    names = [it["name"] for it in settings._entry_strategy_items()]
+    idx = names.index("BUY_ASK_BID_RATIO") + 1
+    mock_ask.side_effect = [str(idx), "1.8", "q"]
+
     orig_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.2)
-    orig_mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
-    
+
     try:
         settings.modify_analysis_thresholds()
         assert config.ANALYSIS_THRESHOLDS["BUY_ASK_BID_RATIO"] == 1.8
-        assert config.ANALYSIS_THRESHOLDS["MR_RSI_MAX"] == 35.0
+        assert "MR_RSI_MAX" not in names, "역추세 설정은 편집 목록에 노출되면 안 된다"
     finally:
         config.ANALYSIS_THRESHOLDS["BUY_ASK_BID_RATIO"] = orig_ratio
-        config.ANALYSIS_THRESHOLDS["MR_RSI_MAX"] = orig_mr_rsi
 
 @patch('rich.prompt.Prompt.ask')
 def test_modify_risk_portfolio_settings_new_items(mock_ask):

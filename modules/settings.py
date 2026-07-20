@@ -183,17 +183,13 @@ def view_system_config(group=None):
     # =========================================================
     if group in (None, 1):
         header(1)
-        subheader("1-1. 기본 진입 조건", first=True)
+        subheader("1-1. 진입 조건", first=True)
         row("매수 기준 점수", "진입 임계값 (종합 점수)", "ANALYSIS_THRESHOLDS['BUY_SCORE']", f"{thresholds.get('BUY_SCORE')}", key="BUY_SCORE")
-        row("상승 추세 점수", "관망/상승 판단 기준", "ANALYSIS_THRESHOLDS['RISE_SCORE']", f"{thresholds.get('RISE_SCORE')}", key="RISE_SCORE")
-        row("관심 신호 최소 개수", "추세전환 초기신호 N개 이상 시 '관심'(태동) 분류 (0=미사용)", "ANALYSIS_THRESHOLDS['INTEREST_SIGNAL_MIN']", f"{thresholds.get('INTEREST_SIGNAL_MIN', 3)}", key="INTEREST_SIGNAL_MIN")
-        row("관심 60일선 근접 비율", "60일선의 이 비율 이상이면 '돌파 시도' 신호로 인정", "ANALYSIS_THRESHOLDS['INTEREST_MA60_NEAR']", f"{thresholds.get('INTEREST_MA60_NEAR', 0.97)}", key="INTEREST_MA60_NEAR")
+        row("상승 추세 점수", "'상승' 상태 분류 기준", "ANALYSIS_THRESHOLDS['RISE_SCORE']", f"{thresholds.get('RISE_SCORE')}", key="RISE_SCORE")
         row("매수 허용 RSI 상한", "과열 방지 (이 값보다 낮아야 매수)", "ANALYSIS_THRESHOLDS['BUY_RSI_MAX']", f"{thresholds.get('BUY_RSI_MAX')}", key="BUY_RSI_MAX")
         row("매수 체결강도 기준", "수급 확인 (이 값 이상이어야 매수)", "ANALYSIS_THRESHOLDS['BUY_VOL_STRENGTH']", f"{thresholds.get('BUY_VOL_STRENGTH')}%", key="BUY_VOL_STRENGTH")
         row("비대칭성 자동 계산", "체결강도 100% 기준으로 비례하여 자동 조정", "ANALYSIS_THRESHOLDS['AUTO_ADJUST_ASK_BID_RATIO']", f"{thresholds.get('AUTO_ADJUST_ASK_BID_RATIO', True)}", key="AUTO_ADJUST_ASK_BID_RATIO")
         row("매도잔량 비율 기준", "가짜 체결강도 방어 (체결강도 100% 기준 비율)", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', 1.0)}배", key="BUY_ASK_BID_RATIO")
-        row("과열 이격도 상한", "20일선 기준 이 비율 이상 시 단기과열", "ANALYSIS_THRESHOLDS['DISPARITY_UPPER']", f"{thresholds.get('DISPARITY_UPPER', 110.0)}%", key="DISPARITY_UPPER")
-        row("침체 이격도 하한", "20일선 기준 이 비율 이하 시 과매도", "ANALYSIS_THRESHOLDS['DISPARITY_LOWER']", f"{thresholds.get('DISPARITY_LOWER', 90.0)}%", key="DISPARITY_LOWER")
 
         subheader("1-2. 서브전략 (슈퍼 모멘텀/피라미딩)")
         # [추세추종 보호] 역매수(역추세) 관련 설정은 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
@@ -202,19 +198,18 @@ def view_system_config(group=None):
             row("슈퍼 매수 발동 점수", "기준 점수 이상 & 신고가 90% 이상 시 발동", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_SCORE']", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.0)}", key="SUPER_MOMENTUM_SCORE", indent=True)
             row("슈퍼 52주 위치 기준", "신고가 근접 여부 (예: 90.0% 이상)", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_W52_POS']", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%", key="SUPER_MOMENTUM_W52_POS", indent=True)
             row("완화된 매수 RSI 상한", "발동 시 적용되는 진입 최대 RSI", "ANALYSIS_THRESHOLDS['SUPER_BUY_RSI_MAX']", f"{thresholds.get('SUPER_BUY_RSI_MAX', 80.0)}", key="SUPER_BUY_RSI_MAX", indent=True)
-        row("피라미딩 (수익 증액)", "수익으로 추세 검증된 포지션만 증액 (물타기 반대)", "ANALYSIS_THRESHOLDS['PYRAMIDING_USE']", f"{thresholds.get('PYRAMIDING_USE', True)}", key="PYRAMIDING_USE")
+        row("피라미딩 (수익 증액)", "수익으로 추세 검증된 포지션만 증액", "ANALYSIS_THRESHOLDS['PYRAMIDING_USE']", f"{thresholds.get('PYRAMIDING_USE', True)}", key="PYRAMIDING_USE")
         if thresholds.get('PYRAMIDING_USE', True):
             row("증액 발동 수익률", "이 수익률 이상 & 매수신호 유지 시 증액", "ANALYSIS_THRESHOLDS['PYRAMIDING_PROFIT_TRIGGER']", f"{thresholds.get('PYRAMIDING_PROFIT_TRIGGER', 10.0)}%", key="PYRAMIDING_PROFIT_TRIGGER", indent=True)
             row("증액 비율", "보유 수량 대비 증액 수량 비율", "ANALYSIS_THRESHOLDS['PYRAMIDING_RATIO']", f"{thresholds.get('PYRAMIDING_RATIO', 0.5)}", key="PYRAMIDING_RATIO", indent=True)
             row("최대 증액 횟수", "포지션당 피라미딩 허용 횟수", "ANALYSIS_THRESHOLDS['PYRAMIDING_MAX_COUNT']", f"{thresholds.get('PYRAMIDING_MAX_COUNT', 1)}회", key="PYRAMIDING_MAX_COUNT", indent=True)
 
-        subheader("1-3. 매도/청산 — 트레일링 스탑")
+        subheader("1-3. 청산 — 손절·트레일링·시간")
         # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
         row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
         row("TS 하락 감지율", "최고가 대비 최소 하락률 (ATR 동적 콜백의 하한)", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%", key="TRAILING_STOP_CALLBACK_RATE")
         row("TS ATR 배수", "샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대", "SELL_STRATEGY['TRAILING_ATR_MULTIPLIER']", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}", key="TRAILING_ATR_MULTIPLIER")
 
-        subheader("1-4. 매도/청산 — 손절")
         row("손절 수익률", "손실 제한 (Stop Loss)", "SELL_STRATEGY['STOP_LOSS_RATE']", f"{sell.get('STOP_LOSS_RATE')}%", key="STOP_LOSS_RATE")
         row("ATR 손절 사용", "변동성 기반 동적 손절", "SELL_STRATEGY['USE_ATR_STOP']", f"{sell.get('USE_ATR_STOP', False)}", key="USE_ATR_STOP")
         if sell.get('USE_ATR_STOP', False):
@@ -226,21 +221,28 @@ def view_system_config(group=None):
         _bep_trigger = ("손절폭(1R) 도달 시" if sell.get('USE_ATR_STOP', True)
                         else f"+{sell.get('BREAK_EVEN_PROFIT_RATE', 5.0)}% 도달 시")
         table.add_row(
-            f"본전 청산\n[dim]{_bep_trigger} 손절선을 {sell.get('BREAK_EVEN_STOP_RATE', 0.5):+g}%로 상향 "
-            f"(손실 꼬리만 축소 — 대박 종목 조기청산 없음)[/dim]",
+            f"본전 청산\n[dim]{_bep_trigger} 손절선을 {sell.get('BREAK_EVEN_STOP_RATE', 0.5):+g}%로 상향[/dim]",
             "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "사용")
 
-        subheader("1-5. 매도/청산 — 기타")
         row("시간 청산 사용", "장기 횡보 종목 강제 매도", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}", key="TIME_STOP_USE")
         if sell.get('TIME_STOP_USE', True):
             table.add_row(
                 f"  [dim]└ {sell.get('TIME_STOP_DAYS', 20)}일 경과 & 수익 "
                 f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 0.0)}% 미만일 때만 청산\n"
-                f"    (상방 모멘텀 살아있으면 유예 — 수익 종목은 보유)[/dim]",
+                f"    (상방 모멘텀 살아있으면 유예)[/dim]",
                 "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "")
         table.add_row(
             f"매도(추세이탈) 점수\n[dim]점수가 이 값 미만 [bold]이고[/bold] 주가가 60일선 이탈 시 매도 (동시 충족)[/dim]",
             "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('SELL_SCORE')}")
+
+        # [분리] 아래 항목들은 화면 분류·스크리닝 표시에만 쓰이고 매수/매도 판정에는 관여하지 않는다.
+        #  매매 설정과 섞여 있어 오해를 부르던 것을 별도 섹션으로 뺐다.
+        #  ('관심'(태동) 상태는 수동 모니터링용 표시이고, 이격도는 개별 종목 분석 화면의 평가 문구 전용)
+        subheader("1-4. 화면 표시 전용 (매매 판정 무관)")
+        row("관심 신호 최소 개수", "추세전환 초기신호 N개 이상 시 '관심'(태동) 표시 (0=미사용)", "ANALYSIS_THRESHOLDS['INTEREST_SIGNAL_MIN']", f"{thresholds.get('INTEREST_SIGNAL_MIN', 3)}", key="INTEREST_SIGNAL_MIN")
+        row("관심 60일선 근접 비율", "60일선의 이 비율 이상이면 '돌파 시도' 신호로 인정", "ANALYSIS_THRESHOLDS['INTEREST_MA60_NEAR']", f"{thresholds.get('INTEREST_MA60_NEAR', 0.97)}", key="INTEREST_MA60_NEAR")
+        row("과열 이격도 상한", "20일선 기준 이 비율 이상 시 '단기과열' 표시", "ANALYSIS_THRESHOLDS['DISPARITY_UPPER']", f"{thresholds.get('DISPARITY_UPPER', 110.0)}%", key="DISPARITY_UPPER")
+        row("침체 이격도 하한", "20일선 기준 이 비율 이하 시 '과매도' 표시", "ANALYSIS_THRESHOLDS['DISPARITY_LOWER']", f"{thresholds.get('DISPARITY_LOWER', 90.0)}%", key="DISPARITY_LOWER")
 
     # =========================================================
     # 2. 스코어링 및 시장 국면 설정
@@ -324,28 +326,26 @@ def view_system_config(group=None):
     if group in (None, 4):
         ind = config.INDICATOR_PARAMS
         header(4)
-        subheader("4-1. 데이터 조회", first=True)
+        subheader("4-1. 데이터·추세", first=True)
         row("데이터 조회 기간", "일봉 데이터 조회 범위", "INDICATOR_PARAMS['CHART_LOOKBACK_DAYS']", f"{ind.get('CHART_LOOKBACK_DAYS')}일")
 
-        subheader("4-2. 추세")
         row("SAR (Start/Step/Max)", "파라볼릭 SAR 가속변수", "INDICATOR_PARAMS['SAR_AF_START', 'SAR_AF_STEP', 'SAR_AF_MAX']", f"{ind.get('SAR_AF_START')}/{ind.get('SAR_AF_STEP')}/{ind.get('SAR_AF_MAX')}")
         row("MACD (Fast/Slow/Sig)", "이동평균수렴확산", "INDICATOR_PARAMS['MACD_FAST', 'MACD_SLOW', 'MACD_SIGNAL']", f"{ind.get('MACD_FAST')}/{ind.get('MACD_SLOW')}/{ind.get('MACD_SIGNAL')}")
         row("단기 이평선(EMA) 기간", "단기 급등 추세 판단용", "INDICATOR_PARAMS['EMA_SHORT']", f"{ind.get('EMA_SHORT', 5)}")
         row("상승/하락 추세선 기간", "스윙 피봇 연결을 위한 룩백 기간", "INDICATOR_PARAMS['TREND_PERIOD']", f"{ind.get('TREND_PERIOD', 60)}일")
 
-        subheader("4-3. 모멘텀")
+        subheader("4-2. 모멘텀")
         row("RSI (Period/Signal)", "상대강도지수 기간", "INDICATOR_PARAMS['RSI_PERIOD', 'RSI_SIGNAL']", f"{ind.get('RSI_PERIOD')}/{ind.get('RSI_SIGNAL')}")
         row("RSI (Up/Mid/Low)", "과매수/중심/과매도 기준", "INDICATOR_PARAMS['RSI_UPPER', 'RSI_MID', 'RSI_LOWER']", f"{ind.get('RSI_UPPER')}/{ind.get('RSI_MID')}/{ind.get('RSI_LOWER')}")
         row("CCI (Window/Up/Low)", "상품채널지수", "INDICATOR_PARAMS['CCI_WINDOW', 'CCI_UPPER', 'CCI_LOWER']", f"{ind.get('CCI_WINDOW')}/{ind.get('CCI_UPPER')}/{ind.get('CCI_LOWER')}")
 
-        subheader("4-4. 강도/수급/변동성")
+        subheader("4-3. 강도·수급·가격구조")
         row("ADX 기간", "추세 강도 지표", "INDICATOR_PARAMS['ADX_PERIOD']", f"{ind.get('ADX_PERIOD')}")
         row("OBV EMA 기간", "거래량 추세 지수이동평균", "INDICATOR_PARAMS['OBV_MA_PERIOD']", f"{ind.get('OBV_MA_PERIOD')}")
         row("거래량 이동평균 기간", "수급 추세 및 폭발 판단용", "INDICATOR_PARAMS['VOLUME_MA_PERIOD']", f"{ind.get('VOLUME_MA_PERIOD', 20)}")
         row("거래량 폭발 배수", "이동평균 대비 폭발 기준", "INDICATOR_PARAMS['VOLUME_SPIKE_RATIO']", f"{ind.get('VOLUME_SPIKE_RATIO', 2.0)}")
         row("ATR 기간", "평균 진폭 (변동성)", "INDICATOR_PARAMS['ATR_PERIOD']", f"{ind.get('ATR_PERIOD')}")
 
-        subheader("4-5. 가격 구조")
         row("박스권 탐지 기간", "매물대 기반 박스권 탐지 룩백 봉 수 (일봉=일, 분봉=분)", "INDICATOR_PARAMS['BOX_PERIOD']", f"{ind.get('BOX_PERIOD', 30)}봉")
         row("박스권 매물대 %", "핵심 매물대 집중도", "INDICATOR_PARAMS['BOX_VALUE_AREA_PCT']", f"{ind.get('BOX_VALUE_AREA_PCT', 50.0)}%")
 
@@ -626,25 +626,25 @@ ANTI_TREND_HIDDEN_KEYS = {
 def _entry_strategy_items():
     """매수/진입 조건 + 서브전략 항목 (섹션 1-1, 1-2)"""
     items = [
-        {"desc": "매수 기준 점수", "help": "진입 임계값 (종합 점수)", "name": "BUY_SCORE", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "매수 기준 점수", "help": "진입 임계값 (종합 점수)", "name": "BUY_SCORE", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS["BUY_SCORE"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_SCORE": v})},
-        {"desc": "상승 추세 점수", "help": "관망/상승 판단 기준", "name": "RISE_SCORE", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "상승 추세 점수", "help": "'상승' 상태 분류 기준", "name": "RISE_SCORE", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS["RISE_SCORE"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"RISE_SCORE": v})},
-        {"desc": "관심 신호 최소 개수", "help": "추세전환 초기신호 N개 이상 시 '관심'(태동) 분류 (0=미사용)", "name": "INTEREST_SIGNAL_MIN", "type": "int", "section": "1-1. 기본 진입 조건",
+        {"desc": "관심 신호 최소 개수", "help": "추세전환 초기신호 N개 이상 시 '관심'(태동) 표시 (0=미사용)", "name": "INTEREST_SIGNAL_MIN", "type": "int", "section": "1-4. 화면 표시 전용",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("INTEREST_SIGNAL_MIN", 3), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"INTEREST_SIGNAL_MIN": v})},
-        {"desc": "관심 60일선 근접 비율", "help": "60일선의 이 비율 이상이면 '돌파 시도' 신호로 인정 (예: 0.97)", "name": "INTEREST_MA60_NEAR", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "관심 60일선 근접 비율", "help": "60일선의 이 비율 이상이면 '돌파 시도' 신호로 인정 (예: 0.97)", "name": "INTEREST_MA60_NEAR", "type": "float", "section": "1-4. 화면 표시 전용",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"INTEREST_MA60_NEAR": v})},
-        {"desc": "매수 허용 RSI 상한", "help": "과열 방지 (이 값보다 낮아야 매수)", "name": "BUY_RSI_MAX", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "매수 허용 RSI 상한", "help": "과열 방지 (이 값보다 낮아야 매수)", "name": "BUY_RSI_MAX", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_RSI_MAX": v})},
-        {"desc": "매수 체결강도 기준", "help": "수급 확인 (이 값 이상이어야 매수)", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "매수 체결강도 기준", "help": "수급 확인 (이 값 이상이어야 매수)", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_VOL_STRENGTH": v})},
-        {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준으로 비례하여 매도잔량비를 자동 조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"], "section": "1-1. 기본 진입 조건",
+        {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준으로 비례하여 매도잔량비를 자동 조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"], "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('AUTO_ADJUST_ASK_BID_RATIO', True)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"AUTO_ADJUST_ASK_BID_RATIO": v})},
-        {"desc": "매도잔량 비율 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 비율, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "매도잔량 비율 기준", "help": "가짜 체결강도 방어 (체결강도 100% 기준 비율, 0: 미사용)", "name": "BUY_ASK_BID_RATIO", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0)), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_ASK_BID_RATIO": v})},
-        {"desc": "과열 이격도 상한", "help": "20일선 대비 단기 과열 기준 (예: 110.0)", "name": "DISPARITY_UPPER", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "과열 이격도 상한", "help": "20일선 대비 '단기 과열' 표시 기준 (예: 110.0)", "name": "DISPARITY_UPPER", "type": "float", "section": "1-4. 화면 표시 전용",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_UPPER": v})},
-        {"desc": "침체 이격도 하한", "help": "20일선 대비 과매도 기준 (예: 90.0)", "name": "DISPARITY_LOWER", "type": "float", "section": "1-1. 기본 진입 조건",
+        {"desc": "침체 이격도 하한", "help": "20일선 대비 '과매도' 표시 기준 (예: 90.0)", "name": "DISPARITY_LOWER", "type": "float", "section": "1-4. 화면 표시 전용",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("DISPARITY_LOWER", 90.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"DISPARITY_LOWER": v})},
         {"desc": "역추세(낙폭과대) 사용", "help": "하락장/급락 시 반등 매수", "name": "USE_MEAN_REVERSION", "type": "bool", "choices": ["y", "n"], "section": "1-2. 서브전략 — 역추세",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("USE_MEAN_REVERSION", False), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"USE_MEAN_REVERSION": v})},
@@ -666,7 +666,7 @@ def _entry_strategy_items():
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"SUPER_BUY_RSI_MAX": v})},
         {"desc": "슈퍼 모멘텀 과열 매도 RSI", "help": "추세 유지 시 매도 지연 RSI (예: 85.0)", "name": "SUPER_TAKE_PROFIT_RSI", "type": "float", "section": "1-2. 서브전략 — 슈퍼 모멘텀",
          "get": lambda: config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0), "set": lambda v: config.SELL_STRATEGY.update({"SUPER_TAKE_PROFIT_RSI": v})},
-        {"desc": "피라미딩(수익 증액) 사용", "help": "수익으로 추세 검증된 포지션만 증액 (물타기 반대)", "name": "PYRAMIDING_USE", "type": "bool", "choices": ["y", "n"], "section": "1-2. 서브전략 — 피라미딩",
+        {"desc": "피라미딩(수익 증액) 사용", "help": "수익으로 추세 검증된 포지션만 증액", "name": "PYRAMIDING_USE", "type": "bool", "choices": ["y", "n"], "section": "1-2. 서브전략 — 피라미딩",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_USE": v})},
         {"desc": "증액 발동 수익률(%)", "help": "이 수익률 이상 & 매수신호 유지 시 증액 (예: 10.0)", "name": "PYRAMIDING_PROFIT_TRIGGER", "type": "float", "section": "1-2. 서브전략 — 피라미딩",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_PROFIT_TRIGGER": v})},
@@ -694,37 +694,37 @@ def _sell_strategy_items():
     ANTI_TREND_HIDDEN_KEYS 필터로 목록에서 제외된다 (내부 로직·설정 키는 유지).
     """
     items = [
-        {"desc": "익절 수익률(%)", "help": "목표 수익 달성 시 매도 (0: 미사용)", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
+        {"desc": "익절 수익률(%)", "help": "목표 수익 달성 시 매도 (0: 미사용)", "name": "TAKE_PROFIT_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RATE": v})},
-        {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 매도/청산 — 트레일링 스탑",
+        {"desc": "반익절 사용", "help": "익절 수익률의 절반 도달 시 50% 선매도", "name": "HALF_TAKE_PROFIT_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
-        {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
+        {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
-        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
+        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
-        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "1-3. 매도/청산 — 트레일링 스탑",
+        {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
-        {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
+        {"desc": "손절 수익률(%)", "help": "손실 제한 (Stop Loss) (0: 미사용)", "name": "STOP_LOSS_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY["STOP_LOSS_RATE"], "set": lambda v: config.SELL_STRATEGY.update({"STOP_LOSS_RATE": v})},
-        {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"], "section": "1-4. 매도/청산 — 손절",
+        {"desc": "ATR 손절 사용", "help": "변동성 기반 동적 손절", "name": "USE_ATR_STOP", "type": "bool", "choices": ["y", "n"], "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("USE_ATR_STOP", True), "set": lambda v: config.SELL_STRATEGY.update({"USE_ATR_STOP": v})},
-        {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float", "section": "1-4. 매도/청산 — 손절",
+        {"desc": "ATR 손절 배수", "help": "ATR * 배수 만큼 손절폭 설정 (0: 미사용)", "name": "ATR_STOP_MULTIPLIER", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0), "set": lambda v: config.SELL_STRATEGY.update({"ATR_STOP_MULTIPLIER": v})},
-        {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
+        {"desc": "ATR 최대 손절률(%)", "help": "데이터 오류 및 과열 변동성으로 인한 과도한 리스크 제한 (0: 미사용)", "name": "MAX_ATR_STOP_LOSS_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0), "set": lambda v: config.SELL_STRATEGY.update({"MAX_ATR_STOP_LOSS_RATE": v})},
-        {"desc": "본전 청산 발동 수익률(%)", "help": "최고 수익률이 이 값에 도달하면 손절선 상향 (0: 미사용, ATR 사용 시 동적 연동)", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
+        {"desc": "본전 청산 발동 수익률(%)", "help": "최고 수익률이 이 값에 도달하면 손절선 상향 (0: 미사용, ATR 사용 시 동적 연동)", "name": "BREAK_EVEN_PROFIT_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_PROFIT_RATE": v})},
-        {"desc": "본전 청산 손절선(%)", "help": "본전 청산 발동 시 변경될 손절률 (예: 0.5)", "name": "BREAK_EVEN_STOP_RATE", "type": "float", "section": "1-4. 매도/청산 — 손절",
+        {"desc": "본전 청산 손절선(%)", "help": "본전 청산 발동 시 변경될 손절률 (예: 0.5)", "name": "BREAK_EVEN_STOP_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5), "set": lambda v: config.SELL_STRATEGY.update({"BREAK_EVEN_STOP_RATE": v})},
-        {"desc": "시간 청산 사용", "help": "장기 횡보 시 강제 매도", "name": "TIME_STOP_USE", "type": "bool", "choices": ["y", "n"], "section": "1-5. 매도/청산 — 기타",
+        {"desc": "시간 청산 사용", "help": "장기 횡보 시 강제 매도", "name": "TIME_STOP_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_USE": v})},
-        {"desc": "시간 청산 기준일", "help": "매수 후 제한 일수 (예: 10)", "name": "TIME_STOP_DAYS", "type": "int", "section": "1-5. 매도/청산 — 기타",
+        {"desc": "시간 청산 기준일", "help": "매수 후 제한 일수 (예: 10)", "name": "TIME_STOP_DAYS", "type": "int", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
-        {"desc": "시간청산 최소수익(%)", "help": "기간 내 달성해야 할 목표치", "name": "TIME_STOP_MIN_PROFIT_RATE", "type": "float", "section": "1-5. 매도/청산 — 기타",
+        {"desc": "시간청산 최소수익(%)", "help": "기간 내 달성해야 할 목표치", "name": "TIME_STOP_MIN_PROFIT_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_MIN_PROFIT_RATE": v})},
-        {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 매도", "name": "SELL_SCORE", "type": "float", "section": "1-5. 매도/청산 — 기타",
+        {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 매도", "name": "SELL_SCORE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY["SELL_SCORE"], "set": lambda v: config.SELL_STRATEGY.update({"SELL_SCORE": v})},
-        {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"], "section": "1-5. 매도/청산 — 기타",
+        {"desc": "방어적 반매도 사용", "help": "SAR 매도 + 5일선 이탈 시 50% 수익실현 및 리스크 회피", "name": "DEFENSIVE_HALF_SELL_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})},
     ]
     # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
@@ -735,60 +735,61 @@ def modify_sell_strategy():
 
 def _indicator_items():
     """기술적 지표 항목 (섹션 4-1 ~ 4-5)"""
-    return [
-        {"desc": "데이터 조회 기간(일)", "help": "일봉 데이터 조회 범위", "name": "CHART_LOOKBACK_DAYS", "type": "int", "section": "4-1. 데이터 조회",
+    items = [
+        {"desc": "데이터 조회 기간(일)", "help": "일봉 데이터 조회 범위", "name": "CHART_LOOKBACK_DAYS", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"], "set": lambda v: config.INDICATOR_PARAMS.update({"CHART_LOOKBACK_DAYS": v})},
 
-        {"desc": "SAR 가속변수 시작(Start)", "help": "파라볼릭 SAR 초기값", "name": "SAR_AF_START", "type": "float", "section": "4-2. 추세",
+        {"desc": "SAR 가속변수 시작(Start)", "help": "파라볼릭 SAR 초기값", "name": "SAR_AF_START", "type": "float", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["SAR_AF_START"], "set": lambda v: config.INDICATOR_PARAMS.update({"SAR_AF_START": v})},
-        {"desc": "SAR 가속변수 증가(Step)", "help": "파라볼릭 SAR 증가값", "name": "SAR_AF_STEP", "type": "float", "section": "4-2. 추세",
+        {"desc": "SAR 가속변수 증가(Step)", "help": "파라볼릭 SAR 증가값", "name": "SAR_AF_STEP", "type": "float", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["SAR_AF_STEP"], "set": lambda v: config.INDICATOR_PARAMS.update({"SAR_AF_STEP": v})},
-        {"desc": "SAR 가속변수 최대(Max)", "help": "파라볼릭 SAR 최대값", "name": "SAR_AF_MAX", "type": "float", "section": "4-2. 추세",
+        {"desc": "SAR 가속변수 최대(Max)", "help": "파라볼릭 SAR 최대값", "name": "SAR_AF_MAX", "type": "float", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["SAR_AF_MAX"], "set": lambda v: config.INDICATOR_PARAMS.update({"SAR_AF_MAX": v})},
-        {"desc": "MACD Fast EMA", "help": "단기 지수이동평균", "name": "MACD_FAST", "type": "int", "section": "4-2. 추세",
+        {"desc": "MACD Fast EMA", "help": "단기 지수이동평균", "name": "MACD_FAST", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["MACD_FAST"], "set": lambda v: config.INDICATOR_PARAMS.update({"MACD_FAST": v})},
-        {"desc": "MACD Slow EMA", "help": "장기 지수이동평균", "name": "MACD_SLOW", "type": "int", "section": "4-2. 추세",
+        {"desc": "MACD Slow EMA", "help": "장기 지수이동평균", "name": "MACD_SLOW", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["MACD_SLOW"], "set": lambda v: config.INDICATOR_PARAMS.update({"MACD_SLOW": v})},
-        {"desc": "MACD Signal", "help": "시그널 기간", "name": "MACD_SIGNAL", "type": "int", "section": "4-2. 추세",
+        {"desc": "MACD Signal", "help": "시그널 기간", "name": "MACD_SIGNAL", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS["MACD_SIGNAL"], "set": lambda v: config.INDICATOR_PARAMS.update({"MACD_SIGNAL": v})},
-        {"desc": "단기 EMA 기간", "help": "단기 급등 추세 판단 (기본 5)", "name": "EMA_SHORT", "type": "int", "section": "4-2. 추세",
+        {"desc": "단기 EMA 기간", "help": "단기 급등 추세 판단 (기본 5)", "name": "EMA_SHORT", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS.get("EMA_SHORT", 5), "set": lambda v: config.INDICATOR_PARAMS.update({"EMA_SHORT": v})},
-        {"desc": "상승/하락 추세선 기간", "help": "추세선 룩백 기간 (기본 60일)", "name": "TREND_PERIOD", "type": "int", "section": "4-2. 추세",
+        {"desc": "상승/하락 추세선 기간", "help": "추세선 룩백 기간 (기본 60일)", "name": "TREND_PERIOD", "type": "int", "section": "4-1. 데이터·추세",
          "get": lambda: config.INDICATOR_PARAMS.get("TREND_PERIOD", 60), "set": lambda v: config.INDICATOR_PARAMS.update({"TREND_PERIOD": v})},
 
-        {"desc": "RSI 계산 기간", "help": "상대강도지수 기간", "name": "RSI_PERIOD", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "RSI 계산 기간", "help": "상대강도지수 기간", "name": "RSI_PERIOD", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["RSI_PERIOD"], "set": lambda v: config.INDICATOR_PARAMS.update({"RSI_PERIOD": v})},
-        {"desc": "RSI 시그널 기간", "help": "RSI 이동평균 기간", "name": "RSI_SIGNAL", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "RSI 시그널 기간", "help": "RSI 이동평균 기간", "name": "RSI_SIGNAL", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["RSI_SIGNAL"], "set": lambda v: config.INDICATOR_PARAMS.update({"RSI_SIGNAL": v})},
-        {"desc": "RSI 과매수 기준", "help": "이 값 이상이면 과열", "name": "RSI_UPPER", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "RSI 과매수 기준", "help": "이 값 이상이면 과열", "name": "RSI_UPPER", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["RSI_UPPER"], "set": lambda v: config.INDICATOR_PARAMS.update({"RSI_UPPER": v})},
-        {"desc": "RSI 중심선", "help": "강세/약세 기준선", "name": "RSI_MID", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "RSI 중심선", "help": "강세/약세 기준선", "name": "RSI_MID", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["RSI_MID"], "set": lambda v: config.INDICATOR_PARAMS.update({"RSI_MID": v})},
-        {"desc": "RSI 과매도 기준", "help": "이 값 이하면 침체", "name": "RSI_LOWER", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "RSI 과매도 기준", "help": "이 값 이하면 침체", "name": "RSI_LOWER", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["RSI_LOWER"], "set": lambda v: config.INDICATOR_PARAMS.update({"RSI_LOWER": v})},
-        {"desc": "CCI 계산 기간", "help": "상품채널지수 기간", "name": "CCI_WINDOW", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "CCI 계산 기간", "help": "상품채널지수 기간", "name": "CCI_WINDOW", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["CCI_WINDOW"], "set": lambda v: config.INDICATOR_PARAMS.update({"CCI_WINDOW": v})},
-        {"desc": "CCI 과매수 기준", "help": "이 값 이상이면 과열", "name": "CCI_UPPER", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "CCI 과매수 기준", "help": "이 값 이상이면 과열", "name": "CCI_UPPER", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["CCI_UPPER"], "set": lambda v: config.INDICATOR_PARAMS.update({"CCI_UPPER": v})},
-        {"desc": "CCI 과매도 기준", "help": "이 값 이하면 침체", "name": "CCI_LOWER", "type": "int", "section": "4-3. 모멘텀",
+        {"desc": "CCI 과매도 기준", "help": "이 값 이하면 침체", "name": "CCI_LOWER", "type": "int", "section": "4-2. 모멘텀",
          "get": lambda: config.INDICATOR_PARAMS["CCI_LOWER"], "set": lambda v: config.INDICATOR_PARAMS.update({"CCI_LOWER": v})},
 
-        {"desc": "ADX 계산 기간", "help": "추세 강도 지표", "name": "ADX_PERIOD", "type": "int", "section": "4-4. 강도/수급/변동성",
+        {"desc": "ADX 계산 기간", "help": "추세 강도 지표", "name": "ADX_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS["ADX_PERIOD"], "set": lambda v: config.INDICATOR_PARAMS.update({"ADX_PERIOD": v})},
-        {"desc": "OBV EMA 기간", "help": "거래량 추세 판단 (지수이동평균)", "name": "OBV_MA_PERIOD", "type": "int", "section": "4-4. 강도/수급/변동성",
+        {"desc": "OBV EMA 기간", "help": "거래량 추세 판단 (지수이동평균)", "name": "OBV_MA_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS["OBV_MA_PERIOD"], "set": lambda v: config.INDICATOR_PARAMS.update({"OBV_MA_PERIOD": v})},
-        {"desc": "거래량 이동평균 기간", "help": "단기 수급 추세 판단 (기본 20)", "name": "VOLUME_MA_PERIOD", "type": "int", "section": "4-4. 강도/수급/변동성",
+        {"desc": "거래량 이동평균 기간", "help": "단기 수급 추세 판단 (기본 20)", "name": "VOLUME_MA_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_MA_PERIOD", 20), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_MA_PERIOD": v})},
-        {"desc": "거래량 폭발 배수", "help": "이평선 대비 폭증 기준 (기본 2.0)", "name": "VOLUME_SPIKE_RATIO", "type": "float", "section": "4-4. 강도/수급/변동성",
+        {"desc": "거래량 폭발 배수", "help": "이평선 대비 폭증 기준 (기본 2.0)", "name": "VOLUME_SPIKE_RATIO", "type": "float", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("VOLUME_SPIKE_RATIO", 2.0), "set": lambda v: config.INDICATOR_PARAMS.update({"VOLUME_SPIKE_RATIO": v})},
-        {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "4-4. 강도/수급/변동성",
+        {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("ATR_PERIOD", 14), "set": lambda v: config.INDICATOR_PARAMS.update({"ATR_PERIOD": v})},
 
-        {"desc": "박스권 탐지 기간", "help": "매물대 기반 박스권 룩백 봉 수 (기본 20봉, 일봉=일/분봉=분)", "name": "BOX_PERIOD", "type": "int", "section": "4-5. 가격 구조",
+        {"desc": "박스권 탐지 기간", "help": "매물대 기반 박스권 룩백 봉 수 (기본 20봉, 일봉=일/분봉=분)", "name": "BOX_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("BOX_PERIOD", 30), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_PERIOD": v})},
-        {"desc": "박스권 매물대 %", "help": "핵심 매물대 집중도 (기본 50.0)", "name": "BOX_VALUE_AREA_PCT", "type": "float", "section": "4-5. 가격 구조",
+        {"desc": "박스권 매물대 %", "help": "핵심 매물대 집중도 (기본 50.0)", "name": "BOX_VALUE_AREA_PCT", "type": "float", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_VALUE_AREA_PCT": v})}
     ]
+    return items
 
 def modify_indicator_params():
     return _edit_config_table("기술적 지표 파라미터 (Indicators)", _indicator_items)
@@ -1593,16 +1594,16 @@ def manage_custom_settings():
         _CAT5 = "5. 환경 및 시스템 설정"
 
         category_map = {
-            "BUY_SCORE": (_CAT1, "1-1. 기본 진입 조건"),
-            "RISE_SCORE": (_CAT1, "1-1. 기본 진입 조건"),
-            "INTEREST_SIGNAL_MIN": (_CAT1, "1-1. 기본 진입 조건"),
-            "INTEREST_MA60_NEAR": (_CAT1, "1-1. 기본 진입 조건"),
-            "BUY_RSI_MAX": (_CAT1, "1-1. 기본 진입 조건"),
-            "BUY_VOL_STRENGTH": (_CAT1, "1-1. 기본 진입 조건"),
-            "AUTO_ADJUST_ASK_BID_RATIO": (_CAT1, "1-1. 기본 진입 조건"),
-            "BUY_ASK_BID_RATIO": (_CAT1, "1-1. 기본 진입 조건"),
-            "DISPARITY_UPPER": (_CAT1, "1-1. 기본 진입 조건"),
-            "DISPARITY_LOWER": (_CAT1, "1-1. 기본 진입 조건"),
+            "BUY_SCORE": (_CAT1, "1-1. 진입 조건"),
+            "RISE_SCORE": (_CAT1, "1-1. 진입 조건"),
+            "INTEREST_SIGNAL_MIN": (_CAT1, "1-4. 화면 표시 전용"),
+            "INTEREST_MA60_NEAR": (_CAT1, "1-4. 화면 표시 전용"),
+            "BUY_RSI_MAX": (_CAT1, "1-1. 진입 조건"),
+            "BUY_VOL_STRENGTH": (_CAT1, "1-1. 진입 조건"),
+            "AUTO_ADJUST_ASK_BID_RATIO": (_CAT1, "1-1. 진입 조건"),
+            "BUY_ASK_BID_RATIO": (_CAT1, "1-1. 진입 조건"),
+            "DISPARITY_UPPER": (_CAT1, "1-4. 화면 표시 전용"),
+            "DISPARITY_LOWER": (_CAT1, "1-4. 화면 표시 전용"),
             "USE_MEAN_REVERSION": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
             "MR_RSI_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
             "MR_DISPARITY_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
@@ -1613,22 +1614,22 @@ def manage_custom_settings():
             "SUPER_MOMENTUM_W52_POS": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
             "SUPER_BUY_RSI_MAX": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
             "SUPER_TAKE_PROFIT_RSI": (_CAT1, "1-2. 서브전략 (슈퍼 모멘텀/피라미딩)"),
-            "TAKE_PROFIT_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
-            "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
-            "TAKE_PROFIT_RSI": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
-            "TRAILING_STOP_ACTIVATION_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
-            "TRAILING_STOP_CALLBACK_RATE": (_CAT1, "1-3. 매도/청산 — 트레일링 스탑"),
-            "STOP_LOSS_RATE": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "USE_ATR_STOP": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "ATR_STOP_MULTIPLIER": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "MAX_ATR_STOP_LOSS_RATE": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "BREAK_EVEN_PROFIT_RATE": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "BREAK_EVEN_STOP_RATE": (_CAT1, "1-4. 매도/청산 — 손절"),
-            "TIME_STOP_USE": (_CAT1, "1-5. 매도/청산 — 기타"),
-            "TIME_STOP_DAYS": (_CAT1, "1-5. 매도/청산 — 기타"),
-            "TIME_STOP_MIN_PROFIT_RATE": (_CAT1, "1-5. 매도/청산 — 기타"),
-            "SELL_SCORE": (_CAT1, "1-5. 매도/청산 — 기타"),
-            "DEFENSIVE_HALF_SELL_USE": (_CAT1, "1-5. 매도/청산 — 기타"),
+            "TAKE_PROFIT_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TAKE_PROFIT_RSI": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TRAILING_STOP_ACTIVATION_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TRAILING_STOP_CALLBACK_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "STOP_LOSS_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "USE_ATR_STOP": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "ATR_STOP_MULTIPLIER": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "MAX_ATR_STOP_LOSS_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "BREAK_EVEN_PROFIT_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "BREAK_EVEN_STOP_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TIME_STOP_USE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TIME_STOP_DAYS": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "TIME_STOP_MIN_PROFIT_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "SELL_SCORE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+            "DEFENSIVE_HALF_SELL_USE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "TREND": (_CAT2, "2-1. 스코어링 가중치"),
             "MOMENTUM": (_CAT2, "2-1. 스코어링 가중치"),
             "STRENGTH": (_CAT2, "2-1. 스코어링 가중치"),
@@ -1677,30 +1678,30 @@ def manage_custom_settings():
             "DD_SCALE_2": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "DD_LOOKBACK_DAYS": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
             "GAP_RISK_BUFFER": (_CAT3, "3-4. 리스크 한도 동적 스케일링"),
-            "CHART_LOOKBACK_DAYS": (_CAT4, "4-1. 데이터 조회"),
-            "SAR_AF_START": (_CAT4, "4-2. 추세"),
-            "SAR_AF_STEP": (_CAT4, "4-2. 추세"),
-            "SAR_AF_MAX": (_CAT4, "4-2. 추세"),
-            "MACD_FAST": (_CAT4, "4-2. 추세"),
-            "MACD_SLOW": (_CAT4, "4-2. 추세"),
-            "MACD_SIGNAL": (_CAT4, "4-2. 추세"),
-            "EMA_SHORT": (_CAT4, "4-2. 추세"),
-            "TREND_PERIOD": (_CAT4, "4-2. 추세"),
-            "RSI_PERIOD": (_CAT4, "4-3. 모멘텀"),
-            "RSI_SIGNAL": (_CAT4, "4-3. 모멘텀"),
-            "RSI_UPPER": (_CAT4, "4-3. 모멘텀"),
-            "RSI_MID": (_CAT4, "4-3. 모멘텀"),
-            "RSI_LOWER": (_CAT4, "4-3. 모멘텀"),
-            "CCI_WINDOW": (_CAT4, "4-3. 모멘텀"),
-            "CCI_UPPER": (_CAT4, "4-3. 모멘텀"),
-            "CCI_LOWER": (_CAT4, "4-3. 모멘텀"),
-            "ADX_PERIOD": (_CAT4, "4-4. 강도/수급/변동성"),
-            "OBV_MA_PERIOD": (_CAT4, "4-4. 강도/수급/변동성"),
-            "VOLUME_MA_PERIOD": (_CAT4, "4-4. 강도/수급/변동성"),
-            "VOLUME_SPIKE_RATIO": (_CAT4, "4-4. 강도/수급/변동성"),
-            "ATR_PERIOD": (_CAT4, "4-4. 강도/수급/변동성"),
-            "BOX_PERIOD": (_CAT4, "4-5. 가격 구조"),
-            "BOX_VALUE_AREA_PCT": (_CAT4, "4-5. 가격 구조"),
+            "CHART_LOOKBACK_DAYS": (_CAT4, "4-1. 데이터·추세"),
+            "SAR_AF_START": (_CAT4, "4-1. 데이터·추세"),
+            "SAR_AF_STEP": (_CAT4, "4-1. 데이터·추세"),
+            "SAR_AF_MAX": (_CAT4, "4-1. 데이터·추세"),
+            "MACD_FAST": (_CAT4, "4-1. 데이터·추세"),
+            "MACD_SLOW": (_CAT4, "4-1. 데이터·추세"),
+            "MACD_SIGNAL": (_CAT4, "4-1. 데이터·추세"),
+            "EMA_SHORT": (_CAT4, "4-1. 데이터·추세"),
+            "TREND_PERIOD": (_CAT4, "4-1. 데이터·추세"),
+            "RSI_PERIOD": (_CAT4, "4-2. 모멘텀"),
+            "RSI_SIGNAL": (_CAT4, "4-2. 모멘텀"),
+            "RSI_UPPER": (_CAT4, "4-2. 모멘텀"),
+            "RSI_MID": (_CAT4, "4-2. 모멘텀"),
+            "RSI_LOWER": (_CAT4, "4-2. 모멘텀"),
+            "CCI_WINDOW": (_CAT4, "4-2. 모멘텀"),
+            "CCI_UPPER": (_CAT4, "4-2. 모멘텀"),
+            "CCI_LOWER": (_CAT4, "4-2. 모멘텀"),
+            "ADX_PERIOD": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "OBV_MA_PERIOD": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "VOLUME_MA_PERIOD": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "VOLUME_SPIKE_RATIO": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "ATR_PERIOD": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "BOX_PERIOD": (_CAT4, "4-3. 강도·수급·가격구조"),
+            "BOX_VALUE_AREA_PCT": (_CAT4, "4-3. 강도·수급·가격구조"),
             "SYSTEM_TRADING_START_TIME": (_CAT5, "5-1. 거래 시간·주기"),
             "SYSTEM_TRADING_END_TIME": (_CAT5, "5-1. 거래 시간·주기"),
             "SYSTEM_TRADING_INTERVAL": (_CAT5, "5-1. 거래 시간·주기"),
@@ -1866,11 +1867,10 @@ def system_config_menu():
         
         if choice == "1":
             sub_items = [
-                ("1", "기본 진입 조건", "Entry"),
+                ("1", "진입 조건", "Entry"),
                 ("2", "서브전략 (슈퍼 모멘텀/피라미딩)", "Sub-Strategy"),
-                ("3", "매도/청산 — 트레일링 스탑", "Trailing Stop"),
-                ("4", "매도/청산 — 손절", "Stop Loss"),
-                ("5", "매도/청산 — 기타", "Exit Etc")
+                ("3", "청산 (손절·트레일링·시간)", "Exit"),
+                ("4", "화면 표시 전용 (매매 무관)", "Display Only")
             ]
             sub_choice = utils.show_menu("매수 및 매도 전략 설정", sub_items, default_choice="b")
             if sub_choice.lower() in ['b', 'q']: continue
@@ -1910,11 +1910,9 @@ def system_config_menu():
 
         elif choice == "4":
             sub_items = [
-                ("1", "데이터 조회", "Data"),
-                ("2", "추세", "Trend"),
-                ("3", "모멘텀", "Momentum"),
-                ("4", "강도/수급/변동성", "Strength & Volume"),
-                ("5", "가격 구조", "Price Structure")
+                ("1", "데이터·추세", "Data & Trend"),
+                ("2", "모멘텀", "Momentum"),
+                ("3", "강도·수급·가격구조", "Strength & Structure")
             ]
             sub_choice = utils.show_menu("기술적 지표 파라미터", sub_items, default_choice="b")
             if sub_choice.lower() in ['b', 'q']: continue

@@ -61,8 +61,11 @@ def test_simulate_strategy_atr_stop(sample_df):
     # Price 10000 -> Stop Price 9800
     # 9700 < 9800 -> Sell
     
-    # 본전청산(BEP)이 ATR손절보다 먼저 발동하지 않도록 BEP 활성화 기준을 높여 ATR손절을 격리 검증
-    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False, "BREAK_EVEN_PROFIT_RATE": 999.0}):
+    # 본전청산(BEP)이 ATR손절보다 먼저 발동하지 않도록 BEP를 끄고 ATR손절을 격리 검증.
+    # [주의] BEP 비활성화는 BREAK_EVEN_PROFIT_RATE로 할 수 없다 — ATR 손절 적용 시
+    #   발동 기준이 손절폭(1R)으로 덮어써지기 때문(backtest.py: bep_activation = abs(sl_rate_to_use)).
+    #   손절선 상향 목표치(BREAK_EVEN_STOP_RATE)를 낮춰 `sl < bep_stop` 조건을 깨야 한다.
+    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "STOP_LOSS_RATE": -10.0, "TIME_STOP_USE": False, "BREAK_EVEN_STOP_RATE": -999.0}):
         res = backtest.simulate_strategy(
             sample_df, sample_df.iloc[0], 10000000, 
             buy_score_limit=6.0, buy_rsi_limit=70, is_overseas=False
@@ -188,9 +191,29 @@ def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_g
     """백테스팅 설정 변경 테스트"""
     mock_get_data.return_value = sample_df
     
+    # run_backtest 대화 흐름 순서대로 응답 (프롬프트가 늘면 이 목록도 함께 갱신할 것)
     mock_ask.side_effect = [
-            "6", "005930", "n", "y", "100", "9.0", "60", "20.0", "n", "75", "5.0", 
-        "10.0", "3.0", "10", "n", "-5.0", "n", "1", "n", "q"
+        "6",        # 1. 메뉴 선택 (단일 종목 백테스트)
+        "005930",   # 2. 종목코드
+        "n",        # 3. 시장 상황 프리셋 적용?
+        "y",        # 4. 시뮬레이션 조건 변경?
+        "100",      # 5. 분석 기간(일)
+        "9.0",      # 6. 매수 기준 점수      ← 검증 대상
+        "60",       # 7. 매수 허용 RSI 상한
+        "20.0",     # 8. 익절 수익률(%)
+        "n",        # 9. 반익절 사용?
+        "75",       # 10. 익절 RSI 기준
+        "5.0",      # 11. 매도(추세이탈) 기준 점수
+        "10.0",     # 12. TS 발동 수익률(%)
+        "3.0",      # 13. TS 하락 감지율(%)
+        "10",       # 14. 시간 청산 기한(일)
+        "n",        # 15. 손절 방식 (n=고정 손절률)
+        "-5.0",     # 16. 손절 수익률(%)     ← 검증 대상
+        "n",        # 17. 피라미딩 차수 변경?
+        "n",        # 18. 가중치 변경?
+        "1",        # 19. 실행 모드 선택 (1=단일 실행)
+        "n",        # 20. AI 성과 진단?
+        "q",        # 21. 메뉴 선택 (종료)
     ]
     
     mock_status.return_value.__enter__.return_value = MagicMock()

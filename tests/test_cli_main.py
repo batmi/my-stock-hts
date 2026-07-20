@@ -67,10 +67,12 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
 @patch('api.get_current_price_data')
 def test_main_chart_menu(mock_cp, mock_chart, mock_ask, mock_exit):
     """메인 메뉴 -> 차트 분석 메뉴 테스트"""
-    # 3번(차트) -> 6번(직접입력) -> 코드입력 -> 유효성확인(y) -> 1번(일봉) -> 1번(6개월)
+    # 3번(차트) -> 6번(직접입력) -> 코드입력 -> 유효성확인(y) -> 2번(일봉) -> 1번(6개월)
+    # [주의] 봉 종류 메뉴는 1=주봉 / 2=일봉 / 3=시봉 / 4=분봉 순이다(main.py menu_items_type).
+    #        일봉을 고를 때만 표시 기간(6개월/1년) 프롬프트가 뒤따른다.
     # 이후 부족분은 'q'를 자동 반환하여 흐름 변화에 무관하게 메뉴를 빠져나가게 한다
     # (StopIteration/무한루프 방지)
-    _inputs = iter(["3", "6", "005930", "y", "1", "1"])
+    _inputs = iter(["3", "6", "005930", "y", "2", "1"])
     mock_ask.side_effect = lambda *a, **k: next(_inputs, "q")
     mock_cp.return_value = {'rt_cd': '0', 'output': {'stck_prpr': '100'}}
     

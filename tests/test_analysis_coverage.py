@@ -65,11 +65,17 @@ def test_calculate_score_perfect_10_points():
         vol_spike=False, vol_trend=True,     # 거래량 추세 상승 (+0.5) [NEW OR]
         smart_money=False,
         plus_di=30, minus_di=15,             # +DI > -DI (+0.5)
+        # [추세추종] 이후 신설된 두 팩터의 입력. 없으면 구조적으로 만점이 나올 수 없다.
+        trend_persist=100.0,                 # 최근 120일 100% 60일선 위 (+0.5, TREND)
+        mom_ret=30.0, w52_pos=95.0,          # 6개월 +30% & 52주 95% (+0.5, MOMENTUM)
+        mom_ret_1m=5.0, mom_ret_3m=15.0,     # 단기 모멘텀 정합 게이트 통과
         weights={"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0} # 타 테스트 오염 방지
     )
-    
-    assert score == 10.0
-    # [개선 #2] TREND 재구성으로 상세 내역 구성 변경:
-    #   MA 5줄 + 상한적용 1줄 + MACD 0선 1줄 + MACD 확산 1줄 + SAR 1줄
-    #   + MOMENTUM 5줄 + STRENGTH 3줄 + SYNERGY 2줄 = 19줄 (감점 없음)
-    assert len(details) == 19 # 각 가산점에 대한 상세 내역 개수 확인
+
+    assert score == 10.0, f"만점이 아님 ({score}) — 누락 항목:\n" + "\n".join(details)
+    # 상세 내역 구성 (감점 없음):
+    #   TREND    : MA 5줄 + 상한적용 1줄 + 추세 지속 1줄 + MACD 0선 1줄 + MACD 확산 1줄 + SAR 1줄 = 10
+    #   MOMENTUM : RSI 2줄 + CCI 1줄 + DMI 1줄 + 가격 모멘텀 1줄 = 5
+    #   STRENGTH : ADX 1줄 + VOL 1줄 + 수급 1줄 = 3
+    #   SYNERGY  : 2줄
+    assert len(details) == 20, "\n".join(details)  # 각 가산점에 대한 상세 내역 개수 확인
