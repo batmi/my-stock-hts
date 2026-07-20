@@ -4,9 +4,13 @@
 변경 사항:
   1. analysis.get_index_momentum — 지수의 최근 MOMENTUM_LOOKBACK(126일) 수익률(%).
      데이터 부족/조회 실패 시 None (호출부 fail-open).
-  2. _analyze_candidate_worker — USE_RS_FILTER=True(기본)일 때 국내 종목의 126일
+  2. _analyze_candidate_worker — USE_RS_FILTER=True일 때 국내 종목의 126일
      수익률이 소속 지수(KOSPI/KOSDAQ) 이하이면 'rs_skip' 반환 (analyze_buy 미진행).
      종목 이력 부족·지수 조회 실패 시에는 통과 (데이터 장애로 매수 전면 중단 방지).
+
+[주의] USE_RS_FILTER의 기본값은 False다 — 실증 검증에서 RS 게이트가 추세 초입 진입을
+  막아 순손실로 확인되어 기본 OFF + 설정 숨김 처리되었다(config.py USE_RS_FILTER 주석).
+  아래 게이트 테스트는 로직 자체가 살아있는지 확인하기 위해 fixture에서 명시적으로 켠다.
 """
 
 import numpy as np
@@ -71,7 +75,7 @@ class TestGetIndexMomentum:
 @pytest.fixture(autouse=True)
 def setup_teardown():
     """매 테스트마다 config·싱글톤 상태를 초기화하여 독립성을 보장합니다."""
-    original_rs = getattr(config, 'USE_RS_FILTER', True)
+    original_rs = getattr(config, 'USE_RS_FILTER', False)
     AutoTrader._instance = None
     config.USE_RS_FILTER = True
 

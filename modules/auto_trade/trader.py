@@ -3717,7 +3717,7 @@ class AutoTrader:
             #   '확실한 추세'가 아니라고 보고 게이트에서 제외한다 (약추세 진입 = 큰 손실의 원천).
             #   룩백은 RS_FILTER_LOOKBACK(>0) 우선, 0이면 스코어링 '가격 모멘텀'과 동일(MOMENTUM_LOOKBACK).
             #   종목 이력 부족·지수 조회 실패 시에는 통과(fail-open — 데이터 장애가 매수 전면 중단으로 번지지 않게).
-            if getattr(config, 'USE_RS_FILTER', True) and not is_overseas_stock:
+            if getattr(config, 'USE_RS_FILTER', False) and not is_overseas_stock:
                 mom_lb = getattr(config, 'RS_FILTER_LOOKBACK', 0) or config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
                 if len(df) > mom_lb:
                     try:

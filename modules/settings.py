@@ -31,7 +31,7 @@ def _save_dynamic_config():
         "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180),
         "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
         "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
-        "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', True),
+        "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', False),
         "RS_FILTER_LOOKBACK": getattr(config.settings, 'RS_FILTER_LOOKBACK', 0),
         "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 60),
         "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
@@ -300,11 +300,14 @@ def view_system_config(group=None):
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")
         if getattr(config.settings, 'USE_MARKET_FILTER', True):
             row("시장 필터링 SMA (일)", "지수 추세 판단용 단순이동평균선", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 60)}", key="MARKET_FILTER_MA", indent=True)
-        row("상대강도(RS) 필터 사용", "지수 대비 약세 종목 신규 매수 제외", "USE_RS_FILTER", f"{getattr(config.settings, 'USE_RS_FILTER', True)}", key="USE_RS_FILTER")
-        if getattr(config.settings, 'USE_RS_FILTER', True):
-            _rs_lb = getattr(config.settings, 'RS_FILTER_LOOKBACK', 0)
-            _rs_lb_str = f"{_rs_lb}일" if _rs_lb > 0 else f"연동 ({config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)}일)"
-            row("상대강도(RS) 필터 기간", "지수 대비 수익률 비교 룩백 (0=가격 모멘텀 룩백 연동)", "RS_FILTER_LOOKBACK", _rs_lb_str, key="RS_FILTER_LOOKBACK", indent=True)
+        # [추세추종 보호] 상대강도(RS) 필터는 기본 OFF + 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조).
+        #  숨김 집합에서 키를 빼면 조회·편집·도움말에 자동으로 다시 나타난다.
+        if "USE_RS_FILTER" not in ANTI_TREND_HIDDEN_KEYS:
+            row("상대강도(RS) 필터 사용", "지수 대비 약세 종목 신규 매수 제외", "USE_RS_FILTER", f"{getattr(config.settings, 'USE_RS_FILTER', False)}", key="USE_RS_FILTER")
+            if getattr(config.settings, 'USE_RS_FILTER', False):
+                _rs_lb = getattr(config.settings, 'RS_FILTER_LOOKBACK', 0)
+                _rs_lb_str = f"{_rs_lb}일" if _rs_lb > 0 else f"연동 ({config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)}일)"
+                row("상대강도(RS) 필터 기간", "지수 대비 수익률 비교 룩백 (0=가격 모멘텀 룩백 연동)", "RS_FILTER_LOOKBACK", _rs_lb_str, key="RS_FILTER_LOOKBACK", indent=True)
         row("상관계수 필터링 사용", "유사 테마 종목 중복 매수 방지", "USE_CORRELATION_FILTER", f"{getattr(config.settings, 'USE_CORRELATION_FILTER', True)}", key="USE_CORRELATION_FILTER")
         if getattr(config.settings, 'USE_CORRELATION_FILTER', True):
             row("상관계수 임계값", "동조화 판단 기준치 (0.0~1.0)", "CORRELATION_THRESHOLD", f"{getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)}", key="CORRELATION_THRESHOLD", indent=True)
@@ -620,6 +623,12 @@ ANTI_TREND_HIDDEN_KEYS = {
     "VOLATILITY_SCALING_MAX",
     "MR_VOL_STRENGTH",         # 역매수 체결강도 기준 (부속 설정)
     "MR_GRACE_LOSS_RATE",      # 역매수 보유분 점수매도 유예 손실폭 (부속 설정)
+    #  USE_RS_FILTER / RS_FILTER_LOOKBACK: 상대강도 필터는 '지수 대비 열위 = 신규 매수 금지'라는
+    #   이진 차단이라 추세 초입 진입과 정면충돌한다. 실증(37종목×9년, 신호 10,307건)에서 신호의
+    #   28.6%를 잘라내고도 대박률↓·손실률↑·MDD↑로 순손실이었다(config.py USE_RS_FILTER 주석 참조).
+    #   기본 OFF로 전환하고, 다시 켜는 다이얼 자체를 숨긴다.
+    "USE_RS_FILTER",
+    "RS_FILTER_LOOKBACK",
 }
 
 
@@ -987,7 +996,7 @@ def _risk_portfolio_items():
         {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 60), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
         {"desc": "상대강도(RS) 필터 사용", "help": "수익률이 소속 지수를 밑도는 종목 신규 매수 제외", "name": "USE_RS_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
-         "get": lambda: getattr(config.settings, 'USE_RS_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_RS_FILTER', v)},
+         "get": lambda: getattr(config.settings, 'USE_RS_FILTER', False), "set": lambda v: setattr(config.settings, 'USE_RS_FILTER', v)},
         {"desc": "상대강도(RS) 필터 기간 (일)", "help": "지수 대비 수익률 비교 룩백 거래일 (0 = 가격 모멘텀 룩백 연동)", "name": "RS_FILTER_LOOKBACK", "type": "int", "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'RS_FILTER_LOOKBACK', 0), "set": lambda v: setattr(config.settings, 'RS_FILTER_LOOKBACK', v), "validator": lambda v: v >= 0},
         {"desc": "상관계수 필터링 사용", "help": "유사 테마 종목 중복 매수 방지", "name": "USE_CORRELATION_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",

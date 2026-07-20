@@ -677,6 +677,21 @@ def show_help():
     score_table.add_column("점수/행동", justify="center", style="white")
     score_table.add_column("의미", justify="left")
 
+    def _help_show(key, active):
+        """도움말 행 노출 여부 — 시스템 설정 메뉴(메인메뉴 0)의 숨김 처리와 연동.
+
+        추세추종 보호·백테스트 보호로 숨긴 설정(settings.ANTI_TREND_HIDDEN_KEYS /
+        BACKTESTED_HIDDEN_KEYS)은 운영자가 조정할 수 없으므로, 그 기능이 꺼져 있으면
+        도움말에서도 감춘다 — 끌 수도 켤 수도 없는 'OFF' 행이 남아 있으면 매매 판정
+        기준을 오해하게 된다. 숨김 집합에서 키를 빼면 도움말에도 자동으로 되돌아온다.
+        동작 중인 기능(예: 본전청산·시간청산)은 다이얼이 잠겨 있어도 그대로 노출한다 —
+        실제 매매에 관여하는 규칙을 감추면 안 되기 때문이다.
+        """
+        if active:
+            return True
+        return (key not in settings.ANTI_TREND_HIDDEN_KEYS
+                and key not in settings.BACKTESTED_HIDDEN_KEYS)
+
     # [수정] 표는 analysis.calculate_score 실구현과 1:1 대응 (구식 항목 제거·누락 항목 반영)
     _ip = config.INDICATOR_PARAMS
     rsi_mid = _ip.get('SCORE_RSI_MID', 50); rsi_strong = _ip.get('SCORE_RSI_STRONG', 60)
@@ -777,15 +792,17 @@ def show_help():
         score_table.add_row("현재 시장 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
 
     # [추가] 상대강도(RS) 필터 섹션 (룩백: RS_FILTER_LOOKBACK>0 우선, 0이면 가격 모멘텀 룩백 연동 — trader RS 게이트와 동일 규칙)
-    score_table.add_section()
-    rs_on = getattr(config, 'USE_RS_FILTER', True)
-    rs_status = "[green]ON[/green]" if rs_on else "[red]OFF[/red]"
-    rs_lb_cfg = getattr(config, 'RS_FILTER_LOOKBACK', 0)
-    rs_lookback = rs_lb_cfg if rs_lb_cfg > 0 else config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
-    rs_lb_src = "전용 설정" if rs_lb_cfg > 0 else "가격 모멘텀 룩백 연동"
-    score_table.add_row(f"상대강도(RS) 필터 ({rs_status})", f"종목 {rs_lookback}일 수익률 ≤ 소속 지수(KOSPI/KOSDAQ) 수익률", "[blue]제외[/]", f"지수 대비 약세 종목 신규 매수 제외 (국내 전용, 기간: {rs_lb_src})")
-
+    #  [추세추종 보호] 기본 OFF이므로 꺼져 있으면 섹션 자체를 그리지 않는다 — 동작하지 않는 필터를
+    #   도움말에 남겨두면 매수 제외 사유를 오해하게 된다. dynamic_config.json에서 다시 켜면
+    #   (설정 화면 숨김 해제와 무관하게) 이 섹션도 자동으로 다시 나타난다.
+    rs_on = getattr(config, 'USE_RS_FILTER', False)
     if rs_on:
+        score_table.add_section()
+        rs_lb_cfg = getattr(config, 'RS_FILTER_LOOKBACK', 0)
+        rs_lookback = rs_lb_cfg if rs_lb_cfg > 0 else config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
+        rs_lb_src = "전용 설정" if rs_lb_cfg > 0 else "가격 모멘텀 룩백 연동"
+        score_table.add_row("상대강도(RS) 필터 ([green]ON[/green])", f"종목 {rs_lookback}일 수익률 ≤ 소속 지수(KOSPI/KOSDAQ) 수익률", "[blue]제외[/]", f"지수 대비 약세 종목 신규 매수 제외 (국내 전용, 기간: {rs_lb_src})")
+
         # 현재 기준값 = 소속 지수의 룩백 기간 수익률 (이 값 이하의 종목이 신규 매수에서 제외됨)
         rs_k = analysis.get_index_momentum("KOSPI", lookback=rs_lookback)
         rs_q = analysis.get_index_momentum("KOSDAQ", lookback=rs_lookback)
@@ -816,7 +833,8 @@ def show_help():
     mr_disp = config.ANALYSIS_THRESHOLDS.get("MR_DISPARITY_MAX", 90.0)
     mr_rsi = config.ANALYSIS_THRESHOLDS.get("MR_RSI_MAX", 40.0)
     mr_vol = config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-    score_table.add_row(f"매수 - 역추세 ({mr_status})", f"이격도 ≤ {mr_disp}% & RSI ≤ {mr_rsi} 반등 & 체결 > {mr_vol}%", "[magenta]역매수[/]", "낙폭과대 기술적 반등 노리기")
+    if _help_show("USE_MEAN_REVERSION", use_mr):
+        score_table.add_row(f"매수 - 역추세 ({mr_status})", f"이격도 ≤ {mr_disp}% & RSI ≤ {mr_rsi} 반등 & 체결 > {mr_vol}%", "[magenta]역매수[/]", "낙폭과대 기술적 반등 노리기")
     
     use_super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
     super_status = "[green]ON[/green]" if use_super else "[red]OFF[/red]"
@@ -851,11 +869,13 @@ def show_help():
     #  (추세추종 기조: 고정 익절·RSI 과열 익절은 기본 OFF, 주청산은 트레일링 스탑)
     tp_status = "[green]ON[/green]" if take_profit > 0 else "[red]OFF[/red]"
     tp_cond = f"수익률 +{take_profit}% 도달" if take_profit > 0 else "미사용 (0 = OFF, 추세추종: TS 주청산)"
-    score_table.add_row(f"매도 - 익절 ({tp_status})", tp_cond, "[red]익절[/]", "목표 수익 달성 (최우선)")
+    if _help_show("TAKE_PROFIT_RATE", take_profit > 0):
+        score_table.add_row(f"매도 - 익절 ({tp_status})", tp_cond, "[red]익절[/]", "목표 수익 달성 (최우선)")
 
     half_tp_status = "[green]ON[/green]" if (half_tp_use and take_profit > 0) else "[red]OFF[/red]"
     half_cond = f"수익률 +{take_profit/2:.1f}% 도달" if take_profit > 0 else "미사용 (익절 OFF 시 비활성)"
-    score_table.add_row(f"매도 - 반익절 ({half_tp_status})", half_cond, "[red]반익절[/]", "절반(50%) 선매도로 수익 확보")
+    if _help_show("HALF_TAKE_PROFIT_USE", half_tp_use and take_profit > 0):
+        score_table.add_row(f"매도 - 반익절 ({half_tp_status})", half_cond, "[red]반익절[/]", "절반(50%) 선매도로 수익 확보")
     
     fixed_sl_status = "[red]OFF[/red]" if use_atr else "[green]ON[/green]"
     score_table.add_row(f"매도 - 고정손절 ({fixed_sl_status})", f"손실률 {stop_loss}% 도달", "[blue]손절[/]", "손실 제한 (고정 손절)")
@@ -863,18 +883,24 @@ def show_help():
     atr_status = "[green]ON[/green]" if use_atr else "[red]OFF[/red]"
     score_table.add_row(f"매도 - ATR손절 ({atr_status})", f"매수가 - (ATR x {atr_mult})", "[blue]손절[/]", "변동성 기반 동적 손절")
     
-    score_table.add_row("매도 - 본전청산", f"수익 +{bep_activation}% 달성 후 하락 시", "[blue]본전청산[/]", f"손실 방지 (손절선을 +{bep_stop}%로 끌어올림)")
+    # [수정] ATR 손절 사용 시 BEP 발동 기준은 BREAK_EVEN_PROFIT_RATE가 아니라 손절폭(1R)이다
+    #  (trader/backtest가 그렇게 주입). 설정값을 그대로 쓰면 실제 동작과 달라 오해를 부른다.
+    _bep_cond = ("손절폭(1R) 도달 후 하락 시" if use_atr else f"수익 +{bep_activation}% 달성 후 하락 시")
+    score_table.add_row("매도 - 본전청산", _bep_cond, "[blue]본전청산[/]", f"손실 방지 (손절선을 {bep_stop:+g}%로 끌어올림)")
     
     time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
     score_table.add_row(f"매도 - 시간청산 ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}% (최근 5일 고점 갱신 부재)", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
     
-    def_half_status = "[green]ON[/green]" if config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False) else "[red]OFF[/red]"
-    score_table.add_row(f"매도 - 방어적 반매도 ({def_half_status})", f"주가 < SAR & 주가 < 5일선 동시 이탈 시", "[blue]반매도[/]", "하락 반전 신호 감지 시 50% 덜어내기 (리스크 방어)")
+    use_def_half = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False)
+    def_half_status = "[green]ON[/green]" if use_def_half else "[red]OFF[/red]"
+    if _help_show("DEFENSIVE_HALF_SELL_USE", use_def_half):
+        score_table.add_row(f"매도 - 방어적 반매도 ({def_half_status})", f"주가 < SAR & 주가 < 5일선 동시 이탈 시", "[blue]반매도[/]", "하락 반전 신호 감지 시 50% 덜어내기 (리스크 방어)")
 
     score_table.add_row("매도 - 트레일링", f"수익 {ts_activation}% 도달 후 고점 대비 하락 시", "[blue]매도[/]", "수익 보전 (ATR 사용 시 동적 변동폭 적용)")
     overheat_status = "[green]ON[/green]" if take_profit_rsi > 0 else "[red]OFF[/red]"
     overheat_cond = f"RSI > {take_profit_rsi}" if take_profit_rsi > 0 else "미사용 (0 = OFF, 강추세는 과매수 지속 허용)"
-    score_table.add_row(f"매도 - 과열 ({overheat_status})", overheat_cond, "[red]익절[/]", "RSI 과열 시 이익 실현")
+    if _help_show("TAKE_PROFIT_RSI", take_profit_rsi > 0):
+        score_table.add_row(f"매도 - 과열 ({overheat_status})", overheat_cond, "[red]익절[/]", "RSI 과열 시 이익 실현")
     score_table.add_row("매도 - 추세이탈", f"종합 점수 < {sell_score}점 or 위험 상태", "[blue]매도[/]", "추세 붕괴 시 청산")
 
     # [추가] 주문 집행 상세 섹션
