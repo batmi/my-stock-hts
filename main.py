@@ -475,10 +475,12 @@ def show_help():
     table.add_row("", "-3.0% ~ -20.0%", "[white]흰색[/]", "일반 조정/중립")
     table.add_section()
 
-    table.add_row("종목명 색상", "이평선 정배열 & ADX ≥ 40 & RSI ≥ 70 & CCI ≥ 100", "[magenta]보라색[/]", "과열/하락 반전 주의")
-    table.add_row("", "이평선 정배열 & 현재가 > 5일선 & ADX ≥ 30 & RSI ≥ 55 & CCI ≥ 100", "[red]빨간색[/]", "강력한 상승 추세")
-    table.add_row("", "이평선 역배열 & 현재가 > 5일선 & ADX ≥ 20 & RSI ≥ 45 & CCI ≥ 0", "[orange3]주황색[/]", "바닥권 상승 반전 시도")
-    table.add_row("", "이평선 20선 > 60선 > 5선 & ADX ≥ 30 & RSI ≤ 30 & CCI ≤ 100", "[blue]파란색[/]", "하락 심화/매도 우위")
+    # [통일] 종목명 색상은 시장 지수와 동일한 국면 룰(이중 EMA + 추종 확인)을 쓴다
+    table.add_row("종목명 색상", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
+    table.add_row("", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[white]흰색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
+    table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
 
     buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]

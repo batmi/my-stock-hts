@@ -4167,14 +4167,14 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 else: cci_str = f"[blue]{cci_str}[/]"
 
             final_name_str = name
-            if ind.get('ema_5') is not None and ind.get('ema_20') is not None and ind.get('ema_60') is not None and ind.get('adx') is not None and ind.get('rsi') is not None and ind.get('cci') is not None:
-                all_ema_green = (ind.get('ema_5') > ind.get('ema_20') and ind.get('ema_20') > ind.get('ema_60'))
-                all_ema_red = (ind.get('ema_5') < ind.get('ema_20') and ind.get('ema_20') < ind.get('ema_60'))
-                price_above_ema5 = (curr > ind.get('ema_5'))
-                if ind.get('adx') >= 40 and ind.get('rsi') >= config.INDICATOR_PARAMS["RSI_UPPER"] and ind.get('cci') >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[magenta]{name}[/]"
-                elif all_ema_green and price_above_ema5 and ind.get('adx') >= 30 and ind.get('rsi') >= 55 and ind.get('cci') >= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[red]{name}[/]"
-                elif all_ema_red and price_above_ema5 and ind.get('adx') >= 20 and ind.get('rsi') >= 45 and ind.get('cci') >= 0: final_name_str = f"[orange3]{name}[/]"
-                elif (ind.get('ema_20') > ind.get('ema_60') and ind.get('ema_60') > ind.get('ema_5')) and ind.get('adx') >= 30 and ind.get('rsi') <= config.INDICATOR_PARAMS["RSI_LOWER"] and ind.get('cci') <= config.INDICATOR_PARAMS["CCI_UPPER"]: final_name_str = f"[blue]{name}[/]"
+            # [변경] 종목명 색상도 지수와 동일한 국면 룰(이중 EMA 교차 + 추종 확인)로 통일한다.
+            #  기존 이평선 배열+ADX/RSI/CCI 복합 조건은 지수 색상과 의미가 달라 화면상
+            #  같은 색이 다른 뜻이 되던 문제가 있었다. 판정은 classify_regime_from_df 단일 소스.
+            try:
+                _regime = classify_regime_from_df(chart_df)['regime']
+                _, _regime_color = REGIME_DISPLAY.get(_regime, ("", "yellow"))
+                final_name_str = f"[{_regime_color}]{name}[/]"
+            except Exception: pass
             
             # 제한 종목 표시
             is_restricted = False
