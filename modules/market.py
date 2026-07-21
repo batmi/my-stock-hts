@@ -585,11 +585,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 if name == "달러환율": curr_fmt += "원"
 
             # [통일] 현재가 색상은 종목 표와 동일 규칙 — analysis.price_trend_color 단일 소스
-            #  단, VIX·금리·달러처럼 '값이 오를수록 시장에 불리한' 역방향 자산은 색을 반전한다
-            #  (반전 없으면 VIX 급등이 빨간색=강세로 읽혀 지수명 밴드 색과 정반대가 된다).
-            curr_price_color = analysis.price_trend_color(
-                eval_price, ema20, ema60,
-                invert=(name in config.INVERSE_VALUE_INDICES))
+            #  자산 종류와 무관하게 '값 자체의 방향'만 나타낸다(등락률·52주 고점대비와 동일 문법).
+            curr_price_color = analysis.price_trend_color(eval_price, ema20, ema60)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             h_color = "[white]"
@@ -664,12 +661,16 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             
         trend_str = f"{sar_icon} {macd_icon} {obv_icon}"
 
+        # [통일] RSI 임계값은 종목 표·도움말과 같은 config 단일 소스를 쓴다
+        #  (상수로 두면 사용자가 RSI_UPPER/LOWER를 바꿔도 지수 표만 옛 기준으로 남는다)
+        _rsi_up = config.INDICATOR_PARAMS["RSI_UPPER"]
+        _rsi_low = config.INDICATOR_PARAMS["RSI_LOWER"]
         rsi_str = f"{val_rsi:.1f}" if val_rsi is not None else "[dim]-[/dim]"
         if val_rsi is not None:
-            if val_rsi >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
-            elif 55 <= val_rsi < 70: rsi_str = f"[red]{rsi_str}[/]"
+            if val_rsi >= _rsi_up: rsi_str = f"[magenta]{rsi_str}[/]"
+            elif 55 <= val_rsi < _rsi_up: rsi_str = f"[red]{rsi_str}[/]"
             elif 45 <= val_rsi < 55: rsi_str = f"[orange3]{rsi_str}[/]"
-            elif 30 < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
+            elif _rsi_low < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
             else: rsi_str = f"[blue]{rsi_str}[/]"
 
         adx_str = f"{val_adx:.1f}" if val_adx is not None else "[dim]-[/dim]"
@@ -680,11 +681,14 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif val_adx >= 15: adx_str = f"[yellow]{adx_str}[/]"
             else: adx_str = f"[white]{adx_str}[/]"
 
+        # [통일] CCI 임계값도 config 단일 소스 (RSI와 동일한 이유)
+        _cci_up = config.INDICATOR_PARAMS["CCI_UPPER"]
+        _cci_low = config.INDICATOR_PARAMS["CCI_LOWER"]
         cci_str = f"{val_cci:.1f}" if val_cci is not None else "[dim]-[/dim]"
         if val_cci is not None:
-            if val_cci >= 100: cci_str = f"[red]{cci_str}[/]"
-            elif 0 < val_cci < 100: cci_str = f"[orange3]{cci_str}[/]"
-            elif -100 < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
+            if val_cci >= _cci_up: cci_str = f"[red]{cci_str}[/]"
+            elif 0 < val_cci < _cci_up: cci_str = f"[orange3]{cci_str}[/]"
+            elif _cci_low < val_cci <= 0: cci_str = f"[yellow]{cci_str}[/]"
             else: cci_str = f"[blue]{cci_str}[/]"
 
         display_name = name

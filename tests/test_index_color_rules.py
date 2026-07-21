@@ -1,7 +1,7 @@
 """지수/종목 색상 규칙 테스트.
 
 - 이름 색상: 방향성 자산은 국면 룰, 절대 밴드 자산은 밴드 룰 (두 축 분리)
-- 값 색상: price_trend_color 단일 소스 + 역방향 자산 반전 + 판정 불가 dim
+- 값 색상: price_trend_color 단일 소스(자산 무관 동일 문법) + 판정 불가 dim
 """
 import re
 
@@ -16,7 +16,7 @@ from modules import analysis, market
 # 1. 값 색상 — price_trend_color
 # ==========================================================
 def test_price_trend_color_basic():
-    """정방향 자산: 추세(EMA20 vs EMA60) × 위치(현재가 vs EMA20) 4구간."""
+    """추세(EMA20 vs EMA60) × 위치(현재가 vs EMA20) 4구간 — 자산 종류와 무관하게 동일."""
     assert analysis.price_trend_color(110, 100, 90) == "[red]"      # 강세
     assert analysis.price_trend_color(95, 100, 90) == "[white]"     # 눌림목
     assert analysis.price_trend_color(105, 100, 110) == "[orange3]" # 반등 시도
@@ -32,23 +32,24 @@ def test_price_trend_color_unavailable_is_dim():
     assert analysis.price_trend_color(100, 100, 100) == "[white]"
 
 
-def test_price_trend_color_invert_swaps_axes():
-    """역방향 자산: 강세축(red/white) ↔ 약세축(blue/orange3) 반전."""
-    assert analysis.price_trend_color(110, 100, 90, invert=True) == "[blue]"
-    assert analysis.price_trend_color(95, 100, 90, invert=True) == "[orange3]"
-    assert analysis.price_trend_color(105, 100, 110, invert=True) == "[white]"
-    assert analysis.price_trend_color(95, 100, 110, invert=True) == "[red]"
-    # 산출 불가는 반전해도 dim
-    assert analysis.price_trend_color(None, None, None, invert=True) == "[dim]"
+def test_value_color_not_inverted_for_any_asset():
+    """값 색상 반전은 폐기됐다 — VIX·금리·달러도 값 자체의 방향만 색으로 나타낸다.
+
+    (반전 시절엔 같은 줄의 등락률·52주 고점대비와 색이 엇갈려 읽기 어려웠다)
+    """
+    assert not hasattr(config, "INVERSE_VALUE_INDICES")
+    src = open("modules/market.py", encoding="utf-8").read()
+    assert "invert=" not in src, "지수 값 색상에 반전 인자가 다시 들어왔다"
 
 
-def test_inverse_value_indices_membership():
-    """반전 대상은 '값이 오를수록 시장에 불리한' 자산에 한정된다."""
-    for name in ("VIX (변동성)", "V코스피200", "달러인덱스", "달러환율",
-                 "미국채 2년물 금리", "미국채 30년물 금리"):
-        assert name in config.INVERSE_VALUE_INDICES
-    for name in ("코스피", "나스닥", "SOX (반도체)", "금", "비트코인", "WTI 원유"):
-        assert name not in config.INVERSE_VALUE_INDICES
+def test_index_table_uses_config_thresholds():
+    """지수 표의 RSI·CCI 임계값은 도움말·종목 표와 같은 config 단일 소스여야 한다.
+
+    상수로 두면 사용자가 RSI_UPPER 등을 바꿔도 지수 표만 옛 기준으로 남아 색이 어긋난다.
+    """
+    src = open("modules/market.py", encoding="utf-8").read()
+    for key in ("RSI_UPPER", "RSI_LOWER", "CCI_UPPER", "CCI_LOWER"):
+        assert f'INDICATOR_PARAMS["{key}"]' in src, f"{key}가 config에서 오지 않는다"
 
 
 # ==========================================================

@@ -292,6 +292,7 @@ def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
     config.console.print("[dim]※ '~지수명'·'종목명' 항목은 이름(첫 컬럼) 글자색 규칙이고, '지수값·현재가/등락률/52주 고점대비' 항목은 값 자체의 글자색 규칙입니다.[/dim]")
     config.console.print("[dim]※ 이름 색은 두 축입니다 — 방향성 자산은 '국면'(빨강/주황/하늘/파랑), 수준 자체가 매크로 의미인 자산(VIX·미국채·달러·유가/가스/밀)은 '위험도 밴드'(초록·보라 포함)입니다.[/dim]")
+    config.console.print("[dim]※ 값 색은 자산 종류와 무관하게 '값 자체의 방향'만 나타냅니다(빨강=상승/강세). VIX·금리·달러처럼 오를수록 시장에 불리한 자산은 값이 빨개도 위험 신호이며, 그 해석은 지수명(위험도 밴드) 색으로 확인하세요.[/dim]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
@@ -383,7 +384,7 @@ def show_help():
     table.add_section()
 
     table.add_row("VIX 변동성 지수명", "지수 < 15", "[green]초록색[/]", "안정 (평균 수준/골디락스장)")
-    table.add_row("", "15 ≤ 지수 < 20", "[yellow]노란색[/]", "경계 진입 (단기 변동성 확대/노이즈)")
+    table.add_row("(VIX·V코스피200 공통)", "15 ≤ 지수 < 20", "[yellow]노란색[/]", "경계 진입 (단기 변동성 확대/노이즈)")
     table.add_row("", "20 ≤ 지수 < 30", "[orange3]주황색[/]", "위험 구간 (추세 훼손/조정장 진입)")
     table.add_row("", "30 ≤ 지수 < 40", "[red]빨간색[/]", "공포/패닉 (급락장/베어마켓)")
     table.add_row("", "지수 ≥ 40", "[magenta]보라색[/]", "시스템 위기 (블랙스완/투매)")
@@ -397,6 +398,7 @@ def show_help():
     table.add_row("52주 고점대비 값", "등락률 > -3.0%", "[red]빨간색[/]", "신고가 근접 (초강세)")
     table.add_row("", "등락률 < -20.0%", "[blue]파란색[/]", "침체/약세장 진입")
     table.add_row("", "-3.0% ~ -20.0%", "[white]흰색[/]", "일반 조정/중립")
+    table.add_row("", "[dim]VIX·미국채·달러 등 역방향 자산[/dim]", "", "[dim]빨간색(고점 근접) = 초강세가 아니라 위험 고조로 해석[/dim]")
     table.add_section()
 
     # [통일] 종목명 색상은 시장 지수와 동일한 국면 룰(이중 EMA + 추종 확인)을 쓴다
@@ -410,7 +412,17 @@ def show_help():
     buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
     rise_score = config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
     buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
-    table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    # [추가] 슈퍼 모멘텀(강매수)은 기본 ON이라 실제 화면에 보라색 종목이 나타난다 — 설정 OFF면 행을 감춘다
+    _th = config.ANALYSIS_THRESHOLDS
+    if _th.get("SUPER_MOMENTUM_USE", True):
+        _sm_score = _th.get("SUPER_MOMENTUM_SCORE", 8.0)
+        _sm_w52 = _th.get("SUPER_MOMENTUM_W52_POS", 90.0)
+        _sm_rsi = _th.get("SUPER_BUY_RSI_MAX", 80.0)
+        table.add_row("종목 분류", f"{_sm_score}점 이상 & 52주 위치 {_sm_w52:g}% 이상 & RSI<{_sm_rsi:g}",
+                      "[magenta]강매수[/]", "슈퍼 모멘텀 (주도주 랠리 — RSI 상한 완화 적용)")
+        table.add_row("", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
+    else:
+        table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     table.add_row("", f"{buy_score}점 이상 & RSI≥{buy_rsi} (과열)", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
     table.add_row("", f"{rise_score} ~ {buy_score}점 미만 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기/소량)")
     table.add_row("", "정렬 미완성 + 추세전환 초기신호 ≥3개 (위험신호 없음)", "[green]관심[/]", "태동 단계/수동 스윙 모니터링 (120일선 아래도 포착)")
@@ -426,24 +438,32 @@ def show_help():
     table.add_row("", "현재가 < 20일선 & 20일선 < 60일선", "[blue]파란색[/]", "약세: 중장기 하락 추세 속 단기 약세")
     table.add_row("", "20일선 == 60일선 (혼조)", "[white]흰색[/]", "방향 판단 보류")
     table.add_row("", "이평선 산출 불가 (데이터 부족)", "[dim]흐린색[/]", "판정 불가 (눌림목 흰색과 구분)")
-    table.add_row("", "", "", "")
-    table.add_row("", "역방향 자산은 위 색을 반전 (빨강↔파랑, 흰색↔주황)", "", "VIX·V코스피200·미국채 4종·달러인덱스·달러환율")
-    table.add_row("", "  예) VIX 상승 추세 = 시장에 불리", "[blue]파란색[/]", "값이 오를수록 불리한 자산은 상승이 파란색")
     table.add_section()
 
     table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
-    table.add_row("", "120% ~ 150%", "[red]빨간색[/]", "매수 우위: 상승 추세 강화, 단기 모멘텀 발생")
-    table.add_row("", "100% ~ 120%", "[orange3]주황색[/]", "점진적 유입: 완만한 매수세, 주가 하방 지지력 강함")
-    table.add_row("", "100%", "[white]흰색[/]", "균형: 매수와 매도의 힘이 팽팽하게 맞서는 상태")
-    table.add_row("", "80% ~ 100%", "[yellow]노란색[/]", "매도 우위: 주가 탄력 둔화, 관망세 확산")
+    table.add_row("", "120% 이상 ~ 150% 미만", "[red]빨간색[/]", "매수 우위: 상승 추세 강화, 단기 모멘텀 발생")
+    table.add_row("", "100% 초과 ~ 120% 미만", "[orange3]주황색[/]", "점진적 유입: 완만한 매수세, 주가 하방 지지력 강함")
+    table.add_row("", "100% (동일)", "[white]흰색[/]", "균형: 매수와 매도의 힘이 팽팽하게 맞서는 상태")
+    table.add_row("", "80% 이상 ~ 100% 미만", "[yellow]노란색[/]", "매도 우위: 주가 탄력 둔화, 관망세 확산")
     table.add_row("", "80% 미만", "[blue]파란색[/]", "하락 압력: 공격적인 매도세, 추가 하락 경계 필요")
     table.add_section()
 
+    # [추가] 토스증권은 체결강도를 제공하지 않아 매도잔량비로 대체 표시된다 — 실제 화면 항목이므로 함께 안내
+    #  값은 매도/매수 총잔량 비율 — 높을수록 매물을 받아내는 매수 압력으로 보아 체결강도와 같은 색 방향(빨강=양호)
+    table.add_row("매도잔량비 [x.xx]", "2.00배 이상", "[magenta]보라색[/]", "매물 흡수 극대 (강한 수급 유입)")
+    table.add_row("(토스 전용, 체결강도 대체)", "1.50배 이상 ~ 2.00배 미만", "[red]빨간색[/]", "수급 양호 (매도 물량 소화 중)")
+    table.add_row("", "1.00배 초과 ~ 1.50배 미만", "[orange3]주황색[/]", "점진적 유입 (매수 기준선 충족)")
+    table.add_row("", "1.00배 (동일)", "[white]흰색[/]", "잔량 균형")
+    table.add_row("", "0.70배 이상 ~ 1.00배 미만", "[yellow]노란색[/]", "수급 둔화 (매수 기준선 미달)")
+    table.add_row("", "0.70배 미만", "[blue]파란색[/]", "수급 약세")
+    table.add_row("", "[dim]NXT 운영시간(08:00~20:00) 밖[/dim]", "", "[dim]호가 동결 구간 — 표기 생략[/dim]")
+    table.add_section()
+
     table.add_row("52주 위치", "90% 이상", "[red]빨간색[/]", "신고가 근접/초강세")
-    table.add_row("", "80% 이상", "[orange3]주황색[/]", "상승세 우위")
-    table.add_row("", "50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
+    table.add_row("", "80% 이상 ~ 90% 미만", "[orange3]주황색[/]", "상승세 우위")
+    table.add_row("", "50% 초과 ~ 80% 미만", "[white]흰색[/]", "중립")
+    table.add_row("", "30% 초과 ~ 50% 이하", "[yellow]노란색[/]", "약세/바닥권 진입")
     table.add_row("", "30% 이하", "[blue]파란색[/]", "신저가 근접/침체")
-    table.add_row("", "그 외 (50~80%)", "[white]흰색[/]", "중립")
     table.add_section()
 
     table.add_row("EMA 5일선 (초단기)", "5일선 > 20일선", "[red]빨간색[/]", "초단기 정배열 (단기 모멘텀)")

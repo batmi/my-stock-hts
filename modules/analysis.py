@@ -981,21 +981,14 @@ def format_regime(regime, markup=True):
     return f"[{color}]{label}[/]" if markup else label
 
 
-# [단일 소스] 역방향 자산의 값 색상 반전 매핑 — 강세축(red/white) ↔ 약세축(blue/orange3).
-#  red(추세 강세)↔blue(추세 약세), white(강세 속 눌림)↔orange3(약세 속 반등)로 서로 맞바꾼다.
-_INVERSE_COLOR_MAP = {"[red]": "[blue]", "[blue]": "[red]",
-                      "[white]": "[orange3]", "[orange3]": "[white]"}
-
-
-def price_trend_color(price, ema20, ema60, invert=False):
+def price_trend_color(price, ema20, ema60):
     """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
 
     지수 화면(market.py)과 종목 표(analysis.print_table)가 같은 규칙을 쓰도록 분리했다.
     (동일 로직이 양쪽에 복제돼 한쪽만 고치면 어긋나던 문제 방지)
 
-    invert=True면 색을 반전한다 — VIX·금리·달러처럼 '값이 오를수록 시장에 불리한'
-    역방향 자산용(config.INVERSE_VALUE_INDICES). 값이 뜻하는 방향은 그대로 두고
-    '시장에 유리한가'로 색 문법을 통일하기 위함이다.
+    자산 종류와 무관하게 '값 자체의 방향'만 나타낸다 — VIX·금리·달러를 반전하던
+    규칙은 같은 줄의 등락률(반전 없음)과 색이 엇갈려 폐기했다(config 색상 규칙 주석 참조).
 
     Returns: rich 색상 태그 문자열 ("[red]" 등).
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
@@ -1010,7 +1003,7 @@ def price_trend_color(price, ema20, ema60, invert=False):
         color = "[blue]" if price < ema20 else "[orange3]"
     else:
         color = "[white]"  # ema20 == ema60 (혼조) — 방향 판단 보류
-    return _INVERSE_COLOR_MAP[color] if invert else color
+    return color
 
 
 def classify_regime_from_df(df, params=None):
