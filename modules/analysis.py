@@ -967,7 +967,9 @@ REGIME_SCORE_ADJ_KEYS = {
 REGIME_DISPLAY = {
     "Bull": ("강세장", "red"),
     "PendUp": ("상승 미확정", "orange3"),
-    "PendDown": ("하락 미확정", "white"),
+    # PendDown은 하락축의 '옅은' 색 — Bull/PendUp(빨강/주황)과 대칭을 이루게 한다.
+    #  magenta는 팔레트 전반에서 '극단/과열'(VIX≥40, WTI≥100, RSI 과열 등)로 굳어 있어 쓰지 않는다.
+    "PendDown": ("하락 미확정", "sky_blue3"),
     "Bear": ("약세장", "blue"),
     "Sideways": ("판정 보류", "yellow"),
 }
@@ -977,6 +979,25 @@ def format_regime(regime, markup=True):
     """국면 문자열을 한글 라벨로 변환. markup=True면 rich 색상 태그를 입힌다."""
     label, color = REGIME_DISPLAY.get(regime, (regime, "yellow"))
     return f"[{color}]{label}[/]" if markup else label
+
+
+def price_trend_color(price, ema20, ema60):
+    """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
+
+    지수 화면(market.py)과 종목 표(analysis.print_table)가 같은 규칙을 쓰도록 분리했다.
+    (동일 로직이 양쪽에 복제돼 한쪽만 고치면 어긋나던 문제 방지)
+
+    Returns: rich 색상 태그 문자열 ("[red]" 등). 판정 불가/혼조는 "[white]".
+    """
+    if price is None or ema20 is None or ema60 is None:
+        return "[white]"
+    if ema20 > ema60:
+        # 상승 추세: 20일선 위면 강세, 아래면 눌림목 조정
+        return "[red]" if price > ema20 else "[white]"
+    if ema20 < ema60:
+        # 하락 추세: 20일선 아래면 약세, 위면 반등 시도
+        return "[blue]" if price < ema20 else "[orange3]"
+    return "[white]"  # ema20 == ema60 (혼조) — 방향 판단 보류
 
 
 def classify_regime_from_df(df, params=None):
@@ -1905,13 +1926,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     # 시장 정보
     table_tech.add_row("시장", market_str, "소속 거래소")
 
-    # 현재가
-    curr_price_color = "[white]"
-    if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
-        if ind['ema_20'] > ind['ema_60']:
-            curr_price_color = "[red]" if current_price > ind['ema_20'] else "[white]"
-        elif ind['ema_20'] < ind['ema_60']:
-            curr_price_color = "[blue]" if current_price < ind['ema_20'] else "[orange3]"
+    # 현재가 ([통일] 지수 화면·종목 표와 동일 규칙 — price_trend_color 단일 소스)
+    curr_price_color = price_trend_color(current_price, ind.get('ema_20'), ind.get('ema_60'))
 
     if is_index:
         price_str_tech = f"{current_price:,.0f}" if current_price >= 1000 else f"{current_price:,.2f}"
@@ -4065,12 +4081,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
 
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
-            curr_price_color = "[white]"
-            if ind.get('ema_20') is not None and ind.get('ema_60') is not None:
-                if ind['ema_20'] > ind['ema_60']:
-                    curr_price_color = "[red]" if curr > ind['ema_20'] else "[white]"
-                elif ind['ema_20'] < ind['ema_60']:
-                    curr_price_color = "[blue]" if curr < ind['ema_20'] else "[orange3]"
+            # [통일] 지수 화면과 동일 규칙 — price_trend_color 단일 소스
+            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'))
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             # [수정] 이평선 색상 규칙 단순화 (계층적 분석)

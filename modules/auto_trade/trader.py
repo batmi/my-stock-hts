@@ -867,7 +867,9 @@ class AutoTrader:
             
         # [수정] 현재 시장 상황 정보
         msg += "\n[시장 상황]\n"
-        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "⚪", "Bear": "🔵", "Sideways": "🟡"}
+        # 하락축은 🔷(미확정) → 🔵(확정)로 단계를 표현 — 화면 색상(sky_blue3 → blue)과 동일 계열
+        #  (하늘색 원형 이모지는 유니코드에 없어 밝은 파랑 마름모로 대체)
+        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "🔷", "Bear": "🔵", "Sideways": "🟡"}
         rp = config.MARKET_REGIME_PARAMS
         ema_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)}"
 

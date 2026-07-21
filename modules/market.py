@@ -584,20 +584,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 curr_fmt = f"{current:,.2f}"
                 if name == "달러환율": curr_fmt += "원"
 
-            # [수정] 현재가 색상 규칙 단순화 (추세와 현재가 관계 중심)
-            curr_price_color = "[white]" # 기본값
-            if ema20 and ema60:
-                is_bullish_trend = ema20 > ema60
-                is_bearish_trend = ema20 < ema60
-                
-                if is_bullish_trend:
-                    # 강세장: 현재가가 20일선 위에 있으면 강세(red), 아래면 눌림목(white)
-                    curr_price_color = "[red]" if eval_price > ema20 else "[white]"
-                elif is_bearish_trend:
-                    # 약세장: 현재가가 20일선 아래에 있으면 약세(blue), 위면 반등 시도(orange3)
-                    curr_price_color = "[blue]" if eval_price < ema20 else "[orange3]"
-                # 혼조세(ema20 == ema60)는 기본값 white 유지
-            
+            # [통일] 현재가 색상은 종목 표와 동일 규칙 — analysis.price_trend_color 단일 소스
+            curr_price_color = analysis.price_trend_color(eval_price, ema20, ema60)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             h_color = "[white]"
@@ -817,7 +805,9 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 1450 <= current < 1500: display_name = f"[red]{name}[/]"
             elif 1400 <= current < 1450: display_name = f"[orange3]{name}[/]"
             elif 1300 <= current < 1400: display_name = f"[green]{name}[/]"
-            elif 1200 <= current < 1300: display_name = f"[cyan]{name}[/]"
+            # [통일] 국면 표시(PendDown)와 같은 하늘색 사용 — cyan(ANSI 6)은 터미널 테마마다
+            #  렌더링이 달라져 하늘색과 구분이 흐려지므로 256색으로 고정한다
+            elif 1200 <= current < 1300: display_name = f"[sky_blue3]{name}[/]"
             elif current < 1200: display_name = f"[blue]{name}[/]"
         elif name == "WTI 원유":
             if current >= 100: display_name = f"[magenta]{name}[/]"

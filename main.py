@@ -303,7 +303,7 @@ def show_help():
 
     table.add_row("시장 지수", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
     table.add_row("(글로벌/원자재/코인)", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
-    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[white]흰색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
     table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
     table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
@@ -376,7 +376,7 @@ def show_help():
     table.add_row("", "1450 ≤ 환율 < 1500", "[red]빨간색[/]", "위험 구간 (당국 개입 및 자본 유출 우려)")
     table.add_row("", "1400 ≤ 환율 < 1450", "[orange3]주황색[/]", "구조적 고환율 (경제 부담 가중)")
     table.add_row("", "1300 ≤ 환율 < 1400", "[green]초록색[/]", "강달러 뉴노멀 (현재 시장 중립 구간)")
-    table.add_row("", "1200 ≤ 환율 < 1300", "[cyan]청록색[/]", "안정화 (원화 강세 전환)")
+    table.add_row("", "1200 ≤ 환율 < 1300", "[sky_blue3]하늘색[/]", "안정화 (원화 강세 전환)")
     table.add_row("", "환율 < 1200", "[blue]파란색[/]", "초강세 원화 (수출 기업 실적 부담)")
     table.add_section()
 
@@ -478,7 +478,7 @@ def show_help():
     # [통일] 종목명 색상은 시장 지수와 동일한 국면 룰(이중 EMA + 추종 확인)을 쓴다
     table.add_row("종목명 색상", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
     table.add_row("", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
-    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[white]흰색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
     table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
     table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
@@ -495,10 +495,12 @@ def show_help():
     table.add_row("", "장기추세 붕괴 및 과열", "[blue]매도[/]", "적극 매도/손절 고려 (위험)")
     table.add_section()
 
-    table.add_row("현재가 (추세)", "현재가 > 20일선 & 20일선 > 60일선", "[red]빨간색[/]", "강세: 중장기 상승 추세 속 단기 강세")
+    # [통일] 지수 화면·종목 표·개별 분석이 analysis.price_trend_color 단일 소스를 공유한다
+    table.add_row("지수·종목 현재가", "현재가 > 20일선 & 20일선 > 60일선", "[red]빨간색[/]", "강세: 중장기 상승 추세 속 단기 강세")
+    table.add_row("(추세)", "현재가 ≤ 20일선 & 20일선 > 60일선", "[white]흰색[/]", "눌림목 조정: 장기 강세 속 단기 조정")
+    table.add_row("", "현재가 ≥ 20일선 & 20일선 < 60일선", "[orange3]주황색[/]", "반등 시도: 장기 약세 속 단기 추세 전환 시도")
     table.add_row("", "현재가 < 20일선 & 20일선 < 60일선", "[blue]파란색[/]", "약세: 중장기 하락 추세 속 단기 약세")
-    table.add_row("", "현재가 > 20일선 & 20일선 < 60일선", "[orange3]주황색[/]", "반등 시도: 장기 약세 속 단기 추세 전환 시도")
-    table.add_row("", "현재가 < 20일선 & 20일선 > 60일선", "[white]흰색[/]", "눌림목 조정: 장기 강세 속 단기 조정")
+    table.add_row("", "20일선 == 60일선 (혼조) 또는 산출 불가", "[white]흰색[/]", "방향 판단 보류")
     table.add_section()
 
     table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
