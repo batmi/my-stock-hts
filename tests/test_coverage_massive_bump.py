@@ -65,11 +65,18 @@ def test_market_process_index_worker_adaptive_colors(mock_fast_info, mock_fetch,
     res1 = market._process_index_worker("미국채 10년물 금리", "^TNX", df_10y, pd.DataFrame())
     assert "magenta" in res1['row_data'][0]
     
-    # SOX 반도체 (high_52_rate 적용) - 52주 고점 대비 -25% 이하 -> blue
-    df_sox = df_base.copy()
-    df_sox.iloc[-1, df_sox.columns.get_loc('close')] = 70.0 # 고점 100 대비 -30%
+    # SOX 반도체 - [변경] 52주 낙폭 룰 폐지, 국면 룰(이중 EMA + 추종 확인) 적용
+    #  꾸준한 하락(60봉) -> 확정 하락추세(Bear) = blue
+    df_sox = pd.DataFrame({
+        'close': [200.0 - i for i in range(60)], 'open': [100.0]*60,
+        'high': [200.0]*60, 'low': [100.0]*60, 'volume': [1000]*60
+    }, index=pd.date_range('2023-01-01', periods=60))
     res2 = market._process_index_worker("SOX (반도체)", "^SOX", df_sox, pd.DataFrame())
     assert "blue" in res2['row_data'][0]
+
+    # 데이터가 부족하면 국면 판정 보류(Sideways) = yellow
+    res2b = market._process_index_worker("SOX (반도체)", "^SOX", df_base.copy(), pd.DataFrame())
+    assert "yellow" in res2b['row_data'][0]
     
     # 달러인덱스 (120 이상 -> magenta)
     df_dx = df_base.copy()

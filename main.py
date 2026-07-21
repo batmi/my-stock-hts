@@ -290,6 +290,8 @@ def preflight_check():
 
 def show_help():
     config.console.print("\n[bold cyan]=== [Help] 색상 및 기능 설명 ===[/bold cyan]")
+    config.console.print("[dim]※ '~지수명'·'종목명' 항목은 이름(첫 컬럼) 글자색 규칙이고, '지수값·현재가/등락률/52주 고점대비' 항목은 값 자체의 글자색 규칙입니다.[/dim]")
+    config.console.print("[dim]※ 이름 색은 두 축입니다 — 방향성 자산은 '국면'(빨강/주황/하늘/파랑), 수준 자체가 매크로 의미인 자산(VIX·미국채·달러·유가/가스/밀)은 '위험도 밴드'(초록·보라 포함)입니다.[/dim]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
     table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
@@ -301,10 +303,10 @@ def show_help():
     confirm_pct = _rp.get('REGIME_CONFIRM_PCT', 5.0)
     obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
-    table.add_row("시장 지수", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
-    table.add_row("(글로벌/원자재/코인)", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
-    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
-    table.add_row("", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
+    table.add_row("시장 지수명", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
+    table.add_row("(국내/미국/유럽/아시아 지수,", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
+    table.add_row(" MSCI, 섹터지수 9종,", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row(" 금·은·구리, 암호화폐)", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
     table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
 
@@ -316,7 +318,7 @@ def show_help():
         bands = t_meta["bands"]
         for i, (thr, color, _status, help_desc) in enumerate(bands):
             if i == 0:
-                col1, cond = t_meta["title"], f"금리 ≥ {thr:.2f}"
+                col1, cond = f'{t_meta["title"]} 지수명', f"금리 ≥ {thr:.2f}"
             elif thr is None:
                 col1, cond = "", f"금리 < {bands[i-1][0]:.2f}"
             else:
@@ -325,7 +327,7 @@ def show_help():
             table.add_row(col1, cond, f"[{color}]{color_kr[color]}[/]", help_desc)
         table.add_section()
 
-    table.add_row("브랜트유", "가격 ≥ 105", "[magenta]보라색[/]", "에너지 쇼크 (강제적 수요 파괴 및 스태그플레이션)")
+    table.add_row("브랜트유 지수명", "가격 ≥ 105", "[magenta]보라색[/]", "에너지 쇼크 (강제적 수요 파괴 및 스태그플레이션)")
     table.add_row("", "95 ≤ 가격 < 105", "[red]빨간색[/]", "인플레 재발 우려 (고금리 장기화 강요)")
     table.add_row("", "85 ≤ 가격 < 95", "[orange3]주황색[/]", "고유가 지속 (인플레 압력 상존)")
     table.add_row("", "70 ≤ 가격 < 85", "[green]초록색[/]", "골디락스 (산유국 수익과 물가 안정의 최적 균형점)")
@@ -333,7 +335,7 @@ def show_help():
     table.add_row("", "가격 < 60", "[blue]파란색[/]", "시스템 위기 (심각한 수요 파괴 및 침체)")
     table.add_section()
 
-    table.add_row("WTI 원유", "가격 ≥ 100", "[magenta]보라색[/]", "에너지 쇼크 (강제적 수요 파괴 및 스태그플레이션)")
+    table.add_row("WTI 원유 지수명", "가격 ≥ 100", "[magenta]보라색[/]", "에너지 쇼크 (강제적 수요 파괴 및 스태그플레이션)")
     table.add_row("", "90 ≤ 가격 < 100", "[red]빨간색[/]", "인플레 재발 우려 (고금리 장기화 강요)")
     table.add_row("", "80 ≤ 가격 < 90", "[orange3]주황색[/]", "고유가 지속 (인플레 압력 상존)")
     table.add_row("", "65 ≤ 가격 < 80", "[green]초록색[/]", "골디락스 (산유국 수익과 물가 안정의 최적 균형점)")
@@ -341,7 +343,7 @@ def show_help():
     table.add_row("", "가격 < 55", "[blue]파란색[/]", "시스템 위기 (심각한 수요 파괴 및 침체)")
     table.add_section()
 
-    table.add_row("가솔린 RBOB", "가격 ≥ 4.00", "[magenta]보라색[/]", "에너지 쇼크: 강제적 수요 파괴 및 스태그플레이션 확정")
+    table.add_row("가솔린 RBOB 지수명", "가격 ≥ 4.00", "[magenta]보라색[/]", "에너지 쇼크: 강제적 수요 파괴 및 스태그플레이션 확정")
     table.add_row("", "3.20 ≤ 가격 < 4.00", "[red]빨간색[/]", "임계점: 고금리 긴축 강요, 기업 이익률 급격 둔화")
     table.add_row("", "2.60 ≤ 가격 < 3.20", "[orange3]주황색[/]", "고유가 지속: 인플레 압력 상존, 실물 경제 마지노선")
     table.add_row("", "2.10 ≤ 가격 < 2.60", "[green]초록색[/]", "골디락스: 산유국 수익성과 물가 안정의 최적 균형점")
@@ -349,7 +351,7 @@ def show_help():
     table.add_row("", "가격 < 1.60", "[blue]파란색[/]", "시스템 위기: 심각한 경기 침체 혹은 금융 위기 동반")
     table.add_section()
 
-    table.add_row("천연가스", "가격 ≥ 6.0", "[magenta]보라색[/]", "에너지 쇼크 (공급망 붕괴 또는 극단적 기후 위기)")
+    table.add_row("천연가스 지수명", "가격 ≥ 6.0", "[magenta]보라색[/]", "에너지 쇼크 (공급망 붕괴 또는 극단적 기후 위기)")
     table.add_row("", "4.0 ≤ 가격 < 6.0", "[red]빨간색[/]", "물가 비상 (에너지 인플레 유발)")
     table.add_row("", "3.0 ≤ 가격 < 4.0", "[orange3]주황색[/]", "수급 타이트 (겨울철 피크 또는 수출 수요 강세)")
     table.add_row("", "2.0 ≤ 가격 < 3.0", "[green]초록색[/]", "안정/중립 (현재 박스권 최적 균형점)")
@@ -357,7 +359,7 @@ def show_help():
     table.add_row("", "가격 < 1.5", "[blue]파란색[/]", "시스템 하강 (심각한 수요 파괴 또는 디플레이션 신호)")
     table.add_section()
 
-    table.add_row("밀", "가격 ≥ 800", "[magenta]보라색[/]", "식량 안보 위기 (전쟁/극단적 기후)")
+    table.add_row("밀 지수명", "가격 ≥ 800", "[magenta]보라색[/]", "식량 안보 위기 (전쟁/극단적 기후)")
     table.add_row("", "700 ≤ 가격 < 800", "[red]빨간색[/]", "식량 인플레 경계 (애그플레이션 우려)")
     table.add_row("", "600 ≤ 가격 < 700", "[orange3]주황색[/]", "수급 타이트 (기후 리스크 및 작황 부진)")
     table.add_row("", "500 ≤ 가격 < 600", "[green]초록색[/]", "안정/중립 (현재 박스권 최적 균형점)")
@@ -365,14 +367,14 @@ def show_help():
     table.add_row("", "가격 < 400", "[blue]파란색[/]", "농가 수익성 악화 (디플레이션 신호)")
     table.add_section()
 
-    table.add_row("달러 인덱스", "지수 ≥ 115", "[magenta]보라색[/]", "글로벌 달러 유동성 경색 (시스템 위기)")
+    table.add_row("달러 인덱스 지수명", "지수 ≥ 115", "[magenta]보라색[/]", "글로벌 달러 유동성 경색 (시스템 위기)")
     table.add_row("", "110 ≤ 지수 < 115", "[red]빨간색[/]", "초강달러 (신흥국 자본 유출 패닉)")
     table.add_row("", "105 ≤ 지수 < 110", "[orange3]주황색[/]", "강달러 경계 (미국 외 국가 인플레 자극)")
     table.add_row("", "95 ≤ 지수 < 105", "[green]초록색[/]", "안정/중립 (가장 이상적인 골디락스)")
     table.add_row("", "지수 < 95", "[blue]파란색[/]", "달러 약세 (신흥국/위험자산 랠리)")
     table.add_section()
 
-    table.add_row("달러 환율", "환율 ≥ 1500원", "[magenta]보라색[/]", "시스템 위기 / 외환 패닉")
+    table.add_row("달러 환율 지수명", "환율 ≥ 1500원", "[magenta]보라색[/]", "시스템 위기 / 외환 패닉")
     table.add_row("", "1450 ≤ 환율 < 1500", "[red]빨간색[/]", "위험 구간 (당국 개입 및 자본 유출 우려)")
     table.add_row("", "1400 ≤ 환율 < 1450", "[orange3]주황색[/]", "구조적 고환율 (경제 부담 가중)")
     table.add_row("", "1300 ≤ 환율 < 1400", "[green]초록색[/]", "강달러 뉴노멀 (현재 시장 중립 구간)")
@@ -387,90 +389,12 @@ def show_help():
     table.add_row("", "지수 ≥ 40", "[magenta]보라색[/]", "시스템 위기 (블랙스완/투매)")
     table.add_section()
 
-    table.add_row("비트코인 등 암호화폐", "고점 대비 낙폭 ≤ 10%", "[red]빨간색[/]", "신고가 랠리 (크립토 불장)")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 25%", "[orange3]주황색[/]", "건전한 조정 (높은 변동성 허용 구간)")
-    table.add_row("", "25% < 고점 대비 낙폭 ≤ 40%", "[yellow]노란색[/]", "투심 위축 / 하락 추세 전환 경계")
-    table.add_row("", "고점 대비 낙폭 > 40%", "[blue]파란색[/]", "크립토 윈터 / 깊은 침체장")
-    table.add_section()
-
-    table.add_row("금 (Gold) 지수명", "고점 대비 낙폭 ≤ 3%", "[red]빨간색[/]", "신고가 랠리 (안전자산 선호/인플레 헷지)")
-    table.add_row("", "3% < 고점 대비 낙폭 ≤ 8%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "8% < 고점 대비 낙폭 ≤ 15%", "[yellow]노란색[/]", "단기 약세/추세 둔화")
-    table.add_row("", "고점 대비 낙폭 > 15%", "[blue]파란색[/]", "하락장 (위험자산 선호/달러 초강세)")
-    table.add_section()
-
-    table.add_row("은/구리 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 (경기 확장/원자재 랠리)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 15%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "15% < 고점 대비 낙폭 ≤ 25%", "[yellow]노란색[/]", "수요 둔화/기술적 조정기")
-    table.add_row("", "고점 대비 낙폭 > 25%", "[blue]파란색[/]", "경기 침체 우려 (닥터 코퍼 경고)")
-    table.add_section()
-
-    table.add_row("SOX 반도체 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입")
-    table.add_row("", "고점 대비 낙폭 > 20%", "[blue]파란색[/]", "반도체 하락 사이클/침체")
-    table.add_section()
-
-    table.add_row("NBI 바이오 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 15%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "15% < 고점 대비 낙폭 ≤ 25%", "[yellow]노란색[/]", "기술적 조정기 진입")
-    table.add_row("", "고점 대비 낙폭 > 25%", "[blue]파란색[/]", "바이오 하락 사이클/침체")
-    table.add_section()
-
-    table.add_row("BKX 은행 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입")
-    table.add_row("", "고점 대비 낙폭 > 20%", "[blue]파란색[/]", "은행업/경제 하락 사이클/침체")
-    table.add_section()
-
-    table.add_row("DJU 유틸/전력 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (AI 전력 수요 폭발)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정 및 인프라 숨고르기")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 15%", "[yellow]노란색[/]", "기술적 조정기 진입 (금리 부담 가중)")
-    table.add_row("", "고점 대비 낙폭 > 15%", "[blue]파란색[/]", "유틸리티 하락 사이클 및 방어주 침체")
-    table.add_section()
-
-    table.add_row("DRG 제약 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (방어주 부각)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정 및 파이프라인 숨고르기")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 15%", "[yellow]노란색[/]", "기술적 조정기 진입 (임상/약가 리스크)")
-    table.add_row("", "고점 대비 낙폭 > 15%", "[blue]파란색[/]", "제약/헬스케어 하락 사이클 및 침체")
-    table.add_section()
-
-    table.add_row("DJT 운송 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (실물 경기 호황)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입 (경기 둔화 우려 반영)")
-    table.add_row("", "고점 대비 낙폭 > 20%", "[blue]파란색[/]", "운송업 및 실물경제 하락 사이클/침체")
-    table.add_section()
-
-    table.add_row("XAL 항공 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (여행 수요 폭발)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 15%", "[orange3]주황색[/]", "건전한 조정 및 유가/환율 숨고르기")
-    table.add_row("", "15% < 고점 대비 낙폭 ≤ 25%", "[yellow]노란색[/]", "기술적 조정기 진입 (운영비 증가 우려)")
-    table.add_row("", "고점 대비 낙폭 > 25%", "[blue]파란색[/]", "항공업 하락 사이클/침체 (외부 쇼크 반영)")
-    table.add_section()
-
-    table.add_row("XOI 에너지 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (유가 상승 수혜)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 10%", "[orange3]주황색[/]", "건전한 조정")
-    table.add_row("", "10% < 고점 대비 낙폭 ≤ 20%", "[yellow]노란색[/]", "기술적 조정기 진입 (원유 수요 둔화 우려)")
-    table.add_row("", "고점 대비 낙폭 > 20%", "[blue]파란색[/]", "에너지/정유업 하락 사이클/침체")
-    table.add_section()
-
-    table.add_row("HUI 금광 지수명", "고점 대비 낙폭 ≤ 5%", "[red]빨간색[/]", "신고가 랠리 및 초강세 (안전자산 선호 극대화)")
-    table.add_row("", "5% < 고점 대비 낙폭 ≤ 15%", "[orange3]주황색[/]", "건전한 조정 및 금값 단기 숨고르기")
-    table.add_row("", "15% < 고점 대비 낙폭 ≤ 30%", "[yellow]노란색[/]", "기술적 조정기 진입 (고금리/강달러 압박)")
-    table.add_row("", "고점 대비 낙폭 > 30%", "[blue]파란색[/]", "금광업 하락 사이클 및 투심 위축")
-    table.add_section()
-
-    table.add_row("유럽 등 주요 지수", "고점 대비 낙폭 ≤ 3%", "[red]빨간색[/]", "신고가 근접/초강세장")
-    table.add_row("(FTSE, CAC, DAX, STOXX)", "3% < 고점 대비 낙폭 ≤ 8%", "[orange3]주황색[/]", "안정적인 상승장/건전한 조정")
-    table.add_row("", "8% < 고점 대비 낙폭 ≤ 20%", "[yellow]노란색[/]", "일반 조정/중립 구간")
-    table.add_row("", "고점 대비 낙폭 > 20%", "[blue]파란색[/]", "침체/약세장 진입")
-    table.add_section()
-
-    table.add_row("등락폭/등락률", "상승 (> 0)", "[red]빨간색[/]", "전일 대비 상승")
+    table.add_row("등락폭/등락률 값", "상승 (> 0)", "[red]빨간색[/]", "전일 대비 상승")
     table.add_row("", "하락 (< 0)", "[blue]파란색[/]", "전일 대비 하락")
     table.add_row("", "보합 (== 0)", "[white]흰색[/]", "전일 대비 보합")
     table.add_section()
 
-    table.add_row("52주 고점대비", "등락률 > -3.0%", "[red]빨간색[/]", "신고가 근접 (초강세)")
+    table.add_row("52주 고점대비 값", "등락률 > -3.0%", "[red]빨간색[/]", "신고가 근접 (초강세)")
     table.add_row("", "등락률 < -20.0%", "[blue]파란색[/]", "침체/약세장 진입")
     table.add_row("", "-3.0% ~ -20.0%", "[white]흰색[/]", "일반 조정/중립")
     table.add_section()
@@ -496,11 +420,15 @@ def show_help():
     table.add_section()
 
     # [통일] 지수 화면·종목 표·개별 분석이 analysis.price_trend_color 단일 소스를 공유한다
-    table.add_row("지수·종목 현재가", "현재가 > 20일선 & 20일선 > 60일선", "[red]빨간색[/]", "강세: 중장기 상승 추세 속 단기 강세")
+    table.add_row("지수값·종목 현재가", "현재가 > 20일선 & 20일선 > 60일선", "[red]빨간색[/]", "강세: 중장기 상승 추세 속 단기 강세")
     table.add_row("(추세)", "현재가 ≤ 20일선 & 20일선 > 60일선", "[white]흰색[/]", "눌림목 조정: 장기 강세 속 단기 조정")
     table.add_row("", "현재가 ≥ 20일선 & 20일선 < 60일선", "[orange3]주황색[/]", "반등 시도: 장기 약세 속 단기 추세 전환 시도")
     table.add_row("", "현재가 < 20일선 & 20일선 < 60일선", "[blue]파란색[/]", "약세: 중장기 하락 추세 속 단기 약세")
-    table.add_row("", "20일선 == 60일선 (혼조) 또는 산출 불가", "[white]흰색[/]", "방향 판단 보류")
+    table.add_row("", "20일선 == 60일선 (혼조)", "[white]흰색[/]", "방향 판단 보류")
+    table.add_row("", "이평선 산출 불가 (데이터 부족)", "[dim]흐린색[/]", "판정 불가 (눌림목 흰색과 구분)")
+    table.add_row("", "", "", "")
+    table.add_row("", "역방향 자산은 위 색을 반전 (빨강↔파랑, 흰색↔주황)", "", "VIX·V코스피200·미국채 4종·달러인덱스·달러환율")
+    table.add_row("", "  예) VIX 상승 추세 = 시장에 불리", "[blue]파란색[/]", "값이 오를수록 불리한 자산은 상승이 파란색")
     table.add_section()
 
     table.add_row("체결강도", "150% 이상", "[magenta]보라색[/]", "강력한 수급: 공격적인 매수세 유입, 주가 급등 가능성 높음")
@@ -536,13 +464,6 @@ def show_help():
 
     table.add_row("파라볼릭 SAR", "주가 > SAR (SAR이 주가 아래)", "[red]빨간색[/]", "상승 추세 (매수/보유)")
     table.add_row("", "주가 < SAR (SAR이 주가 위)", "[blue]파란색[/]", "하락 추세 (매도/청산)")
-    table.add_row("", "", "", "")
-    table.add_row("", "SAR 는 추세가 끝났는지 아닌지 빠르게 알려주는 지표", "", "추세 유지/종료 판단용")
-    table.add_row("", "SAR 전환 발생 + 종가 기준 EMA60 이탈 + RSI 60 이상", "", "추세 종료 확정")
-    table.add_row("", "SAR 상승 중 + EMA60 위 + RSI 50~65", "", "보유")
-    table.add_row("", "SAR 하향 전환 +  EMA60 유지 + RSI 55 ", "", "관망")
-    table.add_row("", "SAR 하향 전환 +  EMA60 종가 이탈 + RSI 65 이상", "", "정리")
-    table.add_row("", "SAR은 추세 없을 때 쓰면 안됨", "", "ADX 필수확인")
     table.add_section()
 
     table.add_row("추세SMO", "S (SAR)", "[red]⬆[/] / [blue]⬇[/]", "상승 / 하락")
@@ -558,14 +479,6 @@ def show_help():
     table.add_row("", "45 ≤ RSI < 55", "[orange3]주황색[/]", "강세 조정 구간 (진입후보)")
     table.add_row("", f"{rsi_lower} < RSI < 45", "[yellow]노란색[/]", "단기하락 전환가능")
     table.add_row("", f"RSI ≤ {rsi_lower}", "[blue]파란색[/]", "하락")
-    table.add_row("", "", "", "")
-    table.add_row("", "SAR이 알려주는 전환이 과열/과매도 구간인지 확인", "", "SAR 전환 해석")
-    table.add_row("", "RSI 70 이상 / 과매수구간", "", "SAR 전환시 단기고점/매수금지/분할매도 ")
-    table.add_row("", "RSI 60 ~ 70 부근 / 강한상승구간", "", "SAR 전환시 조정가능성 높음/단기조정/횡보")
-    table.add_row("", "RSI 50 ~ 60 부근 / 약한상승구간", "", "SAR 전환시 가짜신호 확률높음")
-    table.add_row("", "RSI 40 ~ 50 부근 / 강세조정구간", "", "SAR 전환시 눌림후 재상승 가능성/분할매수")
-    table.add_row("", "RSI 30 ~ 40 부근 / 약세진입구간", "", "SAR 전환시 하락추세 전환가능성 증가/신규매수금지")
-    table.add_row("", "RSI 30 이하 / 과매도구간", "", "SAR 전환시 단기반등 시그널/신규매수금지")
     table.add_section()
 
     table.add_row("ADX", "0 ~ 15 미만", "[white]흰색[/]", "추세 없음 (횡보/박스권)")
@@ -573,11 +486,6 @@ def show_help():
     table.add_row("", "20 ~ 30 미만", "[orange3]주황색[/]", "안정적 추세 (매매 최적)")
     table.add_row("", "30 ~ 40 미만", "[red]빨간색[/]", "강한 추세 (과열 주의)")
     table.add_row("", "40 이상", "[magenta]보라색[/]", "과열 (조정 주의)")
-    table.add_row("", "", "", "")
-    table.add_row("", "ADX가 지금 SAR를 써도 되는지 알려줌", "", "SAR 신뢰도")
-    table.add_row("", "ADX 15 미만", "", "SAR 사용금지")
-    table.add_row("", "ADX 15 이상 20 미만 ", "", "주의")
-    table.add_row("", "ADX 20 이상", "", "SAR 사용가능")
     table.add_section()
 
     cci_upper = config.INDICATOR_PARAMS["CCI_UPPER"]
@@ -587,11 +495,6 @@ def show_help():
     table.add_row("", f"0 < CCI < {cci_upper}", "[orange3]주황색[/]", "상승 방향시 (추세 매매)")
     table.add_row("", f"{cci_lower} < CCI < 0", "[yellow]노란색[/]", "상승 방향시 (반등 시도)")
     table.add_row("", f"CCI ≤ {cci_lower}", "[blue]파란색[/]", "과매도 (저점 탐색)")
-    table.add_row("", "", "", "")
-    table.add_row("", "SAR 타이밍 정밀화 용도로 사용", "", "SAR 해석")
-    table.add_row("", "+100선 이상", "", "SAR 추세 연장")
-    table.add_row("", "0선 하향 + SAR 반전", "", "SAR 추세 종료")
-    table.add_row("", "-100선 근처", "", "하락 가속 가능")
     table.add_section()
 
     table.add_row("OBV (거래량)", f"OBV > EMA {obv_period}일선", "[red]빨간색[/]", "수급 양호 (매집)")

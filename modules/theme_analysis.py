@@ -313,72 +313,10 @@ def evaluate_market_indicator(name, price, yh_rate=None):
         elif price >= 40: status_desc = "시스템 위기/블랙스완"
     
     if yh_rate is not None:
-        if name == "SOX (반도체)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리/초강세"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정"
-            elif yh_rate >= -20.0: status_desc = "기술적 조정기"
-            elif yh_rate < -20.0: status_desc = "반도체 하락 사이클/침체"
-        elif name == "NBI (바이오)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리/초강세"
-            elif yh_rate >= -15.0: status_desc = "건전한 조정"
-            elif yh_rate >= -25.0: status_desc = "기술적 조정기"
-            elif yh_rate < -25.0: status_desc = "바이오 하락 사이클/침체"
-        elif name == "BKX (은행)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리/초강세"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정"
-            elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입"
-            elif yh_rate < -20.0: status_desc = "은행업/경제 하락 사이클/침체"
-        elif name == "DJU (유틸/전력)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리/방어주 및 전력인프라 강세"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정"
-            elif yh_rate >= -15.0: status_desc = "기술적 조정기/금리인하 지연 우려"
-            elif yh_rate < -15.0: status_desc = "전력/유틸리티 섹터 침체"
-        elif name == "DRG (제약)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (방어주 부각)"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정 및 파이프라인 숨고르기"
-            elif yh_rate >= -15.0: status_desc = "기술적 조정기 진입 (임상/약가 리스크)"
-            elif yh_rate < -15.0: status_desc = "제약/헬스케어 하락 사이클 및 침체"
-        elif name == "DJT (운송)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (실물 경기 호황)"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정"
-            elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입 (경기 둔화 우려 반영)"
-            elif yh_rate < -20.0: status_desc = "운송업 및 실물경제 하락 사이클/침체"
-        elif name == "XAL (항공)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (여행 수요 폭발)"
-            elif yh_rate >= -15.0: status_desc = "건전한 조정 및 유가/환율 숨고르기"
-            elif yh_rate >= -25.0: status_desc = "기술적 조정기 진입 (운영비 증가 우려)"
-            elif yh_rate < -25.0: status_desc = "항공업 하락 사이클/침체 (외부 쇼크 반영)"
-        elif name == "XOI (에너지)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (유가 상승 수혜)"
-            elif yh_rate >= -10.0: status_desc = "건전한 조정"
-            elif yh_rate >= -20.0: status_desc = "기술적 조정기 진입 (원유 수요 둔화 우려)"
-            elif yh_rate < -20.0: status_desc = "에너지/정유업 하락 사이클/침체"
-        elif name == "HUI (금광)":
-            if yh_rate >= -5.0: status_desc = "신고가 랠리 및 초강세 (안전자산 선호 극대화)"
-            elif yh_rate >= -15.0: status_desc = "건전한 조정 및 금값 단기 숨고르기"
-            elif yh_rate >= -30.0: status_desc = "기술적 조정기 진입 (고금리/강달러 압박)"
-            elif yh_rate < -30.0: status_desc = "금광업 하락 사이클 및 투심 위축"
-        elif name in ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]:
-            if yh_rate >= -3.0: status_desc = "신고가 근접/초강세장"
-            elif yh_rate >= -8.0: status_desc = "안정적인 상승장/건전한 조정"
-            elif yh_rate >= -20.0: status_desc = "일반 조정/중립 구간"
-            elif yh_rate < -20.0: status_desc = "침체/약세장 진입"
-        elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
-            if yh_rate >= -10.0: status_desc = "신고가 랠리/크립토 불장"
-            elif yh_rate >= -25.0: status_desc = "건전한 조정/변동성 허용 구간"
-            elif yh_rate >= -40.0: status_desc = "투심 위축/하락 경계"
-            elif yh_rate < -40.0: status_desc = "크립토 윈터/침체장"
-        elif name == "금":
-            if yh_rate >= -3.0: status_desc = "신고가 랠리/안전자산 선호(인플레 헷지)"
-            elif yh_rate >= -8.0: status_desc = "건전한 조정"
-            elif yh_rate >= -15.0: status_desc = "단기 약세/추세 둔화"
-            elif yh_rate < -15.0: status_desc = "하락장/위험자산 선호(달러 강세)"
-        elif name in ["은", "구리"]:
-            if yh_rate >= -5.0: status_desc = "신고가 랠리/경기 확장(수요 폭발)"
-            elif yh_rate >= -15.0: status_desc = "건전한 조정"
-            elif yh_rate >= -25.0: status_desc = "수요 둔화/기술적 조정기"
-            elif yh_rate < -25.0: status_desc = "경기 침체 우려/닥터코퍼 경고"
-        elif not status_desc:
+        # [통일] 섹터 지수·유럽 지수·암호화폐·금/은/구리의 자산별 낙폭 문구는 제거했다.
+        #  지수명 색상이 국면 룰로 일원화되면서 이 문구만 낙폭 기준으로 남으면 색과 설명이
+        #  어긋나고, 동일 임계값이 market/main에 3중 복제되던 문제도 있었다(아래 공통 문구 사용).
+        if not status_desc:
             if yh_rate >= -3.0: status_desc = "신고가 근접/초강세"
             elif yh_rate <= -20.0: status_desc = "침체/약세장 진입"
             else: status_desc = "일반 조정/중립"

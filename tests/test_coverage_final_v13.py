@@ -71,7 +71,8 @@ def test_evaluate_market_indicator_all_cases():
     assert "골디락스" in theme_analysis.evaluate_market_indicator("WTI 원유", 70)
     assert "외환 패닉" in theme_analysis.evaluate_market_indicator("달러환율", 1550)
     assert "안정" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 14)
-    assert "신고가 랠리" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-3.0)
+    # [변경] 섹터 지수의 자산별 낙폭 문구는 폐지 — 공통 낙폭 문구를 사용한다(지수명 색상은 국면 룰로 통일)
+    assert "신고가 근접" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-3.0)
     assert "침체/약세장" in theme_analysis.evaluate_market_indicator("기타지수", 100, yh_rate=-25.0)
 
 @patch('modules.theme_analysis.genai.GenerativeModel')

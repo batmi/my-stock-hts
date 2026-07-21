@@ -41,7 +41,8 @@ def test_evaluate_market_indicator_branches():
     assert "위험" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 25)
     assert "경계" in theme_analysis.evaluate_market_indicator("VIX (변동성)", 18)
     
-    assert "반도체 하락 사이클" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-30.0)
+    # [변경] 섹터 지수의 자산별 낙폭 문구는 폐지 — 공통 낙폭 문구를 사용한다(지수명 색상은 국면 룰로 통일)
+    assert "침체/약세장 진입" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-30.0)
     assert "침체/약세장 진입" in theme_analysis.evaluate_market_indicator("일반지수", 100, yh_rate=-25.0)
 
 # ==========================================================

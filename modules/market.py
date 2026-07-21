@@ -585,7 +585,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 if name == "달러환율": curr_fmt += "원"
 
             # [통일] 현재가 색상은 종목 표와 동일 규칙 — analysis.price_trend_color 단일 소스
-            curr_price_color = analysis.price_trend_color(eval_price, ema20, ema60)
+            #  단, VIX·금리·달러처럼 '값이 오를수록 시장에 불리한' 역방향 자산은 색을 반전한다
+            #  (반전 없으면 VIX 급등이 빨간색=강세로 읽혀 지수명 밴드 색과 정반대가 된다).
+            curr_price_color = analysis.price_trend_color(
+                eval_price, ema20, ema60,
+                invert=(name in config.INVERSE_VALUE_INDICES))
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             h_color = "[white]"
@@ -689,13 +693,25 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if fut_div:
             display_name = f"{name} {fut_div}"
 
+        # [통일] 방향성 자산의 지수명은 모두 국면 룰(이중 EMA + 추종 확인)로 색을 입힌다.
+        #  섹터 지수·귀금속/구리·암호화폐는 과거 '52주 낙폭 구간' 룰을 썼으나,
+        #  낙폭은 가격 수준일 뿐 추세 방향이 아니라 고점 직후 꺾임을 강세(빨강)로 오인했다.
+        #  10년 일봉 검증에서 위험 조기경보 성능은 두 룰이 동등(J≈0)했고, 색 전환 빈도는
+        #  국면 룰이 일관되게 낮아(원자재 20 vs 24회/년, 코인 27 vs 33, 섹터 21 vs 25)
+        #  화면 안정성과 색 문법 일관성 모두 국면 룰이 우세해 통합했다.
+        #  (52주 낙폭 수치 자체는 '52주 고점' 컬럼에 그대로 표시되므로 정보 손실 없음)
+        #  절대 밴드 자산(VIX·미국채·달러·유가/가스/밀)은 수준 자체가 매크로 의미라 제외.
         adaptive_targets = [
             "코스피", "코스닥", "코스피200", "코스닥150", "코스피200선물",
             "나스닥 선물", "나스닥", "S&P500 선물", "S&P500", "다우존스 선물", "다우존스", "러셀2000 선물", "러셀2000",
-            "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합", 
-            "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40", 
+            "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합",
+            "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40",
             "Germany - DAX 40", "Europe - STOXX 50",
-            "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
+            "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국",
+            "SOX (반도체)", "NBI (바이오)", "BKX (은행)", "DJU (유틸/전력)", "DRG (제약)",
+            "DJT (운송)", "XAL (항공)", "XOI (에너지)", "HUI (금광)",
+            "금", "은", "구리",
+            "비트코인", "이더리움", "솔라나", "리플",
         ]
 
         if name in adaptive_targets:
@@ -723,71 +739,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 if thr is None or eval_price >= thr:
                     display_name = f"[{color}]{name}[/]"
                     break
-        elif name == "SOX (반도체)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name == "NBI (바이오)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
-        elif name == "BKX (은행)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name == "DJU (유틸/전력)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -15.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
-        elif name == "DRG (제약)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -15.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
-        elif name == "DJT (운송)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name == "XAL (항공)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
-        elif name == "XOI (에너지)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -10.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -10.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name == "HUI (금광)":
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -30.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -30.0: display_name = f"[blue]{name}[/]"
-        elif name in ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]:
-            if high_52_rate >= -3.0: display_name = f"[red]{name}[/]"
-            elif -8.0 <= high_52_rate < -3.0: display_name = f"[orange3]{name}[/]"
-            elif -20.0 <= high_52_rate < -8.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -20.0: display_name = f"[blue]{name}[/]"
-        elif name in ["비트코인", "이더리움", "솔라나", "리플"]:
-            if high_52_rate >= -10.0: display_name = f"[red]{name}[/]"
-            elif -25.0 <= high_52_rate < -10.0: display_name = f"[orange3]{name}[/]"
-            elif -40.0 <= high_52_rate < -25.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -40.0: display_name = f"[blue]{name}[/]"
-        elif name == "금":
-            if high_52_rate >= -3.0: display_name = f"[red]{name}[/]"
-            elif -8.0 <= high_52_rate < -3.0: display_name = f"[orange3]{name}[/]"
-            elif -15.0 <= high_52_rate < -8.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -15.0: display_name = f"[blue]{name}[/]"
-        elif name in ["은", "구리"]:
-            if high_52_rate >= -5.0: display_name = f"[red]{name}[/]"
-            elif -15.0 <= high_52_rate < -5.0: display_name = f"[orange3]{name}[/]"
-            elif -25.0 <= high_52_rate < -15.0: display_name = f"[yellow]{name}[/]"
-            elif high_52_rate < -25.0: display_name = f"[blue]{name}[/]"
+        # [통일] 섹터 지수(SOX/NBI/BKX/DJU/DRG/DJT/XAL/XOI/HUI)·금/은/구리·암호화폐의
+        #  52주 낙폭 색상 분기는 제거했다 — 위 adaptive_targets의 국면 룰로 일원화(유럽 지수와 동일).
         elif name in ["VIX (변동성)", "V코스피200"]:
             if current < 15: display_name = f"[green]{name}[/]"
             elif 15 <= current < 20: display_name = f"[yellow]{name}[/]"
