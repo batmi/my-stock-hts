@@ -724,8 +724,11 @@ def _chart_cache_key(code, is_overseas, is_index):
     KIS 일봉=KRX 정규장 종가**. 브로커를 키에 넣지 않으면 mode 전환 시(예: 맥북에서
     mode 2 → mode 3) 한쪽 데이터가 다른 쪽 캐시로 새어들어 등락률/EMA가 어긋난다.
     모의(mode1)·실전(mode2)은 둘 다 KIS/KRX라 'K'로 공유한다.
+
+    TOSS는 'T2' — 일봉 이상치 보정(_toss_sanitize_daily_ohlc) 도입 시 네임스페이스를 올려
+    이미 저장된 오염 캐시(메모리/디스크)가 재사용되지 않게 한다.
     """
-    broker = 'T' if getattr(config.session, 'is_toss', False) else 'K'
+    broker = 'T2' if getattr(config.session, 'is_toss', False) else 'K'
     return f"{broker}_{code}_{is_overseas}_{is_index}"
 
 
@@ -4136,6 +4139,62 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     return df
 
 
+# 국내 일봉 이상치 판정 폭. 국내 가격제한폭(±30%)보다 낮게 잡아 '제한폭에 붙은 가짜 값'만 걸러낸다.
+# 실측(2026-07-22) 정상 봉의 전일종가 대비 고가 괴리는 최대 +15.6%였고, 오염 값은 -30%/-30%/+27%로
+# 뚜렷이 갈렸다. 18%는 그 사이의 여유 있는 경계다.
+_TOSS_DAILY_OUTLIER_GUARD = 0.18
+
+
+def _toss_sanitize_daily_ohlc(df, code=""):
+    """토스 국내 일봉의 상·하한가 이상치를 제거한다.
+
+    토스 캔들은 NXT 프리마켓(08:00) 개장 직후의 상·하한가 호가 체결을 일봉 시가/고가/저가에
+    그대로 섞는다. 실측 사례(전일 종가 대비 정확히 ±30% = 가격제한폭):
+      KT 2025-09-03      시가·저가 36,500 (KRX 실제 52,000 / 종가 52,500)
+      HD현대중공업 09-29  저가 344,500     (KRX 실제 486,500)
+      삼성SDI 2026-04-22  시가·고가 820,000 (KRX 실제 686,000)
+    이 값이 52주 밴드는 물론 ATR·변동성·샹들리에 트레일링 스톱까지 오염시킨다.
+
+    판정: '종가는 전일 종가 근처인데 시가/고가/저가만 제한폭에 붙은' 봉만 손본다. 진짜 상·하한가
+    급등락일은 종가도 함께 크게 움직이므로 게이트에 걸려 원본이 보존된다(예: -29.95% 하한가 마감).
+    보정: 오염된 값은 임의의 클램프 값으로 바꾸지 않고 그 봉의 실제 체결가(시가/종가)로 접는다.
+    (가짜 극값이 52주 고·저점으로 남지 않게 하는 것이 목적이며, 밴드를 넓히는 방향으로는 절대
+     보정하지 않는다.)
+    """
+    if df is None or df.empty or len(df) < 2:
+        return df
+    g = _TOSS_DAILY_OUTLIER_GUARD
+    fixed = 0
+    try:
+        io, ih, il, ic = (df.columns.get_loc(c) for c in ('open', 'high', 'low', 'close'))
+        prev_c = float(df.iat[0, ic] or 0)
+        for i in range(1, len(df)):
+            o = float(df.iat[i, io] or 0)
+            h = float(df.iat[i, ih] or 0)
+            l = float(df.iat[i, il] or 0)
+            c = float(df.iat[i, ic] or 0)
+            if prev_c > 0 and c > 0 and abs(c / prev_c - 1) <= g:
+                hi_lim, lo_lim = prev_c * (1 + g), prev_c * (1 - g)
+                dirty = False
+                if o > hi_lim or o < lo_lim:      # 시가 오염 → 그 봉의 신뢰 가능한 값(종가)으로 대체
+                    o, dirty = c, True
+                if h > hi_lim:
+                    h, dirty = max(o, c), True
+                if l < lo_lim:
+                    l, dirty = min(o, c), True
+                if dirty:
+                    # 정합성: 고가/저가는 시가·종가를 반드시 포함해야 한다.
+                    h, l = max(h, o, c), min(l, o, c)
+                    df.iat[i, io], df.iat[i, ih], df.iat[i, il] = o, h, l
+                    fixed += 1
+            prev_c = c if c > 0 else prev_c
+        if fixed:
+            logger.debug(f"[Toss] 일봉 이상치 보정({code}): {fixed}봉")
+    except Exception as e:
+        logger.debug(f"[Toss] 일봉 이상치 보정 실패({code}): {e}")
+    return df
+
+
 def _toss_chart_data(code, period_type='daily', is_overseas=False):
     """토스 캔들 → KIS get_chart_data 형태의 DataFrame.
     columns=['date','open','high','low','close','volume'] (date=YYYYMMDD, 오름차순).
@@ -4219,6 +4278,10 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
     df = df.sort_values('date', ascending=True).reset_index(drop=True)
     if interval == '1d':
+        if not is_overseas:
+            # NXT 프리마켓 상·하한가 체결이 섞인 봉을 먼저 정제한다(tail 이전 = 첫 봉도 전일 종가 확보).
+            # 해외는 가격제한폭이 없어 '제한폭에 붙은 값' 판정이 성립하지 않으므로 제외.
+            df = _toss_sanitize_daily_ohlc(df, code)
         df = df.tail(250).reset_index(drop=True)
         # 국내 일봉 종가는 NXT 연장(~20:00) 체결까지 포함한 값 그대로 둔다.
         # (과거엔 직전 봉 종가를 KRX 기준가로 역산 보정했으나 역산 로직을 폐기 —

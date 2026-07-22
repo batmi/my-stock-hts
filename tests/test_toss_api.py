@@ -414,6 +414,51 @@ def test_toss_capture_krx_close_skips_before_close():
         config.session.is_toss = False
 
 
+def _daily_candles(rows):
+    """[(days_ago, o, h, l, c), ...] → 토스 캔들 응답(최신 우선)."""
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.now()
+    return {"candles": [
+        {"timestamp": (today - _td(days=d)).strftime("%Y-%m-%dT09:00:00+09:00"),
+         "openPrice": str(o), "highPrice": str(h), "lowPrice": str(l),
+         "closePrice": str(c), "volume": "1000"}
+        for d, o, h, l, c in rows
+    ], "nextBefore": None}
+
+
+def test_daily_sanitize_drops_price_limit_outlier():
+    """NXT 프리마켓 상·하한가 체결이 시가/저가로 섞인 봉을 제거한다(KT 2025-09-03 실측 형태)."""
+    import api
+    # 전일 종가 52,200 → 당일 시가·저가만 36,500(= -30%, 가격제한폭), 종가는 52,500(+0.6%)
+    res = _daily_candles([(1, 36500, 53700, 36500, 52500), (2, 53200, 53200, 51400, 52200)])
+    with patch("toss_api.get_candles", return_value=res):
+        df = api._toss_chart_data("030200", period_type='daily', is_overseas=False)
+    last = df.iloc[-1]
+    assert float(last['low']) == 52500.0    # 가짜 하한가 저가 제거
+    assert float(last['open']) == 52500.0   # 오염된 시가는 종가로 대체
+    assert float(last['high']) == 53700.0   # 정상 범위의 고가는 보존
+    assert float(last['close']) == 52500.0  # 종가는 언제나 무보정
+
+
+def test_daily_sanitize_keeps_real_limit_down_day():
+    """진짜 하한가 마감일(종가도 -30%)은 게이트에 걸려 원본이 보존된다."""
+    import api
+    res = _daily_candles([(1, 30050, 30050, 30050, 30050), (2, 43000, 43500, 42800, 42900)])
+    with patch("toss_api.get_candles", return_value=res):
+        df = api._toss_chart_data("950160", period_type='daily', is_overseas=False)
+    last = df.iloc[-1]
+    assert float(last['low']) == 30050.0 and float(last['open']) == 30050.0
+
+
+def test_daily_sanitize_skips_overseas():
+    """해외는 가격제한폭이 없어 판정이 성립하지 않으므로 보정하지 않는다."""
+    import api
+    res = _daily_candles([(1, 36.5, 53.7, 36.5, 52.5), (2, 53.2, 53.2, 51.4, 52.2)])
+    with patch("toss_api.get_candles", return_value=res):
+        df = api._toss_chart_data("TSLA", period_type='daily', is_overseas=True)
+    assert float(df.iloc[-1]['low']) == 36.5
+
+
 def test_chart_data_adapter_daily_keeps_nxt_close():
     """국내 일봉: 직전 거래일 봉 종가를 NXT 연장(~20:00) 종가 '그대로' 둔다(KRX 역산 보정 폐기)."""
     import api
