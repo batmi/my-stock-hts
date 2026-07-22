@@ -12,6 +12,8 @@ class MockTrader:
         pass # 테스트 중 로그 출력 생략
     def stop(self):
         pass # Mock stop method
+    def halt_buys(self, reason, notify_msg=None):
+        return True # [방어 모드] 신규 매수 중단 (청산은 계속)
 
 @pytest.fixture
 def risk_manager():
@@ -160,19 +162,23 @@ def test_volatility_targeting_scaling_limits(risk_manager):
 
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_check_loss_limit_triggered(mock_tg, risk_manager):
-    """손실 한도 초과 시 정지 테스트"""
+    """손실 한도 초과 시 '신규 매수 중단(방어 모드)' 테스트
+
+    [추세추종] 시스템 정지(stop)는 매도 감시까지 꺼서 손절을 무력화하므로 호출되지 않아야 한다.
+    """
     risk_manager.trader.initial_asset = 10_000_000
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0 # 5% limit
-    
+
     # Current asset: 9,000,000 (-10% loss)
     current_total = 9_000_000
-    
-    with patch.object(risk_manager.trader, 'stop') as mock_stop:
+
+    with patch.object(risk_manager.trader, 'stop') as mock_stop, \
+         patch.object(risk_manager.trader, 'halt_buys', return_value=True) as mock_halt:
         risk_manager.check_loss_limit(current_total)
-        
-        mock_stop.assert_called_once()
-        mock_tg.assert_called_once()
-        assert "비상 정지" in mock_tg.call_args[0][0]
+
+        mock_halt.assert_called_once()
+        mock_stop.assert_not_called()
+        assert "방어 모드" in mock_halt.call_args.kwargs['notify_msg']
 
 def test_check_loss_limit_safe(risk_manager):
     """손실 한도 이내일 때 테스트"""

@@ -134,9 +134,13 @@ def test_update_market_indices_status_data_lack(mock_get_index):
     # 10개만 반환 (기본 MA 20 미만)
     mock_get_index.return_value = pd.DataFrame({'close': [100]*10})
     
-    trader._update_market_indices_status()
-    
-    assert trader.market_index_status["KOSPI"]["is_healthy"] is True
+    with patch('modules.auto_trade.api.send_telegram_message'):
+        trader._update_market_indices_status()
+
+    # [추세추종] 데이터 부족 = '시장 방향 판단 불가' → 신규 매수는 fail-closed로 보류한다.
+    #  ("대체 무슨 일이 벌어지고 있는지 모르겠다면, 아무것도 하지 마라")
+    assert trader.market_index_status["KOSPI"]["is_healthy"] is False
+    assert trader.market_index_status["KOSPI"]["unknown"] is True
     assert trader.market_index_status["KOSPI"]["current"] == 0
 
 # ==========================================================

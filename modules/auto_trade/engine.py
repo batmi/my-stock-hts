@@ -1046,21 +1046,31 @@ class RiskManager:
             logger.debug(f"[LossCheck] 시작자산:{self.trader.initial_asset:,} -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
         
         if loss_rate <= -loss_limit_pct:
-            self.trader.log(f"[비상 정지] 일일 손실 한도 초과! (현재: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)")
-            self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
-            
-            # [추가] 화면에 붉은색 경고 출력 (안내 메시지로 충분하므로 중복 [ERROR] 출력 제거)
-            console.print(f"\n[bold red]🛑 [비상 정지] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n[dim]자산 보호를 위해 시스템을 정지했습니다.[/dim]\n")
+            # [Fix] 기존에는 여기서 trader.stop()으로 시스템을 통째로 정지했다. 그러나 정지는
+            #  포지션을 청산하지 않고 매도 감시 루프까지 함께 끄기 때문에, 일일 손실 한도에
+            #  도달한(=여러 포지션이 이미 손절선 근처인) 바로 그 순간부터 손절·트레일링 스탑이
+            #  작동하지 않는 무방비 상태가 됐다. 추세추종 원칙("손절을 하지 않으면 계좌가
+            #  심각한 타격을 입는다")과 정면 충돌하므로, '신규 매수 중단(방어 모드)'으로 축소하고
+            #  청산 감시는 계속 돌린다. 시스템 완전 정지는 사용자 판단(메뉴/텔레그램)에 맡긴다.
+            reason = f"일일 손실 한도 초과 ({loss_rate:.2f}% / 제한 -{loss_limit_pct}%)"
 
-            msg = f"🛑 [비상 정지] 일일 손실 한도 초과\n\n수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n현재 자산: {current_total:,}원\n\n자산 보호를 위해 시스템을 정지합니다."
-            
+            msg = (f"🛑 [방어 모드] 일일 손실 한도 초과\n\n"
+                   f"수익률: {loss_rate:.2f}% (제한: -{loss_limit_pct}%)\n"
+                   f"현재 자산: {current_total:,}원\n\n"
+                   f"신규 매수를 중단합니다. 보유 종목의 손절·트레일링 스탑 감시는 계속됩니다.\n"
+                   f"(완전 정지가 필요하면 직접 중지해 주세요)")
+
             # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
             now = time.time()
             if now - getattr(self.trader, 'last_emergency_alert_time', 0) > 3600:
                 log_tail = get_mystock_log_tail(20)
                 msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
                 self.trader.last_emergency_alert_time = now
-            
-            api.send_telegram_message(msg)
-            self.trader.stop(use_status=False)
+
+            # 이미 같은 날 발동 중이면 halt_buys가 False를 돌려주어 알림·로그가 반복되지 않는다.
+            if self.trader.halt_buys(reason, notify_msg=msg):
+                self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
+                console.print(
+                    f"\n[bold red]🛑 [방어 모드] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n"
+                    f"[dim]신규 매수를 중단했습니다. 손절·트레일링 스탑 감시는 계속됩니다.[/dim]\n")
 

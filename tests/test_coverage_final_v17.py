@@ -166,23 +166,31 @@ def test_autotrader_print_report_custom_days(mock_ask, mock_asset, mock_get_trad
     assert kwargs.get('start_date') is not None
 
 def test_risk_manager_check_loss_limit_edge_case():
-    """일일 손실 제한(Loss Limit) 정확히 임계점 도달 시 킬 스위치 발동 커버리지"""
+    """일일 손실 제한 임계점 도달 시 '방어 모드'(신규 매수 중단) 발동 커버리지
+
+    [추세추종] 시스템 정지(stop)는 매도 감시까지 꺼서 손절을 무력화하므로 호출되지 않는다.
+    """
     trader = auto_trade.AutoTrader()
     trader.initial_asset = 10_000_000
+    trader.buy_halted = False  # 싱글턴 상태 초기화 (앞선 테스트의 방어 모드 잔존 방지)
+    trader.buy_halt_date = None
     rm = auto_trade.RiskManager(trader)
-    
+
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0 # 10% 손실 제한
     current_total = 9_000_000 # 정확히 -10% 손실 (900만원)
-    
+
     with patch.object(trader, 'stop') as mock_stop, \
          patch('modules.auto_trade.api.send_telegram_message') as mock_tg, \
          patch('config.console.print'):
-             
+
         rm.check_loss_limit(current_total)
-        
-        # 임계값 이하라면 중단 로직이 트리거되어야 함
-        mock_stop.assert_called_once_with(use_status=False)
+
+        # 신규 매수만 차단되고 청산 감시는 유지되어야 함
+        assert trader.buy_halted is True
+        mock_stop.assert_not_called()
         mock_tg.assert_called_once()
+
+    trader.resume_buys("테스트 정리")
 
 # ==========================================================
 # 4. modules/analysis.py 커버리지 (72% -> Target)

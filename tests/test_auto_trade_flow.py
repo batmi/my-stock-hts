@@ -42,6 +42,13 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     """매수 조건 점검 및 주문 실행 테스트"""
     # Setup
     trader.is_running = True
+    trader.buy_halted = False
+    # [필수] 시장 필터는 fail-closed다 — 지수 상태가 없으면 '판단 불가'로 신규 매수가 보류되므로
+    #  매수 경로를 검증하려면 정상(healthy) 지수 상태를 명시적으로 세팅해야 한다.
+    trader.market_index_status = {
+        "KOSPI": {"is_healthy": True, "unknown": False, "current": 2500.0},
+        "KOSDAQ": {"is_healthy": True, "unknown": False, "current": 800.0},
+    }
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
     
     # Mocks

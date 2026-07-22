@@ -918,15 +918,33 @@ def setup_logging():
     #  tvDatafeed 익명 웹소켓의 일시 끊김("Connection ... lost", "no data")은 자체 폴백·재시도로
     #  처리되는 설계상 정상 경로라 ERROR가 아니다. 핸들러 필터로 레벨을 낮춰(자식 로거 전파 포함)
     #  FILE_DEBUG_LEVEL=DEBUG일 때만 [DEBUG]로 기록한다. 우리 코드의 ERROR는 영향 없음.
+    # [추가] 라이브러리의 '설계상 정상' WARNING도 강등 대상. (name, 메시지 조각) → 강등 레벨
+    #  tvDatafeed 익명(nologin) 사용 경고는 우리가 의도적으로 선택한 접속 방식이라
+    #  매 초기화마다 반복될 뿐 조치할 것이 없다 → INFO로 낮춘다.
+    _DEMOTE_WARNINGS = (
+        ("tvDatafeed", "you are using nologin method", logging.INFO),
+    )
+
     class _DemoteExpectedLibErrors(logging.Filter):
         _NOISY = ("yfinance", "tvDatafeed", "websocket")
 
+        @staticmethod
+        def _is_lib(record, name):
+            return record.name == name or record.name.startswith(name + ".")
+
         def filter(self, record):
             if record.levelno >= logging.ERROR and any(
-                    record.name == n or record.name.startswith(n + ".") for n in self._NOISY):
+                    self._is_lib(record, n) for n in self._NOISY):
                 record.levelno = logging.DEBUG
                 record.levelname = "DEBUG"
                 return numeric_level <= logging.DEBUG
+
+            if record.levelno == logging.WARNING:
+                for lib_name, needle, target_level in _DEMOTE_WARNINGS:
+                    if self._is_lib(record, lib_name) and needle in str(record.msg):
+                        record.levelno = target_level
+                        record.levelname = logging.getLevelName(target_level)
+                        return numeric_level <= target_level
             return True
 
     file_handler.addFilter(_DemoteExpectedLibErrors())

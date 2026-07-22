@@ -482,19 +482,26 @@ def test_get_deposit_balance_fail(mock_call):
 @patch('modules.auto_trade.api.send_telegram_message')
 @patch('modules.auto_trade.AutoTrader.stop')
 def test_risk_manager_emergency_stop(mock_stop, mock_tg):
-    """일일 손실 한도 초과 시 비상 정지(Kill Switch) 테스트"""
+    """일일 손실 한도 초과 시 방어 모드(신규 매수 중단) 테스트
+
+    [추세추종] 청산 감시를 살려두어야 하므로 시스템 정지(stop)는 호출되지 않는다.
+    """
     trader = auto_trade.AutoTrader()
     trader.initial_asset = 10_000_000
+    trader.buy_halted = False  # 싱글턴 상태 초기화
+    trader.buy_halt_date = None
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0 # 5% 손실 제한
-    
+
     rm = auto_trade.RiskManager(trader)
-    
+
     with patch('config.console.print'):
         # 현재 자산이 9,000,000원 (10% 손실) -> 제한(-5%) 초과
         rm.check_loss_limit(9_000_000)
-        
-    mock_stop.assert_called_once()
+
+    assert trader.buy_halted is True
+    mock_stop.assert_not_called()
     mock_tg.assert_called_once()
+    trader.resume_buys("테스트 정리")
 
 def test_autotrader_get_recent_logs():
     """최근 로그 조회 기능 테스트"""

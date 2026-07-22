@@ -1,7 +1,10 @@
-"""자산 리스크 관리(손실컷·비상정지) 핵심 로직 테스트.
+"""자산 리스크 관리(손실컷·방어모드) 핵심 로직 테스트.
 
 OrderManager.check_loss_limit 은 '돈을 지키는' 마지막 안전장치이므로
-한도초과 정지 / 한도내 유지 / 비활성 / 비정상 급감 스킵 / 시작자산 0 분기를 검증한다.
+한도초과 방어모드 / 한도내 유지 / 비활성 / 비정상 급감 스킵 / 시작자산 0 분기를 검증한다.
+
+[추세추종] 한도 초과 시 시스템을 통째로 정지(stop)하면 매도 감시까지 꺼져 보유 포지션이
+손절선 아래로 방치되므로, '신규 매수만 중단(halt_buys)'하고 청산은 계속 돌리도록 바뀌었다.
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -15,29 +18,37 @@ def _om(initial_asset=1_000_000):
     trader = MagicMock()
     trader.initial_asset = initial_asset
     trader.last_emergency_alert_time = 0
+    trader.halt_buys.return_value = True  # 최초 발동 (중복 아님)
     return RiskManager(trader), trader
 
 
 @patch('modules.auto_trade.api.send_telegram_message')
-def test_loss_limit_triggers_emergency_stop(mock_tg):
-    """일일 손실 한도 초과 시 시스템을 정지(stop)하고 알림을 보낸다."""
+def test_loss_limit_triggers_buy_halt_not_stop(mock_tg):
+    """일일 손실 한도 초과 시 신규 매수만 중단하고 시스템은 정지하지 않는다."""
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
     om, trader = _om(1_000_000)
 
     om.check_loss_limit(900_000)  # -10% (한도 -5% 초과)
 
-    trader.stop.assert_called_once_with(use_status=False)
-    mock_tg.assert_called_once()
+    trader.halt_buys.assert_called_once()
+    # 청산(손절·트레일링 스탑) 감시가 계속되어야 하므로 시스템 정지는 호출되지 않는다
+    trader.stop.assert_not_called()
+
+    # 알림은 halt_buys에 notify_msg로 위임된다 (중복 발송 방지)
+    _, kwargs = trader.halt_buys.call_args
+    assert "방어 모드" in kwargs['notify_msg']
+    assert "손절" in kwargs['notify_msg']
 
 
 @patch('modules.auto_trade.api.send_telegram_message')
-def test_loss_limit_within_limit_no_stop(mock_tg):
-    """손실이 한도 이내면 정지하지 않는다."""
+def test_loss_limit_within_limit_no_halt(mock_tg):
+    """손실이 한도 이내면 매수 중단도 정지도 하지 않는다."""
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
     om, trader = _om(1_000_000)
 
     om.check_loss_limit(980_000)  # -2%
 
+    trader.halt_buys.assert_not_called()
     trader.stop.assert_not_called()
     mock_tg.assert_not_called()
 
@@ -50,6 +61,7 @@ def test_loss_limit_disabled(mock_tg):
 
     om.check_loss_limit(500_000)  # -50%
 
+    trader.halt_buys.assert_not_called()
     trader.stop.assert_not_called()
 
 
@@ -61,6 +73,7 @@ def test_loss_limit_abnormal_drop_skipped(mock_tg):
 
     om.check_loss_limit(400_000)  # < 50% → 가짜 비상정지 방지
 
+    trader.halt_buys.assert_not_called()
     trader.stop.assert_not_called()
 
 
@@ -72,18 +85,35 @@ def test_loss_limit_zero_initial_asset(mock_tg):
 
     om.check_loss_limit(900_000)
 
+    trader.halt_buys.assert_not_called()
     trader.stop.assert_not_called()
 
 
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_loss_limit_exact_threshold_triggers(mock_tg):
-    """손실률이 한도와 정확히 같아도(<=) 정지한다(경계값)."""
+    """손실률이 한도와 정확히 같아도(<=) 방어 모드로 진입한다(경계값)."""
     config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
     om, trader = _om(1_000_000)
 
     om.check_loss_limit(950_000)  # 정확히 -5%
 
-    trader.stop.assert_called_once_with(use_status=False)
+    trader.halt_buys.assert_called_once()
+    trader.stop.assert_not_called()
+
+
+@patch('modules.auto_trade.api.send_telegram_message')
+def test_loss_limit_repeat_does_not_realert(mock_tg):
+    """같은 날 재차 한도를 넘어도 halt_buys가 False를 돌려주면 재알림하지 않는다."""
+    config.SYSTEM_DAILY_LOSS_LIMIT = 5.0
+    om, trader = _om(1_000_000)
+    trader.halt_buys.return_value = False  # 이미 발동 중
+
+    om.check_loss_limit(900_000)
+
+    trader.halt_buys.assert_called_once()
+    trader.stop.assert_not_called()
+    # 중복 콘솔/로그 출력 없이 조용히 넘어간다
+    trader.log.assert_not_called()
 
 
 # ==========================================================

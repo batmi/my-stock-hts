@@ -103,6 +103,13 @@ class AutoTrader:
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
             cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
+            # [안전장치] 방어 모드 — 신규 매수(피라미딩 포함)만 중단하고 매도·손절 감시는 계속 돌린다.
+            #  일일 손실 한도 초과 시 시스템 전체를 정지하던 기존 동작은, 정작 손절이 가장 필요한
+            #  순간에 청산 엔진을 꺼버려 보유 포지션이 손절선 아래로 방치되는 문제가 있었다.
+            cls._instance.buy_halted = False          # 방어 모드 활성 여부
+            cls._instance.buy_halt_reason = ""        # 방어 모드 사유 (상태 표시용)
+            cls._instance.buy_halt_date = None        # 방어 모드 발동 일자 (날짜 변경 시 자동 해제)
+            cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
             
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             # [추가] 로그 디렉토리 확인 및 생성
@@ -294,7 +301,12 @@ class AutoTrader:
             return
         
         self.log("━━━ 자동매매 시스템 시작 프로세스 진입 ━━━")
-        
+
+        # [안전장치] 시작 시 방어 모드는 초기화한다. 손실 한도 조건이 여전히 유효하면
+        #  첫 주기의 check_loss_limit이 즉시 재발동시키므로 안전 수준은 유지된다.
+        if getattr(self, 'buy_halted', False):
+            self.resume_buys(reason="시스템 재시작")
+
         if config.session.is_toss:
             # [추가] 토스: 단일 계좌 + 토스 API 사용. 별도 KIS AUTO 계좌가 필요 없다.
             if not config.session.toss_app_key or not config.session.toss_app_secret or not config.session.cano:
@@ -671,6 +683,41 @@ class AutoTrader:
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
         context.SYSTEM_LOGGER = None
 
+    def halt_buys(self, reason, notify_msg=None):
+        """[안전장치] 방어 모드 진입 — 신규 매수·피라미딩만 중단하고 청산 감시는 유지한다.
+
+        [추세추종 원칙] "어떤 전략을 쓰든 손절을 하지 않으면 언젠가는 계좌가 심각한 타격을 입는다."
+        일일 손실 한도 초과 = 이미 여러 포지션이 손절선 근처라는 뜻이므로, 이때 시스템을 통째로
+        정지(stop)하면 남은 포지션이 손절선을 뚫고 내려가도 아무도 팔지 않는 무방비 상태가 된다.
+        따라서 '노출을 늘리는 행위'만 막고 매도/손절/트레일링 스탑 감시는 그대로 돌린다.
+
+        날짜가 바뀌면(당일 시작 자산 재측정) 자동 해제된다. 즉시 해제는 resume_buys()를 쓴다.
+        """
+        today = datetime.now().date()
+        if self.buy_halted and self.buy_halt_date == today:
+            return False  # 이미 같은 날 발동 중 — 중복 알림 방지
+
+        with self._lock:
+            self.buy_halted = True
+            self.buy_halt_reason = reason
+            self.buy_halt_date = today
+
+        self.log(f"[방어 모드] 신규 매수 중단: {reason} (매도·손절 감시는 계속됩니다)")
+        if notify_msg:
+            api.send_telegram_message(notify_msg)
+        return True
+
+    def resume_buys(self, reason="수동 해제"):
+        """방어 모드 해제 — 신규 매수를 재개한다."""
+        if not self.buy_halted:
+            return False
+        with self._lock:
+            self.buy_halted = False
+            self.buy_halt_reason = ""
+            self.buy_halt_date = None
+        self.log(f"[방어 모드 해제] 신규 매수를 재개합니다. ({reason})")
+        return True
+
     def log_current_holdings(self):
         """현재 보유 종목 현황을 조회하여 로그에 출력합니다 (체결 후 호출용)"""
         try:
@@ -757,7 +804,11 @@ class AutoTrader:
                 status_icon = "🟡"
         
         msg = f"{status_icon} [시스템 상태: {status_text}]\n"
-        
+
+        # [안전장치] 방어 모드 표시 — 청산은 계속 돌고 신규 진입만 막혀 있음을 명확히 알린다.
+        if self.is_running and getattr(self, 'buy_halted', False):
+            msg += f"🛑 방어 모드: 신규 매수 중단 ({self.buy_halt_reason})\n   └ 매도·손절·트레일링 스탑 감시는 정상 동작 중\n"
+
         # 자산 정보 조회
         current_asset = None
         deposit = 0
@@ -904,7 +955,11 @@ class AutoTrader:
                         # 시스템 루프의 상태 캐시(market_index_status)를 우선 적용하여 보류 카운트와 상태 불일치 방지
                         cached_stat = self.market_index_status.get(m_type)
                         
-                        if cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
+                        if isinstance(cached_stat, dict) and cached_stat.get('unknown'):
+                            # [Fix] 판단 불가 = 매수 보류(fail-closed). '약세 보류'와 원인을 구분해 표시한다.
+                            is_healthy = False
+                            filter_msg = " [🚫보류(판단불가)]"
+                        elif cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
                             is_healthy = cached_stat.get('is_healthy', True)
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                         else:
@@ -915,8 +970,8 @@ class AutoTrader:
                                 is_healthy = curr >= ma_val
                                 filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                             else:
-                                is_healthy = True
-                                filter_msg = " [데이터부족]"
+                                is_healthy = False
+                                filter_msg = " [🚫보류(데이터부족)]"
                                 
                         if m_type == "KOSPI":
                             is_healthy_k = is_healthy
@@ -1153,7 +1208,13 @@ class AutoTrader:
                 
         if datetime.now().weekday() > 4: market_status = "주말 휴장 (대기 중)"
         table.add_row("마켓 상태", market_status)
-        
+
+        # [안전장치] 방어 모드 — 신규 매수만 차단, 청산 감시는 계속됨을 명시
+        if self.is_running and getattr(self, 'buy_halted', False):
+            table.add_row("방어 모드",
+                          f"[bold red]🛑 신규 매수 중단[/] ({self.buy_halt_reason})\n"
+                          f"[dim]매도·손절·트레일링 스탑 감시는 정상 동작 중 (날짜 변경 시 자동 해제)[/]")
+
         # [추가] 시장 국면 상태 표시
         k_regime_str = analysis.format_regime(kospi_regime)
         q_regime_str = analysis.format_regime(kosdaq_regime)
@@ -1168,9 +1229,12 @@ class AutoTrader:
             kosdaq_stat = self.market_index_status.get("KOSDAQ")
             
             def get_stat_msg(stat):
+                # [Fix] 판단 불가(조회 실패)는 '확인 중'이 아니라 '매수 보류' 상태임을 명시한다.
+                if isinstance(stat, dict) and stat.get('unknown'):
+                    return "[yellow]판단 불가 (신규 매수 보류)[/]"
                 if not stat or not isinstance(stat, dict) or stat.get('current', 0) == 0:
                     return "[dim]확인 중[/]"
-                
+
                 is_healthy = stat.get('is_healthy', True)
                 current = stat.get('current', 0)
                 trend_icon = "(상승)" if is_healthy else "(하락)"
@@ -2445,6 +2509,12 @@ class AutoTrader:
                         self.initial_asset = 0
                         self.baseline_principal = 0  # [추가] 입금 감지 기준 원금도 당일 첫 측정 시 재산정되도록 리셋
 
+                        # [안전장치] 일일 손실 한도는 '당일 시작 자산' 기준이므로, 기준이 재측정되는
+                        #  날짜 변경 시점에 방어 모드(신규 매수 중단)도 함께 해제한다.
+                        if self.buy_halted:
+                            self.resume_buys(reason="날짜 변경 — 일일 손실 한도 기준 재설정")
+                            api.send_telegram_message("🔄 [방어 모드 해제] 날짜가 변경되어 신규 매수를 재개합니다.")
+
                         try:
                             acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
                             
@@ -3034,6 +3104,66 @@ class AutoTrader:
             except Exception: pass
         return None
 
+    def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None):
+        """[안전장치] 자동 매도 대상에서 제외된 보유 포지션의 손절선 이탈 경보
+
+        [추세추종 원칙] "탈출 전략이 없다면 포지션을 잡지 마라."
+        트레이딩 제한 종목(수동 홀딩)과 ETF(SYSTEM_INCLUDE_ETF=False)는 의도적으로 매도 분석에서
+        제외되므로 시스템이 손절하지 않는다. 자동 청산까지 하면 '수동 관리' 의도를 깨므로,
+        대신 손절선 이탈 사실을 알려 사용자가 직접 판단할 수 있게 한다.
+
+        손절선은 매수 기록에 저장된 실제 손절률(수량가중평균)을 쓰고, 없으면 전역 STOP_LOSS_RATE.
+        같은 종목의 반복 알림은 24시간 스로틀하며, 손절선 위로 회복하면 스로틀을 풀어
+        재이탈 시 다시 알린다.
+        """
+        try:
+            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+
+            sl_rate = None
+            tq, ws = 0, 0.0
+            for t in (buy_trades or []):
+                q = api.safe_int(t.get('qty', 0))
+                try:
+                    s = float(t.get('stop_loss_rate') or 0.0)
+                except (TypeError, ValueError):
+                    s = 0.0
+                if q > 0 and s != 0.0:
+                    tq += q
+                    ws += q * s
+            if tq > 0:
+                sl_rate = ws / tq
+            if sl_rate is None or sl_rate >= 0:
+                sl_rate = config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)
+            if sl_rate >= 0:
+                return  # 손절 기준 자체가 없으면(0=미사용) 경보할 기준도 없다
+
+            if profit_rate > sl_rate:
+                # 손절선 위로 회복 — 다음 이탈 때 다시 알리도록 스로틀 해제
+                self.unmanaged_stop_notified.pop(code, None)
+                return
+
+            now = time.time()
+            last = self.unmanaged_stop_notified.get(code, 0)
+            if now - last < 86400:
+                return
+            self.unmanaged_stop_notified[code] = now
+
+            qty = api.safe_int(item.get('hldg_qty', 0))
+            eval_amt = api.safe_int(item.get('evlu_amt', 0))
+            loss_amt = api.safe_int(item.get('evlu_pfls_amt', 0))
+
+            self.log(f"⚠️ [손절선 이탈 경보] {name}({code}): 수익률 {profit_rate:.2f}% ≤ 손절 기준 {sl_rate:.2f}% "
+                     f"— {kind}이라 시스템이 자동 매도하지 않습니다.")
+            api.send_telegram_message(
+                f"⚠️ [손절선 이탈 — 자동매도 제외 종목]\n\n"
+                f"종목: {name}({code})\n"
+                f"수익률: {profit_rate:.2f}% (손절 기준: {sl_rate:.2f}%)\n"
+                f"보유: {qty:,}주 / 평가금 {eval_amt:,}원 / 평가손익 {loss_amt:,}원\n\n"
+                f"사유: {kind}으로 자동 매도 대상에서 제외되어 있어 시스템이 손절하지 않습니다.\n"
+                f"직접 청산 여부를 판단해 주세요. (동일 종목 재알림은 24시간 후)")
+        except Exception as e:
+            logger.debug(f"[손절선 이탈 경보] {code} 처리 실패: {e}")
+
     def _check_sell_conditions(self, holdings, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [WS] 시스템 트레이딩 종목을 실시간 피드에 최우선으로 등록한다.
         #  보유종목(포지션, 최우선) → 매수후보 순서로 priority. 매수후보는 국내주식 + (ETF 포함 설정 시)국내 ETF.
@@ -3121,9 +3251,12 @@ class AutoTrader:
             code = item['pdno']; name = item['prdt_name']
             
             # [추가] 트레이딩 제한 종목은 매도 분석에서 완전히 제외 (수동 매수/홀딩용)
+            #  [Fix] 단, 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
             if code in restricted_stocks:
                 self.set_stock_state(code, None)
                 self.log(f"[분석스킵] {name}: 트레이딩 제한 종목 (수동 홀딩)")
+                self._alert_unmanaged_stop(code, name, item, "트레이딩 제한 종목(수동 홀딩)",
+                                           buy_trades_map.get(code))
                 return
             
             if self.order_manager.is_pending(code):
@@ -3151,6 +3284,9 @@ class AutoTrader:
             if is_domestic_etf and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
                 self.set_stock_state(code, None)
                 self.log(f"[매도스킵] {name}({code}): ETF 포함 설정(False)으로 자동 매도 제외")
+                # [Fix] 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
+                self._alert_unmanaged_stop(code, name, item, "ETF 자동매매 제외 설정",
+                                           buy_trades_map.get(code))
                 return
 
             qty = api.safe_int(item.get('ord_psbl_qty'))
@@ -3375,6 +3511,10 @@ class AutoTrader:
             if not (len(code) == 6 and code[0].isdigit() and code.isalnum()):
                 return
 
+            # [안전장치] 방어 모드에서는 증액(노출 확대)도 신규 매수와 동일하게 보류한다.
+            if getattr(self, 'buy_halted', False):
+                return
+
             # 증액 횟수 판별: 최근 매수 사유의 '피라미딩 N차' 마커 (DB 기록이라 재시작에도 유지)
             pyramid_count = 0
             if last_buy:
@@ -3388,12 +3528,14 @@ class AutoTrader:
 
             # [리스크 관리] 시장 필터 게이트: 신규 매수가 차단되는 약세 시장(지수<SMA)에서는
             # 검증된 포지션이라도 증액(노출 확대)을 보류한다. (기존 보유·청산에는 영향 없음)
+            # [Fix] 신규 매수 경로와 동일하게 fail-closed — 지수 판단 불가(데이터 장애·캐시 없음)도 보류.
             if (getattr(config, 'USE_MARKET_FILTER', True)
                     and config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True)):
                 m_type = self._get_stock_market_type(code)
                 m_stat = self.market_index_status.get(m_type)
-                if isinstance(m_stat, dict) and not m_stat.get('is_healthy', True):
-                    self.log(f"피라미딩 보류: {name} - {m_type} 지수 약세(시장 필터)로 증액 보류")
+                if not isinstance(m_stat, dict) or not m_stat.get('is_healthy', False):
+                    cause = "판단 불가(데이터 없음)" if not isinstance(m_stat, dict) or m_stat.get('unknown') else "약세"
+                    self.log(f"피라미딩 보류: {name} - {m_type} 지수 {cause}(시장 필터)로 증액 보류")
                     return
 
             if not is_market_open:
@@ -3471,6 +3613,13 @@ class AutoTrader:
             self.log(f"[피라미딩 오류] {name}: {e}")
 
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True, rules_map=None, restricted_stocks=None):
+        # [안전장치] 방어 모드(일일 손실 한도 초과 등)에서는 신규 진입만 차단한다.
+        #  매도 검사(_check_sell_conditions)는 이 게이트 앞에서 이미 수행되므로 손절 감시는 유지된다.
+        if getattr(self, 'buy_halted', False):
+            if self.consecutive_errors == 0:  # 로그 도배 방지
+                self.log(f"매수 스킵: 방어 모드 — {self.buy_halt_reason or '신규 매수 중단'}")
+            return
+
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합 (그룹 정보 추가)
         targets = []
         for item in config.session.stock_data.get("stocks_kr", []):
@@ -3626,13 +3775,15 @@ class AutoTrader:
             if code in holding_codes: return None
             
             # 4. 시장 지수 필터링 (종목별 적용)
+            # [Fix] fail-closed: 상태 캐시가 아예 없는 경우(첫 주기 전·조회 실패)도 '판단 불가'로 보아
+            #  신규 매수를 보류한다. 기존에는 캐시가 없으면 필터를 통과시켜, 시장 방향을 모르는
+            #  상태에서 진입이 이뤄질 수 있었다. ('모르겠으면 아무것도 하지 마라')
             if getattr(config, 'USE_MARKET_FILTER', True):
                 market_type = self._get_stock_market_type(code)
                 market_stat = self.market_index_status.get(market_type)
-                if market_stat and isinstance(market_stat, dict):
-                    if not market_stat.get('is_healthy', True):
-                        self.set_stock_state(code, None)
-                        return {'type': 'market_skip', 'name': name, 'market_type': market_type}
+                if not isinstance(market_stat, dict) or not market_stat.get('is_healthy', False):
+                    self.set_stock_state(code, None)
+                    return {'type': 'market_skip', 'name': name, 'market_type': market_type}
             
             if not self.is_running: return None # API 호출 전 최종 확인
             
@@ -3934,7 +4085,12 @@ class AutoTrader:
 
         # [추가] 시장 필터링 보류 종목 로그 기록
         if skipped_stocks:
-            self.log(f"[시장 필터링] 하락장 매수 보류 ({len(skipped_stocks)}종목): {', '.join(skipped_stocks)}")
+            # [Fix] '약세라서 보류'와 '지수 판단 불가라서 보류'는 원인이 다르므로 로그에서 구분한다.
+            _unknown_markets = [m for m, s in self.market_index_status.items()
+                                if isinstance(s, dict) and s.get('unknown')]
+            _cause = (f"지수 판단 불가({', '.join(_unknown_markets)}) 매수 보류"
+                      if _unknown_markets else "하락장 매수 보류")
+            self.log(f"[시장 필터링] {_cause} ({len(skipped_stocks)}종목): {', '.join(skipped_stocks)}")
 
         # [추가] 상관관계 보류 종목 로그 기록
         if correlation_skipped_stocks:
@@ -4153,31 +4309,42 @@ class AutoTrader:
                 self.trade_records.append(record)
 
     def _update_market_indices_status(self, notify=True):
-        """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림"""
+        """KOSPI, KOSDAQ 지수 상태 업데이트 및 알림
+
+        [Fix / 추세추종 원칙] "대체 무슨 일이 벌어지고 있는지 모르겠다면, 아무것도 하지 마라."
+        기존에는 지수 데이터 조회 실패 시 is_healthy=True로 두어 '판단 불가'가 곧 '매수 허용'이
+        되는 fail-open 구조였다. 시장 방향을 모르는 상태에서 신규 진입을 허용하는 것은
+        추세추종의 전제(시장 방향을 파악해 포지션을 구축한다) 자체를 무너뜨리므로,
+        매수 게이트는 fail-closed(보류)로 전환한다. 상태에 unknown=True 플래그를 실어
+        '약세로 판정된 것'과 '판정 자체가 불가한 것'을 화면·로그에서 구분한다.
+        (매도·손절 경로는 이 상태를 참조하지 않으므로 데이터 장애와 무관하게 계속 동작한다.)
+        """
         # [수정] analysis 모듈의 공통 함수 사용을 위해 리스트로 변경
         target_indices = ["KOSPI", "KOSDAQ"]
-        
+
         ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
-        
+
         for market_name in target_indices:
             try:
                 # [수정] analysis 모듈의 공통 함수 사용 (Fallback 포함)
                 df = analysis.get_domestic_index_data(market_name)
 
                 if df is None or df.empty or len(df) < ma_period:
-                    self.log(f"{market_name} 지수 데이터 부족/조회 실패. 필터링을 건너뜁니다.")
-                    self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
+                    self.log(f"{market_name} 지수 데이터 부족/조회 실패 → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
+                    self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0}
+                    self._notify_market_unknown(market_name, notify)
                     continue
-                
+
                 ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
                 current_idx = df['close'].iloc[-1]
                 is_healthy = current_idx >= ma_val
-                
+
                 self.market_index_status[market_name] = {
                     "is_healthy": is_healthy,
+                    "unknown": False,
                     "current": current_idx
                 }
-                
+
                 # 상태 변경 알림
                 if not notify:
                     continue
@@ -4190,8 +4357,25 @@ class AutoTrader:
                     api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선을 회복했습니다.\n매수를 재개합니다.")
                     self.market_status_notified[market_name] = False
             except Exception as e:
-                self.log(f"{market_name} 지수 조회 실패: {e}")
-                self.market_index_status[market_name] = {"is_healthy": True, "current": 0}
+                self.log(f"{market_name} 지수 조회 실패: {e} → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
+                self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0}
+                self._notify_market_unknown(market_name, notify)
+
+    def _notify_market_unknown(self, market_name, notify=True):
+        """지수 판단 불가(데이터 장애)로 매수를 보류할 때 1회만 알린다.
+
+        '약세 판정'과 원인이 다르므로 문구를 분리하되, 스로틀 플래그는
+        market_status_notified를 공유해 회복 시 '매수 재개' 알림이 정상적으로 나가게 한다.
+        """
+        if not notify:
+            return
+        if self.market_status_notified.get(market_name, False):
+            return
+        api.send_telegram_message(
+            f"⚠️ [판단 보류] {market_name} 지수 데이터를 확인할 수 없습니다.\n"
+            f"시장 방향을 알 수 없으므로 해당 시장 종목의 신규 매수를 보류합니다.\n"
+            f"(보유 종목의 손절·트레일링 스탑 감시는 계속됩니다)")
+        self.market_status_notified[market_name] = True
 
     @staticmethod
     def _whipsaw_risk_scale(whipsaw, params=None):

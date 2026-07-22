@@ -22,20 +22,28 @@ def cleanup_db_connection():
 # ==============================================================================
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_risk_manager_emergency_stop(mock_tg):
-    """일일 손실 한도 도달 시 비상 정지(Kill Switch) 작동 커버리지"""
+    """일일 손실 한도 도달 시 방어 모드(신규 매수 중단) 작동 커버리지
+
+    [추세추종] 손절이 가장 필요한 순간에 매도 감시가 꺼지면 안 되므로 stop()은 호출하지 않는다.
+    """
     trader = auto_trade.AutoTrader()
     trader.initial_asset = 10000000
     trader.is_running = True
-    
+    trader.buy_halted = False  # 싱글턴 상태 초기화
+    trader.buy_halt_date = None
+
     config.SYSTEM_DAILY_LOSS_LIMIT = 10.0
-    
-    with patch.object(trader, 'stop') as mock_stop:
+
+    with patch.object(trader, 'stop') as mock_stop, patch('config.console.print'):
         # 20% 손실(8백만원) 발생 시뮬레이션
         trader.risk_manager.check_loss_limit(8000000)
-        
-        mock_stop.assert_called_once_with(use_status=False)
+
+        assert trader.buy_halted is True
+        mock_stop.assert_not_called()
         mock_tg.assert_called()
-        assert "비상 정지" in mock_tg.call_args[0][0]
+        assert "방어 모드" in mock_tg.call_args[0][0]
+
+    trader.resume_buys("테스트 정리")
 
 @patch('modules.auto_trade.api.get_unfilled_orders', return_value=[])
 @patch('modules.auto_trade.api.revise_cancel_order', return_value={'rt_cd': '0', 'output': {'ODNO': 'CANC123'}})
