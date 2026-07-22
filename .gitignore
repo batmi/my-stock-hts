@@ -7,6 +7,7 @@ venv/
 .coveragerc
 .vscode
 coverage.json
+pyrightconfig.json
 
 # Data, Logs & Caches
 json/
