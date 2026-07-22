@@ -12,7 +12,7 @@ import indicators
 import utils
 import caching
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import urllib.request
 import sys
 import zipfile
@@ -3851,6 +3851,33 @@ def _prelisting_last_regular_change(chart_df, curr):
     except Exception:
         return None
 
+_W52_MIN_BARS = 200   # 이보다 짧으면 창이 52주를 못 채운 것 → 차트 대신 벤더(API/스캐너) 값을 쓴다
+
+
+def _w52_high_low(chart_df):
+    """일봉에서 '최근 365일'(=52주) 구간의 (고가, 저가)를 구한다. 산출 불가 시 (None, None).
+
+    tail(250)을 쓰면 안 된다 — 250거래일은 실측상 373일치(2025-07-14~2026-07-22)라 52주보다
+    8일 넓고, 그 경계 밖 극값이 밴드를 통째로 왜곡한다(TIGER 조선TOP10: 창 밖 18,855가 잡혀
+    20.2%, 실제 52주 기준은 11.0%). 날짜로 잘라 벤더의 52주 정의와 창을 맞춘다.
+
+    봉 수가 _W52_MIN_BARS 미만이면 신규상장이거나 차트 수신이 잘린 경우다. 이때 좁아진 밴드를
+    그대로 쓰면 52주 위치가 부풀려지므로 호출부가 벤더 값으로 폴백하도록 None을 준다.
+    """
+    try:
+        if chart_df is None or chart_df.empty or 'date' not in chart_df.columns:
+            return None, None
+        cutoff = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+        dates = chart_df['date'].astype(str).str.replace('-', '', regex=False).str[:8]
+        win = chart_df[dates >= cutoff]
+        if len(win) < _W52_MIN_BARS:
+            return None, None
+        h, l = float(win['high'].max()), float(win['low'].min())
+        return (h, l) if h > l > 0 else (None, None)
+    except Exception:
+        return None, None
+
+
 def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, bundle):
     """(내부함수) print_table 2단계: 수집된 데이터(bundle)로 지표 분석 및 행 포맷."""
     try:
@@ -3896,7 +3923,9 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
            and chart_df is not None and not chart_df.empty:
             _o = curr_data['output']
             try:
-                _h52 = float(chart_df['high'].max()); _l52 = float(chart_df['low'].min())
+                _h52, _l52 = _w52_high_low(chart_df)
+                if _h52 is None:  # 52주에 못 미치는 차트(신규상장 등)는 확보한 전 구간으로 폴백
+                    _h52, _l52 = float(chart_df['high'].max()), float(chart_df['low'].min())
                 _cur = float(chart_df['close'].iloc[-1])
                 _prev = float(chart_df['close'].iloc[-2]) if len(chart_df) >= 2 else _cur
                 if is_overseas:
@@ -3917,16 +3946,14 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         _o.setdefault('stck_sdpr', str(int(_prev)))
             except Exception: pass
 
-        # [멀티시세] 이 TR은 52주 고저(w52_*)를 제공하지 않으므로 차트(250봉)로 보강한다.
-        # (개별 현재가 API의 액면분할 보정 경로와 동일한 산출 방식)
+        # [멀티시세] 이 TR은 52주 고저(w52_*)를 제공하지 않으므로 차트(최근 365일)로 보강한다.
         if not is_overseas and curr_data and curr_data.get('rt_cd') == '0' \
            and curr_data.get('output', {}).get('_src') == 'multi' \
            and chart_df is not None and not chart_df.empty:
             _o = curr_data['output']
-            try:
-                _o['w52_hgpr'] = str(float(chart_df['high'].tail(250).max()))
-                _o['w52_lwpr'] = str(float(chart_df['low'].tail(250).min()))
-            except Exception: pass
+            _h52, _l52 = _w52_high_low(chart_df)
+            if _h52 is not None:
+                _o['w52_hgpr'] = str(_h52); _o['w52_lwpr'] = str(_l52)
 
         ind = indicators.calculate_indicators(chart_df)
 
@@ -3975,7 +4002,17 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 out = curr_data.get('output', {})
                 foreign_rate_str = f"{out.get('hts_frgn_ehrt', '-')}%"
                 try:
-                    h52, l52, c = float(out.get('w52_hgpr', 0)), float(out.get('w52_lwpr', 0)), float(out.get('stck_prpr', 0))
+                    # [수정] 52주 밴드는 차트(최근 365일)를 1차로 쓰고, 못 구할 때만 API 값으로 폴백한다.
+                    #  KIS w52_hgpr/w52_lwpr는 수정주가가 반영되지 않아 차트와 어긋나는 종목이 있다
+                    #  (삼성바이오 API 저가 982,000 vs 차트·토스 모두 1,228,000 — API 창이 차트보다
+                    #   좁은데 더 낮은 저가를 주므로 산술적으로 성립하지 않는다).
+                    #  차트 1차로 통일하면 mode 2/3의 산출 방식도 같아져 모드 간 값이 수렴한다.
+                    h52, l52 = _w52_high_low(chart_df)
+                    if h52 is None:
+                        h52, l52 = float(out.get('w52_hgpr', 0) or 0), float(out.get('w52_lwpr', 0) or 0)
+                    # [수정] 기준 현재가를 표시 현재가와 일치시킨다(NXT 우선 → KRX 폴백).
+                    #  종전엔 stck_prpr(KRX)만 써서 같은 행의 현재가 컬럼(NXT 우선)과 어긋났다.
+                    c = float(out.get('ats_prpr', 0) or 0) or float(out.get('stck_prpr', 0) or 0)
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
                         w52_pos_val = pos
@@ -4000,7 +4037,14 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
                     except Exception: pass
                 try:
-                    h52, l52, c = float(detail.get('h52p', 0)), float(detail.get('l52p', 0)), float(detail.get('last', 0))
+                    # [수정] 국내와 동일 규칙 — 차트(최근 365일) 1차, 스캐너 값은 폴백.
+                    #  상장 1년 미만(SPCX·SKHY 등)은 차트가 창을 못 채워 폴백을 탄다.
+                    h52, l52 = _w52_high_low(chart_df)
+                    if h52 is None:
+                        h52, l52 = float(detail.get('h52p', 0) or 0), float(detail.get('l52p', 0) or 0)
+                    # 기준 현재가도 표시 현재가(KIS/토스 last)를 우선한다.
+                    _out = curr_data.get('output', {}) if (curr_data or {}).get('rt_cd') == '0' else {}
+                    c = float(_out.get('last', 0) or 0) or float(detail.get('last', 0) or 0)
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
                         w52_pos_val = pos

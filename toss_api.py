@@ -88,12 +88,22 @@ class TossApiError(Exception):
 # =========================================================================
 # 인증 (OAuth2 Client Credentials)
 # =========================================================================
-def get_access_token(force_refresh=False):
-    """토스 access token을 발급/캐시한다. 실패 시 None."""
+def get_access_token(force_refresh=False, stale_token=None):
+    """토스 access token을 발급/캐시한다. 실패 시 None.
+
+    stale_token: 401을 맞은 '죽은 토큰'. force_refresh와 함께 주면, 락을 잡은 시점에
+      캐시 토큰이 이미 그것과 달라진 경우(= 다른 스레드가 먼저 재발급 완료) 재발급하지
+      않고 그 토큰을 그대로 쓴다. 여러 스레드가 동시에 401을 맞았을 때 저마다 재발급해
+      서로의 토큰을 무효화하는 폭주를 막는다.
+    """
     with _token_lock:
         if not force_refresh:
             cached = config.session.get_valid_token("TOSS")
             if cached:
+                return cached
+        elif stale_token:
+            cached = config.session.get_valid_token("TOSS")
+            if cached and cached != stale_token:
                 return cached
 
         key = config.session.toss_app_key
@@ -204,7 +214,8 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
 
     url = f"{_BASE}{path}"
     last_exc = None
-    for attempt in range(retries + 1):
+    token_retried = False   # 401 강제 재발급은 요청당 1회로 제한(무한 재발급 방지)
+    for attempt in range(retries + 2):  # +1: 401 재발급 재시도가 일반 재시도 횟수를 잡아먹지 않게
         _throttle(group)
         try:
             if method == "GET":
@@ -232,6 +243,19 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
                 time.sleep(wait)
                 continue
             raise TossApiError("rate-limit-exceeded", "요청 한도를 초과했습니다.", status=429)
+
+        # [추가] 401 invalid-token: 서버가 캐시 만료시각 전에 토큰을 폐기한 경우다
+        #  (다른 기기·세션에서 같은 앱키로 재발급하면 앞선 토큰이 무효화된다).
+        #  캐시는 '아직 유효'로 보고 재발급을 안 하므로, 복구하지 않으면 캐시 만료(최대 24h)까지
+        #  토스 모드 전체가 죽는다. 요청당 1회만 강제 재발급 후 같은 요청을 재시도한다.
+        if res.status_code == 401 and not token_retried:
+            token_retried = True
+            new_token = get_access_token(force_refresh=True, stale_token=token)
+            if new_token and new_token != token:
+                token = new_token
+                headers["Authorization"] = f"Bearer {token}"
+                logger.warning(f"[Toss] 401 invalid-token → 토큰 재발급 후 재시도 ({path})")
+                continue
 
         # 성공
         if 200 <= res.status_code < 300:

@@ -4254,6 +4254,11 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
                        + (f" | ERROR={cand_err}" if cand_err else ""))
 
     if not candles:
+        # [진단] 일봉이 통째로 비면 화면엔 '차트 없음'·지표 전체 '-'로만 나타나 원인이 안 남는다.
+        #  (토큰 만료·레이트리밋 등) 실패 사유를 항상 로그에 남긴다. 분봉은 위에서 이미 기록.
+        if interval == '1d':
+            logger.warning(f"[Toss] 일봉({code}) 조회 결과 없음"
+                           + (f" | ERROR={cand_err}" if cand_err else " (요청은 성공했으나 캔들 0건)"))
         return pd.DataFrame()
     rows = []
     for c in candles:

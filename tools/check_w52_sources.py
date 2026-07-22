@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 import api
+from modules import analysis as _analysis
 
 # 기본 샘플: 2026-07-22 20:02 mode2/mode3 '52주'가 크게 어긋났던 종목
 DEFAULT_CODES = ["030200", "207940", "329180", "494670", "006400", "091170", "005930"]
@@ -46,7 +47,7 @@ def main():
     print("=" * 100)
 
     hdr = (f"{'코드':>8s} {'현재가':>10s} | {'봉수':>4s} {'차트시작':>9s} {'차트끝':>9s} "
-           f"| {'전체高':>10s} {'전체低':>10s} {'pos(전체)':>9s} "
+           f"| {'365高':>10s} {'365低':>10s} {'pos(365)★':>10s} "
            f"| {'250高':>10s} {'250低':>10s} {'pos(250)':>9s} "
            f"| {'API高':>10s} {'API低':>10s} {'pos(API)':>9s} | src")
     print(hdr)
@@ -74,7 +75,10 @@ def main():
             print(f"{code:>8s} {cur:>10,.0f} | 차트 없음")
             continue
 
-        h_all, l_all = float(df['high'].max()), float(df['low'].min())
+        # ★ 실제 화면이 쓰는 창(최근 365일). 못 구하면(52주 미달 차트) 벤더 값으로 폴백된다.
+        h_all, l_all = _analysis._w52_high_low(df)
+        if h_all is None:
+            h_all, l_all = float('nan'), float('nan')
         t = df.tail(250)
         h250, l250 = float(t['high'].max()), float(t['low'].min())
         try:
@@ -86,15 +90,16 @@ def main():
         d0 = str(df.iloc[0]['date'])[:10]
         d1 = str(df.iloc[-1]['date'])[:10]
         print(f"{code:>8s} {cur:>10,.0f} | {len(df):>4d} {d0:>9s} {d1:>9s} "
-              f"| {h_all:>10,.0f} {l_all:>10,.0f} {_pos(cur, h_all, l_all):>8.1f}% "
+              f"| {h_all:>10,.0f} {l_all:>10,.0f} {_pos(cur, h_all, l_all):>9.1f}% "
               f"| {h250:>10,.0f} {l250:>10,.0f} {_pos(cur, h250, l250):>8.1f}% "
               f"| {api_h:>10,.0f} {api_l:>10,.0f} {_pos(cur, api_h, api_l):>8.1f}% "
               f"| {out.get('_src', '-')}")
 
     # 52주(=1년) 경계 참고: 오늘 기준 365일 전 날짜
     print("-" * len(hdr))
-    print(f"참고: 오늘-365일 = {(datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')} "
-          f"(차트시작이 이보다 과거면 '52주'보다 넓은 창을 쓰고 있는 것)")
+    print(f"참고: 오늘-365일 = {(datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')}")
+    print("  ★ pos(365)가 화면 '52주' 컬럼의 값이다. pos(250)은 종전 창(≈373일), pos(API)는 벤더 값.")
+    print("  365高/低가 nan이면 차트가 52주를 못 채운 것(신규상장·수신 절단) → 화면은 벤더 값으로 폴백한다.")
 
 
 if __name__ == "__main__":

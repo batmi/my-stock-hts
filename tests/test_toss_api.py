@@ -59,6 +59,56 @@ def test_get_access_token_uses_cache():
     mp.assert_not_called()
 
 
+def test_request_retries_once_after_401_invalid_token():
+    """서버가 캐시 만료 전에 토큰을 폐기(401)하면 강제 재발급 후 같은 요청을 재시도한다."""
+    config.session.toss_account_seq = 1
+    err = {"error": {"code": "invalid-token", "message": "유효하지 않은 토큰입니다."}}
+    ok = {"result": [{"symbol": "005930", "lastPrice": "72000"}]}
+    responses = [FakeResponse(401, err), FakeResponse(200, ok)]
+    issued = []
+
+    def fake_token(force_refresh=False, stale_token=None):
+        issued.append((force_refresh, stale_token))
+        return "NEW" if force_refresh else "DEAD"
+
+    with patch("toss_api.get_access_token", side_effect=fake_token), \
+         patch("toss_api.requests.get", side_effect=responses) as mg:
+        result = toss_api.get_price("005930")
+
+    assert result["lastPrice"] == "72000"          # 재시도로 복구
+    assert issued[1] == (True, "DEAD")             # 죽은 토큰을 넘겨 강제 재발급
+    assert mg.call_args_list[1][1]["headers"]["Authorization"] == "Bearer NEW"
+
+
+def test_request_401_refresh_only_once():
+    """재발급 후에도 401이면 더 발급하지 않고 예외로 끝낸다(무한 재발급 방지)."""
+    config.session.toss_account_seq = 1
+    err = {"error": {"code": "invalid-token", "message": "유효하지 않은 토큰입니다."}}
+    calls = {"n": 0}
+
+    def fake_token(force_refresh=False, stale_token=None):
+        calls["n"] += 1
+        return f"TOK{calls['n']}"
+
+    with patch("toss_api.get_access_token", side_effect=fake_token), \
+         patch("toss_api.requests.get", return_value=FakeResponse(401, err)):
+        try:
+            toss_api.get_price("005930")
+            assert False, "TossApiError가 발생해야 함"
+        except toss_api.TossApiError as e:
+            assert e.status == 401
+    assert calls["n"] == 2  # 최초 1회 + 강제 재발급 1회
+
+
+def test_get_access_token_skips_refresh_when_peer_already_renewed():
+    """동시 401에서 다른 스레드가 이미 갱신했으면 재발급하지 않고 새 토큰을 그대로 쓴다."""
+    with patch.object(config.session, "get_valid_token", return_value="FRESH"), \
+         patch("toss_api.requests.post") as mp:
+        token = toss_api.get_access_token(force_refresh=True, stale_token="DEAD")
+    assert token == "FRESH"
+    mp.assert_not_called()
+
+
 def test_resolve_account_seq_matches_acc_num():
     config.session.toss_account_seq = None
     config.session.toss_acc_num = "12345678901"

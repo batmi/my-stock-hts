@@ -35,7 +35,9 @@ def _mk_multi_response(codes):
 
 
 def _mk_chart_df(periods=260, start_price=60000.0):
-    dates = pd.date_range(start="2024-01-02", periods=periods).strftime('%Y%m%d')
+    # 52주 밴드는 '최근 365일' 창으로 산출하므로 오늘까지 이어지는 일자여야 한다
+    # (고정 과거 일자로 만들면 창 밖이라 52주가 산출되지 않는다).
+    dates = pd.date_range(end=pd.Timestamp.today().normalize(), periods=periods).strftime('%Y%m%d')
     close = np.linspace(start_price, start_price * 1.2, periods)
     return pd.DataFrame({
         'date': dates,
@@ -226,6 +228,48 @@ def test_analyze_table_row_fills_w52_from_chart():
     out = bundle['curr_data']['output']
     assert float(out['w52_hgpr']) > 0
     assert float(out['w52_lwpr']) > 0
+
+
+def test_w52_window_excludes_bars_older_than_a_year():
+    """52주 창은 최근 365일이다 — 250봉(≈373일)에 걸린 창 밖 극값은 밴드에 들어오지 않는다."""
+    df = _mk_chart_df(periods=300)          # 300일 → 앞부분은 365일 창 안이지만 넉넉히 확보
+    old = pd.Timestamp.today().normalize() - pd.Timedelta(days=400)
+    df.loc[0, 'date'] = old.strftime('%Y%m%d')
+    df.loc[0, 'low'] = 1.0                  # 1년보다 과거에 박힌 극단 저가
+    h, l = analysis._w52_high_low(df)
+    assert l > 1.0                          # 창 밖 저가는 무시
+    assert h == pytest.approx(float(df['high'].max()))
+
+
+def test_w52_window_returns_none_for_short_chart():
+    """52주를 못 채우는 차트(신규상장·수신 절단)는 None → 호출부가 벤더 값으로 폴백한다."""
+    assert analysis._w52_high_low(_mk_chart_df(periods=100)) == (None, None)
+    assert analysis._w52_high_low(pd.DataFrame()) == (None, None)
+
+
+def test_analyze_table_row_w52_prefers_chart_over_api_and_uses_nxt_price():
+    """52주는 API w52_*(수정주가 미반영)보다 차트를 먼저 쓰고, 기준가는 표시 현재가(NXT)를 따른다."""
+    chart_df = _mk_chart_df()
+    ch, cl = analysis._w52_high_low(chart_df)
+    nxt = int(cl + (ch - cl) * 0.5)         # 창 한가운데 → 기대 위치 50%
+    bundle = {
+        'curr_data': {'rt_cd': '0', 'output': {
+            'stck_prpr': str(int(cl)),      # KRX가(=저가) — 이걸 쓰면 0%가 된다
+            'ats_prpr': str(nxt),           # NXT가(표시 현재가)
+            'stck_sdpr': str(nxt), 'rprs_mrkt_kor_name': '코스피',
+            'w52_hgpr': '99999999', 'w52_lwpr': '1',   # 차트와 어긋나는 API 값
+        }},
+        'chart_df': chart_df, 'inv_list': None,
+        'rt_strength': 110.0, 'ask_bid_ratio': None, 'detail': None,
+    }
+    with patch('modules.analysis.check_smart_money_turnaround', return_value=(False, "")):
+        row_data = analysis._analyze_table_row(
+            ('삼성전자', '005930'), '국내 주식 기술적 분석', False, False,
+            set(), {}, {}, set(), set(), bundle
+        )[0]
+    # API 값(1~99999999)을 썼다면 0%에 가깝게 나온다 → 차트 기준 50%여야 함
+    pos = float(row_data[5].split(']')[1].split('%')[0])
+    assert pos == pytest.approx(50.0, abs=1.5)
 
 
 def _mk_nxt_response(codes, prpr='71000', vol='99999'):
