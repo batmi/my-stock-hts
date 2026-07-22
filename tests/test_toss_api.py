@@ -3,6 +3,8 @@
 네트워크를 타지 않도록 requests 및 토큰 캐시를 모킹한다.
 """
 import json
+import os
+import tempfile
 import time
 import pytest
 from unittest.mock import patch, MagicMock
@@ -1710,15 +1712,16 @@ def test_toss_base_price_uses_yfinance_when_capture_missing():
                           return_value=_yf_frame("TSTY.KS", "2026-07-13", 284000.0)), \
              patch.object(api, "_toss_krx_close_put") as m_put:
             assert api._toss_base_price("TSTY") == 284000.0   # NXT 285000이 아님
-            m_put.assert_called_once_with("TSTY", "20260713", 284000.0)  # 다음부터 2순위에서 종료
+            # 검증값('yf')으로 저장 → 다음부터 2순위(신뢰 조회)에서 종료
+            m_put.assert_called_once_with("TSTY", "20260713", 284000.0, source="yf")
     finally:
         _pop_daily_chart("TSTY")
 
 
-def test_toss_base_price_stored_beats_yfinance():
-    """저장된 캡처값이 있으면 yfinance를 호출하지 않는다(네트워크 절약)."""
+def test_toss_base_price_verified_store_beats_yfinance():
+    """검증값('yf')이 저장돼 있으면 yfinance를 다시 호출하지 않는다(네트워크 절약)."""
     import api
-    _reset_krx_store({"TSTZ": {"20260713": 284000.0}})
+    _reset_krx_store({"TSTZ": {"20260713": {"c": 284000.0, "s": "yf"}}})
     _inject_daily_chart("TSTZ", PAST_CHART)
     try:
         with patch.object(api, "fetch_yfinance_data") as m_yf:
@@ -1726,6 +1729,78 @@ def test_toss_base_price_stored_beats_yfinance():
             m_yf.assert_not_called()
     finally:
         _pop_daily_chart("TSTZ")
+
+
+# --- 분봉 캡처값 신뢰 범위 -------------------------------------------------
+#  NXT(넥스트레이드)가 정규장 시간대에 KRX와 병행 체결되고 토스 분봉이 두 거래소를 섞어
+#  주므로, 주식의 캡처값은 KRX 종가가 아니다(실측 2026-07-16: 주식 0/10, ETF 15/15).
+#  캡처값을 믿으면 yfinance가 영원히 호출되지 않아 오차가 고정된다 — 그 회귀를 막는다.
+
+def test_toss_base_price_distrusts_stock_capture_and_uses_yfinance():
+    """[회귀] 주식의 캡처값(구형식)은 신뢰하지 않고 yfinance로 교정해야 한다."""
+    import api
+    _reset_krx_store({"TSTC": {"20260713": 283000.0}})   # 구형식 = 캡처값(오염)
+    _inject_daily_chart("TSTC", PAST_CHART)
+    try:
+        with patch.object(api, "is_domestic_etf_etn", return_value=False), \
+             patch.object(api, "fetch_yfinance_data",
+                          return_value=_yf_frame("TSTC.KS", "2026-07-13", 284000.0)):
+            assert api._toss_base_price("TSTC") == 284000.0   # 오염된 283000이 아님
+    finally:
+        _pop_daily_chart("TSTC")
+
+
+def test_toss_base_price_trusts_etf_capture():
+    """ETF는 NXT 미거래라 캡처값이 곧 KRX 종가 → yfinance를 호출하지 않는다."""
+    import api
+    _reset_krx_store({"TSTE": {"20260713": 283000.0}})
+    _inject_daily_chart("TSTE", PAST_CHART)
+    try:
+        with patch.object(api, "is_domestic_etf_etn", return_value=True), \
+             patch.object(api, "fetch_yfinance_data") as m_yf:
+            assert api._toss_base_price("TSTE") == 283000.0
+            m_yf.assert_not_called()
+    finally:
+        _pop_daily_chart("TSTE")
+
+
+def test_toss_base_price_falls_back_to_capture_before_nxt():
+    """yfinance가 실패하면 캡처값을 쓰고, NXT 종가까지 내려가지 않는다."""
+    import api
+    _reset_krx_store({"TSTF": {"20260713": 283000.0}})
+    _inject_daily_chart("TSTF", PAST_CHART)   # NXT 캔들 = 285000
+    api._toss_yf_base_miss.clear()
+    try:
+        with patch.object(api, "is_domestic_etf_etn", return_value=False), \
+             patch.object(api, "fetch_yfinance_data", return_value=None):
+            assert api._toss_base_price("TSTF") == 283000.0   # NXT 285000이 아님
+    finally:
+        _pop_daily_chart("TSTF")
+        api._toss_yf_base_miss.clear()
+
+
+def test_toss_krx_close_put_does_not_downgrade_verified_value():
+    """검증값('yf')을 캡처값('cap')이 덮어써 오염으로 되돌리면 안 된다."""
+    import api
+    _reset_krx_store({})
+    with patch.object(api, "_toss_krx_close_path",
+                      return_value=os.path.join(tempfile.mkdtemp(), "k.json")):
+        api._toss_krx_close_put("TSTG", "20260713", 284000.0, source="yf")
+        api._toss_krx_close_put("TSTG", "20260713", 283000.0, source="cap")
+        assert api._toss_krx_close_get("TSTG", "20260713") == 284000.0
+        assert api._toss_krx_close_get("TSTG", "20260713", trusted_only=True) == 284000.0
+
+
+def test_toss_krx_close_get_reads_legacy_and_tagged_formats():
+    """구형식(실수)과 신형식(dict) 저장값을 모두 읽어야 한다(하위 호환)."""
+    import api
+    _reset_krx_store({"TSTH": {"20260713": 283000.0},
+                      "TSTI": {"20260713": {"c": 284000.0, "s": "yf"}}})
+    assert api._toss_krx_close_get("TSTH", "20260713") == 283000.0
+    assert api._toss_krx_close_get("TSTI", "20260713") == 284000.0
+    with patch.object(api, "is_domestic_etf_etn", return_value=False):
+        assert api._toss_krx_close_get("TSTH", "20260713", trusted_only=True) is None
+        assert api._toss_krx_close_get("TSTI", "20260713", trusted_only=True) == 284000.0
 
 
 def test_toss_yf_krx_close_negative_cache_blocks_refetch():

@@ -3699,21 +3699,65 @@ def _toss_krx_close_load_locked():
     return _toss_krx_close_store
 
 
-def _toss_krx_close_get(code, date_str):
-    """저장된 KRX 정규장 마감가 조회 (없으면 None)."""
+#  저장 형식: {code: {date: {"c": 종가, "s": 출처}}} — 출처 'yf'는 KRX 종가로 검증된 값,
+#  'cap'은 분봉 캡처값(주식은 NXT 혼입으로 부정확, 아래 _toss_capture_krx_close 주석 참조).
+#  구버전은 종가만 실수로 저장했으므로, 태그 없는 값은 'cap'으로 간주해 신뢰하지 않는다.
+def _toss_krx_close_unpack(v):
+    """저장값 → (종가, 출처). 구형식(실수)은 ('cap')으로 본다."""
+    if isinstance(v, dict):
+        try:
+            c = float(v.get("c") or 0)
+        except Exception:
+            return None, None
+        return (c if c > 0 else None), (v.get("s") or "cap")
+    try:
+        c = float(v) if v else 0
+    except Exception:
+        return None, None
+    return (c if c > 0 else None), "cap"
+
+
+def _toss_krx_close_trusted(code, source):
+    """이 출처의 저장값을 KRX 정규장 종가로 믿어도 되는가.
+
+    'yf'는 일봉(KRX 기준) 조회로 얻은 값이라 신뢰한다. 'cap'(분봉 캡처)은 ETF/ETN만
+    신뢰한다 — ETF는 NXT에서 거래되지 않아 분봉이 KRX 단독이기 때문이다(실측 2026-07-16:
+    ETF 15/15 정확, 주식 0/10 정확).
+    """
+    if source == "yf":
+        return True
+    try:
+        return bool(is_domestic_etf_etn(code))
+    except Exception:
+        return False
+
+
+def _toss_krx_close_get(code, date_str, trusted_only=False):
+    """저장된 KRX 정규장 마감가 조회 (없으면 None).
+
+    trusted_only=True면 KRX 종가로 믿을 수 있는 값만 돌려준다(_toss_krx_close_trusted).
+    """
     if not date_str:
         return None
     with _toss_krx_close_lock:
         store = _toss_krx_close_load_locked()
         try:
-            v = (store.get(code) or {}).get(date_str)
-            return float(v) if v else None
+            close, source = _toss_krx_close_unpack((store.get(code) or {}).get(date_str))
         except Exception:
             return None
+    if close is None:
+        return None
+    if trusted_only and not _toss_krx_close_trusted(code, source):
+        return None
+    return close
 
 
-def _toss_krx_close_put(code, date_str, close):
-    """KRX 정규장 마감가 저장 (종목당 최근 10거래일 유지, 원자적 저장)."""
+def _toss_krx_close_put(code, date_str, close, source="cap"):
+    """KRX 정규장 마감가 저장 (종목당 최근 10거래일 유지, 원자적 저장).
+
+    source: 'yf'(일봉 조회로 검증) / 'cap'(분봉 캡처). 검증값은 캡처값을 덮어쓰지만,
+    반대로 캡처값이 검증값을 덮지는 않는다(오염된 값으로의 퇴행 방지).
+    """
     if not date_str or not close or close <= 0:
         return
     with _toss_krx_close_lock:
@@ -3722,9 +3766,13 @@ def _toss_krx_close_put(code, date_str, close):
         if not isinstance(per, dict):
             per = {}
             store[code] = per
-        if per.get(date_str) == close:
-            return
-        per[date_str] = close
+        cur_close, cur_source = _toss_krx_close_unpack(per.get(date_str))
+        if cur_close is not None:
+            if cur_source == "yf" and source != "yf":
+                return                       # 검증값을 캡처값으로 되돌리지 않는다
+            if cur_close == close and cur_source == source:
+                return
+        per[date_str] = {"c": float(close), "s": source}
         for k in sorted(per.keys())[:-10]:
             del per[k]
         try:
@@ -3772,9 +3820,15 @@ def _before_krx_regular_open():
 
 
 def _toss_capture_krx_close(code):
-    """마감 후, 오늘 KRX 정규장 마감가(정규장 분봉의 마지막=15:30 종가)를 하루 1회 저장한다.
+    """마감 후, 오늘 정규장 분봉의 마지막(15:30) 종가를 하루 1회 저장한다.
 
-    _toss_chart_data 분봉은 당일 정규장(09:00~15:30)만 필터하므로 마지막 봉 종가가 KRX 마감가다.
+    ETF/ETN은 이 값이 곧 KRX 마감가다. 그러나 **주식은 KRX 마감가가 아니다** —
+    NXT(넥스트레이드)가 정규장 시간대에도 KRX와 병행 체결되고 토스 분봉은 두 거래소를
+    섞어 주므로, 마지막 봉 종가가 KRX 종가 단일가와 어긋난다. ETF는 NXT 미거래라 오염이 없다.
+    실측(2026-07-16, KIS 일봉 대조): ETF 15/15 정확, 주식은 52종목 중 26종목이 불일치
+    (중앙값 0.45%, 최대 1.89%). 시간 필터로는 고칠 수 없어 'cap' 태그로 저장하고,
+    주식 기준가로는 _toss_yf_krx_close(일봉=KRX 기준) 값을 우선한다.
+
     이미 오늘분이 저장돼 있으면(store 적중) 재조회하지 않아 마감 직후 1회 버스트로 끝난다.
     """
     if not (config.session.is_toss and _toss_after_krx_close()):
@@ -3786,9 +3840,9 @@ def _toss_capture_krx_close(code):
         df = _toss_chart_data(code, period_type='intraday', is_overseas=False)
         if df is None or len(df) == 0:
             return
-        close = _toss_float(df.iloc[-1]['close'])  # 정규장 필터 → 마지막 봉 = 15:30 = KRX 마감가
+        close = _toss_float(df.iloc[-1]['close'])  # 정규장 필터 → 마지막 봉 = 15:30
         if close > 0:
-            _toss_krx_close_put(code, today, close)
+            _toss_krx_close_put(code, today, close, source="cap")
     except Exception as e:
         logger.debug(f"[Toss] KRX 마감가 캡처 실패({code}): {e}")
 
@@ -3877,7 +3931,8 @@ def _toss_yf_krx_close(code, ref_date):
                 if d == ref_date:
                     close = float(val)
                     if close > 0:
-                        _toss_krx_close_put(code, ref_date, close)  # 다음부터 2순위에서 종료
+                        # 검증값으로 저장 → 다음부터 2순위(신뢰 조회)에서 즉시 종료
+                        _toss_krx_close_put(code, ref_date, close, source="yf")
                         return close
     except Exception as e:
         logger.debug(f"[Toss] yfinance 기준가 조회 실패({code} {ref_date}): {e}")
@@ -3891,12 +3946,16 @@ def _toss_base_price(code, chart_df=None):
 
     우선순위(위에서 값이 나오면 즉시 반환, 아래는 실행 안 함):
       1) 랭킹 basePrice — 거래대금/거래량 상위(대형주)의 전일 KRX 정규장 종가(라이브, HTS 일치)
-      2) 저장된 KRX 정규장 마감가 — `_toss_capture_krx_close`가 마감 후 캡처(랭킹 밖 중소형)
-      3) yfinance 일봉 종가 — KRX 정규장 기준. 캡처 공백(그날 미실행)을 과거 소급으로 메운다
-      4) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
+      2) 저장된 값 중 '검증된' 것 — yfinance로 확인된 값, 또는 ETF의 분봉 캡처값
+      3) yfinance 일봉 종가 — KRX 정규장 기준. 확보 즉시 검증값으로 저장돼 다음부터 2)에서 끝난다
+      4) 저장된 분봉 캡처값(주식) — NXT 혼입으로 부정확하나 NXT 종가보다는 가깝다
+      5) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
 
-    1~3이 모두 없을 때만 4(NXT 종가)로 내려가며, 4는 연장시간 체결 차이로 KRX 기준 HTS
-    등락률과 소폭 다를 수 있다(기동 시 안내). TOSS는 전일 KRX 종가 필드를 직접 주지 않는다.
+    주식의 분봉 캡처값을 2)에서 쓰지 않는 이유는 _toss_capture_krx_close 주석 참조 —
+    NXT가 정규장 시간대에 병행 체결돼 토스 분봉 종가가 KRX 단일가와 어긋난다. 캡처값을
+    믿으면 3)의 yfinance가 영원히 호출되지 않아 오차가 고정된다(2026-07-22 실측 6종목).
+    4)·5)는 KRX 기준 HTS 등락률과 소폭 다를 수 있다(기동 시 안내).
+    TOSS는 전일 KRX 종가 필드를 직접 주지 않는다.
 
     ref_date(전일 종가의 거래일)는 일봉 '날짜'만으로 결정한다:
       마지막 캔들일이 오늘보다 과거면 그 캔들(=장중), 오늘이면 그 직전 캔들(=마감 후).
@@ -3918,18 +3977,22 @@ def _toss_base_price(code, chart_df=None):
         prev_date = str(df.iloc[-2]['date']).replace('-', '')[:8]
         ref_date = last_date if last_date < today else prev_date
 
-        # 2) 저장된 KRX 정규장 마감가 (캡처값)
-        stored = _toss_krx_close_get(code, ref_date)
-        if stored:
-            return stored
+        # 2) 저장된 값 중 검증된 것만 (yfinance 확인분 또는 ETF 캡처) — 네트워크 없음
+        trusted = _toss_krx_close_get(code, ref_date, trusted_only=True)
+        if trusted:
+            return trusted
 
-        # 3) yfinance 일봉 종가 (KRX 정규장 기준) — 캡처가 없던 날을 과거 소급으로 메운다.
-        #    성공 시 캡처 저장소에 적재되어 다음 호출부터는 2)에서 종료된다.
+        # 3) yfinance 일봉 종가 (KRX 정규장 기준). 성공 시 검증값으로 적재되어 2)에서 종료된다.
         yf_close = _toss_yf_krx_close(code, ref_date)
         if yf_close:
             return yf_close
 
-        # 4) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
+        # 4) 저장된 분봉 캡처값 (주식: NXT 혼입으로 부정확) — yfinance 실패 시 근사 폴백
+        stored = _toss_krx_close_get(code, ref_date)
+        if stored:
+            return stored
+
+        # 5) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
         row = df.iloc[-1] if last_date < today else df.iloc[-2]
         base = _toss_float(row['close'])
         return base if base > 0 else None

@@ -38,12 +38,13 @@ def _f(v):
 
 
 def _parse_args(argv):
-    """[mode] [code | code=기대값 ...] 파싱."""
+    """[mode] [code | code=기대값 ...] 파싱 → (mode, [(code, 기대값), ...])."""
     args = list(argv[1:])
+    mode = "3"
     if args and args[0] in ("1", "2", "3"):
-        args.pop(0)          # 모드는 실행 스크립트(run.sh)가 이미 정한다. 위치만 흡수.
+        mode = args.pop(0)
     if not args:
-        return DEFAULT_CODES
+        return mode, DEFAULT_CODES
     out = []
     for a in args:
         code, _, exp = a.partition("=")
@@ -51,11 +52,13 @@ def _parse_args(argv):
             out.append((code.strip(), float(exp) if exp else None))
         except ValueError:
             out.append((code.strip(), None))
-    return out
+    return mode, out
 
 
 def main():
-    targets = _parse_args(sys.argv)
+    mode, targets = _parse_args(sys.argv)
+    # 세션을 초기화해야 is_toss가 켜지고 일봉·랭킹 조회가 동작한다(안 하면 전부 미스로 보인다).
+    config.session.initialize(mode=mode)
 
     print("=" * 78)
     print(f"실행 시각  : {datetime.now()}")
@@ -67,9 +70,10 @@ def main():
         except Exception as e:
             print(f"{mod:10s} : ★ import 실패 → {e}")
     print(f"기준가 폴백: _toss_yf_krx_close 존재 = {hasattr(api, '_toss_yf_krx_close')}")
-    print(f"TOSS 모드  : {config.session.is_toss}")
+    print(f"출처 태그  : _toss_krx_close_unpack 존재 = {hasattr(api, '_toss_krx_close_unpack')}")
+    print(f"모드/TOSS  : mode={mode}  is_toss={config.session.is_toss}")
     if not config.session.is_toss:
-        print("  ※ TOSS 모드가 아니면 일봉·랭킹 조회가 비어 결과가 달라집니다.")
+        print("  ※ TOSS 모드가 아니면 일봉·랭킹 조회가 비어 결과가 달라집니다. (mode 3로 실행하세요)")
     print("=" * 78)
 
     # 기준일(전 거래일) — _toss_base_price 와 동일한 규칙으로 산출
@@ -110,15 +114,25 @@ def main():
 
     # [2] 종목별 4단 우선순위 추적
     print("-" * 78)
-    print("[2] 우선순위별 추적  (① 랭킹 → ② 저장 → ③ yfinance → 최종)")
-    print(f"    {'종목':>8s} {'①랭킹':>11s} {'②저장':>11s} {'③yfinance':>11s} "
-          f"{'최종':>11s} {'기대(mode2)':>12s}  판정")
+    print("[2] 우선순위별 추적  (① 랭킹 → ② 검증저장 → ③ yfinance → ④ 캡처 → 최종)")
+    print(f"    {'종목':>8s} {'①랭킹':>11s} {'②검증저장':>11s} {'③yfinance':>11s} "
+          f"{'④캡처':>11s} {'출처':>5s} {'최종':>11s} {'기대(mode2)':>12s}  판정")
     for code, expect in targets:
         try:
             p1 = api._toss_ranking_base(code)
         except Exception as ex:
             p1 = f"ERR {ex}"
-        p2 = api._toss_krx_close_get(code, ref)
+        try:
+            p2 = api._toss_krx_close_get(code, ref, trusted_only=True)
+        except TypeError:                    # 구버전(출처 태그 이전)
+            p2 = api._toss_krx_close_get(code, ref)
+        p4 = api._toss_krx_close_get(code, ref)
+        try:
+            with api._toss_krx_close_lock:
+                raw = (api._toss_krx_close_load_locked().get(code) or {}).get(ref)
+            src = (api._toss_krx_close_unpack(raw)[1] or "-") if raw is not None else "-"
+        except Exception:
+            src = "?"
         cooling = ""
         try:
             with api._toss_yf_base_lock:
@@ -140,14 +154,16 @@ def main():
         else:
             verdict = "일치" if fin == expect else "★불일치"
         print(f"    {code:>8s} {_f(p1):>11s} {_f(p2):>11s} {_f(p3):>11s} "
-              f"{_f(fin):>11s} {_f(expect):>12s}  {verdict}{cooling}")
+              f"{_f(p4):>11s} {src:>5s} {_f(fin):>11s} {_f(expect):>12s}  {verdict}{cooling}")
 
     print("-" * 78)
     print("판정 방법:")
-    print("  ③이 값을 주는데 최종이 다르면      → 우선순위 로직 문제")
-    print("  ③이 '-'이고 [1]이 빈 DataFrame     → yfinance 레이트리밋/네트워크 차단")
-    print("  ③이 '-'이고 [1]은 OK               → _toss_yf_krx_close 파싱(컬럼·날짜 매칭) 문제")
-    print("  ①이 값을 주는데 그 값이 기대와 다르면 → 랭킹 basePrice 자체가 NXT 기준")
+    print("  ④(캡처)가 기대와 다른데 최종이 ④와 같다 → 캡처값을 신뢰해 버린 것(출처 태그 확인)")
+    print("  ③이 값을 주는데 최종이 다르면          → 우선순위 로직 문제")
+    print("  ③이 '-'이고 [1]이 빈 DataFrame         → yfinance 레이트리밋/네트워크 차단")
+    print("  ③이 '-'이고 [1]은 OK                   → _toss_yf_krx_close 파싱(컬럼·날짜) 문제")
+    print("  ①이 값을 주는데 그 값이 기대와 다르면    → 랭킹 basePrice 자체가 NXT 기준")
+    print("  출처 'cap'은 분봉 캡처(주식은 NXT 혼입으로 부정확), 'yf'는 일봉으로 검증된 값")
 
 
 if __name__ == "__main__":
