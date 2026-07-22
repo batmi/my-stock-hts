@@ -369,17 +369,12 @@ def _render_summary(insiders, bulk=None):
     table.add_column("보고 건수", justify="center")
     table.add_column("순증감(주)", justify="right")
     table.add_column("신호", justify="center")
-    today = datetime.now().strftime("%Y%m%d")
     for (code, name), a in rows:
         net = a["net"]
         signal = ("[red]▲ 순취득[/]" if net > 0 else
                   "[blue]▼ 순처분[/]" if net < 0 else "[dim]중립[/dim]")
-        last = _fmt_date(a["last"])
-        # 최근 7일 내 보고는 신호가 살아있다는 뜻이라 강조한다
-        if a["last"] and (datetime.strptime(today, "%Y%m%d")
-                          - datetime.strptime(a["last"], "%Y%m%d")).days <= 7:
-            last = f"[bold]{last}[/bold]"
-        table.add_row(last, f"{name} ({code})", str(a["cnt"]), _fmt_chg(net), signal)
+        table.add_row(_fmt_date(a["last"]), f"{name} ({code})",
+                      str(a["cnt"]), _fmt_chg(net), signal)
     config.console.print(table)
     if excluded:
         config.console.print(f"  [dim]※ 순증감은 보유수량 차분 기준(신규·재보고의 전량 기재 제외). "
