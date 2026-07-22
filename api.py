@@ -4139,59 +4139,67 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     return df
 
 
-# 국내 일봉 이상치 판정 폭. 국내 가격제한폭(±30%)보다 낮게 잡아 '제한폭에 붙은 가짜 값'만 걸러낸다.
-# 실측(2026-07-22) 정상 봉의 전일종가 대비 고가 괴리는 최대 +15.6%였고, 오염 값은 -30%/-30%/+27%로
-# 뚜렷이 갈렸다. 18%는 그 사이의 여유 있는 경계다.
-_TOSS_DAILY_OUTLIER_GUARD = 0.18
+# 저가 이상치 판정 폭 — '이웃(전·익일) 저가' 대비 얼마나 아래로 고립됐는지.
+# 실측(2026-07-22, KIS 국내 33종목·8,250봉)의 정상 봉 최대 고립도는 -13.2%였고 오염은 -29.0%였다.
+# 20%는 그 사이의 여유 있는 경계다. (전일종가 대비·시가/종가 대비 축은 정상 봉이 각각 +29.9%,
+#  +33.3%까지 나와 오염과 완전히 겹쳤다 — 이 축들로는 판별할 수 없다.)
+_TOSS_DAILY_ISOLATION_GUARD = 0.20
 
 
 def _toss_sanitize_daily_ohlc(df, code=""):
-    """토스 국내 일봉의 상·하한가 이상치를 제거한다.
+    """토스 국내 일봉에 섞인 '고립된 저가 이상치'를 제거한다.
 
-    토스 캔들은 NXT 프리마켓(08:00) 개장 직후의 상·하한가 호가 체결을 일봉 시가/고가/저가에
-    그대로 섞는다. 실측 사례(전일 종가 대비 정확히 ±30% = 가격제한폭):
-      KT 2025-09-03      시가·저가 36,500 (KRX 실제 52,000 / 종가 52,500)
-      HD현대중공업 09-29  저가 344,500     (KRX 실제 486,500)
-      삼성SDI 2026-04-22  시가·고가 820,000 (KRX 실제 686,000)
-    이 값이 52주 밴드는 물론 ATR·변동성·샹들리에 트레일링 스톱까지 오염시킨다.
+    토스 캔들은 NXT 프리마켓(08:00) 개장 직후의 하한가 체결을 일봉 시가/저가에 그대로 섞는다.
+      KT 2025-09-03      시가·저가 36,500 (KRX 실제 52,000 / 종가 52,500 / 이웃 저가 51,400)
+      HD현대중공업 09-29  저가 344,500     (KRX 실제 486,500 / 종가 491,500)
+    이 값은 52주 밴드를 넓혀 위치를 과대평가하고(KT 47.2% ← 실제 19.7%), ATR·변동성·샹들리에
+    트레일링 스톱까지 부풀린다.
 
-    판정: '종가는 전일 종가 근처인데 시가/고가/저가만 제한폭에 붙은' 봉만 손본다. 진짜 상·하한가
-    급등락일은 종가도 함께 크게 움직이므로 게이트에 걸려 원본이 보존된다(예: -29.95% 하한가 마감).
-    보정: 오염된 값은 임의의 클램프 값으로 바꾸지 않고 그 봉의 실제 체결가(시가/종가)로 접는다.
-    (가짜 극값이 52주 고·저점으로 남지 않게 하는 것이 목적이며, 밴드를 넓히는 방향으로는 절대
-     보정하지 않는다.)
+    판정 축은 '이웃 봉 대비 저가의 고립도' 하나뿐이다. 실측상 이 축만이 정상 봉(최대 -13.2%)과
+    오염(-29.0%)을 안전하게 가른다. 종가가 그 저가 근처까지 내려간 봉은 실제로 그 가격대에서
+    거래된 것이므로 건드리지 않는다(진짜 하한가 마감일 보존).
+
+    고가 오염(삼성SDI 2026-04-22 820,000 등)은 의도적으로 손대지 않는다. 정상 봉의 고가 고립도가
+    +21.3%까지 나와 오염(+21.5%)과 구분되지 않으며, 무리하게 걸러내면 진짜 급등 봉의 고가를 깎아
+    52주 밴드를 되레 왜곡한다(초기 구현에서 LG이노텍·SK텔레콤이 실제로 훼손됐다).
+
+    보정값은 임의의 클램프가 아니라 그 봉의 신뢰 가능한 실제 체결가(시가/종가)와 이웃 저가 중
+    최소값으로 접는다 — 밴드를 넓히는 방향으로는 절대 보정하지 않는다. 종가는 어떤 경우에도
+    수정하지 않는다.
     """
-    if df is None or df.empty or len(df) < 2:
+    if df is None or df.empty or len(df) < 3:
         return df
-    g = _TOSS_DAILY_OUTLIER_GUARD
+    g = _TOSS_DAILY_ISOLATION_GUARD
     fixed = 0
     try:
         io, ih, il, ic = (df.columns.get_loc(c) for c in ('open', 'high', 'low', 'close'))
-        prev_c = float(df.iat[0, ic] or 0)
-        for i in range(1, len(df)):
-            o = float(df.iat[i, io] or 0)
-            h = float(df.iat[i, ih] or 0)
+        # 마지막 봉(당일)은 장중 갱신 중이라 이웃이 한쪽뿐이고 값도 계속 바뀐다 → 대상에서 제외.
+        for i in range(len(df) - 1):
+            neighbors = [float(df.iat[i + 1, il] or 0)]
+            if i > 0:
+                neighbors.append(float(df.iat[i - 1, il] or 0))
+            nb_lo = min([v for v in neighbors if v > 0], default=0.0)
+            if nb_lo <= 0:
+                continue
+            floor = nb_lo * (1 - g)
             l = float(df.iat[i, il] or 0)
             c = float(df.iat[i, ic] or 0)
-            if prev_c > 0 and c > 0 and abs(c / prev_c - 1) <= g:
-                hi_lim, lo_lim = prev_c * (1 + g), prev_c * (1 - g)
-                dirty = False
-                if o > hi_lim or o < lo_lim:      # 시가 오염 → 그 봉의 신뢰 가능한 값(종가)으로 대체
-                    o, dirty = c, True
-                if h > hi_lim:
-                    h, dirty = max(o, c), True
-                if l < lo_lim:
-                    l, dirty = min(o, c), True
-                if dirty:
-                    # 정합성: 고가/저가는 시가·종가를 반드시 포함해야 한다.
-                    h, l = max(h, o, c), min(l, o, c)
-                    df.iat[i, io], df.iat[i, ih], df.iat[i, il] = o, h, l
-                    fixed += 1
-            prev_c = c if c > 0 else prev_c
+            # 종가까지 floor 아래면 진짜 급락일이다(하한가 마감 등) → 원본 보존.
+            if not (0 < l < floor <= c):
+                continue
+            o = float(df.iat[i, io] or 0)
+            trusted = [v for v in (o, c) if v >= floor]   # 시가도 같은 이상치면 후보에서 빠진다
+            new_l = min(trusted + [nb_lo])
+            df.iat[i, il] = new_l
+            if o < floor:
+                df.iat[i, io] = new_l
+            if float(df.iat[i, ih] or 0) < new_l:         # 정합성 방어
+                df.iat[i, ih] = new_l
+            fixed += 1
         if fixed:
-            logger.debug(f"[Toss] 일봉 이상치 보정({code}): {fixed}봉")
+            logger.debug(f"[Toss] 일봉 저가 이상치 보정({code}): {fixed}봉")
     except Exception as e:
-        logger.debug(f"[Toss] 일봉 이상치 보정 실패({code}): {e}")
+        logger.debug(f"[Toss] 일봉 저가 이상치 보정 실패({code}): {e}")
     return df
 
 

@@ -476,37 +476,56 @@ def _daily_candles(rows):
     ], "nextBefore": None}
 
 
-def test_daily_sanitize_drops_price_limit_outlier():
-    """NXT 프리마켓 상·하한가 체결이 시가/저가로 섞인 봉을 제거한다(KT 2025-09-03 실측 형태)."""
+def test_daily_sanitize_drops_isolated_low_outlier():
+    """이웃 봉에서 고립된 저가(NXT 프리마켓 하한가 체결)를 제거한다(KT 2025-09-03 실측 형태)."""
     import api
-    # 전일 종가 52,200 → 당일 시가·저가만 36,500(= -30%, 가격제한폭), 종가는 52,500(+0.6%)
-    res = _daily_candles([(1, 36500, 53700, 36500, 52500), (2, 53200, 53200, 51400, 52200)])
+    # 가운데 봉: 시가·저가만 36,500(이웃 저가 51,400 대비 -29%), 종가는 52,500으로 정상
+    res = _daily_candles([(1, 52300, 53000, 52100, 52700),
+                          (2, 36500, 53700, 36500, 52500),
+                          (3, 53200, 53200, 51400, 52200)])
     with patch("toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("030200", period_type='daily', is_overseas=False)
-    last = df.iloc[-1]
-    assert float(last['low']) == 52500.0    # 가짜 하한가 저가 제거
-    assert float(last['open']) == 52500.0   # 오염된 시가는 종가로 대체
-    assert float(last['high']) == 53700.0   # 정상 범위의 고가는 보존
-    assert float(last['close']) == 52500.0  # 종가는 언제나 무보정
+    bar = df.iloc[-2]
+    assert float(bar['low']) == 51400.0     # 이웃 저가 수준으로 복원(가짜 하한가 제거)
+    assert float(bar['open']) == 51400.0    # 같은 이상치였던 시가도 함께 교정
+    assert float(bar['high']) == 53700.0    # 고가는 손대지 않는다
+    assert float(bar['close']) == 52500.0   # 종가는 어떤 경우에도 무보정
 
 
 def test_daily_sanitize_keeps_real_limit_down_day():
-    """진짜 하한가 마감일(종가도 -30%)은 게이트에 걸려 원본이 보존된다."""
+    """진짜 하한가 마감일(종가도 저가까지 내려감)은 원본이 보존된다."""
     import api
-    res = _daily_candles([(1, 30050, 30050, 30050, 30050), (2, 43000, 43500, 42800, 42900)])
+    res = _daily_candles([(1, 30100, 30500, 30000, 30200),
+                          (2, 30050, 30050, 30050, 30050),   # -29.95% 하한가 마감
+                          (3, 43000, 43500, 42800, 42900)])
     with patch("toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("950160", period_type='daily', is_overseas=False)
-    last = df.iloc[-1]
-    assert float(last['low']) == 30050.0 and float(last['open']) == 30050.0
+    bar = df.iloc[-2]
+    assert float(bar['low']) == 30050.0 and float(bar['open']) == 30050.0
+
+
+def test_daily_sanitize_keeps_normal_spike_high():
+    """장중 급등 후 밀린 정상 봉(고가 +29%)은 건드리지 않는다 — 고가는 판별 축이 아니다."""
+    import api
+    res = _daily_candles([(1, 96000, 99000, 95000, 97000),
+                          (2, 78000, 129000, 77000, 98000),  # 전일 종가 100,000 대비 고가 +29%
+                          (3, 99000, 101000, 96000, 100000)])
+    with patch("toss_api.get_candles", return_value=res):
+        df = api._toss_chart_data("079550", period_type='daily', is_overseas=False)
+    bar = df.iloc[-2]
+    assert float(bar['high']) == 129000.0   # 진짜 급등 고가 보존
+    assert float(bar['low']) == 77000.0     # 이웃 대비 고립도 -19% → 임계(20%) 미만이라 유지
 
 
 def test_daily_sanitize_skips_overseas():
     """해외는 가격제한폭이 없어 판정이 성립하지 않으므로 보정하지 않는다."""
     import api
-    res = _daily_candles([(1, 36.5, 53.7, 36.5, 52.5), (2, 53.2, 53.2, 51.4, 52.2)])
+    res = _daily_candles([(1, 52.3, 53.0, 52.1, 52.7),
+                          (2, 36.5, 53.7, 36.5, 52.5),
+                          (3, 53.2, 53.2, 51.4, 52.2)])
     with patch("toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("TSLA", period_type='daily', is_overseas=True)
-    assert float(df.iloc[-1]['low']) == 36.5
+    assert float(df.iloc[-2]['low']) == 36.5
 
 
 def test_chart_data_adapter_daily_keeps_nxt_close():
