@@ -5,6 +5,7 @@
 - 스케줄러 알림(scheduler)에서도 분류 로직을 재사용한다.
 """
 import concurrent.futures
+import contextlib
 from datetime import datetime, timedelta
 
 from rich.table import Table
@@ -84,13 +85,26 @@ def collect_disclosures(code, name, days=14, min_level=0):
     return out
 
 
-def _gather(codes, days, min_level):
+def _make_progress():
+    """공시 조회용 진행바 (조회 → 상세 단계가 공유한다)."""
+    return Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                    BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=config.console, transient=True)
+
+
+def _gather(codes, days, min_level, progress=None, task=None):
+    """관심종목 공시를 병렬 수집.
+
+    progress/task를 받으면 그 진행바에 이어서 진행한다(호출측이 '조회 → 상세' 여러 단계를
+    하나의 진행바로 합칠 수 있게 함). 없으면 자체 진행바를 만든다.
+    """
     events = []
     if not codes:
         return events
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
-        task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
+    with contextlib.ExitStack() as stack:
+        if progress is None:
+            progress = stack.enter_context(_make_progress())
+            task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             futs = {ex.submit(collect_disclosures, c, n, days, min_level): c for c, n in codes}
             for fut in concurrent.futures.as_completed(futs):
@@ -375,14 +389,25 @@ def build_detail_note(e):
     return ""
 
 
-def _enrich_details(events, limit=12):
-    """표시 대상 공시 중 상세정보 대상만 병렬 조회해 e['note']를 채운다."""
+def _enrich_details(events, limit=12, progress=None, task=None):
+    """표시 대상 공시 중 상세정보 대상만 병렬 조회해 e['note']를 채운다.
+
+    progress/task를 받으면 새 진행바를 만들지 않고 기존 막대의 total을 늘려 이어서 채운다.
+    (조회 단계와 상세 단계가 각각 진행바를 띄워 두 개가 순차로 보이던 것을 하나로 합침)
+    """
     targets = [e for e in events if _detail_eligible(e)][:limit]
     if not targets:
         return
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
-        task = progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=len(targets))
+    with contextlib.ExitStack() as stack:
+        if progress is None:
+            progress = stack.enter_context(_make_progress())
+            task = progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=len(targets))
+        else:
+            # 공유 진행바: 남은 작업량만큼 total을 늘려 하나의 막대가 끊기지 않고 이어지게 한다
+            cur = next((t for t in progress.tasks if t.id == task), None)
+            base_total = (cur.total or 0) if cur is not None else 0
+            progress.update(task, total=base_total + len(targets),
+                            description="[cyan]공시 상세정보 조회 중...[/cyan]")
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futs = {ex.submit(build_detail_note, e): e for e in targets}
             for fut in concurrent.futures.as_completed(futs):
@@ -407,14 +432,19 @@ def show_disclosures(days=14):
         return
 
     # 관심/중대 공시(level>=1)만 표시하여 임원·지분 등 일상 공시 노이즈 제거
-    events = _gather(codes, days, min_level=1)
+    # [진행바] 조회·상세 두 단계가 하나의 막대를 공유한다(단계마다 새 막대가 뜨지 않게).
+    shown = []
+    with _make_progress() as progress:
+        task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
+        events = _gather(codes, days, min_level=1, progress=progress, task=task)
+        if events:
+            events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
+            shown = events[:40]
+            _enrich_details(shown, progress=progress, task=task)
+
     if not events:
         config.console.print(f"[dim]최근 {days}일간 주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)[/dim]")
         return
-
-    events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
-    shown = events[:40]
-    _enrich_details(shown)
 
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("일자", justify="center")

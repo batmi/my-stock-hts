@@ -1601,3 +1601,85 @@ def test_format_order_no_toss_last_10():
     # 비토스(KIS)는 절단하지 않고 그대로
     assert utils.format_order_no("0001234567") == "0001234567"
     assert utils.format_order_no(long_odno) == long_odno
+
+
+# ---------------------------------------------------------------------------
+# 마감 후 ETF 현재가 = KRX 정규장 종가 고정 (mode 2/HTS 정합)
+# ---------------------------------------------------------------------------
+#  ETF는 NXT 연장거래 대상이 아니라 15:30 이후 체결은 전부 KRX 시간외단일가(16:00~18:00)다.
+#  KIS 경로(mode 1/2)는 시간외단일가를 별도 TR로만 제공해 반영하지 않으므로 정규장 종가를
+#  보여주는데, 토스 lastPrice는 시간외 체결을 그대로 반영해 두 모드가 어긋났다.
+#  (실측 2026-07-22 16:07 KODEX 코스닥150: KIS·HTS 12,525 / 토스 12,530)
+_KRX_CLOSE, _AFTER_HOURS, _BASE = 12525.0, 12530.0, 12650.0
+
+
+def _toss_price_output(after_close, code, krx_close=_KRX_CLOSE, last=_AFTER_HOURS):
+    import api
+    from unittest.mock import patch
+    with patch.object(api.toss_api, "get_price", return_value={"lastPrice": last}), \
+         patch.object(api, "_toss_capture_krx_close"), \
+         patch.object(api, "_toss_after_krx_close", return_value=after_close), \
+         patch.object(api, "_toss_krx_close_get", return_value=krx_close), \
+         patch.object(api, "_toss_base_price", return_value=_BASE), \
+         patch.object(api, "_toss_before_nxt_open", return_value=False):
+        return api._toss_current_price_data(code, is_overseas=False)["output"]
+
+
+def _setup_etf_watchlist():
+    import api
+    config.session.stock_data = {
+        "stocks_kr": [{"code": "005930", "name": "삼성전자"}],
+        "etfs_kr": [{"code": "229200", "name": "KODEX 코스닥150"}],
+        "stocks_us": [], "etfs_us": [],
+    }
+    api._ETF_ETN_CACHE.clear()
+
+
+def test_toss_etf_after_close_uses_krx_regular_close():
+    """마감 후 ETF는 시간외 체결가가 아니라 KRX 정규장 종가를 보여준다."""
+    config.session.is_toss = True
+    _setup_etf_watchlist()
+    try:
+        o = _toss_price_output(after_close=True, code="229200")
+        assert int(o["stck_prpr"]) == 12525          # 시간외 12,530이 아님
+        assert o["prdy_vrss"] == "-125"              # 기준가 12,650 대비
+        assert float(o["prdy_ctrt"]) == -0.99
+    finally:
+        config.session.is_toss = False
+
+
+def test_toss_etf_during_session_keeps_live_price():
+    """장중에는 그대로 실시간 체결가를 쓴다(고정은 마감 후에만)."""
+    config.session.is_toss = True
+    _setup_etf_watchlist()
+    try:
+        o = _toss_price_output(after_close=False, code="229200")
+        assert int(o["stck_prpr"]) == 12530
+    finally:
+        config.session.is_toss = False
+
+
+def test_toss_stock_after_close_keeps_nxt_price():
+    """일반 주식은 마감 후에도 NXT 연장가를 유지한다.
+
+    mode 1/2도 장후(15:30~20:00)에 NXT 연장가를 노출하므로(get_multi_current_prices_nxt),
+    여기서 정규장 종가로 고정하면 오히려 모드 간 값이 어긋난다.
+    """
+    config.session.is_toss = True
+    _setup_etf_watchlist()
+    try:
+        o = _toss_price_output(after_close=True, code="005930")
+        assert int(o["stck_prpr"]) == 12530          # NXT 연장가 유지
+    finally:
+        config.session.is_toss = False
+
+
+def test_toss_etf_after_close_without_captured_close_falls_back():
+    """KRX 마감가 캡처에 실패했으면 기존 동작(실시간가)으로 폴백한다."""
+    config.session.is_toss = True
+    _setup_etf_watchlist()
+    try:
+        o = _toss_price_output(after_close=True, code="229200", krx_close=None)
+        assert int(o["stck_prpr"]) == 12530
+    finally:
+        config.session.is_toss = False

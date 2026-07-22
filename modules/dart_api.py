@@ -232,6 +232,34 @@ def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
     return out
 
 
+def _rcept_date(row):
+    """접수일자(YYYYMMDD). rcept_dt가 없으면 접수번호 앞 8자리로 복원한다.
+
+    DART API는 계열에 따라 날짜 필드 제공 여부가 다르다(실측 2026-07-22, 삼성전자):
+      - 공시목록 계열(list/elestock/majorstock): rcept_dt 제공 ✅
+      - 주요사항보고서 '결정' 계열(자기주식·메자닌·무상증자·감자): rcept_dt **미제공** ❌
+        → 응답 키에 아예 없고 접수번호(14자리) 앞 8자리가 접수일자다.
+          예: rcept_no=20260713000395 → 2026-07-13
+    이 복원이 없으면 화면의 '일자' 칸이 공백이 되고, rcept_dt 기준 정렬도 전부 빈 문자열
+    비교가 되어 최신순 정렬이 무효화된다.
+    """
+    dt = str(row.get("rcept_dt") or "").replace("-", "").strip()
+    if len(dt) == 8 and dt.isdigit():
+        return dt
+    head = str(row.get("rcept_no") or "").strip()[:8]
+    return head if len(head) == 8 and head.isdigit() else ""
+
+
+def _fill_rcept_dt(rows):
+    """결정 계열 응답에 rcept_dt를 주입해 호출측이 날짜 필드를 그대로 쓰게 한다."""
+    if not isinstance(rows, list):
+        return []
+    for r in rows:
+        if isinstance(r, dict):
+            r["rcept_dt"] = _rcept_date(r)
+    return rows
+
+
 def _dart_num(s):
     """DART 숫자 문자열('1,234', '△12' 등) -> float. 파싱 불가 시 None."""
     if s is None:
@@ -334,7 +362,10 @@ def get_dart_paid_increase_detail(stock_code, bgn_de, end_de):
 
 _BOND_ENDPOINTS = {
     "CB": "cvbdIsDecsn.json",   # 전환사채
-    "BW": "bwbdIsDecsn.json",   # 신주인수권부사채
+    # [Fix] 신주인수권부사채는 bdwtIsDecsn. 기존 'bwbdIsDecsn'는 존재하지 않는 URL이라
+    #  DART가 status 101(잘못된 URL)을 돌려주었고, BW 오버행이 조회 자체가 되지 않았다.
+    #  (실측 2026-07-22: bwbdIsDecsn→101 / bdwtIsDecsn→013 '조회된 데이타가 없습니다')
+    "BW": "bdwtIsDecsn.json",   # 신주인수권부사채
     "EB": "exbdIsDecsn.json",   # 교환사채
 }
 
@@ -353,18 +384,22 @@ def get_dart_bond_issue_detail(stock_code, bgn_de, end_de, kind="CB"):
     rows = _api().call_dart(endpoint, {
         "corp_code": corp, "bgn_de": bgn_de, "end_de": end_de
     })
-    return rows if isinstance(rows, list) else []
+    # [Fix] 이 계열은 rcept_dt를 주지 않으므로 접수번호에서 복원해 주입한다(_rcept_date 참조)
+    return _fill_rcept_dt(rows)
 
 
 def _decsn_rows(stock_code, endpoint, bgn_de, end_de):
-    """주요사항보고서 결정 계열(기간 조회) 공통 래퍼. 없으면 []."""
+    """주요사항보고서 결정 계열(기간 조회) 공통 래퍼. 없으면 [].
+
+    이 계열(자기주식·무상증자·감자 등)은 rcept_dt를 주지 않아 접수번호에서 복원해 주입한다.
+    """
     corp = _api().get_dart_corp_map().get(stock_code)
     if not corp:
         return []
     rows = _api().call_dart(endpoint, {
         "corp_code": corp, "bgn_de": bgn_de, "end_de": end_de
     })
-    return rows if isinstance(rows, list) else []
+    return _fill_rcept_dt(rows)
 
 
 def get_dart_treasury_decisions(stock_code, bgn_de, end_de):

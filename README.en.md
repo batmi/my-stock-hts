@@ -197,6 +197,12 @@ Also, you can modify global settings in real-time during execution via the **'Ma
     *   **Defensive Half Sell**: `DEFENSIVE_HALF_SELL_USE` = **False**. If enabled, sell 50% on a downward reversal signal (SAR Sell + 5MA breakdown).
 
 ### 4. Risk Management & Filtering
+*   **US Day-Market (Overnight Session) Quotes**:
+    *   **Overview**: Reflects live prices from the US overnight ATS session (ET 20:00–04:00 = KST 09:00–17:00 during DST). KIS calls this "day market" and serves it under **different exchange codes** from the regular session (NAS→`BAQ`, NYS→`BAY`, AMS→`BAA`).
+    *   **Behavior**: During the day-market session, day-market codes are tried first and fall back to regular codes when a symbol has no overnight prints. Outside the session, only regular codes are queried so no extra API calls are made.
+    *   **Exchange cache**: Even when a day-market code returns the quote, `stock.json` and the exchange cache **always store the regular code** — a stored day-market code would break both regular-hours quotes and the order path.
+    *   **Daily-bar attribution**: Overnight prints belong to the *next* trading session (a print at ET 21:00 belongs to the following day), so the market reference date follows the session it belongs to. Otherwise the overnight price would overwrite the already-settled prior regular bar and corrupt indicators.
+    *   **Background**: The order path already recognized the day market (order division `31`), but the quote path queried only regular codes, so **the prior regular close stayed frozen for the whole session** (measured: MU `NAS` $970.82 +12.17% [frozen] vs `BAQ` $949.00 −2.25% [live]). Orders could be placed while prices could not be seen.
 *   **Slippage Adjustment**:
     *   **Overview**: An adjustment to account for the difference between the price at the time of the order and the actual execution price (unfavorable execution).
     *   **Backtesting**: Conservatively reflects actual trading costs (spread, execution delays) by assuming a higher purchase price and a lower selling price.
@@ -393,6 +399,7 @@ Toss and KIS provide the "closing price" of domestic (KR) stocks on different ba
 
 - Example (Samsung Electronics, as of 2026-07-10): Thursday's close differs — KRX 278,000 vs Toss (NXT-inclusive) 282,500 — so even though both modes show the same Friday last price (286,500), the change displays as +8,500 (+3.06%) in KIS vs +4,000 (+1.42%) in Toss.
 - The Toss API does not expose the KRX regular-session close at all, so change rates in Toss mode are computed **self-consistently on the unified-price basis** (the same family of figures the Toss app shows). Chart-derived indicators (52-week high/low, moving averages, etc.) are also unified-price based and may differ slightly from KIS mode.
+- **ETF/ETN exception (pinned to the regular-session close after the bell)**: ETFs are not eligible for NXT extended trading, so every fill after 15:30 comes from the **KRX after-hours single-price session (16:00–18:00)**. The KIS path exposes that session only through a separate TR and therefore keeps showing the regular close, while Toss's `lastPrice` reflects the after-hours fill — leaving the two modes out of sync (measured 2026-07-22 16:07, KODEX KOSDAQ150: KIS/HTS 12,525 vs Toss 12,530; only ETFs with after-hours volume diverged, those without matched exactly). Daily candles and indicators are anchored to the regular-session close, and after-hours single-price volume is negligible (a few to a few dozen shares), so **after the bell (15:35+) the Toss current price for ETFs/ETNs is pinned to the captured KRX regular-session close**, matching KIS and HTS. Ordinary stocks are left alone because KIS mode also surfaces the NXT extended price.
 - The program notes this difference at Toss-mode startup.
 
 ### Common
@@ -495,6 +502,8 @@ By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use
     *   `[7] Supply-Demand & Overhang Signals`: (1) **Treasury stock acquisition/disposal/trust decisions** (company-level supply signal), (2) **mezzanine (CB/BW/EB) overhang watch** — conversion price vs. current price, potential conversion volume vs. shares outstanding, recent conversion-exercise filings, (3) **bonus issue decisions**, (4) insider (elestock) and 5% holder (majorstock) net buy/sell summary.
     *   `[8] Financial Snapshot`: Revenue/operating profit/net profit with YoY from the latest periodic report, **standalone quarterly operating profit** (cumulative-difference method), and DART-computed **ROE / debt ratio**.
     *   **Telegram Alerts**: Sends instant pushes for major disclosures (capital increase, administrative issues, etc.).
+
+> **Filing-date handling**: DART provides the date field inconsistently across API families. The disclosure-list family (`list`/`elestock`/`majorstock`) returns `rcept_dt`, but the **material-report "decision" family** (treasury stock, mezzanine, bonus issue, capital reduction) omits `rcept_dt` entirely — the filing date lives in the **first 8 digits of the 14-digit receipt number**. The system recovers the date from the receipt number in that case. (Without it the date column renders blank and date-based newest-first sorting is silently defeated.)
 
 ## 10. AI-Powered Assistant
 

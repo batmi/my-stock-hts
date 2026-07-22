@@ -318,13 +318,87 @@ def now_us_eastern():
     is_dst = dst_start_utc <= now_utc < dst_end_utc
     return now_utc - timedelta(hours=4 if is_dst else 5)
 
+# ==========================================================
+# [미국 주간거래(데이마켓)] 거래소 코드 매핑 및 세션 판정
+# ==========================================================
+# KIS는 미국 야간 ATS 세션(ET 20:00~04:00 = KST 09:00~17:00, 서머타임 기준)을
+# '주간거래(데이마켓)'로 부르며 정규장과 다른 거래소 코드로 시세를 제공한다.
+# 이 코드로 조회하지 않으면 세션 내내 직전 정규장 마감가가 그대로 굳는다
+# (실측 2026-07-22 ET 02:50: MU NAS $970.82 +12.17%[전일 마감 동결] vs BAQ $949.00 -2.25%[라이브]).
+# 주문 경로(modules/trading.py)는 이미 ord_dvsn '31'로 데이마켓을 인지하고 있었으므로,
+# '주문은 되는데 가격은 못 보는' 비대칭을 해소한다.
+US_DAY_MARKET_EXCD = {"NAS": "BAQ", "NASD": "BAQ",
+                      "NYS": "BAY", "NYSE": "BAY",
+                      "AMS": "BAA", "AMEX": "BAA"}
+# 주간거래 코드는 exchange_cache/stock.json에 저장하면 안 되므로(정규장 조회가 깨진다) 역매핑을 둔다.
+US_REGULAR_EXCD = {"BAQ": "NAS", "BAY": "NYS", "BAA": "AMS"}
+
+
+def us_day_market_session():
+    """미국 주간거래(데이마켓) 세션이 열려 있으면 그 세션의 '거래일'(YYYYMMDD), 아니면 None.
+
+    야간 ATS 세션은 ET 20:00에 시작해 다음날 ET 04:00에 끝나고 '다음 거래일' 세션으로 귀속된다
+    (ET 21:00 07/21의 체결은 07/22 세션 — KIS 주간거래 응답의 base가 07/21 정규장 종가인 것과 정합).
+    세션 귀속일이 실제 거래일일 때만 열린 것으로 보므로, 금요일 밤(→토요일 귀속)·토요일 새벽은
+    자동으로 닫힘 처리된다.
+      ET 20:00~24:00 → 귀속일 = 다음 날 / ET 00:00~04:00 → 귀속일 = 당일
+    """
+    et = now_us_eastern()
+    if et.hour >= 20:
+        target = et + timedelta(days=1)
+    elif et.hour < 4:
+        target = et
+    else:
+        return None
+    try:
+        if _is_closed_day(target, 'US'):
+            return None
+    except Exception:
+        return None
+    return target.strftime('%Y%m%d')
+
+
+def us_excd_candidates(cached_ex=None):
+    """미국 시세 조회용 거래소 코드 후보(시도 순서).
+
+    주간거래 세션 중에는 주간 코드를 먼저 시도하고, 값이 없으면 정규 코드로 폴백한다
+    (세션 중이라도 해당 종목에 체결이 없으면 주간 코드는 빈 응답을 준다).
+    캐시된 거래소가 있으면 그 코드(및 대응 주간 코드)를 최우선으로 두어 호출 수를 줄인다.
+    """
+    regular = []
+    if cached_ex:
+        regular.append(cached_ex)
+    for e in ("NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"):
+        if e not in regular:
+            regular.append(e)
+
+    if not us_day_market_session():
+        return regular
+
+    day = []
+    for e in regular:
+        d = US_DAY_MARKET_EXCD.get(e)
+        if d and d not in day:
+            day.append(d)
+    return day + regular
+
+
 def market_today(is_overseas=False):
     """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
 
     국내는 시스템 로컬(KST), 해외(미국)는 동부시간(ET, 서머타임 자동판별) 기준이며,
     주말·공휴일(휴장일)이면 직전 거래일까지 되돌려 반환한다. 비거래일에 현재가(=최종 종가)로
     '가짜 당일 봉'이 추가되어 등락폭/등락률이 0으로 계산되는 문제를 막는다.
+
+    [주간거래] 데이마켓 세션 중에는 그 세션의 귀속 거래일을 돌려준다. ET 20:00~24:00 구간에서
+    ET 달력일(=직전 정규장일)을 그대로 쓰면 주간거래 체결가가 '직전 정규장 봉'을 덮어써
+    확정된 과거 봉이 오염되므로, 세션 귀속일 기준으로 새 봉을 추가하게 한다.
     """
+    if is_overseas:
+        day_session = us_day_market_session()
+        if day_session:
+            return day_session
+
     dt = datetime.now() if not is_overseas else now_us_eastern()
     country = 'US' if is_overseas else 'KR'
     key = (dt.strftime('%Y%m%d'), country)
@@ -2924,17 +2998,19 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
     
     if is_overseas:
         cached_ex = config.session.exchange_cache.get(code)
-        exchanges = []
-        if cached_ex: exchanges.append(cached_ex)
-        for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
-            if e not in exchanges: exchanges.append(e)
-        
+        # [주간거래] 데이마켓 세션 중이면 주간 거래소 코드(BAQ/BAY/BAA)를 먼저 시도한다.
+        #  이 분기가 없으면 세션 내내 직전 정규장 마감가가 그대로 굳는다.
+        exchanges = us_excd_candidates(cached_ex)
+
         for excd in exchanges:
             params = {"AUTH": "", "EXCD": excd, "SYMB": code}
             data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["PRICE"], "overseas", "quotations", "price", params=params, timeout=3)
             if data.get('rt_cd') == '0':
                 if float(data.get('output', {}).get('last', 0) or 0) > 0:
-                    if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                    # [주간거래] 캐시·stock.json에는 항상 '정규장' 코드를 저장한다.
+                    #  주간 코드(BAQ 등)가 저장되면 정규장 시간대 조회와 주문 경로가 깨진다.
+                    reg_excd = US_REGULAR_EXCD.get(excd, excd)
+                    if cached_ex != reg_excd: config.session.update_cache_and_save(code, reg_excd)
 
                     # [수정] 장외(프리/애프터) 시세: KIS 응답을 1차 신뢰한다.
                     #  KIS 현재체결가의 last/diff/rate는 프리·애프터장에도 갱신되므로, 기존의
@@ -3338,13 +3414,27 @@ def fetch_overseas_detail_price(code, excd):
     for e in ["NASD", "NAS", "NYSE", "NYS", "AMEX", "AMS"]:
         if e not in exchanges: exchanges.append(e)
 
+    # [주간거래] 데이마켓 세션 중에는 주간 코드를 먼저 시도한다.
+    #  이 TR의 52주 고저·PER/PBR은 정규/주간이 동일하고 last만 라이브로 갱신되므로,
+    #  주간 코드를 쓰지 않으면 52주 위치가 직전 정규장 종가 기준으로 계산된다.
+    if us_day_market_session():
+        day = []
+        for e in exchanges:
+            d = US_DAY_MARKET_EXCD.get(e)
+            if d and d not in day:
+                day.append(d)
+        exchanges = day + exchanges
+
     for target_excd in exchanges:
         params = {"AUTH": "", "EXCD": target_excd, "SYMB": code}
         data = call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["DETAIL"], "overseas", "quotations", "detail", params=params, timeout=3)
         if data.get('rt_cd') == '0':
             output = data.get('output', {})
             if output.get('h52p') and float(output.get('h52p')) > 0:
-                if target_excd != excd: config.session.update_cache_and_save(code, target_excd)
+                # [주간거래] 캐시·stock.json에는 항상 '정규장' 코드를 저장한다(주간 코드가 박히면
+                #  정규장 시간대 조회·주문 경로가 깨진다). update_cache_and_save는 파일에 영속된다.
+                reg_excd = US_REGULAR_EXCD.get(target_excd, target_excd)
+                if reg_excd != excd: config.session.update_cache_and_save(code, reg_excd)
                 _set_micro_cache(cache_key, output)
                 return output
     return {}
@@ -4045,8 +4135,26 @@ def _toss_current_price_data(code, is_overseas):
     # (있으면 HTS 일치), 없으면 전일 NXT 종가로 폴백. 마감 후엔 오늘 KRX 마감가를 1회 캡처해 저장.
     if not is_overseas:
         _toss_capture_krx_close(code)  # 마감(15:35+) 후 오늘 KRX 마감가 1회 저장(이미 있으면 즉시 반환)
-        base = _toss_base_price(code)
         p = _toss_float(price)
+
+        # [모드 정합성] ETF/ETN은 마감 후 현재가를 'KRX 정규장 종가'로 고정한다.
+        #  ETF는 NXT 연장거래 대상이 아니라 15:30 이후 체결은 전부 KRX 시간외단일가(16:00~18:00)다.
+        #  KIS 경로(mode 1/2)는 시간외단일가를 별도 TR(FHPST02300000)로만 제공해 반영하지 않으므로
+        #  정규장 종가를 보여주는데, 토스 lastPrice는 시간외 체결을 그대로 반영해 두 모드가 어긋났다.
+        #  (실측 2026-07-22 16:07 KODEX 코스닥150: KIS·HTS 12,525 / 토스 12,530 = 시간외 체결가.
+        #   같은 시각 시간외 거래량이 있는 ETF만 값이 갈리고, 거래가 없던 ETF는 정확히 일치했다.)
+        #  일봉 종가와 지표(EMA/RSI/CCI·52주 위치)의 기준은 정규장 종가이고 시간외단일가는 거래량이
+        #  극히 적어(수 주~수십 주) 노이즈에 가까우므로, 마감 후에는 캡처해 둔 KRX 마감가로 고정한다.
+        #  ※ 일반 주식은 NXT 연장가를 mode 1/2도 함께 노출하므로(get_multi_current_prices_nxt)
+        #    여기서 고정하면 오히려 어긋난다 → ETF/ETN에만 적용한다.
+        if _toss_after_krx_close() and is_domestic_etf_etn(code):
+            krx_close = _toss_krx_close_get(code, datetime.now().strftime('%Y%m%d'))
+            if krx_close and krx_close > 0:
+                p = float(krx_close)
+                output['stck_prpr'] = str(int(round(p)))
+                output['last'] = str(p)
+
+        base = _toss_base_price(code)
         if base and base > 0 and p > 0:
             output['stck_sdpr'] = str(int(base))
             output['prdy_vrss'] = str(int(round(p - base)))

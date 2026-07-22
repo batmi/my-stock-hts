@@ -72,3 +72,68 @@ def test_db_disclosure_notified_roundtrip():
     assert db_manager.db.is_disclosure_notified("RC-XYZ") is False
     db_manager.db.mark_disclosure_notified("RC-XYZ")
     assert db_manager.db.is_disclosure_notified("RC-XYZ") is True
+
+
+# ---------------------------------------------------------------------------
+# 진행바 통합 (조회 → 상세를 하나의 막대로)
+# ---------------------------------------------------------------------------
+def _fake_collect(code, name, days, min_level):
+    return [{
+        "code": code, "name": name, "date": "20260720",
+        "report_nm": "주요사항보고서(자기주식취득결정)",
+        "level": 2, "icon": "🔴", "category": "자기주식",
+        "rcept_no": "20260720000001",
+    }]
+
+
+def _run_show_disclosures(n_codes=20):
+    """show_disclosures를 실행하고 생성된 Progress 인스턴스 목록을 돌려준다."""
+    created = []
+    orig = disclosure._make_progress
+
+    def spy():
+        p = orig()
+        created.append(p)
+        return p
+
+    codes = [(f"{i:06d}", f"종목{i}") for i in range(1, n_codes + 1)]
+    with patch.object(disclosure, "_make_progress", spy), \
+         patch.object(disclosure, "_kr_watchlist", return_value=codes), \
+         patch.object(disclosure, "collect_disclosures", side_effect=_fake_collect), \
+         patch.object(disclosure, "build_detail_note", return_value="예정금액 100억"), \
+         patch.object(disclosure, "_maybe_ai_summary"), \
+         patch.object(config, "DART_API_KEY", "x" * 40), \
+         patch("utils.clear_screen"), patch.object(config.console, "print"):
+        disclosure.show_disclosures(days=14)
+    return created, len(codes)
+
+
+def test_show_disclosures_uses_single_progress_bar():
+    """공시 조회와 상세 조회가 진행바 하나를 공유해야 한다.
+
+    (기존에는 단계마다 Progress를 새로 만들어 진행바가 순차로 두 개 보였다.)
+    """
+    created, _ = _run_show_disclosures()
+    assert len(created) == 1, "진행바는 하나만 생성되어야 한다"
+    assert len(created[0].tasks) == 1, "막대(task)도 하나여야 한다"
+
+
+def test_progress_total_covers_both_phases():
+    """상세 단계가 total을 늘려 하나의 막대가 100%까지 이어져야 한다."""
+    created, n_codes = _run_show_disclosures()
+    task = created[0].tasks[0]
+    assert task.total == n_codes + 12          # 조회 n건 + 상세 최대 12건
+    assert task.completed == task.total        # 중간에 끊기지 않고 완주
+    assert "상세정보" in task.description      # 마지막 단계 라벨로 갱신
+
+
+def test_gather_and_enrich_still_standalone():
+    """진행바를 안 넘기면 각자 자체 진행바를 만들어 단독 호출도 계속 동작한다."""
+    codes = [("005930", "삼성전자")]
+    with patch.object(disclosure, "collect_disclosures", side_effect=_fake_collect):
+        events = disclosure._gather(codes, 14, 1)
+    assert len(events) == 1
+
+    with patch.object(disclosure, "build_detail_note", return_value="비고"):
+        disclosure._enrich_details(events)
+    assert events[0]["note"] == "비고"
