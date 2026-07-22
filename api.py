@@ -3831,15 +3831,71 @@ def _toss_ranking_base(code):
         return mp.get(code)
 
 
+# --- yfinance 국내 일봉 = KRX 정규장 종가 (3순위 소스, 과거 소급 조회 가능) ---
+#  캡처(2순위)는 '그날 15:35 이후 프로그램이 mode 3로 떠 있어야' 저장되므로, 하루라도 안 띄우면
+#  그날의 KRX 종가가 영구히 비어 다음 날 기준가가 NXT 종가로 폴백된다(실측 2026-07-22 한미약품:
+#  KIS 기준가 372,500[KRX] vs 토스 371,500[NXT] → 등락률 -1.21% vs -0.94%).
+#  yfinance 국내 일봉 종가는 KRX 정규장 기준이라 KIS 기준가와 일치하고(실측 07-21 = 372,500),
+#  인증 없이 과거 아무 날짜나 조회되므로 이 커버리지 구멍을 메운다.
+_toss_yf_base_miss = {}          # {(code, date): 마지막 실패 시각} — 실패 재조회 폭주 방지
+_toss_yf_base_lock = threading.Lock()
+_TOSS_YF_BASE_RETRY_SEC = 1800   # 실패 후 재시도 쿨다운(초)
+
+
+def _toss_yf_krx_close(code, ref_date):
+    """yfinance 국내 일봉에서 ref_date(YYYYMMDD)의 KRX 정규장 종가를 얻는다. 없으면 None.
+
+    조회 성공 시 캡처 저장소에 넣어 다음부터는 2순위에서 즉시 끝나게 한다(네트워크 1회로 종료).
+    실패는 쿨다운 캐시로 묶어 주기적 시세 갱신마다 yfinance를 두드리지 않게 한다.
+    """
+    if not code or not ref_date:
+        return None
+    key = (code, ref_date)
+    with _toss_yf_base_lock:
+        last = _toss_yf_base_miss.get(key)
+        if last and (time.time() - last) < _TOSS_YF_BASE_RETRY_SEC:
+            return None
+    try:
+        # 국내는 KOSPI(.KS)/KOSDAQ(.KQ) 접미사를 모두 시도한다(거래소 정보가 없어도 동작).
+        start = (datetime.strptime(ref_date, "%Y%m%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+        end = (datetime.strptime(ref_date, "%Y%m%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        for suffix in (".KS", ".KQ"):
+            ticker = f"{code}{suffix}"
+            df = fetch_yfinance_data(ticker, start=start, end=end)
+            if df is None or getattr(df, 'empty', True):
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                try:
+                    df = df.xs(ticker, axis=1, level=1)
+                except Exception:
+                    pass
+            df.columns = [str(c).lower() for c in df.columns]
+            if 'close' not in df.columns:
+                continue
+            for idx, val in df['close'].items():
+                d = idx.strftime('%Y%m%d') if hasattr(idx, 'strftime') else str(idx).replace('-', '')[:8]
+                if d == ref_date:
+                    close = float(val)
+                    if close > 0:
+                        _toss_krx_close_put(code, ref_date, close)  # 다음부터 2순위에서 종료
+                        return close
+    except Exception as e:
+        logger.debug(f"[Toss] yfinance 기준가 조회 실패({code} {ref_date}): {e}")
+    with _toss_yf_base_lock:
+        _toss_yf_base_miss[key] = time.time()
+    return None
+
+
 def _toss_base_price(code, chart_df=None):
     """국내 등락률 기준가. 역산·계산 없이 '확보된 값을 그대로' 쓴다(단락 평가).
 
     우선순위(위에서 값이 나오면 즉시 반환, 아래는 실행 안 함):
       1) 랭킹 basePrice — 거래대금/거래량 상위(대형주)의 전일 KRX 정규장 종가(라이브, HTS 일치)
       2) 저장된 KRX 정규장 마감가 — `_toss_capture_krx_close`가 마감 후 캡처(랭킹 밖 중소형)
-      3) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
+      3) yfinance 일봉 종가 — KRX 정규장 기준. 캡처 공백(그날 미실행)을 과거 소급으로 메운다
+      4) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
 
-    1·2가 모두 없을 때만 3(NXT 종가)으로 내려가며, 3은 연장시간 체결 차이로 KRX 기준 HTS
+    1~3이 모두 없을 때만 4(NXT 종가)로 내려가며, 4는 연장시간 체결 차이로 KRX 기준 HTS
     등락률과 소폭 다를 수 있다(기동 시 안내). TOSS는 전일 KRX 종가 필드를 직접 주지 않는다.
 
     ref_date(전일 종가의 거래일)는 일봉 '날짜'만으로 결정한다:
@@ -3867,7 +3923,13 @@ def _toss_base_price(code, chart_df=None):
         if stored:
             return stored
 
-        # 3) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
+        # 3) yfinance 일봉 종가 (KRX 정규장 기준) — 캡처가 없던 날을 과거 소급으로 메운다.
+        #    성공 시 캡처 저장소에 적재되어 다음 호출부터는 2)에서 종료된다.
+        yf_close = _toss_yf_krx_close(code, ref_date)
+        if yf_close:
+            return yf_close
+
+        # 4) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
         row = df.iloc[-1] if last_date < today else df.iloc[-2]
         base = _toss_float(row['close'])
         return base if base > 0 else None

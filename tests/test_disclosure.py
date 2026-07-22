@@ -119,12 +119,34 @@ def test_show_disclosures_uses_single_progress_bar():
 
 
 def test_progress_total_covers_both_phases():
-    """상세 단계가 total을 늘려 하나의 막대가 100%까지 이어져야 한다."""
+    """조회·상세 두 단계가 끊김 없이 하나의 막대로 100%까지 이어져야 한다."""
     created, n_codes = _run_show_disclosures()
     task = created[0].tasks[0]
-    assert task.total == n_codes + 12          # 조회 n건 + 상세 최대 12건
-    assert task.completed == task.total        # 중간에 끊기지 않고 완주
-    assert "상세정보" in task.description      # 마지막 단계 라벨로 갱신
+    # 조회 n건 + 상세 대상(최대 _DETAIL_LIMIT건)까지 한 막대로 처리된다
+    assert n_codes < task.completed <= n_codes + disclosure._DETAIL_LIMIT
+    assert task.completed == task.total        # 예약분이 정리되어 100%로 끝난다
+    # 라벨이 단계마다 바뀌면 사용자에게 진행바가 새로 뜬 것처럼 보인다 → 고정이어야 한다
+    assert task.description == disclosure._PROGRESS_LABEL
+
+
+def test_progress_percentage_never_rewinds():
+    """진행률이 뒤로 되감기면 새 진행바가 뜬 것처럼 보인다 → 단조 증가여야 한다."""
+    seen = []
+
+    class _Recorder(disclosure.Progress):
+        def advance(self, task_id, advance=1):
+            super().advance(task_id, advance)
+            seen.append(self.tasks[0].percentage)
+
+        def update(self, task_id, **kw):
+            super().update(task_id, **kw)
+            seen.append(self.tasks[0].percentage)
+
+    with patch.object(disclosure, "Progress", _Recorder):
+        _run_show_disclosures()
+    assert seen, "진행률이 기록되지 않았다"
+    assert seen == sorted(seen), f"진행률이 되감겼다: {seen}"
+    assert seen[-1] == 100.0
 
 
 def test_gather_and_enrich_still_standalone():

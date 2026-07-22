@@ -323,12 +323,13 @@ def test_toss_ranking_base_builds_map_and_caches():
 
 
 def test_toss_base_price_falls_back_to_prev_nxt_candle():
-    """[폴백] 저장된 KRX 마감가가 없으면 전일 NXT 종가(일봉 직전 캔들)로 계산한다(역산·yfinance 없음)."""
+    """[최종 폴백] 저장분·yfinance가 모두 없으면 전일 NXT 종가(일봉 직전 캔들)로 계산한다(역산 없음)."""
     import api
     _reset_krx_store({})  # 저장분 없음
     _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → 그 종가
     try:
-        with patch("toss_api.get_price_limit") as m_pl:
+        with patch("toss_api.get_price_limit") as m_pl, \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스
             assert api._toss_base_price("TSTA") == 285000.0  # NXT 캔들 종가
             m_pl.assert_not_called()  # 역산 없음
     finally:
@@ -355,7 +356,8 @@ def test_toss_base_price_ref_date_is_prev_when_today_candle_exists():
     _inject_daily_chart("TSTC", [{'date': '20260713', 'close': 285000.0},
                                  {'date': today, 'close': 262500.0}])
     try:
-        assert api._toss_base_price("TSTC") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
+        with patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스 → NXT 폴백
+            assert api._toss_base_price("TSTC") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
     finally:
         _pop_daily_chart("TSTC")
 
@@ -645,7 +647,8 @@ def test_current_price_data_adapter():
     try:
         with patch("toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
-             patch.object(api, "_toss_capture_krx_close"):  # 마감가 캡처(분봉 조회) 격리
+             patch.object(api, "_toss_capture_krx_close"), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 캡처·yfinance 격리
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:
@@ -1683,3 +1686,64 @@ def test_toss_etf_after_close_without_captured_close_falls_back():
         assert int(o["stck_prpr"]) == 12530
     finally:
         config.session.is_toss = False
+
+
+# ---------------------------------------------------------------------------
+# 기준가 3순위: yfinance 일봉(KRX 정규장 종가) — 캡처 공백 소급 보정
+# ---------------------------------------------------------------------------
+#  캡처(2순위)는 '그날 15:35 이후 프로그램이 mode 3로 떠 있어야' 저장되므로, 하루라도 안 띄우면
+#  그날 KRX 종가가 영구히 비어 기준가가 NXT 종가로 폴백된다.
+#  (실측 2026-07-22 한미약품: KIS 기준가 372,500[KRX] vs 토스 371,500[NXT] → -1.21% vs -0.94%)
+def _yf_frame(ticker, date_str, close):
+    import pandas as pd
+    idx = pd.to_datetime([date_str])
+    return pd.DataFrame({"Close": [close]}, index=idx)
+
+
+def test_toss_base_price_uses_yfinance_when_capture_missing():
+    """[우선순위 3] 저장분이 없으면 yfinance 일봉(KRX 종가)을 쓰고 NXT 폴백으로 내려가지 않는다."""
+    import api
+    _reset_krx_store({})
+    _inject_daily_chart("TSTY", PAST_CHART)  # ref_date=20260713, NXT 캔들=285000
+    try:
+        with patch.object(api, "fetch_yfinance_data",
+                          return_value=_yf_frame("TSTY.KS", "2026-07-13", 284000.0)), \
+             patch.object(api, "_toss_krx_close_put") as m_put:
+            assert api._toss_base_price("TSTY") == 284000.0   # NXT 285000이 아님
+            m_put.assert_called_once_with("TSTY", "20260713", 284000.0)  # 다음부터 2순위에서 종료
+    finally:
+        _pop_daily_chart("TSTY")
+
+
+def test_toss_base_price_stored_beats_yfinance():
+    """저장된 캡처값이 있으면 yfinance를 호출하지 않는다(네트워크 절약)."""
+    import api
+    _reset_krx_store({"TSTZ": {"20260713": 284000.0}})
+    _inject_daily_chart("TSTZ", PAST_CHART)
+    try:
+        with patch.object(api, "fetch_yfinance_data") as m_yf:
+            assert api._toss_base_price("TSTZ") == 284000.0
+            m_yf.assert_not_called()
+    finally:
+        _pop_daily_chart("TSTZ")
+
+
+def test_toss_yf_krx_close_negative_cache_blocks_refetch():
+    """조회 실패는 쿨다운으로 묶어 시세 갱신마다 yfinance를 두드리지 않는다."""
+    import api
+    api._toss_yf_base_miss.clear()
+    with patch.object(api, "fetch_yfinance_data", return_value=None) as m_yf:
+        assert api._toss_yf_krx_close("TSTQ", "20260713") is None
+        assert api._toss_yf_krx_close("TSTQ", "20260713") is None
+        assert m_yf.call_count == 2   # 1회차만 .KS/.KQ 두 번 시도, 2회차는 쿨다운으로 미호출
+    api._toss_yf_base_miss.clear()
+
+
+def test_toss_yf_krx_close_ignores_other_dates():
+    """요청한 거래일과 다른 날짜 봉만 오면 값을 만들지 않는다(잘못된 기준가 방지)."""
+    import api
+    api._toss_yf_base_miss.clear()
+    with patch.object(api, "fetch_yfinance_data",
+                      return_value=_yf_frame("X.KS", "2026-07-10", 999.0)):
+        assert api._toss_yf_krx_close("TSTW", "20260713") is None
+    api._toss_yf_base_miss.clear()

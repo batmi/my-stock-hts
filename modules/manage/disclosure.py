@@ -85,11 +85,21 @@ def collect_disclosures(code, name, days=14, min_level=0):
     return out
 
 
+_DETAIL_LIMIT = 12          # 상세 조회 대상 최대 건수 (진행바 total 예약분과 같아야 한다)
+_PROGRESS_LABEL = "[cyan]공시 조회 중...[/cyan]"
+
+
 def _make_progress():
     """공시 조회용 진행바 (조회 → 상세 단계가 공유한다)."""
     return Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                     BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                     console=config.console, transient=True)
+
+
+def _task_done(progress, task):
+    """진행바 task의 현재 완료 수량."""
+    t = next((x for x in progress.tasks if x.id == task), None)
+    return int(t.completed) if t is not None else 0
 
 
 def _gather(codes, days, min_level, progress=None, task=None):
@@ -104,7 +114,7 @@ def _gather(codes, days, min_level, progress=None, task=None):
     with contextlib.ExitStack() as stack:
         if progress is None:
             progress = stack.enter_context(_make_progress())
-            task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
+            task = progress.add_task(_PROGRESS_LABEL, total=len(codes))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             futs = {ex.submit(collect_disclosures, c, n, days, min_level): c for c, n in codes}
             for fut in concurrent.futures.as_completed(futs):
@@ -389,11 +399,14 @@ def build_detail_note(e):
     return ""
 
 
-def _enrich_details(events, limit=12, progress=None, task=None):
+def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None):
     """표시 대상 공시 중 상세정보 대상만 병렬 조회해 e['note']를 채운다.
 
-    progress/task를 받으면 새 진행바를 만들지 않고 기존 막대의 total을 늘려 이어서 채운다.
-    (조회 단계와 상세 단계가 각각 진행바를 띄워 두 개가 순차로 보이던 것을 하나로 합침)
+    progress/task를 받으면 새 진행바를 만들지 않고 그 막대를 이어서 채운다. 이때
+    total은 '이미 끝난 양 + 남은 대상 수'로 다시 잡는다. 호출측이 상세 단계 몫까지
+    미리 예약해 두므로(_DETAIL_LIMIT) 퍼센트가 뒤로 되감기지 않고, 설명 문구도
+    바꾸지 않아 하나의 막대로 보인다. (단계마다 라벨이 바뀌고 퍼센트가 되감기면
+    사용자에게는 진행바가 두 개 뜬 것처럼 보인다.)
     """
     targets = [e for e in events if _detail_eligible(e)][:limit]
     if not targets:
@@ -401,13 +414,9 @@ def _enrich_details(events, limit=12, progress=None, task=None):
     with contextlib.ExitStack() as stack:
         if progress is None:
             progress = stack.enter_context(_make_progress())
-            task = progress.add_task("[cyan]공시 상세정보 조회 중...[/cyan]", total=len(targets))
+            task = progress.add_task(_PROGRESS_LABEL, total=len(targets))
         else:
-            # 공유 진행바: 남은 작업량만큼 total을 늘려 하나의 막대가 끊기지 않고 이어지게 한다
-            cur = next((t for t in progress.tasks if t.id == task), None)
-            base_total = (cur.total or 0) if cur is not None else 0
-            progress.update(task, total=base_total + len(targets),
-                            description="[cyan]공시 상세정보 조회 중...[/cyan]")
+            progress.update(task, total=_task_done(progress, task) + len(targets))
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futs = {ex.submit(build_detail_note, e): e for e in targets}
             for fut in concurrent.futures.as_completed(futs):
@@ -435,12 +444,15 @@ def show_disclosures(days=14):
     # [진행바] 조회·상세 두 단계가 하나의 막대를 공유한다(단계마다 새 막대가 뜨지 않게).
     shown = []
     with _make_progress() as progress:
-        task = progress.add_task("[cyan]공시 조회 중...[/cyan]", total=len(codes))
+        # 상세 단계 몫(_DETAIL_LIMIT)을 total에 미리 얹어 막대가 100%까지 찼다가
+        # 되감기는 일이 없게 한다. 되감기면 새 진행바가 뜬 것처럼 보인다.
+        task = progress.add_task(_PROGRESS_LABEL, total=len(codes) + _DETAIL_LIMIT)
         events = _gather(codes, days, min_level=1, progress=progress, task=task)
         if events:
             events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
             shown = events[:40]
             _enrich_details(shown, progress=progress, task=task)
+        progress.update(task, total=max(_task_done(progress, task), 1))  # 예약분 정리
 
     if not events:
         config.console.print(f"[dim]최근 {days}일간 주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)[/dim]")

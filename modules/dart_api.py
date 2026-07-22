@@ -273,13 +273,33 @@ def _dart_num(s):
         return None
 
 
-def get_dart_insider_trades(stock_code, since=None):
+def _norm_insider_row(r):
+    return {
+        "rcept_no": r.get("rcept_no", ""),
+        "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
+        "repror": (r.get("repror") or "").strip(),
+        "ofcps": (r.get("isu_exctv_ofcps") or "").strip(),
+        "main_shrholdr": (r.get("isu_main_shrholdr") or "").strip(),
+        "qty": _dart_num(r.get("sp_stock_lmp_cnt")),
+        "chg": _dart_num(r.get("sp_stock_lmp_irds_cnt")),
+        "rate": _dart_num(r.get("sp_stock_lmp_rate")),
+        "rate_chg": _dart_num(r.get("sp_stock_lmp_irds_rate")),
+        "baseline": False,
+    }
+
+
+def get_dart_insider_trades(stock_code, since=None, keep_baseline=False):
     """임원·주요주주 특정증권등 소유상황 보고 (elestock.json, 최신순).
 
-    반환: [{rcept_no, rcept_dt, repror, ofcps, main_shrholdr, qty, chg, rate, rate_chg}, ...]
+    반환: [{rcept_no, rcept_dt, repror, ofcps, main_shrholdr, qty, chg, rate, rate_chg,
+            baseline}, ...]
     qty=보유 특정증권 수, chg=증감 수량(+매수/-매도), rate=보유비율(%).
     since: 'YYYYMMDD' — 응답이 전체 이력(수천 건)이라 이 날짜 이전은 정규화 전에 버려
            저사양 환경의 메모리 사용을 줄인다.
+    keep_baseline: since 이전 구간에서 보고자별 '가장 최근 1건'만 baseline=True로 남긴다.
+           DART의 증감 칸은 신규·재보고 시 보유 전량이 그대로 들어와(chg == qty) 지분
+           유지가 대량 취득으로 보이므로, 직전 보유수량을 알아야 실제 증감을 차분으로
+           복원할 수 있다. 보고자당 1건이라 메모리 부담은 거의 없다.
     """
     corp = _api().get_dart_corp_map().get(stock_code)
     if not corp:
@@ -288,20 +308,21 @@ def get_dart_insider_trades(stock_code, since=None):
     if not rows or not isinstance(rows, list):
         return []
     out = []
+    base = {}
     for r in rows:
-        if since and (r.get("rcept_dt") or "").replace("-", "") < since:
+        dt = (r.get("rcept_dt") or "").replace("-", "")
+        if since and dt < since:
+            if keep_baseline:
+                who = (r.get("repror") or "").strip()
+                prev = base.get(who)
+                if prev is None or dt >= prev[0]:
+                    base[who] = (dt, r)
             continue
-        out.append({
-            "rcept_no": r.get("rcept_no", ""),
-            "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
-            "repror": (r.get("repror") or "").strip(),
-            "ofcps": (r.get("isu_exctv_ofcps") or "").strip(),
-            "main_shrholdr": (r.get("isu_main_shrholdr") or "").strip(),
-            "qty": _dart_num(r.get("sp_stock_lmp_cnt")),
-            "chg": _dart_num(r.get("sp_stock_lmp_irds_cnt")),
-            "rate": _dart_num(r.get("sp_stock_lmp_rate")),
-            "rate_chg": _dart_num(r.get("sp_stock_lmp_irds_rate")),
-        })
+        out.append(_norm_insider_row(r))
+    for _dt, r in base.values():
+        row = _norm_insider_row(r)
+        row["baseline"] = True
+        out.append(row)
     return out
 
 

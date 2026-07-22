@@ -7,6 +7,7 @@
 - 임원·주요주주 소유상황 / 대량보유(5%) 보고: 내부자 지분 변동 추적
 """
 import concurrent.futures
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from rich.table import Table
@@ -19,6 +20,13 @@ import utils
 
 _MEZZ_LOOKBACK_DAYS = 365 * 3   # 메자닌 오버행 발행 이력 조회 기간 (통상 만기 3~5년)
 _EXERCISE_LOOKBACK_DAYS = 90    # 전환청구권/신주인수권 행사 공시 감지 기간
+
+# 회사 일괄 이벤트(우리사주·스톡그랜트·무상신주·주식배당) 판정 기준.
+# 임원 다수가 같은 날 같은 방향으로 보고하면 개별 매매가 아니라 회사가 일괄 배정한 것이다.
+# 실측(2026-07-22): 삼성전자 2026-07-21 743명 동시 증가, SK텔레콤 50명, 현대로템 37명.
+# 반면 SK하이닉스 2026-06-09는 5명이지만 3증가/2감소로 방향이 갈려 실제 매매다.
+_BULK_MIN_REPORTERS = 5
+_BULK_SAME_DIR_RATIO = 0.9
 
 
 def _kr_stocks():
@@ -46,8 +54,10 @@ def _fmt_chg(chg):
 def _collect(code, name, cutoff):
     """단일 종목의 내부자/대량보유 보고를 cutoff 이후만 수집."""
     insiders, majors = [], []
-    for r in api.get_dart_insider_trades(code, since=cutoff):
-        if r["rcept_dt"] >= cutoff:
+    # keep_baseline: cutoff 직전 보고 1건을 보유수량 기준선으로 함께 받아
+    # 기간 첫 보고의 실제 증감을 차분으로 복원한다(_apply_real_chg).
+    for r in api.get_dart_insider_trades(code, since=cutoff, keep_baseline=True):
+        if r["rcept_dt"] >= cutoff or r.get("baseline"):
             r = dict(r, code=code, name=name)
             insiders.append(r)
     for r in api.get_dart_major_holdings(code):
@@ -161,13 +171,18 @@ def show_insider_trades(days=90):
         config.console.print(f"[dim]최근 {days}일간 수급·물량 관련 보고가 없습니다.[/dim]")
         return
 
+    # 실제 증감(차분)·일괄 이벤트 판정은 요약/상세가 같은 기준을 쓰도록 여기서 한 번만 계산
+    _apply_real_chg(insiders)
+    bulk = _bulk_event_keys(insiders)
+
     _render_treasury(treasury)
     _render_free_increase(frees)
     _render_overhang(mezz)
-    _render_summary(insiders)
-    _render_insiders(insiders)
+    _render_summary(insiders, bulk=bulk)
+    _render_insiders(insiders, bulk=bulk)
     _render_majors(majors)
-    config.console.print("[dim]※ 증감(+)=취득, (-)=처분 · 무상신주·스톡옵션 등 매매 외 사유 포함 가능 · 원문: dart.fss.or.kr[/dim]")
+    config.console.print("[dim]※ 증감(+)=취득, (-)=처분 · DART는 변동사유를 제공하지 않아 "
+                         "일괄 지급·재보고를 패턴으로 걸러냅니다 · 원문: dart.fss.or.kr[/dim]")
 
 
 def _render_treasury(rows):
@@ -266,36 +281,128 @@ def _render_overhang(rows, limit=20):
                          "전환가는 발행 결정 시점 기준(리픽싱 미반영), 행사공시=최근 90일 전환청구권·신주인수권 행사.[/dim]\n")
 
 
-def _render_summary(insiders):
-    """종목별 임원·주요주주 순증감 합계 (신호 요약)."""
+def _apply_real_chg(insiders):
+    """보고된 '증감' 대신 보유수량 차분으로 실제 증감(r['real_chg'])을 채운다.
+
+    DART 소유상황보고의 증감 칸은 신규 보고·재보고(지분율이 5%/10% 선을 다시 넘는 등)
+    때 보유 전량이 그대로 들어온다. 실측(2026-07-22) 국민연금공단 한미약품:
+      05-22 보유 1,269,470 / 증감 -137,654
+      06-01 보유 1,281,813 / 증감 +1,281,813  ← 전량 재기재. 실제 변동은 +12,343
+    이 값을 그대로 합산하면 90일 순증감이 +2,458,181(순취득)로 뒤집혀 나오지만
+    차분으로 계산하면 -88,036(순처분)이 실제다. 그래서 직전 보고 대비 차분을 쓴다.
+
+    직전 보고가 전혀 없는 최초 보고는 차분을 낼 수 없어 보고값을 그대로 쓰되,
+    증감이 보유 전량과 같으면(= 전량 기재로 의심) 0으로 둔다. 신규 임원의 소액
+    매수를 놓치는 손실보다 수백만 주 허위 취득 신호를 내는 쪽이 훨씬 위험하다.
+    """
+    seq = defaultdict(list)
+    for r in insiders:
+        seq[(r["code"], r["repror"])].append(r)
+    for rows in seq.values():
+        rows.sort(key=lambda r: (r["rcept_dt"], r["rcept_no"]))
+        prev = None
+        for r in rows:
+            qty, chg = r["qty"], r["chg"] or 0
+            if prev is not None and qty is not None:
+                r["real_chg"] = qty - prev
+            elif qty is not None and chg > 0 and abs(chg - qty) < 1e-9:
+                r["real_chg"] = 0.0        # 최초 보고에 보유 전량이 증감으로 기재됨
+            else:
+                r["real_chg"] = float(chg)
+            if qty is not None:
+                prev = qty
+
+
+def _bulk_event_keys(insiders):
+    """회사 일괄 이벤트로 판정된 (종목코드, 접수일) 집합.
+
+    우리사주·스톡그랜트·무상신주·주식배당은 임원 수십~수백 명이 같은 날 같은 방향으로
+    보고된다. 개별 매매 의사와 무관하므로 수급 신호에서 빼야 한다.
+    """
+    groups = defaultdict(list)
+    for r in insiders:
+        if not r.get("baseline"):
+            groups[(r["code"], r["rcept_dt"])].append(r.get("real_chg") or 0)
+    keys = set()
+    for key, chgs in groups.items():
+        if len(chgs) < _BULK_MIN_REPORTERS:
+            continue
+        up = sum(1 for c in chgs if c > 0)
+        dn = sum(1 for c in chgs if c < 0)
+        # 방향 비율은 변동이 있는 보고만 놓고 본다. 차분 보정으로 0이 된 재보고가
+        # 분모에 끼면 일괄 지급인데도 비율이 희석되어 통과해 버린다.
+        moved = up + dn
+        if moved and max(up, dn) >= moved * _BULK_SAME_DIR_RATIO:
+            keys.add(key)
+    return keys
+
+
+def _render_summary(insiders, bulk=None):
+    """종목별 임원·주요주주 순증감 요약 (매매 외 사유 제외, 실제 증감 기준)."""
     if not insiders:
         return
-    agg = {}
-    for r in insiders:
-        key = (r["code"], r["name"])
-        a = agg.setdefault(key, {"net": 0.0, "cnt": 0})
-        a["net"] += r["chg"] or 0
-        a["cnt"] += 1
-    rows = sorted(agg.items(), key=lambda kv: abs(kv[1]["net"]), reverse=True)
+    bulk = _bulk_event_keys(insiders) if bulk is None else bulk
 
-    config.console.print("[bold]▸ 종목별 내부자 순증감 요약[/bold]")
+    agg = {}
+    excluded = 0
+    for r in insiders:
+        if r.get("baseline"):
+            continue                       # 기준선 전용 행(기간 이전 보고)
+        if (r["code"], r["rcept_dt"]) in bulk:
+            excluded += 1
+            continue
+        key = (r["code"], r["name"])
+        a = agg.setdefault(key, {"net": 0.0, "cnt": 0, "last": ""})
+        a["net"] += r.get("real_chg") or 0
+        a["cnt"] += 1
+        if r["rcept_dt"] > a["last"]:
+            a["last"] = r["rcept_dt"]
+    if not agg:
+        return
+    # 이 화면의 다른 표와 같이 최신순. 같은 날이면 순증감 규모가 큰 쪽을 위로.
+    rows = sorted(agg.items(), key=lambda kv: (kv[1]["last"], abs(kv[1]["net"])), reverse=True)
+
+    config.console.print("[bold]▸ 종목별 내부자 순증감 요약[/bold] [dim](매매 외 사유 제외)[/dim]")
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table.add_column("최근 보고일", justify="center")   # 다른 표와 같이 일자를 맨 앞에 둔다
     table.add_column("종목", justify="left")
     table.add_column("보고 건수", justify="center")
     table.add_column("순증감(주)", justify="right")
     table.add_column("신호", justify="center")
+    today = datetime.now().strftime("%Y%m%d")
     for (code, name), a in rows:
         net = a["net"]
         signal = ("[red]▲ 순취득[/]" if net > 0 else
                   "[blue]▼ 순처분[/]" if net < 0 else "[dim]중립[/dim]")
-        table.add_row(f"{name} ({code})", str(a["cnt"]), _fmt_chg(net), signal)
+        last = _fmt_date(a["last"])
+        # 최근 7일 내 보고는 신호가 살아있다는 뜻이라 강조한다
+        if a["last"] and (datetime.strptime(today, "%Y%m%d")
+                          - datetime.strptime(a["last"], "%Y%m%d")).days <= 7:
+            last = f"[bold]{last}[/bold]"
+        table.add_row(last, f"{name} ({code})", str(a["cnt"]), _fmt_chg(net), signal)
     config.console.print(table)
+    if excluded:
+        config.console.print(f"  [dim]※ 순증감은 보유수량 차분 기준(신규·재보고의 전량 기재 제외). "
+                             f"임원 {_BULK_MIN_REPORTERS}인 이상이 같은 날 같은 방향으로 보고한 "
+                             f"일괄 지급·배정 {excluded}건은 매매가 아니라 제외했습니다.[/dim]")
+    else:
+        config.console.print("  [dim]※ 순증감은 보유수량 차분 기준(신규·재보고의 전량 기재 제외).[/dim]")
     config.console.print()
 
 
-def _render_insiders(insiders, limit=30):
-    """임원·주요주주 소유상황 보고 상세 (최신순)."""
+def _render_insiders(insiders, limit=30, bulk=None):
+    """임원·주요주주 소유상황 보고 상세 (최신순, 매매 외 사유 제외).
+
+    일괄 지급·배정 건은 제외한다. 제외하지 않으면 우리사주 지급 한 번에 수백 건이
+    쏟아져(실측: 삼성전자 743건) 최신순 상위 목록을 통째로 덮어버린다.
+    """
     config.console.print("[bold]▸ 임원 · 주요주주 소유상황 보고[/bold]")
+    bulk = _bulk_event_keys(insiders) if bulk is None else bulk
+    # 기준선 행은 기간 밖 보조 데이터라 '제외 건수'에 넣지 않는다
+    dropped = sum(1 for r in insiders
+                  if not r.get("baseline") and (r["code"], r["rcept_dt"]) in bulk)
+    insiders = [r for r in insiders
+                if not r.get("baseline") and (r["code"], r["rcept_dt"]) not in bulk]
     if not insiders:
         config.console.print("  [dim]해당 기간 보고가 없습니다.[/dim]\n")
         return
@@ -311,18 +418,25 @@ def _render_insiders(insiders, limit=30):
     table.add_column("비율", justify="right")
     for r in insiders[:limit]:
         who = r["ofcps"] or r["main_shrholdr"] or "-"
+        real = r.get("real_chg")
+        chg_str = _fmt_chg(real if real is not None else r["chg"])
+        # 보고값이 전량 기재라 차분과 다르면 원인을 알 수 있게 표시
+        if real is not None and abs(real - (r["chg"] or 0)) > 1e-9:
+            chg_str += " [dim](재보고)[/dim]"
         table.add_row(
             _fmt_date(r["rcept_dt"]),
             f"{r['name']} ({r['code']})",
             r["repror"] or "-",
             who,
-            _fmt_chg(r["chg"]),
+            chg_str,
             f"{r['qty']:,.0f}" if r["qty"] is not None else "-",
             f"{r['rate']:.2f}%" if r["rate"] is not None else "-",
         )
     config.console.print(table)
     if len(insiders) > limit:
         config.console.print(f"  [dim]… 외 {len(insiders) - limit}건[/dim]")
+    if dropped:
+        config.console.print(f"  [dim]※ 일괄 지급·배정 등 매매 외 보고 {dropped}건은 제외했습니다.[/dim]")
     config.console.print()
 
 
