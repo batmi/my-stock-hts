@@ -67,6 +67,65 @@ def _collect(code, name, cutoff):
     return insiders, majors
 
 
+def _get_rem_shares(code):
+    """최근 전환청구권행사 공시를 파싱하여 회차별 잔존 주식수 맵을 반환. 없으면 None."""
+    import re
+    docs = api.get_dart_disclosures(code, days=730)
+    exercise_doc = None
+    for d in docs:
+        nm = d.get('report_nm', '')
+        if '전환청구권행사' in nm or '신주인수권행사' in nm or '전환청구권 행사' in nm:
+            exercise_doc = d
+            break
+            
+    if not exercise_doc:
+        return None, None
+        
+    text = api.get_dart_document_text(exercise_doc['rcept_no'])
+    text_clean = re.sub('<[^<]+>', '\n', text)
+    lines = [line.strip() for line in text_clean.split('\n') if line.strip()]
+    
+    start_idx = -1
+    for i, line in enumerate(lines):
+        if '미전환사채 잔액' in line or '전환사채 잔액' in line or '미상환 잔액' in line or '미상환 사채' in line:
+            if i + 3 < len(lines) and (str(lines[i+1]).isdigit() or str(lines[i+2]).isdigit() or str(lines[i+3]).isdigit()):
+                start_idx = i
+                break
+    if start_idx == -1:
+        for i, line in enumerate(lines):
+            if line in ['1', '2', '3', '4', '5'] and i + 1 < len(lines) and '000,000,000' in lines[i+1]:
+                start_idx = i - 5
+                break
+                
+    if start_idx == -1:
+        return None, None
+        
+    rem_map = {}
+    idx = start_idx
+    while idx < len(lines):
+        line = lines[idx]
+        if line in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']:
+            round_num = line
+            offset = 1
+            while idx+offset < len(lines) and 'KRW' not in lines[idx+offset]:
+                offset += 1
+            offset2 = offset + 1
+            while idx+offset2 < len(lines) and 'KRW' not in lines[idx+offset2]:
+                offset2 += 1
+                
+            if idx+offset2+2 < len(lines):
+                shares_str = lines[idx+offset2+2].replace(',', '')
+                if shares_str.isdigit():
+                    rem_map[round_num] = int(shares_str)
+            idx += offset2 + 2
+        else:
+            idx += 1
+        if idx > start_idx + 150:
+            break
+            
+    return rem_map, exercise_doc['rcept_dt'].replace('-', '')
+
+
 def _collect_supply(code, name, days):
     """단일 종목의 자기주식/무상증자/메자닌 오버행 신호 수집."""
     end = datetime.now().strftime("%Y%m%d")
@@ -90,12 +149,14 @@ def _collect_supply(code, name, days):
                 "code": code, "name": name, "kind": kind,
                 "rcept_dt": (r.get("rcept_dt") or "").replace("-", "").strip(),
                 "amount": amt, "price": prc, "shares": amt / prc,
+                "round_num": str(r.get("bd_tm", "")).strip()
             })
 
     exercised = 0
     cur_price = None
     total_shares = None
     if mezz:
+        rem_map, exercise_dt = _get_rem_shares(code)
         # 전환청구권/신주인수권 행사 공시 감지 (실제 물량 출회 신호)
         for d in api.get_dart_disclosures(code, days=_EXERCISE_LOOKBACK_DAYS):
             nm = d.get("report_nm", "")
@@ -110,6 +171,13 @@ def _collect_supply(code, name, days):
         m["cur_price"] = cur_price
         m["total_shares"] = total_shares
         m["exercised"] = exercised
+        if not rem_map:
+            m["rem_shares"] = m["shares"]
+        else:
+            if m["rcept_dt"] > exercise_dt:
+                m["rem_shares"] = m["shares"]
+            else:
+                m["rem_shares"] = rem_map.get(m["round_num"], 0)
 
     return treasury, frees, mezz
 
@@ -254,6 +322,7 @@ def _render_overhang(rows, limit=20):
     table.add_column("전환/행사가", justify="right")
     table.add_column("현재가", justify="right")
     table.add_column("잠재물량(주)", justify="right")
+    table.add_column("잔존물량(주)", justify="right")
     table.add_column("유통대비", justify="right")
     table.add_column("상태", justify="left")
     for r in rows[:limit]:
@@ -266,13 +335,14 @@ def _render_overhang(rows, limit=20):
         else:
             status = "[dim]-[/dim]"
         ts = r.get("total_shares")
-        pct = f"{r['shares'] / ts * 100:.1f}%" if ts else "-"
+        rem = r.get("rem_shares", r["shares"])
+        pct = f"{rem / ts * 100:.1f}%" if ts and rem else "-"
         if r.get("exercised"):
             status += f" [yellow]행사공시 {r['exercised']}건[/]"
         table.add_row(
             _fmt_date(r["rcept_dt"]), f"{r['name']} ({r['code']})", r["kind"],
             _fmt_eok(r["amount"]), f"{prc:,.0f}", f"{cur:,.0f}" if cur else "-",
-            f"{r['shares']:,.0f}", pct, status,
+            f"{r['shares']:,.0f}", f"{rem:,.0f}", pct, status,
         )
     config.console.print(table)
     if len(rows) > limit:

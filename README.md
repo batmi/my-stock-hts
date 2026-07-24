@@ -348,7 +348,8 @@ my-stock-hts/
 │   ├── verify_autotrader_cancel.py  # 자동매매 취소 로직 검증 도구
 │   ├── search_indices_yfinance.py   # yfinance 기반 해외 지수 검색 도구
 │   ├── gemini_tool.py          # Gemini AI 기능 직접 테스트 도구
-│   └── get_google_genai.py     # Google GenAI SDK 연결 확인 도구
+│   ├── get_google_genai.py     # Google GenAI SDK 연결 확인 도구
+│   └── check_cb.py             # DART 공시 기반 전환사채(CB) 잔존물량 확인 도구
 ├── tests/                # Pytest 단위/통합 테스트 코드 (870개+)
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리

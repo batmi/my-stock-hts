@@ -336,7 +336,8 @@ my-stock-hts/
 │   ├── verify_autotrader_cancel.py  # Auto-trading cancellation logic verification tool
 │   ├── search_indices_yfinance.py   # yfinance-based overseas index search tool
 │   ├── gemini_tool.py          # Gemini AI feature direct test tool
-│   └── get_google_genai.py     # Google GenAI SDK connection confirmation tool
+│   ├── get_google_genai.py     # Google GenAI SDK connection confirmation tool
+│   └── check_cb.py             # DART disclosure-based CB remaining balance check tool
 ├── tests/                # Pytest unit/integration test codes (870+)
 └── modules/              # Feature-specific module folders
     ├── db_manager.py     # DB connection & query management
