@@ -235,3 +235,108 @@ def clear_cache():
     with _CACHE_LOCK:
         _CACHE.clear()
         _FAIL.clear()
+    with _LISTING_LOCK:
+        _LISTING['map'] = None
+        _LISTING['ts'] = 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 상장 종목 마스터 (종목코드 → 종목명·시가총액)
+#  - 용도: AI가 출력한 '종목명(6자리코드)' 표기의 존재/일치 검증(할루시네이션 차단).
+#    LLM은 종목코드를 지어내거나 이름-코드를 뒤바꾸는 실패 모드가 흔하고,
+#    프롬프트 지시만으로는 막히지 않으므로 출력 후 대조가 유일한 방어선이다.
+#  - FDR StockListing('KRX') 1회 호출로 전 종목(약 2,900행)을 받는다(실측 0.3초/2.4MB).
+#    DataFrame은 즉시 버리고 {코드: (이름, 시총)} dict만 남겨 라즈베리파이 메모리를 아낀다.
+#  - 폴백은 pykrx 단건 조회(이름만, 시총 없음). 둘 다 실패하면 None을 반환해
+#    호출부가 '검증 불가'로 처리하도록 한다(없는 종목으로 오판하면 안 된다).
+# ─────────────────────────────────────────────────────────────────────────────
+_LISTING = {'map': None, 'ts': 0.0}
+_LISTING_LOCK = threading.RLock()
+_LISTING_FAIL_TS = [0.0]
+
+
+def get_listing_map(use_cache=True):
+    """{'005930': {'name': '삼성전자', 'marcap': 1458646512696000}, ...} 또는 None.
+
+    None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
+    이 경우 검증을 건너뛰어야 한다.
+    """
+    now = time.time()
+    if use_cache:
+        with _LISTING_LOCK:
+            hit = _LISTING.get('map')
+            if hit and (now - _LISTING.get('ts', 0.0)) < _cache_ttl_sec():
+                return hit
+            if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
+                return None
+
+    _lazy_import()
+    if _fdr is None:
+        return None
+
+    try:
+        buf = io.StringIO()
+        with redirect_stderr(buf), redirect_stdout(buf):
+            df = _fdr.StockListing('KRX')
+    except Exception as e:      # noqa: BLE001 - 네트워크/파싱 실패 모두 '검증 불가'
+        logger.debug(f"[KRX] 상장목록 조회 실패: {e}")
+        _LISTING_FAIL_TS[0] = now
+        return None
+
+    if df is None or getattr(df, 'empty', True) or 'Code' not in df.columns:
+        _LISTING_FAIL_TS[0] = now
+        return None
+
+    result = {}
+    has_marcap = 'Marcap' in df.columns
+    has_name = 'Name' in df.columns
+    for row in df.itertuples(index=False):
+        code = str(getattr(row, 'Code', '') or '').strip()
+        if len(code) != 6 or not code.isdigit():
+            continue
+        try:
+            marcap = float(getattr(row, 'Marcap', 0) or 0) if has_marcap else 0.0
+        except (TypeError, ValueError):
+            marcap = 0.0
+        result[code] = {
+            'name': str(getattr(row, 'Name', '') or '').strip() if has_name else '',
+            'marcap': marcap,
+        }
+    del df
+
+    if not result:
+        _LISTING_FAIL_TS[0] = now
+        return None
+
+    with _LISTING_LOCK:
+        _LISTING['map'] = result
+        _LISTING['ts'] = now
+    return result
+
+
+def get_ticker_name(code):
+    """종목코드 → 종목명. 상장 목록에 없으면 '' , 조회 자체가 불가하면 None."""
+    code = str(code or '').strip()
+    if len(code) != 6 or not code.isdigit():
+        return ''
+
+    listing = get_listing_map()
+    if listing is not None:
+        entry = listing.get(code)
+        return entry['name'] if entry else ''
+
+    # 폴백: pykrx 단건. 없는 코드면 문자열이 아닌 값(빈 DataFrame 등)을 돌려준다.
+    _lazy_import()
+    if _pykrx is None:
+        return None
+    try:
+        buf = io.StringIO()
+        with redirect_stderr(buf), redirect_stdout(buf):
+            raw = _pykrx.get_market_ticker_name(code)
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[KRX] 종목명 조회 실패({code}): {e}")
+        return None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    # 단건 폴백은 '없는 코드'와 '조회 실패'를 구분하지 못하므로 보수적으로 검증 불가 처리.
+    return None

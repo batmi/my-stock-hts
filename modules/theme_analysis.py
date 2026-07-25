@@ -1,4 +1,5 @@
 import logging
+import re
 import requests
 import sqlite3
 import concurrent.futures
@@ -688,7 +689,9 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
                 }, 150.0)
 
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 응답 수신 성공")
-                return _gemini_text(response, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
+                text = _gemini_text(response, default="검색 결과가 없거나 응답을 생성하지 못했습니다.")
+                # 테마 리포트도 대장주를 '종목명(코드)'로 적으므로 동일하게 검증한다.
+                return verify_stock_codes(text)
             except Exception as e:
                 raise e
 
@@ -718,6 +721,95 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
             config.console.print(f"\n[red]오류 발생: {e}[/red]")
             logger.error(f"Gemini Search Error (Model: {config.GEMINI_MODEL}): {e}")
         return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI 출력 종목코드 검증 (할루시네이션 차단)
+#  - LLM은 6자리 종목코드를 지어내거나 종목명-코드를 뒤바꾸는 실패 모드가 흔하다.
+#    프롬프트 지시(_TICKER_GUARD)만으로는 못 막으므로 출력 후 KRX 상장목록과 대조한다.
+#  - 텍스트를 지우지 않고 표시만 덧붙인다(사용자가 판단). 상장목록 조회가 실패하면
+#    아무 표시도 하지 않는다 — 없는 종목으로 오판하는 쪽이 더 나쁘다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# '삼성전자(005930)' / '• 삼성전자 (005930)' 형태. 이름은 코드 바로 앞 최대 24자만 본다.
+_TICKER_MENTION_RE = re.compile(r'([0-9A-Za-z가-힣&·\.\+\-\s]{0,24}?)\(\s*(\d{6})\s*\)')
+# AI가 추천 가능한 최소 시총(1천억). 프롬프트로는 검증할 수 없어 여기서 확인한다.
+_CURATION_MIN_MARCAP = 100_000_000_000
+
+
+def _normalize_stock_name(name):
+    """종목명 비교용 정규화 — 공백·기호를 제거하고 소문자로 통일."""
+    return re.sub(r'[^0-9a-z가-힣]', '', str(name or '').lower())
+
+
+def verify_stock_codes(text, min_marcap=_CURATION_MIN_MARCAP):
+    """AI 리포트의 '종목명(6자리코드)' 표기를 KRX 상장목록과 대조해 표시를 덧붙인다.
+
+    - 상장목록에 없는 코드   → '(코드 ⚠️미상장 코드)'
+    - 종목명이 다른 코드     → '(코드 ⚠️실제: 실제종목명)'
+    - 시총이 기준 미만       → '(코드 ⚠️시총 XXX억)'
+    조회 실패 시에는 원문을 그대로 돌려준다.
+    """
+    if not text or not isinstance(text, str):
+        return text
+
+    # 종목 표기가 없으면 상장목록을 부를 이유가 없다(네트워크·메모리 절약).
+    if not _TICKER_MENTION_RE.search(text):
+        return text
+
+    try:
+        from modules import krx_daily
+        listing = krx_daily.get_listing_map()
+    except Exception as e:      # noqa: BLE001 - 검증 실패가 리포트를 막아서는 안 된다
+        logger.debug(f"[AI검증] 상장목록 조회 실패: {e}")
+        return text
+
+    if not listing:
+        logger.debug("[AI검증] 상장목록을 얻지 못해 종목코드 검증을 건너뜁니다.")
+        return text
+
+    bad_codes, bad_names, small_caps = [], [], []
+
+    def _mark(m):
+        raw_name, code = m.group(1), m.group(2)
+        entry = listing.get(code)
+        if entry is None:
+            label = _normalize_stock_name(raw_name) and raw_name.strip() or code
+            bad_codes.append(f"{label}({code})")
+            return f"{raw_name}({code} ⚠️미상장 코드)"
+
+        notes = []
+        actual = entry.get('name') or ''
+        got, want = _normalize_stock_name(raw_name), _normalize_stock_name(actual)
+        # 이름 앞에 불릿·번호가 붙으므로 완전일치가 아닌 꼬리일치로 본다.
+        if want and got and not (got.endswith(want) or want in got):
+            bad_names.append(f"{raw_name.strip()}({code}) → 실제 {actual}")
+            notes.append(f"⚠️실제: {actual}")
+
+        marcap = entry.get('marcap') or 0
+        if min_marcap and 0 < marcap < min_marcap:
+            small_caps.append(f"{actual}({code}) {marcap / 100_000_000:,.0f}억")
+            notes.append(f"⚠️시총 {marcap / 100_000_000:,.0f}억")
+
+        if not notes:
+            return m.group(0)
+        return f"{raw_name}({code} {' '.join(notes)})"
+
+    marked = _TICKER_MENTION_RE.sub(_mark, text)
+    if not (bad_codes or bad_names or small_caps):
+        return marked
+
+    lines = ["", "─" * 30, "⚠️ 시스템 검증 (KRX 상장목록 대조)"]
+    if bad_codes:
+        lines.append(f"• 존재하지 않는 종목코드: {', '.join(bad_codes)}")
+    if bad_names:
+        lines.append(f"• 종목명 불일치: {', '.join(bad_names)}")
+    if small_caps:
+        lines.append(f"• 시총 {min_marcap / 100_000_000:,.0f}억 미만: {', '.join(small_caps)}")
+    lines.append("AI 표기를 그대로 신뢰하지 말고, 관심종목 편입 전에 위 항목을 확인하세요.")
+    logger.warning(f"[AI검증] 종목코드 이상 감지 - 미상장 {len(bad_codes)}건 / "
+                   f"이름불일치 {len(bad_names)}건 / 소형주 {len(small_caps)}건")
+    return marked + "\n" + "\n".join(lines)
+
 
 def analyze_stock_with_gemini(code, name, tech_info_str):
     """특정 종목의 기술적 지표와 모멘텀을 결합하여 심층 진단"""
@@ -812,7 +904,9 @@ def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.MORNING_BRIEFING_PROMPT.format(now=now, market_data_str=market_data_str)
-    return _run_gemini_report(prompt, label="장전 브리핑", default=None, error_style="silent")
+    result = _run_gemini_report(prompt, label="장전 브리핑", default=None, error_style="silent")
+    # 주도주를 '종목명(코드)'로 추천하므로 발송 전에 KRX 상장목록과 대조한다.
+    return verify_stock_codes(result) if result else result
 
 def generate_stock_curation():
     """현재 시점 매크로 지표 및 뉴스를 기반으로 관심 종목 큐레이션 (수동 추가용)"""
@@ -822,9 +916,13 @@ def generate_stock_curation():
     macro_context = _get_macro_context_str()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.STOCK_CURATION_PROMPT.format(now=now, macro_context=macro_context)
-    return _run_gemini_report(prompt, label="큐레이션", default=None,
-                              generation_config={"temperature": 0.3},
-                              error_style="plain", error_prefix="종목 큐레이션")
+    result = _run_gemini_report(prompt, label="큐레이션", default=None,
+                                generation_config={"temperature": 0.3},
+                                error_style="plain", error_prefix="종목 큐레이션")
+    # 관심종목으로 바로 편입될 후보이므로 코드 존재·이름 일치·시총을 반드시 대조한다.
+    if not result or result.startswith("⚠️"):
+        return result
+    return verify_stock_codes(result)
 
 def ask_gemini(question):
     """사용자의 자유 질문에 대해 Gemini API로 답변 생성"""
