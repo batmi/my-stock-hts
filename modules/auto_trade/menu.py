@@ -124,7 +124,7 @@ def _view_stock_rules():
                 w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
         sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-        ratio_str = f"{r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100:.0f}%"
+        ratio_str = config.format_invest_ratio(r.get('invest_ratio'))
         half_tp_str = " (반익절 O)" if r.get('half_take_profit_use', 1) else " (반익절 X)"
 
         table.add_row(
@@ -182,7 +182,8 @@ def _input_and_save_rule(code, name):
         "ts_callback": config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "memo": "",
         "weights": None,
-        "invest_ratio": config.settings.SYSTEM_INVEST_PER_STOCK,
+        # 0 = 자동(전역 SYSTEM_INVEST_PER_STOCK → 그것도 0이면 1/슬롯수). 값을 박제하지 않는다.
+        "invest_ratio": 0.0,
         "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20),
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0),
@@ -248,11 +249,32 @@ def _input_and_save_rule(code, name):
         new_strategy['time_stop_days'] = ask_val('time_stop_days', f"시간 청산 기한(일) (기본: {defaults['time_stop_days']}일)", "매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)", int)
             
         console.print("\n[bold]3. 리스크 관리 및 자산 비중 설정[/bold]")
-        curr_ratio_pct = current.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100
-        val = Prompt.ask(f"종목별 투자 비중(%) [dim](현재: {curr_ratio_pct:.0f})\n[dim]전체 자산 대비 이 종목에 투자할 비중 한도[/dim]", default=str(int(curr_ratio_pct)))
+        try:
+            curr_ratio_pct = float(current.get('invest_ratio') or 0.0) * 100
+        except (TypeError, ValueError):
+            curr_ratio_pct = 0.0
+        auto_pct = config.resolve_invest_ratio() * 100
+        curr_disp = f"{curr_ratio_pct:.0f}" if curr_ratio_pct > 0 else f"0 (자동 = {auto_pct:.0f}%)"
+        val = Prompt.ask(
+            f"종목별 투자 비중(%) [dim](현재: {curr_disp})\n"
+            f"[dim]전체 자산 대비 이 종목에 투자할 비중 한도. "
+            f"0을 넣으면 전역 설정(현재 {auto_pct:.0f}%)을 따라갑니다 — 슬롯 수를 바꿔도 자동으로 맞춰집니다.[/dim]",
+            default=str(int(curr_ratio_pct)))
         if val.lower() in ['b', 'q']: raise QuitInput()
-        new_strategy['invest_ratio'] = float(val) / 100.0
-        
+        new_strategy['invest_ratio'] = max(0.0, float(val) / 100.0)
+
+        # [경고] 이 종목만 개별 비중을 지정하면 명목합이 100%를 넘을 수 있다 (차단하지 않음)
+        if new_strategy['invest_ratio'] > 0:
+            try:
+                others = [r.get('invest_ratio') for r in (db_manager.db.get_all_stock_strategies() or [])
+                          if r.get('code') != current.get('code')]
+            except Exception:
+                others = []
+            warn = config.nominal_exposure_warning(
+                override_ratios=[new_strategy['invest_ratio']] + others)
+            if warn:
+                console.print(f"\n[yellow]⚠️ {warn}[/yellow]\n")
+
         curr_use_atr = "y" if current.get('use_atr_stop', 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0) else "n"
         val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) [dim](현재: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "b", "q"], default=curr_use_atr)
         if val.lower() in ['b', 'q']: raise QuitInput()

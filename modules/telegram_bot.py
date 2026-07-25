@@ -910,7 +910,7 @@ class TelegramCommander:
             msg += (f"\n• {name}({code})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
                     f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
-                    f"   리스크: 비중 {r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK)*100:.0f}% / 손절 {sl_str}\n"
+                    f"   리스크: 비중 {config.format_invest_ratio(r.get('invest_ratio'))} / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
                     f"{memo_part}")
         return msg
@@ -2188,7 +2188,7 @@ class TelegramCommander:
         msg += f"• OBV: EMA {ind.get('OBV_MA_PERIOD')}\n"
 
         # 기타
-        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
+        invest_ratio_str = config.format_invest_ratio()
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
@@ -2202,7 +2202,7 @@ class TelegramCommander:
         vol_str = f"ON (목표 {vol_target*100:.0f}%)" if use_vol else "OFF"
 
         msg += f"\n[기타]\n"
-        msg += f"• 종목당 투자비중: {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})\n"
+        msg += f"• 종목당 투자비중: {invest_ratio_str} (최대 {max_holdings}종목, ETF {etf_str})\n"
         msg += f"• 슬리피지 비율: {slippage:.4f} ({slippage*100:.2f}%)\n"
         msg += f"• 시장 필터링: {filter_str}\n"
         msg += f"• 변동성 타겟팅: {vol_str}\n"

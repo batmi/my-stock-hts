@@ -420,8 +420,8 @@ class AutoTrader:
             ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
             sell_score = config.SELL_STRATEGY["SELL_SCORE"]
             tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-            invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
-            
+            invest_ratio_str = config.format_invest_ratio()
+
             use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
@@ -459,7 +459,7 @@ class AutoTrader:
             msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
             if use_time_stop:
                 msg += f"\n• 시간청산: {time_stop_days}일 경과"
-            msg += f"\n• 비중: 종목당 {invest_ratio*100:.0f}%"
+            msg += f"\n• 비중: 종목당 {invest_ratio_str}"
                 
             # [복원] 보유 종목 현황 추가
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
@@ -1303,7 +1303,7 @@ class AutoTrader:
                     w_str = f"{w.get('TREND',0):.1f}/{w.get('MOMENTUM',0):.1f}/{w.get('STRENGTH',0):.1f}/{w.get('SYNERGY',0):.1f}"
 
                 sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
-                ratio_str = f"{r.get('invest_ratio', config.settings.SYSTEM_INVEST_PER_STOCK) * 100:.0f}%"
+                ratio_str = config.format_invest_ratio(r.get('invest_ratio'))
 
                 rule_table.add_row(
                     name_disp,
@@ -1483,11 +1483,10 @@ class AutoTrader:
         table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
 
         # 투자 설정
-        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
-        table.add_row("투자 설정", f"비중 {invest_ratio*100:.0f}% (최대 {max_holdings}종목, ETF {etf_str})")
+        table.add_row("투자 설정", f"비중 {config.format_invest_ratio()} (최대 {max_holdings}종목, ETF {etf_str})")
 
         # 손실 제한
         loss_limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
@@ -3660,13 +3659,13 @@ class AutoTrader:
                 holding_names_map[code] = h['prdt_name']
                 holding_groups_map[code] = code_to_group.get(code, 'stocks_kr')
         
-        # [수정] 최대 보유 종목 수 체크 (투자 비중에 따라 자동 계산)
-        invest_ratio = config.settings.SYSTEM_INVEST_PER_STOCK
+        # [수정] 최대 보유 종목 수 체크 (투자 비중은 개별 룰이 없으면 전역/자동값을 따른다)
+        invest_ratio = config.resolve_invest_ratio()
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
-        
+
         if len(holding_codes) >= max_holdings:
             if self.consecutive_errors == 0: # 로그 도배 방지
-                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {invest_ratio*100:.0f}% 기준)")
+                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준)")
             return
 
         # 예수금 확인 (API 직접 호출)
@@ -4142,8 +4141,10 @@ class AutoTrader:
                     use_atr_stop = bool(rule['use_atr_stop'])
                 if rule.get('atr_stop_multiplier') is not None:
                     atr_mult = rule['atr_stop_multiplier']
-                if rule.get('invest_ratio') is not None:
-                    cand_invest_ratio = rule['invest_ratio']
+                # [수정] 개별 룰의 비중이 0/None이면 '자동' → 전역(또는 슬롯 균등 분할)을 따른다.
+                #   종전에는 룰 저장 시점의 값이 박제돼 슬롯 수를 바꿔도 그 종목만 옛 비중으로
+                #   남아 명목합이 조용히 100%를 넘었다.
+                cand_invest_ratio = config.resolve_invest_ratio(rule.get('invest_ratio'))
 
             atr_val = cand.get('atr', 0)
             price_val = cand.get('price', 0)

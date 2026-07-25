@@ -278,7 +278,9 @@ def view_system_config(group=None):
     if group in (None, 3):
         header(3)
         subheader("3-1. 자산 배분/포지션", first=True)
-        row("종목당 투자 비중", "전체 자산 대비 한 종목 투자 비율", "SYSTEM_INVEST_PER_STOCK", f"{config.settings.SYSTEM_INVEST_PER_STOCK}", key="SYSTEM_INVEST_PER_STOCK")
+        _ipr = config.settings.SYSTEM_INVEST_PER_STOCK
+        _ipr_str = f"0 (자동 = {config.resolve_invest_ratio() * 100:.0f}%)" if not _ipr or _ipr <= 0 else f"{_ipr}"
+        row("종목당 투자 비중", "0이면 1/최대보유종목수로 자동 계산", "SYSTEM_INVEST_PER_STOCK", _ipr_str, key="SYSTEM_INVEST_PER_STOCK")
         row("최대 보유 종목 수", "포트폴리오 최대 종목 개수", "SYSTEM_MAX_HOLDINGS", f"{config.settings.SYSTEM_MAX_HOLDINGS}", key="SYSTEM_MAX_HOLDINGS")
         row("자동매매 대상에 ETF 포함", "관심종목 내 ETF도 자동매매 대상으로 감시/매수", "SYSTEM_INCLUDE_ETF", f"{getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False)}", key="SYSTEM_INCLUDE_ETF")
         slippage = getattr(config.settings, 'SLIPPAGE_RATE', 0.002)
@@ -963,14 +965,35 @@ def _validate_time_format(val):
             return True
     return False
 
+def _warn_nominal_exposure():
+    """명목합(종목당 비중 × 최대 보유 종목 수)이 100%를 넘으면 경고만 띄운다(차단 아님).
+
+    개별 종목 룰에 지정된 비중까지 합산해 판정한다. 오버커밋은 의도적 선택일 수 있어
+    허용하되, 슬롯 수만 바꿨다가 조용히 초과되는 상황만 알린다.
+    """
+    try:
+        from modules import db_manager  # 지연 임포트(순환 참조 방지)
+        overrides = [r.get('invest_ratio') for r in (db_manager.db.get_all_stock_strategies() or [])]
+    except Exception:
+        overrides = []
+
+    warn = config.nominal_exposure_warning(override_ratios=overrides)
+    if warn:
+        console.print(f"\n[yellow]⚠️ {warn}[/yellow]\n")
+    elif config.is_invest_ratio_auto():
+        console.print(f"[dim]종목당 비중 자동: {config.resolve_invest_ratio() * 100:.0f}% "
+                      f"(= 1 / {config.settings.SYSTEM_MAX_HOLDINGS}종목, 명목합 100%)[/dim]")
+
+
 def _risk_portfolio_items():
     """리스크/자산 배분 항목 (섹션 3-1 ~ 3-3)"""
     items = [
-        {"desc": "종목당 투자 비중", "help": "전체 자산 대비 한 종목 투자 비율 (0.1~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "3-1. 자산 배분/포지션",
+        {"desc": "종목당 투자 비중", "help": "0 = 자동(1/최대보유종목수). 0보다 크면 그 값을 그대로 사용 (0~1.0)", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "3-1. 자산 배분/포지션",
              "get": lambda: config.settings.SYSTEM_INVEST_PER_STOCK, "set": lambda v: setattr(config.settings, 'SYSTEM_INVEST_PER_STOCK', v),
-         "validator": lambda v: 0 < v <= 1.0},
-        {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "3-1. 자산 배분/포지션",
-             "get": lambda: config.settings.SYSTEM_MAX_HOLDINGS, "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_HOLDINGS', v)},
+         "validator": lambda v: 0 <= v <= 1.0, "callback": _warn_nominal_exposure},
+        {"desc": "최대 보유 종목 수", "help": "포트폴리오 최대 종목 개수 (종목당 비중이 0이면 이 값으로 비중까지 자동 결정)", "name": "SYSTEM_MAX_HOLDINGS", "type": "int", "section": "3-1. 자산 배분/포지션",
+             "get": lambda: config.settings.SYSTEM_MAX_HOLDINGS, "set": lambda v: setattr(config.settings, 'SYSTEM_MAX_HOLDINGS', v),
+         "callback": _warn_nominal_exposure},
         {"desc": "자동매매 대상에 ETF 포함", "help": "관심종목 내 ETF도 자동매매 대상으로 감시/매수", "name": "SYSTEM_INCLUDE_ETF", "type": "bool", "choices": ["y", "n"], "section": "3-1. 자산 배분/포지션",
          "get": lambda: getattr(config.settings, 'SYSTEM_INCLUDE_ETF', False), "set": lambda v: setattr(config.settings, 'SYSTEM_INCLUDE_ETF', v)},
         {"desc": "슬리피지 비율", "help": "주문가 보정 및 백테스트 비용", "name": "SLIPPAGE_RATE", "type": "float", "section": "3-1. 자산 배분/포지션",
@@ -1088,25 +1111,25 @@ DEFAULT_PRESETS = {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 75.0, "BUY_VOL_STRENGTH": 95.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 100.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 25, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.0,
         "TREND": 4.5, "MOMENTUM": 2.5, "STRENGTH": 1.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.25, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
+        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 50
     },
     "bear": {
         "BUY_SCORE": 8.0, "BUY_RSI_MAX": 65.0, "BUY_VOL_STRENGTH": 105.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 30.0, "MR_VOL_STRENGTH": 110.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -3.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.5, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 3, "SELL_SCORE": 6.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 4.0, "TRAILING_STOP_CALLBACK_RATE": 2.0, "TRAILING_ATR_MULTIPLIER": 2.0,
         "TREND": 3.0, "MOMENTUM": 3.0, "STRENGTH": 2.0, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.25, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
+        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 5.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "sideways": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 50.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 105.0, "SUPER_MOMENTUM_USE": False,
         "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -5.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 1.8, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 5, "SELL_SCORE": 5.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 7.0, "TRAILING_STOP_CALLBACK_RATE": 3.0, "TRAILING_ATR_MULTIPLIER": 2.5,
         "TREND": 3.5, "MOMENTUM": 3.0, "STRENGTH": 1.5, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.25, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
+        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 7.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 20
     },
     "default": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.0,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.25, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 60
+        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 60
     }
 }
 
@@ -1262,7 +1285,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 60))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
         ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']}"),
-        ("종목당 투자 비중", f"{config.settings.SYSTEM_INVEST_PER_STOCK * 100:.0f}%")
+        ("종목당 투자 비중", config.format_invest_ratio())
     ]
     
     if interactive:
@@ -1346,7 +1369,7 @@ def _edit_single_preset(preset_type):
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk", "get": make_getter("USE_MARKET_FILTER"), "set": make_setter("USE_MARKET_FILTER", 'bool')},
             {"desc": "시장 필터 SMA(일)", "help": "필터 감지 이평선 주기", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk", "get": make_getter("MARKET_FILTER_MA"), "set": make_setter("MARKET_FILTER_MA", 'int')},
             {"desc": "일일 손실 제한(%)", "help": "비상 정지 기준 (0%면 비상 정지 OFF)", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_DAILY_LOSS_LIMIT"), "set": make_setter("SYSTEM_DAILY_LOSS_LIMIT", 'float')},
-            {"desc": "종목당 투자 비중", "help": "0.1 ~ 1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float')}
+            {"desc": "종목당 투자 비중", "help": "0 = 자동(1/최대보유종목수), 0~1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float'), "callback": _warn_nominal_exposure}
         ]
 
         # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목 편집 숨김(매도잔량비는 유지)

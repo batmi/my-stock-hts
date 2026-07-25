@@ -71,22 +71,31 @@ class GlobalSettings(BaseModel):
     SYSTEM_TRADING_INTERVAL: int = Field(default=180, gt=0)
 
     # [종목당 최대 투자 비중]
-    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.25 = 25%)
-    # - [정합성] SYSTEM_MAX_HOLDINGS(기본 4종목)와 곱했을 때 1.0(100%)을 넘지 않도록 0.25로 설정합니다.
-    #   (0.3 × 4 = 1.2 → 앞순위 종목이 현금을 과다 소진해 뒷순위 슬롯이 굶는 문제를 방지하기 위함)
-    #   균등비중 운용을 원하면 (1.0 / SYSTEM_MAX_HOLDINGS) 값으로 맞추세요.
+    # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.0 = 자동)
+    # - [자동 모드] 0으로 두면 (1.0 / SYSTEM_MAX_HOLDINGS)로 자동 계산됩니다.
+    #   슬롯 수만 바꿔도 명목합(비중×종목수)이 항상 100%로 유지되므로, 두 값을 쌍으로
+    #   맞춰야 하는 실수(0.3×4=1.2 → 앞순위 종목이 현금을 과다 소진해 뒷순위 슬롯이 굶음)가 없습니다.
+    #   실효 비중 확정은 resolve_invest_ratio()가 담당합니다.
+    # - [수동 모드] 0보다 큰 값을 넣으면 그 값이 그대로 쓰입니다(자동 무시).
+    #   명목합을 100% 미만으로 두어 현금 버퍼를 남기거나(예: 4슬롯 × 0.2 = 80%),
+    #   반대로 100%를 넘겨 '슬롯은 넓게 열되 앞순위가 현금을 먼저 쓰게' 두는 의도적
+    #   오버커밋도 가능합니다. 저장 시 명목합이 100%를 넘으면 경고만 표시하고 막지는 않습니다.
     # - 리스크 기반 사이징(SYSTEM_RISK_PER_TRADE)·변동성 타겟팅(TARGET_VOLATILITY)과 함께 쓰이며,
     #   셋이 각자 낸 상한 중 '가장 적은 금액'이 최종 투자금이 됩니다(min 결합, 곱셈 중첩 아님).
-    #   ※ 이 값은 '집중도'를 정할 뿐 '투자율'은 정하지 못합니다 — 명목합(비중×종목수)이 100%면
+    #   ※ 이 값은 '집중도'를 정할 뿐 '투자율'은 정하지 못합니다 — 명목합이 100%면
     #     4×0.25든 3×0.33이든 만재 투자율은 같고, 실제 투자율은 TARGET_VOLATILITY가 결정합니다.
     # - 만약 리스크 기반 사이징만 전적으로 따르고 싶다면 이 값을 1.0(100%)으로 설정하세요.
-    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.25, gt=0.0, le=1.0)
+    SYSTEM_INVEST_PER_STOCK: float = Field(default=0.0, ge=0.0, le=1.0)
 
     # [최대 보유 종목 수]
     # 포트폴리오에 담을 수 있는 최대 종목 개수입니다. (기본값: 4)
+    # - SYSTEM_INVEST_PER_STOCK이 자동(0)이면 이 값 하나만 바꾸면 비중까지 함께 조정됩니다.
     # - [추세추종] 슬롯당 투입액(시드×25%)이 '2주 이상 매수 + 피라미딩(보유량 50% 증액) 작동'
     #   하한을 확보하면서, 승률 ~26% 구조에서 동시 보유 중 승자가 존재할 확률(~71%)과
-    #   승자 1종목의 계좌 기여(25%)의 균형점. 시드 규모가 크면 5~6개로 확장 검토.
+    #   승자 1종목의 계좌 기여(25%)의 균형점.
+    # - 하한은 승자 포착 확률(1-0.74^n: 4개 70%, 3개 59%, 2개 45%), 상한은 승자 희석과
+    #   유니버스 크기(관심종목 수의 15~20% 이내)가 정한다. 시드별 권장: ~200만 3개,
+    #   300만~1,000만 4개, 1,500만~5,000만 5개, 5,000만+ 6개(유니버스 50종목 이상일 때).
     SYSTEM_MAX_HOLDINGS: int = Field(default=4, gt=0)
 
     # [추가] 자동매매 대상에 ETF 포함 여부
@@ -448,6 +457,97 @@ class GlobalSettings(BaseModel):
 
 _settings_lock = threading.RLock()
 settings = GlobalSettings()
+
+
+# ==========================================================
+# [헬퍼] 종목당 기초 비중 확정 (자동/수동 + 개별 룰 오버라이드)
+# ==========================================================
+def resolve_invest_ratio(rule_ratio=None):
+    """종목당 기초 비중을 확정한다. 0/None은 '자동'(1.0 / SYSTEM_MAX_HOLDINGS)을 뜻한다.
+
+    우선순위: 종목별 개별 룰 > 전역 SYSTEM_INVEST_PER_STOCK > 자동(슬롯 균등 분할)
+    개별 룰이 0/None이면 전역을 따르고, 전역도 0이면 슬롯 수로 균등 분할한다.
+    개별 룰에 값이 박제돼 슬롯 수 변경을 따라오지 못하는 문제를 '0=자동'으로 회피한다.
+    """
+    for candidate in (rule_ratio, getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)):
+        try:
+            value = float(candidate or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+
+    try:
+        holdings = int(getattr(settings, 'SYSTEM_MAX_HOLDINGS', 4) or 4)
+    except (TypeError, ValueError):
+        holdings = 4
+    return 1.0 / max(1, holdings)
+
+
+def is_invest_ratio_auto(rule_ratio=None):
+    """해당 비중이 '자동(슬롯 균등 분할)' 모드로 결정되는가."""
+    for candidate in (rule_ratio, getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)):
+        try:
+            if float(candidate or 0.0) > 0:
+                return False
+        except (TypeError, ValueError):
+            continue
+    return True
+
+
+def format_invest_ratio(rule_ratio=None):
+    """화면 표시용 비중 문자열. 자동 모드면 '(자동)'을 덧붙인다."""
+    ratio = resolve_invest_ratio(rule_ratio)
+    suffix = " (자동)" if is_invest_ratio_auto(rule_ratio) else ""
+    return f"{ratio * 100:.0f}%{suffix}"
+
+
+def nominal_exposure_warning(ratio=None, holdings=None, override_ratios=None):
+    """명목합(종목당 비중 × 최대 보유 종목 수) 점검. 문제 없으면 None, 아니면 경고 문구.
+
+    [경고이지 차단이 아니다] 신호가 드문 추세추종에서는 '슬롯은 넓게 열되 앞순위 종목이
+    현금을 먼저 쓰게' 두는 의도적 오버커밋이 합리적일 수 있다. 100% 초과를 허용하되
+    의도치 않은 초과만 알려주는 것이 목적이다.
+
+    override_ratios: 종목별 개별 룰의 invest_ratio 목록(0/None은 전역을 따르므로 제외됨).
+                     지정하면 '개별 룰 합 + 나머지 슬롯 × 전역 비중'으로 명목합을 계산한다.
+    """
+    if ratio is None:
+        ratio = getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)
+    if holdings is None:
+        holdings = getattr(settings, 'SYSTEM_MAX_HOLDINGS', 4)
+
+    try:
+        holdings = int(holdings or 0)
+    except (TypeError, ValueError):
+        return None
+    if holdings <= 0:
+        return None
+
+    base = resolve_invest_ratio() if not ratio or float(ratio) <= 0 else float(ratio)
+
+    overrides = []
+    for value in (override_ratios or []):
+        try:
+            value = float(value or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            overrides.append(value)
+    overrides = overrides[:holdings]
+
+    total = sum(overrides) + base * max(0, holdings - len(overrides))
+    if total <= 1.0001:
+        return None
+
+    detail = f"종목당 {base * 100:.0f}% × {holdings}종목"
+    if overrides:
+        detail = f"개별 룰 {len(overrides)}종목 + " + detail.replace(f"× {holdings}종목", f"× 잔여 {holdings - len(overrides)}종목")
+    return (f"명목합 {total * 100:.0f}% (100% 초과) — {detail}\n"
+            f"오버커밋 자체는 허용됩니다. 앞순위 종목이 현금을 먼저 쓰고 예수금이 마르면 "
+            f"뒷순위 슬롯이 비게 되는 동작이며, 신호가 드문 국면에서 현금을 덜 놀리려는 "
+            f"의도라면 정상적인 선택입니다. 의도한 설정이 아니라면 "
+            f"종목당 비중을 0(자동, {1.0 / holdings * 100:.0f}%)으로 두거나 슬롯 수를 조정하세요.")
 
 # ==========================================================
 # [설정] 텔레그램 설정 (Telegram Configuration)
