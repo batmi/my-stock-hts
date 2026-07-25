@@ -725,10 +725,13 @@ def _chart_cache_key(code, is_overseas, is_index):
     mode 2 → mode 3) 한쪽 데이터가 다른 쪽 캐시로 새어들어 등락률/EMA가 어긋난다.
     모의(mode1)·실전(mode2)은 둘 다 KIS/KRX라 'K'로 공유한다.
 
-    TOSS는 'T2' — 일봉 이상치 보정(_toss_sanitize_daily_ohlc) 도입 시 네임스페이스를 올려
-    이미 저장된 오염 캐시(메모리/디스크)가 재사용되지 않게 한다.
+    TOSS는 'T3' — 일봉의 '기준' 자체가 바뀔 때마다 네임스페이스를 올려, 이미 저장된
+    옛 기준 캐시(메모리/디스크)가 재사용되지 않게 한다. 올리지 않으면 코드를 고쳐도
+    당일 디스크 캐시가 그대로 반환되어 수정 전 값이 계속 보인다.
+      T  → T2 : 일봉 이상치 보정(_toss_sanitize_daily_ohlc) 도입
+      T2 → T3 : 국내 일봉을 KRX 정규장 기준으로 전환(_krx_daily_chart, pykrx/FDR)
     """
-    broker = 'T2' if getattr(config.session, 'is_toss', False) else 'K'
+    broker = 'T3' if getattr(config.session, 'is_toss', False) else 'K'
     return f"{broker}_{code}_{is_overseas}_{is_index}"
 
 
@@ -4344,7 +4347,16 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     SK hynix(ADR) 등 일부 해외 종목/ETF는 토스 캔들이 비어(또는 EMA120 산출에 못 미쳐)
     EMA/RSI/CCI/ADX가 표에서 '-'로 비는데, 이때 TV 시세로 보강한다. 국내 종목은 폴백하지 않는다.
     (tradingview_screener(스캐너)는 스냅샷만 제공하므로 시계열은 OHLC를 주는 tvDatafeed로 조회)
+
+    [국내] 토스 캔들은 SOR 통합값이라 NXT 장전·장후 체결이 OHLC에 섞인다(ADX 왜곡 최대 9.45).
+     KRX 정규장 기준 일봉을 pykrx/FDR로 먼저 조회하고, 실패 시에만 토스 캔들로 폴백한다.
+     당일 봉은 이 소스들이 주지 않으므로 _get_cached_chart의 실시간 오버레이가 채운다.
     """
+    if not is_overseas:
+        krx_df = _krx_daily_chart(code)
+        if krx_df is not None and not krx_df.empty:
+            return krx_df
+
     df = _toss_chart_data(code, 'daily', is_overseas)
     if not is_overseas:
         return df
@@ -4362,6 +4374,74 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     if tv_df is not None and not tv_df.empty and len(tv_df) > have:
         return tv_df
     return df
+
+
+def _krx_daily_chart(code):
+    """국내 일봉을 KRX 정규장 기준(pykrx/FDR)으로 조회한다. 실패·미지원이면 None.
+
+    지표 산출에 못 미치는 짧은 결과(신규 상장 등)는 채택하지 않고 토스 캔들에 맡긴다 —
+    EMA120이 계산되지 않으면 화면 지표가 통째로 비기 때문이다.
+    """
+    if not code or not str(code).isdigit() or len(str(code)) != 6:
+        return None
+    try:
+        from modules import krx_daily
+        df = krx_daily.get_daily(code)
+    except Exception as e:      # noqa: BLE001 - 외부 소스 장애가 시세 경로를 막지 않게 한다
+        logger.debug(f"[API] KRX 일봉 조회 실패({code}): {e}")
+        return None
+
+    if df is None or df.empty:
+        return None
+    if len(df) < 120:
+        logger.debug(f"[API] KRX 일봉({code}) {len(df)}봉으로 부족 → 토스 캔들 사용")
+        return None
+
+    source = df.attrs.get('source', '?')
+    df = df.tail(250).reset_index(drop=True)
+    df = _append_today_bar_from_price(df, code)
+    df.attrs['source'] = f"KRX/{source}"
+    return df
+
+
+def _append_today_bar_from_price(df, code):
+    """pykrx·FDR이 주지 않는 '당일 봉'을 현재가로 채워 붙인다.
+
+    _get_cached_chart의 실시간 오버레이는 '캐시 적중' 경로에서만 돈다. 캐시 미스(6시간마다 1회)
+    직후의 첫 반환에는 당일 봉이 없어 그 사이클의 지표·신호가 전일 기준으로 계산된다.
+    여기서 미리 붙여 두면 미스/히트 어느 경로든 당일 봉이 존재한다(이후 오버레이가 갱신).
+    """
+    try:
+        today = market_today(False)
+        if str(df.iloc[-1]['date']) >= today:
+            return df
+
+        cp = get_current_price_data(code, False)
+        if not cp or cp.get('rt_cd') != '0':
+            return df
+        out = cp.get('output', {}) or {}
+
+        def _f(key):
+            try:
+                return float(str(out.get(key, 0) or 0).replace(',', ''))
+            except (TypeError, ValueError):
+                return 0.0
+
+        curr = _f('stck_prpr')
+        if curr <= 0:
+            return df
+
+        open_p = _f('stck_oprc') or curr
+        high_p = max(_f('stck_hgpr'), curr)
+        low_p = _f('stck_lwpr')
+        low_p = min(low_p, curr) if low_p > 0 else curr
+
+        row = pd.DataFrame([{'date': today, 'open': open_p, 'high': high_p,
+                             'low': low_p, 'close': curr, 'volume': _f('acml_vol')}])
+        return pd.concat([df, row], ignore_index=True)
+    except Exception as e:      # noqa: BLE001 - 당일 봉 보강 실패가 과거봉 반환을 막지 않게 한다
+        logger.debug(f"[API] KRX 일봉 당일 봉 보강 실패({code}): {e}")
+        return df
 
 
 # 저가 이상치 판정 폭 — '이웃(전·익일) 저가' 대비 얼마나 아래로 고립됐는지.

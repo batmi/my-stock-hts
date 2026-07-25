@@ -241,7 +241,10 @@ def test_chart_data_adapter_daily():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", return_value=res), \
+        # 국내 일봉은 KRX 소스(pykrx/FDR)가 1순위다. 이 테스트는 '토스 캔들 어댑터'를 검증하므로
+        # KRX 경로를 비활성화해 폴백을 강제한다(네트워크 격리 목적도 겸함).
+        with patch("api._krx_daily_chart", return_value=None), \
+             patch("toss_api.get_candles", return_value=res), \
              patch("toss_api.get_price_limit",
                    side_effect=toss_api.TossApiError("network-error", "mock")):  # 기준가 보정 경로 차단(네트워크 격리)
             df = api.get_chart_data("005930", is_overseas=False, period_type='daily')

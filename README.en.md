@@ -398,12 +398,26 @@ Toss and KIS provide the "closing price" of domestic (KR) stocks on different ba
 | Item | KIS (mode 1/2) | Toss (mode 3) |
 | --- | --- | --- |
 | Current/last price | KRX regular-session close (mode 1) or NXT close (mode 2, merged) | Unified last trade price including NXT extended hours (~20:00) |
-| Daily candle close | KRX regular-session (15:30) close | Unified last price including NXT extended hours |
+| Daily candles (indicator input) | KRX regular-session OHLC | **KRX regular-session OHLC** (pykrx/FDR, see below) |
 | Base for change amount/rate (previous close) | Reference price (`stck_sdpr`) = previous KRX regular-session close | Previous daily candle close = previous unified (NXT-inclusive) last price |
 | Price limit (upper/lower) base | KRX reference price | Unified (NXT-inclusive) last price |
 
 - Example (Samsung Electronics, as of 2026-07-10): Thursday's close differs — KRX 278,000 vs Toss (NXT-inclusive) 282,500 — so even though both modes show the same Friday last price (286,500), the change displays as +8,500 (+3.06%) in KIS vs +4,000 (+1.42%) in Toss.
-- The Toss API does not expose the KRX regular-session close at all, so change rates in Toss mode are computed **self-consistently on the unified-price basis** (the same family of figures the Toss app shows). Chart-derived indicators (52-week high/low, moving averages, etc.) are also unified-price based and may differ slightly from KIS mode.
+- The Toss API does not expose the KRX regular-session close at all, so change rates in Toss mode are computed **self-consistently on the unified-price basis** (the same family of figures the Toss app shows).
+- **[Improvement] Domestic daily candles are sourced on a KRX regular-session basis (pykrx first, FinanceDataReader as fallback).** Toss candles are SOR-unified, so NXT pre-market (08:00–09:00) and after-market (15:30–20:00) fills leak into the daily OHLC — and that **measurably distorts indicators**. Measured 2026-07-25 over 200 trading days:
+
+    | Symbol | ADX diff | ATR diff | RSI diff |
+    | --- | --- | --- | --- |
+    | Samsung Electronics | +2.10 | **+9.13%** | +0.31 |
+    | SK hynix | +0.68 | **+5.97%** | +0.51 |
+    | EcoPro BM | **−9.45** | **+14.79%** | +2.09 |
+    | GS E&C · Kakao (no NXT fills) | 0.00 | 0.00% | 0.00 |
+
+    Notably **ATR was inflated by 6–15%**. Since ATR feeds the stop width (×2.0), volatility targeting, and the Chandelier trailing stop, this directly caused **stops to sit too wide and positions to be sized too small**. Contamination begins with the NXT launch (2025-03); daily bars before that are pure KRX. Accuracy was verified as **100% agreement on O/H/L/C across 484 trading days** between pykrx (official KRX) and FDR, and a full 720-day pull for 50 symbols takes 2.6s (pykrx) / 5.0s (FDR) — about 0.01% duty cycle against the 6-hour cache period. If both sources fail, the code falls back to Toss candles automatically.
+    *   **Only today's bar is filled from the Toss live price**, because pykrx and FDR do not serve intraday values. History comes from official KRX data, today from Toss — a hybrid.
+    *   yfinance matches on O/H/L but its close diverges on 2–4 days per symbol (residual dividend adjustment), so it is not used for indicators.
+    *   Indices (KOSPI/KOSDAQ) are unaffected by NXT and keep using the existing Toss `market-indicators` path.
+    *   Note: if the Toss API ever exposes KRX-based OHLC, this path will be removed in favor of Toss.
 - **ETF/ETN exception (pinned to the regular-session close after the bell)**: ETFs are not eligible for NXT extended trading, so every fill after 15:30 comes from the **KRX after-hours single-price session (16:00–18:00)**. The KIS path exposes that session only through a separate TR and therefore keeps showing the regular close, while Toss's `lastPrice` reflects the after-hours fill — leaving the two modes out of sync (measured 2026-07-22 16:07, KODEX KOSDAQ150: KIS/HTS 12,525 vs Toss 12,530; only ETFs with after-hours volume diverged, those without matched exactly). Daily candles and indicators are anchored to the regular-session close, and after-hours single-price volume is negligible (a few to a few dozen shares), so **after the bell (15:35+) the Toss current price for ETFs/ETNs is pinned to the captured KRX regular-session close**, matching KIS and HTS. Ordinary stocks are left alone because KIS mode also surfaces the NXT extended price.
 - **How the base price (previous KRX close) is resolved**: (1) Toss ranking `basePrice` (large caps, live) → (2) stored **verified** value → (3) **yfinance daily close** (KRX-based; persisted as verified on success) → (4) captured minute-bar close → (5) previous NXT close.
     *   Why (4) ranks below (2): **NXT trades alongside KRX during regular hours**, and Toss 1-minute candles blend both venues, so the closing minute bar does not equal the KRX single-price close. Measured against KIS daily bars (2026-07-16): **26 of 52 stocks mismatched (median 0.45%, max 1.89%)**, while **ETFs/ETNs were 15/15 exact** (ETFs do not trade on NXT). Captured values are therefore trusted only for ETFs; stocks are corrected with the yfinance value. Stored entries carry a source tag (`yf`/`cap`) and a verified value is never downgraded back to a captured one, so previously stored inaccurate values self-heal.

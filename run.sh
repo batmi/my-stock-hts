@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 # ---------------------------------------------------------
 # 필수 라이브러리 목록
 # ---------------------------------------------------------
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener tvdatafeed gnureadline holidays pytest pytest-xdist"
+# pykrx / finance-datareader: 국내 일봉을 'KRX 정규장 기준'으로 조회한다(토스 캔들은 NXT 장전·장후
+#  체결이 섞여 ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋난다). pykrx 1순위 / FDR 폴백으로 이중화한다.
+REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener tvdatafeed gnureadline holidays pykrx finance-datareader pytest pytest-xdist"
 MISSING_LIBS=""
 
 # tvdatafeed는 PyPI 미배포(git 전용)라 일반 pip install로 설치되지 않는다. git URL로 설치한다.
@@ -82,6 +84,9 @@ for lib in $REQUIRED_LIBS; do
                 ;;
         "pytest-xdist")
             IMPORT_NAME="xdist"
+            ;;
+        "finance-datareader")
+            IMPORT_NAME="FinanceDataReader"
             ;;
     esac
 
