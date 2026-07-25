@@ -384,7 +384,8 @@ def test_toss_base_price_falls_back_to_prev_nxt_candle():
     _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → 그 종가
     try:
         with patch("toss_api.get_price_limit") as m_pl, \
-             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스
+             patch.object(api, "_toss_krx_lib_close", return_value=None), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위(KRX·yfinance) 미스
             assert api._toss_base_price("TSTA") == 285000.0  # NXT 캔들 종가
             m_pl.assert_not_called()  # 역산 없음
     finally:
@@ -411,7 +412,8 @@ def test_toss_base_price_ref_date_is_prev_when_today_candle_exists():
     _inject_daily_chart("TSTC", [{'date': '20260713', 'close': 285000.0},
                                  {'date': today, 'close': 262500.0}])
     try:
-        with patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스 → NXT 폴백
+        with patch.object(api, "_toss_krx_lib_close", return_value=None), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스 → NXT 폴백
             assert api._toss_base_price("TSTC") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
     finally:
         _pop_daily_chart("TSTC")
@@ -767,7 +769,8 @@ def test_current_price_data_adapter():
         with patch("toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
              patch.object(api, "_toss_capture_krx_close"), \
-             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 캡처·yfinance 격리
+             patch.object(api, "_toss_krx_lib_close", return_value=None), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 캡처·KRX·yfinance 격리
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:

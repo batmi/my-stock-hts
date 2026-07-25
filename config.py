@@ -1,6 +1,7 @@
 # config.py
 import os
 import re
+import warnings
 from rich.console import Console
 import logging
 from datetime import datetime, timedelta
@@ -12,6 +13,22 @@ import threading
 
 # .env 파일 로드 (환경 변수 우선순위: 시스템 환경변수 > .env 파일)
 load_dotenv()
+
+# ==========================================================
+# [경고 억제] 서드파티 라이브러리의 DeprecationWarning
+# ==========================================================
+# yfinance(1.4.x)가 numpy 2.x의 강화된 timedelta 단위 규칙에 아직 맞춰지지 않아
+#   yfinance/utils.py:667  last_rows_same_interval = (dt2 - dt1) < _pd.Timedelta(interval)
+# 에서 "The 'generic' unit for NumPy timedelta is deprecated"가 매 호출마다 출력된다.
+# 지수 화면처럼 yfinance 티커를 여러 개 조회하는 경로에서는 종목 수만큼 반복돼 콘솔이 도배된다.
+# 동작에는 영향이 없고 우리 코드로는 고칠 수 없으므로(라이브러리 내부) 이 메시지만 좁게 막는다.
+# ※ 향후 numpy에서 실제 에러로 승격되면 yfinance 업그레이드가 필요하다 — 억제로 덮이지 않는다
+#    (에러는 warning이 아니므로 이 필터와 무관하게 예외로 드러난다).
+warnings.filterwarnings(
+    "ignore",
+    message=r".*'generic' unit for NumPy timedelta is deprecated.*",
+    category=DeprecationWarning,
+)
 
 console = Console()
 

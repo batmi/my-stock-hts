@@ -323,6 +323,85 @@ def test_toss_cache_namespace_bumped_so_old_basis_is_not_reused():
     assert out.iloc[-1]['close'] == 222222, "구 네임스페이스 캐시가 재사용됐다"
 
 
+# ---------------------------------------------------------
+# 기준가(전일 KRX 종가) 3순위 소스 — yfinance → pykrx/FDR 교체
+# ---------------------------------------------------------
+def test_base_price_source_prefers_krx_lib_over_yfinance():
+    """yfinance는 특정일 공식 종가와 어긋나므로(237일 중 2~4일, 최대 1.59%) 후순위여야 한다."""
+    import api
+    df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    ref = df['date'].iloc[-1]
+    with patch.object(krx_daily, 'get_daily', return_value=df), \
+         patch.object(api, '_toss_krx_close_put') as put:
+        got = api._toss_krx_lib_close('005930', ref)
+    assert got == float(df['close'].iloc[-1])
+    # 검증값으로 저장돼 다음부터 2순위(신뢰 조회)에서 종료된다
+    put.assert_called_once_with('005930', ref, got, source='krx')
+
+
+def test_base_price_source_returns_none_for_missing_date():
+    import api
+    df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    with patch.object(krx_daily, 'get_daily', return_value=df):
+        assert api._toss_krx_lib_close('005930', '19990101') is None
+
+
+def test_base_price_source_survives_library_failure():
+    """KRX 소스가 죽어도 예외를 밖으로 내지 않고 None을 반환해 yfinance 폴백으로 넘어간다."""
+    import api
+    with patch.object(krx_daily, 'get_daily', side_effect=RuntimeError('boom')):
+        assert api._toss_krx_lib_close('005930', '20260724') is None
+
+
+def test_krx_source_is_trusted_for_stored_close():
+    import api
+    assert api._toss_krx_close_trusted('005930', 'krx') is True
+    assert api._toss_krx_close_trusted('005930', 'yf') is True
+
+
+def test_stored_close_never_regresses_to_less_accurate_source():
+    """정확도 순위 krx > yf > cap — 낮은 출처가 높은 출처를 덮어쓰지 못한다."""
+    import api
+    rank = api._TOSS_CLOSE_SOURCE_RANK
+    assert rank['krx'] > rank['yf'] > rank['cap']
+
+
+def test_yfinance_stored_value_is_upgraded_by_krx():
+    """이미 'yf'로 저장된 부정확한 값은 'krx'가 덮어써 자동 교정된다."""
+    import api
+    store = {}
+
+    def fake_load():
+        return store
+
+    with patch.object(api, '_toss_krx_close_load_locked', side_effect=fake_load), \
+         patch.object(api, '_toss_krx_close_path', return_value='/dev/null'), \
+         patch('builtins.open', create=True), patch('os.replace'):
+        api._toss_krx_close_put('005930', '20260724', 249100.0, source='yf')
+        assert store['005930']['20260724']['s'] == 'yf'
+        api._toss_krx_close_put('005930', '20260724', 249500.0, source='krx')
+        assert store['005930']['20260724'] == {'c': 249500.0, 's': 'krx'}
+        # 반대 방향(퇴행)은 막힌다
+        api._toss_krx_close_put('005930', '20260724', 111111.0, source='yf')
+        api._toss_krx_close_put('005930', '20260724', 222222.0, source='cap')
+        assert store['005930']['20260724'] == {'c': 249500.0, 's': 'krx'}
+
+
+def test_yfinance_deprecation_warning_is_suppressed():
+    """yfinance×numpy2 DeprecationWarning만 좁게 막고 다른 경고는 통과시킨다."""
+    import warnings
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        warnings.filterwarnings(
+            'ignore',
+            message=r".*'generic' unit for NumPy timedelta is deprecated.*",
+            category=DeprecationWarning)
+        warnings.warn("The 'generic' unit for NumPy timedelta is deprecated, and will raise",
+                      DeprecationWarning)
+        warnings.warn('unrelated deprecation', DeprecationWarning)
+    assert [str(w.message) for w in caught] == ['unrelated deprecation']
+
+
 def test_toss_daily_overseas_never_uses_krx():
     import api
     toss_df = krx_daily._normalize(_fdr_frame(200), 'FDR')
