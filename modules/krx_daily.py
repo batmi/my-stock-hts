@@ -174,17 +174,24 @@ def get_daily(code, lookback_days=None, use_cache=True):
     now = time.time()
     today = datetime.now().strftime('%Y%m%d')
 
+    lookback_days = int(lookback_days)
+
     if use_cache:
         with _CACHE_LOCK:
             hit = _CACHE.get(code)
-            if hit and hit.get('day') == today and (now - hit['ts']) < _cache_ttl_sec():
+            # [중요] 캐시본의 조회 기간이 요청보다 짧으면 재사용하지 않는다.
+            #  차트 경로(730일)가 먼저 캐시해 두면 백테스트(수년)가 짧은 시계열을 받아
+            #  기간이 조용히 잘린 채 검증되기 때문이다. 반대로 더 긴 캐시본은 그대로 쓴다.
+            if (hit and hit.get('day') == today
+                    and (now - hit['ts']) < _cache_ttl_sec()
+                    and hit.get('lookback', 0) >= lookback_days):
                 return hit['df'].copy()
             failed_at = _FAIL.get(code, 0)
         if failed_at and (now - failed_at) < _FAIL_COOLDOWN_SEC:
             return None
 
     end = datetime.now()
-    start = end - timedelta(days=int(lookback_days))
+    start = end - timedelta(days=lookback_days)
     s, e = start.strftime('%Y%m%d'), end.strftime('%Y%m%d')
 
     df = None
@@ -206,7 +213,7 @@ def get_daily(code, lookback_days=None, use_cache=True):
 
     with _CACHE_LOCK:
         _FAIL.pop(code, None)
-        _CACHE[code] = {'df': df, 'ts': now, 'day': today}
+        _CACHE[code] = {'df': df, 'ts': now, 'day': today, 'lookback': lookback_days}
         if len(_CACHE) > _CACHE_MAX:
             oldest = sorted(_CACHE.items(), key=lambda kv: kv[1]['ts'])[:len(_CACHE) - _CACHE_MAX]
             for k, _ in oldest:

@@ -4160,7 +4160,20 @@ class AutoTrader:
                 if max_atr_sl != 0 and sl_rate < max_atr_sl:
                     self.log(f"[리스크 조정] ATR 손절률({sl_rate:.1f}%)이 최대 한도({max_atr_sl}%)를 초과하여 조정됩니다.")
                     sl_rate = max_atr_sl
-                
+
+            # [추세추종 안전장치] "탈출 전략이 없다면 포지션을 잡지 마라"
+            #  ATR 손절이 꺼져 있고(또는 ATR 미확보) 고정 손절도 0(미사용)이면 이 매수는
+            #  청산 기준이 없는 포지션이 된다. 게다가 allocate_budget은 손절폭이 0이면
+            #  리스크 캡을 건너뛰어 '손실액 상한'까지 함께 사라진다(집중 캡만 남음).
+            #  기본 설정에서는 도달하지 않고(ATR 손절 ON·고정 -7%), 사용자가 전역이나
+            #  개별 룰에서 둘 다 끈 경우에만 걸린다 → 매수를 진행하지 않고 건너뛴다.
+            if not sl_rate or abs(sl_rate) <= 0:
+                self.log(f"[매수 보류] {cand.get('name', '')}({cand.get('code', '')}) 손절 기준 없음 — "
+                         f"ATR 손절 {'ON(ATR 미확보)' if use_atr_stop else 'OFF'} + 고정 손절 0(미사용). "
+                         f"청산 기준과 손실액 상한이 모두 사라지므로 진입하지 않습니다. "
+                         f"(설정 > 매도 전략에서 ATR 손절을 켜거나 고정 손절률을 지정하세요)")
+                continue
+
             # [수정] 자산 배분 로직 개선: 마지막 슬롯인 경우 남은 예수금 전액 투자
             remaining_slots = max_holdings - current_holdings_count
             

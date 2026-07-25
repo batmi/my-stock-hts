@@ -104,9 +104,37 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     return raw_score, sell_check_score, can_buy_state, state, reason
 
 def get_backtest_data(code, is_overseas, days):
-    # 1. yfinance 시도 (장기간 데이터 확보 유리)
+    """백테스트용 장기 일봉.
+
+    [데이터 정합성] 국내는 **모드와 무관하게 KRX 공식(pykrx/FDR)** 을 1순위로 쓴다.
+     ① 실매매·화면 지표의 기준과 같다 — 토스 모드는 이미 KRX 공식이고, KIS 일봉도 KRX 정규장
+        기준이라 같은 값을 본다. 검증한 전략과 실행하는 전략이 다른 데이터 위에 서지 않는다.
+     ② 모드를 바꿔가며 비교해도 백테스트 결과가 흔들리지 않는다.
+     ③ yfinance는 O/H/L은 일치하나 종가가 237거래일 중 2~4일 어긋나(최대 1.59%,
+        불일치 날짜가 종목 간 동일해 데이터 품질 문제) 손절·익절 트리거 판정을 바꿀 수 있다.
+     ④ KIS 분석 경로(_fetch_domestic_daily)는 250봉 상한이라 장기 백테스트에 애초에 못 쓴다.
+     순서: ① pykrx/FDR(국내) → ② yfinance → ③ 차트 API(모드별, 250봉 상한 → 절단 경고)
+    """
+    warmup_days = days + 400        # 지표 계산용 여유(52주 윈도우 충족 위해 약 1년 워밍업)
+
+    # 1. KRX 공식 일봉 (국내 전용, 모드 무관)
+    if not is_overseas:
+        try:
+            from modules import krx_daily
+            krx_df = krx_daily.get_daily(code, lookback_days=warmup_days)
+            if krx_df is not None and not krx_df.empty:
+                if config.SCREEN_DEBUG_LEVEL == "TRACE":
+                    config.console.print(
+                        f"[dim cyan][TRACE] REQ (KRX/{krx_df.attrs.get('source', '?')}) | "
+                        f"{code} | {len(krx_df)}봉[/dim cyan]")
+                return krx_df
+        except Exception as e:
+            logger.debug(f"[Backtest] KRX 일봉 조회 실패({code}): {e}")
+        logger.warning(f"[Backtest] {code} KRX 공식 일봉 실패 → yfinance로 폴백합니다")
+
+    # 2. yfinance 폴백 (해외 종목의 1순위이기도 하다)
     try:
-        start_dt = datetime.now() - timedelta(days=days + 400) # 지표 계산용 여유 기간 포함 (52주 윈도우 충족 위해 약 1년 워밍업)
+        start_dt = datetime.now() - timedelta(days=warmup_days)
         start_str = start_dt.strftime("%Y-%m-%d")
         
         tickers = []
@@ -137,8 +165,38 @@ def get_backtest_data(code, is_overseas, days):
     except Exception as e:
         pass
 
-    # 2. KIS API 시도 (Fallback)
-    return api.get_chart_data(code, is_overseas)
+    # 3. 차트 API (최종 폴백). 분석용 경로라 250봉(약 1년) 상한이 걸려 있다.
+    #    요청 기간보다 짧으면 백테스트가 조용히 잘린 채 도는 것이므로 반드시 알린다.
+    df = api.get_chart_data(code, is_overseas)
+    _warn_if_truncated(df, code, days)
+    return df
+
+
+def _warn_if_truncated(df, code, days):
+    """확보한 시계열이 요청 기간에 못 미치면 경고한다(무언의 절단 방지).
+
+    차트 API 경로는 분석용이라 250봉 상한이 있어, 다년 백테스트를 요청해도 약 1년만 돌아온다.
+    결과 화면에는 '요청 기간'이 그대로 찍히므로 알리지 않으면 사용자가 알 수 없다.
+    """
+    if df is None or getattr(df, 'empty', True) or 'date' not in getattr(df, 'columns', []):
+        return
+    try:
+        first = str(df['date'].iloc[0])[:8]
+        last = str(df['date'].iloc[-1])[:8]
+        covered = (datetime.strptime(last, "%Y%m%d") - datetime.strptime(first, "%Y%m%d")).days
+    except Exception:
+        return
+    if covered >= days * 0.9:       # 휴장일·상장일 등으로 약간 짧은 것은 정상
+        return
+
+    msg = (f"백테스트 데이터 부족: {code} 요청 {days}일 / 확보 {covered}일"
+           f"({first}~{last}, {len(df)}봉) — 차트 API의 250봉 상한 때문입니다. "
+           f"결과는 이 짧은 구간만 반영합니다.")
+    logger.warning(f"[Backtest] {msg}")
+    try:
+        config.console.print(f"[bold yellow]⚠️  {msg}[/bold yellow]")
+    except Exception:
+        pass
 
 def _append_smart_money_signal(df, code, is_overseas):
     """과거 수급 데이터를 API로 조회하여 DataFrame에 병합하고 스마트머니 시그널을 사전 계산 (Vectorized)"""
