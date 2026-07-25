@@ -270,6 +270,92 @@ def test_today_bar_high_low_respect_current_price():
 
 
 # ---------------------------------------------------------
+# 폴백 경고 (토스 캔들 = NXT 포함으로 계산됨을 사용자에게 알림)
+# ---------------------------------------------------------
+@pytest.fixture(autouse=True)
+def clean_fallback():
+    import api
+    api.clear_krx_fallback()
+    yield
+    api.clear_krx_fallback()
+
+
+def test_fallback_recorded_when_sources_fail():
+    import api
+    with patch.object(krx_daily, 'get_daily', return_value=None):
+        assert api._krx_daily_chart('005930') is None
+    assert '005930' in api.get_krx_fallback()
+
+
+def test_fallback_recorded_when_history_too_short():
+    """120봉 미만도 토스 캔들로 넘어가므로 경고 대상이다."""
+    import api
+    short = krx_daily._normalize(_pykrx_frame(50), 'pykrx')
+    with patch.object(krx_daily, 'get_daily', return_value=short):
+        assert api._krx_daily_chart('005930') is None
+    assert '005930' in api.get_krx_fallback()
+    assert '50봉' in api.get_krx_fallback()['005930']
+
+
+def test_fallback_recorded_on_exception():
+    import api
+    with patch.object(krx_daily, 'get_daily', side_effect=RuntimeError('boom')):
+        api._krx_daily_chart('005930')
+    assert '005930' in api.get_krx_fallback()
+
+
+def test_fallback_cleared_on_recovery():
+    """다음 조회에서 KRX 소스가 살아나면 경고 목록에서 빠진다."""
+    import api
+    api.note_krx_fallback('005930', 'pykrx·FDR 모두 실패')
+    good = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    with patch.object(krx_daily, 'get_daily', return_value=good), \
+         patch.object(api, '_append_today_bar_from_price', side_effect=lambda df, code: df):
+        assert api._krx_daily_chart('005930') is not None
+    assert '005930' not in api.get_krx_fallback()
+
+
+def test_warning_silent_when_no_fallback():
+    import api
+    import utils
+    api.clear_krx_fallback()
+    with patch.object(config.console, 'print') as p:
+        utils.print_krx_fallback_warning()
+    p.assert_not_called()
+
+
+def test_warning_lists_affected_symbols_with_names():
+    import api
+    import utils
+    api.note_krx_fallback('005930', 'pykrx·FDR 모두 실패')
+    with patch.object(config.console, 'print') as p:
+        utils.print_krx_fallback_warning({'005930': '삼성전자'})
+    out = ' '.join(str(c.args[0]) for c in p.call_args_list if c.args)
+    assert 'yellow' in out                 # 노란색으로 출력
+    assert '삼성전자(005930)' in out
+    assert 'NXT' in out                    # 왜 신뢰할 수 없는지 명시
+
+
+def test_warning_truncates_long_symbol_list():
+    import api
+    import utils
+    for i in range(12):
+        api.note_krx_fallback(f'00000{i}', '실패')
+    with patch.object(config.console, 'print') as p:
+        utils.print_krx_fallback_warning()
+    out = ' '.join(str(c.args[0]) for c in p.call_args_list if c.args)
+    assert '외 4종목' in out               # 8개까지만 나열하고 나머지는 요약
+
+
+def test_warning_survives_api_error():
+    """경고 렌더링 실패가 결과 출력 자체를 막지 않는다."""
+    import api
+    import utils
+    with patch.object(api, 'get_krx_fallback', side_effect=RuntimeError('boom')):
+        utils.print_krx_fallback_warning()   # 예외가 새어나오지 않아야 한다
+
+
+# ---------------------------------------------------------
 # 토스 일봉 경로 우선순위
 # ---------------------------------------------------------
 def test_toss_daily_prefers_krx_for_domestic():

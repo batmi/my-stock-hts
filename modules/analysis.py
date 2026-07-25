@@ -1941,7 +1941,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 4. 결과 출력
     config.console.print()
-    
+
+    # [경고] KRX 공식 일봉 실패로 토스 캔들(NXT 포함)이 쓰였으면 결과 앞에 알린다
+    utils.print_krx_fallback_warning({code: name})
+
     # [추가] 종목 메모 출력 (존재 시 패널 형태로 상단에 표시)
     memo_data_list = utils.get_stock_memos(code)
     if memo_data_list:
@@ -4626,8 +4629,13 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         logger.error(f"데이터 분석 중 오류: {e}")
 
     try:
+        # [경고] KRX 공식 일봉 실패로 토스 캔들(NXT 포함)이 쓰인 종목이 있으면 표 앞에 알린다
+        if not is_overseas:
+            utils.print_krx_fallback_warning(
+                {str(d.get('code')): d.get('name') for d in (data_list or []) if d.get('code')})
+
         config.console.print(table, crop=False)
-        
+
         mark_desc = []
         if '-' in used_marks: mark_desc.append("[dim]([/dim] - [dim]) 시스템 트레이딩 제한 종목[/dim]")
         if '+' in used_marks: mark_desc.append("[dim]([/dim] + [dim]) 개별 룰 적용 종목[/dim]")

@@ -4429,6 +4429,38 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     return df
 
 
+# --- KRX 공식 일봉 실패 → 토스 캔들(NXT 포함) 폴백 추적 ---
+#  폴백하면 일봉 OHLC에 NXT 장전·장후 체결이 섞여 ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋난다
+#  (손절폭·포지션 크기까지 영향). 조용히 넘어가면 사용자가 알 수 없으므로 화면에 경고를 띄운다.
+_krx_fallback_lock = threading.Lock()
+_krx_fallback = {}          # {code: 사유}
+
+
+def note_krx_fallback(code, reason):
+    """해당 종목이 토스 캔들(NXT 포함)로 계산됐음을 기록한다."""
+    if not code:
+        return
+    with _krx_fallback_lock:
+        if _krx_fallback.get(code) != reason:
+            logger.warning(f"[KRX] {code} 공식 일봉 확보 실패({reason}) → 토스 캔들(NXT 포함)로 대체")
+        _krx_fallback[code] = reason
+
+
+def clear_krx_fallback(code=None):
+    """복구된 종목(또는 전체)을 폴백 목록에서 제거한다."""
+    with _krx_fallback_lock:
+        if code is None:
+            _krx_fallback.clear()
+        else:
+            _krx_fallback.pop(code, None)
+
+
+def get_krx_fallback():
+    """{종목코드: 사유} 사본. 비어 있으면 모든 종목이 KRX 공식 일봉으로 계산된 것이다."""
+    with _krx_fallback_lock:
+        return dict(_krx_fallback)
+
+
 def _krx_daily_chart(code):
     """국내 일봉을 KRX 정규장 기준(pykrx/FDR)으로 조회한다. 실패·미지원이면 None.
 
@@ -4442,13 +4474,18 @@ def _krx_daily_chart(code):
         df = krx_daily.get_daily(code)
     except Exception as e:      # noqa: BLE001 - 외부 소스 장애가 시세 경로를 막지 않게 한다
         logger.debug(f"[API] KRX 일봉 조회 실패({code}): {e}")
+        note_krx_fallback(code, "조회 오류")
         return None
 
     if df is None or df.empty:
+        note_krx_fallback(code, "pykrx·FDR 모두 실패")
         return None
     if len(df) < 120:
         logger.debug(f"[API] KRX 일봉({code}) {len(df)}봉으로 부족 → 토스 캔들 사용")
+        note_krx_fallback(code, f"{len(df)}봉뿐(지표 산출 부족)")
         return None
+
+    clear_krx_fallback(code)        # 복구되면 경고에서 빠진다
 
     source = df.attrs.get('source', '?')
     df = df.tail(250).reset_index(drop=True)

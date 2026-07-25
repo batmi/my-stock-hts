@@ -575,3 +575,42 @@ def adjust_to_tick(price, is_overseas=False):
         return 0  # 숫자가 아니면 0을 반환
 
     return round(price / tick) * tick
+
+
+def print_krx_fallback_warning(name_map=None):
+    """KRX 공식 일봉 확보에 실패해 토스 캔들(NXT 포함)로 계산된 종목이 있으면 노란 경고를 띄운다.
+
+    폴백하면 일봉 OHLC에 NXT 장전(08:00~09:00)·장후(15:30~20:00) 체결이 섞인다. 실측상
+    ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋나 손절폭·포지션 크기까지 영향을 받으므로,
+    결과를 그대로 신뢰하지 않도록 출력 직전에 알린다. 폴백이 없으면 아무것도 출력하지 않는다.
+
+    name_map: {종목코드: 종목명} — 있으면 이름을 함께 보여준다(없으면 코드만).
+    """
+    try:
+        fallback = api.get_krx_fallback()
+    except Exception:
+        return
+    if not fallback:
+        return
+
+    name_map = name_map or {}
+    items = []
+    for code in sorted(fallback):
+        nm = name_map.get(code)
+        items.append(f"{nm}({code})" if nm else str(code))
+
+    MAX_SHOW = 8
+    shown = ", ".join(items[:MAX_SHOW])
+    if len(items) > MAX_SHOW:
+        shown += f" 외 {len(items) - MAX_SHOW}종목"
+
+    reasons = sorted(set(fallback.values()))
+    config.console.print(
+        f"[bold yellow]⚠️  KRX 공식 일봉(pykrx/FDR) 조회 실패 — 아래 {len(items)}종목은 "
+        f"토스 캔들(NXT 장전·장후 포함)로 계산했습니다.[/bold yellow]")
+    config.console.print(f"[yellow]   대상: {shown}[/yellow]")
+    config.console.print(f"[yellow]   사유: {', '.join(reasons)}[/yellow]")
+    config.console.print(
+        "[yellow]   → ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋날 수 있습니다"
+        " (손절폭·포지션 크기에 영향). 지표를 그대로 신뢰하지 마세요.[/yellow]")
+    config.console.print()
