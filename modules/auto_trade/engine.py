@@ -959,19 +959,24 @@ class RiskManager:
     def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
         """자산 배분 계산
 
-        3개 레이어가 순차 적용된다. ATR(변동성)이 2~3번에 모두 관여하지만 '목적'이 서로 달라
-        의도된 중첩이다(이중 안전장치). 변경 시 아래 의도를 유지할 것:
+        3개 레이어가 각자 '상한'을 내고, 그 중 가장 작은 값을 쓴다(min 결합).
           1) 기초 비중(invest_ratio): 종목당 명목 상한 (집중 방지). SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하 권장.
           2) 리스크 기반(SYSTEM_RISK_PER_TRADE): '손절 시 계좌 손실액'을 일정 이하로 고정 → 꼬리위험(tail loss) 상한.
-             손절폭(ATR 손절이면 ATR 반영)이 넓을수록 비중을 줄인다. min()으로 1)과 결합.
+             손절폭(ATR 손절이면 ATR 반영)이 넓을수록 상한을 줄인다.
              [갭 버퍼] 소프트 스탑의 갭하락 미끄러짐을 대비해 손절폭에 GAP_RISK_BUFFER 배수를 곱해 보수 계산.
              [리스크 스케일링] 약세 국면·드로다운 시 허용 손실액이 risk_scale 배수만큼 축소된다.
-          3) 변동성 타겟팅(TARGET_VOLATILITY): 종목의 연환산 변동성을 목표치로 정규화 → 포트폴리오 변동성 균질화.
-             2)가 '최악 손실액'을 막는다면 3)은 '평상시 변동성'을 맞춘다. scale 배수로 곱셈 결합.
-        즉 2)는 손실액 캡, 3)은 변동성 정규화로 서로 다른 위험을 통제하므로 단순 중복이 아니다.
-        [집중 캡] 변동성 타겟팅의 확대(scale>1) 결과가 기초 비중을 넘지 않도록 최종 클램프한다.
-        기초 비중은 SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하가 되도록 설계된 종목당 명목 상한이므로,
-        어떤 레이어도 이를 초과할 수 없다. (확대는 2)로 축소된 금액을 기초 비중까지 복원하는 용도로만 작동)
+          3) 변동성 타겟팅(TARGET_VOLATILITY): 종목의 연환산 변동성을 목표치로 정규화 → 변동성 균질화.
+             상한 = 기초 비중 × scale (기초 대비 몇 %까지 허용하는가).
+
+        [Fix] 종전에는 3)을 2)의 결과에 '곱셈'으로 얹었다. 그러나 ATR 손절을 쓰면 2)의 상한이
+        이미 1/ATR에 비례하고 3)의 배수도 1/ATR에 비례해, 결합 결과가 1/ATR²로 과대 축소됐다
+        (실측 2026-07-23 GS건설: 기초 2,487,790 → 리스크 1,326,821 → ×0.40 = 530,728 = 기초의 21%.
+         같은 상황에서 기초 비중을 0.25→0.5로 올려도 최종액이 530,728원으로 동일했다 —
+         기초를 올려도 곱셈 사슬 뒤쪽이 그대로 깎아내려 설정이 사문화됐다).
+        2)와 3)은 '얼마를 살까'에 대한 서로 다른 답이지 누적 벌점이 아니므로 min()으로 결합한다.
+        min 결합에서도 각 정책은 그대로 지켜진다 — 최종액 ≤ 2)이므로 손실액 캡은 여전히 불가침이고,
+        최종액 ≤ 1)이므로 집중 캡도 유지된다. 다만 3)의 확대(scale>1)로 2)의 축소분을 되돌리던
+        동작은 사라진다(그 복원은 손실액 캡을 넘길 수 있어 애초에 위험한 방향이었다).
         """
         if self.trader.initial_asset > 0:
             target_invest_amt = int(self.trader.initial_asset * invest_ratio)
@@ -997,6 +1002,7 @@ class RiskManager:
             target_invest_amt = min(target_invest_amt, risk_based_amt)
 
         scale = 1.0
+        vol_based_amt = 0
         if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
@@ -1008,9 +1014,10 @@ class RiskManager:
             if annual_vol > 0:
                 scale = target_vol / annual_vol
                 scale = max(scale_min, min(scale_max, scale))
-                target_invest_amt = int(target_invest_amt * scale)
-                # [집중 캡] 확대 스케일이 종목당 명목 상한(기초 비중)을 초과하지 않도록 클램프
-                target_invest_amt = min(target_invest_amt, base_amt)
+                # 변동성 상한은 '기초 비중 기준'으로 산출한다(리스크 상한에 곱하지 않는다 → 중복 축소 제거).
+                # 확대(scale>1)는 기초 비중을 넘을 수 없으므로 집중 캡도 자동 충족된다.
+                vol_based_amt = min(int(base_amt * scale), base_amt)
+                target_invest_amt = min(target_invest_amt, vol_based_amt)
 
         invest_amt = min(target_invest_amt, avail_cash)
 
@@ -1018,9 +1025,9 @@ class RiskManager:
         if risk_scale < 1.0:
             log_msg += f" | 리스크스케일 x{risk_scale:.2f}({getattr(self.trader, 'risk_scale_reason', '') or '축소'})"
         if risk_based_amt > 0:
-            log_msg += f" -> 리스크조정:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
-        if scale != 1.0:
-            log_msg += f" -> 변동성조정(x{scale:.2f}):{target_invest_amt:,}원"
+            log_msg += f" | 리스크캡:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
+        if vol_based_amt > 0:
+            log_msg += f" | 변동성캡:{vol_based_amt:,}원(x{scale:.2f})"
         log_msg += f" -> 최종:{invest_amt:,}원"
 
         self.trader.log(log_msg)

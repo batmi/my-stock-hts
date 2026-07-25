@@ -759,10 +759,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 if annual_vol > 0:
                     scale = target_vol / annual_vol
                     scale = max(scale_min, min(scale_max, scale))
-                    invest_amt = int(invest_amt * scale)
-                    # [Fix] 확대 스케일이 잔고를 초과 투자(음수 잔고)하지 않도록 클램프
-                    #  (실매매의 '기초 비중 초과 불가' 클램프와 동일 취지 — 백테스트는 단일 종목이라 잔고가 상한)
-                    invest_amt = min(invest_amt, balance)
+                    # [Fix] 실매매(allocate_budget)와 동일하게 min 결합한다. 종전처럼 리스크 사이징
+                    #  결과에 곱하면 ATR이 두 번(손절폭·변동성) 벌점으로 작용해 1/ATR²로 과대 축소된다.
+                    #  백테스트는 단일 종목이라 '기초 비중' = 잔고 전액이므로 잔고 기준으로 캡을 낸다.
+                    vol_based_amt = min(int(balance * scale), balance)
+                    invest_amt = min(invest_amt, vol_based_amt)
 
             buy_qty = int(invest_amt / buy_price)
             

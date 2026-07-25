@@ -160,6 +160,64 @@ def test_volatility_targeting_scaling_limits(risk_manager):
     )
     assert invest_amt_min == 500_000 # 100만 * 0.5
 
+def test_risk_and_volatility_caps_combine_by_min(risk_manager):
+    """[중복 축소 방지] 리스크 캡과 변동성 캡은 곱셈이 아니라 min()으로 결합한다.
+
+    실측 회귀(2026-07-23 GS건설): 자산 9,951,160 / 기초 25% / risk_scale 0.6 /
+    ATR 손절 -15% / 연변동성 134%(scale는 하한 0.40에 클램프).
+      종전(곱셈): min(기초, 리스크) 1,326,821 × 0.40 = 530,728  → 기초의 21%
+      현재(min) : min(기초 2,487,790, 리스크 1,326,821, 변동성 995,116) = 995,116
+    """
+    config.USE_VOLATILITY_TARGETING = True
+    config.TARGET_VOLATILITY = 0.20
+    config.VOLATILITY_SCALING_MAX = 2.0
+    config.VOLATILITY_SCALING_MIN = 0.40
+    config.SYSTEM_RISK_PER_TRADE = 4.0
+    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS, GAP_RISK_BUFFER=1.2)
+
+    risk_manager.trader.initial_asset = 9_951_160
+    risk_manager.trader.risk_scale = 0.6
+    try:
+        price, atr = 34_500, 2_912      # 연변동성 ≈ 134% → scale 0.149 → 하한 0.40
+        amt = risk_manager.allocate_budget(
+            9_951_160, 0.25, stop_loss_rate=-15.0, atr=atr, current_price=price
+        )
+        assert amt == 995_116           # 기초 2,487,790 × 0.40 (변동성 캡이 최소)
+        assert amt > 530_728            # 종전 곱셈 결과보다 커야 한다
+
+        # 손실액 캡은 여전히 불가침: 최종액 × 손절폭 ≤ 자산 × (리스크% × 스케일)
+        assert amt * 0.15 <= 9_951_160 * (4.0 * 0.6 / 100.0)
+    finally:
+        risk_manager.trader.risk_scale = 1.0
+        risk_manager.trader.initial_asset = 10_000_000
+
+
+def test_base_ratio_change_now_moves_final_amount(risk_manager):
+    """기초 비중을 올리면 최종 매수금도 (리스크 캡 한도까지) 실제로 늘어난다.
+
+    종전 곱셈 결합에서는 리스크 캡이 바인딩하면 기초 비중을 2배로 올려도 최종액이
+    똑같아 설정이 사문화됐다(0.25·0.5 모두 530,728원).
+    """
+    config.USE_VOLATILITY_TARGETING = True
+    config.TARGET_VOLATILITY = 0.20
+    config.VOLATILITY_SCALING_MIN = 0.40
+    config.VOLATILITY_SCALING_MAX = 2.0
+    config.SYSTEM_RISK_PER_TRADE = 4.0
+    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS, GAP_RISK_BUFFER=1.2)
+
+    risk_manager.trader.initial_asset = 9_951_160
+    risk_manager.trader.risk_scale = 0.6
+    try:
+        kw = dict(stop_loss_rate=-15.0, atr=2_912, current_price=34_500)
+        small = risk_manager.allocate_budget(9_951_160, 0.25, **kw)
+        large = risk_manager.allocate_budget(9_951_160, 0.50, **kw)
+        assert large > small
+        assert large == 1_326_821       # 리스크 캡에서 멈춘다(무한정 증가하지 않음)
+    finally:
+        risk_manager.trader.risk_scale = 1.0
+        risk_manager.trader.initial_asset = 10_000_000
+
+
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_check_loss_limit_triggered(mock_tg, risk_manager):
     """손실 한도 초과 시 '신규 매수 중단(방어 모드)' 테스트
