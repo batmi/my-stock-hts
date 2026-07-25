@@ -2381,11 +2381,68 @@ def _get_intraday_chart_data(code, is_overseas):
 # KIS 지수 코드 → yfinance 티커 (토스 모드 폴백용)
 _INDEX_KIS_TO_YF = {"0001": "^KS11", "1001": "^KQ11", "2001": "^KS200", "2203": "^KQ150"}
 
+# KIS 지수 코드 → 토스 시장지표 심볼 (토스 API 1.2.4 /market-indicators).
+#  KRX 공식 지수를 그대로 주므로 토스 모드의 1순위 소스다. 코스피200(2001)·코스닥150(2203)은
+#  토스 심볼 카탈로그에 없어(400 unsupported-symbol) 종전 폴백(tvDatafeed→yfinance)을 그대로 쓴다.
+_INDEX_KIS_TO_TOSS = {"0001": "KOSPI", "1001": "KOSDAQ"}
+
+
+def _toss_index_chart_data(symbol, target=260):
+    """토스 시장지표 일봉 → ['date','open','high','low','close','volume'] DataFrame.
+
+    date=YYYYMMDD 문자열, 오름차순(KIS 지수 일봉과 동일 스키마). 실패/무응답 시 빈 DF.
+    호출당 최대 200봉이라 nextBefore 커서로 EMA120·52주에 충분한 분량을 모은다.
+    """
+    candles = []
+    before = None
+    prev_cursor = None
+    try:
+        for _ in range(3):
+            res = toss_api.get_market_indicator_candles(symbol, interval="1d",
+                                                        count=200, before=before)
+            batch = (res or {}).get('candles', []) or []
+            if not batch:
+                break
+            candles.extend(batch)
+            if len(candles) >= target:
+                break
+            nb = (res or {}).get('nextBefore')
+            oldest = min((str(c.get('timestamp', '')) for c in batch if c.get('timestamp')),
+                         default=None)
+            before = nb or oldest
+            if not before or before == prev_cursor:   # 커서 정체 → 무한루프 방지
+                break
+            prev_cursor = before
+    except toss_api.TossApiError as e:
+        logger.warning(f"[Toss] 지수({symbol}) 일봉 조회 실패: {e}")
+        return pd.DataFrame()
+
+    if not candles:
+        logger.warning(f"[Toss] 지수({symbol}) 일봉 조회 결과 없음")
+        return pd.DataFrame()
+
+    rows = [{
+        'date': str(c.get('timestamp', ''))[:10].replace('-', ''),
+        'open': _toss_float(c.get('openPrice')),
+        'high': _toss_float(c.get('highPrice')),
+        'low': _toss_float(c.get('lowPrice')),
+        'close': _toss_float(c.get('closePrice')),
+        'volume': _toss_float(c.get('volume')),
+    } for c in candles]
+    df = pd.DataFrame(rows)
+    df = df[df['date'] != ''].drop_duplicates(subset=['date'])
+    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+
 
 def get_domestic_index_chart(code):
-    """업종/지수 기간별 시세(일봉) 조회 (KIS API, 토스 모드는 yfinance 폴백)"""
-    # [추가] 토스: KIS 미사용. 지수 KIS 코드를 yfinance 티커로 매핑하여 조회.
+    """업종/지수 기간별 시세(일봉) 조회 (KIS API / 토스 모드는 시장지표 API·yfinance)"""
+    # [추가] 토스: KIS 미사용. 코스피·코스닥은 토스 시장지표(1.2.4), 그 외는 yfinance 티커 매핑.
     if config.session.is_toss:
+        toss_symbol = _INDEX_KIS_TO_TOSS.get(str(code))
+        if toss_symbol:
+            # KIS 경로와 동일하게 캐시+당일봉 실시간 오버레이를 태운다(오버레이는 토스 지수 현재가 사용).
+            return _get_cached_chart(code, is_overseas=False, is_index=True,
+                                     fetch_func=lambda: _toss_index_chart_data(toss_symbol))
         yf_ticker = _INDEX_KIS_TO_YF.get(str(code))
         if not yf_ticker:
             return pd.DataFrame()
@@ -2459,9 +2516,31 @@ def get_domestic_index_chart(code):
     return _get_cached_chart(code, is_overseas=False, is_index=True, fetch_func=fetch_func)
 
 def get_domestic_index_price(code):
-    """업종/지수 현재가 조회 (KIS API, 토스 모드는 yfinance 폴백)"""
-    # [추가] 토스: KIS 미사용. yfinance fast_info로 현재가/전일종가 조회 후 KIS 형태로 반환.
+    """업종/지수 현재가 조회 (KIS API / 토스 모드는 시장지표 API·yfinance)"""
+    # [추가] 토스: KIS 미사용. 코스피·코스닥은 토스 시장지표(1.2.4) 실시간 지수를 KIS 형태로 반환.
     if config.session.is_toss:
+        toss_symbol = _INDEX_KIS_TO_TOSS.get(str(code))
+        if toss_symbol:
+            cache_key = f"toss_idx_price_{toss_symbol}"
+            cached = _get_micro_cache(cache_key)
+            if cached:
+                return cached
+            try:
+                row = toss_api.get_market_indicator_price(toss_symbol)
+                curr = _toss_float((row or {}).get('lastPrice'))
+                if curr > 0:
+                    # 토스 시장지표는 전일 종가를 주지 않는다 → 0으로 두어 상위의 수정주가 검증을
+                    # 건너뛰게 한다(임의 값을 넣으면 정상 캐시를 오탐 파기한다).
+                    res = {'rt_cd': '0', 'output': {
+                        'bstp_nmix_prpr': str(curr),
+                        'bstp_nmix_prdy_clpr': '0',
+                    }}
+                    _set_micro_cache(cache_key, res)
+                    return res
+            except Exception as e:
+                logger.debug(f"[Toss] 지수 현재가 조회 실패({toss_symbol}): {e}")
+            # 토스 시장지표 실패 시 yfinance로 폴백 (아래 공통 경로)
+
         yf_ticker = _INDEX_KIS_TO_YF.get(str(code))
         if not yf_ticker:
             return {'rt_cd': '9999'}
@@ -3683,6 +3762,120 @@ def _toss_cached_daily_chart(code):
     return None
 
 
+# --- NXT(대체거래소) 거래 여부 — 토스 캔들이 'KRX 단독'인지 판정하는 근거 ---
+#  토스 캔들·현재가는 KRX+NXT 통합 체결이라 거래소를 골라낼 수 없다. 다만 NXT에서 거래되지
+#  않는 종목(ETF/ETN 대부분 + 일부 주식)은 통합값이 곧 KRX 값이다. stocks API의
+#  koreanMarketDetail.nxtSupported가 이를 직접 알려준다.
+#  이 정보는 영업일 단위(또는 그 이상)로만 바뀌므로 거래일 단위로 캐시한다(스펙 권고).
+_toss_nxt_map = {}          # {code: bool}
+_toss_nxt_day = None        # 캐시 유효 거래일(YYYYMMDD)
+_toss_nxt_lock = threading.Lock()
+
+
+def _toss_nxt_supported(code):
+    """종목이 NXT에서 거래되는가. True/False, 판정 불가 시 None(호출부가 폴백).
+
+    비토스 모드이거나 국내 6자리 코드가 아니면 None. 조회 실패도 None(음성 캐시 없이
+    다음 호출에서 재시도 — 종목당 1회성 조회라 폭주 위험이 낮다).
+    """
+    global _toss_nxt_map, _toss_nxt_day
+    if not config.session.is_toss or not code or not str(code).isdigit():
+        return None
+    today = datetime.now().strftime('%Y%m%d')
+    with _toss_nxt_lock:
+        if _toss_nxt_day != today:      # 날짜가 바뀌면 전체 무효화(상장·NXT 편입 변경 반영)
+            _toss_nxt_map = {}
+            _toss_nxt_day = today
+        if code in _toss_nxt_map:
+            return _toss_nxt_map[code]
+    try:
+        rows = toss_api.get_stocks([code]) or []
+    except toss_api.TossApiError as e:
+        logger.debug(f"[Toss] NXT 지원 여부 조회 실패({code}): {e}")
+        return None
+    for r in rows:
+        if r.get('symbol') != code:
+            continue
+        detail = r.get('koreanMarketDetail') or {}
+        val = detail.get('nxtSupported')
+        if isinstance(val, bool):
+            with _toss_nxt_lock:
+                _toss_nxt_map[code] = val
+            return val
+    return None
+
+
+def _toss_krx_only(code):
+    """이 종목의 토스 체결값을 'KRX 단독'으로 봐도 되는가(= NXT 미거래).
+
+    True면 토스 분봉·현재가에 NXT 체결이 섞이지 않아 KRX 값과 동일하다.
+    nxtSupported(직접 근거)를 우선하고, 판정 불가 시 ETF/ETN 휴리스틱으로 폴백한다.
+    """
+    nxt = _toss_nxt_supported(code)
+    if nxt is not None:
+        return not nxt
+    try:
+        return bool(is_domestic_etf_etn(code))
+    except Exception:
+        return False
+
+
+# --- KRX 정규장 세션 경계 (market-calendar/KR) ---
+#  분봉에서 정규장 구간만 잘라내려면 시작·종료 시각이 필요하다. 09:00~15:30 하드코딩은
+#  임시 지연·단축 개장(수능일 등)에 어긋나므로 캘린더 값을 쓰고, 조회 실패 시에만 기본값을 쓴다.
+#  integrated.regularMarket은 KRX∪NXT 합집합이지만 두 거래소의 정규장 시간이 같아
+#  (NXT의 프리 08:00~09:00 / 애프터 15:30~20:00은 별도 필드) 경계값으로 그대로 쓸 수 있다.
+_TOSS_KRX_SESSION_DEFAULT = ((9, 0), (15, 30))
+_toss_kr_cal_map = {}       # {'YYYYMMDD': ((h,m),(h,m))}
+_toss_kr_cal_day = None     # 캘린더를 받아온 달력일(YYYYMMDD)
+_toss_kr_cal_lock = threading.Lock()
+
+
+def _toss_parse_hm(ts):
+    """ISO8601 문자열에서 (시, 분) 추출. 실패 시 None."""
+    try:
+        dt = datetime.fromisoformat(str(ts))
+        return dt.hour, dt.minute
+    except Exception:
+        return None
+
+
+def _toss_krx_regular_bounds(date_str=None):
+    """해당 거래일 KRX 정규장의 (시작, 종료) 시각 ((시,분),(시,분)).
+
+    market-calendar/KR 1회 호출로 전/당/익 영업일 3건을 받아 날짜별로 캐시하므로
+    캘린더 호출은 하루 1회다. 비토스 모드·조회 실패·미수록 날짜는 기본값(09:00~15:30).
+    """
+    global _toss_kr_cal_map, _toss_kr_cal_day
+    if not config.session.is_toss:
+        return _TOSS_KRX_SESSION_DEFAULT
+    today = datetime.now().strftime('%Y%m%d')
+    key = str(date_str or today)
+    with _toss_kr_cal_lock:
+        if _toss_kr_cal_day == today:
+            return _toss_kr_cal_map.get(key, _TOSS_KRX_SESSION_DEFAULT)
+
+    parsed = {}
+    try:
+        res = toss_api.get_market_calendar("KR") or {}
+        for slot in ("previousBusinessDay", "today", "nextBusinessDay"):
+            day = res.get(slot) or {}
+            d = str(day.get('date') or '').replace('-', '')
+            reg = ((day.get('integrated') or {}).get('regularMarket')) or {}
+            start = _toss_parse_hm(reg.get('startTime'))
+            end = _toss_parse_hm(reg.get('endTime'))
+            if d and start and end:
+                parsed[d] = (start, end)
+    except Exception as e:
+        logger.debug(f"[Toss] 장 운영시간 조회 실패: {e}")
+
+    with _toss_kr_cal_lock:
+        if parsed:                      # 실패 시엔 캐시 날짜를 올리지 않아 다음 호출에서 재시도
+            _toss_kr_cal_map = parsed
+            _toss_kr_cal_day = today
+    return parsed.get(key, _TOSS_KRX_SESSION_DEFAULT)
+
+
 # --- KRX 정규장 마감가(15:30) 캡처·저장 (mode 3 등락률 기준가) ---
 #  TOSS는 전일 KRX 정규장 종가 필드를 안 준다. 역산·yfinance는 불안정해 폐기했고, 대신
 #  '거래일 마감 후 정규장 분봉의 15:30 종가'(=KRX 마감가)를 그날 1회 캡처해 영속 저장한다.
@@ -3730,16 +3923,17 @@ def _toss_krx_close_unpack(v):
 def _toss_krx_close_trusted(code, source):
     """이 출처의 저장값을 KRX 정규장 종가로 믿어도 되는가.
 
-    'yf'는 일봉(KRX 기준) 조회로 얻은 값이라 신뢰한다. 'cap'(분봉 캡처)은 ETF/ETN만
-    신뢰한다 — ETF는 NXT에서 거래되지 않아 분봉이 KRX 단독이기 때문이다(실측 2026-07-16:
-    ETF 15/15 정확, 주식 0/10 정확).
+    'yf'는 일봉(KRX 기준) 조회로 얻은 값이라 신뢰한다. 'cap'(분봉 캡처)은 **NXT에서
+    거래되지 않는 종목**만 신뢰한다 — 그 종목의 분봉은 KRX 단독이라 오염이 없기 때문이다
+    (실측 2026-07-16: ETF 15/15 정확, 주식 0/10 정확).
+
+    NXT 거래 여부는 토스 stocks API의 koreanMarketDetail.nxtSupported로 직접 판정한다.
+    조회 불가(비토스·API 실패) 시에만 종전의 ETF/ETN 휴리스틱으로 폴백한다 — 휴리스틱은
+    관심목록 등록·종목명 브랜드에 의존해 NXT 미지원 '주식'을 놓치고 오탐 여지도 있다.
     """
     if source == "yf":
         return True
-    try:
-        return bool(is_domestic_etf_etn(code))
-    except Exception:
-        return False
+    return _toss_krx_only(code)
 
 
 def _toss_krx_close_get(code, date_str, trusted_only=False):
@@ -3795,9 +3989,15 @@ def _toss_krx_close_put(code, date_str, close, source="cap"):
 
 
 def _toss_after_krx_close():
-    """오늘이 거래일이고 KRX 정규장 마감(15:35+, 종가 확정 여유) 이후면 True."""
+    """오늘이 거래일이고 KRX 정규장 마감 + 5분(종가 확정 여유) 이후면 True.
+
+    마감 시각은 캘린더 기준(기본 15:30 → 15:35)이라 단축장에도 어긋나지 않는다.
+    """
     now = datetime.now()
-    return market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') >= '1535'
+    if market_today(False) != now.strftime('%Y%m%d'):
+        return False
+    (_sh, _sm), (eh, em) = _toss_krx_regular_bounds(now.strftime('%Y%m%d'))
+    return now >= now.replace(hour=eh, minute=em, second=0, microsecond=0) + timedelta(minutes=5)
 
 
 def _before_nxt_premarket_open():
@@ -4308,13 +4508,15 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
         #  mode 3 등락률은 전일 NXT 종가 기준으로 계산하며, 기동 시 안내한다.)
         return df
 
-    # 분봉: KIS 당일분봉과 동일하게 "당일(가장 최근 거래일)의 정규장(09:00~15:30)"만 표시.
+    # 분봉: KIS 당일분봉과 동일하게 "당일(가장 최근 거래일)의 KRX 정규장"만 표시.
     # 토스의 시간외/NXT 연장(08:00~/~20:00) 캔들과 날짜 교차를 모두 제거한다.
     # 장전에 조회하면 당일 정규장 데이터가 없어 빈 값이 되고(→ 호출부에서 장전 안내),
-    # 장중이면 09:00~현재, 장후면 09:00~15:30 전체가 된다.
+    # 장중이면 개장~현재, 장후면 정규장 전체가 된다.
+    # 경계는 market-calendar/KR 값을 쓴다(기본 09:00~15:30) — 임시 지연·단축 개장 대응.
     last_day = df['date'].dt.normalize().max()
-    hh, mm = df['date'].dt.hour, df['date'].dt.minute
-    in_session = (hh >= 9) & ((hh < 15) | ((hh == 15) & (mm <= 30)))
+    (sh, sm), (eh, em) = _toss_krx_regular_bounds(last_day.strftime('%Y%m%d'))
+    minutes = df['date'].dt.hour * 60 + df['date'].dt.minute
+    in_session = (minutes >= sh * 60 + sm) & (minutes <= eh * 60 + em)
     return df[(df['date'].dt.normalize() == last_day) & in_session].reset_index(drop=True)
 
 
@@ -4353,9 +4555,10 @@ def _toss_current_price_data(code, is_overseas):
         #   같은 시각 시간외 거래량이 있는 ETF만 값이 갈리고, 거래가 없던 ETF는 정확히 일치했다.)
         #  일봉 종가와 지표(EMA/RSI/CCI·52주 위치)의 기준은 정규장 종가이고 시간외단일가는 거래량이
         #  극히 적어(수 주~수십 주) 노이즈에 가까우므로, 마감 후에는 캡처해 둔 KRX 마감가로 고정한다.
-        #  ※ 일반 주식은 NXT 연장가를 mode 1/2도 함께 노출하므로(get_multi_current_prices_nxt)
-        #    여기서 고정하면 오히려 어긋난다 → ETF/ETN에만 적용한다.
-        if _toss_after_krx_close() and is_domestic_etf_etn(code):
+        #  ※ NXT 거래 종목은 연장가를 mode 1/2도 함께 노출하므로(get_multi_current_prices_nxt)
+        #    여기서 고정하면 오히려 어긋난다 → NXT 미거래 종목(_toss_krx_only)에만 적용한다.
+        #    (종전엔 ETF/ETN 휴리스틱이었으나 nxtSupported로 판정해 NXT 미지원 주식까지 포함)
+        if _toss_after_krx_close() and _toss_krx_only(code):
             krx_close = _toss_krx_close_get(code, datetime.now().strftime('%Y%m%d'))
             if krx_close and krx_close > 0:
                 p = float(krx_close)

@@ -56,6 +56,10 @@ _GROUP_RPS = {
     "ORDER_HISTORY": _TOSS_MAX_RPS,
     "ORDER_INFO": _TOSS_MAX_RPS,
     "RANKING": 5,             # 실측 5 (종전 10 — 초과 설정이었음)
+    # 시장지표(1.2.4 신설) — 한도 미실측. 성격이 비슷한 MARKET_DATA/CHART보다 보수적으로 잡고,
+    #  초과 시엔 429 그룹 쿨다운이 방어한다. (지수는 4종 이하 소량 호출이라 낮아도 무해)
+    "MARKET_INDICATOR": 5,
+    "MARKET_INDICATOR_CHART": 3,
 }
 
 _rate_lock = threading.Lock()
@@ -381,6 +385,56 @@ def get_candles(symbol, interval="1d", count=100, before=None, adjusted=True):
         params["before"] = before
     return _request("GET", "/api/v1/candles", group="MARKET_DATA_CHART",
                     params=params, account=False)
+
+
+# =========================================================================
+# 시장 지표 (Market Indicators) — 국내 지수·국채 [API 1.2.4 신설]
+#  개별 종목이 아닌 '지수/금리' 전용 엔드포인트다. 카탈로그 밖 심볼은 400 unsupported-symbol.
+#  코스피200·코스닥150은 카탈로그에 없으므로 여기서 조회할 수 없다(tvDatafeed 폴백 유지).
+# =========================================================================
+MARKET_INDICATOR_SYMBOLS = (
+    "KOSPI", "KOSDAQ",
+    "KR_BOND_2Y", "KR_BOND_3Y", "KR_BOND_5Y",
+    "KR_BOND_10Y", "KR_BOND_20Y", "KR_BOND_30Y",
+)
+
+
+def get_market_indicator_prices(symbols):
+    """시장 지표 현재가 다건. symbols: list[str] (카탈로그 심볼만).
+    [{symbol, timestamp, lastPrice}] — 지수는 포인트, 국채는 % (수익률)."""
+    if isinstance(symbols, (list, tuple)):
+        symbols = ",".join(symbols)
+    return _request("GET", "/api/v1/market-indicators/prices", group="MARKET_INDICATOR",
+                    params={"symbols": symbols}, account=False) or []
+
+
+def get_market_indicator_price(symbol):
+    """시장 지표 단건 현재가. 없으면 None."""
+    rows = get_market_indicator_prices([symbol])
+    return rows[0] if rows else None
+
+
+def get_market_indicator_candles(symbol, interval="1d", count=200, before=None):
+    """시장 지표 캔들(OHLCV). {candles:[...], nextBefore}
+
+    분봉('1m')은 지수(KOSPI·KOSDAQ)만 지원하고 국채는 일봉('1d')만 지원한다.
+    종목 캔들(/api/v1/candles)과 달리 currency 필드가 없다.
+    """
+    params = {"interval": interval, "count": count}
+    if before:
+        params["before"] = before
+    return _request("GET", f"/api/v1/market-indicators/{symbol}/candles",
+                    group="MARKET_INDICATOR_CHART", params=params, account=False)
+
+
+def get_market_indicator_investor_trading(symbol, interval="1d", count=10, until=None):
+    """KRX 투자자별 매매동향(개인·외국인·기관·기타법인). KOSPI/KOSDAQ만 지원.
+    {nextUntil, records:[{date, updatedAt, individual, foreigner, institution, otherCorporation}]}"""
+    params = {"interval": interval, "count": count}
+    if until:
+        params["until"] = until
+    return _request("GET", f"/api/v1/market-indicators/{symbol}/investor-trading",
+                    group="MARKET_INDICATOR", params=params, account=False)
 
 
 # =========================================================================

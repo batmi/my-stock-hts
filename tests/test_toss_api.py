@@ -1335,8 +1335,39 @@ def test_sellable_quantity_adapter():
 # 메뉴 1(시장 지수): 토스 모드는 KIS 미사용, yfinance 폴백
 # =========================================================================
 @pytest.mark.real_index_chart  # get_domestic_index_chart 자체 로직 검증 → 지수 조회 자동 mock 비활성화
-def test_index_chart_toss_uses_yfinance_not_kis():
-    """토스 모드: 국내 지수 차트가 KIS 대신 yfinance(get_chart_data)로 라우팅."""
+def test_index_chart_toss_uses_market_indicator_for_kospi():
+    """토스 모드: 코스피 지수 차트는 토스 시장지표 API(1.2.4)로 조회한다(KIS·yfinance 미사용)."""
+    import api
+    res = {"candles": [
+        {"timestamp": "2026-03-25T09:00:00+09:00", "openPrice": "2798.32", "highPrice": "2820.15",
+         "lowPrice": "2790.10", "closePrice": "2812.45", "volume": "542000000"},
+        {"timestamp": "2026-03-24T09:00:00+09:00", "openPrice": "2785.60", "highPrice": "2801.22",
+         "lowPrice": "2779.85", "closePrice": "2798.10", "volume": "498000000"},
+    ], "nextBefore": None}
+
+    api.clear_chart_cache()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_market_indicator_candles", return_value=res) as mock_ind, \
+             patch("api.get_chart_data") as mock_yf, \
+             patch("api.call_api") as mock_call:
+            df = api.get_domestic_index_chart("0001")  # KOSPI
+    finally:
+        config.session.is_toss = False
+        api.clear_chart_cache()
+
+    assert mock_ind.call_args.args[0] == "KOSPI"
+    assert mock_ind.call_args.kwargs["interval"] == "1d"
+    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
+    assert df.iloc[-1]['date'] == '20260325'          # 오름차순 정렬
+    assert df.iloc[-1]['close'] == 2812.45
+    mock_yf.assert_not_called()   # yfinance 미사용
+    mock_call.assert_not_called() # KIS 미호출
+
+
+@pytest.mark.real_index_chart
+def test_index_chart_toss_kospi200_still_uses_yfinance():
+    """토스 모드: 코스피200은 토스 심볼 카탈로그에 없어 종전 yfinance 경로를 유지한다."""
     import api
     import pandas as pd
     captured = {}
@@ -1349,31 +1380,152 @@ def test_index_chart_toss_uses_yfinance_not_kis():
     config.session.is_toss = True
     try:
         with patch("api.get_chart_data", side_effect=fake_chart), \
+             patch("toss_api.get_market_indicator_candles") as mock_ind, \
              patch("api.call_api") as mock_call:
-            df = api.get_domestic_index_chart("0001")  # KOSPI
+            df = api.get_domestic_index_chart("2001")  # KOSPI200
     finally:
         config.session.is_toss = False
-    assert captured["ticker"] == "^KS11"
+    assert captured["ticker"] == "^KS200"
     assert captured["is_overseas"] is True
     assert not df.empty
+    mock_ind.assert_not_called()   # 토스 시장지표 미지원 심볼
     mock_call.assert_not_called()  # KIS 미호출
 
 
-def test_index_price_toss_uses_fast_info():
-    """토스 모드: 국내 지수 현재가가 KIS 대신 yfinance fast_info → KIS 형태 반환."""
+def test_toss_index_chart_paginates_with_next_before():
+    """토스 시장지표 일봉도 nextBefore 커서로 250봉 이상 확보한다(EMA120·52주 정확도)."""
     import api
+    from datetime import datetime as _dt, timedelta as _td
+    _base = _dt(2026, 6, 1)
+
+    def make_page(start_idx):
+        return [{
+            "timestamp": (_base - _td(days=i)).strftime("%Y-%m-%dT09:00:00+09:00"),
+            "openPrice": "2700", "highPrice": "2750", "lowPrice": "2650",
+            "closePrice": str(2700 + i), "volume": "1000",
+        } for i in range(start_idx, start_idx + 200)]
+
+    pages = [{"candles": make_page(0), "nextBefore": "P2"},
+             {"candles": make_page(200), "nextBefore": "P3"}]
+    calls = {"n": 0}
+
+    def fake_candles(symbol, interval="1d", count=200, before=None):
+        idx = calls["n"]
+        calls["n"] += 1
+        return pages[idx] if idx < len(pages) else {"candles": [], "nextBefore": None}
+
+    with patch("toss_api.get_market_indicator_candles", side_effect=fake_candles):
+        df = api._toss_index_chart_data("KOSPI")
+
+    assert calls["n"] == 2      # 2페이지(>=260) 확보 후 중단
+    assert len(df) == 250       # tail(250)
+    assert df['date'].is_monotonic_increasing
+
+
+@pytest.mark.real_index_chart
+def test_index_chart_toss_overlays_today_with_market_indicator_price(monkeypatch):
+    """토스 지수도 KIS와 동일하게 당일 봉을 실시간 지수(시장지표 현재가)로 갱신한다."""
+    import api
+    res = {"candles": [
+        {"timestamp": "2026-03-24T09:00:00+09:00", "openPrice": "2780", "highPrice": "2800",
+         "lowPrice": "2770", "closePrice": "2798.10", "volume": "498000000"},
+    ], "nextBefore": None}
+
+    monkeypatch.setattr(api, "market_today", lambda is_overseas=False: "20260325")
+    monkeypatch.setattr(api, "_before_krx_regular_open", lambda: False)  # 장중
+    api.clear_chart_cache()
+    api._MICRO_CACHE.clear()
     config.session.is_toss = True
     try:
-        with patch("api.get_yf_fast_info",
-                   return_value={"last_price": 850.5, "regular_market_previous_close": 845.0}), \
+        with patch("toss_api.get_market_indicator_candles", return_value=res), \
+             patch("toss_api.get_market_indicator_price",
+                   return_value={"symbol": "KOSPI", "lastPrice": "2812.45"}):
+            api.get_domestic_index_chart("0001")          # 캐시 적재
+            df = api.get_domestic_index_chart("0001")     # 캐시 적중 + 오버레이
+    finally:
+        config.session.is_toss = False
+        api.clear_chart_cache()
+        api._MICRO_CACHE.clear()
+
+    assert list(df['date']) == ['20260324', '20260325']   # 당일 봉 추가
+    assert float(df.iloc[-1]['close']) == 2812.45         # 실시간 지수로 갱신
+
+
+def test_toss_index_chart_empty_on_api_error():
+    """토스 시장지표 오류 시 빈 DF(상위 폴백 체인으로 넘어감)."""
+    import api
+    with patch("toss_api.get_market_indicator_candles",
+               side_effect=toss_api.TossApiError("internal-error", "mock", status=500)):
+        df = api._toss_index_chart_data("KOSDAQ")
+    assert df.empty
+
+
+def test_index_price_toss_uses_market_indicator():
+    """토스 모드: 국내 지수 현재가는 토스 시장지표 API로 조회해 KIS 형태로 반환한다.
+
+    전일 종가는 미제공 → '0'으로 둬 상위(_get_cached_chart)의 수정주가 검증을 건너뛰게 한다.
+    """
+    import api
+    api._MICRO_CACHE.clear()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_market_indicator_price",
+                   return_value={"symbol": "KOSDAQ", "lastPrice": "845.32"}) as mock_ind, \
+             patch("api.get_yf_fast_info") as mock_yf, \
              patch("api.call_api") as mock_call:
             res = api.get_domestic_index_price("1001")  # KOSDAQ
     finally:
         config.session.is_toss = False
+        api._MICRO_CACHE.clear()
+    assert mock_ind.call_args.args[0] == "KOSDAQ"
+    assert res["rt_cd"] == "0"
+    assert res["output"]["bstp_nmix_prpr"] == "845.32"
+    assert res["output"]["bstp_nmix_prdy_clpr"] == "0"
+    mock_yf.assert_not_called()
+    mock_call.assert_not_called()
+
+
+def test_index_price_toss_falls_back_to_fast_info():
+    """토스 시장지표 실패 시 종전 yfinance fast_info 경로로 폴백한다."""
+    import api
+    api._MICRO_CACHE.clear()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_market_indicator_price",
+                   side_effect=toss_api.TossApiError("internal-error", "mock", status=500)), \
+             patch("api.get_yf_fast_info",
+                   return_value={"last_price": 850.5, "regular_market_previous_close": 845.0}), \
+             patch("api.call_api") as mock_call:
+            res = api.get_domestic_index_price("1001")
+    finally:
+        config.session.is_toss = False
+        api._MICRO_CACHE.clear()
     assert res["rt_cd"] == "0"
     assert res["output"]["bstp_nmix_prpr"] == "850.5"
     assert res["output"]["bstp_nmix_prdy_clpr"] == "845.0"
     mock_call.assert_not_called()
+
+
+def test_market_indicator_endpoints_paths_and_groups():
+    """시장지표 엔드포인트 경로·레이트리밋 그룹이 스펙(1.2.4)과 일치하는가."""
+    seen = []
+
+    def fake_request(method, path, group, params=None, json_body=None, account=True, retries=2):
+        seen.append((path, group, params, account))
+        return [] if path.endswith("/prices") else {}
+
+    with patch("toss_api._request", side_effect=fake_request):
+        toss_api.get_market_indicator_prices(["KOSPI", "KOSDAQ"])
+        toss_api.get_market_indicator_candles("KOSPI", interval="1d", count=200)
+        toss_api.get_market_indicator_investor_trading("KOSPI", interval="1d", count=5)
+
+    assert seen[0][0] == "/api/v1/market-indicators/prices"
+    assert seen[0][1] == "MARKET_INDICATOR"
+    assert seen[0][2]["symbols"] == "KOSPI,KOSDAQ"
+    assert seen[1][0] == "/api/v1/market-indicators/KOSPI/candles"
+    assert seen[1][1] == "MARKET_INDICATOR_CHART"
+    assert seen[2][0] == "/api/v1/market-indicators/KOSPI/investor-trading"
+    assert all(s[3] is False for s in seen)   # 계좌 헤더 불필요(토큰만으로 호출)
 
 
 def test_index_price_toss_unknown_code():
@@ -1583,50 +1735,66 @@ def test_kosdaq150_no_data_in_toss():
     assert mock_yf.call_args.args[0] == "^KQ150"  # 최후 폴백으로 yfinance(^KQ150) 시도됨
 
 
-def test_kospi_kosdaq_use_tvdatafeed_in_toss():
-    """토스 모드: 코스피/코스닥도 tvDatafeed 1순위 조회 → 성공 시 KIS/yfinance 미호출."""
+def test_kospi_kosdaq_use_toss_market_indicator_first():
+    """토스 모드: 코스피/코스닥은 토스 시장지표가 1순위 → 성공 시 tvDatafeed/yfinance 미호출."""
     import modules.analysis as analysis
     import pandas as pd
     config.session.is_toss = True
     fake = pd.DataFrame({
-        'date': pd.date_range('2026-01-01', periods=130),
-        'open': [7000.0] * 130, 'high': [7000.0] * 130, 'low': [7000.0] * 130,
-        'close': [7000.0 + i for i in range(130)], 'volume': [0] * 130,
+        'date': [f'2026{(i // 28) + 1:02d}{(i % 28) + 1:02d}' for i in range(130)],
+        'open': [2700.0] * 130, 'high': [2700.0] * 130, 'low': [2700.0] * 130,
+        'close': [2700.0 + i for i in range(130)], 'volume': [1000] * 130,
     })
-    fake.attrs['source'] = 'TVDATAFEED'
     try:
-        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=fake) as mock_tv, \
-             patch("api.get_domestic_index_chart") as mock_kis, \
+        with patch("api.get_domestic_index_chart", return_value=fake) as mock_idx, \
+             patch("modules.analysis._fetch_index_via_tvdatafeed") as mock_tv, \
              patch("api.get_chart_data") as mock_yf:
             for mtype in ("KOSPI", "KOSDAQ"):
                 df = analysis.get_domestic_index_data(mtype, force_refresh=True)
                 assert df is not None and not df.empty
-                assert df.attrs.get('source') == 'TVDATAFEED'
-        assert {c.args[0] for c in mock_tv.call_args_list} == {"KOSPI", "KOSDAQ"}
-        mock_kis.assert_not_called()   # KIS 미호출
-        mock_yf.assert_not_called()    # yfinance(^KS11/^KQ11) 미호출 (tvDatafeed 성공)
+                assert df.attrs.get('source') == 'TOSS'
+        assert {c.args[0] for c in mock_idx.call_args_list} == {"0001", "1001"}
+        mock_tv.assert_not_called()   # 토스 성공 → tvDatafeed 미호출
+        mock_yf.assert_not_called()   # yfinance 미호출
     finally:
         config.session.is_toss = False
 
 
-def test_kospi_falls_back_to_yfinance_when_tvdatafeed_fails():
-    """토스 모드: 코스피 tvDatafeed 실패 시 yfinance(^KS11)로 폴백한다."""
+def test_kospi_falls_back_to_tvdatafeed_then_yfinance_in_toss():
+    """토스 모드 폴백 체인: 시장지표 실패 → tvDatafeed → yfinance(^KS11)."""
     import modules.analysis as analysis
     import pandas as pd
     config.session.is_toss = True
+    tv_df = pd.DataFrame({
+        'date': pd.date_range('2026-01-01', periods=130),
+        'open': [7000.0] * 130, 'high': [7000.0] * 130, 'low': [7000.0] * 130,
+        'close': [7000.0 + i for i in range(130)], 'volume': [0] * 130,
+    })
+    tv_df.attrs['source'] = 'TVDATAFEED'
     yf_df = pd.DataFrame({
-        'date': pd.date_range('2026-01-01', periods=60),
-        'open': [3000.0] * 60, 'high': [3000.0] * 60, 'low': [3000.0] * 60,
-        'close': [3000.0] * 60, 'volume': [100] * 60,
+        'date': pd.date_range('2026-01-01', periods=130),
+        'open': [3000.0] * 130, 'high': [3000.0] * 130, 'low': [3000.0] * 130,
+        'close': [3000.0] * 130, 'volume': [100] * 130,
     })
     try:
-        with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv, \
+        # (a) 시장지표 실패 → tvDatafeed 성공: yfinance 미호출
+        with patch("api.get_domestic_index_chart", return_value=pd.DataFrame()) as mock_idx, \
+             patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=tv_df) as mock_tv, \
              patch("api.get_chart_data", return_value=yf_df) as mock_yf:
             df = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
-        assert df is not None and not df.empty
-        mock_tv.assert_called_once()
-        # yfinance ^KS11로 폴백 호출됨
-        assert mock_yf.call_args.args[0] == "^KS11"
+            assert df is not None and df.attrs.get('source') == 'TVDATAFEED'
+            mock_idx.assert_called()
+            mock_tv.assert_called_once()
+            mock_yf.assert_not_called()
+
+        # (b) 시장지표·tvDatafeed 모두 실패 → yfinance(^KS11) 폴백
+        with patch("api.get_domestic_index_chart", return_value=pd.DataFrame()), \
+             patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv2, \
+             patch("api.get_chart_data", return_value=yf_df) as mock_yf2:
+            df2 = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
+            assert df2 is not None and df2.attrs.get('source') == 'YFINANCE'
+            mock_tv2.assert_called_once()
+            assert mock_yf2.call_args.args[0] == "^KS11"
     finally:
         config.session.is_toss = False
 

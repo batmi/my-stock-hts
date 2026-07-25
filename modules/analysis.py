@@ -52,6 +52,10 @@ _TVDATAFEED_LOCK = threading.Lock()
 # market_type -> (TradingView 심볼, 거래소)
 #  코스피/코스닥은 yfinance(^KS11/^KQ11)가 최신 거래일 종가를 NaN으로 주는 일이 잦아(fast_info도
 #  None) 지수·등락률이 '-'로 표시된다 → tvDatafeed를 1순위로 쓰고 실패 시 yfinance로 폴백한다.
+# 토스 시장지표(/api/v1/market-indicators, API 1.2.4)로 조회 가능한 지수.
+#  코스피200·코스닥150은 토스 심볼 카탈로그에 없어 tvDatafeed가 1순위로 남는다.
+_TOSS_INDEX_MARKET_TYPES = ("KOSPI", "KOSDAQ")
+
 _TVDATAFEED_INDEX_SYMBOLS = {
     "KOSPI": ("KOSPI", "KRX"),
     "KOSDAQ": ("KOSDAQ", "KRX"),
@@ -861,7 +865,10 @@ def _fetch_domestic_index_data(market_type):
 
     폴백 체인(각 단계는 '데이터 없음/부족(< ma_period)'일 때만 다음으로 내려간다):
       - 모드 1/2(KIS): KIS API → tvDatafeed → yfinance
-      - 모드 3(토스):  tvDatafeed → yfinance   (KIS 미사용)
+      - 모드 3(토스):  토스 시장지표(코스피·코스닥) → tvDatafeed → yfinance   (KIS 미사용)
+    토스 시장지표(/api/v1/market-indicators, API 1.2.4)는 KRX 공식 지수를 인증된 채널로 주므로
+    익명 tvDatafeed(간헐 빈 응답)보다 안정적이다. 다만 코스피200·코스닥150은 심볼 카탈로그에
+    없어 토스로 조회할 수 없다 → 그 둘은 종전대로 tvDatafeed가 1순위다.
     tvDatafeed는 4종 지수(코스피·코스닥·코스피200·코스닥150) 모두 지원하며 KRX 정확·당일 종가를
     준다. yfinance(^KS11/^KQ11 등)는 최신 거래일 종가를 NaN으로 주는 일이 잦아 최후 폴백으로 둔다.
     """
@@ -911,8 +918,18 @@ def _fetch_domestic_index_data(market_type):
 
     df = None
 
+    # 0) 토스 시장지표 (모드 3의 1순위) — 코스피·코스닥만 지원(그 외는 아래 폴백으로)
+    if config.session.is_toss and market_type in _TOSS_INDEX_MARKET_TYPES:
+        try:
+            toss_df = api.get_domestic_index_chart(kis_code)
+            if toss_df is not None and not toss_df.empty:
+                toss_df.attrs['source'] = 'TOSS'
+                df = toss_df
+        except Exception as e:
+            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} 토스 시장지표 조회 실패: {e}")
+
     # 1) KIS API (모드 1/2 전용; 토스 모드는 KIS 미사용)
-    if not config.session.is_toss:
+    if _insufficient(df) and not config.session.is_toss:
         try:
             kis_df = api.get_domestic_index_chart(kis_code)
             if kis_df is not None and not kis_df.empty:
