@@ -1074,7 +1074,7 @@ def send_order(order_type):
                 df = api.get_chart_data(stock_code, is_overseas)
                 if df is not None and not df.empty:
                     # [추가] 주문 단가(시장가인 경우 현재가)를 바탕으로 차트 갱신
-                    indicators.apply_realtime_price(df, calc_price)
+                    indicators.apply_realtime_price(df, api.chart_overlay_price(calc_price, is_overseas))
 
                     ind = indicators.calculate_indicators(df)
                     indicator_info = ind

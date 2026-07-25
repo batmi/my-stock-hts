@@ -326,6 +326,18 @@ def test_register_reserved_order_ema_up(mock_insert, mock_get_price, mock_select
 from modules.reserved_order_monitor import ReservedOrderMonitor
 import pandas as pd
 
+
+@pytest.fixture(autouse=True)
+def _domestic_market_open():
+    """예약 주문 감시는 국내 시장 개장(NXT 포함) 중에만 발동한다.
+
+    아래 테스트들은 정규장(12:00) 시나리오이므로 개장으로 고정한다.
+    (실제 시각에 따라 결과가 달라지는 플래키를 막는다)
+    """
+    with patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True):
+        yield
+
+
 @patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
 @patch('modules.reserved_order_monitor.api.get_current_price')
 @patch('modules.reserved_order_monitor.api.get_chart_data')

@@ -1439,6 +1439,8 @@ def test_index_chart_toss_overlays_today_with_market_indicator_price(monkeypatch
 
     monkeypatch.setattr(api, "market_today", lambda is_overseas=False: "20260325")
     monkeypatch.setattr(api, "_before_krx_regular_open", lambda: False)  # 장중
+    # 장중 시나리오이므로 '장 종료 후 KRX 종가 고정' 게이트는 통과시킨다
+    monkeypatch.setattr(api, "domestic_trading_session_open", lambda: True)
     api.clear_chart_cache()
     api._MICRO_CACHE.clear()
     config.session.is_toss = True

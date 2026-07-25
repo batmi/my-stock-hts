@@ -647,7 +647,7 @@ class TelegramCommander:
             
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
             try:
-                rt_price = api.get_current_price(code, is_overseas=is_overseas)
+                rt_price = api.chart_overlay_price(api.get_current_price(code, is_overseas=is_overseas), is_overseas)
                 indicators.apply_realtime_price(df, rt_price)
             except Exception: pass
             
@@ -1737,7 +1737,7 @@ class TelegramCommander:
             
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
             try:
-                rt_price = api.get_current_price(code, is_overseas=is_overseas)
+                rt_price = api.chart_overlay_price(api.get_current_price(code, is_overseas=is_overseas), is_overseas)
                 indicators.apply_realtime_price(df, rt_price)
             except Exception: pass
             

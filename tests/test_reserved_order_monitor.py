@@ -9,6 +9,18 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules.reserved_order_monitor import ReservedOrderMonitor
 
+
+@pytest.fixture(autouse=True)
+def _domestic_market_open():
+    """예약 주문 감시는 국내 시장 개장(NXT 포함) 중에만 발동한다.
+
+    아래 테스트들은 정규장(12:00) 시나리오이므로 개장으로 고정한다.
+    (실제 시각에 따라 결과가 달라지는 플래키를 막는다)
+    """
+    with patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True):
+        yield
+
+
 @pytest.fixture
 def monitor():
     """싱글톤 인스턴스 초기화용 피스처"""

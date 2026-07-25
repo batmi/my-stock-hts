@@ -412,6 +412,55 @@ def market_today(is_overseas=False):
     _TRADING_DAY_CACHE[key] = res
     return res
 
+def domestic_trading_session_open():
+    """국내 거래 시간대(KRX 정규장 + NXT 프리/애프터)인가.
+
+    거래일 08:00~20:00이면 True. 야간(20:00~익일 08:00)·주말·공휴일은 False —
+    '모든 장이 끝난' 시간대다. _nxt_quote_phase()의 offhours 판정을 그대로 쓴다.
+    """
+    try:
+        return _nxt_quote_phase() != 'offhours'
+    except Exception:      # noqa: BLE001 - 판정 실패는 '개장'으로 보고 종전 동작 유지
+        return True
+
+
+def chart_overlay_enabled(is_overseas=False):
+    """지금 차트 마지막 봉에 실시간가를 반영해도 되는가 (chart_overlay_price의 시간대 판정부).
+
+    가격을 아직 조회하기 전에 확인해, 어차피 버릴 현재가 API 호출 자체를 생략하는 데 쓴다.
+    """
+    if is_overseas or not getattr(config, 'USE_KRX_CLOSE_AFTER_HOURS', True):
+        return True
+    return domestic_trading_session_open()
+
+
+def chart_overlay_price(price, is_overseas=False):
+    """차트 마지막 봉·지표에 반영해도 되는 실시간가. 반영 불가면 0.0.
+
+    USE_KRX_CLOSE_AFTER_HOURS(기본 True)면 국내는 '모든 장이 끝난 뒤'(NXT 애프터마켓 20:00
+    종료 후·주말·휴장일) 실시간가 반영을 막는다. 그 시간대의 lastPrice는 마지막 NXT 체결가로
+    굳어 있는데, 이 값이 확정된 KRX 일봉의 종가를 덮어쓰면 EMA·RSI·CCI·ATR·52주 위치가
+    전부 함께 흔들린다(시간외 거래량은 정규장의 수백분의 1이라 지표 기준엔 노이즈).
+    과거 일봉이 전부 KRX 정규장 기준(pykrx/FDR)이므로 기준을 맞추는 쪽이 정합적이다.
+
+    실측 2026-07-24 SK텔레콤: KRX 종가 100,000 vs 애프터마켓 20:00 99,700
+      → EMA5 94,805→94,705, RSI 61.8→61.54, CCI 231.6→230.10, 52주 위치 55.2%→54.8%
+
+    거래 시간대(08:00~20:00)에는 종전대로 실시간가를 반영한다 — 살아있는 시장의 가격을
+    보고 대응해야 하기 때문이다.
+
+    ※ 이 게이트는 '지표·표시' 경로 전용이다. 주문 가격은 호출부가 실시간가를 직접 쓰므로
+      NXT 시간대(자동매매 08:00~20:00)의 체결가 산정에는 영향이 없다.
+    """
+    try:
+        p = float(price or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if p <= 0:
+        return 0.0
+    return p if chart_overlay_enabled(is_overseas) else 0.0
+
+
 def _is_screen_output_allowed():
     """화면 출력 허용 여부 확인 (텔레그램 봇 스레드 차단) — context 공용 판정으로 위임"""
     return context.is_screen_output_allowed()
@@ -780,6 +829,11 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             return df
         # [추가] 재진입(분할보정 경로 등) 감지 시 오버레이/재조회 없이 과거봉 캐시만 반환 → 무한재귀 차단
         if getattr(_OVERLAY_GUARD, 'active', False):
+            return df
+        # [추가] 모든 장 종료 후(NXT 애프터마켓 20:00 이후·주말·휴장)에는 국내 봉을 갱신하지 않는다.
+        #  이 시간대의 현재가는 마지막 NXT 체결가로 굳어 있어, 확정된 KRX 일봉 종가를 덮어쓰면
+        #  지표가 통째로 흔들린다(chart_overlay_price 참조). 설정으로 끌 수 있다.
+        if not chart_overlay_enabled(is_overseas):
             return df
         _OVERLAY_GUARD.active = True
         try:
@@ -4504,6 +4558,10 @@ def _append_today_bar_from_price(df, code):
     try:
         today = market_today(False)
         if str(df.iloc[-1]['date']) >= today:
+            return df
+        # 모든 장 종료 후에는 현재가가 마지막 NXT 체결가로 굳어 있어 '당일 봉'으로 쓸 수 없다.
+        # (그 시간대엔 pykrx/FDR이 이미 확정 종가를 주므로 보강 자체가 불필요하다)
+        if not chart_overlay_enabled(is_overseas=False):
             return df
 
         cp = get_current_price_data(code, False)

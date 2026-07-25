@@ -15,8 +15,30 @@ import api
 def trader():
     return AutoTrader()
 
-def test_market_open_regular_times(trader, monkeypatch):
-    """1. 정상적인 거래 시간(정규장, 프리마켓, 애프터마켓) 인식 테스트"""
+@pytest.fixture
+def nxt_hours(monkeypatch):
+    """자동매매 운용시간을 NXT 연장까지 넓힌 설정(0800~2000).
+
+    기본값은 KRX 정규장(0900~1530)이므로, NXT 시간대 동작을 검증하려면 명시적으로 넓혀야 한다.
+    """
+    monkeypatch.setattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0800")
+    monkeypatch.setattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000")
+
+
+def test_market_open_krx_default(trader, monkeypatch):
+    """0. 기본 설정은 KRX 정규장(09:00~15:30) — NXT 시간대엔 자동매매가 돌지 않는다."""
+    monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
+    assert config.settings.SYSTEM_TRADING_START_TIME == "0900"
+    assert config.settings.SYSTEM_TRADING_END_TIME == "1530"
+
+    for hh, mm, want in [(8, 30, False), (10, 0, True), (16, 0, False)]:
+        monkeypatch.setattr('modules.auto_trade.common.datetime',
+                            MagicMock(now=lambda hh=hh, mm=mm: datetime(2026, 6, 11, hh, mm)))
+        assert trader.is_market_open() is want, f"{hh:02d}:{mm:02d}"
+
+
+def test_market_open_regular_times(trader, monkeypatch, nxt_hours):
+    """1. NXT까지 넓힌 설정에서의 거래 시간(정규장, 프리마켓, 애프터마켓) 인식 테스트"""
     monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
     
     # 오전 8시 30분 (NXT 프리마켓)
@@ -31,7 +53,7 @@ def test_market_open_regular_times(trader, monkeypatch):
     monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
     assert trader.is_market_open() is True
 
-def test_market_pause_times(trader, monkeypatch):
+def test_market_pause_times(trader, monkeypatch, nxt_hours):
     """2. NXT 장 휴게시간 (단일가 동기화 시간) 차단 테스트"""
     monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
     

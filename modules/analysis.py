@@ -1898,8 +1898,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         #  (국채 현물은 TV 일봉 마지막 봉이 실시간 값 — 야후 시세를 덮어쓰면 소스가 섞이므로 제외)
         if not treasury_sym:
             try:
-                rt_price = api.get_current_price(code, is_overseas=is_overseas)
-                indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
+                if api.chart_overlay_enabled(is_overseas):
+                    rt_price = api.get_current_price(code, is_overseas=is_overseas)
+                    indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
             except Exception: pass
 
         # 2. 지표 계산
@@ -2721,7 +2722,8 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             else:
                 rt_price = api.get_current_price(code, is_overseas=False)
 
-            indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(False))
+            indicators.apply_realtime_price(df, api.chart_overlay_price(rt_price, False),
+                                            market_date=utils.market_today(False))
         except Exception: pass
 
         ind = indicators.calculate_indicators(df)
@@ -3020,7 +3022,16 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             
         if df is None: return {'error': 'API 응답 없음'}
         if df.empty: return {'error': '차트 데이터 없음 (거래정지 등)'}
-        
+
+        # [Fix] 이 워커만 실시간 갱신이 빠져 있어, 현재가·점수가 차트 캐시 히트/미스에 따라
+        #  달라졌다(히트=오버레이 반영, 미스=원본 봉). 개별 분석·관심종목 진단과 같은 기준으로 통일한다.
+        #  (모든 장 종료 후에는 chart_overlay_price가 0을 돌려줘 KRX 확정 종가가 그대로 유지된다)
+        try:
+            if api.chart_overlay_enabled(False):   # 장 종료 후엔 현재가 조회 자체를 생략
+                rt_price = api.get_current_price(code, is_overseas=False)
+                indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(False))
+        except Exception: pass
+
         current_price = float(df.iloc[-1]['close'])
         ind = indicators.calculate_indicators(df)
         
@@ -3982,8 +3993,24 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     krx_price = float(curr_data['output'].get('stck_prpr', 0) or 0)
                     rt_price = nxt_price if nxt_price > 0 else krx_price
 
-            indicators.apply_realtime_price(chart_df, rt_price, market_date=utils.market_today(is_overseas))
+            indicators.apply_realtime_price(chart_df, api.chart_overlay_price(rt_price, is_overseas),
+                                            market_date=utils.market_today(is_overseas))
         except Exception: pass
+
+        # [장 종료 후] 표시 현재가·등락·52주 위치도 확정된 KRX 일봉으로 맞춘다.
+        #  이 행의 현재가는 curr_data(ats_prpr/stck_prpr)에서 직접 오므로, 지표만 KRX로
+        #  고정하면 같은 줄에서 현재가와 지표의 기준이 갈린다(실측: SK텔레콤 현재가 99,700
+        #  = NXT 애프터가인데 EMA5·RSI·CCI는 KRX 종가 100,000 기준).
+        #  등락은 API 기준가 대신 일봉 직전 봉과 비교해 'KRX 정규장 등락'으로 통일한다.
+        krx_close_px, krx_prev_px = 0.0, 0.0
+        if not is_overseas and not api.chart_overlay_enabled(False) \
+                and chart_df is not None and not chart_df.empty:
+            try:
+                krx_close_px = float(chart_df.iloc[-1]['close'])
+                if len(chart_df) >= 2:
+                    krx_prev_px = float(chart_df.iloc[-2]['close'])
+            except (TypeError, ValueError):
+                krx_close_px, krx_prev_px = 0.0, 0.0
 
         # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.
         # (이 함수는 이미 chart_df를 확보하므로 추가 API 호출 없이 out에 주입한다)
@@ -4080,7 +4107,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         h52, l52 = float(out.get('w52_hgpr', 0) or 0), float(out.get('w52_lwpr', 0) or 0)
                     # [수정] 기준 현재가를 표시 현재가와 일치시킨다(NXT 우선 → KRX 폴백).
                     #  종전엔 stck_prpr(KRX)만 써서 같은 행의 현재가 컬럼(NXT 우선)과 어긋났다.
-                    c = float(out.get('ats_prpr', 0) or 0) or float(out.get('stck_prpr', 0) or 0)
+                    c = krx_close_px or float(out.get('ats_prpr', 0) or 0) or float(out.get('stck_prpr', 0) or 0)
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
                         w52_pos_val = pos
@@ -4138,6 +4165,11 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 krx_curr = int(out.get('stck_prpr', 0) or 0)
                 base_price = int(out.get('stck_sdpr', 0) or 0)
                 curr = nxt_curr if nxt_curr > 0 else krx_curr
+
+                # [장 종료 후] KRX 확정 종가로 대체 (등락 기준도 일봉 직전 봉으로 함께 교체)
+                if krx_close_px > 0:
+                    curr = int(round(krx_close_px))
+                    base_price = int(round(krx_prev_px)) if krx_prev_px > 0 else base_price
 
                 if base_price > 0:
                     diff = curr - base_price

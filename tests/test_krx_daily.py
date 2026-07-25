@@ -229,6 +229,7 @@ def test_today_bar_appended_when_missing():
                                       'stck_hgpr': '71000', 'stck_lwpr': '68000',
                                       'acml_vol': '12345'}}
     with patch.object(api, 'market_today', return_value='20991231'), \
+         patch.object(api, 'chart_overlay_enabled', return_value=True), \
          patch.object(api, 'get_current_price_data', return_value=price):
         out = api._append_today_bar_from_price(df, '005930')
     assert len(out) == len(df) + 1
@@ -248,10 +249,22 @@ def test_today_bar_not_duplicated_when_present():
     m.assert_not_called()
 
 
+def test_today_bar_skipped_after_all_markets_close():
+    """모든 장 종료 후엔 현재가가 마지막 NXT 체결가로 굳어 있어 당일 봉으로 쓸 수 없다."""
+    import api
+    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    with patch.object(api, 'market_today', return_value='20991231'), \
+         patch.object(api, 'chart_overlay_enabled', return_value=False), \
+         patch.object(api, 'get_current_price_data') as m:
+        assert len(api._append_today_bar_from_price(df, '005930')) == len(df)
+    m.assert_not_called()
+
+
 def test_today_bar_skipped_when_price_unavailable():
     import api
     df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
     with patch.object(api, 'market_today', return_value='20991231'), \
+         patch.object(api, 'chart_overlay_enabled', return_value=True), \
          patch.object(api, 'get_current_price_data', return_value={'rt_cd': '1'}):
         assert len(api._append_today_bar_from_price(df, '005930')) == len(df)
 
@@ -263,6 +276,7 @@ def test_today_bar_high_low_respect_current_price():
     price = {'rt_cd': '0', 'output': {'stck_prpr': '80000', 'stck_oprc': '69000',
                                       'stck_hgpr': '71000', 'stck_lwpr': '68000'}}
     with patch.object(api, 'market_today', return_value='20991231'), \
+         patch.object(api, 'chart_overlay_enabled', return_value=True), \
          patch.object(api, 'get_current_price_data', return_value=price):
         last = api._append_today_bar_from_price(df, '005930').iloc[-1]
     assert last['high'] == 80000

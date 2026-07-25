@@ -104,14 +104,15 @@ class ReservedOrderMonitor:
                     elif len(tt) <= 4 and now_time_str_short >= tt:
                         trigger, reason = True, f"지정 시간({tt}) 도달"
             else:
-                # [수정] 장 마감 시간대 API 자원 최적화 (시스템 설정 시간 연동)
-                start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0800")
-                end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "2000")
-                
-                if not is_overseas and (now_time_str_short >= end_time or now_time_str_short < start_time):
+                # [수정] 장 마감 시간대 API 자원 최적화.
+                #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
+                #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
+                #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
+                #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
+                if not is_overseas and not api.domestic_trading_session_open():
                     continue
-                    
-                # [추가] 정규장 단일가 매매 동기화를 위한 대체거래소 휴게 시간은 발동 스킵
+
+                # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵
                 if not is_overseas and (("0850" <= now_time_str_short < "0900") or ("1525" <= now_time_str_short < "1530")):
                     continue
                 # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)

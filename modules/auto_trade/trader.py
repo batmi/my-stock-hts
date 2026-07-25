@@ -3397,7 +3397,9 @@ class AutoTrader:
             df = api.get_chart_data(code, is_overseas=is_overseas_stock)
             
             # [추가] 차트 데이터 당일 종가/고가/저가 실시간 갱신 (지표 불일치 완벽 방지)
-            indicators.apply_realtime_price(df, current_price)
+            #  모든 장 종료 후에는 반영하지 않는다(KRX 확정 종가 유지). 손절·트레일링 판정은
+            #  아래 analyze_sell에 current_price를 그대로 넘기므로 실시간 대응에는 영향이 없다.
+            indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas_stock))
 
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
@@ -3825,12 +3827,17 @@ class AutoTrader:
             
             # [수정] 캐시된 차트 데이터의 당일 미확정 종가를 실시간 최신 현재가로 업데이트
             # (종목 분석 메뉴와 시스템 트레이딩 간의 지표 및 점수 불일치 원천 차단)
+            realtime_price = 0.0
             try:
                 realtime_price = api.get_current_price(code, is_overseas=is_overseas_stock)
-                indicators.apply_realtime_price(df, realtime_price)
+                # 모든 장 종료 후에는 지표용 봉을 갱신하지 않는다(KRX 확정 종가 유지).
+                indicators.apply_realtime_price(df, api.chart_overlay_price(realtime_price, is_overseas_stock))
             except Exception: pass
-            
-            current_price = float(df.iloc[-1]['close'])
+
+            # [주문가 보호] 지표는 KRX 확정 종가로 계산하되, 매수 주문 단가는 항상 실시간가를 쓴다.
+            #  이 값이 _execute_buy_orders의 cand['price'] → 주문 지정가가 되므로, NXT 시간대에
+            #  KRX 종가로 굳으면 호가에서 벗어나 체결되지 않는다.
+            current_price = float(realtime_price) if realtime_price and realtime_price > 0 else float(df.iloc[-1]['close'])
 
             # [추가] 상관계수 필터링
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
