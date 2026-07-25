@@ -1943,7 +1943,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
 
     # [경고] KRX 공식 일봉 실패로 토스 캔들(NXT 포함)이 쓰였으면 결과 앞에 알린다
-    utils.print_krx_fallback_warning({code: name})
+    #  부가 정보이므로 실패해도 분석 결과 출력을 막지 않는다.
+    if not is_overseas:
+        try:
+            utils.print_krx_fallback_warning({str(code): name})
+        except Exception as e:
+            logger.debug(f"KRX 폴백 경고 출력 실패: {e}")
 
     # [추가] 종목 메모 출력 (존재 시 패널 형태로 상단에 표시)
     memo_data_list = utils.get_stock_memos(code)
@@ -4389,6 +4394,28 @@ def _probe_investor_data(data_list):
     _INV_PROBE_CACHE[key] = (use, now)
     return use
 
+def _name_map_from(data_list):
+    """{종목코드: 종목명} 추출. data_list는 (종목명, 종목코드) 튜플 리스트다.
+
+    호출부에 따라 dict가 섞여 들어와도 죽지 않도록 방어한다 — 이 값은 경고 문구를
+    꾸미는 용도일 뿐이라, 여기서 예외가 나면 표 자체가 출력되지 않는다.
+    """
+    out = {}
+    for item in (data_list or []):
+        try:
+            if isinstance(item, dict):
+                code, name = item.get('code'), item.get('name')
+            elif isinstance(item, (tuple, list)) and len(item) >= 2:
+                name, code = item[0], item[1]
+            else:
+                continue
+            if code:
+                out[str(code)] = name
+        except Exception:
+            continue
+    return out
+
+
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     use_investor_data = False
     if not is_overseas and data_list:
@@ -4629,10 +4656,14 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         logger.error(f"데이터 분석 중 오류: {e}")
 
     try:
-        # [경고] KRX 공식 일봉 실패로 토스 캔들(NXT 포함)이 쓰인 종목이 있으면 표 앞에 알린다
+        # [경고] KRX 공식 일봉 실패로 토스 캔들(NXT 포함)이 쓰인 종목이 있으면 표 앞에 알린다.
+        #  data_list는 (종목명, 종목코드) 튜플 리스트다. 부가 정보이므로 여기서 실패해도
+        #  표 출력을 막지 않는다(아래 except가 '테이블 출력 실패'로 잡아먹지 않도록 분리).
         if not is_overseas:
-            utils.print_krx_fallback_warning(
-                {str(d.get('code')): d.get('name') for d in (data_list or []) if d.get('code')})
+            try:
+                utils.print_krx_fallback_warning(_name_map_from(data_list))
+            except Exception as e:
+                logger.debug(f"KRX 폴백 경고 출력 실패: {e}")
 
         config.console.print(table, crop=False)
 

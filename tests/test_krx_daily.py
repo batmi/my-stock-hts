@@ -548,3 +548,30 @@ def test_toss_daily_overseas_never_uses_krx():
          patch.object(api, '_toss_chart_data', return_value=toss_df):
         api._toss_daily_chart_with_tv_fallback('AAPL', is_overseas=True)
     krx_mock.assert_not_called()
+
+
+# ---------------------------------------------------------
+# 표 출력 경로의 입력 형태 (회귀: print_table의 data_list는 (이름, 코드) 튜플이다)
+# ---------------------------------------------------------
+def test_name_map_accepts_tuple_data_list():
+    """analysis.print_table의 data_list는 dict가 아니라 (종목명, 종목코드) 튜플 리스트다.
+
+    [회귀] dict로 가정해 d.get(...)을 쓰는 바람에 국내 종목 분석에서
+    "테이블 출력 실패: 'tuple' object has no attribute 'get'"로 표가 통째로 안 나왔다.
+    """
+    from modules import analysis
+    got = analysis._name_map_from([('삼성전자', '005930'), ('SK하이닉스', '000660')])
+    assert got == {'005930': '삼성전자', '000660': 'SK하이닉스'}
+
+
+def test_name_map_accepts_dict_and_list_shapes():
+    from modules import analysis
+    assert analysis._name_map_from([{'code': '005930', 'name': '삼성전자'}]) == {'005930': '삼성전자'}
+    assert analysis._name_map_from([['카카오', '035720']]) == {'035720': '카카오'}
+
+
+@pytest.mark.parametrize("bad", [None, [], [42], [None], [('짧음',)], ['문자열'], [()]])
+def test_name_map_never_raises_on_bad_input(bad):
+    """경고 문구용 부가 정보라 여기서 예외가 나면 표 자체가 죽는다 — 절대 던지지 않는다."""
+    from modules import analysis
+    assert isinstance(analysis._name_map_from(bad), dict)
