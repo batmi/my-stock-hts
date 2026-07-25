@@ -15,20 +15,35 @@ import threading
 load_dotenv()
 
 # ==========================================================
-# [경고 억제] 서드파티 라이브러리의 DeprecationWarning
+# [경고 억제] yfinance × numpy 2.x DeprecationWarning
 # ==========================================================
-# yfinance(1.4.x)가 numpy 2.x의 강화된 timedelta 단위 규칙에 아직 맞춰지지 않아
-#   yfinance/utils.py:667  last_rows_same_interval = (dt2 - dt1) < _pd.Timedelta(interval)
-# 에서 "The 'generic' unit for NumPy timedelta is deprecated"가 매 호출마다 출력된다.
-# 지수 화면처럼 yfinance 티커를 여러 개 조회하는 경로에서는 종목 수만큼 반복돼 콘솔이 도배된다.
-# 동작에는 영향이 없고 우리 코드로는 고칠 수 없으므로(라이브러리 내부) 이 메시지만 좁게 막는다.
-# ※ 향후 numpy에서 실제 에러로 승격되면 yfinance 업그레이드가 필요하다 — 억제로 덮이지 않는다
-#    (에러는 warning이 아니므로 이 필터와 무관하게 예외로 드러난다).
-warnings.filterwarnings(
-    "ignore",
-    message=r".*'generic' unit for NumPy timedelta is deprecated.*",
-    category=DeprecationWarning,
-)
+_YF_NUMPY_WARN_RE = r".*'generic' unit for NumPy timedelta is deprecated.*"
+
+
+def silence_yfinance_numpy_warning():
+    """yfinance(1.4.x) × numpy 2.x의 timedelta DeprecationWarning만 좁게 막는다.
+
+      yfinance/utils.py:667  last_rows_same_interval = (dt2 - dt1) < _pd.Timedelta(interval)
+      → "The 'generic' unit for NumPy timedelta is deprecated" 가 조회할 때마다 출력된다.
+    지수 화면처럼 yfinance 티커를 여러 개 조회하는 경로에서는 티커 수만큼 반복돼 콘솔이 도배된다.
+    동작에는 영향이 없고 라이브러리 내부라 우리 코드로는 고칠 수 없다.
+
+    [반드시 yfinance import 뒤에 호출해야 한다]
+      yfinance/__init__.py:45 가
+          warnings.filterwarnings('default', category=DeprecationWarning, module='^yfinance')
+      로 '자기 경고는 항상 보여준다'를 강제한다(파이썬 기본값 ignore::DeprecationWarning을 뒤집음).
+      warnings 필터는 나중에 등록된 것이 앞에 놓여 먼저 매칭되므로, config import 시점에만
+      걸어두면 이후 yfinance가 로드되면서 그 필터가 앞을 차지해 무력화된다.
+      그래서 yfinance를 import하는 모듈마다 import 직후 이 함수를 호출한다(멱등).
+
+    ※ 향후 numpy에서 실제 에러로 승격되면 yfinance 업그레이드가 필요하다 — 억제로 덮이지 않는다
+       (에러는 warning이 아니므로 이 필터와 무관하게 예외로 드러난다).
+    """
+    warnings.filterwarnings("ignore", message=_YF_NUMPY_WARN_RE, category=DeprecationWarning)
+
+
+# 기본선(yfinance 미로드 경로 대비). 실제 억제는 각 import 지점의 재호출이 담당한다.
+silence_yfinance_numpy_warning()
 
 console = Console()
 

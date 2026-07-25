@@ -387,15 +387,68 @@ def test_yfinance_stored_value_is_upgraded_by_krx():
         assert store['005930']['20260724'] == {'c': 249500.0, 's': 'krx'}
 
 
-def test_yfinance_deprecation_warning_is_suppressed():
-    """yfinance×numpy2 DeprecationWarning만 좁게 막고 다른 경고는 통과시킨다."""
+def test_yfinance_numpy_warning_filter_outranks_yfinance_own_filter():
+    """yfinance가 import 시 자기 경고를 강제 노출하므로, 우리 필터가 그보다 앞에 있어야 한다.
+
+    yfinance/__init__.py:45
+        warnings.filterwarnings('default', category=DeprecationWarning, module='^yfinance')
+    는 파이썬 기본값(ignore::DeprecationWarning)을 뒤집는다. warnings 필터는 나중에 등록된
+    것이 앞에 놓여 먼저 매칭되므로, config import 시점에만 걸면 yfinance 로드 후 무력화된다.
+    → yfinance를 import하는 모듈들이 import 직후 재등록하는지(순서)를 검증한다.
+    """
+    import warnings
+
+    msg = "The 'generic' unit for NumPy timedelta is deprecated, and will raise an error"
+
+    def _emit_as_yfinance():
+        """실제와 동일하게 'yfinance.utils' 모듈에서 발생한 경고로 만든다.
+
+        warnings.warn()은 호출한 쪽(테스트 모듈) 기준으로 필터가 매칭되므로,
+        yfinance 자체 필터(module='^yfinance')가 아예 적용되지 않아 재현이 안 된다.
+        """
+        warnings.warn_explicit(msg, DeprecationWarning,
+                               'yfinance/utils.py', 667, module='yfinance.utils', registry={})
+
+    # (1) config import 시점에만 건 경우 = yfinance 필터가 나중에 등록되어 앞을 차지 → 경고가 샌다
+    with warnings.catch_warnings(record=True) as leaked:
+        warnings.resetwarnings()
+        config.silence_yfinance_numpy_warning()                       # 먼저
+        warnings.filterwarnings('default', category=DeprecationWarning, module='^yfinance')
+        _emit_as_yfinance()
+    assert len(leaked) == 1, "이 순서에서는 경고가 새는 것이 정상 — 전제가 깨졌다면 재검토 필요"
+
+    # (2) yfinance import '뒤'에 재등록한 경우 → 억제된다 (현재 구현)
+    with warnings.catch_warnings(record=True) as blocked:
+        warnings.resetwarnings()
+        warnings.filterwarnings('default', category=DeprecationWarning, module='^yfinance')
+        config.silence_yfinance_numpy_warning()                       # 나중
+        _emit_as_yfinance()
+    assert len(blocked) == 0, "yfinance 필터보다 뒤에 등록했는데도 억제되지 않았다"
+
+
+def test_yfinance_importers_reregister_the_filter():
+    """yfinance를 import하는 모듈은 import 직후 억제 필터를 재등록해야 한다."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    targets = ['api.py', 'utils.py', 'modules/market.py',
+               'modules/analysis.py', 'modules/manage/events.py']
+    for rel in targets:
+        src = (root / rel).read_text(encoding='utf-8')
+        if not re.search(r'^\s*import yfinance as yf', src, re.M):
+            continue
+        assert 'silence_yfinance_numpy_warning()' in src, (
+            f"{rel}: yfinance를 import하면서 config.silence_yfinance_numpy_warning() 재등록이 없다 "
+            "— yfinance 자체 필터가 앞을 차지해 경고가 다시 출력된다")
+
+
+def test_only_target_message_is_suppressed():
+    """대상 메시지만 막고 다른 DeprecationWarning은 그대로 통과시킨다."""
     import warnings
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
-        warnings.filterwarnings(
-            'ignore',
-            message=r".*'generic' unit for NumPy timedelta is deprecated.*",
-            category=DeprecationWarning)
+        config.silence_yfinance_numpy_warning()
         warnings.warn("The 'generic' unit for NumPy timedelta is deprecated, and will raise",
                       DeprecationWarning)
         warnings.warn('unrelated deprecation', DeprecationWarning)

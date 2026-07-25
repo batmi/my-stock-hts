@@ -1813,6 +1813,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 elif is_index:
                     try:
                         import yfinance as yf
+                        config.silence_yfinance_numpy_warning()  # import 뒤에 걸어야 억제 유효
                         tk = yf.Ticker(code)
                         ex = getattr(tk.fast_info, 'exchange', None)
                         if not ex:

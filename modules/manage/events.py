@@ -19,6 +19,7 @@ import utils
 
 try:
     import yfinance as yf
+    config.silence_yfinance_numpy_warning()  # import 뒤에 걸어야 억제 유효
 except Exception:  # pragma: no cover
     yf = None
 

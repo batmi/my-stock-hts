@@ -6,6 +6,7 @@ from rich.prompt import Prompt
 import yfinance as yf
 import pandas as pd
 import config
+config.silence_yfinance_numpy_warning()  # yfinance import 뒤에 걸어야 억제 유효
 import context # [추가] 상태 관리 모듈
 import indicators
 import api

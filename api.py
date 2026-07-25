@@ -24,6 +24,9 @@ from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 from collections import deque
 import config
+# yfinance는 import 시 'default::DeprecationWarning:^yfinance' 필터를 등록해 자기 경고를 강제 노출한다.
+# warnings 필터는 나중 등록분이 앞서므로, yfinance import '뒤'에 다시 걸어야 억제가 유효하다.
+config.silence_yfinance_numpy_warning()
 import context # [추가] 상태 관리 모듈
 import constants
 import toss_api  # [추가] 토스증권(mode 3) 클라이언트

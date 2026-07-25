@@ -3,6 +3,7 @@ from rich.prompt import Prompt
 import yfinance as yf
 import logging
 import config
+config.silence_yfinance_numpy_warning()  # yfinance import 뒤에 걸어야 억제 유효(아래 함수 주석 참조)
 import context # [추가]
 import api
 import constants
