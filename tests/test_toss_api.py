@@ -1506,6 +1506,145 @@ def test_index_price_toss_falls_back_to_fast_info():
     mock_call.assert_not_called()
 
 
+def _reset_nxt_cache():
+    import api
+    api._toss_nxt_map = {}
+    api._toss_nxt_miss = {}
+    api._toss_nxt_day = None
+
+
+def _reset_cal_cache():
+    import api
+    api._toss_kr_cal_map = {}
+    api._toss_kr_cal_day = None
+    api._toss_kr_cal_fail = 0.0
+
+
+def test_krx_only_uses_nxt_supported_field():
+    """NXT 미거래(nxtSupported=false) 종목은 토스 체결이 KRX 단독 → 신뢰 대상."""
+    import api
+    _reset_nxt_cache()
+    config.session.is_toss = True
+    try:
+        rows = [{"symbol": "069500", "koreanMarketDetail": {"nxtSupported": False}}]
+        with patch("toss_api.get_stocks", return_value=rows) as mock_st:
+            assert api._toss_krx_only("069500") is True
+            assert api._toss_krx_only("069500") is True   # 캐시 적중
+        mock_st.assert_called_once()                      # 종목당 1회만 조회
+
+        rows2 = [{"symbol": "005930", "koreanMarketDetail": {"nxtSupported": True}}]
+        with patch("toss_api.get_stocks", return_value=rows2):
+            assert api._toss_krx_only("005930") is False  # NXT 병행 체결 → 신뢰 불가
+    finally:
+        config.session.is_toss = False
+        _reset_nxt_cache()
+
+
+def test_krx_only_falls_back_to_etf_heuristic(monkeypatch):
+    """stocks 조회 실패 시 종전 ETF/ETN 휴리스틱으로 폴백하고, 쿨다운 동안 재조회하지 않는다."""
+    import api
+    _reset_nxt_cache()
+    monkeypatch.setattr(api, "is_domestic_etf_etn", lambda code, name="": True)
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_stocks",
+                   side_effect=toss_api.TossApiError("internal-error", "mock", status=500)) as mock_st:
+            assert api._toss_krx_only("069500") is True   # 휴리스틱 폴백
+            assert api._toss_krx_only("069500") is True
+        mock_st.assert_called_once()                      # 실패 쿨다운으로 재조회 억제
+    finally:
+        config.session.is_toss = False
+        _reset_nxt_cache()
+
+
+def test_krx_close_trusted_by_nxt_support():
+    """분봉 캡처값('cap') 신뢰 판정이 nxtSupported를 따른다."""
+    import api
+    _reset_nxt_cache()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_stocks",
+                   return_value=[{"symbol": "069500", "koreanMarketDetail": {"nxtSupported": False}}]):
+            assert api._toss_krx_close_trusted("069500", "cap") is True
+        _reset_nxt_cache()
+        with patch("toss_api.get_stocks",
+                   return_value=[{"symbol": "005930", "koreanMarketDetail": {"nxtSupported": True}}]):
+            assert api._toss_krx_close_trusted("005930", "cap") is False
+            assert api._toss_krx_close_trusted("005930", "yf") is True   # 일봉 검증값은 항상 신뢰
+    finally:
+        config.session.is_toss = False
+        _reset_nxt_cache()
+
+
+def _cal_payload(start="09:00:00", end="15:30:00", date="2026-03-25"):
+    return {
+        "today": {"date": date, "integrated": {
+            "regularMarket": {"startTime": f"{date}T{start}+09:00",
+                              "endTime": f"{date}T{end}+09:00"}}},
+        "previousBusinessDay": {"date": "2026-03-24", "integrated": {
+            "regularMarket": {"startTime": "2026-03-24T09:00:00+09:00",
+                              "endTime": "2026-03-24T15:30:00+09:00"}}},
+        "nextBusinessDay": {"date": "2026-03-26", "integrated": None},
+    }
+
+
+def test_krx_regular_bounds_from_calendar():
+    """정규장 경계를 market-calendar에서 읽고, 캘린더 호출은 하루 1회로 캐시한다."""
+    import api
+    _reset_cal_cache()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_market_calendar",
+                   return_value=_cal_payload(start="10:00:00", end="16:00:00")) as mock_cal:
+            assert api._toss_krx_regular_bounds("20260325") == ((10, 0), (16, 0))  # 지연·연장 개장
+            assert api._toss_krx_regular_bounds("20260324") == ((9, 0), (15, 30))  # 전 영업일도 함께 캐시
+        mock_cal.assert_called_once()
+        # 휴장(integrated=null)·미수록 날짜는 기본값
+        assert api._toss_krx_regular_bounds("20260326") == ((9, 0), (15, 30))
+    finally:
+        config.session.is_toss = False
+        _reset_cal_cache()
+
+
+def test_krx_regular_bounds_default_on_failure():
+    """캘린더 조회 실패 시 기본값(09:00~15:30)을 쓰고 쿨다운 동안 재조회하지 않는다."""
+    import api
+    _reset_cal_cache()
+    config.session.is_toss = True
+    try:
+        with patch("toss_api.get_market_calendar",
+                   side_effect=toss_api.TossApiError("internal-error", "mock", status=500)) as mock_cal:
+            assert api._toss_krx_regular_bounds() == ((9, 0), (15, 30))
+            assert api._toss_krx_regular_bounds() == ((9, 0), (15, 30))
+        mock_cal.assert_called_once()
+    finally:
+        config.session.is_toss = False
+        _reset_cal_cache()
+
+
+def test_intraday_filter_follows_calendar_bounds():
+    """분봉 정규장 필터가 캘린더 경계를 따른다(단축장이면 그 시각까지만 남는다)."""
+    import api
+    _reset_cal_cache()
+    candles = [{
+        "timestamp": f"2026-03-25T{h:02d}:{m:02d}:00+09:00",
+        "openPrice": "100", "highPrice": "100", "lowPrice": "100",
+        "closePrice": "100", "volume": "10",
+    } for h, m in [(8, 30), (9, 0), (10, 0), (13, 0), (14, 0), (15, 30), (16, 0)]]
+
+    config.session.is_toss = True
+    try:
+        # 단축장(09:00~14:00) → 14:00 초과 봉 제외, NXT 프리(08:30)·애프터(15:30/16:00) 제거
+        with patch("toss_api.get_market_calendar",
+                   return_value=_cal_payload(end="14:00:00")), \
+             patch("toss_api.get_candles", return_value={"candles": candles, "nextBefore": None}):
+            df = api._toss_chart_data("005930", period_type='intraday', is_overseas=False)
+        assert [t.strftime('%H:%M') for t in df['date']] == ['09:00', '10:00', '13:00', '14:00']
+    finally:
+        config.session.is_toss = False
+        _reset_cal_cache()
+
+
 def test_market_indicator_endpoints_paths_and_groups():
     """시장지표 엔드포인트 경로·레이트리밋 그룹이 스펙(1.2.4)과 일치하는가."""
     seen = []

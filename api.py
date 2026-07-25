@@ -3768,30 +3768,38 @@ def _toss_cached_daily_chart(code):
 #  koreanMarketDetail.nxtSupported가 이를 직접 알려준다.
 #  이 정보는 영업일 단위(또는 그 이상)로만 바뀌므로 거래일 단위로 캐시한다(스펙 권고).
 _toss_nxt_map = {}          # {code: bool}
+_toss_nxt_miss = {}         # {code: 마지막 실패 시각} — 조회 실패 재시도 폭주 방지
 _toss_nxt_day = None        # 캐시 유효 거래일(YYYYMMDD)
 _toss_nxt_lock = threading.Lock()
+_TOSS_NXT_RETRY_SEC = 600
 
 
 def _toss_nxt_supported(code):
     """종목이 NXT에서 거래되는가. True/False, 판정 불가 시 None(호출부가 폴백).
 
-    비토스 모드이거나 국내 6자리 코드가 아니면 None. 조회 실패도 None(음성 캐시 없이
-    다음 호출에서 재시도 — 종목당 1회성 조회라 폭주 위험이 낮다).
+    비토스 모드이거나 국내 6자리 코드가 아니면 None. 조회 실패는 쿨다운(10분) 동안 None을
+    반환해, 시세 갱신 주기마다 stocks API를 두드리지 않게 한다.
     """
-    global _toss_nxt_map, _toss_nxt_day
+    global _toss_nxt_map, _toss_nxt_miss, _toss_nxt_day
     if not config.session.is_toss or not code or not str(code).isdigit():
         return None
     today = datetime.now().strftime('%Y%m%d')
     with _toss_nxt_lock:
         if _toss_nxt_day != today:      # 날짜가 바뀌면 전체 무효화(상장·NXT 편입 변경 반영)
             _toss_nxt_map = {}
+            _toss_nxt_miss = {}
             _toss_nxt_day = today
         if code in _toss_nxt_map:
             return _toss_nxt_map[code]
+        last = _toss_nxt_miss.get(code)
+        if last and (time.time() - last) < _TOSS_NXT_RETRY_SEC:
+            return None
     try:
         rows = toss_api.get_stocks([code]) or []
     except toss_api.TossApiError as e:
         logger.debug(f"[Toss] NXT 지원 여부 조회 실패({code}): {e}")
+        with _toss_nxt_lock:
+            _toss_nxt_miss[code] = time.time()
         return None
     for r in rows:
         if r.get('symbol') != code:
@@ -3802,6 +3810,8 @@ def _toss_nxt_supported(code):
             with _toss_nxt_lock:
                 _toss_nxt_map[code] = val
             return val
+    with _toss_nxt_lock:      # 응답에 종목/필드가 없음(해외 종목 등) — 쿨다운 후 재시도
+        _toss_nxt_miss[code] = time.time()
     return None
 
 
@@ -3828,7 +3838,9 @@ def _toss_krx_only(code):
 _TOSS_KRX_SESSION_DEFAULT = ((9, 0), (15, 30))
 _toss_kr_cal_map = {}       # {'YYYYMMDD': ((h,m),(h,m))}
 _toss_kr_cal_day = None     # 캘린더를 받아온 달력일(YYYYMMDD)
+_toss_kr_cal_fail = 0.0     # 마지막 조회 실패 시각(재시도 쿨다운)
 _toss_kr_cal_lock = threading.Lock()
+_TOSS_KR_CAL_RETRY_SEC = 300
 
 
 def _toss_parse_hm(ts):
@@ -3846,7 +3858,7 @@ def _toss_krx_regular_bounds(date_str=None):
     market-calendar/KR 1회 호출로 전/당/익 영업일 3건을 받아 날짜별로 캐시하므로
     캘린더 호출은 하루 1회다. 비토스 모드·조회 실패·미수록 날짜는 기본값(09:00~15:30).
     """
-    global _toss_kr_cal_map, _toss_kr_cal_day
+    global _toss_kr_cal_map, _toss_kr_cal_day, _toss_kr_cal_fail
     if not config.session.is_toss:
         return _TOSS_KRX_SESSION_DEFAULT
     today = datetime.now().strftime('%Y%m%d')
@@ -3854,6 +3866,9 @@ def _toss_krx_regular_bounds(date_str=None):
     with _toss_kr_cal_lock:
         if _toss_kr_cal_day == today:
             return _toss_kr_cal_map.get(key, _TOSS_KRX_SESSION_DEFAULT)
+        # 실패 직후 재조회 억제 — 시세 갱신마다 캘린더를 두드리지 않게 한다
+        if _toss_kr_cal_fail and (time.time() - _toss_kr_cal_fail) < _TOSS_KR_CAL_RETRY_SEC:
+            return _TOSS_KRX_SESSION_DEFAULT
 
     parsed = {}
     try:
@@ -3870,9 +3885,12 @@ def _toss_krx_regular_bounds(date_str=None):
         logger.debug(f"[Toss] 장 운영시간 조회 실패: {e}")
 
     with _toss_kr_cal_lock:
-        if parsed:                      # 실패 시엔 캐시 날짜를 올리지 않아 다음 호출에서 재시도
+        if parsed:
             _toss_kr_cal_map = parsed
             _toss_kr_cal_day = today
+            _toss_kr_cal_fail = 0.0
+        else:                           # 실패: 쿨다운 후 재시도(그 동안은 기본값 사용)
+            _toss_kr_cal_fail = time.time()
     return parsed.get(key, _TOSS_KRX_SESSION_DEFAULT)
 
 
