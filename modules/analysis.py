@@ -728,19 +728,36 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
 #                      직전 정상 데이터를 stale 폴백으로 보존한다.
 #   3) stale-while-revalidate: TTL 만료 시 옛 값을 즉시 반환하고 백그라운드 1스레드로만 갱신
 #                      → 5분 주기 캐시 절벽/블로킹 제거.
-_INDEX_DATA_CACHE = {}          # {market_type: {'df': df, 'time': ts, 'fail_time': ts}}
+# 단, stale 서빙에는 상한을 둔다: 시장 기준일이 바뀌었거나(_current_market_day) 15분을 넘긴
+# 데이터는 즉시 반환하지 않고 동기 재조회한다. 상한이 없던 시절, 장기 구동 시 '다음날 어제 값 +
+# 등락률 0%'가 그대로 표시되고 한 번 더 조회해야 갱신되는 문제가 있었다.
+_INDEX_DATA_CACHE = {}          # {market_type: {'df': df, 'time': ts, 'fail_time': ts, 'day': 'YYYYMMDD'}}
 _INDEX_DATA_CACHE_LOCK = threading.Lock()   # 캐시 딕셔너리 보호
 _INDEX_DATA_CACHE_TTL = 300     # 정상 데이터 유효시간(5분) - 장중 국면 판단에는 충분히 신선함
 _INDEX_DATA_NEG_TTL = 30        # 실패 후 재조회 억제시간(초) - 폭주 자기증식 차단
+# [Fix] stale-while-revalidate 서빙 상한. 이 시간을 넘긴 데이터는 '옛 값 즉시 반환'을 하지 않고
+#  동기 재조회한다. (몇 시간~하루를 쉰 뒤 조회하면 첫 화면이 옛 지수로 나오고 재조회해야
+#  갱신되던 문제 차단 — 그 정도로 오래된 값은 '빠른 응답'보다 '정확한 값'이 우선이다)
+_INDEX_DATA_MAX_STALE = 900     # 15분
 
 _INDEX_FETCH_LOCKS = {}         # {market_type: Lock} single-flight 동기 조회 잠금
 _INDEX_FETCH_LOCKS_GUARD = threading.Lock()
-_INDEX_REFRESH_INFLIGHT = set() # 백그라운드 재검증 진행 중인 market_type
+_INDEX_REFRESH_INFLIGHT = {}    # {market_type: 기동 시각} 백그라운드 재검증 진행 중
 _INDEX_REFRESH_GUARD = threading.Lock()
+# [Fix] 재검증 워커가 죽거나(스레드 생성 실패 등) 비정상적으로 오래 걸리면 inflight 표시가 남아
+#  이후 모든 갱신이 영구히 막혔다(재시작 전까지 지수 고착). 이 시간이 지나면 재기동을 허용한다.
+_INDEX_REFRESH_STUCK_SEC = 120
 
 def _index_cache_enabled():
     """테스트(pytest) 환경에서는 모킹된 지수 데이터가 캐시에 고착되지 않도록 캐시를 비활성화한다."""
     return "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ
+
+def _current_market_day():
+    """국내 시장 기준일(YYYYMMDD, 휴장일이면 직전 거래일). 캐시 데이터의 '날짜 세대' 판정용."""
+    try:
+        return api.market_today(False)
+    except Exception:
+        return datetime.now().strftime('%Y%m%d')
 
 def _get_index_fetch_lock(market_type):
     """market_type별 single-flight 잠금을 반환한다(없으면 생성)."""
@@ -756,9 +773,11 @@ def _lookup_index_cache(market_type):
     - 'fresh'   : TTL 이내 정상 데이터 → 즉시 반환
     - 'suppress': 최근 실패(음성 TTL 이내) → 재조회 없이 직전 정상 데이터(또는 None) 반환
     - 'stale'   : TTL 경과한 정상 데이터 존재 → 즉시 반환 후 백그라운드 갱신
+    - 'expired' : 날짜(거래일)가 바뀌었거나 너무 오래된 데이터 → 동기 조회 필요(실패 시 폴백용)
     - 'miss'    : 쓸만한 데이터 없음 → 동기 조회 필요
     """
     now = time.time()
+    today = _current_market_day()   # 네트워크(휴장일 조회) 가능 → 캐시 락 밖에서 계산
     with _INDEX_DATA_CACHE_LOCK:
         entry = _INDEX_DATA_CACHE.get(market_type)
         if not entry:
@@ -772,9 +791,15 @@ def _lookup_index_cache(market_type):
         if has_good and (now - entry.get('fail_time', 0)) < _INDEX_DATA_NEG_TTL:
             return 'suppress', df
         if has_good:
-            if (now - entry.get('time', 0)) < _INDEX_DATA_CACHE_TTL:
-                return 'fresh', df
-            return 'stale', df
+            age = now - entry.get('time', 0)
+            # [Fix] 시장 기준일이 바뀌면(하루 이상 구동 후 다음날) 옛 데이터를 stale로 즉시
+            #  서빙하면 안 된다 — 어제 종가·등락률 0%가 그대로 화면에 남는다. 동기 재조회한다.
+            if entry.get('day') == today:
+                if age < _INDEX_DATA_CACHE_TTL:
+                    return 'fresh', df
+                if age < _INDEX_DATA_MAX_STALE:
+                    return 'stale', df
+            return 'expired', df
         return 'miss', None
 
 def _store_index_cache(market_type, df):
@@ -783,14 +808,16 @@ def _store_index_cache(market_type, df):
     if not _index_cache_enabled():
         return
     now = time.time()
+    day = _current_market_day()
     with _INDEX_DATA_CACHE_LOCK:
-        entry = _INDEX_DATA_CACHE.get(market_type) or {'df': None, 'time': 0, 'fail_time': 0}
+        entry = _INDEX_DATA_CACHE.get(market_type) or {'df': None, 'time': 0, 'fail_time': 0, 'day': None}
         if df is not None and not df.empty:
             entry['df'] = df
             entry['time'] = now
+            entry['day'] = day      # 데이터의 '거래일 세대' — 날짜가 바뀌면 stale 서빙 금지
             entry['fail_time'] = 0
         else:
-            # 실패: 직전 정상 df/time은 보존, 실패 시각만 갱신
+            # 실패: 직전 정상 df/time/day는 보존, 실패 시각만 갱신
             entry['fail_time'] = now
         _INDEX_DATA_CACHE[market_type] = entry
 
@@ -798,10 +825,19 @@ def _trigger_async_refresh(market_type):
     """stale 데이터 제공 후 백그라운드에서 1스레드로만 캐시를 재검증한다."""
     if not _index_cache_enabled():
         return
+    now = time.time()
     with _INDEX_REFRESH_GUARD:
-        if market_type in _INDEX_REFRESH_INFLIGHT:
-            return  # 이미 갱신 중 → 중복 기동 방지
-        _INDEX_REFRESH_INFLIGHT.add(market_type)
+        started = _INDEX_REFRESH_INFLIGHT.get(market_type)
+        # 이미 갱신 중이면 중복 기동 방지. 단, 워커가 죽어 표시만 남은 경우를 대비해
+        # 일정 시간(_INDEX_REFRESH_STUCK_SEC)이 지나면 재기동을 허용한다(영구 고착 방지).
+        if started is not None and (now - started) < _INDEX_REFRESH_STUCK_SEC:
+            return
+        _INDEX_REFRESH_INFLIGHT[market_type] = now
+
+    def _release():
+        with _INDEX_REFRESH_GUARD:
+            if _INDEX_REFRESH_INFLIGHT.get(market_type) == now:  # 내 기동분만 해제
+                _INDEX_REFRESH_INFLIGHT.pop(market_type, None)
 
     def _worker():
         try:
@@ -811,10 +847,14 @@ def _trigger_async_refresh(market_type):
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} 비동기 재검증 실패: {e}")
             _store_index_cache(market_type, None)  # 실패 기록(음성 캐시)
         finally:
-            with _INDEX_REFRESH_GUARD:
-                _INDEX_REFRESH_INFLIGHT.discard(market_type)
+            _release()
 
-    threading.Thread(target=_worker, name=f"IndexRefresh-{market_type}", daemon=True).start()
+    try:
+        threading.Thread(target=_worker, name=f"IndexRefresh-{market_type}", daemon=True).start()
+    except Exception as e:
+        # 스레드 생성 실패(라즈베리파이 메모리 압박 등). inflight 표시를 반드시 되돌린다.
+        logger.warning(f"[MARKET_INDEX] {market_type} 재검증 스레드 기동 실패: {e}")
+        _release()
 
 def _fetch_domestic_index_data(market_type):
     """국내 지수 데이터를 실제 조회한다(캐시 미적용).
@@ -929,7 +969,7 @@ def get_domestic_index_data(market_type, force_refresh=False):
         if status == 'stale':
             _trigger_async_refresh(market_type)  # stale 즉시 반환 + 백그라운드 갱신
             return df
-        # status == 'miss': 동기 조회 필요
+        # status == 'miss'/'expired': 동기 조회 필요
 
     # 2. single-flight: market_type별 1개 스레드만 실제 조회, 나머지는 대기 후 결과 공유
     fetch_lock = _get_index_fetch_lock(market_type)
@@ -943,13 +983,15 @@ def get_domestic_index_data(market_type, force_refresh=False):
             if status == 'stale':
                 _trigger_async_refresh(market_type)
                 return df
-            stale_df = df  # 'miss' → 폴백용(보통 None)
+            stale_df = df  # 'miss' → None / 'expired' → 날짜 지난 옛 데이터(폴백용)
 
         df = _fetch_domestic_index_data(market_type)
         _store_index_cache(market_type, df)
 
         # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백
         if (df is None or df.empty) and stale_df is not None and not stale_df.empty:
+            # 날짜가 지난 데이터를 계속 서빙하는 상황은 조용히 넘기면 안 된다(등락률 고착·국면 오판).
+            logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전(과거) 데이터로 폴백")
             return stale_df
         return df
 

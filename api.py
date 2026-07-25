@@ -862,6 +862,13 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                         if vol <= 0: vol = float(df.iloc[-1]['volume'])
                         df.loc[df.index[-1], ['open', 'high', 'low', 'close', 'volume']] = [open_p, high_p, low_p, curr, vol]
                     else:
+                        # [Fix] 국내 지수는 NXT 연장거래가 없어 09:00 개장 전 현재가 = 전일 종가다.
+                        #  이때 '오늘 봉'을 추가하면 마지막 두 봉의 종가가 같아져 등락률이 0%로 굳고,
+                        #  그 df가 지수 공유 캐시에 실려 하루 종일 '어제 값 + 0%'로 보이게 된다.
+                        #  개장 전이고 현재가가 마지막 봉 종가와 같으면 가짜 봉을 만들지 않는다.
+                        if (is_index and not is_overseas and abs(curr - float(df.iloc[-1]['close'])) < 1e-9
+                                and _before_krx_regular_open()):
+                            return df
                         # 오늘 날짜 행이 없으면 새로 추가 (시가/고가/저가 미제공 시 현재가로 근사)
                         if open_p <= 0: open_p = curr
                         if high_p <= 0: high_p = curr
