@@ -23,6 +23,12 @@ import json
 
 logger = logging.getLogger(__name__)
 
+# [PRESET_RETIRED] 백테스트 진입 시 '시장 상황 프리셋 적용?' 질문 숨김 여부.
+#  전략 프리셋은 폐지되어 설정 화면에서도 감춘 상태라 이 질문만 남으면 없는 기능을 묻게 된다.
+#  False로 바꾸면 질문과 프리셋 선택 메뉴가 그대로 다시 나타난다.
+HIDE_MARKET_PRESET_PROMPT = True
+
+
 def _trend_smo_str(close, psar, macd, macd_signal, obv_trend):
     """추세SMO 셀 문자열 생성 (S: SAR ⬆/⬇, M: MACD 0선±/골든G·데드D, O: OBV ▲/▼) — 종목분석 표기와 동일"""
     sar_icon = "-"
@@ -1584,9 +1590,16 @@ def run_backtest():
         if not code: continue
 
         # 2. 설정 입력
-        apply_preset = Prompt.ask("시장 상황 프리셋을 적용하여 시뮬레이션을 진행하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
-        config.console.print()
-        if apply_preset in ['b', 'q']: continue
+        # [PRESET_RETIRED] 전략 프리셋(강세/약세/횡보)은 폐지되어 설정 메뉴에서도 숨겼다
+        #  (settings.py의 PRESET_RETIRED 주석 참조). 백테스트 입구의 '프리셋 적용?' 질문만
+        #  남으면 없는 기능을 매번 묻는 셈이라 함께 숨긴다. 아래 상수를 False로 되돌리면
+        #  질문과 프리셋 선택 메뉴가 그대로 복원된다(선택 로직은 제거하지 않았다).
+        if HIDE_MARKET_PRESET_PROMPT:
+            apply_preset = "n"
+        else:
+            apply_preset = Prompt.ask("시장 상황 프리셋을 적용하여 시뮬레이션을 진행하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
+            config.console.print()
+            if apply_preset in ['b', 'q']: continue
 
         change_settings = "n"
         preset_choice = None

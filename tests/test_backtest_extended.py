@@ -56,8 +56,9 @@ def test_run_monte_carlo_simulation(mock_print, mock_ask, sample_backtest_df):
 @patch('modules.backtest.get_backtest_data')
 def test_run_backtest_menu(mock_get_data, mock_ask, sample_backtest_df):
     """백테스팅 메뉴 실행 테스트"""
-    # 6(직접입력) -> 코드(005930) -> 프리셋적용(n) -> 설정변경(n) -> 모드(1:단일) -> AI진단(n) -> 메인화면(q)
-    mock_ask.side_effect = ["6", "005930", "n", "n", "1", "n", "q"]
+    # 6(직접입력) -> 코드(005930) -> 설정변경(n) -> 모드(1:단일) -> AI진단(n) -> 메인화면(q)
+    #  (프리셋 적용 질문은 PRESET_RETIRED로 숨김 처리되어 더 이상 묻지 않는다)
+    mock_ask.side_effect = ["6", "005930", "n", "1", "n", "q"]
 
     
     mock_get_data.return_value = sample_backtest_df
