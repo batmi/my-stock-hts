@@ -193,6 +193,14 @@ class GlobalSettings(BaseModel):
     # 신규 진입의 리스크 한도(SYSTEM_RISK_PER_TRADE·SYSTEM_MAX_PORTFOLIO_RISK)를 자동 축소한다.
     # 진입 '크기'만 조절하며 청산 로직(샹들리에 TS 등)에는 일절 관여하지 않는다. (추세추종 정합)
     # 국면 배수 × 드로다운 배수가 곱으로 결합된다. (예: 약세 0.75 × DD10% 0.5 = 0.375)
+    #
+    # ※ [실측 2026-07-27] 현재 파라미터에서 이 배수는 **종목당 배분액을 줄이지 못한다**.
+    #   사이징 3층 min 결합에서 변동성 타겟팅이 96% 구속(VOLATILITY_SCALING_MIN 0.4 바닥 =
+    #   자산의 약 10%)하고 리스크층 상한은 항상 그보다 커서, 배수가 약 0.45 미만으로 내려가야
+    #   비로소 배분액이 변한다(단일 트리거로는 도달 불가, 둘 이상 겹쳐야 함).
+    #   실효 방어는 히트 캡 경로다 — effective_portfolio_cap = SYSTEM_MAX_PORTFOLIO_RISK × 배수라
+    #   4슬롯 보유 기준 배수 0.5 이하부터 신규 매수가 예산 초과로 차단된다. 즉 '단계적 축소'가
+    #   아니라 '신규 진입 차단'으로 작동한다. (아래 값들을 조정할 때 이 점을 전제할 것)
     RISK_SCALING_PARAMS: dict = {
         # [국면 연동] 15년 백테스트 결과, 리스크를 줄여야 할 구간은 '확정 약세(Bear)'가 아니라
         #  '하락 미확정(PendDown, 추세 붕괴 초기)'이다. 확정 Bear는 이미 -5% 하락한 뒤라
@@ -359,7 +367,12 @@ class GlobalSettings(BaseModel):
         "PYRAMIDING_USE": True,           # 피라미딩 사용 여부
         "PYRAMIDING_PROFIT_TRIGGER": 10.0,  # 증액 발동 최소 수익률 (%) - TS 감시 시작(+10%)과 동일선
         "PYRAMIDING_RATIO": 0.5,          # 증액 수량 비율 (현재 보유 수량 대비, 0.5 = 50%)
-        "PYRAMIDING_MAX_COUNT": 1,        # 포지션당 최대 증액 횟수 (피라미드 구조 유지를 위해 기본 1회)
+        # 포지션당 최대 증액 횟수. 4슬롯 포트폴리오 백테스트(2026-07-27, 3년) 결과 2회가 최적:
+        #  1회 → 2회로 올리면 수익 중앙 +50.8%p(30종목 무작위 24회 중 23회 개선), PF 1.75 → 2.06.
+        #  대가는 MDD 약 2%p 악화. 승률은 오히려 24.4% → 20.0%로 떨어지므로 레버리지가 아니라
+        #  fat-tail 강화(이긴 포지션에만 얹는 추세추종 원칙 그대로)에서 나온 이득이다.
+        #  3회는 수익이 더 늘지만 MDD가 5%p 이상 악화되어 채택하지 않았다.
+        "PYRAMIDING_MAX_COUNT": 2,
         # [리스크 관리] 시장 필터(지수<SMA)가 '보류' 상태인 시장의 종목은 피라미딩 증액도 보류.
         # 신규 매수 차단과 동일 기준을 증액에 적용해 약세 시장에서의 노출 확대를 방지한다.
         # (USE_MARKET_FILTER가 꺼져 있으면 이 옵션도 무시됨)
@@ -1260,7 +1273,7 @@ def reset_all_settings():
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
             "SUPER_MOMENTUM_SCORE": 8.0, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 80.0,
-            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 1,
+            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 2,
             "PYRAMIDING_REQUIRE_HEALTHY_MARKET": True
         }
         settings.SELL_STRATEGY = {

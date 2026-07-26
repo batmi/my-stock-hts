@@ -1532,7 +1532,10 @@ def run_backtest():
         menu_items = [
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
-            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
+            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input"),
+            # 1~6은 '한 종목 × 계좌 전액' 검증이라 슬롯 경쟁·현금 제약·히트 캡이 빠진다.
+            # 실제 운용 형태(N슬롯 동시 보유)로 확인하려면 7번을 쓴다.
+            ("7", "관심종목 포트폴리오 (N슬롯)", "Portfolio (N slots)")
         ]
         sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice=last_choice)
         if sub_choice.lower() in ['b', 'q']: return False
@@ -1543,7 +1546,15 @@ def run_backtest():
             continue
         
         menu_map_dict = dict((k, v) for k, v, _ in menu_items)
+        if sub_choice not in menu_map_dict:
+            continue
         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {menu_map_dict[sub_choice]}")
+
+        if sub_choice == '7':
+            last_choice = sub_choice
+            from modules import portfolio_backtest
+            portfolio_backtest.run_portfolio_backtest()
+            continue
 
         code, name, is_overseas = None, None, False
 

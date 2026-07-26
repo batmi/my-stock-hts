@@ -178,7 +178,7 @@ Also, you can modify global settings in real-time during execution via the **'Ma
 *   **Pyramiding (`PYRAMIDING_USE`)**: Scales up only held positions validated by profit. (The opposite of averaging down — never fires on losing positions.)
     *   `PYRAMIDING_PROFIT_TRIGGER`: Minimum return to trigger scaling (Default +10.0%)
     *   `PYRAMIDING_RATIO`: Added quantity as a ratio of the held quantity (Default 0.5 = 50%)
-    *   `PYRAMIDING_MAX_COUNT`: Maximum scale-ups per position (Default 1)
+    *   `PYRAMIDING_MAX_COUNT`: Maximum scale-ups per position (Default 2) — optimal under the 4-slot portfolio backtest
 
 ### 3. Sell Strategy (`SELL_STRATEGY`)
 *   **Stop Loss**: Confirm loss when the loss rate reaches **-7.0%** (`STOP_LOSS_RATE`).

@@ -935,7 +935,7 @@ def _entry_strategy_items():
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_PROFIT_TRIGGER", 10.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_PROFIT_TRIGGER": v})},
         {"desc": "증액 비율", "help": "보유 수량 대비 증액 수량 비율 (예: 0.5 = 50%)", "name": "PYRAMIDING_RATIO", "type": "float", "section": "1-2. 서브전략 — 피라미딩",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_RATIO": v})},
-        {"desc": "최대 증액 횟수", "help": "포지션당 피라미딩 허용 횟수 (기본 1회)", "name": "PYRAMIDING_MAX_COUNT", "type": "int", "section": "1-2. 서브전략 — 피라미딩",
+        {"desc": "최대 증액 횟수", "help": "포지션당 피라미딩 허용 횟수 (기본 2회)", "name": "PYRAMIDING_MAX_COUNT", "type": "int", "section": "1-2. 서브전략 — 피라미딩",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_MAX_COUNT": v})}
     ]
     # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목은 편집 목록에서 숨김(미사용 유지)
