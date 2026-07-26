@@ -49,6 +49,12 @@ _MARKET_REGIME_TTL_SEC = 60.0
 #  실호출 빈도를 크게 낮춘다.
 _TVDATAFEED_INSTANCE = None
 _TVDATAFEED_LOCK = threading.Lock()
+# 현재 인스턴스가 로그인 상태인지(True) — 로그인 상태에서는 실패 버스트 시 인스턴스를
+#  재생성하지 않는다(재생성=재-signin이라 캡차·차단 위험).
+_TVDATAFEED_LOGGED_IN = False
+# 생성 전용 락(조회 직렬화용 _TVDATAFEED_LOCK과 분리) — 스레드풀에서 동시에 첫 호출이
+#  들어와도 signin이 중복 발생하지 않도록 한다.
+_TVDATAFEED_INIT_LOCK = threading.Lock()
 # market_type -> (TradingView 심볼, 거래소)
 #  코스피/코스닥은 yfinance(^KS11/^KQ11)가 최신 거래일 종가를 NaN으로 주는 일이 잦아(fast_info도
 #  None) 지수·등락률이 '-'로 표시된다 → tvDatafeed를 1순위로 쓰고 실패 시 yfinance로 폴백한다.
@@ -63,19 +69,157 @@ _TVDATAFEED_INDEX_SYMBOLS = {
     "KOSDAQ150": ("KOSDAQ150", "KRX"),
 }
 
+def _log_startup_info(msg):
+    """기동 시 1회성 INFO를 FILE_DEBUG_LEVEL(기본 WARNING)과 무관하게 파일 로그에 남긴다.
+
+    로거 레벨에서 걸리는 경우 레코드를 직접 만들어 핸들러로 넘긴다(핸들러 레벨은 NOTSET).
+    남용하면 로그가 불어나므로 '운영 중 상태 확인에 반드시 필요한 1회성 기록'에만 쓴다.
+    """
+    if logger.isEnabledFor(logging.INFO):
+        logger.info(msg)
+        return
+    try:
+        logger.handle(logger.makeRecord(logger.name, logging.INFO, __file__, 0, msg, (), None))
+    except Exception:
+        pass
+
+
+# [추가] TradingView 로그인. 라이브러리(TvDatafeed(username, password))의 내장 signin은
+#  Referer 헤더만 보내는 구식 요청이라 현재 TradingView가 거부한다(→ 'error while signin' 후
+#  익명 폴백). 동일 엔드포인트에 브라우저 수준 헤더를 붙여 우리가 직접 토큰을 받고,
+#  익명으로 만든 인스턴스에 주입한다(get_hist는 호출마다 웹소켓에 토큰을 재전송하므로 유효).
+_TV_SIGNIN_URL = "https://www.tradingview.com/accounts/signin/"
+_TV_SIGNIN_HEADERS = {
+    "Referer": "https://www.tradingview.com/",
+    "Origin": "https://www.tradingview.com",
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Accept": "application/json, text/plain, */*",
+}
+
+
+# [추가] 발급받은 토큰은 파일에 캐시해 재사용한다. TradingView는 짧은 간격의 반복 로그인에
+#  캡차("confirm that you are not a robot")를 요구하므로, 프로그램을 재시작할 때마다
+#  signin을 하면 결국 로그인이 막힌다. 캐시가 유효하면 signin 없이 토큰만 주입한다.
+_TV_TOKEN_CACHE_PATH = os.path.join(config.DATA_DIR, "tv_token.json")
+_TV_TOKEN_TTL_SEC = 7 * 24 * 3600   # 7일
+
+
+def _load_tv_token(user):
+    """캐시된 TradingView 토큰을 읽는다(계정 불일치·만료·손상 시 None)."""
+    try:
+        with open(_TV_TOKEN_CACHE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if data.get('user') != user:
+            return None
+        if (time.time() - float(data.get('ts', 0))) > _TV_TOKEN_TTL_SEC:
+            return None
+        token = data.get('token')
+        return token if token and token != "unauthorized_user_token" else None
+    except Exception:
+        return None
+
+
+def _save_tv_token(user, token):
+    """발급 토큰을 캐시한다(자격증명 성격이라 소유자 전용 권한 0600)."""
+    try:
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        with open(_TV_TOKEN_CACHE_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'user': user, 'token': token, 'ts': time.time()}, f)
+        os.chmod(_TV_TOKEN_CACHE_PATH, 0o600)
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] 토큰 캐시 저장 실패: {e}")
+
+
+def _tv_signin(user, pw):
+    """TradingView 인증 토큰을 발급받는다. 성공 시 (token, None), 실패 시 (None, 사유).
+
+    사유 문자열에는 비밀번호를 포함하지 않는다(파일 로그에 남기 때문).
+    """
+    try:
+        import requests
+        resp = requests.post(_TV_SIGNIN_URL,
+                             data={"username": user, "password": pw, "remember": "on"},
+                             headers=_TV_SIGNIN_HEADERS, timeout=15)
+    except Exception as e:
+        return None, f"요청 실패({type(e).__name__}: {e})"
+    try:
+        body = resp.json()
+    except Exception:
+        return None, f"응답 파싱 실패(HTTP {resp.status_code})"
+    token = (body.get("user") or {}).get("auth_token")
+    if token:
+        return token, None
+    # TradingView는 실패 사유를 error/code(예: 캡차 요구, 2FA, 자격증명 오류)로 준다.
+    err = body.get("error") or body.get("code") or body.get("detail") or ""
+    if not err and body.get("two_factor_types"):
+        err = "2단계 인증(2FA) 필요 — 계정에 2FA가 켜져 있으면 비밀번호 로그인 불가"
+    return None, f"HTTP {resp.status_code}, 사유: {err or '토큰 없음'}"
+
+
 # tvdatafeed는 PyPI 미배포(git 전용)라 배포 환경(예: 라즈베리파이)에 누락될 수 있다.
 # 설치는 run.sh의 '필수 라이브러리 설치 상태 스캔' 단계가 git URL로 담당한다(여기서는 조회만).
 def _get_tvdatafeed():
-    """tvDatafeed 인스턴스를 지연 생성해 재사용한다(익명). 미설치/초기화 실패 시 None."""
-    global _TVDATAFEED_INSTANCE
+    """tvDatafeed 인스턴스를 지연 생성해 재사용한다. 미설치/초기화 실패 시 None.
+
+    TV_USERNAME/TV_PASSWORD(config, ~/.htsrc의 export)가 모두 있으면 로그인 모드로 생성하고,
+    없으면 종전처럼 익명(nologin)으로 생성한다. 로그인 결과는 파일 로그에 남긴다
+    (성공=INFO / 미로그인·실패=WARNING). 로그는 인스턴스 생성 시점에만 찍힌다(싱글턴).
+    """
+    global _TVDATAFEED_INSTANCE, _TVDATAFEED_LOGGED_IN
     if _TVDATAFEED_INSTANCE is not None:
         return _TVDATAFEED_INSTANCE
+    with _TVDATAFEED_INIT_LOCK:
+        if _TVDATAFEED_INSTANCE is not None:  # 락 대기 중 다른 스레드가 생성했으면 재사용
+            return _TVDATAFEED_INSTANCE
+        return _init_tvdatafeed()
+
+
+def _init_tvdatafeed():
+    """_get_tvdatafeed 전용 생성 루틴(락 보유 상태에서만 호출)."""
+    global _TVDATAFEED_INSTANCE, _TVDATAFEED_LOGGED_IN
+    user = (getattr(config, 'TV_USERNAME', '') or '').strip()
+    pw = (getattr(config, 'TV_PASSWORD', '') or '').strip()
     try:
         from tvDatafeed import TvDatafeed
-        _TVDATAFEED_INSTANCE = TvDatafeed()  # 익명(nologin)
+        if user and pw:
+            token, reason, cached = _load_tv_token(user), None, True
+            if not token:  # 캐시 미스·만료 시에만 실제 signin(캡차 유발 최소화)
+                cached = False
+                token, reason = _tv_signin(user, pw)
+                if token:
+                    _save_tv_token(user, token)
+            # 익명 생성 후 토큰 주입(내장 signin 우회). 토큰이 있으면 라이브러리의
+            #  'you are using nologin method' 경고는 사실과 달라 생성 중에만 억제한다.
+            _tvlog = logging.getLogger("tvDatafeed.main")
+            _prev_level = _tvlog.level
+            if token:
+                _tvlog.setLevel(logging.ERROR)
+            try:
+                _TVDATAFEED_INSTANCE = TvDatafeed()
+            finally:
+                _tvlog.setLevel(_prev_level)
+            if token:
+                _TVDATAFEED_INSTANCE.token = token
+                _TVDATAFEED_LOGGED_IN = True
+                _log_startup_info(f"[TVDATAFEED] TradingView 로그인 성공 (계정: {user}"
+                                  f"{', 캐시 토큰 재사용' if cached else ''})")
+            else:
+                _TVDATAFEED_LOGGED_IN = False
+                logger.warning(
+                    f"[TVDATAFEED] TradingView 로그인 실패 — 익명(nologin)으로 동작합니다 "
+                    f"(계정: {user}, {reason})")
+        else:
+            _TVDATAFEED_INSTANCE = TvDatafeed()  # 익명(nologin)
+            _TVDATAFEED_LOGGED_IN = False
+            logger.warning(
+                "[TVDATAFEED] TV_USERNAME/TV_PASSWORD 환경변수가 없어 로그인하지 않았습니다 "
+                "— 익명(nologin)으로 동작합니다(데이터 한도·안정성 제한).")
     except Exception as e:
         logger.debug(f"[TVDATAFEED] 초기화 실패(라이브러리 미설치 가능): {e}")
         _TVDATAFEED_INSTANCE = None
+        _TVDATAFEED_LOGGED_IN = False
     return _TVDATAFEED_INSTANCE
 
 def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
@@ -251,7 +395,8 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         if attempt < max_attempts - 1:
             # 실패 버스트가 이어지면 마지막 시도 전 익명 인스턴스를 재생성해 웹소켓
             # 불량 상태를 리셋한다(익명이라 재-signin/캡차 위험 없음).
-            if attempt == max_attempts - 2:
+            # 로그인 인스턴스는 재생성 시 매번 재-signin이 발생하므로 재사용만 한다.
+            if attempt == max_attempts - 2 and not _TVDATAFEED_LOGGED_IN:
                 global _TVDATAFEED_INSTANCE
                 with _TVDATAFEED_LOCK:
                     _TVDATAFEED_INSTANCE = None

@@ -314,3 +314,120 @@ class TestTossOverseasFundamentals:
         finally:
             config.session.is_toss = orig
             api._MICRO_CACHE.clear()
+
+
+class TestTvDatafeedLogin:
+    """tvDatafeed 인스턴스 생성 시 TradingView 로그인 처리.
+
+    TV_USERNAME/TV_PASSWORD가 있으면 로그인 토큰을 주입(성공 시 INFO 로그),
+    없거나 로그인 실패면 익명(nologin)으로 동작하고 WARNING 로그를 남긴다.
+    """
+
+    class _FakeTv:
+        def __init__(self, username=None, password=None):
+            self.token = "unauthorized_user_token"
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self, tmp_path):
+        """싱글턴 초기화 + 토큰 캐시 경로 격리(운영 캐시 파일 덮어쓰기 방지)"""
+        import modules.analysis as analysis
+        analysis._TVDATAFEED_INSTANCE = None
+        analysis._TVDATAFEED_LOGGED_IN = False
+        with patch.object(analysis, '_TV_TOKEN_CACHE_PATH', str(tmp_path / "tv_token.json")):
+            yield
+        analysis._TVDATAFEED_INSTANCE = None
+        analysis._TVDATAFEED_LOGGED_IN = False
+
+    def _make(self, user, pw, signin_result):
+        """config 자격증명과 signin 결과를 지정해 _get_tvdatafeed()를 호출한다."""
+        import sys
+        import types
+        import modules.analysis as analysis
+        fake_mod = types.ModuleType('tvDatafeed')
+        fake_mod.TvDatafeed = self._FakeTv
+        with patch.dict(sys.modules, {'tvDatafeed': fake_mod}), \
+             patch.object(config, 'TV_USERNAME', user), \
+             patch.object(config, 'TV_PASSWORD', pw), \
+             patch.object(analysis, '_tv_signin', return_value=signin_result) as m_signin:
+            tv = analysis._get_tvdatafeed()
+        return tv, m_signin, analysis
+
+    def test_login_success_injects_token(self, caplog):
+        """자격증명이 있고 로그인 성공하면 토큰을 주입하고 INFO 로그를 남긴다"""
+        import logging
+        with caplog.at_level(logging.INFO, logger='modules.analysis'):
+            tv, m_signin, analysis = self._make('user', 'pw', ('tok-abc', None))
+        assert tv.token == 'tok-abc'
+        assert analysis._TVDATAFEED_LOGGED_IN is True
+        m_signin.assert_called_once_with('user', 'pw')
+        assert any(r.levelno == logging.INFO and '로그인 성공' in r.message for r in caplog.records)
+
+    def test_login_failure_falls_back_to_anonymous(self, caplog):
+        """로그인 실패 시 익명 토큰 유지 + WARNING(사유 포함)"""
+        import logging
+        with caplog.at_level(logging.WARNING, logger='modules.analysis'):
+            tv, _, analysis = self._make('user', 'pw', (None, 'HTTP 401, 사유: invalid'))
+        assert tv.token == 'unauthorized_user_token'
+        assert analysis._TVDATAFEED_LOGGED_IN is False
+        assert any(r.levelno == logging.WARNING and '로그인 실패' in r.message
+                   and 'HTTP 401' in r.message for r in caplog.records)
+
+    @pytest.mark.parametrize('user,pw', [('', ''), ('user', ''), ('', 'pw')])
+    def test_missing_credentials_warns_and_skips_signin(self, caplog, user, pw):
+        """자격증명이 없거나 한쪽만 있으면 signin 시도 없이 익명 + WARNING"""
+        import logging
+        with caplog.at_level(logging.WARNING, logger='modules.analysis'):
+            tv, m_signin, analysis = self._make(user, pw, (None, None))
+        assert tv is not None
+        assert analysis._TVDATAFEED_LOGGED_IN is False
+        m_signin.assert_not_called()
+        assert any(r.levelno == logging.WARNING and 'TV_USERNAME/TV_PASSWORD' in r.message
+                   for r in caplog.records)
+
+    def test_signin_password_not_in_failure_reason(self):
+        """실패 사유 문자열에 비밀번호가 섞이지 않는다(파일 로그 유출 방지)"""
+        import modules.analysis as analysis
+
+        class _Resp:
+            status_code = 401
+            def json(self):
+                return {'error': 'invalid username or password'}
+
+        with patch('requests.post', return_value=_Resp()):
+            token, reason = analysis._tv_signin('user', 'topsecret')
+        assert token is None
+        assert 'topsecret' not in reason
+        assert 'invalid username or password' in reason
+
+    def test_cached_token_skips_signin(self, tmp_path):
+        """캐시된 토큰이 있으면 signin 없이 재사용한다(캡차 유발 최소화)"""
+        import json
+        import time
+        import modules.analysis as analysis
+        cache = tmp_path / "tv_token.json"
+        cache.write_text(json.dumps({'user': 'user', 'token': 'cached-tok', 'ts': time.time()}))
+        with patch.object(analysis, '_TV_TOKEN_CACHE_PATH', str(cache)):
+            tv, m_signin, analysis = self._make('user', 'pw', ('fresh-tok', None))
+        assert tv.token == 'cached-tok'
+        m_signin.assert_not_called()
+
+    @pytest.mark.parametrize('payload,label', [
+        ({'user': 'other', 'token': 'tok', 'ts': None}, '계정 불일치'),
+        ({'user': 'user', 'token': 'tok', 'ts': 0}, '만료'),
+        ({'user': 'user', 'token': 'unauthorized_user_token', 'ts': None}, '익명 토큰'),
+    ])
+    def test_invalid_cache_triggers_signin(self, tmp_path, payload, label):
+        """계정 불일치·만료·익명 토큰 캐시는 무시하고 다시 로그인한다"""
+        import json
+        import time
+        import modules.analysis as analysis
+        if payload['ts'] is None:
+            payload['ts'] = time.time()
+        cache = tmp_path / "tv_token.json"
+        cache.write_text(json.dumps(payload))
+        with patch.object(analysis, '_TV_TOKEN_CACHE_PATH', str(cache)):
+            tv, m_signin, analysis = self._make('user', 'pw', ('fresh-tok', None))
+        assert tv.token == 'fresh-tok', label
+        m_signin.assert_called_once()
+        # 새 토큰이 캐시에 기록된다
+        assert json.loads(cache.read_text())['token'] == 'fresh-tok'

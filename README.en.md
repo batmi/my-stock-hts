@@ -441,6 +441,7 @@ Register sensitive information like API Keys as **environment variables**:
 *   `GEMINI_MODEL`: Gemini model name to use (Optional, default: `gemini-flash-latest`)
 *   `GEMINI_FALLBACK_MODEL`: Lighter fallback model automatically retried when the free-tier quota is exceeded (429) (Optional, default: `gemini-flash-lite-latest`)
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
+*   `TV_USERNAME`, `TV_PASSWORD`: TradingView account (Optional). Lets tvDatafeed (indices, US Treasury yields) run in **logged-in mode**, with better quotas/stability than anonymous access. If unset, it stays anonymous (nologin) as before and a WARNING is written to the file log (INFO on successful login). The issued token is cached in `data/tv_token.json` for 7 days so restarts don't re-login (frequent logins trigger TradingView's captcha). If a captcha is returned, retry later or sign in once from a browser and restart.
 
 **Example (`export` in a shell profile such as `~/.htsrc`):**
 ```sh

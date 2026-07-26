@@ -470,6 +470,7 @@ pip install -r requirements.txt
 *   `GEMINI_MODEL`: (선택) 사용할 Gemini 모델명 (기본값: `gemini-flash-latest`)
 *   `GEMINI_FALLBACK_MODEL`: (선택) 무료 티어 한도 초과(429) 시 자동 전환할 폴백 모델 (기본값: `gemini-flash-lite-latest`)
 *   `DART_API_KEY`: (선택) 국내 공시·배당·실적 조회용 OpenDART API Key ([발급 안내](#12--opendart-전자공시-연동-설정-disclosure-integration))
+*   `TV_USERNAME`, `TV_PASSWORD`: (선택) TradingView 계정. 지수·미국채 금리 조회에 쓰는 tvDatafeed가 **로그인 모드**로 동작해 익명 대비 조회 한도·안정성이 좋아집니다. 미설정 시 종전대로 익명(nologin)으로 동작하며 파일 로그에 WARNING이 남습니다(로그인 성공 시 INFO). 발급 토큰은 `data/tv_token.json`에 7일간 캐시되어 재시작 때마다 재로그인하지 않습니다(잦은 로그인은 TradingView 캡차를 유발). 캡차가 뜨면 잠시 후 다시 시도하거나 브라우저에서 한 번 로그인한 뒤 재시작하세요.
 
 **설정 예시 (`~/.htsrc` 등 셸 프로파일에 `export`로 등록):**
 ```sh

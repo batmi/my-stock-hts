@@ -617,6 +617,15 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 DART_API_KEY = os.getenv("DART_API_KEY", "")  # https://opendart.fss.or.kr 발급 (무료, 40자리)
 
 # ==========================================================
+# [설정] TradingView 계정 (tvDatafeed 로그인용)
+# ==========================================================
+# 둘 다 설정되어 있으면 tvDatafeed가 로그인 모드로 동작한다(익명 대비 데이터 한도·안정성 우수).
+#  미설정 시 종전대로 익명(nologin)으로 동작하며, 파일 로그에 WARNING으로 남는다.
+#  (~/.htsrc 에 `export TV_USERNAME=...`, `export TV_PASSWORD=...` 추가 후 재시작)
+TV_USERNAME = os.getenv("TV_USERNAME", "")
+TV_PASSWORD = os.getenv("TV_PASSWORD", "")
+
+# ==========================================================
 # [설정] 지수 색상 규칙 (지수명 = 상태 라벨 / 지수값 = 추세 위치)
 # ==========================================================
 # 값(현재가·등락률·52주 고점대비) 색상은 자산 종류와 무관하게 '값 자체의 방향'만 나타낸다.
