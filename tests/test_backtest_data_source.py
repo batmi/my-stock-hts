@@ -230,24 +230,36 @@ def test_no_warning_when_coverage_is_sufficient(toss_mode):
 
 
 # ---------------------------------------------------------
-# 기본 분석 기간 (2026-07-26: 365일 → 730일)
-#  1년은 국면이 한 방향으로 치우칠 수 있어 추세추종의 강점(소수의 큰 수익)과
-#  약점(횡보장 휩쏘)이 둘 다 표본에 들어오지 않는다.
+# 기본 분석 기간 (365일 → 730일 → 1095일, 2026-07-26)
+#  승률 24%·대박 fat-tail 구조라 표본 부족이 결과를 가장 크게 왜곡한다.
+#  실측(30종목): 종목당 청산이 365일 5.9건 → 730일 11.3건 → 1095일 16.2건.
+#  pykrx/FDR이 3년치를 절단 없이 커버하고 비용도 30종목 5.2s→5.5s로 무시할 만하다.
 # ---------------------------------------------------------
 
-def test_backtest_default_period_is_two_years():
+def test_backtest_default_period_is_three_years():
     import inspect
 
     from modules import backtest as bt
     src = inspect.getsource(bt.run_backtest)
-    assert 'days = 730' in src
-    assert 'default="730"' in src
+    assert 'days = 1095' in src
+    assert 'default="1095"' in src
     assert 'days = 365' not in src
+    assert 'days = 730' not in src
 
 
-def test_walk_forward_default_period_is_two_years():
+def test_walk_forward_default_period_is_three_years():
     import inspect
 
     from modules import backtest as bt
     sig = inspect.signature(bt.run_walk_forward)
-    assert sig.parameters['days'].default == 730
+    assert sig.parameters['days'].default == 1095
+
+
+def test_walk_forward_floor_raised_to_three_years():
+    """WF는 OOS 폴드당 표본을 확보해야 하므로 짧은 설정을 1095일로 자동 상향한다."""
+    import inspect
+
+    from modules import backtest as bt
+    src = inspect.getsource(bt.run_backtest)
+    assert 'if days < 1095:' in src
+    assert 'if days < 730:' not in src

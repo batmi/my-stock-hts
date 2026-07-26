@@ -1235,7 +1235,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
 
 
 def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_params,
-                     name="", code="", days=730, n_splits=4, optimize_dims=None):
+                     name="", code="", days=1095, n_splits=4, optimize_dims=None):
     """Walk-Forward 검증 (과최적화 진단)
 
     전체 분석 구간을 n_splits개의 연속된 OOS(Out-of-Sample) 폴드로 나눈다.
@@ -1609,10 +1609,17 @@ def run_backtest():
         custom_rule = db_manager.db.get_stock_strategy(code)
         
         # 기본값 설정 (개별 룰 우선 적용)
-        #  [기간] 기본 730일(2년) — 1년은 국면이 한 방향으로만 치우칠 수 있어 추세추종 전략의
-        #  강점(소수의 큰 수익)과 약점(횡보장 휩쏘)이 둘 다 표본에 들어오지 않는다.
-        #  과거 데이터는 pykrx/FDR(KRX 공식)이 담당하므로 2년치 조회에 부담이 없다.
-        days = 730
+        #  [기간] 기본 1095일(3년) — 이 전략은 승률 24%에 대박 fat-tail로 먹는 구조라
+        #  표본 부족이 결과를 가장 크게 왜곡한다. >50% 대박은 실측 34거래당 1건이라
+        #  종목당 거래 수가 적으면 대박 1건의 유무로 결론이 뒤집힌다.
+        #  실측(30종목): 365일 5.9건/종목 → 730일 11.3건 → 1095일 16.2건.
+        #  과거 데이터는 pykrx/FDR(KRX 공식)이 담당해 3년치도 절단 없이 커버되고
+        #  (30종목 5.2s→5.5s, 메모리 +2MB) 라즈베리파이 부담도 없다.
+        #  4년으로 더 늘리지 않는 이유: 청산·스코어링·리스크 로직이 최근 국면을 보고
+        #  튜닝된 것이라 2022년까지 소급하면 검증의 의미가 옅어진다.
+        #  [주의] 기간을 늘리면 '총수익률'은 누적이라 기계적으로 커진다. 기간 간 비교는
+        #  반드시 CAGR·PF·MDD로 할 것.
+        days = 1095
         buy_score = custom_rule['buy_score'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = custom_rule['buy_rsi'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         sell_score = custom_rule['sell_score'] if custom_rule else config.SELL_STRATEGY["SELL_SCORE"]
@@ -1692,12 +1699,12 @@ def run_backtest():
         if change_settings == "y":
             config.console.print()
             config.console.print("[bold]1. 시뮬레이션 기본 설정[/bold]")
-            days_input = Prompt.ask("분석 기간 (일 단위)\n[dim]과거 며칠간의 데이터를 시뮬레이션할지 설정 (기본 730일 = 2년)[/dim]", default="730")
+            days_input = Prompt.ask("분석 기간 (일 단위)\n[dim]과거 며칠간의 데이터를 시뮬레이션할지 설정 (기본 1095일 = 3년)[/dim]", default="1095")
             if days_input.lower() in ['b', 'q']: continue
             try:
                 days = int(days_input)
             except Exception:
-                days = 730
+                days = 1095
             
             config.console.print("\n[bold]2. 기본 매수 타점 설정[/bold]")
             def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
@@ -1858,13 +1865,15 @@ def run_backtest():
         context.USER_ACTION_BREADCRUMB.append(f"[{mode_choice}] {mode_map_dict.get(mode_choice, '')}")
 
         # [추가] Walk-Forward는 추세 사이클(진입→TS활성화→전개→청산)이 OOS 폴드 안에 완결되도록
-        #  무조건 730일 이상을 기준으로 진행한다 (짧은 폴드로 인한 승률 0%·유지율 왜곡 방지).
+        #  무조건 1095일 이상을 기준으로 진행한다 (짧은 폴드로 인한 승률 0%·유지율 왜곡 방지).
+        #  n_splits=4 기준 OOS 폴드가 730일이면 약 120거래일뿐이라 파라미터 안정성을
+        #  판정하기에 표본이 모자란다. 1095일이면 폴드당 약 180거래일이 된다.
         if mode_choice == "3":
-            if days < 730:
-                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 730일을 기준으로 진행합니다. (설정 기간 {days}일 → 730일 자동 상향)[/yellow]")
-                days = 730
+            if days < 1095:
+                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 1095일을 기준으로 진행합니다. (설정 기간 {days}일 → 1095일 자동 상향)[/yellow]")
+                days = 1095
             else:
-                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 730일을 기준으로 진행합니다. (현재 설정 {days}일 ≥ 730일, 그대로 적용)[/yellow]")
+                config.console.print(f"\n[yellow]ℹ Walk-Forward 검증은 무조건 1095일을 기준으로 진행합니다. (현재 설정 {days}일 ≥ 1095일, 그대로 적용)[/yellow]")
 
         # 3. 데이터 준비
         with Progress(
