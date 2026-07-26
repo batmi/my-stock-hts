@@ -1193,6 +1193,59 @@ class AutoTrader:
                 )
         resource_text = " · ".join(resource_parts) if resource_parts else "확인 불가"
 
+        # [운영 관제] 리스크 4종은 '지금 얼마나 위험한가'를 판단하는 핵심 수치다. 숫자만 나열하면
+        #  운용자가 기준을 외우고 있어야 읽히므로, 각 값을 판단 기준(슬롯 수·히트 한도·기본 배수)
+        #  대비로 함께 적는다. 값의 의미(무엇을 뜻하는 금액인지)도 짧게 덧붙인다.
+        #  주의: 텔레그램과 공용 문자열이라 rich 마크업을 넣지 않는다(색은 _add_health_rows에서 부여).
+        #        또한 CLI 표는 " · "로 줄을 나누므로 각 항목 내부에는 " · "를 쓰지 않는다.
+        tracked_cnt = len(getattr(self, 'trailing_stop_cache', {}) or {})
+        max_holdings = getattr(config, 'SYSTEM_MAX_HOLDINGS', 4) or 4
+        equity = getattr(self, 'current_total_asset', 0) or 0
+        heat_amt = getattr(self, 'portfolio_heat_amt', 0.0) or 0.0
+        heat_cap_pct = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0) or 0.0
+        risk_scale = getattr(self, 'risk_scale', 1.0) or 1.0
+        risk_scale_reason = getattr(self, 'risk_scale_reason', "") or ""
+
+        risk_parts = [f"추적 포지션 {tracked_cnt}/{max_holdings}종목 (손절·트레일링 감시 중)"]
+        if equity > 0:
+            risk_parts.append(f"현재 자산 {equity:,.0f}원 (예수금+주식평가)")
+        else:
+            risk_parts.append("현재 자산 미조회 (루프 1회 실행 후 표시)")
+
+        # 히트는 절대 금액보다 '한도를 얼마나 썼는가 / 얼마나 남았는가'가 판단 기준이다.
+        #  한도는 실제 매수 게이트가 쓰는 값과 같게 계산한다
+        #  (자산 × 한도% × 리스크 배수 — engine.effective_portfolio_cap 참조).
+        if heat_cap_pct <= 0:
+            risk_parts.append(f"포트폴리오 히트 {heat_amt:,.0f}원 (한도 미사용)")
+            risk_parts.append("동시 손절 시 최대손실")
+        elif equity <= 0:
+            risk_parts.append(f"포트폴리오 히트 {heat_amt:,.0f}원 (한도 {heat_cap_pct:.1f}%)")
+            risk_parts.append("동시 손절 시 최대손실, 한도액은 자산 조회 후 산출")
+        else:
+            heat_limit = equity * heat_cap_pct * min(1.0, risk_scale) / 100.0
+            used_pct = (heat_amt / heat_limit * 100.0) if heat_limit > 0 else 0.0
+            room = heat_limit - heat_amt
+            risk_parts.append(
+                f"포트폴리오 히트 {heat_amt:,.0f}원 / 한도 {heat_limit:,.0f}원 ({used_pct:.0f}% 소진)"
+            )
+            if used_pct >= 100:
+                risk_parts.append("동시 손절 시 최대손실, 한도 초과로 신규 매수·피라미딩 차단")
+                risks.append(
+                    f"포트폴리오 히트 한도 초과 {heat_amt:,.0f}/{heat_limit:,.0f}원 (신규 매수·피라미딩 차단 중)"
+                )
+            elif used_pct >= 80:
+                risk_parts.append(f"동시 손절 시 최대손실, 한도까지 {room:,.0f}원 (임박)")
+                warnings.append(f"포트폴리오 히트 한도 {used_pct:.0f}% 소진 (신규 매수 여력 축소)")
+            else:
+                risk_parts.append(f"동시 손절 시 최대손실, 한도까지 {room:,.0f}원 여유")
+
+        if risk_scale >= 1.0:
+            risk_parts.append("리스크 배수 x1.00 (기본 사이징 100%)")
+        else:
+            risk_parts.append(f"리스크 배수 x{risk_scale:.2f} (신규 매수 예산 {risk_scale * 100:.0f}%로 축소)")
+            if risk_scale_reason:
+                risk_parts.append(f"축소 사유: {risk_scale_reason[:60]}")
+
         lines = [
             f"{icon} [운영 관제 /health: {state}]",
             f"• 모드/계좌: {mode} / {account or '-'}",
@@ -1202,7 +1255,7 @@ class AutoTrader:
             f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
             f"• 시세 연결: {feed_text}",
-            f"• 리스크: 추적 포지션 {len(getattr(self, 'trailing_stop_cache', {}))}종목 · 현재 자산 {getattr(self, 'current_total_asset', 0):,.0f}원 · 포트폴리오 히트 {getattr(self, 'portfolio_heat_amt', 0):,.0f}원 · 리스크 배수 x{getattr(self, 'risk_scale', 1.0):.2f}",
+            "• 리스크: " + " · ".join(risk_parts),
             f"• 시스템 자원: {resource_text}",
         ]
         if risks:
@@ -1229,11 +1282,18 @@ class AutoTrader:
             # 오류 메시지의 대괄호가 rich 마크업으로 해석돼 글자가 사라지는 것을 막는다.
             return escape(text.strip())
 
+        # '리스크' 셀에서 바로 앞 값을 부연하는 줄(무엇을 뜻하는 금액인지·축소 사유).
+        #  텔레그램 한 줄 표기에서는 들여쓰기 기호가 어색하므로 CLI 표에서만 붙인다.
+        risk_sub_prefixes = ("동시 손절 시 최대손실", "축소 사유:")
+
         def _compact_detail(label, detail):
             # 한 줄에 모든 지표를 나열하면 표가 화면 전체 폭으로 늘어난다. 관련 값은
             # 셀 안에서 줄바꿈해 기존 상태 표의 폭과 가독성을 맞춘다.
             if label in ("자동매매 루프", "Kill Switch", "주문 감시", "리스크"):
-                return detail.replace(" · ", "\n")
+                rows = detail.split(" · ")
+                if label == "리스크":
+                    rows = [f"└ {r}" if r.startswith(risk_sub_prefixes) else r for r in rows]
+                return "\n".join(rows)
             return detail
 
         def _styled(label, detail):
@@ -1250,6 +1310,12 @@ class AutoTrader:
                 if "연결·수신" in detail:
                     return f"[green]{detail}[/]"
                 if "재연결" in detail or "폴백" in detail:
+                    return f"[yellow]{detail}[/]"
+            if label == "리스크":
+                # 히트 한도 소진과 사이징 축소는 '지금 매수가 막혔는지'를 결정하므로 색으로 먼저 보이게 한다.
+                if "한도 초과" in detail:
+                    return f"[red]{detail}[/]"
+                if "한도 임박" in detail or "축소" in detail:
                     return f"[yellow]{detail}[/]"
             return detail
 
