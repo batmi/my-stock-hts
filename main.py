@@ -508,6 +508,12 @@ def show_help():
     table.add_row("", "40 이상", "[magenta]보라색[/]", "과열 (조정 주의)")
     table.add_section()
 
+    # ADX 셀 뒤에 붙는 DMI 방향 아이콘 (표 폭을 늘리지 않기 위해 ADX는 정수 표기)
+    table.add_row("DMI (ADX 뒤 기호)", "+DI > -DI", "[red]▲[/] 빨간색", "상승 방향 우위")
+    table.add_row("", "-DI > +DI", "[blue]▼[/] 파란색", "하락 방향 우위")
+    table.add_row("", f"DX < {analysis.DMI_NEUTRAL_DX:.0f} (격차 미미)", "[white]●[/] 흰색", "중립 (방향성 없음)")
+    table.add_section()
+
     cci_upper = config.INDICATOR_PARAMS["CCI_UPPER"]
     cci_lower = config.INDICATOR_PARAMS["CCI_LOWER"]
 

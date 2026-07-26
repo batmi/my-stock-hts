@@ -2126,10 +2126,10 @@ def run_backtest():
             t_table.add_column("구분", justify="center")
             t_table.add_column("점수", justify="center")
             t_table.add_column("추세SMO", justify="center")
-            t_table.add_column("RSI", justify="right")
-            t_table.add_column("CCI", justify="right")
             t_table.add_column("ADX", justify="right")
             t_table.add_column("DMI", justify="right")
+            t_table.add_column("RSI", justify="right")
+            t_table.add_column("CCI", justify="right")
             t_table.add_column("수량", justify="right")
             t_table.add_column("단가", justify="right")
             t_table.add_column("수익금", justify="right")
@@ -2159,19 +2159,12 @@ def run_backtest():
                     elif 45 <= rsi_val < 55: rsi_c = "orange3"
                     elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_c = "yellow"
                 
-                # ADX
+                # ADX (값 뒤에 DMI 우위 방향 ▲/▼/● 표기 — 표기 규칙은 analysis 단일 소스)
                 adx_val = t.get('adx', 0)
                 if adx_val is None or np.isnan(adx_val):
-                    adx_str = "-"
-                    adx_c = "dim"
-                else:
-                    adx_str = f"{adx_val:.1f}"
-                    adx_c = "white"
-                    if adx_val >= 40: adx_c = "magenta"
-                    elif adx_val >= 30: adx_c = "red"
-                    elif adx_val >= 20: adx_c = "orange3"
-                    elif adx_val >= 15: adx_c = "yellow"
-                
+                    adx_val = None
+                adx_str = analysis.format_adx_cell(adx_val, t.get('plus_di'), t.get('minus_di'))
+
                 # CCI
                 cci_val = t.get('cci', 0)
                 if cci_val is None or np.isnan(cci_val):
@@ -2232,10 +2225,10 @@ def run_backtest():
                     f"{type_color}{t['type']}[/]", 
                     f"{t.get('score', 0):.1f}",
                     smo_str,
+                    adx_str,
+                    dmi_str,
                     f"[{rsi_c}]{rsi_str}[/]",
                     f"[{cci_c}]{cci_str}[/]",
-                    f"[{adx_c}]{adx_str}[/]",
-                    dmi_str,
                     qty_str,
                     price_str, 
                     amt_str, 
@@ -2340,10 +2333,10 @@ def run_backtest():
             m_table.add_column("상태", justify="center")
             m_table.add_column("당시 주가", justify="right")
             m_table.add_column("추세SMO", justify="center")
-            m_table.add_column("RSI", justify="right")
-            m_table.add_column("CCI", justify="right")
             m_table.add_column("ADX", justify="right")
             m_table.add_column("DMI", justify="right")
+            m_table.add_column("RSI", justify="right")
+            m_table.add_column("CCI", justify="right")
             m_table.add_column("사유", justify="left")
             
             for m in missed_trades:
@@ -2358,11 +2351,12 @@ def run_backtest():
                 elif state == "관망": state_color = "white"
                 elif state == "주의": state_color = "yellow"
                 elif state == "매도": state_color = "blue"
-                adx_str = f"{m.get('adx', 0):.1f}"
                 cci_str = f"{m.get('cci', 0):.1f}"
-                
+
                 plus_di = m.get('plus_di')
                 minus_di = m.get('minus_di')
+                # ADX 값 뒤에 DMI 우위 방향(▲/▼/●) 표기
+                adx_str = analysis.format_adx_cell(m.get('adx'), plus_di, minus_di)
                 if plus_di is None or minus_di is None or np.isnan(plus_di) or np.isnan(minus_di):
                     dmi_str = "-"
                 else:
@@ -2375,7 +2369,7 @@ def run_backtest():
                 
                 price_str = fmt_money(m.get('price', 0))
                 smo_str = _trend_smo_str(m.get('close'), m.get('psar'), m.get('macd'), m.get('macd_signal'), m.get('obv_trend'))
-                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, smo_str, f"{m['rsi']:.1f}", cci_str, adx_str, dmi_str, m['reason'])
+                m_table.add_row(date_str, f"{m['score']:.1f}", f"[{state_color}]{state}[/]", price_str, smo_str, adx_str, dmi_str, f"{m['rsi']:.1f}", cci_str, m['reason'])
                 
             config.console.print(m_table)
 

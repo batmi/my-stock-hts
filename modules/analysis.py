@@ -1185,6 +1185,54 @@ def format_regime(regime, markup=True):
     return f"[{color}]{label}[/]" if markup else label
 
 
+# DMI 방향 표기(▲/▼/●)에서 '중립'으로 볼 DX 상한.
+#  절대 격차(|+DI - -DI|)는 종목 변동성에 따라 스케일이 달라져 기준이 흔들리므로,
+#  ADX의 재료인 정규화 값 DX = 100*|+DI - -DI|/(+DI + -DI)로 판정한다.
+DMI_NEUTRAL_DX = 10.0
+
+
+def dmi_direction_icon(plus_di, minus_di):
+    """DMI 우위 방향 아이콘. +DI 우위 ▲(빨강) / -DI 우위 ▼(파랑) / 중립 ●(흰색).
+
+    데이터가 없으면 빈 문자열을 돌려 ADX 셀이 기존 표기를 유지하게 한다.
+    """
+    if plus_di is None or minus_di is None:
+        return ""
+    try:
+        if math.isnan(plus_di) or math.isnan(minus_di):
+            return ""
+    except TypeError:
+        return ""
+
+    di_sum = plus_di + minus_di
+    if di_sum <= 0:
+        return "[white]●[/]"
+    dx = 100 * abs(plus_di - minus_di) / di_sum
+    if dx < DMI_NEUTRAL_DX:
+        return "[white]●[/]"
+    return "[red]▲[/]" if plus_di > minus_di else "[blue]▼[/]"
+
+
+def format_adx_cell(adx_val, plus_di=None, minus_di=None, digits=0):
+    """표용 ADX 셀: 값(강도 색상) + DMI 방향 아이콘.
+
+    색상 5단계(magenta/red/orange3/yellow/white)는 지수표·전체분석표와 동일 기준.
+    목록 표에서는 아이콘 자리를 만들기 위해 정수로 표기한다(소수 2자리는 개별 분석 화면).
+    """
+    if adx_val is None:
+        return "[dim]-[/dim]"
+
+    adx_str = f"{adx_val:.{digits}f}"
+    if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]"
+    elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"
+    elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
+    elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
+    else: adx_str = f"[white]{adx_str}[/]"
+
+    icon = dmi_direction_icon(plus_di, minus_di)
+    return f"{adx_str} {icon}" if icon else adx_str
+
+
 def price_trend_color(price, ema20, ema60):
     """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
 
@@ -1492,8 +1540,12 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
     
     is_caution = False
     # [추가] 위험형 주의(hard): '관심(태동)'으로도 분류 불가한 명백한 하락/과열 신호.
-    #        약세형(soft: 단순 장기이평 이탈)과 분리하여, 60/120일선 아래여도
+    #        약세형(soft: 이평선 한쪽 이탈)과 분리하여, 60일선 또는 120일선 중 한쪽 아래여도
     #        추세 전환 초기 신호가 있으면 '관심'으로 건질 수 있도록 한다.
+    #  [주의] 60·120일선을 '동시에' 이탈한 종목은 위 is_severe_danger에서 이미 '매도'로 확정
+    #        되어 여기까지 오지 않는다(추세추종 원칙상 의도된 차단 — 역배열 데드캣 반등을
+    #        관심으로도 올리지 않는다). 따라서 이 아래 약세형 경로가 실제로 커버하는 것은
+    #        '한쪽만 이탈'(또는 120일선 데이터 부족으로 위험 판정이 불가한) 경우다.
     hard_caution = False
     # [수정] 주의 조건: 60일선 이탈 또는 120일선 이탈 → 약세형(soft, 관심 후보 가능)
     if price < ema60:
@@ -1554,8 +1606,9 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
 
     # [관심(태동)] 추세 정렬은 미완성('상승' 미달)이나, 위험형 신호가 없고
     #   추세 전환 초기 신호가 INTEREST_SIGNAL_MIN개 이상 포착된 종목.
-    #   60/120일선 아래(약세형 주의)여도 초기 반등 여력을 빠르게 포착하기 위함.
-    #   수동 스윙 매매 모니터링 대상으로 표시한다.
+    #   60일선 또는 120일선 중 한쪽 아래(약세형 주의)여도 초기 반등 여력을 빠르게 포착하기 위함.
+    #   (양쪽 동시 이탈은 위 is_severe_danger에서 '매도'로 확정되어 여기 도달하지 않는다)
+    #   수동 스윙 매매 모니터링 대상으로 표시한다. 자동매매 진입 상태가 아니다.
     if not hard_caution and interest_min > 0:
         interest_signals = []
         if ema_5 is not None and ema20 is not None and ema_5 > ema20:
@@ -2695,9 +2748,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     idx_table.add_column("EMA(60)", justify="right")
                     idx_table.add_column("EMA(120)", justify="right")
                     idx_table.add_column("추세SMO", justify="center")
+                    idx_table.add_column("ADX", justify="right")
                     idx_table.add_column("RSI", justify="right")
                     idx_table.add_column("CCI", justify="right")
-                    idx_table.add_column("ADX", justify="right")
                     idx_table.add_column("OBV", justify="right")
                     
                     curr_fmt = f"{current_price:,.2f}"
@@ -2793,14 +2846,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         elif config.INDICATOR_PARAMS["CCI_LOWER"] < val_cci <= 0: t_cci_str = f"[yellow]{t_cci_str}[/]"
                         else: t_cci_str = f"[blue]{t_cci_str}[/]"
 
+                    # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기
                     val_adx = ind.get('adx')
-                    t_adx_str = f"{val_adx:.1f}" if val_adx is not None else "[dim]-[/dim]"
-                    if val_adx is not None:
-                        if val_adx >= 40: t_adx_str = f"[magenta]{t_adx_str}[/]" 
-                        elif val_adx >= 30: t_adx_str = f"[red]{t_adx_str}[/]"     
-                        elif val_adx >= 20: t_adx_str = f"[orange3]{t_adx_str}[/]"
-                        elif val_adx >= 15: t_adx_str = f"[yellow]{t_adx_str}[/]"
-                        else: t_adx_str = f"[white]{t_adx_str}[/]"
+                    t_adx_str = format_adx_cell(val_adx, ind.get('plus_di'), ind.get('minus_di'))
 
                     idx_table.add_row(
                         name, curr_str, change_str, high_52_str, 
@@ -2808,7 +2856,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                         fmt_val(ind.get('ema_20'), ema20_color), 
                         fmt_val(ind.get('ema_60'), ema60_color), 
                         fmt_val(ind.get('ema_120'), ema120_color), 
-                        trend_str, t_rsi_str, t_cci_str, t_adx_str, obv_disp
+                        trend_str, t_adx_str, t_rsi_str, t_cci_str, obv_disp
                     )
                     config.console.print()
                     config.console.print(idx_table)
@@ -2921,6 +2969,7 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': state, 'state_color': state_color,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
+            'plus_di': ind.get('plus_di'), 'minus_di': ind.get('minus_di'),
             'vol_strength': vol_strength, 'is_custom_rule': is_custom_rule,
             'is_restricted': is_restricted,
             'is_reserved': is_reserved,
@@ -3008,9 +3057,9 @@ def diagnose_group_stocks(market_filter=None):
     table.add_column("현재가", justify="right")
     table.add_column("점수", justify="center")
     table.add_column("상태", justify="center")
+    table.add_column("ADX", justify="right")
     table.add_column("RSI", justify="right")
     table.add_column("CCI", justify="right")
-    table.add_column("ADX", justify="right")
     table.add_column("체결강도", justify="right")
     
     for r in results:
@@ -3024,7 +3073,8 @@ def diagnose_group_stocks(market_filter=None):
             if rsi_val >= 70: rsi_str = f"[magenta]{rsi_str}[/]"
             elif rsi_val <= 30: rsi_str = f"[blue]{rsi_str}[/]"
             
-        adx_str = f"{r['adx']:.1f}" if r['adx'] is not None else "-"
+        # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기
+        adx_str = format_adx_cell(r['adx'], r.get('plus_di'), r.get('minus_di'))
         cci_str = f"{r['cci']:.1f}" if r['cci'] is not None else "-"
         
         vol_val = r.get('vol_strength')
@@ -3053,9 +3103,9 @@ def diagnose_group_stocks(market_filter=None):
             f"{int(r['price']):,}원",
             score_str,
             state_str,
+            adx_str,
             rsi_str,
-            cci_str,
-            adx_str
+            cci_str
         )
         
     config.console.print(table, crop=False)
@@ -3285,6 +3335,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             'code': code, 'name': name, 'price': current_price,
             'score': score, 'state': initial_state, 'state_color': initial_state_color, 'state_reason': state_reason,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': obv_trend,
+            'plus_di': ind.get('plus_di'), 'minus_di': ind.get('minus_di'),
             'psar': ind['psar'], 'macd': ind.get('macd'), 'macd_signal': ind.get('macd_signal'),
             'is_target': is_target, 
             'vol_strength': vol_strength,
@@ -3587,9 +3638,9 @@ def analyze_market_stocks(market_type):
         table.add_column("점수", justify="center")
         table.add_column("상태", justify="center")
         table.add_column("추세SMO", justify="center")
+        table.add_column("ADX", justify="right")
         table.add_column("RSI", justify="right")
         table.add_column("CCI", justify="right")
-        table.add_column("ADX", justify="right")
         table.add_column("체결강도", justify="right")
         
         for i, item in enumerate(page_items):
@@ -3602,14 +3653,9 @@ def analyze_market_stocks(market_type):
                 elif config.INDICATOR_PARAMS["RSI_LOWER"] < rsi_val < 45: rsi_str = f"[yellow]{rsi_str}[/]"
                 else: rsi_str = f"[blue]{rsi_str}[/]"
 
+            # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기
             adx_val = item['adx']
-            adx_str = f"{adx_val:.1f}" if adx_val is not None else "-"
-            if adx_val is not None:
-                if adx_val >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                elif adx_val >= 30: adx_str = f"[red]{adx_str}[/]"     
-                elif adx_val >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                elif adx_val >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                else: adx_str = f"[white]{adx_str}[/]"
+            adx_str = format_adx_cell(adx_val, item.get('plus_di'), item.get('minus_di'))
 
             cci_val = item['cci']
             cci_str = f"{cci_val:.1f}" if cci_val is not None else "-"
@@ -3676,9 +3722,9 @@ def analyze_market_stocks(market_type):
                 f"[{s_color}]{item['score']}[/]",
                 f"[{s_color}]{display_state}[/]",
                 trend_str,
+                adx_str,
                 rsi_str,
                 cci_str,
-                adx_str,
                 vol_str
             )
             
@@ -4458,13 +4504,8 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 elif config.INDICATOR_PARAMS["RSI_LOWER"] < ind.get('rsi') < 45: rsi_str = f"[yellow]{rsi_str}[/]"
                 else: rsi_str = f"[blue]{rsi_str}[/]"
 
-            adx_str = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "[dim]-[/dim]"
-            if ind.get('adx') is not None:
-                if ind.get('adx') >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-                elif ind.get('adx') >= 30: adx_str = f"[red]{adx_str}[/]"     
-                elif ind.get('adx') >= 20: adx_str = f"[orange3]{adx_str}[/]"
-                elif ind.get('adx') >= 15: adx_str = f"[yellow]{adx_str}[/]"
-                else: adx_str = f"[white]{adx_str}[/]"
+            # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기
+            adx_str = format_adx_cell(ind.get('adx'), ind.get('plus_di'), ind.get('minus_di'))
 
             cci_str = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "[dim]-[/dim]"
             if ind.get('cci') is not None:
@@ -4507,7 +4548,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             if marks:
                 final_name_str += f"[dim]{''.join(marks)}[/dim]"
 
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, rsi_str, cci_str, adx_str]
+            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, adx_str, rsi_str, cci_str]
             if not is_overseas:
                 if use_investor_data: row_data.append(inv_str)
                 else: row_data.append(obv_disp)
@@ -4655,10 +4696,10 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     table.add_column("EMA(60)", justify="right")
     table.add_column("EMA(120)", justify="right")
     table.add_column("추세SMO", justify="center")
+    table.add_column("ADX", justify="right")
     table.add_column("RSI", justify="right")
     table.add_column("CCI", justify="right")
-    table.add_column("ADX", justify="right")
-    
+
     is_us_stock = is_overseas and ("주식" in title)
     is_us_etf = is_overseas and ("ETF" in title)
     

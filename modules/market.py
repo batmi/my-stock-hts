@@ -674,13 +674,8 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif _rsi_low < val_rsi < 45: rsi_str = f"[yellow]{rsi_str}[/]"
             else: rsi_str = f"[blue]{rsi_str}[/]"
 
-        adx_str = f"{val_adx:.1f}" if val_adx is not None else "[dim]-[/dim]"
-        if val_adx is not None:
-            if val_adx >= 40: adx_str = f"[magenta]{adx_str}[/]" 
-            elif val_adx >= 30: adx_str = f"[red]{adx_str}[/]"     
-            elif val_adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
-            elif val_adx >= 15: adx_str = f"[yellow]{adx_str}[/]"
-            else: adx_str = f"[white]{adx_str}[/]"
+        # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기 (표기 규칙은 analysis 단일 소스)
+        adx_str = analysis.format_adx_cell(val_adx, val_plus_di, val_minus_di)
 
         # [통일] CCI 임계값도 config 단일 소스 (RSI와 동일한 이유)
         _cci_up = config.INDICATOR_PARAMS["CCI_UPPER"]
@@ -808,7 +803,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         return {
             'status': 'success',
-            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, rsi_str, cci_str, adx_str, obv_disp],
+            'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, adx_str, rsi_str, cci_str, obv_disp],
             'patched_name': patched_name,
             'missing_name': missing_name,
             'mismatch_msg': mismatch_msg,
@@ -1040,9 +1035,9 @@ def _show_market_indices_core(target_indices=None):
         table.add_column("EMA(60)", justify="right")
         table.add_column("EMA(120)", justify="right")
         table.add_column("추세SMO", justify="center")
+        table.add_column("ADX", justify="right")
         table.add_column("RSI", justify="right")
         table.add_column("CCI", justify="right")
-        table.add_column("ADX", justify="right")
         table.add_column("OBV", justify="right")
 
         # [변경] 3. 지표 분석 및 테이블 구성 (Progress 분리: Percentage 포함)

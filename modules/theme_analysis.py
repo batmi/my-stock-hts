@@ -1309,7 +1309,7 @@ def _analyze_stock_ui():
 # ==========================================================
 SCREENER_SELECT_COLS = [
     'name', 'description', 'sector', 'close', 'change', 'volume', 'RSI', 'SMA20', 'SMA50', 'SMA200',
-    'MACD.macd', 'MACD.signal', 'ADX', 'average_volume', 'price_earnings_ttm', 'price_book_ratio',
+    'MACD.macd', 'MACD.signal', 'ADX', 'ADX+DI', 'ADX-DI', 'average_volume', 'price_earnings_ttm', 'price_book_ratio',
     'return_on_equity', 'debt_to_equity', 'price_52_week_high', 'price_52_week_low',
     'dividend_yield_recent', 'relative_volume_10d_calc', 'market_cap_basic', 'Recommend.All'
 ]
@@ -1461,6 +1461,7 @@ def _run_tradingview_screener():
         from tradingview_screener import Query, Column
         import api
         import pandas as pd
+        from modules import analysis
     except ImportError:
         config.console.print("\n[red]※ tradingview-screener 라이브러리가 설치되지 않았습니다.[/red]")
         config.console.print("[dim]명령어: pip install tradingview-screener[/dim]")
@@ -1568,8 +1569,8 @@ def _run_tradingview_screener():
                     table.add_column("52주(%)", justify="right")
                     table.add_column("SMA20", justify="right")
                     table.add_column("MACD (Sig)", justify="right")
-                    table.add_column("RSI", justify="right")
                     table.add_column("ADX", justify="right")
+                    table.add_column("RSI", justify="right")
                     table.add_column("PER", justify="right")
                     table.add_column("ROE(%)", justify="right")
                     table.add_column("배당(%)", justify="right", style="dim")
@@ -1644,6 +1645,8 @@ def _run_tradingview_screener():
                         macd = row.get('MACD.macd', None)
                         macd_signal = row.get('MACD.signal', None)
                         adx = row.get('ADX', None)
+                        plus_di = row.get('ADX+DI', None)
+                        minus_di = row.get('ADX-DI', None)
                         per = row.get('price_earnings_ttm', None)
                         roe = row.get('return_on_equity', None)
                         div = row.get('dividend_yield_recent', None)
@@ -1684,11 +1687,12 @@ def _run_tradingview_screener():
                             elif 30 <= rsi < 50: rsi_str = f"[orange3]{rsi_str}[/]"
                             elif rsi < 30: rsi_str = f"[blue]{rsi_str}[/]"
 
-                        adx_str = f"{adx:.1f}" if pd.notna(adx) else "-"
-                        if pd.notna(adx):
-                            if adx > 40: adx_str = f"[magenta]{adx_str}[/]"
-                            elif adx >= 30: adx_str = f"[red]{adx_str}[/]"
-                            elif adx >= 20: adx_str = f"[orange3]{adx_str}[/]"
+                        # ADX 값 뒤에 DMI 우위 방향(▲/▼/●)을 함께 표기 (표기 규칙은 analysis 단일 소스)
+                        adx_str = analysis.format_adx_cell(
+                            adx if pd.notna(adx) else None,
+                            plus_di if pd.notna(plus_di) else None,
+                            minus_di if pd.notna(minus_di) else None,
+                        )
 
                         per_str = f"{per:.1f}" if pd.notna(per) else "-"
                         roe_str = f"{roe:.1f}" if pd.notna(roe) else "-"
@@ -1706,7 +1710,7 @@ def _run_tradingview_screener():
 
                         table.add_row(
                             ticker, name, sector, close_str, change_str, w52_pos_str, sma20_str,
-                            macd_str, rsi_str, adx_str, per_str, roe_str, div_str, vol_str, avg_vol_str
+                            macd_str, adx_str, rsi_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                         )
                         progress.advance(active_task)
                         # [추가] 진행 중 프리셋의 행 처리 비율을 메인 진행률에 실시간 반영
