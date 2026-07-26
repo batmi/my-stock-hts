@@ -78,6 +78,12 @@ class AutoTrader:
             cls._instance.trade_records = []
             cls._instance.start_time = None
             cls._instance.consecutive_errors = 0
+            # 운영 관제용 수명주기 정보. /health는 외부 API를 추가 호출하지 않고
+            # 이 값을 읽어 현재 루프의 생존성·최근 장애를 보여준다.
+            cls._instance.last_cycle_at = None
+            cls._instance.last_success_at = None
+            cls._instance.last_error_at = None
+            cls._instance.last_error_message = ""
             cls._instance.initial_asset = 0
             cls._instance.baseline_principal = 0   # [추가] 입금 자동감지용 기준 원금(현금+매입원가-실현손익). initial_asset(총자산)과 별개.
             cls._instance.was_market_open = None
@@ -1016,6 +1022,228 @@ class AutoTrader:
             
         return msg
 
+    @staticmethod
+    def _health_time(value):
+        """관제 메시지용 시각 포맷. 값이 없을 때도 상태를 명확히 표시한다."""
+        if not value:
+            return "기록 없음"
+        if isinstance(value, datetime):
+            return value.strftime("%H:%M:%S")
+        return str(value)
+
+    def get_health_message(self):
+        """외부 API 호출 없이 운영 상태를 요약한 관제 메시지를 만든다.
+
+        /status는 잔고·지수 조회까지 수행하는 상세 화면이고, /health는 장애 상황에서도
+        응답할 수 있도록 메모리·로컬 DB·실시간 피드 상태만 사용한다.
+        """
+        now = datetime.now()
+        warnings = []
+        risks = []
+
+        if not self.is_running:
+            state = "중지"
+            icon = "🔴"
+            warnings.append("자동매매가 실행 중이 아닙니다")
+        elif getattr(self, "buy_halted", False):
+            state = "방어 모드"
+            icon = "🟠"
+            warnings.append(f"신규 매수 중단: {self.buy_halt_reason or '사유 미기록'}")
+        elif self.is_market_open():
+            state = "운영 중"
+            icon = "🟢"
+        else:
+            state = "대기"
+            icon = "🟡"
+
+        max_err = int(getattr(config, "SYSTEM_MAX_CONSECUTIVE_ERRORS", 5) or 5)
+        errors = int(getattr(self, "consecutive_errors", 0) or 0)
+        if errors:
+            (risks if errors >= max_err else warnings).append(
+                f"자동매매 루프 연속 오류 {errors}/{max_err}회"
+            )
+
+        # 체결 모니터 오류는 주문 안전성과 직결되므로 별도로 노출한다.
+        monitor_errors = 0
+        try:
+            monitor_errors = int(getattr(_pkg().ConclusionMonitor(), "consecutive_errors", 0) or 0)
+        except Exception:
+            warnings.append("체결 감시 상태를 읽지 못했습니다")
+        if monitor_errors:
+            (risks if monitor_errors >= max_err else warnings).append(
+                f"체결 감시 연속 오류 {monitor_errors}/{max_err}회"
+            )
+
+        # 로컬 주문 상태는 API 장애 중에도 확인 가능하다.
+        with getattr(self.order_manager, "_lock", threading.RLock()):
+            pending_orders = sum(len(v) for v in self.order_manager.pending_orders.values())
+        try:
+            reserved_orders = len(db_manager.db.get_pending_reserved_orders())
+        except Exception:
+            reserved_orders = 0
+            warnings.append("예약 주문 DB를 읽지 못했습니다")
+
+        # 당일 주문 이력도 로컬 DB에서만 집계한다. 주문번호 기준으로 중복된
+        # 접수→체결 행은 한 건으로 정리해 운영자가 실제 주문 흐름을 오해하지 않게 한다.
+        today_order_count = today_fill_count = today_cancel_count = 0
+        try:
+            target_account = (
+                f"{config.session.cano}-{config.session.acnt_prdt_cd}"
+                if config.session.is_simulation
+                else f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
+            )
+            today_trades = db_manager.db.get_trades(
+                start_date=now.strftime("%Y-%m-%d"), end_date=now.strftime("%Y-%m-%d"),
+                is_sim=config.session.is_simulation, account=target_account,
+            )
+            refined = self._refine_trade_records(today_trades)
+            today_order_count = len(refined)
+            today_fill_count = sum("체결" in str(t.get("order_status") or "") for t in refined)
+            today_cancel_count = sum("취소" in str(t.get("order_status") or "") for t in refined)
+        except Exception:
+            warnings.append("당일 주문 이력을 읽지 못했습니다")
+
+        feed_text = "REST 폴링"
+        try:
+            import realtime
+            feed = realtime.get_feed()
+            if getattr(config.session, "is_toss", False):
+                feed_text = "토스: REST 폴링 (공식 WS 미지원)"
+            elif not getattr(config, "USE_WEBSOCKET", True):
+                feed_text = "REST 폴링 (WebSocket 비활성)"
+            else:
+                thread = getattr(feed, "_thread", None)
+                alive = bool(thread and thread.is_alive())
+                got_data = bool(getattr(feed, "_got_data", False))
+                coverage = feed.coverage() if hasattr(feed, "coverage") else None
+                feed_text = "WebSocket 연결·수신 중" if alive and got_data else "WebSocket 재연결/REST 폴백"
+                if not (alive and got_data):
+                    warnings.append("실시간 시세 WebSocket이 연결 또는 수신 대기 상태입니다")
+                if coverage:
+                    feed_text += f" (시세 {coverage.get('price_covered', 0)}/{coverage.get('priority', 0)}종목)"
+        except Exception:
+            warnings.append("실시간 피드 상태를 읽지 못했습니다")
+
+        account = config.session.cano if config.session.is_simulation else config.session.auto_cano
+        if getattr(config.session, "is_toss", False):
+            mode = "토스 실전"
+        elif config.session.is_simulation:
+            mode = "KIS 모의"
+        else:
+            mode = "KIS 실전"
+
+        if self.last_success_at and isinstance(self.last_success_at, datetime):
+            age = (now - self.last_success_at).total_seconds()
+            if self.is_running and age > max(120, getattr(config, "SYSTEM_TRADING_INTERVAL", 10) * 4):
+                warnings.append(f"정상 루프 갱신 지연 {int(age)}초")
+        elif self.is_running:
+            warnings.append("아직 정상 루프 완료 기록이 없습니다")
+
+        lines = [
+            f"{icon} [운영 관제 /health: {state}]",
+            f"• 모드/계좌: {mode} / {account or '-'}",
+            f"• 자동매매 루프: 최근 시작 {self._health_time(self.last_cycle_at)} · 정상 완료 {self._health_time(self.last_success_at)}",
+            f"• 최근 오류: {self._health_time(self.last_error_at)}" + (f" — {self.last_error_message[:160]}" if self.last_error_message else ""),
+            f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
+            f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
+            f"• 시세 연결: {feed_text}",
+            f"• 리스크: 추적 포지션 {len(getattr(self, 'trailing_stop_cache', {}))}종목 · 현재 자산 {getattr(self, 'current_total_asset', 0):,.0f}원 · 포트폴리오 히트 {getattr(self, 'portfolio_heat_amt', 0):,.0f}원 · 리스크 배수 x{getattr(self, 'risk_scale', 1.0):.2f}",
+        ]
+        if risks:
+            lines.append("\n🚨 [위험]\n" + "\n".join(f"• {item}" for item in risks))
+        if warnings:
+            lines.append("\n⚠️ [주의]\n" + "\n".join(f"• {item}" for item in warnings))
+        if not risks and not warnings:
+            lines.append("\n✅ 관제상 즉시 조치가 필요한 신호가 없습니다.")
+        return "\n".join(lines)
+
+    def _add_health_rows(self, table):
+        """기존 CLI 테이블 끝에 운영 관제 행을 추가한다.
+
+        텔레그램은 한 화면에 읽기 쉬운 줄글을 쓰되, 터미널은 기존 ``print_status``와
+        같은 표 형식을 사용해 운용 중 수치를 빠르게 비교할 수 있게 한다.
+        """
+        message_lines = self.get_health_message().splitlines()
+
+        def _cli_text(text):
+            """텔레그램용 상태 기호를 터미널 테이블에서는 제거한다."""
+            for mark in ("🟢", "🟡", "🟠", "🔴", "🚨", "⚠️", "⚠", "✅"):
+                text = text.replace(mark, "")
+            return text.strip()
+
+        def _compact_detail(label, detail):
+            # 한 줄에 모든 지표를 나열하면 표가 화면 전체 폭으로 늘어난다. 관련 값은
+            # 셀 안에서 줄바꿈해 기존 상태 표의 폭과 가독성을 맞춘다.
+            if label in ("자동매매 루프", "Kill Switch", "주문 감시", "리스크"):
+                return detail.replace(" · ", "\n")
+            return detail
+
+        section = None
+        section_messages = []
+
+        def _flush_section_messages():
+            """주의/위험 항목을 한 셀에 모아 라벨 반복을 피한다."""
+            nonlocal section_messages
+            if section and section_messages:
+                table.add_row(section, "\n".join(section_messages))
+                section_messages = []
+
+        # 상태 제목은 기존 테이블 제목에 이미 있으므로 건너뛴다.
+        for raw_line in message_lines[1:]:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line in ("🚨 [위험]", "⚠️ [주의]"):
+                _flush_section_messages()
+                section = "위험 신호" if line.startswith("🚨") else "주의 신호"
+                table.add_section()
+                continue
+            if line.startswith("✅ "):
+                _flush_section_messages()
+                table.add_section()
+                table.add_row("관제 결과", _cli_text(line))
+                continue
+
+            # get_health_message의 표준 항목(• 구분: 내용)을 터미널 표의 두 열로 분리한다.
+            if line.startswith("• "):
+                body = line[2:]
+                if section:
+                    section_messages.append(_cli_text(body))
+                elif ": " in body:
+                    label, detail = body.split(": ", 1)
+                    table.add_row(label, _compact_detail(label, _cli_text(detail)))
+                else:
+                    table.add_row("상태", _cli_text(body))
+            else:
+                if section:
+                    section_messages.append(_cli_text(line))
+                else:
+                    table.add_row("상태", _cli_text(line))
+
+        _flush_section_messages()
+
+    def print_health(self):
+        """CLI용 운영 관제 단독 화면(하위 호환용)."""
+        utils.clear_screen()
+        utils.print_breadcrumb()
+
+        table = Table(
+            title="운영 관제",
+            title_justify="center",
+            title_style="",
+            box=box.HORIZONTALS,
+            show_header=True,
+            header_style="dim",
+            border_style="dim",
+        )
+        table.add_column("구분", justify="left", style="cyan", width=15, no_wrap=True)
+        table.add_column("상세 내용", justify="left")
+        self._add_health_rows(table)
+
+        console.print()
+        console.print(table)
+        console.print()
+
     def _get_skipped_stocks_count(self, holdings):
         """현재 관심 종목 중 미보유 종목을 대상으로 시장별 대기 종목 수를 계산합니다."""
         targets = config.session.stock_data.get("stocks_kr", [])
@@ -1515,6 +1743,11 @@ class AutoTrader:
             table.add_section()
             table.add_row("개별 룰 설정", rule_summary)
 
+        # 운영 관제는 별도 표가 아닌 상태 표의 마지막 섹션으로 이어서 보여 준다.
+        # 기존 상태/설정 정보와 관제 데이터를 수평 구분선으로 명확히 나눈다.
+        table.add_section()
+        self._add_health_rows(table)
+
         console.print(table)
         
         if rule_table:
@@ -1574,7 +1807,7 @@ class AutoTrader:
             console.print(h_table)
         else:
             console.print("\n[dim]현재 보유 중인 종목이 없습니다.[/dim]")
-            
+
         console.print()
 
     def print_report(self, target_account=None):
@@ -2459,6 +2692,7 @@ class AutoTrader:
         my_thread = threading.current_thread()
         while self.is_running and self.thread is my_thread:
             try:
+                self.last_cycle_at = datetime.now()
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
                 with utils.AccountContext(target_cano):
                     current_market_status = self.is_market_open()
@@ -2726,8 +2960,11 @@ class AutoTrader:
                 
                 # 정상 루프 완료 시 에러 카운트 초기화
                 self.consecutive_errors = 0
+                self.last_success_at = datetime.now()
                     
             except Exception as e:
+                self.last_error_at = datetime.now()
+                self.last_error_message = str(e)
                 self.consecutive_errors += 1
                 max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
                 self.log(f"에러 발생({self.consecutive_errors}/{max_err}): {str(e)}")
@@ -4555,4 +4792,3 @@ class AutoTrader:
         # 3. API 조회 실패 또는 정보 누락 시 기본값 'KOSPI'로 설정
         self.stock_market_map[code] = "KOSPI"
         return "KOSPI"
-

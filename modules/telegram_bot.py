@@ -46,6 +46,7 @@ class TelegramCommander:
         # [리팩토링] 명령어 핸들러 매핑
         self.command_handlers = {
             "/status": self._cmd_status,
+            "/health": self._cmd_health,
             "/start": self._cmd_start,
             "/stop": self._cmd_stop,
             "/restart": self._cmd_restart,
@@ -514,6 +515,10 @@ class TelegramCommander:
         self._send_reply("⏳ [시스템 상태 조회] 현재 상태 및 자산 정보를 수집 중입니다. 잠시만 기다려주세요...")
         return self.trader.get_status_message()
 
+    def _cmd_health(self, args):
+        """외부 API 장애 때도 확인 가능한 경량 운영 관제 명령."""
+        return self.trader.get_health_message()
+
     def _cmd_start(self, args):
         if self.trader.is_running:
             return "⚠️ 이미 시스템 트레이딩이 실행 중입니다."
@@ -547,6 +552,7 @@ class TelegramCommander:
             "• /stop : 자동매매 중단\n"
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
+            "• /health : 운영 관제(루프·오류·주문·실시간 연결)\n"
             "• /config : 트레이딩 전략 설정값 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
