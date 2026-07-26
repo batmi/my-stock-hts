@@ -20,12 +20,28 @@ def test_modify_sell_strategy_ui(mock_ask):
     반추세성 청산 설정(고정 익절 등)은 메뉴에서 숨겨져 1번 항목이 TS 발동 수익률이다.
     """
     # 1번 선택 -> 값 입력 -> 종료
-    mock_ask.side_effect = ["1", "50.0", "q"]
+    mock_ask.side_effect = ["1", "20.0", "q"]
 
     original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
     try:
         settings.modify_sell_strategy()
-        assert config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] == 50.0
+        assert config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] == 20.0
+    finally:
+        config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = original
+
+
+@patch('rich.prompt.Prompt.ask')
+def test_modify_sell_strategy_ui_rejects_out_of_range(mock_ask):
+    """범위를 벗어난 입력은 저장되지 않아야 한다 (_RANGE_RULES).
+
+    TS 발동률 50%는 트레일링 스탑을 사실상 비활성화한다 — 주청산 수단이 사라지는 값이다.
+    """
+    mock_ask.side_effect = ["1", "50.0", "q", "q"]
+
+    original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
+    try:
+        settings.modify_sell_strategy()
+        assert config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] == original
     finally:
         config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = original
 

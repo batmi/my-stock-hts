@@ -120,6 +120,14 @@ def _notify_preset_switch(old_preset, new_preset):
     except Exception:
         pass
 
+# [UX] 설정 하위 메뉴(1~5) 공통 '전체보기' 항목.
+#  편집 항목을 고르기 전에 현재 값을 먼저 보는 것이 일반적인 흐름이므로 각 하위 메뉴의
+#  기본 선택지로 둔다. 숨김 처리된 키(ANTI_TREND/BACKTESTED_HIDDEN_KEYS)도 조회 화면에는
+#  읽기 전용으로 나오므로, 이 항목이 '무엇으로 도는지'를 확인하는 정식 경로가 된다.
+_VIEW_ALL_KEY = "9"
+_VIEW_ALL_ITEM = (_VIEW_ALL_KEY, "전체보기", "View All")
+
+
 def view_system_config(group=None):
     """현재 시스템 설정 조회 (group: 1~5 해당 그룹만 조회, None이면 전체)"""
     group_names = {
@@ -194,7 +202,12 @@ def view_system_config(group=None):
 
         subheader("1-2. 서브전략 (슈퍼 모멘텀/피라미딩)")
         # [추세추종 보호] 역매수(역추세) 관련 설정은 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
-        row("슈퍼 모멘텀 (RSI 유연화)", "주도주 랠리 시 RSI 허용치 완화", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE']", f"{thresholds.get('SUPER_MOMENTUM_USE', True)}", key="SUPER_MOMENTUM_USE")
+        # [추세추종 보호] 슈퍼 모멘텀 스위치는 잠금 — BUY_RSI_MAX와 조합되면 매매 0건이 된다
+        #  (ANTI_TREND_HIDDEN_KEYS 주석 참조). 값 자체는 읽기 전용으로 계속 보여준다.
+        table.add_row(
+            "슈퍼 모멘텀 (RSI 유연화)\n[dim]주도주 랠리 시 RSI 허용치 완화[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]",
+            f"{thresholds.get('SUPER_MOMENTUM_USE', True)}")
         if thresholds.get('SUPER_MOMENTUM_USE', True):
             row("슈퍼 매수 발동 점수", "기준 점수 이상 & 신고가 90% 이상 시 발동", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_SCORE']", f"{thresholds.get('SUPER_MOMENTUM_SCORE', 8.0)}", key="SUPER_MOMENTUM_SCORE", indent=True)
             row("슈퍼 52주 위치 기준", "신고가 근접 여부 (예: 90.0% 이상)", "ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_W52_POS']", f"{thresholds.get('SUPER_MOMENTUM_W52_POS', 90.0)}%", key="SUPER_MOMENTUM_W52_POS", indent=True)
@@ -208,14 +221,28 @@ def view_system_config(group=None):
         subheader("1-3. 청산 — 손절·트레일링·시간")
         # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
         row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
-        row("TS 하락 감지율", "최고가 대비 최소 하락률 (ATR 동적 콜백의 하한)", "SELL_STRATEGY['TRAILING_STOP_CALLBACK_RATE']", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%", key="TRAILING_STOP_CALLBACK_RATE")
-        row("TS ATR 배수", "샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대", "SELL_STRATEGY['TRAILING_ATR_MULTIPLIER']", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}", key="TRAILING_ATR_MULTIPLIER")
+        # [추세추종 보호] TS 하락 감지율은 실효 콜백의 '하한'일 뿐이고 동적 콜백(ATR×배수)이
+        #  사실상 항상 이를 넘어서 조정해도 결과가 바뀌지 않는다(실측: 5→2%에서 거래 486건 불변).
+        #  편집 가능한 것처럼 보이면 오해를 부르므로 실제 규칙을 그대로 적어 읽기 전용으로 둔다.
+        table.add_row(
+            f"TS 하락 감지율\n[dim]실효 콜백 = max({sell.get('TRAILING_STOP_CALLBACK_RATE')}%, "
+            f"ATR×{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}/고점) — 통상 동적값이 지배[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
+        # TRAILING_ATR_MULTIPLIER는 애초에 편집 목록에 없다. 변수명을 그대로 띄우면
+        # 편집 가능한 것처럼 보이므로 다른 잠금 항목과 표기를 맞춘다.
+        table.add_row(
+            "TS ATR 배수\n[dim]샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}")
 
-        row("손절 수익률", "손실 제한 (Stop Loss)", "SELL_STRATEGY['STOP_LOSS_RATE']", f"{sell.get('STOP_LOSS_RATE')}%", key="STOP_LOSS_RATE")
-        row("ATR 손절 사용", "변동성 기반 동적 손절", "SELL_STRATEGY['USE_ATR_STOP']", f"{sell.get('USE_ATR_STOP', False)}", key="USE_ATR_STOP")
-        if sell.get('USE_ATR_STOP', False):
-            row("ATR 손절 배수", "ATR * 배수 만큼 손절폭 설정", "SELL_STRATEGY['ATR_STOP_MULTIPLIER']", f"{sell.get('ATR_STOP_MULTIPLIER', 2.0)}", key="ATR_STOP_MULTIPLIER", indent=True)
-            row("ATR 손절 최대 한도", "비정상적인 과도한 손절폭 제한", "SELL_STRATEGY['MAX_ATR_STOP_LOSS_RATE']", f"{sell.get('MAX_ATR_STOP_LOSS_RATE', -15.0)}%", key="MAX_ATR_STOP_LOSS_RATE", indent=True)
+        # [추세추종 보호] 손절 체계 일체 잠금 (ANTI_TREND_HIDDEN_KEYS 주석 참조).
+        #  ATR 손절을 끄면 >50% 대박이 12→4건으로 잘리므로 스위치부터 잠그고,
+        #  잠근 뒤 실질 다이얼이 되는 배수·상한도 함께 잠근다. 무엇으로 도는지는 계속 보여준다.
+        table.add_row(
+            f"ATR 손절 (변동성 기반)\n[dim]손절폭 = ATR×{sell.get('ATR_STOP_MULTIPLIER', 2.0)}, "
+            f"최대 {sell.get('MAX_ATR_STOP_LOSS_RATE', -15.0):g}% 한도\n"
+            f"    (산출 실패 시 폴백 {sell.get('STOP_LOSS_RATE')}%)[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]",
+            "사용" if sell.get('USE_ATR_STOP', True) else "미사용")
         # [추세추종 보호] 본전 청산 다이얼은 숨기고 실제 동작만 읽기 전용으로 안내한다
         #  (ANTI_TREND_HIDDEN_KEYS 주석 참조). ATR 손절 사용 시 발동 기준은 설정된
         #  BREAK_EVEN_PROFIT_RATE가 아니라 '손절폭(1R)'이므로 그대로 표시하면 오해를 부른다.
@@ -484,6 +511,8 @@ def _edit_config_table(title_source, items_source, check_preset=True):
 
                     if target_val != curr_val:
                         item['set'](target_val)
+                        # [교차 검증] bool 스위치도 조합 모순의 절반을 차지한다 (슈퍼모멘텀 OFF 등)
+                        _print_config_conflicts()
                         if 'callback' in item:
                             item['callback']()
                         console.print(f"[cyan]>> 설정이 변경되었습니다: {target_val}[/cyan]")
@@ -532,11 +561,20 @@ def _edit_config_table(title_source, items_source, check_preset=True):
                     console.print("[red]입력값이 유효 범위를 벗어났습니다.[/red]")
                     continue
 
+                # [입력 검증] 항목별 validator가 없어도 중앙 규칙표로 한 번 더 거른다
+                _err = _range_error(item.get('name'), converted_val)
+                if _err:
+                    console.print(f"[red]{_err}[/red]")
+                    continue
+
                 item['set'](converted_val)
-                
+
                 if 'callback' in item:
                     item['callback']()
-                    
+
+                # [교차 검증] 저장 후 조합 모순 확인 (개별 값은 정상인데 조합이 깨지는 경우)
+                _print_config_conflicts()
+
                 changed_in_this_loop = True
                 if item.get('name') in DEFAULT_PRESETS.get('default', {}):
                     changed_preset_keys = True
@@ -633,7 +671,219 @@ ANTI_TREND_HIDDEN_KEYS = {
     #   기본 OFF로 전환하고, 다시 켜는 다이얼 자체를 숨긴다.
     "USE_RS_FILTER",
     "RS_FILTER_LOOKBACK",
+    # --- 2026-07-26 설정 감사: 편집 가능 71개를 30종목×3년으로 다이얼별 실측한 결과 ---
+    #  기준값: 평균수익 +21.02% / MDD -22.51% / PF 1.74 / 거래 486건 / >50% 대박 12건 / 평균이익 +19.85%
+    #
+    #  USE_ATR_STOP: 끄면(고정 -7% 손절) >50% 대박이 12→4건으로 3분의 1이 잘리고
+    #   평균이익 +19.85→+10.87%, PF 1.74→1.36, 거래는 486→711건으로 churn이 급증한다.
+    #   한국 변동성에 고정 손절은 너무 타이트해 승자에서 먼저 털린다(drawdown-lever 실측의
+    #   '한국은 ATR 유지'와 일치). 단일 토글 중 fat-tail 파괴력이 가장 크다.
+    #  ATR_STOP_MULTIPLIER: USE_ATR_STOP을 잠그면 이것이 실질 손절폭 다이얼이 된다.
+    #   2.0→1.0에서 거래 486→624건, MDD -22.51→-23.95%, PF 1.74→1.60, 중앙값 +3.45→-0.39%.
+    #   BEP 다이얼과 같은 '좁히는 방향으로만 위험한' 부류라 함께 잠근다.
+    #  MAX_ATR_STOP_LOSS_RATE: -15→-1%에서 거래가 2배(164→327)로 튀고 PF 1.91→1.56.
+    #   데이터 오류 방어용 상한이지 튜닝 대상이 아니다.
+    #  STOP_LOSS_RATE: USE_ATR_STOP이 잠긴 뒤에는 ATR 산출 실패 시의 폴백으로만 쓰인다.
+    #   실제로 지배하지 않는 값을 '손절 수익률 -7%'로 띄우면 BREAK_EVEN_PROFIT_RATE와 같은
+    #   오해를 부르고, 부호를 +로 잘못 넣어도 통과하던 자리다(실측: +5.0 입력 수용).
+    #  TRAILING_STOP_CALLBACK_RATE: **죽은 다이얼**. 실효 콜백은 max(설정값, 3×ATR/고점)인데
+    #   동적 콜백이 사실상 항상 5%를 넘어, 5→3%·5→2%로 낮춰도 거래 486건이 1건도 안 변한다.
+    #   화면에만 보이고 동작하지 않으므로 읽기 전용 안내로 내린다.
+    #  SUPER_MOMENTUM_USE: 끄면 +21.02→+18.17%인데, 진짜 문제는 BUY_RSI_MAX와의 조합이다.
+    #   RSI 상한 50 + 슈퍼모멘텀 OFF = 30종목 3년간 매매 0건(폐지한 횡보 프리셋의 자기모순을
+    #   CLI에서 손으로 재현할 수 있다). 이 스위치를 잠그면 조합 자체가 도달 불가능해진다.
+    "USE_ATR_STOP",
+    "ATR_STOP_MULTIPLIER",
+    "MAX_ATR_STOP_LOSS_RATE",
+    "STOP_LOSS_RATE",
+    "TRAILING_STOP_CALLBACK_RATE",
+    "SUPER_MOMENTUM_USE",
 }
+
+
+# [입력 검증] 설정 항목별 허용 범위 (min, max, 안내문). 둘 중 하나가 None이면 그쪽은 무제한.
+#
+#  왜 필요한가: 2026-07-26 감사 시점에 편집 가능 71개 중 범위 검증이 걸린 항목은
+#  SYSTEM_INVEST_PER_STOCK 하나뿐이었다. `validator` 훅은 있었지만 나머지 12개는 전부
+#  편집 불가능한 BACKTESTED_HIDDEN_KEYS에 붙어 있어 실효가 없었다. 실측 결과
+#  SYSTEM_RISK_PER_TRADE=50, BUY_SCORE=0, BUY_RSI_MAX=0, STOP_LOSS_RATE=+5(부호 오입력),
+#  RSI_PERIOD=1이 전부 그대로 수용됐다.
+#
+#  범위는 '추세추종을 깨지 않는 폭'으로 잡되, 정상적인 튜닝은 막지 않는다.
+#  숨김(HIDDEN_KEYS)이 '이 항목은 건드리지 말 것'이라면, 이쪽은 '이 항목은 이 폭 안에서'다.
+_RANGE_RULES = {
+    # --- 진입 ---
+    #  BUY_RSI_MAX 하한 55: 50으로 낮추면 30종목 3년 실측에서 수익이 반토막(+21.02→+11.73%)
+    #   나고 거래가 486→213건으로 줄었다. 이 스코어러는 점수 7.0을 넘으려면 RSI가 50 위여야 해서
+    #   상한을 50에 붙이면 진입 자체가 고갈된다.
+    "BUY_SCORE":                  (3.0, 10.0, "매수 게이트가 사라지거나 도달 불가한 값"),
+    "RISE_SCORE":                 (1.0, 10.0, None),
+    "BUY_RSI_MAX":                (55.0, 95.0, "55 미만은 점수 게이트와 충돌해 진입이 고갈됩니다"),
+    "BUY_VOL_STRENGTH":           (0.0, 300.0, None),
+    "BUY_ASK_BID_RATIO":          (0.0, 10.0, None),
+    # --- 슈퍼 모멘텀 (스위치는 잠금, 다이얼만 조정 가능) ---
+    "SUPER_MOMENTUM_SCORE":       (5.0, 10.0, None),
+    "SUPER_BUY_RSI_MAX":          (60.0, 100.0, None),
+    "SUPER_MOMENTUM_W52_POS":     (50.0, 100.0, None),
+    # --- 피라미딩 ---
+    "PYRAMIDING_MAX_COUNT":       (0, 5, None),
+    "PYRAMIDING_PROFIT_TRIGGER":  (1.0, 100.0, None),
+    "PYRAMIDING_RATIO":           (0.1, 1.0, None),
+    # --- 청산 ---
+    #  TS 발동률 상한 30: 실측상 999로 올리면 트레일링 스탑이 사실상 꺼져 주청산 수단이 사라진다
+    #   (수익은 표본에 따라 올라 보이지만 MDD가 -22.51→-26.29%로 악화).
+    "TRAILING_STOP_ACTIVATION_RATE": (1.0, 30.0, "30% 초과는 트레일링 스탑을 사실상 비활성화합니다"),
+    # --- 리스크 ---
+    #  SYSTEM_RISK_PER_TRADE 상한 10: drawdown-lever 실측에서 MDD 통제의 핵심 레버였다
+    #   (5→3%가 MDD를 좌우). 4.0이 50.0으로 바뀌는 것을 아무것도 막지 않던 자리다.
+    "SYSTEM_RISK_PER_TRADE":      (0.0, 10.0, "1회 리스크 10% 초과는 계좌를 몇 번의 손절로 소진시킵니다"),
+    "SYSTEM_MAX_PORTFOLIO_RISK":  (0.0, 30.0, None),
+    "SYSTEM_DAILY_LOSS_LIMIT":    (0.0, 30.0, None),
+    "SYSTEM_MAX_HOLDINGS":        (1, 20, None),
+    "SYSTEM_MAX_CONSECUTIVE_ERRORS": (1, 100, None),
+    "CORRELATION_THRESHOLD":      (0.1, 1.0, None),
+    "MARKET_FILTER_MA":           (5, 250, None),
+    "SLIPPAGE_RATE":              (0.0, 0.05, None),
+    # --- 지표 기간 (0·1봉은 계산 자체가 불가) ---
+    "EMA_SHORT":                  (2, 250, None),
+    "TREND_PERIOD":               (5, 250, None),
+    "RSI_PERIOD":                 (2, 250, None),
+    "RSI_SIGNAL":                 (2, 250, None),
+    "CCI_WINDOW":                 (2, 250, None),
+    "ADX_PERIOD":                 (2, 250, None),
+    "ATR_PERIOD":                 (2, 250, None),
+    "BOX_PERIOD":                 (5, 250, None),
+    "OBV_MA_PERIOD":              (2, 250, None),
+    "VOLUME_MA_PERIOD":           (2, 250, None),
+    "MACD_FAST":                  (2, 250, None),
+    "MACD_SLOW":                  (2, 250, None),
+    "MACD_SIGNAL":                (2, 250, None),
+    "VOLUME_SPIKE_RATIO":         (1.0, 20.0, None),
+    "BOX_VALUE_AREA_PCT":         (10.0, 100.0, None),
+    "SAR_AF_START":               (0.001, 1.0, None),
+    "SAR_AF_STEP":                (0.001, 1.0, None),
+    "SAR_AF_MAX":                 (0.01, 1.0, None),
+    "RSI_UPPER":                  (50, 100, None),
+    "RSI_MID":                    (1, 99, None),
+    "RSI_LOWER":                  (0, 50, None),
+    "CCI_UPPER":                  (0, 500, None),
+    "CCI_LOWER":                  (-500, 0, None),
+    "DISPARITY_UPPER":            (100.0, 200.0, None),
+    "DISPARITY_LOWER":            (1.0, 100.0, None),
+    "INTEREST_SIGNAL_MIN":        (0, 10, None),
+    "INTEREST_MA60_NEAR":         (0.5, 1.5, None),
+    # --- 시간·주기 ---
+    #  CHART_LOOKBACK_DAYS 하한 373: EMA120·52주 밴드에 250봉이 필요하고 250거래일 ≈ 373달력일.
+    "CHART_LOOKBACK_DAYS":        (373, 3650, "250봉(EMA120·52주 밴드)을 채우려면 373일 이상이 필요합니다"),
+    "CHART_CACHE_TTL_MINUTES":    (0, 10080, None),
+    "SYSTEM_TRADING_INTERVAL":    (5, 3600, None),
+    "CONCLUSION_CHECK_INTERVAL":  (1, 600, None),
+    "CONCLUSION_CHECK_ACTIVE_DURATION": (1, 3600, None),
+    "CONCLUSION_CHECK_IDLE_INTERVAL":   (1, 3600, None),
+    "UNFILLED_ORDER_CANCEL_SECONDS":    (1, 3600, None),
+}
+
+
+def _range_error(name, value):
+    """_RANGE_RULES 위반 시 사용자에게 보여줄 문구. 통과하면 None."""
+    rule = _RANGE_RULES.get(name)
+    if not rule:
+        return None
+    lo, hi, why = rule
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if lo is not None and v < lo:
+        pass
+    elif hi is not None and v > hi:
+        pass
+    else:
+        return None
+    bound = (f"{lo:g} ~ {hi:g}" if lo is not None and hi is not None
+             else (f"{lo:g} 이상" if lo is not None else f"{hi:g} 이하"))
+    msg = f"허용 범위를 벗어났습니다: {name} 는 {bound} 이어야 합니다."
+    return f"{msg}\n{why}" if why else msg
+
+
+# [교차 검증] 개별 값은 정상 범위인데 '조합'이 시스템을 멈추거나 자기모순이 되는 경우를 잡는다.
+#  범위 검증으로도 숨김으로도 막을 수 없는 부류라 별도로 확인한다.
+#  대표 사례가 폐지된 횡보 프리셋의 자기모순(매수 RSI 상한 50 + 슈퍼모멘텀 OFF = 3.8년 매매 0건)이다.
+def check_config_conflicts():
+    """현재 설정의 조합 모순을 점검해 경고 문구 리스트를 돌려준다(빈 리스트면 정상)."""
+    t = config.ANALYSIS_THRESHOLDS
+    s = config.SELL_STRATEGY
+    i = config.INDICATOR_PARAMS
+    warns = []
+
+    def _g(d, k, default=None):
+        """설정값 조회. 키가 없을 때뿐 아니라 값이 None/빈값일 때도 기본값으로 떨어진다.
+
+        dict.get의 기본값은 '키 부재'에만 적용되는데, dynamic_config.json에 키가 null로
+        남아 있는 경우가 있어 그대로 두면 아래 비교 연산이 TypeError로 죽는다.
+        조합 점검은 설정 저장 직후에 도는 보조 기능이므로 절대 예외를 던져선 안 된다.
+        """
+        try:
+            v = d.get(k, default)
+        except Exception:
+            return default
+        return default if v is None else v
+
+    # 1) 진입 자체가 불가능해지는 조합 (가장 위험 — 증상이 '매매가 안 됨'으로만 나타난다)
+    buy_rsi = _g(t, "BUY_RSI_MAX", 70.0)
+    if not _g(t, "SUPER_MOMENTUM_USE", True) and buy_rsi is not None and buy_rsi <= 55:
+        warns.append(
+            f"매수 RSI 상한({buy_rsi:g})이 낮은데 슈퍼 모멘텀이 꺼져 있습니다. "
+            "이 조합은 매수 신호가 0건이 됩니다 (폐지된 횡보 프리셋과 동일한 자기모순).")
+    if _g(t, "BUY_SCORE", 7.0) > 10.0:
+        warns.append("매수 기준 점수가 만점(10.0)을 넘어 어떤 종목도 진입할 수 없습니다.")
+    if _g(t, "SUPER_MOMENTUM_USE", True) and _g(t, "SUPER_MOMENTUM_SCORE", 8.0) < _g(t, "BUY_SCORE", 7.0):
+        warns.append("슈퍼 모멘텀 발동 점수가 매수 기준 점수보다 낮아 완화 조건이 상시 적용됩니다.")
+
+    # 2) 지표 파라미터의 대소 관계
+    if _g(i, "MACD_FAST", 12) >= _g(i, "MACD_SLOW", 26):
+        warns.append("MACD Fast가 Slow 이상입니다. MACD 부호가 뒤집혀 추세 판정이 반대로 갑니다.")
+    if not (_g(i, "RSI_LOWER", 30) < _g(i, "RSI_MID", 50) < _g(i, "RSI_UPPER", 70)):
+        warns.append("RSI 과매도 < 중심선 < 과매수 순서가 어긋났습니다.")
+    if _g(i, "CCI_LOWER", -100) >= _g(i, "CCI_UPPER", 100):
+        warns.append("CCI 과매도 기준이 과매수 기준 이상입니다.")
+    if _g(t, "DISPARITY_LOWER", 90.0) >= _g(t, "DISPARITY_UPPER", 110.0):
+        warns.append("침체 이격도 하한이 과열 상한 이상입니다. (표시 전용)")
+
+    # 3) 리스크 한도 정합
+    risk = getattr(config.settings, "SYSTEM_RISK_PER_TRADE", 4.0)
+    port = getattr(config.settings, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0)
+    holds = getattr(config.settings, "SYSTEM_MAX_HOLDINGS", 4)
+    if risk > 0 and port > 0 and risk > port:
+        warns.append(f"1회 리스크({risk:g}%)가 총 오픈 리스크 한도({port:g}%)보다 큽니다. 첫 진입부터 한도를 넘습니다.")
+    if risk > 0 and port > 0 and holds and risk * holds < port:
+        warns.append(
+            f"1회 리스크 {risk:g}% × 최대 보유 {holds}종목 = {risk*holds:g}% 로 "
+            f"총 한도({port:g}%)에 못 미쳐, 포트폴리오 한도가 실질적으로 작동하지 않습니다.")
+
+    # 4) 청산 수단이 모두 사라지는 경우 (익절 계열은 기본 OFF라 TS·손절이 유일한 출구다)
+    if _g(s, "TRAILING_STOP_ACTIVATION_RATE", 10.0) > 30 and not _g(s, "USE_ATR_STOP", True):
+        warns.append("트레일링 스탑이 사실상 비활성인데 ATR 손절도 꺼져 있어 청산 수단이 남지 않습니다.")
+
+    # 5) 조회 기간이 지표 요구를 못 채우는 경우
+    look = _g(i, "CHART_LOOKBACK_DAYS", 730)
+    if look and look < 373:
+        warns.append(f"차트 조회 기간({look}일)이 250봉에 못 미쳐 EMA120·52주 밴드가 계산되지 않습니다.")
+
+    return warns
+
+
+def _print_config_conflicts():
+    """조합 경고가 있으면 화면에 띄운다. 값은 이미 저장된 뒤이므로 '차단'이 아니라 '경고'다."""
+    try:
+        warns = check_config_conflicts()
+    except Exception:
+        return
+    if not warns:
+        return
+    console.print()
+    for w in warns:
+        console.print(f"[bold yellow]⚠️  설정 조합 경고:[/bold yellow] [yellow]{w}[/yellow]")
 
 
 def _entry_strategy_items():
@@ -1908,26 +2158,33 @@ def system_config_menu():
                 ("1", "진입 조건", "Entry"),
                 ("2", "서브전략 (슈퍼 모멘텀/피라미딩)", "Sub-Strategy"),
                 ("3", "청산 (손절·트레일링·시간)", "Exit"),
-                ("4", "화면 표시 전용 (매매 무관)", "Display Only")
+                ("4", "화면 표시 전용 (매매 무관)", "Display Only"),
+                _VIEW_ALL_ITEM,
             ]
-            sub_choice = utils.show_menu("매수 및 매도 전략 설정", sub_items, default_choice="b")
+            sub_choice = utils.show_menu("매수 및 매도 전략 설정", sub_items, default_choice=_VIEW_ALL_KEY)
             if sub_choice.lower() in ['b', 'q']: continue
 
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+
+            if sub_choice == _VIEW_ALL_KEY:
+                view_system_config(1); utils.pause(); continue
 
             if sub_choice in sub_map:
                 items_src = _entry_strategy_items if sub_choice in ("1", "2") else _sell_strategy_items
                 _edit_section(f"{sub_map[sub_choice]} (1-{sub_choice})", items_src, f"1-{sub_choice}")
 
         elif choice == "2":
-            sub_items = [("1", "스코어링 가중치 설정", "Weights"), ("2", "적응형 임계값 (시장국면) 설정", "Regime")]
-            sub_choice = utils.show_menu("스코어링 및 시장 국면 설정", sub_items, default_choice="b")
+            sub_items = [("1", "스코어링 가중치 설정", "Weights"), ("2", "적응형 임계값 (시장국면) 설정", "Regime"),
+                         _VIEW_ALL_ITEM]
+            sub_choice = utils.show_menu("스코어링 및 시장 국면 설정", sub_items, default_choice=_VIEW_ALL_KEY)
             if sub_choice.lower() in ['b', 'q']: continue
-            
+
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
-            
+
+            if sub_choice == _VIEW_ALL_KEY:
+                view_system_config(2); utils.pause(); continue
             if sub_choice == "1": modify_scoring_weights()
             elif sub_choice == "2": modify_market_regime_params()
             
@@ -1935,13 +2192,17 @@ def system_config_menu():
             sub_items = [
                 ("1", "자산 배분/포지션", "Portfolio"),
                 ("2", "매수 필터", "Filters"),
-                ("3", "비상 안전장치", "Safety")
+                ("3", "비상 안전장치", "Safety"),
+                _VIEW_ALL_ITEM,
             ]
-            sub_choice = utils.show_menu("리스크 및 자산 배분 설정", sub_items, default_choice="b")
+            sub_choice = utils.show_menu("리스크 및 자산 배분 설정", sub_items, default_choice=_VIEW_ALL_KEY)
             if sub_choice.lower() in ['b', 'q']: continue
 
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+
+            if sub_choice == _VIEW_ALL_KEY:
+                view_system_config(3); utils.pause(); continue
 
             if sub_choice in sub_map:
                 _edit_section(f"{sub_map[sub_choice]} (3-{sub_choice})", _risk_portfolio_items, f"3-{sub_choice}")
@@ -1950,13 +2211,17 @@ def system_config_menu():
             sub_items = [
                 ("1", "데이터·추세", "Data & Trend"),
                 ("2", "모멘텀", "Momentum"),
-                ("3", "강도·수급·가격구조", "Strength & Structure")
+                ("3", "강도·수급·가격구조", "Strength & Structure"),
+                _VIEW_ALL_ITEM,
             ]
-            sub_choice = utils.show_menu("기술적 지표 파라미터", sub_items, default_choice="b")
+            sub_choice = utils.show_menu("기술적 지표 파라미터", sub_items, default_choice=_VIEW_ALL_KEY)
             if sub_choice.lower() in ['b', 'q']: continue
 
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+
+            if sub_choice == _VIEW_ALL_KEY:
+                view_system_config(4); utils.pause(); continue
 
             if sub_choice in sub_map:
                 _edit_section(f"{sub_map[sub_choice]} (4-{sub_choice})", _indicator_items, f"4-{sub_choice}")
@@ -1967,13 +2232,17 @@ def system_config_menu():
                 ("2", "주문·체결 감시", "Order & Conclusion"),
                 ("3", "데이터·통신", "Data & Comm"),
                 ("4", "텔레그램 및 AI 브리핑", "Telegram"),
-                ("5", "화면 및 로그", "Log")
+                ("5", "화면 및 로그", "Log"),
+                _VIEW_ALL_ITEM,
             ]
-            sub_choice = utils.show_menu("환경 및 시스템 설정", sub_items, default_choice="b")
+            sub_choice = utils.show_menu("환경 및 시스템 설정", sub_items, default_choice=_VIEW_ALL_KEY)
             if sub_choice.lower() in ['b', 'q']: continue
 
             sub_map = dict((k, v) for k, v, _ in sub_items)
             context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
+
+            if sub_choice == _VIEW_ALL_KEY:
+                view_system_config(5); utils.pause(); continue
 
             if sub_choice in ("1", "2", "3"):
                 _edit_section(f"{sub_map[sub_choice]} (5-{sub_choice})", _trading_cycle_items, f"5-{sub_choice}")
@@ -1994,15 +2263,11 @@ def system_config_menu():
             config.console.print("\n[bold green]데이터 캐시가 초기화되었습니다.[/bold green]")
             utils.pause()
         elif choice == "9":
+            # [UX] '전체 조회' 메뉴이므로 그룹 선택을 되묻지 않고 바로 전체를 출력한다.
+            #  기존엔 기본값 a(전체)를 물어보기만 하고 대부분 그대로 Enter를 치는 단계였다.
+            #  그룹별 조회가 필요하면 해당 그룹 메뉴(1~5)에서 볼 수 있다.
             console.print()
-            grp = Prompt.ask(
-                "조회할 설정 그룹 선택 [dim](1:전략 2:스코어링 3:리스크 4:지표 5:환경, 전체: Enter, 이전: b)[/dim]",
-                choices=["1", "2", "3", "4", "5", "a", "b", "q", "A", "B", "Q"],
-                default="a", show_choices=False
-            )
-            if grp.lower() in ["b", "q"]:
-                continue
-            view_system_config(int(grp) if grp.isdigit() else None)
+            view_system_config(None)
             utils.pause()
         elif choice == "0": 
             if reset_to_default() is not False: utils.pause()
