@@ -524,7 +524,7 @@ chmod +x run.sh
 *   `TELEGRAM_CHAT_ID`: Chat ID
 
 ### 4. 주요 명령어
-*   **시스템 제어**: `/start` (시작), `/stop` (중단), `/restart` (재시작), `/status` (상태), `/config` (전략설정 조회)
+*   **시스템 제어**: `/start` (시작), `/stop` (중단), `/restart` (재시작), `/status` (상태), `/health` (운영 관제 모니터링), `/config` (전략설정 조회)
 *   **계좌 및 자산**: `/balance` (잔고), `/holdings` (보유종목), `/pending` (미체결), `/reserves` (예약매매 현황/취소), `/profit [기간]` (실현손익, d/w/m/n), `/history [기간]` (거래내역), `/report [기간]` (성과 리포트), `/stats [종목]` (종목별 매매 성과)
 *   **시장 및 종목 분석**: `/market [그룹]` (지수현황, k/u/s/r/g/c/b), `/signal <종목/지수>` (기술적 분석·진단), `/analyze <종목/지수>` (AI 심층 진단), `/chart [기간] <종목/지수>` (차트 전송, d/h/m), `/briefing` (온디맨드 AI 시황 브리핑), `/closing` (AI 장 마감 종합 브리핑), `/curate` (시장 주도주 AI 추천), `/scan [시장]` (트레이딩뷰 종목 스캔, k/u), `/news <종목>` (AI 최신 뉴스), `/ask <질문>` (AI 자유 질문)
 *   **관리 및 기타**: `/stocks` (감시종목), `/rules [종목]` (개별 트레이딩 룰), `/restrict` (제한종목 조회), `/addrestrict <종목> [사유]` (제한 추가), `/delrestrict <종목>` (제한 해제), `/memo [a/d/종목]` (메모), `/log` (최근 로그), `/help` (명령어 목록)

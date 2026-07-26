@@ -1,5 +1,7 @@
 """경량 운영 관제(/health) 회귀 테스트."""
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from rich.table import Table
 
 import config
 from modules.auto_trade import AutoTrader
@@ -44,6 +46,45 @@ def test_health_reports_protective_mode_and_loop_errors(monkeypatch):
     assert "일일 손실 한도" in message
     assert "자동매매 루프 연속 오류 2/" in message
     assert "balance unavailable" in message
+
+
+def test_health_message_reports_runtime_and_resources(monkeypatch):
+    trader = AutoTrader()
+    trader.is_running = True
+    trader.start_time = datetime.now() - timedelta(hours=1, minutes=30)
+
+    monkeypatch.setattr(trader, "is_market_open", lambda: True)
+    monkeypatch.setattr(config, "USE_WEBSOCKET", False, raising=False)
+    # 라즈베리파이 OOM 감시용 항목 — 가용 메모리가 임계 아래면 주의로 승격된다.
+    monkeypatch.setattr(AutoTrader, "_health_memory", staticmethod(lambda: (180.0, 90.0)))
+
+    message = trader.get_health_message()
+
+    assert "실행 시간" in message and "(경과 1:30:" in message
+    assert "프로세스 메모리 180MB" in message
+    assert "가용 메모리 90MB" in message
+    assert "가용 메모리 부족" in message
+
+
+def test_cli_health_rows_escape_markup_and_skip_duplicates():
+    trader = AutoTrader()
+    trader.get_health_message = lambda: (
+        "🟢 [운영 관제 /health: 운영 중]\n"
+        "• 실행 시간: 2026-07-26 09:00:00 (경과 1:00:00)\n"
+        "• 최근 오류: 09:30:00 — timeout [Errno 60]"
+    )
+
+    table = Table()
+    table.add_column("구분")
+    table.add_column("상세 내용")
+    trader._add_health_rows(table, skip_labels={"실행 시간"})
+
+    labels = list(table.columns[0].cells)
+    details = list(table.columns[1].cells)
+
+    assert "실행 시간" not in labels
+    # 대괄호가 rich 마크업으로 소비되면 'Errno 60'이 통째로 사라진다.
+    assert any("Errno 60" in d for d in details)
 
 
 def test_telegram_health_command_is_registered(monkeypatch):

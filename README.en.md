@@ -481,7 +481,7 @@ We recommend integrating a Telegram Bot to receive trading history notifications
 Register `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config.py` or as environment variables.
 
 ### 4. Main Commands
-*   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/config` (strategy settings)
+*   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/health` (operations monitoring), `/config` (strategy settings)
 *   **Account & Assets**: `/balance`, `/holdings`, `/pending` (unfilled orders), `/reserves` (reserved orders), `/profit [period]` (realized P&L, d/w/m/n), `/history [period]` (trade history), `/report [period]` (performance report), `/stats [stock]` (per-stock performance)
 *   **Market & Stock Analysis**: `/market [group]` (indices, k/u/s/r/g/c/b), `/signal <stock/index>` (technical diagnosis), `/analyze <stock/index>` (AI in-depth diagnosis), `/chart [period] <stock/index>` (chart, d/h/m), `/briefing` (on-demand AI market briefing), `/closing` (AI closing briefing), `/curate` (AI leading-stock curation), `/scan [market]` (TradingView scan, k/u), `/news <stock>` (AI latest news), `/ask <question>` (free-form AI Q&A)
 *   **Management & Misc**: `/stocks` (watchlist), `/rules [stock]` (per-stock trading rules), `/restrict` (restricted stocks), `/addrestrict <stock> [reason]`, `/delrestrict <stock>`, `/memo [a/d/stock]`, `/log` (recent logs), `/help`

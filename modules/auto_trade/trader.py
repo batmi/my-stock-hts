@@ -1031,6 +1031,40 @@ class AutoTrader:
             return value.strftime("%H:%M:%S")
         return str(value)
 
+    @staticmethod
+    def _health_memory():
+        """프로세스/시스템 메모리 사용량(MB)을 추가 의존성 없이 조회한다.
+
+        운영 환경(라즈베리파이 1GB)에서는 OOM이 자동매매 중단의 주된 원인이라
+        관제 화면에서 상주 메모리와 가용 메모리를 함께 확인할 수 있게 한다.
+        조회에 실패하면 0을 돌려주고 해당 항목만 표시에서 빠진다.
+        """
+        rss_mb = 0.0
+        avail_mb = 0.0
+        try:
+            # 리눅스는 statm의 상주 페이지 수가 가장 정확하고 비용도 낮다.
+            with open("/proc/self/statm") as fp:
+                pages = int(fp.read().split()[1])
+            rss_mb = pages * os.sysconf("SC_PAGE_SIZE") / (1024 ** 2)
+        except Exception:
+            try:
+                import resource
+                usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                # macOS는 바이트, 그 외 POSIX는 KB 단위로 반환한다.
+                is_mac = getattr(os, "uname", None) and os.uname().sysname == "Darwin"
+                rss_mb = usage / (1024 ** 2) if is_mac else usage / 1024
+            except Exception:
+                rss_mb = 0.0
+        try:
+            with open("/proc/meminfo") as fp:
+                for line in fp:
+                    if line.startswith("MemAvailable:"):
+                        avail_mb = int(line.split()[1]) / 1024
+                        break
+        except Exception:
+            avail_mb = 0.0
+        return rss_mb, avail_mb
+
     def get_health_message(self):
         """외부 API 호출 없이 운영 상태를 요약한 관제 메시지를 만든다.
 
@@ -1139,15 +1173,37 @@ class AutoTrader:
         elif self.is_running:
             warnings.append("아직 정상 루프 완료 기록이 없습니다")
 
+        # 언제부터 돌고 있는지는 장애 판단의 기준 시각이라 관제 첫 화면에 함께 둔다.
+        if self.is_running and self.start_time:
+            elapsed = str(now - self.start_time).split(".")[0]
+            run_text = f"{self.start_time.strftime('%Y-%m-%d %H:%M:%S')} (경과 {elapsed})"
+        else:
+            run_text = "미실행"
+
+        rss_mb, avail_mb = self._health_memory()
+        resource_parts = []
+        if rss_mb:
+            resource_parts.append(f"프로세스 메모리 {rss_mb:,.0f}MB")
+        if avail_mb:
+            resource_parts.append(f"가용 메모리 {avail_mb:,.0f}MB")
+            # 1GB 라즈베리파이 기준으로 가용 메모리가 이 아래로 떨어지면 OOM 종료 위험이 커진다.
+            if avail_mb < 120:
+                (risks if avail_mb < 60 else warnings).append(
+                    f"가용 메모리 부족 {avail_mb:,.0f}MB (OOM 위험)"
+                )
+        resource_text = " · ".join(resource_parts) if resource_parts else "확인 불가"
+
         lines = [
             f"{icon} [운영 관제 /health: {state}]",
             f"• 모드/계좌: {mode} / {account or '-'}",
+            f"• 실행 시간: {run_text}",
             f"• 자동매매 루프: 최근 시작 {self._health_time(self.last_cycle_at)} · 정상 완료 {self._health_time(self.last_success_at)}",
             f"• 최근 오류: {self._health_time(self.last_error_at)}" + (f" — {self.last_error_message[:160]}" if self.last_error_message else ""),
             f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
             f"• 시세 연결: {feed_text}",
             f"• 리스크: 추적 포지션 {len(getattr(self, 'trailing_stop_cache', {}))}종목 · 현재 자산 {getattr(self, 'current_total_asset', 0):,.0f}원 · 포트폴리오 히트 {getattr(self, 'portfolio_heat_amt', 0):,.0f}원 · 리스크 배수 x{getattr(self, 'risk_scale', 1.0):.2f}",
+            f"• 시스템 자원: {resource_text}",
         ]
         if risks:
             lines.append("\n🚨 [위험]\n" + "\n".join(f"• {item}" for item in risks))
@@ -1157,11 +1213,12 @@ class AutoTrader:
             lines.append("\n✅ 관제상 즉시 조치가 필요한 신호가 없습니다.")
         return "\n".join(lines)
 
-    def _add_health_rows(self, table):
+    def _add_health_rows(self, table, skip_labels=()):
         """기존 CLI 테이블 끝에 운영 관제 행을 추가한다.
 
         텔레그램은 한 화면에 읽기 쉬운 줄글을 쓰되, 터미널은 기존 ``print_status``와
         같은 표 형식을 사용해 운용 중 수치를 빠르게 비교할 수 있게 한다.
+        ``skip_labels``에 넣은 항목은 상위 표에 이미 있는 값이라 중복 출력하지 않는다.
         """
         message_lines = self.get_health_message().splitlines()
 
@@ -1169,13 +1226,31 @@ class AutoTrader:
             """텔레그램용 상태 기호를 터미널 테이블에서는 제거한다."""
             for mark in ("🟢", "🟡", "🟠", "🔴", "🚨", "⚠️", "⚠", "✅"):
                 text = text.replace(mark, "")
-            return text.strip()
+            # 오류 메시지의 대괄호가 rich 마크업으로 해석돼 글자가 사라지는 것을 막는다.
+            return escape(text.strip())
 
         def _compact_detail(label, detail):
             # 한 줄에 모든 지표를 나열하면 표가 화면 전체 폭으로 늘어난다. 관련 값은
             # 셀 안에서 줄바꿈해 기존 상태 표의 폭과 가독성을 맞춘다.
             if label in ("자동매매 루프", "Kill Switch", "주문 감시", "리스크"):
                 return detail.replace(" · ", "\n")
+            return detail
+
+        def _styled(label, detail):
+            """기존 상태 표와 같은 색 규칙(정상=dim green, 경고=yellow, 위험=red)을 적용한다."""
+            if label == "Kill Switch":
+                counts = re.findall(r"(\d+)/(\d+)", detail)
+                if counts and any(int(cur) > 0 for cur, _ in counts):
+                    color = "red" if any(int(cur) >= int(mx) for cur, mx in counts) else "yellow"
+                    return f"[{color}]{detail}[/]"
+                return f"[dim green]{detail}[/]"
+            if label == "최근 오류":
+                return f"[dim green]{detail}[/]" if detail.startswith("기록 없음") else f"[yellow]{detail}[/]"
+            if label == "시세 연결":
+                if "연결·수신" in detail:
+                    return f"[green]{detail}[/]"
+                if "재연결" in detail or "폴백" in detail:
+                    return f"[yellow]{detail}[/]"
             return detail
 
         section = None
@@ -1185,7 +1260,8 @@ class AutoTrader:
             """주의/위험 항목을 한 셀에 모아 라벨 반복을 피한다."""
             nonlocal section_messages
             if section and section_messages:
-                table.add_row(section, "\n".join(section_messages))
+                color = "bold red" if section == "위험 신호" else "bold orange3"
+                table.add_row(section, f"[{color}]" + "\n".join(section_messages) + "[/]")
                 section_messages = []
 
         # 상태 제목은 기존 테이블 제목에 이미 있으므로 건너뛴다.
@@ -1201,7 +1277,7 @@ class AutoTrader:
             if line.startswith("✅ "):
                 _flush_section_messages()
                 table.add_section()
-                table.add_row("관제 결과", _cli_text(line))
+                table.add_row("관제 결과", f"[dim green]{_cli_text(line)}[/]")
                 continue
 
             # get_health_message의 표준 항목(• 구분: 내용)을 터미널 표의 두 열로 분리한다.
@@ -1211,7 +1287,9 @@ class AutoTrader:
                     section_messages.append(_cli_text(body))
                 elif ": " in body:
                     label, detail = body.split(": ", 1)
-                    table.add_row(label, _compact_detail(label, _cli_text(detail)))
+                    if label in skip_labels:
+                        continue
+                    table.add_row(label, _styled(label, _compact_detail(label, _cli_text(detail))))
                 else:
                     table.add_row("상태", _cli_text(body))
             else:
@@ -1727,16 +1805,8 @@ class AutoTrader:
         else:
             table.add_row("손실 제한", "미사용")
 
-        # 연속 에러
-        err_cnt = self.consecutive_errors
-        max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
-        if err_cnt == 0:
-            err_display = f"[dim green]{err_cnt} / {max_err}회[/]"
-        else:
-            err_color = "[red]" if err_cnt >= max_err else "[yellow]"
-            err_display = f"{err_color}{err_cnt} / {max_err}회[/]"
-        table.add_row("연속 에러", err_display)
-        
+        # 연속 에러는 아래 운영 관제 섹션의 'Kill Switch' 행이 자동매매·체결 감시를
+        # 함께 보여 주므로 여기서 중복 출력하지 않는다.
         table.add_row("오늘 매매", f"[red]매수 {buy_cnt}건[/] / [blue]매도 {sell_cnt}건[/]")
         
         if rule_summary:
@@ -1746,7 +1816,8 @@ class AutoTrader:
         # 운영 관제는 별도 표가 아닌 상태 표의 마지막 섹션으로 이어서 보여 준다.
         # 기존 상태/설정 정보와 관제 데이터를 수평 구분선으로 명확히 나눈다.
         table.add_section()
-        self._add_health_rows(table)
+        # 표 상단에 이미 출력한 항목(실행 시간)은 관제 섹션에서 생략한다.
+        self._add_health_rows(table, skip_labels={"실행 시간"} if (self.is_running and self.start_time) else ())
 
         console.print(table)
         

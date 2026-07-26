@@ -552,7 +552,7 @@ class TelegramCommander:
             "• /stop : 자동매매 중단\n"
             "• /restart : 자동매매 재시작\n"
             "• /status : 시스템 상태 조회\n"
-            "• /health : 운영 관제(루프·오류·주문·실시간 연결)\n"
+            "• /health : 운영 관제 모니터링\n"
             "• /config : 트레이딩 전략 설정값 조회\n\n"
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
