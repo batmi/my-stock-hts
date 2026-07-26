@@ -65,6 +65,27 @@ def test_market_pause_times(trader, monkeypatch, nxt_hours):
     monkeypatch.setattr('modules.auto_trade.common.datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 15, 28)))
     assert trader.is_market_open() is False
 
+def test_single_price_break_only_on_trading_day(monkeypatch):
+    """2-1. 단일가 휴게 구간 판정은 거래일에만 성립한다 (주말·공휴일 15:28은 휴장일)."""
+    from modules.auto_trade.common import is_single_price_break
+
+    # 2026-06-11(목) 15:28 — 실제 종가 단일가 구간
+    monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
+    monkeypatch.setattr('modules.auto_trade.common.datetime',
+                        MagicMock(now=lambda: datetime(2026, 6, 11, 15, 28)))
+    assert is_single_price_break() is True
+
+    # 같은 시각이라도 휴장일(주말/공휴일)이면 단일가 구간이 아니다
+    monkeypatch.setattr(api, 'is_holiday_today', lambda: True)
+    assert is_single_price_break() is False
+
+    # 거래일이어도 휴게 구간 밖이면 False
+    monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
+    monkeypatch.setattr('modules.auto_trade.common.datetime',
+                        MagicMock(now=lambda: datetime(2026, 6, 11, 10, 0)))
+    assert is_single_price_break() is False
+
+
 def test_sor_order_routing_real(monkeypatch):
     """3. 실전 투자 시 SOR(최적주문집행) 거래소 코드가 올바르게 포함되는지 테스트"""
     config.session.is_simulation = False

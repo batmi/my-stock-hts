@@ -21,8 +21,9 @@ def trader():
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_run_loop_market_closed(mock_tg, mock_deposit, mock_balance, trader):
     """장 마감 시 루프 동작 테스트"""
-    # 장 마감 상태 모킹
-    with patch.object(trader, 'is_market_open', return_value=False):
+    # 장 마감 상태 모킹 (휴장일이면 "휴장일" 문구로 갈라지므로 거래일로 고정)
+    with patch('api.is_holiday_today', return_value=False), \
+         patch.object(trader, 'is_market_open', return_value=False):
         # 한 번만 실행하고 종료되도록 설정
         with patch('time.sleep', side_effect=InterruptedError):
             try:

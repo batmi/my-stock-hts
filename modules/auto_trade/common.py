@@ -345,6 +345,16 @@ def is_system_market_open():
         return True
     return False
 
+# [리팩토링] 단일가(동시호가) 휴게 구간 판단 (단일 진입점)
+#  - 상태 안내 문구들이 각자 시각 문자열만 비교하다 보니, 휴장일(주말·공휴일)에도 같은 시각대면
+#    "단일가 매매 동기화 대기"로 안내되는 문제가 있었다. 휴장일에는 단일가 구간 자체가 없다.
+def is_single_price_break(now=None):
+    """지금이 거래일의 단일가(동시호가) 휴게 구간인지 확인 (휴장일에는 항상 False)"""
+    if api.is_holiday_today(): return False
+
+    current_time = (now or datetime.now()).strftime("%H%M")
+    return ("0850" <= current_time < "0900") or ("1525" <= current_time < "1530")
+
 # [추가] 주문 상태 상수 정의 (Order State Machine)
 class OrderStatus:
     IDLE = "IDLE"

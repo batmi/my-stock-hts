@@ -32,7 +32,7 @@ import re # [추가] 정규식 모듈
 import pandas as pd
 
 from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager)
-from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
+from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
 
@@ -372,8 +372,7 @@ class AutoTrader:
             # [추가] 장 마감 상태에서 시작했을 경우 명확한 안내 메시지 출력
             if not self.was_market_open:
                 self.log("━" * 85)
-                now_time_str = datetime.now().strftime("%H%M")
-                if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                if is_single_price_break():
                     self.log("⏸️ [휴게 시간 대기] 현재는 단일가 매매 동기화 시간입니다. 거래 재개 시 자동으로 매매가 개시됩니다.")
                 elif api.is_holiday_today() or datetime.now().weekday() > 4:
                     self.log("💤 [휴장일 대기] 오늘은 주말 또는 공휴일입니다. 다음 거래일에 자동으로 매매가 개시됩니다.")
@@ -794,8 +793,7 @@ class AutoTrader:
                 status_text = "RUNNING"
                 status_icon = "🟢"
             else:
-                now_time_str = datetime.now().strftime("%H%M")
-                if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                if is_single_price_break():
                     status_text = "WAITING (휴게 시간 대기)"
                 elif api.is_holiday_today() or datetime.now().weekday() > 4:
                     status_text = "WAITING (공휴일/주말 휴장)"
@@ -1198,8 +1196,7 @@ class AutoTrader:
         if self.is_market_open():
             market_status = "장 운영 중 (거래 가능)"
         else:
-            now_time_str = datetime.now().strftime("%H%M")
-            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+            if is_single_price_break():
                 market_status = "휴게 시간 (단일가 매매 동기화 대기 중)"
             elif api.is_holiday_today():
                 market_status = "공휴일 휴장 (대기 중)"
@@ -2548,8 +2545,7 @@ class AutoTrader:
                             msg += self._get_holdings_message(target_cano)
                             api.send_telegram_message(msg)
                         elif self.was_market_open and not current_market_status:
-                            now_time_str = datetime.now().strftime("%H%M")
-                            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                            if is_single_price_break():
                                 self.log("━" * 80)
                                 self.log(f"⏸️ [휴게 시간] 거래소 단일가 매매 동기화를 위해 잠시 매매를 멈춥니다. ({datetime.now().strftime('%H:%M')})")
                                 self.log("━" * 80)
@@ -2576,9 +2572,10 @@ class AutoTrader:
                     # [변경] 장 마감 시 분석 중단 (트래픽 감소)
                     if not current_market_status:
                         if is_log_needed:
-                            now_time_str = datetime.now().strftime("%H%M")
-                            if ("0850" <= now_time_str < "0900") or ("1525" <= now_time_str < "1530"):
+                            if is_single_price_break():
                                 self.log("시스템 상태: WAITING (단일가 매매 동기화 대기)")
+                            elif api.is_holiday_today():
+                                self.log("시스템 상태: WAITING (휴장일 - 분석 중지)")
                             else:
                                 self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
                         self.was_market_open = current_market_status
