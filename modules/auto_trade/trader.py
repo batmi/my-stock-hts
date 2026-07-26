@@ -437,7 +437,7 @@ class AutoTrader:
             if config.session.is_toss:
                 # 토스는 체결강도 미제공 → 매도잔량비 게이트로 대체
                 buy_abr = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
-                msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 매도잔량비 {buy_abr}배↑ [dim](체결강도 대체)[/dim]"
+                msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 매도잔량비 {buy_abr}배↑"
             else:
                 msg += f"\n• 매수: {buy_score}점↑ & RSI {buy_rsi}↓ & 체결강도 {buy_vol}%↑"
             # [수정] 0=미사용 규칙(RSI 과열·고정 익절)은 조건을 표시하지 않는다
