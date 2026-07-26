@@ -93,7 +93,8 @@ def test_reserved_order_expire(mock_api, mock_db):
 
 @patch('modules.reserved_order_monitor.db_manager.db')
 @patch('modules.reserved_order_monitor.api.get_current_price')
-def test_reserved_order_trailing_buy(mock_get_price, mock_db):
+@patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True)
+def test_reserved_order_trailing_buy(mock_session_open, mock_get_price, mock_db):
     """ReservedOrderMonitor: 트레일링 매수 조건(TRAILING_BUY) 테스트"""
     monitor = ReservedOrderMonitor()
 
@@ -128,7 +129,8 @@ def test_reserved_order_trailing_buy(mock_get_price, mock_db):
 
 @patch('modules.reserved_order_monitor.db_manager.db')
 @patch('modules.reserved_order_monitor.api.get_current_price')
-def test_reserved_order_trailing_sell(mock_get_price, mock_db):
+@patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True)
+def test_reserved_order_trailing_sell(mock_session_open, mock_get_price, mock_db):
     """ReservedOrderMonitor: 트레일링 매도 조건(TRAILING_SELL) 테스트"""
     monitor = ReservedOrderMonitor()
 

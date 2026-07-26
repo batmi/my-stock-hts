@@ -131,7 +131,8 @@ def test_reserved_order_monitor_score_params(mock_sm, mock_chart, mock_price, mo
     
     with patch('modules.reserved_order_monitor.analysis.calculate_score') as mock_calc_score, \
          patch('modules.reserved_order_monitor.indicators.calculate_indicators', return_value={'rsi': 50}), \
-         patch('modules.reserved_order_monitor.datetime') as mock_dt:
+         patch('modules.reserved_order_monitor.datetime') as mock_dt, \
+         patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True):
         mock_calc_score.return_value = (8.0, [])
         # 장 중(12:00) 시간으로 강제 고정하여 감시 스킵 방지
         mock_dt.now.return_value.strftime.side_effect = lambda x: '1200' if x == '%H%M' else '209912311200' if x == '%Y%m%d%H%M' else '20991231'

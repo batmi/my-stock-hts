@@ -202,6 +202,7 @@ class TestTossDailyChartTvFallback:
         import pandas as pd
         import modules.analysis as analysis
         with patch.object(api, '_toss_chart_data', return_value=pd.DataFrame()), \
+             patch.object(api, '_krx_daily_chart', return_value=None), \
              patch.object(analysis, 'fetch_overseas_daily_via_tvdatafeed') as m_tv:
             out = api._toss_daily_chart_with_tv_fallback('005930', False)
         assert out.empty

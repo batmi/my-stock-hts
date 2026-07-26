@@ -52,10 +52,13 @@ def test_initial_fetch_and_cache(mock_get_price):
     assert not df.empty
     assert api._chart_cache_key('005930', False, False) in api._CHART_CACHE # 캐시 딕셔너리에 저장되어야 함
 
+@patch('api.chart_overlay_enabled', return_value=True)
+@patch('api.market_today')
 @patch('api.get_current_price_data')
-def test_cache_hit_and_stitch(mock_get_price):
+def test_cache_hit_and_stitch(mock_get_price, mock_market_today, mock_overlay):
     """2. 캐시가 존재할 때, 원본 조회 없이 실시간 현재가가 기존 과거 데이터 끝에 병합되는가?"""
     today_str = datetime.now().strftime("%Y%m%d")
+    mock_market_today.return_value = today_str
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     
     # 1. 초기 캐시 세팅 (어제까지의 데이터만 있다고 가정)
@@ -88,9 +91,13 @@ def test_cache_hit_and_stitch(mock_get_price):
     assert df_stitched.iloc[-1]['date'] == today_str
     assert df_stitched.iloc[-1]['close'] == 1050.0 # 오늘 현재가가 종가로 반영됨
 
+@patch('api.chart_overlay_enabled', return_value=True)
+@patch('api.market_today')
 @patch('api.get_current_price_data')
-def test_cache_invalidation_by_corporate_action(mock_get_price):
+def test_cache_invalidation_by_corporate_action(mock_get_price, mock_market_today, mock_overlay):
     """3. 액면분할 등으로 전일 종가가 달라졌을 때, 이를 감지하고 캐시를 파기하는가?"""
+    today_str = datetime.now().strftime("%Y%m%d")
+    mock_market_today.return_value = today_str
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     
     # 1. 초기 캐시 세팅 (어제 종가 10,000원)
@@ -128,10 +135,14 @@ def test_cache_invalidation_by_corporate_action(mock_get_price):
     mock_fetch_func.assert_not_called()
 
 
+@patch('api.chart_overlay_enabled', return_value=True)
+@patch('api.market_today')
 @patch('api.get_current_price_data')
-def test_corporate_action_purges_disk_cache(mock_get_price, monkeypatch):
+def test_corporate_action_purges_disk_cache(mock_get_price, mock_market_today, mock_overlay, monkeypatch):
     """3-1. 수정주가 감지 시 디스크 캐시 항목도 함께 파기하는가?
     (메모리만 지우면 다음 호출에서 디스크의 옛 df가 재적재→재파기→재다운로드가 무한 반복됨)"""
+    today_str = datetime.now().strftime("%Y%m%d")
+    mock_market_today.return_value = today_str
     yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     deleted_keys = []
     monkeypatch.setattr(api, '_chart_disk_delete', lambda key: deleted_keys.append(key))

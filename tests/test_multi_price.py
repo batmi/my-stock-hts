@@ -262,7 +262,9 @@ def test_analyze_table_row_w52_prefers_chart_over_api_and_uses_nxt_price():
         'chart_df': chart_df, 'inv_list': None,
         'rt_strength': 110.0, 'ask_bid_ratio': None, 'detail': None,
     }
-    with patch('modules.analysis.check_smart_money_turnaround', return_value=(False, "")):
+    with patch('modules.analysis.check_smart_money_turnaround', return_value=(False, "")), \
+         patch('modules.analysis.config.session') as mock_session:
+        mock_session.is_toss = True
         row_data = analysis._analyze_table_row(
             ('삼성전자', '005930'), '국내 주식 기술적 분석', False, False,
             set(), {}, {}, set(), set(), bundle

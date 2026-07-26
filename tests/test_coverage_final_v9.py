@@ -43,7 +43,8 @@ def sample_df():
 
 @patch('modules.backtest.api.fetch_yfinance_data')
 @patch('modules.backtest.api.get_chart_data')
-def test_get_backtest_data_fallback(mock_get_chart, mock_yf):
+@patch('modules.krx_daily.get_daily', return_value=None)
+def test_get_backtest_data_fallback(mock_krx, mock_get_chart, mock_yf):
     """yfinance 실패 시 KIS API Fallback 테스트"""
     mock_yf.side_effect = Exception("YF Error")
     mock_get_chart.return_value = pd.DataFrame({'close': [100]})

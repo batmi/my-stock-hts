@@ -76,8 +76,10 @@ class TestGetIndexMomentum:
 def setup_teardown():
     """매 테스트마다 config·싱글톤 상태를 초기화하여 독립성을 보장합니다."""
     original_rs = getattr(config, 'USE_RS_FILTER', False)
+    original_market = getattr(config, 'USE_MARKET_FILTER', True)
     AutoTrader._instance = None
     config.USE_RS_FILTER = True
+    config.USE_MARKET_FILTER = False
 
     patcher1 = patch('modules.auto_trade.api.get_current_price', return_value=0)
     patcher2 = patch('modules.auto_trade.api.get_order_book', return_value={'rt_cd': '0', 'output1': {'total_askp_rsqn': '100', 'total_bidp_rsqn': '100'}})
@@ -88,6 +90,7 @@ def setup_teardown():
 
     patcher1.stop(); patcher2.stop(); patcher3.stop()
     config.USE_RS_FILTER = original_rs
+    config.USE_MARKET_FILTER = original_market
     AutoTrader._instance = None
 
 
