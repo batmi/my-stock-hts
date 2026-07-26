@@ -155,6 +155,45 @@ def test_cache_invalidated_on_day_change():
     assert m.call_count == 2
 
 
+def _captured_span(mock):
+    """_fetch_pykrx(code, start, end) 호출에서 조회 창(달력일)을 계산한다."""
+    from datetime import datetime as _dt
+    _, s, e = mock.call_args[0]
+    return (_dt.strptime(e, '%Y%m%d') - _dt.strptime(s, '%Y%m%d')).days
+
+
+def test_chart_lookback_capped_to_250_bars_window():
+    """화면·지표 경로는 250봉만 쓰므로 조회 창도 거기 맞춘다(KIS 250봉 페이징과 통일).
+
+    종전엔 CHART_LOOKBACK_DAYS(730일 ≈ 490봉)를 받아 절반을 버렸다.
+    """
+    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
+    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+        krx_daily.get_daily('005930')
+    assert _captured_span(m) == krx_daily._CHART_FETCH_DAYS == 400
+
+
+def test_chart_lookback_respects_shorter_user_setting():
+    """설정값이 상한보다 짧으면 사용자 의도를 그대로 따른다."""
+    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
+    orig = config.INDICATOR_PARAMS.get("CHART_LOOKBACK_DAYS")
+    try:
+        config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = 300
+        with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+            krx_daily.get_daily('005930')
+        assert _captured_span(m) == 300
+    finally:
+        config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = orig
+
+
+def test_backtest_lookback_not_capped():
+    """백테스트는 lookback_days를 명시 전달하므로 250봉 상한에 걸리지 않는다."""
+    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
+    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+        krx_daily.get_daily('005930', lookback_days=1130)   # 730일 백테스트 + 워밍업 400
+    assert _captured_span(m) == 1130
+
+
 def test_use_cache_false_forces_refetch():
     normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
     with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:

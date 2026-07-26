@@ -227,3 +227,27 @@ def test_no_warning_when_coverage_is_sufficient(toss_mode):
          patch.object(config.console, 'print') as p:
         backtest.get_backtest_data('005930', False, 100)
     assert not [c for c in p.call_args_list if c.args and '250봉' in str(c.args[0])]
+
+
+# ---------------------------------------------------------
+# 기본 분석 기간 (2026-07-26: 365일 → 730일)
+#  1년은 국면이 한 방향으로 치우칠 수 있어 추세추종의 강점(소수의 큰 수익)과
+#  약점(횡보장 휩쏘)이 둘 다 표본에 들어오지 않는다.
+# ---------------------------------------------------------
+
+def test_backtest_default_period_is_two_years():
+    import inspect
+
+    from modules import backtest as bt
+    src = inspect.getsource(bt.run_backtest)
+    assert 'days = 730' in src
+    assert 'default="730"' in src
+    assert 'days = 365' not in src
+
+
+def test_walk_forward_default_period_is_two_years():
+    import inspect
+
+    from modules import backtest as bt
+    sig = inspect.signature(bt.run_walk_forward)
+    assert sig.parameters['days'].default == 730

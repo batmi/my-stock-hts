@@ -49,6 +49,10 @@ _FAIL_COOLDOWN_SEC = 300
 
 _COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume']
 
+# 화면·지표 경로의 기본 조회 창(달력일). 250거래일 = 실측 373달력일이라 여유를 둔 값이다.
+# (api._krx_daily_chart가 tail(250)으로 자르고, KIS 경로도 250봉에서 페이징을 멈춘다)
+_CHART_FETCH_DAYS = 400
+
 # pykrx는 import 시 KRX 로그인 시도 로그를 stderr로 흘린다(선택적 로그인이라 조회에는 무관).
 # 라즈베리파이 로그 오염을 막기 위해 import 구간만 억제한다.
 _pykrx = None
@@ -169,7 +173,17 @@ def get_daily(code, lookback_days=None, use_cache=True):
         return None
 
     if lookback_days is None:
-        lookback_days = config.INDICATOR_PARAMS.get("CHART_LOOKBACK_DAYS", 730)
+        # 화면·지표 경로는 250봉만 쓴다(_krx_daily_chart가 tail(250)) — KIS 경로도 250봉에서
+        # 페이징을 멈추므로 모드 간 조회량을 맞춘다. 종전엔 730일(약 490봉)을 받아 절반을
+        # 버렸다. 250거래일 ≈ 373달력일이라 _CHART_FETCH_DAYS면 여유 있게 채운다.
+        # 설정값(CHART_LOOKBACK_DAYS)이 더 짧으면 사용자 의도를 존중해 그대로 따른다.
+        # 백테스트는 lookback_days를 명시 전달하므로 이 상한에 걸리지 않는다.
+        configured = config.INDICATOR_PARAMS.get("CHART_LOOKBACK_DAYS", 730)
+        try:
+            configured = int(configured or 730)
+        except (TypeError, ValueError):
+            configured = 730
+        lookback_days = min(configured, _CHART_FETCH_DAYS)
 
     now = time.time()
     today = datetime.now().strftime('%Y%m%d')

@@ -1235,7 +1235,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
 
 
 def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_params,
-                     name="", code="", days=365, n_splits=4, optimize_dims=None):
+                     name="", code="", days=730, n_splits=4, optimize_dims=None):
     """Walk-Forward 검증 (과최적화 진단)
 
     전체 분석 구간을 n_splits개의 연속된 OOS(Out-of-Sample) 폴드로 나눈다.
@@ -1609,7 +1609,10 @@ def run_backtest():
         custom_rule = db_manager.db.get_stock_strategy(code)
         
         # 기본값 설정 (개별 룰 우선 적용)
-        days = 365
+        #  [기간] 기본 730일(2년) — 1년은 국면이 한 방향으로만 치우칠 수 있어 추세추종 전략의
+        #  강점(소수의 큰 수익)과 약점(횡보장 휩쏘)이 둘 다 표본에 들어오지 않는다.
+        #  과거 데이터는 pykrx/FDR(KRX 공식)이 담당하므로 2년치 조회에 부담이 없다.
+        days = 730
         buy_score = custom_rule['buy_score'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
         buy_rsi = custom_rule['buy_rsi'] if custom_rule else config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
         sell_score = custom_rule['sell_score'] if custom_rule else config.SELL_STRATEGY["SELL_SCORE"]
@@ -1689,12 +1692,12 @@ def run_backtest():
         if change_settings == "y":
             config.console.print()
             config.console.print("[bold]1. 시뮬레이션 기본 설정[/bold]")
-            days_input = Prompt.ask("분석 기간 (일 단위)\n[dim]과거 며칠간의 데이터를 시뮬레이션할지 설정[/dim]", default="365")
+            days_input = Prompt.ask("분석 기간 (일 단위)\n[dim]과거 며칠간의 데이터를 시뮬레이션할지 설정 (기본 730일 = 2년)[/dim]", default="730")
             if days_input.lower() in ['b', 'q']: continue
             try:
                 days = int(days_input)
             except Exception:
-                days = 365
+                days = 730
             
             config.console.print("\n[bold]2. 기본 매수 타점 설정[/bold]")
             def_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
