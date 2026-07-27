@@ -78,6 +78,87 @@ def block_external_market_api(request, monkeypatch):
     monkeypatch.setattr(config, "USE_MULTI_PRICE", False, raising=False)
     monkeypatch.setattr(api, "_MULTI_PRICE_DISABLED", False, raising=False)
 
+_EMPTY_DOMESTIC_BALANCE = {
+    'rt_cd': '0', 'msg_cd': 'MOCK', 'msg1': '테스트용 빈 잔고',
+    'output1': [],
+    'output2': [{
+        'dnca_tot_amt': '0', 'prvs_rcdl_excc_amt': '0', 'd2_auto_rdpt_amt': '0',
+        'scts_evlu_amt': '0', 'tot_evlu_amt': '0', 'nass_amt': '0',
+        'evlu_pfls_smtl_amt': '0', 'asst_icdc_amt': '0',
+    }],
+}
+_EMPTY_OVERSEAS_BALANCE = {
+    'rt_cd': '0', 'msg_cd': 'MOCK', 'msg1': '테스트용 빈 잔고',
+    'output1': [], 'output2': {},
+    'ctx_area_fk200': '', 'ctx_area_nk200': '',
+}
+
+
+_EMPTY_ACCOUNT_INQUIRY = {
+    'rt_cd': '0', 'msg_cd': 'MOCK', 'msg1': '테스트용 빈 응답',
+    # KIS는 단수 'output'을 dict로, 'output1/2'를 list로 돌려준다.
+    #  (fetch_buyable_quantity 등은 output.get(...)을 호출하므로 dict여야 한다)
+    'output': {}, 'output1': [], 'output2': [],
+    'ctx_area_fk100': '', 'ctx_area_nk100': '',
+    'ctx_area_fk200': '', 'ctx_area_nk200': '',
+}
+
+
+@pytest.fixture(autouse=True)
+def block_account_inquiry_api(request, monkeypatch):
+    """[격리] 계좌 조회 API(``/trading/`` + category='inquiry')를 기본 차단하고
+    '빈 계좌' 응답으로 대체한다.
+
+    막지 않으면 잔고·체결내역 조회가 mock 없이 실제 한투 서버로 나간다
+    (실측: 잔고 19건 + 체결내역 등). 그러면
+      - 네트워크가 끊기거나 토큰이 만료되면 무관한 테스트가 무더기로 흔들리고,
+      - 모의계좌의 보유 종목이 바뀌는 것만으로 결과가 달라지며,
+      - 계좌번호를 가짜로 바꾸는 테스트는 INVALID_CHECK_ACNO 오류 로그를 뿜는다.
+    (직렬 실행에서는 앞선 테스트가 채운 캐시에 가려 잘 드러나지 않고, xdist 병렬에서
+     워커가 캐시 없이 시작할 때 표면화된다 — 발견이 늦은 이유다.)
+
+    주문(POST) 경로는 category가 'order'라 여기에 걸리지 않으므로 기존 주문 테스트는
+    그대로 동작한다. 조회 API 자체의 파싱·폴백 로직을 검증하는 테스트는
+    HTTP 계층(api.session.request)을 직접 mock하므로
+    @pytest.mark.real_balance_api 로 이 차단을 비활성화한다.
+    """
+    if request.node.get_closest_marker("real_balance_api"):
+        return
+    orig_call_api = api.call_api
+
+    def _guarded_call_api(url_path, *args, **kwargs):
+        # call_api(url_path, market, category, action, ...) — 위치·키워드 모두 대응
+        category = kwargs.get("category", args[1] if len(args) > 1 else None)
+        url = str(url_path)
+        if "trading" in url and category == "inquiry":
+            if "inquire-balance" in url:
+                return dict(_EMPTY_OVERSEAS_BALANCE if "overseas" in url
+                            else _EMPTY_DOMESTIC_BALANCE)
+            return dict(_EMPTY_ACCOUNT_INQUIRY)
+        return orig_call_api(url_path, *args, **kwargs)
+
+    monkeypatch.setattr(api, "call_api", _guarded_call_api)
+
+
+@pytest.fixture(autouse=True)
+def block_buy_restriction_cleanup_thread(monkeypatch):
+    """[격리] 수동 매수 제한 정리 데몬 스레드가 테스트에서 뜨지 않게 한다.
+
+    schedule_buy_restriction_cleanup은 주문 성공 시 데몬 스레드를 띄워 최대 10분간
+    15초 간격으로 잔고 API를 폴링한다(common.py). 테스트에서 send_order가 성공하면
+    이 스레드가 뜨고, **테스트가 끝나 monkeypatch가 원복된 뒤에도 계속 살아남아**
+    이후 무관한 테스트가 도는 내내 실제 한투 서버로 잔고 조회를 날린다.
+    (실측: 한 번의 전체 실행에서 27건. 오류 로그가 엉뚱한 테스트 이름 밑에 찍혀
+     원인 추적이 어려웠다. block_account_inquiry_api만으로는 막히지 않는다 —
+     그 fixture는 테스트 종료와 함께 원복되기 때문이다.)
+    """
+    from modules.auto_trade import common as _at_common
+    monkeypatch.setattr(_at_common, "schedule_buy_restriction_cleanup",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("modules.auto_trade.schedule_buy_restriction_cleanup",
+                        lambda *a, **k: None, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def isolate_test_files(tmp_path, monkeypatch):
     """

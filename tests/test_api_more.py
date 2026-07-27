@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import api
 import config
 
+@pytest.mark.real_balance_api  # HTTP 계층(session.request)을 직접 mock하므로 conftest의 잔고 차단을 끈다
 @patch('api.session.request')
 def test_get_overseas_balance(mock_request):
     """해외 주식 잔고 조회 테스트"""
@@ -23,6 +24,7 @@ def test_get_overseas_balance(mock_request):
     assert len(holdings) == 1
     assert holdings[0]['ovrs_pdno'] == 'AAPL'
 
+@pytest.mark.real_balance_api  # HTTP 계층(session.request)을 직접 mock하므로 conftest의 계좌 조회 차단을 끈다
 @patch('api.session.request')
 def test_get_unfilled_orders(mock_request):
     """미체결 내역 조회 테스트"""
