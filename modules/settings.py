@@ -345,8 +345,27 @@ def view_system_config(group=None):
         subheader("3-3. 비상 안전장치")
         row("연속 에러 허용", "시스템 중단 임계값", "SYSTEM_MAX_CONSECUTIVE_ERRORS", f"{getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)}", key="SYSTEM_MAX_CONSECUTIVE_ERRORS")
         row("일일 손실 제한 (%)", "비상 정지 기준 손실률 (0%면 비상 정지 OFF)", "SYSTEM_DAILY_LOSS_LIMIT", f"{getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}", key="SYSTEM_DAILY_LOSS_LIMIT")
-        row("1회 최대 리스크 (%)", "계좌 대비 1회 매매 최대 손실폭", "SYSTEM_RISK_PER_TRADE", f"{getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0)}", key="SYSTEM_RISK_PER_TRADE")
-        row("총 오픈 리스크 한도 (%)", "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)", "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
+        # [표시 정직성] 아래 두 한도는 '상한선'이지 실효 다이얼이 아니다. 변동성 타겟팅이 켜져 있으면
+        #  사이징 min 결합에서 항상 변동성층이 더 낮은 금액을 내므로 구속되지 않는다(config.py 실측 주석 참조).
+        #  값만 보고 "1회 4% 리스크로 돌고 있다"고 오해하지 않도록 실효값을 함께 적는다.
+        _vt_governs = getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)
+        _risk_pt = getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0)
+        row("1회 최대 리스크 (%)",
+            "계좌 대비 1회 매매 손실폭 상한" + (" — 현재 변동성 타겟팅이 더 낮게 제한 중" if _vt_governs else ""),
+            "SYSTEM_RISK_PER_TRADE", f"{_risk_pt}", key="SYSTEM_RISK_PER_TRADE")
+        if _vt_governs and _risk_pt > 0:
+            _eff_ratio = config.resolve_invest_ratio() * getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)
+            _atr_mult = config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)
+            table.add_row(
+                f"  [dim]└ 실효: 종목당 비중 약 {_eff_ratio * 100:.1f}% "
+                f"(= 기초 {config.resolve_invest_ratio() * 100:.0f}% × 변동성 하한 "
+                f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)}) × 손절폭(ATR×{_atr_mult:g})\n"
+                f"    손절 8% 가정 시 1회 리스크 약 {_eff_ratio * 8:.1f}% — 이 한도({_risk_pt:g}%)는 미발동[/dim]",
+                "", "")
+        row("총 오픈 리스크 한도 (%)",
+            "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)"
+            + (" — 실제 히트는 약 3~4% 수준" if _vt_governs else ""),
+            "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
 
         # [백테스트 보호] 3-4 리스크 한도 동적 스케일링(국면·휩소율·드로다운 배수)은
         #  조회·편집 화면 모두에서 숨긴다 (BACKTESTED_HIDDEN_KEYS 주석 참조).
@@ -860,6 +879,14 @@ def check_config_conflicts():
         warns.append(
             f"1회 리스크 {risk:g}% × 최대 보유 {holds}종목 = {risk*holds:g}% 로 "
             f"총 한도({port:g}%)에 못 미쳐, 포트폴리오 한도가 실질적으로 작동하지 않습니다.")
+    # [사이징 주도권] 변동성 타겟팅은 메뉴에서 숨겨져 있지만 dynamic_config.json 직접 편집으로는
+    #  꺼질 수 있다. 꺼지는 순간 사이징 주도권이 변동성층에서 리스크 한도로 넘어가 포지션이
+    #  일제히 커진다(실측: 리스크층 구속 0.0% → 5.6%, 전형 수익 median 8.6→14.9% / MDD -20→-30%).
+    #  '값 하나가 조용히 바뀌었는데 노출만 커진' 상태를 운용자가 모르고 지나치지 않도록 경고한다.
+    if not getattr(config.settings, "USE_VOLATILITY_TARGETING", True):
+        warns.append(
+            "변동성 타겟팅이 꺼져 있습니다. 사이징 주도권이 1회 리스크 한도"
+            f"({risk:g}%)로 넘어가 종목당 노출이 크게 늘고 MDD가 악화됩니다(실측 -20%→-30%).")
 
     # 4) 청산 수단이 모두 사라지는 경우 (익절 계열은 기본 OFF라 TS·손절이 유일한 출구다)
     if _g(s, "TRAILING_STOP_ACTIVATION_RATE", 10.0) > 30 and not _g(s, "USE_ATR_STOP", True):

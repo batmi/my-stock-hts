@@ -1309,6 +1309,24 @@ class AutoTrader:
             if risk_scale_reason:
                 risk_parts.append(f"축소 사유: {risk_scale_reason[:60]}")
 
+        # [표시 정직성] SYSTEM_RISK_PER_TRADE(명목 한도)는 변동성 타겟팅이 켜져 있는 한
+        #  사이징 min 결합에서 한 번도 구속되지 않는다(config.py의 2026-07-27 실측 주석 참조).
+        #  명목값만 보이면 "1회 4% 리스크로 돌고 있다"는 오해를 부르므로, 실제로 금액을 결정하는
+        #  변동성층 기준의 실효 비중을 함께 적는다. 타겟팅을 끄면 명목 한도가 실효 한도가 된다.
+        try:
+            _nominal_risk = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0) or 0.0
+            if getattr(config, 'USE_VOLATILITY_TARGETING', True):
+                _eff_ratio = (config.resolve_invest_ratio()
+                              * getattr(config, 'VOLATILITY_SCALING_MIN', 0.4))
+                _part = f"1회 사이징 기준 비중 약 {_eff_ratio * 100:.1f}% (변동성 타겟팅이 결정)"
+                if _nominal_risk > 0:
+                    _part += f", 명목 한도 {_nominal_risk:g}%는 미발동"
+                risk_parts.append(_part)
+            elif _nominal_risk > 0:
+                risk_parts.append(f"변동성 타겟팅 OFF — 1회 리스크 한도 {_nominal_risk:g}%가 실효 제한")
+        except Exception:
+            pass
+
         lines = [
             f"{icon} [운영 관제 /health: {state}]",
             f"• 모드/계좌: {mode} / {account or '-'}",
