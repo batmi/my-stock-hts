@@ -122,6 +122,15 @@ class DefaultStrategy:
             if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
                 is_vol_ok = False
                 vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
+        elif min_vol > 0 and not is_overseas:
+            # [Fix 2026-07-27 / fail-closed] KIS 국내 종목에서 체결강도를 못 구한 경우(정규장
+            #  J 무효·EGW00201 스로틀 실패 등)는 수급 게이트를 '통과'시키던 종전 동작이 fail-open이었다.
+            #  체결강도 기준(min_vol>0)을 켜 둔 이상 '확인 못 함'은 '충족'이 아니므로 보류한다.
+            #  값은 캐시되지 않아 다음 분석 주기에 다시 조회된다.
+            #  (min_vol==0은 사용자가 게이트를 끈 것, 해외 종목은 KIS가 체결강도를 제공하지 않아
+            #   애초에 이 게이트의 대상이 아니므로 종전대로 통과시킨다)
+            is_vol_ok = False
+            vol_reject_reason = "체결강도 미확인(보류)"
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',

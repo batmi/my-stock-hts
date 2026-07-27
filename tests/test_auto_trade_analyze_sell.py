@@ -262,3 +262,63 @@ def test_analyze_buy_mean_reversion(mock_ind, mock_cls, mock_score, mock_sm, str
     )
     assert res['action'] == 'buy'
     assert res['state'] == "역매수"
+
+
+# ==========================================================
+# 체결강도 미확인(None) 시 fail-closed 보류 (2026-07-27)
+#  정규장에 KRX(J) 체결강도를 못 구하면 NXT(NX) 값으로 대체하지 않고 None을 넘기므로,
+#  게이트가 이를 '충족'으로 통과시키지 않고 보류하는지 검증한다.
+# ==========================================================
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_vol_unknown_holds(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up, monkeypatch):
+    """국내 종목: 체결강도 미확인(None)이면 매수하지 않고 보류한다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=None, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+    assert res['action'] == 'wait'
+    assert "미확인" in res['vol_reject_reason']
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_vol_unknown_gate_off(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up, monkeypatch):
+    """체결강도 기준을 끈 경우(0)에는 미확인이어도 종전대로 통과한다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+
+    res = strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=None, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 0.0, "BUY_ASK_BID_RATIO": 0.0},
+    )
+    assert res['action'] == 'buy'
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_vol_unknown_overseas_passes(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up, monkeypatch):
+    """해외 종목은 KIS가 체결강도를 제공하지 않으므로 미확인이어도 보류하지 않는다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+
+    res = strategy.analyze_buy(
+        "AAPL", "애플", df_up, 10000, vol_strength=None, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+    assert res['action'] == 'buy'

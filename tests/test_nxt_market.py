@@ -113,3 +113,65 @@ def test_nxt_unsupported_order_routing_krx(monkeypatch):
 
     # KODEX 삼성그룹 (NXT 미지원 ETF)
     api.place_order("domestic", "buy", "102780", 1, 25400, "00")
+
+
+# ==========================================================
+# 체결강도 시장 분리 (2026-07-27)
+#  정규장에는 NXT(NX) 체결강도를 쓰지 않는다 — 정규장의 수백분의 1 거래량에서 나온
+#  다른 시장의 값이 매수 수급 게이트로 들어가면 안 되기 때문. KRX 값을 못 구하면
+#  None(판단 불가)으로 두고 다음 주기에 재조회한다.
+# ==========================================================
+@pytest.fixture
+def vol_strength_env(monkeypatch):
+    """체결강도 REST 경로만 타도록 WS·토스·모의투자·캐시를 정리한다."""
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+    monkeypatch.setattr(config, 'USE_WEBSOCKET', False, raising=False)
+    api._MICRO_CACHE.clear()
+    monkeypatch.setattr(api, 'is_holiday_today', lambda: False)
+
+
+def _vol_api_recorder(j_value, nx_value):
+    """call_api 대역: 조회된 시장구분(J/NX)을 기록하고 지정한 체결강도를 돌려준다."""
+    seen = []
+
+    def _mock(url_path, market, category, action, params=None, data=None,
+              method="GET", timeout=None, retries=None, tr_id=None):
+        div = (params or {}).get("FID_COND_MRKT_DIV_CODE")
+        seen.append(div)
+        val = j_value if div == "J" else nx_value
+        return {'rt_cd': '0', 'output': [{'tday_rltv': str(val)}]}
+
+    return _mock, seen
+
+
+def test_vol_strength_regular_hours_no_nxt(monkeypatch, vol_strength_env):
+    """5. 정규장에 KRX(J) 체결강도가 무효(0)여도 NXT를 조회하지 않고 None(보류)을 반환한다."""
+    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 10, 0)))
+    mock_api, seen = _vol_api_recorder(j_value=0, nx_value=180.0)
+    monkeypatch.setattr(api, 'call_api', mock_api)
+
+    assert api.get_realtime_vol_strength("005930") is None
+    assert "NX" not in seen, f"정규장에 NXT 체결강도를 조회했다: {seen}"
+    # 보류값은 캐시되지 않아야 다음 주기에 재조회된다
+    assert api._get_micro_cache("vol_005930", ttl=3.0) is None
+
+
+def test_vol_strength_regular_hours_uses_krx(monkeypatch, vol_strength_env):
+    """6. 정규장에 KRX(J) 체결강도가 유효하면 그 값을 그대로 쓴다."""
+    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 10, 0)))
+    mock_api, seen = _vol_api_recorder(j_value=125.0, nx_value=180.0)
+    monkeypatch.setattr(api, 'call_api', mock_api)
+
+    assert api.get_realtime_vol_strength("000660") == 125.0
+    assert "NX" not in seen
+
+
+def test_vol_strength_nxt_hours_uses_nxt(monkeypatch, vol_strength_env):
+    """7. NXT 단독시간(애프터마켓)에는 KRX가 닫혀 있으므로 NXT 체결강도를 채택한다."""
+    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
+    mock_api, seen = _vol_api_recorder(j_value=0, nx_value=180.0)
+    monkeypatch.setattr(api, 'call_api', mock_api)
+
+    assert api.get_realtime_vol_strength("035720") == 180.0
+    assert "NX" in seen

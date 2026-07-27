@@ -3492,8 +3492,10 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
                         if config.FILE_DEBUG_LEVEL in ["DEBUG", "TRACE"]:
                             logger.debug(f"[VOL_STRENGTH_PARSED] [{code}] Extracted Value: {valid_val}%")
                         # [수정] 체결강도 0은 해당 거래소 당일 무거래(NXT 단독시간대엔 KRX(J)가 닫혀 항상 0)를
-                        #  의미하는 무효값이므로 채택하지 않는다. 실제값은 아래 NXT(NX) 조회가 채운다.
-                        #  (0을 그대로 채택→캐시하면 NXT 조회 실패 시 [0%]로 오표시되는 문제를 차단)
+                        #  의미하는 무효값이므로 채택하지 않는다.
+                        #  NXT 단독시간대(프리/애프터)에는 아래 NX 조회가 실제값을 채우고,
+                        #  정규장에는 채우지 않고 None(판단 불가)으로 남겨 호출부가 보류하게 한다.
+                        #  (0을 그대로 채택→캐시하면 [0%]로 오표시되는 문제도 함께 차단)
                         if valid_val > 0:
                             final_vol = valid_val
                     except Exception as e:
@@ -3508,17 +3510,19 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
     # [추가] NXT(대체거래소) 체결강도 조회 및 병합 (NX 코드 사용)
     # [수정] 모의투자(VTS)는 NXT 미지원 → NX 조회 스킵 (불필요한 ReadTimeout 방지)
     try:
-        # [수정] NX 폴백 조건을 '시간대 게이트'에서 'J 무효(final_vol is None)일 때'로 확장한다.
-        #  기존엔 프리/애프터(_nxt_quote_window)에만 NX를 조회했으나, 정규장 개장 직후(09:00~09:0X)
-        #  KRX(J) 체결강도(tday_rltv)가 잠시 0으로 나오는 전이 구간에서 시간대 게이트가 이미 닫혀
-        #  NX 폴백이 생략돼 None→[0%]로 오표시됐다(EGW00201로 J가 스로틀 실패해도 동일).
-        #  - phase=='active'(프리/애프터): 기존과 동일하게 항상 조회(J는 항상 0이라 어차피 None).
-        #  - phase=='skip'(정규장 09:00~15:30): J가 유효값(>0)을 준 대다수 종목은 final_vol이
-        #    채워져 NX를 호출하지 않으므로 TPS 절감은 유지되고, J가 0/실패한 종목만 NX로 보강한다.
+        # [Fix 2026-07-27] 정규장(phase=='skip')에서는 NX 폴백을 쓰지 않는다.
+        #  종전엔 J가 0/실패면 정규장에도 NX로 보강해 [0%] 오표시를 막았으나, 이 값은
+        #  표시에만 쓰이지 않고 매수 수급 게이트(BUY_VOL_STRENGTH)로 그대로 들어간다.
+        #  정규장 중 NXT 체결강도는 정규장의 수백분의 1 거래량에서 나온 다른 시장의
+        #  매수/매도 비율이라 소수 체결로 극단값이 되기 쉽고, J가 스로틀(EGW00201)로 실패한
+        #  종목만 이종 기준으로 판정되는 비일관 상태를 만든다.
+        #  → KRX 기준을 못 구하면 None으로 두어 '판단 불가=보류'로 넘긴다(다음 주기 재조회).
+        #    캐시에도 저장하지 않으므로 다음 주기에 정상적으로 다시 조회된다.
+        #  - phase=='active'(프리/애프터): NXT가 유일한 거래 시장 → NX가 정당한 대표값.
+        #  - phase=='skip'(정규장): NX 조회 생략(TPS 절감 겸용).
         #  - phase=='offhours'(야간·휴장): NXT 미개장 → 조회 생략.
         _nxt_phase = _nxt_quote_phase()
-        if (include_nxt and not config.session.is_simulation
-                and (_nxt_phase == 'active' or (_nxt_phase == 'skip' and final_vol is None))):
+        if include_nxt and not config.session.is_simulation and _nxt_phase == 'active':
             # [수정] retries=1: NXT 단독시간대엔 NX가 유일한 유효 체결강도 소스인데, 개요 팬아웃(다워커
             #  동시호출) 중 EGW00201(초당 거래건수 초과)에 걸려 retries=0으로 즉시 실패하면 J의 0으로
             #  폴백돼 [0%]로 오표시된다(간헐적·종목마다 뒤바뀜). call_api의 스로틀 백오프로 회복시킨다.
