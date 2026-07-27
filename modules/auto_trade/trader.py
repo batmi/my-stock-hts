@@ -3450,7 +3450,23 @@ class AutoTrader:
                             
                         # [수정] 오프라인(프로그램 종료) 상태에서의 입출금까지 완벽히 감지하도록 수학적 불변 원리 적용
                         # 매매 손익이 아닌 외부 현금 입출금을 스스로 포착하여 일일 손실 제한(Loss Cut) 오작동을 방지합니다.
-                        current_cash = current_total - total_eval
+                        #
+                        # [Fix] 현금은 반드시 current_total과 '같은 스냅샷'의 평가금으로 빼야 한다.
+                        #  total_eval은 보유 종목 리스트 합산이고 current_total은 get_asset_status_data의
+                        #  별도 재조회라, 두 값의 시세 스냅샷이 어긋나면 현금이 틀어진다(음수까지 나온다).
+                        #  실측 2026-07-27: 같은 로그 한 줄에서 평가금이 3,540,000(88,500 기준)과
+                        #  3,536,000(88,400 기준)으로 갈려 현금이 1,371원 대신 -2,629원으로 계산됐다.
+                        #  장 마감 후에도 어긋났다는 건 한쪽이 캐시라는 뜻이고, 캐시면 오차가 매 주기
+                        #  '동일하게' 반복되어 아래 3회 연속 확인 규칙이 방어가 아니라 오탐 확정 장치가 된다.
+                        #  (보유가 커져 오차가 5만원을 넘으면 가짜 입출금 → initial_asset 이동 →
+                        #   일일 손실 제한 기준 왜곡. 과거 같은 계열 버그가 비상정지를 오작동시켰다.)
+                        #  asset_data 경로에서는 tot_asset = real_cash + dep_ovs + sec_eval 이므로
+                        #  sec_eval을 빼면 현금이 정확히 나온다. 폴백 경로의 current_total은
+                        #  cash + total_eval로 만든 값이라 total_eval을 빼는 것이 맞다.
+                        if asset_data and not is_asset_broken:
+                            current_cash = current_total - api.safe_int(asset_data.get('sec_eval', total_eval))
+                        else:
+                            current_cash = current_total - total_eval
                         current_principal = current_cash + tot_pchs - realized_profit
 
                         # [Fix] 입금 감지 기준은 '원금(현금+매입원가-실현손익)'이어야 한다.
