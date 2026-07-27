@@ -484,7 +484,21 @@ class GlobalSettings(BaseModel):
         # [샹들리에 엑시트] TS 전용 ATR 배수. 손절용 ATR_STOP_MULTIPLIER(2.0)와 분리하여,
         # 급등주는 변동성(ATR)에 비례해 콜백이 자동으로 넓어져 추세를 끝까지 추종한다.
         # 실효 콜백 = max(CALLBACK_RATE, TRAILING_ATR_MULTIPLIER×ATR/고점) (+아래 상한 캡 적용 시 clamp)
-        "TRAILING_ATR_MULTIPLIER": 3.0,
+        # [2026-07-27] 3.0 → 3.5. 주청산 수단인데 배수 자체의 실측 근거가 없어 검증했다.
+        #  4슬롯 포트폴리오, 30종목 무작위 30회 짝비교(현행 3.0 대비):
+        #    2.5(좁힘) → PF -0.49 (개선 2/30)   = 좁히면 확실히 나쁘다
+        #    3.5       → PF +0.41 (25/30), 수익 +20.48%p (21/30), MDD -1.34%p  ← 채택
+        #    4.0       → PF +0.67 (26/30), MDD -3.28%p
+        #    5.0       → PF +1.09 (30/30), MDD -6.36%p
+        #  전 구간에서 같은 방향이다(횡보 25/30·강세 26/30) — 국면 의존이 아니다.
+        #  TS 청산 건당 수익이 +29.97% → +42.35%로 올라, 좁은 배수가 추세를 조기에
+        #  끊고 있었음이 드러났다(고정 익절을 끈 이유인 fat-tail 보호와 모순된 상태였다).
+        #  4.0·5.0은 수치가 더 좋지만 TS가 총이익에서 차지하는 비중이 100% → 81% → 74%로
+        #  떨어져 '주청산은 샹들리에 TS'라는 설계가 무너진다(5.0은 3년간 TS 청산이 7건뿐이라
+        #  표본도 부족). 3.5는 TS 비중 100%를 유지하는 최대치다.
+        #  ※ TRAILING_STOP_ACTIVATION_RATE 상향은 이 변경에 흡수된다 — 배수 3.5에서는
+        #    발동 기준을 10 → 15로 올려도 효과가 정확히 0이다(둘 다 청산을 늦추는 같은 일).
+        "TRAILING_ATR_MULTIPLIER": 3.5,
         # [TS 상한 캡] ATR 동적 콜백을 '최대수익 × 이 비율'로 제한. 0 이하 = 캡 해제(순수 샹들리에).
         # 백테스트(관심목록 52종목×2년): 캡 0.5가 TS 청산 건당 수익을 +29.8%→+17.1%로 깎아
         # fat-tail 추세를 조기에 끊는 것으로 확인 → 추세추종 기조로 기본 해제(0.0).
@@ -1305,7 +1319,7 @@ def reset_all_settings():
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
-            "TRAILING_ATR_MULTIPLIER": 3.0, "TS_MAX_GIVEBACK_RATIO": 0.0
+            "TRAILING_ATR_MULTIPLIER": 3.5, "TS_MAX_GIVEBACK_RATIO": 0.0
         }
         settings.SCORING_WEIGHTS = {
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0

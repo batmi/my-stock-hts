@@ -188,7 +188,7 @@
 *   **시간 청산 (Time-based Stop)**: `TIME_STOP_USE`가 True일 경우, 매수 후 설정된 일수(`TIME_STOP_DAYS`, 기본 20일) 경과 시점에 수익률이 `TIME_STOP_MIN_PROFIT_RATE`(기본 **0.0%** = 손실 중인 종목만 대상) 미만이고 상방 모멘텀을 상실했으면 매도합니다. (상승 추세 유지 시 유예됨)
 *   **트레일링 스탑 (Trailing Stop) — 주 익절 수단 (샹들리에 엑시트)**:
     *   **발동 조건**: 최고 수익률 **+10.0%** (`TRAILING_STOP_ACTIVATION_RATE`) 도달 시 감시 시작.
-    *   **매도 조건**: 실효 콜백 = max(`TRAILING_ATR_MULTIPLIER`(기본 3.0) × ATR ÷ 고점, 최소 `TRAILING_STOP_CALLBACK_RATE`(기본 5.0%)). 급등주는 변동성에 비례해 콜백이 자동 확대되어 추세를 길게 추종합니다. (TS 전용 ATR 배수는 손절용 `ATR_STOP_MULTIPLIER`와 분리. `TS_MAX_GIVEBACK_RATIO`(기본 0=캡 해제, 순수 샹들리에)를 양수로 설정하면 최대 수익의 해당 비율 이상 반납 시 상한 캡 적용)
+    *   **매도 조건**: 실효 콜백 = max(`TRAILING_ATR_MULTIPLIER`(기본 3.5) × ATR ÷ 고점, 최소 `TRAILING_STOP_CALLBACK_RATE`(기본 5.0%)). 급등주는 변동성에 비례해 콜백이 자동 확대되어 추세를 길게 추종합니다. (TS 전용 ATR 배수는 손절용 `ATR_STOP_MULTIPLIER`와 분리. `TS_MAX_GIVEBACK_RATIO`(기본 0=캡 해제, 순수 샹들리에)를 양수로 설정하면 최대 수익의 해당 비율 이상 반납 시 상한 캡 적용)
 *   **추세 이탈 매도**: 종합 점수가 **4점** (`SELL_SCORE`) 미만으로 떨어지고 **주가가 60일선을 이탈**(추세 구조 훼손)하면 매도. 점수 하락 단독으로는 팔지 않으며(주청산은 트레일링 스탑에 위임), 상태가 '매도'로 분류되면 즉시 매도.
 *   **역매수 유예 손절 (`MR_GRACE_LOSS_RATE`)**: 역추세 매수로 진입한 종목의 유예기간 중 최대 허용 손실률입니다. (기본값 -7.0%, 역추세 비활성 시 무관)
 *   **기본 비활성 옵션 (상방 제한 요소 — 메뉴 미노출, `dynamic_config.json` 직접 편집 또는 종목별 개별 룰로만 활성화)**:

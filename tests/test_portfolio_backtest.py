@@ -93,15 +93,22 @@ def test_pyramiding_only_adds_and_respects_max(universe):
             assert per_position[t["code"]] <= 2
 
 
-def test_heat_cap_blocks_new_entries_when_tight(universe):
-    """히트 캡을 극단적으로 좁히면 신규 진입이 줄어야 한다 (캡이 실제로 게이트로 동작)."""
-    dfs, status, dates = universe
-    loose = pbt.run_portfolio(dfs, status, dates, slots=3, heat_cap_pct=0.0)   # 0 = 미사용
-    tight = pbt.run_portfolio(dfs, status, dates, slots=3, heat_cap_pct=0.05)  # 자산의 0.05%
+def test_heat_cap_limits_exposure_when_tight(universe):
+    """히트 캡을 좁힐수록 실제 노출(투자 비중)이 단조 감소해야 한다.
 
-    n_buy_loose = sum(1 for t in loose["trades"] if t["reason"] == "매수")
-    n_buy_tight = sum(1 for t in tight["trades"] if t["reason"] == "매수")
-    assert n_buy_tight < n_buy_loose
+    [주의] '매수 건수'로는 검증할 수 없다 — 캡이 좁으면 포지션이 작아져 빨리 청산되고
+    슬롯이 비어 재매수가 늘어나므로 건수가 오히려 증가할 수 있다(실측 10→13건).
+    캡이 통제하는 것은 노출이므로 유휴현금 비율로 본다.
+    """
+    dfs, status, dates = universe
+    caps = [0.0, 0.05, 0.02, 0.005, 0.001]      # 0 = 미사용, 이후 자산 대비 %
+    cash = [pbt.run_portfolio(dfs, status, dates, slots=3, heat_cap_pct=c)["avg_cash_ratio"]
+            for c in caps]
+
+    # 캡이 좁아질수록 현금이 남는다(= 노출이 줄어든다)
+    assert cash == sorted(cash), f"현금 비율이 캡에 단조 반응하지 않음: {cash}"
+    assert cash[0] < 50.0                        # 캡 미사용이면 대부분 투자된다
+    assert cash[-1] == pytest.approx(100.0)      # 극단적으로 좁히면 진입이 완전히 막힌다
 
 
 def test_reserved_cash_is_held_out_but_counted_in_equity(universe):

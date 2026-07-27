@@ -226,13 +226,13 @@ def view_system_config(group=None):
         #  편집 가능한 것처럼 보이면 오해를 부르므로 실제 규칙을 그대로 적어 읽기 전용으로 둔다.
         table.add_row(
             f"TS 하락 감지율\n[dim]실효 콜백 = max({sell.get('TRAILING_STOP_CALLBACK_RATE')}%, "
-            f"ATR×{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}/고점) — 통상 동적값이 지배[/dim]",
+            f"ATR×{sell.get('TRAILING_ATR_MULTIPLIER', 3.5)}/고점) — 통상 동적값이 지배[/dim]",
             "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('TRAILING_STOP_CALLBACK_RATE')}%")
         # TRAILING_ATR_MULTIPLIER는 애초에 편집 목록에 없다. 변수명을 그대로 띄우면
         # 편집 가능한 것처럼 보이므로 다른 잠금 항목과 표기를 맞춘다.
         table.add_row(
             "TS ATR 배수\n[dim]샹들리에 엑시트: TS 콜백을 ATR×배수로 동적 확대[/dim]",
-            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.0)}")
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.5)}")
 
         # [추세추종 보호] 손절 체계 일체 잠금 (ANTI_TREND_HIDDEN_KEYS 주석 참조).
         #  ATR 손절을 끄면 >50% 대박이 12→4건으로 잘리므로 스위치부터 잠그고,
@@ -1381,7 +1381,7 @@ DEFAULT_PRESETS = {
     },
     "default": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.0,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.5,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 60
     }
@@ -1500,7 +1500,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         "TAKE_PROFIT_RSI": vals["TAKE_PROFIT_RSI"],
         "TRAILING_STOP_ACTIVATION_RATE": vals["TRAILING_STOP_ACTIVATION_RATE"],
         "TRAILING_STOP_CALLBACK_RATE": vals["TRAILING_STOP_CALLBACK_RATE"],
-        "TRAILING_ATR_MULTIPLIER": vals.get("TRAILING_ATR_MULTIPLIER", 3.0)
+        "TRAILING_ATR_MULTIPLIER": vals.get("TRAILING_ATR_MULTIPLIER", 3.5)
     })
     config.SCORING_WEIGHTS.pop("MOMENTUM_PRICE", None)  # 구버전 잔여 키 제거
     config.SCORING_WEIGHTS.update({
