@@ -666,9 +666,9 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         # [추세추종] 가격 모멘텀 팩터 입력값 동적 계산 (백테스트는 사전계산 값을 인자로 전달)
         try:
             if w52_pos is None and price is not None and 'high' in df.columns and 'low' in df.columns:
-                recent_df = df.tail(250)
-                h52 = float(recent_df['high'].max())
-                l52 = float(recent_df['low'].min())
+                # 화면(표·상세·지수)과 동일한 365일 창. 백테스트는 w52_pos를 인자로 넘기므로
+                # 여기 오지 않고, 와도 창이 비어 _w52_band가 기존 tail(250)으로 폴백한다.
+                h52, l52 = _w52_band(df)
                 if h52 > l52:
                     w52_pos = (price - l52) / (h52 - l52) * 100
             if mom_ret is None and price is not None:
@@ -2119,9 +2119,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         l52 = 0.0
         high_52_rate = 0.0
         if len(df) > 0:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
+            h52, l52 = _w52_band(df)   # 표(_analyze_table_row)와 동일한 365일 창
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
             if h52 > 0:
@@ -2928,9 +2926,7 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         if len(df) > 0:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
+            h52, l52 = _w52_band(df)   # 표(_analyze_table_row)와 동일한 365일 창
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
@@ -3256,9 +3252,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         if len(df) > 0:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
+            h52, l52 = _w52_band(df)   # 표(_analyze_table_row)와 동일한 365일 창
             if h52 > l52:
                 w52_pos = (current_price - l52) / (h52 - l52) * 100
 
@@ -4172,6 +4166,33 @@ def _w52_high_low(chart_df):
         return None, None
 
 
+def _w52_band(chart_df):
+    """52주 고/저 밴드 (h52, l52). 산출 불가 시 (0.0, 0.0).
+
+    화면별로 창 정의가 달라 같은 종목의 52주 값이 어긋나던 것을 통일하기 위한 단일 진입점이다.
+    (표는 365일, 지수·상세·점수 폴백은 tail(250)=실측 373일을 쓰고 있었다. 차이는 경계 밖
+     8일에 극값이 걸릴 때만 생기지만, 걸리면 크다 — TIGER 조선TOP10 20.2%→11.0%.
+     2026-07-24 보유 10종목 실측: 삼성SDI 46.2%→45.0%, 삼성전자·현대차 각 -0.3%p)
+
+    365일 창을 못 채우는 경우(신규상장·차트 수신 절단)만 보유 봉 전체로 폴백한다.
+    폴백 조건은 _w52_high_low가 판정한다(_W52_MIN_BARS 미만).
+
+    주의: 창의 기준점은 '오늘'이다. 과거 시점 df(백테스트)에 쓰면 창이 어긋나지만, 그 경로는
+    w52_pos를 사전계산해 인자로 넘기므로 여기에 도달하지 않는다. 도달하더라도 창이 비어
+    _w52_high_low가 None을 주고 기존 tail(250) 동작으로 폴백한다.
+    """
+    if chart_df is None or getattr(chart_df, 'empty', True):
+        return 0.0, 0.0
+    h, l = _w52_high_low(chart_df)
+    if h is None:
+        try:
+            recent = chart_df.tail(250)
+            h, l = float(recent['high'].max()), float(recent['low'].min())
+        except Exception:
+            return 0.0, 0.0
+    return h, l
+
+
 def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, bundle):
     """(내부함수) print_table 2단계: 수집된 데이터(bundle)로 지표 분석 및 행 포맷."""
     try:
@@ -4714,7 +4735,9 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         else:
             col_header += " [강도]"
     table.add_column(col_header, justify="right")
-    table.add_column("52주", justify="right")
+    # [표기] "52주"는 52주 고점(가격)으로 오해되기 쉬워 "52W%"로 바꾼다 — 값은 저점~고점
+    #  밴드 내 위치(%)다. 표시폭 4로 기존 헤더와 같아 컬럼/전체 폭은 변하지 않는다.
+    table.add_column("52W%", justify="right")
     table.add_column("EMA(5)", justify="right")
     table.add_column("EMA(20)", justify="right")
     table.add_column("EMA(60)", justify="right")

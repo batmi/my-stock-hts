@@ -66,7 +66,19 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
 @patch('tradingview_screener.Query')
 @patch('api.yf.Ticker')
 def test_get_yf_fast_info_uses_micro_cache(mock_ticker, mock_query):
-    """3. get_yf_fast_info 함수가 yfinance 통신을 캐싱하여 중복을 방지하는지 검증"""
+    """3. get_yf_fast_info 함수가 yfinance 통신을 캐싱하여 중복을 방지하는지 검증
+
+    [Fix] call_count 전체가 아니라 'AAPL' 호출만 센다. @patch('api.yf.Ticker')는 api 모듈의
+    지역 이름이 아니라 yfinance 모듈 객체의 속성을 갈아끼우므로, 패치가 사는 동안 프로세스
+    안의 어떤 코드/스레드가 yf.Ticker를 불러도(api:1898, analysis:2015, manage/events 등)
+    같은 mock에 집계된다. 다른 테스트가 남긴 데몬 스레드(싱글톤 reset은 인스턴스만 지울 뿐
+    기동된 루프를 멈추지 않는다)의 잔여 틱이 겹치면 count가 2가 되어 -n auto 배분에 따라
+    간헐 실패했다. 이 테스트의 회귀 의도는 'AAPL을 재조회하지 않는가'이므로 대상만 센다.
+    """
+    def _aapl_calls():
+        return sum(1 for c in mock_ticker.call_args_list
+                   if c.args and c.args[0] == "AAPL")
+
     mock_fast_info = MagicMock()
     mock_fast_info.last_price = 150.0
     mock_fast_info.regular_market_previous_close = 145.0
@@ -78,9 +90,9 @@ def test_get_yf_fast_info_uses_micro_cache(mock_ticker, mock_query):
     # 첫 호출
     info1 = api.get_yf_fast_info("AAPL")
     assert info1["last_price"] == 150.0
-    assert mock_ticker.call_count == 1
-    
+    assert _aapl_calls() == 1
+
     # 두 번째 호출 (캐시 적중)
     info2 = api.get_yf_fast_info("AAPL")
     assert info2["last_price"] == 150.0
-    assert mock_ticker.call_count == 1 # 추가 객체 생성 및 통신이 없어야 함
+    assert _aapl_calls() == 1 # 추가 객체 생성 및 통신이 없어야 함
