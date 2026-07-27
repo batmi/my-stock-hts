@@ -4238,14 +4238,21 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
         #  고정하면 같은 줄에서 현재가와 지표의 기준이 갈린다(실측: SK텔레콤 현재가 99,700
         #  = NXT 애프터가인데 EMA5·RSI·CCI는 KRX 종가 100,000 기준).
         #  등락은 API 기준가 대신 일봉 직전 봉과 비교해 'KRX 정규장 등락'으로 통일한다.
+        #  [방어] 마지막 봉이 '직전 거래일'보다 오래됐으면(당일 봉 미수신) 확정 종가로 쓰지 않는다.
+        #   차트가 하루 밀린 채 현재가 자리에 실리면 지난 거래일 종가·등락이 오늘 값으로 보인다
+        #   (2026-07-27 22:40 실측: 삼성전자 249,500 -7.59% = 7/24 값. 원인이던 캐시는
+        #    api._chart_disk_get에서 고쳤고, 여기서는 같은 증상이 다시 새지 않게 막는다).
+        #   이 경우 현재가·등락은 실시간 시세(curr_data)에서 오는 종전 경로를 그대로 탄다.
         krx_close_px, krx_prev_px = 0.0, 0.0
         if not is_overseas and not api.chart_overlay_enabled(False) \
                 and chart_df is not None and not chart_df.empty:
             try:
-                krx_close_px = float(chart_df.iloc[-1]['close'])
-                if len(chart_df) >= 2:
-                    krx_prev_px = float(chart_df.iloc[-2]['close'])
-            except (TypeError, ValueError):
+                last_bar_date = str(chart_df.iloc[-1]['date']).replace('-', '')[:8]
+                if last_bar_date >= utils.market_today(False):
+                    krx_close_px = float(chart_df.iloc[-1]['close'])
+                    if len(chart_df) >= 2:
+                        krx_prev_px = float(chart_df.iloc[-2]['close'])
+            except (TypeError, ValueError, KeyError, IndexError):
                 krx_close_px, krx_prev_px = 0.0, 0.0
 
         # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.

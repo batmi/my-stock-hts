@@ -424,6 +424,30 @@ def domestic_trading_session_open():
         return True
 
 
+# KRX 정규장 마감(15:30) + 확정 일봉 반영 여유 10분. 이 시각 이후엔 '당일 확정 종가'가
+# 어느 소스(KIS 일봉·pykrx·FDR)에서도 조회된다고 본다. 마감 직후 몇 분은 소스에 따라 아직
+# 확정 봉이 없어, 그 순간 받은 캐시를 6시간 붙들면 같은 문제가 다시 생긴다.
+_KRX_DAILY_SETTLED_HHMM = (15, 40)
+
+
+def _krx_close_passed_at():
+    """오늘 KRX 정규장 마감이 이미 지났으면 그 기준 시각(datetime), 아니면 None.
+
+    '캐시된 일봉이 당일 확정 종가를 담고 있어야 하는가'의 기준선이다. 차트 캐시는 달력일
+    단위로만 유효하므로(오늘자 항목만 조회) 같은 날 안에서의 비교만 하면 된다.
+    휴장일(주말·공휴일)은 새로 마감된 세션이 없으므로 None — 검사 자체가 불필요하다.
+    """
+    try:
+        now = datetime.now()
+        if market_today(False) != now.strftime('%Y%m%d'):
+            return None
+        settled = now.replace(hour=_KRX_DAILY_SETTLED_HHMM[0], minute=_KRX_DAILY_SETTLED_HHMM[1],
+                              second=0, microsecond=0)
+        return settled if now >= settled else None
+    except Exception:      # noqa: BLE001 - 판정 실패 시 종전 동작(캐시 유지)
+        return None
+
+
 def chart_overlay_enabled(is_overseas=False):
     """지금 차트 마지막 봉에 실시간가를 반영해도 되는가 (chart_overlay_price의 시간대 판정부).
 
@@ -699,15 +723,41 @@ def _chart_disk_path():
         pass
     return os.path.join(base, 'chart_cache.db')
 
-def _chart_disk_get(cache_key, today_str):
-    """디스크 일봉 캐시에서 '오늘자' DataFrame을 복원한다(없거나 비활성/오류 시 None)."""
+def _chart_disk_get(cache_key, today_str, is_overseas=False):
+    """디스크 일봉 캐시에서 '오늘자' DataFrame을 복원한다(없거나 비활성/오류/만료 시 None).
+
+    [Fix 2026-07-27] 종전엔 달력일(trade_date)만 맞으면 저장 시각과 무관하게 하루 종일
+    돌려줬다. 복원할 때 메모리 캐시의 timestamp를 now로 다시 찍기 때문에 6시간 TTL마저
+    영영 만료되지 않아, 자정 직후에 받아 둔 '어제까지의 일봉'이 그날 밤까지 재사용됐다.
+    장중에는 실시간 오버레이가 당일 봉을 채워 가려지지만, 모든 장이 끝난 뒤(20:00 이후·
+    오버레이 비활성)에는 직전 거래일 종가가 그대로 '현재가'로 노출된다.
+      실측 2026-07-27(월) 22:40 관심종목 표: 삼성전자 249,500(-7.59%)로 표시 — 7/24(금)
+      값이다(실제 7/27 종가 254,000 +1.80%). 캐시 저장 시각 00:54, 마지막 봉 20260724.
+      같은 캐시로 EMA·RSI·CCI·52주 위치까지 하루 밀린 채 계산된다.
+    그래서 두 조건을 모두 만족할 때만 재사용한다:
+      1) 저장 시각 기준 TTL(CHART_CACHE_TTL_MINUTES) 이내
+      2) 국내는 '직전 정규장 마감 이후'에 저장된 것 — 마감 전 캐시는 확정 종가가 없다
+    """
     if getattr(config, 'CHART_DISK_CACHE', True) is False:
         return None
     try:
+        ttl_sec = max(0.0, float(getattr(config, 'CHART_CACHE_TTL_MINUTES', 360))) * 60
+    except (TypeError, ValueError):
+        ttl_sec = 360 * 60
+    closed_at = None if is_overseas else _krx_close_passed_at()
+    try:
         with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
-            row = conn.execute("SELECT df_blob FROM chart_cache WHERE cache_key=? AND trade_date=?", (cache_key, today_str)).fetchone()
+            row = conn.execute("SELECT df_blob, ts FROM chart_cache WHERE cache_key=? AND trade_date=?", (cache_key, today_str)).fetchone()
             if row and row[0]:
+                try:
+                    saved_ts = float(row[1] or 0)
+                except (TypeError, ValueError):
+                    saved_ts = 0.0
+                if ttl_sec > 0 and (time.time() - saved_ts) > ttl_sec:
+                    return None
+                if closed_at is not None and saved_ts < closed_at.timestamp():
+                    return None
                 df = pickle.loads(row[0])
                 if df is not None and not df.empty:
                     return df
@@ -800,6 +850,7 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
     cache_key = _chart_cache_key(code, is_overseas, is_index)
+    settled_at = None if is_overseas else _krx_close_passed_at()
 
     with _CHART_CACHE_LOCK:
         cached = _CHART_CACHE.get(cache_key)
@@ -812,10 +863,17 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             elif (now - cached['timestamp']).total_seconds() > (ttl_minutes * 60):
                 del _CHART_CACHE[cache_key]
                 cached = None
+            # [Fix] 정규장 마감 전에 만들어진 캐시는 당일 확정 종가를 담을 수 없다.
+            #  TTL(6시간) 안이라도 파기해 재조회한다 — 마감 후 이 캐시를 그대로 쓰면
+            #  오버레이가 꺼지는 20:00 이후 직전 거래일 종가가 '현재가'로 보인다.
+            #  (근거·실측은 _chart_disk_get 주석 참조)
+            elif settled_at is not None and cached['timestamp'] < settled_at:
+                del _CHART_CACHE[cache_key]
+                cached = None
 
     # [영속] 메모리 미스 시 디스크(오늘자) 캐시를 확인해 네트워크 재조회를 피한다(재시작 내성).
     if cached is None and not is_index:
-        disk_df = _chart_disk_get(cache_key, today_str)
+        disk_df = _chart_disk_get(cache_key, today_str, is_overseas)
         if disk_df is not None:
             cached = {'df': disk_df, 'timestamp': now, 'date': today_str}
             with _CHART_CACHE_LOCK:

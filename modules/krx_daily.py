@@ -198,6 +198,7 @@ def get_daily(code, lookback_days=None, use_cache=True):
             #  기간이 조용히 잘린 채 검증되기 때문이다. 반대로 더 긴 캐시본은 그대로 쓴다.
             if (hit and hit.get('day') == today
                     and (now - hit['ts']) < _cache_ttl_sec()
+                    and hit['ts'] >= _session_settled_ts()
                     and hit.get('lookback', 0) >= lookback_days):
                 return hit['df'].copy()
             failed_at = _FAIL.get(code, 0)
@@ -234,6 +235,21 @@ def get_daily(code, lookback_days=None, use_cache=True):
                 _CACHE.pop(k, None)
 
     return df.copy()
+
+
+def _session_settled_ts():
+    """직전 정규장 마감(당일 확정 일봉이 존재하는 시각)의 epoch. 마감 전·휴장일이면 0.0.
+
+    이 시각 이전에 받아 둔 캐시는 당일 확정 종가를 담을 수 없으므로 TTL(6시간) 안이라도
+    재사용하면 안 된다. 장 마감 후에도 전일 종가가 '현재가'로 표시되던 문제의 한 축이다
+    (판정 근거는 api._krx_close_passed_at / api._chart_disk_get 주석 참조).
+    """
+    try:
+        import api                              # 지연 임포트 — api가 이 모듈을 지연 임포트한다
+        closed_at = api._krx_close_passed_at()
+        return closed_at.timestamp() if closed_at else 0.0
+    except Exception:       # noqa: BLE001 - 판정 실패는 '검사 없음'으로 두어 종전 동작 유지
+        return 0.0
 
 
 def _cache_ttl_sec():
