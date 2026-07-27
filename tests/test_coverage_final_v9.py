@@ -189,44 +189,64 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
 @patch('config.console.print')
 @patch('config.console.status')
 def test_run_backtest_settings_change(mock_status, mock_print, mock_name, mock_get_data, mock_ask, mock_val, sample_df):
-    """백테스팅 설정 변경 테스트"""
+    """백테스팅 조건 변경 — 열린 항목은 입력이 반영되고, 잠긴 항목은 설정값이 유지된다.
+
+    설정 메뉴에서 숨긴 다이얼(ANTI_TREND/BACKTESTED_HIDDEN_KEYS)은 백테스트 조건 변경에서도
+    묻지 않는다. 한쪽만 잠그면 메뉴에서 막은 값을 백테스트로 바꿔보고 그 결과로 판단하게 되어
+    잠금이 무의미해지기 때문이다. 여기서는 그 대칭이 실제로 지켜지는지 본다.
+    """
     mock_get_data.return_value = sample_df
-    
-    # run_backtest 대화 흐름 순서대로 응답 (프롬프트가 늘면 이 목록도 함께 갱신할 것)
+
+    # run_backtest 대화 흐름 순서대로 응답 (프롬프트가 늘거나 잠금 목록이 바뀌면 함께 갱신할 것)
     mock_ask.side_effect = [
         "6",        # 1. 메뉴 선택 (단일 종목 백테스트)
         "005930",   # 2. 종목코드
-        "n",        # 3. 시장 상황 프리셋 적용?
-        "y",        # 4. 시뮬레이션 조건 변경?
-        "100",      # 5. 분석 기간(일)
-        "9.0",      # 6. 매수 기준 점수      ← 검증 대상
-        "60",       # 7. 매수 허용 RSI 상한
-        "20.0",     # 8. 익절 수익률(%)
-        "n",        # 9. 반익절 사용?
-        "75",       # 10. 익절 RSI 기준
-        "5.0",      # 11. 매도(추세이탈) 기준 점수
-        "10.0",     # 12. TS 발동 수익률(%)
-        "3.0",      # 13. TS 하락 감지율(%)
-        "10",       # 14. 시간 청산 기한(일)
-        "n",        # 15. 손절 방식 (n=고정 손절률)
-        "-5.0",     # 16. 손절 수익률(%)     ← 검증 대상
-        "n",        # 17. 피라미딩 차수 변경?
-        "n",        # 18. 가중치 변경?
-        "1",        # 19. 실행 모드 선택 (1=단일 실행)
-        "n",        # 20. AI 성과 진단?
-        "q",        # 21. 메뉴 선택 (종료)
+        "y",        # 3. 시뮬레이션 조건 변경?   (시장 상황 프리셋 질문은 폐지되어 없음)
+        "100",      # 4. 분석 기간(일)
+        "9.0",      # 5. 매수 기준 점수          ← 열린 항목: 반영되어야 함
+        "60",       # 6. 매수 허용 RSI 상한
+        "10.0",     # 7. TS 발동 수익률(%)
+        "y",        # 8. 시장 필터 사용?
+        "n",        # 9. 피라미딩 차수 변경?
+        "n",        # 10. 가중치 변경?
+        "1",        # 11. 실행 모드 선택 (1=단일 실행)
+        "n",        # 12. AI 성과 진단?
+        "q",        # 13. 메뉴 선택 (종료)
     ]
-    
+
     mock_status.return_value.__enter__.return_value = MagicMock()
-    
-    with patch('modules.backtest.simulate_strategy') as mock_sim:
+
+    # [주의] 시장 필터를 켜면 run_backtest가 지수(^KS11)를 실제로 조회한다. 테스트에서 네트워크를
+    #  타면 느릴 뿐 아니라 지수 차트 캐시가 채워져 다른 테스트의 '조회 실패' 전제를 깨뜨린다.
+    with patch('modules.backtest.simulate_strategy') as mock_sim, \
+         patch('modules.backtest.prepare_market_filter', return_value=None):
         mock_sim.return_value = {
             "trades": [], "final_asset": 10000000, "total_return": 0, "mdd": 0,
             "win_trades": 0, "loss_trades": 0, "gross_profit": 0, "gross_loss": 0,
             "daily_assets": [], "max_score_observed": 0, "score_8_count": 0
         }
         backtest.run_backtest()
-        
+
         args, kwargs = mock_sim.call_args_list[0]
+        # 열린 항목: 입력값이 그대로 전달된다
         assert args[3] == 9.0
-        assert kwargs['stop_loss_rate'] == -5.0
+        # 잠긴 항목(STOP_LOSS_RATE): 묻지 않았으므로 설정값이 유지된다
+        assert kwargs['stop_loss_rate'] == config.SELL_STRATEGY["STOP_LOSS_RATE"]
+
+
+def test_backtest_prompt_locks_match_settings_menu():
+    """백테스트 조건 변경의 잠금 목록은 설정 메뉴의 숨김 목록과 같은 소스를 쓴다."""
+    from modules import settings
+
+    locked = backtest._locked_setting_keys()
+    assert settings.ANTI_TREND_HIDDEN_KEYS <= locked
+    assert settings.BACKTESTED_HIDDEN_KEYS <= locked
+    # 추세추종 보호 대상은 반드시 잠겨 있어야 한다
+    for key in ("TAKE_PROFIT_RATE", "HALF_TAKE_PROFIT_USE", "TAKE_PROFIT_RSI", "SELL_SCORE",
+                "TIME_STOP_DAYS", "USE_ATR_STOP", "ATR_STOP_MULTIPLIER", "STOP_LOSS_RATE",
+                "TRAILING_STOP_CALLBACK_RATE"):
+        assert key in locked, f"{key}가 잠금 목록에서 빠졌다"
+    # 조정 가능한 항목은 잠기면 안 된다
+    for key in ("BUY_SCORE", "BUY_RSI_MAX", "USE_MARKET_FILTER",
+                "TRAILING_STOP_ACTIVATION_RATE", "PYRAMIDING_MAX_COUNT"):
+        assert key not in locked, f"{key}는 조정 가능해야 한다"

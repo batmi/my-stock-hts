@@ -23,7 +23,13 @@ def setup_teardown():
     # 기본 설정으로 테스트 세팅
     config.USE_CORRELATION_FILTER = True
     config.CORRELATION_THRESHOLD = 0.7
-    
+
+    # [독립성] 상관관계 필터만 검증하는 테스트이므로 시장 필터는 통과시킨다.
+    #  시장 필터가 켜져 있으면(현행 기본값) 지수 판단이 상관관계 검사보다 먼저 걸려
+    #  결과가 'market_skip'으로 나온다 — 검증 대상이 아닌 분기다.
+    original_market_filter = getattr(config, 'USE_MARKET_FILTER', True)
+    config.USE_MARKET_FILTER = False
+
     # API 통신으로 인한 Rate Limit 에러 및 의도치 않은 분기(NXT스킵 등) 방지
     patcher1 = patch('modules.auto_trade.api.get_current_price', return_value=0)
     patcher2 = patch('modules.auto_trade.api.get_order_book', return_value={'rt_cd': '0', 'output1': {'total_askp_rsqn': '100', 'total_bidp_rsqn': '100'}})
@@ -42,6 +48,7 @@ def setup_teardown():
     # 테스트 종료 후 원상 복구
     config.USE_CORRELATION_FILTER = original_use
     config.CORRELATION_THRESHOLD = original_threshold
+    config.USE_MARKET_FILTER = original_market_filter
     AutoTrader._instance = None
 
 

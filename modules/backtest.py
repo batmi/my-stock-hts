@@ -29,6 +29,21 @@ logger = logging.getLogger(__name__)
 HIDE_MARKET_PRESET_PROMPT = True
 
 
+def _locked_setting_keys():
+    """설정 메뉴에서 숨김·잠금된 키 (추세추종 보호 + 백테스트 확정값).
+
+    백테스트의 '시뮬레이션 조건 변경'은 설정 메뉴와 같은 다이얼을 묻는 자리다.
+    한쪽만 잠그면 메뉴에서 막은 값을 백테스트에서 바꿔보고 그 결과로 판단하게 되어
+    잠금이 무의미해진다. settings의 목록을 단일 소스로 그대로 따른다.
+    조회는 계속 가능하도록, 잠긴 항목도 요약표에는 현재값이 그대로 표시된다.
+    """
+    try:
+        from modules import settings as _settings
+        return set(_settings.ANTI_TREND_HIDDEN_KEYS) | set(_settings.BACKTESTED_HIDDEN_KEYS)
+    except Exception:
+        return set()
+
+
 def _trend_smo_str(close, psar, macd, macd_signal, obv_trend):
     """추세SMO 셀 문자열 생성 (S: SAR ⬆/⬇, M: MACD 0선±/골든G·데드D, O: OBV ▲/▼) — 종목분석 표기와 동일"""
     sar_icon = "-"
@@ -1662,6 +1677,9 @@ def run_backtest():
         use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         half_tp_use = bool(custom_rule['half_take_profit_use']) if custom_rule and custom_rule.get('half_take_profit_use') is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
+        # 시장 필터는 조건 변경에서 껐다 켤 수 있다. prepare_market_filter가 config를 직접 읽으므로
+        # 호출 시점에만 이 값으로 덮어쓴다(전역 설정은 건드리지 않는다).
+        use_market_filter = getattr(config, "USE_MARKET_FILTER", True)
         # [추가] 피라미딩 최대 차수 오버라이드. None이면 config 기본값(PYRAMIDING_USE 포함) 그대로 사용,
         #        0이면 미사용, 1~5이면 해당 차수까지 증액 허용.
         pyramiding_max = None
@@ -1727,6 +1745,10 @@ def run_backtest():
             msg_preset = "기본설정 (시스템 권장: 추세추종 + 트레일링 주청산)"
 
         if change_settings == "y":
+            # [잠금 동기화] 설정 메뉴에서 숨긴 항목은 여기서도 묻지 않고 현재값을 그대로 쓴다.
+            locked = _locked_setting_keys()
+            locked_notes = []
+
             config.console.print()
             config.console.print("[bold]1. 시뮬레이션 기본 설정[/bold]")
             days_input = Prompt.ask("분석 기간 (일 단위)\n[dim]과거 며칠간의 데이터를 시뮬레이션할지 설정 (기본 1095일 = 3년)[/dim]", default="1095")
@@ -1748,59 +1770,113 @@ def run_backtest():
             if val.lower() in ['b', 'q']: continue
             buy_rsi = float(val)
             
-            config.console.print("\n[bold]3. 기본 청산 타점 설정[/bold]")
-            def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-            val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현 (0: 미사용)[/dim]", default=str(def_tp))
-            if val.lower() in ['b', 'q']: continue
-            take_profit = float(val)
-            
-            curr_half_tp = "y" if half_tp_use else "n"
-            val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) (기본: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "b", "q"], default=curr_half_tp)
-            if val.lower() in ['b', 'q']: continue
-            half_tp_use = (val.lower() == 'y')
-            
-            def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-            val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
-            if val.lower() in ['b', 'q']: continue
-            take_profit_rsi = float(val)
-            
-            def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-            val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
-            if val.lower() in ['b', 'q']: continue
-            try: sell_score = float(val)
-            except Exception: sell_score = float(def_sell_score)
-            
-            def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
-            val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
-            if val.lower() in ['b', 'q']: continue
-            ts_activation = float(val)
-            
-            def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
-            val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
-            if val.lower() in ['b', 'q']: continue
-            ts_callback = float(val)
-            
-            def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
-            val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
-            if val.lower() in ['b', 'q']: continue
-            time_stop_days = int(val)
-            
-            config.console.print("\n[bold]4. 리스크 관리 설정[/bold]")
-            curr_use_atr = "y" if use_atr_stop else "n"
-            val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) (기본: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "b", "q"], default=curr_use_atr)
-            if val.lower() in ['b', 'q']: continue
-            use_atr_stop = (val.lower() == 'y')
-            
-            if use_atr_stop:
-                val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정 (0: 미사용)[/dim]", default=str(atr_mult))
+            # --- 3. 청산 타점 ---
+            #  잠긴 항목(설정 메뉴와 동일)은 묻지 않고 현재값을 그대로 쓴다.
+            #   고정 익절·반익절·RSI 과열 매도 : fat-tail 절단
+            #   SELL_SCORE / TIME_STOP_DAYS   : 수익 종목을 일찍 잘라내는 방향으로만 위험
+            #   TRAILING_STOP_CALLBACK_RATE   : 실효 콜백이 동적값(ATR)에 지배되는 죽은 다이얼
+            _sec3 = [k for k in ("TAKE_PROFIT_RATE", "HALF_TAKE_PROFIT_USE", "TAKE_PROFIT_RSI",
+                                 "SELL_SCORE", "TRAILING_STOP_ACTIVATION_RATE",
+                                 "TRAILING_STOP_CALLBACK_RATE", "TIME_STOP_DAYS") if k not in locked]
+            if _sec3:
+                config.console.print("\n[bold]3. 기본 청산 타점 설정[/bold]")
+
+            if "TAKE_PROFIT_RATE" not in locked:
+                def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
+                val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현 (0: 미사용)[/dim]", default=str(def_tp))
                 if val.lower() in ['b', 'q']: continue
-                atr_mult = float(val)
+                take_profit = float(val)
             else:
+                locked_notes.append(f"익절 {take_profit}%")
+
+            if "HALF_TAKE_PROFIT_USE" not in locked:
+                curr_half_tp = "y" if half_tp_use else "n"
+                val = Prompt.ask(f"반익절 사용 (y: 사용 / n: 미사용) (기본: {curr_half_tp})\n[dim]목표 익절 수익률의 절반 도달 시 50% 선매도[/dim]", choices=["y", "n", "b", "q"], default=curr_half_tp)
+                if val.lower() in ['b', 'q']: continue
+                half_tp_use = (val.lower() == 'y')
+            else:
+                locked_notes.append("반익절 " + ("ON" if half_tp_use else "OFF"))
+
+            if "TAKE_PROFIT_RSI" not in locked:
+                def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
+                val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
+                if val.lower() in ['b', 'q']: continue
+                take_profit_rsi = float(val)
+            else:
+                locked_notes.append(f"익절 RSI {take_profit_rsi}")
+
+            if "SELL_SCORE" not in locked:
+                def_sell_score = config.SELL_STRATEGY["SELL_SCORE"]
+                val = Prompt.ask(f"매도(추세이탈) 기준 점수 (기본: {def_sell_score}점)\n[dim]점수가 이 값 미만으로 떨어지면 매도[/dim]", default=str(def_sell_score))
+                if val.lower() in ['b', 'q']: continue
+                try: sell_score = float(val)
+                except Exception: sell_score = float(def_sell_score)
+            else:
+                locked_notes.append(f"매도 점수 {sell_score}")
+
+            if "TRAILING_STOP_ACTIVATION_RATE" not in locked:
+                def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+                val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
+                if val.lower() in ['b', 'q']: continue
+                ts_activation = float(val)
+            else:
+                locked_notes.append(f"TS 발동 +{ts_activation}%")
+
+            if "TRAILING_STOP_CALLBACK_RATE" not in locked:
+                def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+                val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
+                if val.lower() in ['b', 'q']: continue
+                ts_callback = float(val)
+            else:
+                locked_notes.append(f"TS 하락 감지율 {ts_callback}%")
+
+            if "TIME_STOP_DAYS" not in locked:
+                def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+                val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
+                if val.lower() in ['b', 'q']: continue
+                time_stop_days = int(val)
+            else:
+                locked_notes.append(f"시간 청산 {time_stop_days}일")
+
+            # --- 4. 리스크 관리 ---
+            _sec4 = [k for k in ("USE_ATR_STOP", "ATR_STOP_MULTIPLIER", "STOP_LOSS_RATE") if k not in locked]
+            if _sec4 or "USE_MARKET_FILTER" not in locked:
+                config.console.print("\n[bold]4. 리스크 관리 설정[/bold]")
+
+            if "USE_ATR_STOP" not in locked:
+                curr_use_atr = "y" if use_atr_stop else "n"
+                val = Prompt.ask(f"손절 방식 (y: ATR 동적 손절 / n: 고정 손절률) (기본: {curr_use_atr})\n[dim]종목의 변동성에 비례하여 손절폭 자동 계산 여부[/dim]", choices=["y", "n", "b", "q"], default=curr_use_atr)
+                if val.lower() in ['b', 'q']: continue
+                use_atr_stop = (val.lower() == 'y')
+
+            if use_atr_stop:
+                if "ATR_STOP_MULTIPLIER" not in locked:
+                    val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정 (0: 미사용)[/dim]", default=str(atr_mult))
+                    if val.lower() in ['b', 'q']: continue
+                    atr_mult = float(val)
+                else:
+                    locked_notes.append(f"손절 ATR x{atr_mult}")
+            elif "STOP_LOSS_RATE" not in locked:
                 def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
                 val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]손실이 이 비율에 도달하면 손절매 (0: 미사용)[/dim]", default=str(def_sl))
                 if val.lower() in ['b', 'q']: continue
                 stop_loss = float(val)
-            
+            else:
+                locked_notes.append(f"손절 {stop_loss}%")
+
+            # 시장 필터는 설정 메뉴에서 조정 가능한 항목이므로 백테스트에서도 묻는다.
+            #  지수 종가 < SMA(MARKET_FILTER_MA)인 날은 신규 진입을 차단하고,
+            #  PYRAMIDING_REQUIRE_HEALTHY_MARKET이 켜져 있으면 증액도 함께 보류된다.
+            if "USE_MARKET_FILTER" not in locked:
+                curr_mf = "y" if use_market_filter else "n"
+                _ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+                val = Prompt.ask(
+                    f"시장 필터 사용 (y: 사용 / n: 미사용) (기본: {curr_mf})\n"
+                    f"[dim]지수가 {_ma}일선 아래인 날은 신규 진입 보류 (증액도 함께 보류)[/dim]",
+                    choices=["y", "n", "b", "q"], default=curr_mf)
+                if val.lower() in ['b', 'q']: continue
+                use_market_filter = (val.lower() == 'y')
+
             config.console.print("\n[bold]5. 피라미딩(수익 증액) 차수 설정[/bold]")
             cur_pyr_on = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True)
             cur_pyr_cnt = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
@@ -1849,6 +1925,12 @@ def run_backtest():
                         config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
                         continue
 
+            # 잠긴 항목은 묻지 않았지만 어떤 값으로 돌아가는지는 알려준다(설정 메뉴의 읽기 전용 표시와 동일).
+            if locked_notes:
+                config.console.print(
+                    f"\n[dim]※ 추세추종 보호로 잠긴 항목은 현재값을 그대로 사용합니다 — "
+                    f"{' · '.join(locked_notes)}[/dim]")
+
         if change_settings == "y":
             header_msg = "⚪ [개별 설정] 사용자 지정 시뮬레이션 조건으로 진행합니다."
         else:
@@ -1865,6 +1947,9 @@ def run_backtest():
         msg += f"   [cyan]익절 / 손절[/cyan]              +{take_profit}% (반익절: {'ON' if half_tp_use else 'OFF'}) / {f'{stop_loss}% (ATR x{atr_mult})' if use_atr_stop else f'{stop_loss}%'}\n"
         msg += f"   [cyan]트레일링 스탑[/cyan]            +{ts_activation}% 발동 후 -{ts_callback}%\n"
         msg += f"   [cyan]시간 청산[/cyan]                {time_stop_days}일 경과 시 강제 매도\n"
+        _mf_ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+        msg += (f"   [cyan]시장 필터[/cyan]                "
+                f"{f'ON — 지수 {_mf_ma}일선 아래면 신규 진입 보류' if use_market_filter else 'OFF'}\n")
         if pyramiding_max is not None:
             pyr_disp = f"최대 {pyramiding_max}차" if pyramiding_max > 0 else "미사용"
         else:
@@ -1956,16 +2041,23 @@ def run_backtest():
                 if actual_days < days * 0.9: # 90% 미만일 때만 경고
                     config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
 
-        # [동기화] 실매매 시장 필터를 백테스트에 반영 (설정값 USE_MARKET_FILTER/MARKET_FILTER_MA 그대로 사용)
+        # [동기화] 실매매 시장 필터를 백테스트에 반영 (MARKET_FILTER_MA는 설정값 그대로 사용)
         #  모든 모드(단일/몬테카를로/워크포워드/최적화)가 이 차단일 집합을 공유한다.
-        mf_result = prepare_market_filter(code, is_overseas, days)
+        #  ON/OFF만 조건 변경에서 고른 값(use_market_filter)으로 덮어쓴다 — prepare_market_filter가
+        #  config를 직접 읽으므로 호출 동안만 바꾸고 곧바로 되돌린다(전역 설정 오염 방지).
+        _mf_saved = getattr(config, 'USE_MARKET_FILTER', True)
+        try:
+            config.USE_MARKET_FILTER = use_market_filter
+            mf_result = prepare_market_filter(code, is_overseas, days)
+        finally:
+            config.USE_MARKET_FILTER = _mf_saved
         if mf_result:
             mf_cnt, mf_desc = mf_result
             config.console.print(f"[dim]🛡 시장 필터 반영: {mf_desc} 인 날짜 신규 진입 차단 (기간 내 차단 후보일 {mf_cnt}일, 실매매와 동일 기준)[/dim]")
-        elif getattr(config, 'USE_MARKET_FILTER', True):
+        elif use_market_filter:
             config.console.print("[dim yellow]🛡 시장 필터: 지수 데이터 조회 실패로 이번 백테스트에는 미반영됩니다. (실매매는 정상 적용)[/dim yellow]")
         else:
-            config.console.print("[dim]🛡 시장 필터: 설정 OFF (USE_MARKET_FILTER=False) — 백테스트에도 미적용[/dim]")
+            config.console.print("[dim]🛡 시장 필터: 이번 시뮬레이션에서 OFF — 신규 진입 차단 없음[/dim]")
 
         if mode_choice == "2":
             run_monte_carlo_simulation(df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,

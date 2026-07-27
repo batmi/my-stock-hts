@@ -131,9 +131,16 @@ def test_throttled_session_tps():
 
 @patch('api.fetch_yfinance_data')
 def test_get_chart_data_index_fail(mock_fetch):
-    """지수 차트 데이터 조회 실패 테스트"""
+    """지수 차트 데이터 조회 실패 테스트
+
+    [주의] get_chart_data는 메모리·디스크 캐시를 먼저 본다. 같은 세션의 다른 테스트가
+    ^KS11을 한 번이라도 조회했다면 캐시 적중으로 빈 DataFrame이 나오지 않는다
+    (xdist 병렬 실행에서는 워커 배정에 따라 결과가 갈려 플래키해진다).
+    '조회 실패 시 빈 DataFrame'만 검증하는 테스트이므로 캐시를 끄고 확인한다.
+    """
     mock_fetch.side_effect = Exception("YF Error")
-    df = api.get_chart_data("^KS11")
+    with patch.object(config, 'CHART_CACHE_TTL_MINUTES', 0):   # 0 = 캐시 미사용
+        df = api.get_chart_data("^KS11")
     assert df.empty
 
 # --- Settings ---
