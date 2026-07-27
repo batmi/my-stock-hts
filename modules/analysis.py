@@ -2094,23 +2094,48 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
         # [추가] 실시간 현재가 조회 및 차트 데이터 최신화 (점수 불일치 방지)
         #  (국채 현물은 TV 일봉 마지막 봉이 실시간 값 — 야후 시세를 덮어쓰면 소스가 섞이므로 제외)
+        #  [Fix 2026-07-28] 봉 반영(지표)은 KRX 정규장에만, 실시간가 조회는 '표시에 쓸 일이 있으면'
+        #   한다. 모든 장 마감 후 KRX 고정(설정 True)이면 조회 자체를 생략해 종전처럼 TPS를 아낀다.
+        rt_price = 0.0
         if not treasury_sym:
             try:
-                if api.chart_overlay_enabled(is_overseas):
-                    rt_price = api.get_current_price(code, is_overseas=is_overseas)
+                if api.chart_overlay_enabled(is_overseas) or not api.display_price_krx_fixed(is_overseas):
+                    rt_price = float(api.get_current_price(code, is_overseas=is_overseas) or 0)
+                if rt_price > 0 and api.chart_overlay_enabled(is_overseas):
                     indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
             except Exception: pass
 
         # 2. 지표 계산
         progress.update(task, description="[cyan]기술적 지표 계산 및 상태 분류 중...[/cyan]")
         ind = indicators.calculate_indicators(df)
-        
+
         # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
         prev_rsi = ind.get('prev_rsi') if df is not None and not df.empty and len(df) >= 16 else None
 
-        current_price = float(df.iloc[-1]['close'])
-        prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
-        diff = current_price - prev_price
+        current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수·이격도·52주 위치
+        # [표시 전용] NXT 거래시간(프리 08:00~09:00 / 애프터 15:30~20:00)에는 살아있는 실시간가를
+        #  현재가로 보여준다. 다만 지표는 KRX 확정 봉으로 계산하므로, 같은 화면에서 기준이 갈리는
+        #  것을 감추지 않도록 (NXT) 표기를 함께 붙인다.
+        display_price = current_price
+        display_tag = ""
+        if rt_price > 0 and not is_overseas and not api.chart_overlay_enabled(False) \
+                and not api.display_price_krx_fixed(False):
+            display_price = rt_price
+            display_tag = " [dim](NXT)[/dim]"
+        # 등락 기준봉: 마지막 봉이 '최신 확정 세션'이면 직전 봉과 비교하고, 아직 그 봉이 없으면
+        #  (프리마켓 등) 마지막 봉 자체가 직전 종가다 — 그대로 두면 등락이 하루 밀린다.
+        #  [Fix 2026-07-28] 국내는 market_today 대신 krx_last_settled_day를 쓴다. 자정~개장 전에는
+        #   market_today가 아직 열리지도 않은 '오늘'이라, 확정 봉을 갖고도 등락이 0%로 나왔다.
+        try:
+            _ref_day = utils.market_today(True) if is_overseas else api.krx_last_settled_day()
+            _last_bar_is_today = str(df.iloc[-1]['date']).replace('-', '')[:8] >= _ref_day
+        except Exception:
+            _last_bar_is_today = True
+        if _last_bar_is_today:
+            prev_price = float(df.iloc[-2]['close']) if len(df) > 1 else current_price
+        else:
+            prev_price = current_price
+        diff = display_price - prev_price
         rate = (diff / prev_price) * 100 if prev_price > 0 else 0.0
         
         # 52주 위치 계산 (슈퍼 모멘텀 판정용)
@@ -2198,18 +2223,20 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("시장", market_str, "소속 거래소")
 
     # 현재가 ([통일] 지수 화면·종목 표와 동일 규칙 — price_trend_color 단일 소스)
-    curr_price_color = price_trend_color(current_price, ind.get('ema_20'), ind.get('ema_60'))
+    #  [표시] display_price는 NXT 거래시간에만 current_price와 갈린다(그 외에는 동일 값).
+    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'))
 
     if is_index:
-        price_str_tech = f"{current_price:,.0f}" if current_price >= 1000 else f"{current_price:,.2f}"
+        price_str_tech = f"{display_price:,.0f}" if display_price >= 1000 else f"{display_price:,.2f}"
         h52_str = f"{h52:,.0f}" if h52 >= 1000 else f"{h52:,.2f}"
         l52_str = f"{l52:,.0f}" if l52 >= 1000 else f"{l52:,.2f}"
     else:
-        price_str_tech = f"${current_price:,.2f}" if is_overseas else f"{current_price:,.0f}원"
+        price_str_tech = f"${display_price:,.2f}" if is_overseas else f"{display_price:,.0f}원"
         h52_str = f"${h52:,.2f}" if is_overseas else f"{int(h52):,}원"
         l52_str = f"${l52:,.2f}" if is_overseas else f"{int(l52):,}원"
         
-    table_tech.add_row("현재가", f"{curr_price_color}{price_str_tech}[/]", "이평선 배열 및 위치 기반")
+    table_tech.add_row("현재가", f"{curr_price_color}{price_str_tech}[/]{display_tag}",
+                       "이평선 배열 및 위치 기반" + (" (지표는 KRX 종가 기준)" if display_tag else ""))
 
     # ATR (변동성)
     atr_val = ind.get('atr', 0)
@@ -2904,6 +2931,8 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         if df is None or df.empty: return None
         
         # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가/종가 최신화
+        #  (봉 반영은 KRX 정규장에만 — chart_overlay_price가 정규장 밖에서 0을 돌려준다)
+        rt_price = 0.0
         try:
             if cp_data and cp_data.get('rt_cd') == '0':
                 # [수정] NXT 장 현재가(ats_prpr)가 있으면 우선 반영, 없으면 정규장 현재가 반영
@@ -2911,15 +2940,19 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
                 krx_price = float(cp_data['output'].get('stck_prpr', 0) or 0)
                 rt_price = nxt_price if nxt_price > 0 else krx_price
             else:
-                rt_price = api.get_current_price(code, is_overseas=False)
+                rt_price = float(api.get_current_price(code, is_overseas=False) or 0)
 
             indicators.apply_realtime_price(df, api.chart_overlay_price(rt_price, False),
                                             market_date=utils.market_today(False))
         except Exception: pass
 
         ind = indicators.calculate_indicators(df)
-        current_price = float(df.iloc[-1]['close'])
-        
+        current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수·52주 위치
+        # [표시 전용] NXT 거래시간에는 살아있는 실시간가를 현재가로 내보낸다(지표 기준은 위 값 유지).
+        display_price = current_price
+        if rt_price > 0 and not api.chart_overlay_enabled(False) and not api.display_price_krx_fixed(False):
+            display_price = rt_price
+
         # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
         prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
 
@@ -2962,7 +2995,7 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         is_memo = code in m_codes
         
         return {
-            'code': code, 'name': name, 'price': current_price,
+            'code': code, 'name': name, 'price': display_price,
             'score': score, 'state': state, 'state_color': state_color,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'],
             'plus_di': ind.get('plus_di'), 'minus_di': ind.get('minus_di'),
@@ -3236,14 +3269,21 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
 
         # [Fix] 이 워커만 실시간 갱신이 빠져 있어, 현재가·점수가 차트 캐시 히트/미스에 따라
         #  달라졌다(히트=오버레이 반영, 미스=원본 봉). 개별 분석·관심종목 진단과 같은 기준으로 통일한다.
-        #  (모든 장 종료 후에는 chart_overlay_price가 0을 돌려줘 KRX 확정 종가가 그대로 유지된다)
+        #  (봉 반영은 KRX 정규장에만 — 정규장 밖 현재가는 NXT 체결가라 지표를 흔든다)
+        rt_price = 0.0
         try:
-            if api.chart_overlay_enabled(False):   # 장 종료 후엔 현재가 조회 자체를 생략
-                rt_price = api.get_current_price(code, is_overseas=False)
+            # 모든 장 마감 후 KRX 고정(설정 True)이면 표시에도 쓸 일이 없어 조회 자체를 생략한다.
+            if api.chart_overlay_enabled(False) or not api.display_price_krx_fixed(False):
+                rt_price = float(api.get_current_price(code, is_overseas=False) or 0)
+            if rt_price > 0 and api.chart_overlay_enabled(False):
                 indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(False))
         except Exception: pass
 
-        current_price = float(df.iloc[-1]['close'])
+        current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수·52주 위치
+        # [표시 전용] NXT 거래시간에는 살아있는 실시간가를 현재가로 내보낸다(지표 기준은 위 값 유지).
+        display_price = current_price
+        if rt_price > 0 and not api.chart_overlay_enabled(False) and not api.display_price_krx_fixed(False):
+            display_price = rt_price
         ind = indicators.calculate_indicators(df)
         
         # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
@@ -3346,7 +3386,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             obv_val = None
 
         return {
-            'code': code, 'name': name, 'price': current_price,
+            'code': code, 'name': name, 'price': display_price,
             'score': score, 'state': initial_state, 'state_color': initial_state_color, 'state_reason': state_reason,
             'rsi': ind['rsi'], 'adx': ind['adx'], 'cci': ind['cci'], 'obv_trend': obv_trend,
             'plus_di': ind.get('plus_di'), 'minus_di': ind.get('minus_di'),
@@ -4233,22 +4273,28 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                                             market_date=utils.market_today(is_overseas))
         except Exception: pass
 
-        # [장 종료 후] 표시 현재가·등락·52주 위치도 확정된 KRX 일봉으로 맞춘다.
-        #  이 행의 현재가는 curr_data(ats_prpr/stck_prpr)에서 직접 오므로, 지표만 KRX로
-        #  고정하면 같은 줄에서 현재가와 지표의 기준이 갈린다(실측: SK텔레콤 현재가 99,700
-        #  = NXT 애프터가인데 EMA5·RSI·CCI는 KRX 종가 100,000 기준).
+        # [모든 장 마감 후] 표시 현재가·등락·52주 위치를 확정된 KRX 일봉으로 맞춘다.
+        #  이 행의 현재가는 curr_data(ats_prpr/stck_prpr)에서 직접 오는데, 20:00 이후·주말에는
+        #  그 값이 '마지막 NXT 체결가'로 굳어 있다. USE_KRX_CLOSE_AFTER_HOURS(기본 True)면
+        #  KRX 확정 종가로 고정하고, 끄면 마지막 실거래가를 그대로 노출한다.
         #  등락은 API 기준가 대신 일봉 직전 봉과 비교해 'KRX 정규장 등락'으로 통일한다.
+        #  [Fix 2026-07-28] 게이트를 chart_overlay_enabled(지표용)에서 display_price_krx_fixed
+        #   (표시용)로 분리한다. 지표 게이트가 정규장 전용이 되면서, 그대로 두면 NXT 거래시간
+        #   (프리·애프터)에도 표시가 KRX로 굳어 '살아있는 NXT 가격을 본다'는 목적이 깨진다.
         #  [방어] 마지막 봉이 '직전 거래일'보다 오래됐으면(당일 봉 미수신) 확정 종가로 쓰지 않는다.
         #   차트가 하루 밀린 채 현재가 자리에 실리면 지난 거래일 종가·등락이 오늘 값으로 보인다
         #   (2026-07-27 22:40 실측: 삼성전자 249,500 -7.59% = 7/24 값. 원인이던 캐시는
         #    api._chart_disk_get에서 고쳤고, 여기서는 같은 증상이 다시 새지 않게 막는다).
         #   이 경우 현재가·등락은 실시간 시세(curr_data)에서 오는 종전 경로를 그대로 탄다.
         krx_close_px, krx_prev_px = 0.0, 0.0
-        if not is_overseas and not api.chart_overlay_enabled(False) \
+        if not is_overseas and api.display_price_krx_fixed(False) \
                 and chart_df is not None and not chart_df.empty:
             try:
                 last_bar_date = str(chart_df.iloc[-1]['date']).replace('-', '')[:8]
-                if last_bar_date >= utils.market_today(False):
+                # [Fix 2026-07-28] 기준을 market_today → krx_last_settled_day로 바꾼다.
+                #  자정~개장 전에는 market_today가 아직 열리지도 않은 '오늘'을 돌려줘
+                #  이 조건이 항상 실패했고, 그 결과 새벽에 KRX 고정이 걸리지 않았다.
+                if last_bar_date >= api.krx_last_settled_day():
                     krx_close_px = float(chart_df.iloc[-1]['close'])
                     if len(chart_df) >= 2:
                         krx_prev_px = float(chart_df.iloc[-2]['close'])

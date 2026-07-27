@@ -652,14 +652,21 @@ class TelegramCommander:
                 return f"⚠️ 차트 데이터를 불러올 수 없어 분석할 수 없습니다."
             
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
+            #  (봉 반영은 KRX 정규장에만 — 정규장 밖 현재가는 NXT 체결가라 지표를 흔든다)
+            live_price = 0.0
             try:
-                rt_price = api.chart_overlay_price(api.get_current_price(code, is_overseas=is_overseas), is_overseas)
-                indicators.apply_realtime_price(df, rt_price)
+                live_price = float(api.get_current_price(code, is_overseas=is_overseas) or 0)
+                indicators.apply_realtime_price(df, api.chart_overlay_price(live_price, is_overseas))
             except Exception: pass
-            
+
             ind = indicators.calculate_indicators(df)
-            current_price = float(df.iloc[-1]['close'])
-            
+            current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수
+            # [표시 전용] NXT 거래시간에는 살아있는 실시간가를 현재가로 보여준다.
+            display_price = current_price
+            if live_price > 0 and not api.chart_overlay_enabled(is_overseas) \
+                    and not api.display_price_krx_fixed(is_overseas):
+                display_price = live_price
+
             # 상태 분류를 위한 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
             prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
 
@@ -730,14 +737,14 @@ class TelegramCommander:
             cci_val = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             
             if is_index:
-                price_str = f"{current_price:,.0f}" if current_price >= 1000 else f"{current_price:,.2f}"
+                price_str = f"{display_price:,.0f}" if display_price >= 1000 else f"{display_price:,.2f}"
                 tech_info = (
                     f"• 현재가: {price_str}\n"
                     f"• 시스템 상태: {state} (사유: {state_reason})\n"
                     f"• 핵심 지표: RSI {rsi_val} | ADX {adx_val} | CCI {cci_val} | DMI {dmi_str}"
                 )
             else:
-                price_str = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+                price_str = f"${display_price:,.2f}" if is_overseas else f"{int(display_price):,}원"
                 tech_info = (
                     f"• 현재가: {price_str}\n"
                     f"• 시스템 상태: {state} (사유: {state_reason})\n"
@@ -1742,14 +1749,21 @@ class TelegramCommander:
                 return f"⚠️ {name}({code}) 차트 데이터를 불러올 수 없습니다."
             
             # [추가] 실시간 현재가 조회 및 차트 당일 고가/저가 실시간 갱신 (점수 불일치 방지)
+            #  (봉 반영은 KRX 정규장에만 — 정규장 밖 현재가는 NXT 체결가라 지표를 흔든다)
+            live_price = 0.0
             try:
-                rt_price = api.chart_overlay_price(api.get_current_price(code, is_overseas=is_overseas), is_overseas)
-                indicators.apply_realtime_price(df, rt_price)
+                live_price = float(api.get_current_price(code, is_overseas=is_overseas) or 0)
+                indicators.apply_realtime_price(df, api.chart_overlay_price(live_price, is_overseas))
             except Exception: pass
-            
+
             ind = indicators.calculate_indicators(df)
-            current_price = float(df.iloc[-1]['close'])
-            
+            current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수
+            # [표시 전용] NXT 거래시간에는 살아있는 실시간가를 현재가로 보여준다.
+            display_price = current_price
+            if live_price > 0 and not api.chart_overlay_enabled(is_overseas) \
+                    and not api.display_price_krx_fixed(is_overseas):
+                display_price = live_price
+
             # 52주 최고/최저 및 위치 계산 (최근 250일 데이터 기준)
             high_52 = df['high'].max()
             low_52 = df['low'].min()
@@ -1809,7 +1823,7 @@ class TelegramCommander:
             adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             
-            price_fmt = f"${current_price:,.2f}" if is_overseas else f"{int(current_price):,}원"
+            price_fmt = f"${display_price:,.2f}" if is_overseas else f"{int(display_price):,}원"
             h52_fmt = f"${high_52:,.2f}" if is_overseas else f"{int(high_52):,}원"
             l52_fmt = f"${low_52:,.2f}" if is_overseas else f"{int(low_52):,}원"
             

@@ -1439,8 +1439,10 @@ def test_index_chart_toss_overlays_today_with_market_indicator_price(monkeypatch
 
     monkeypatch.setattr(api, "market_today", lambda is_overseas=False: "20260325")
     monkeypatch.setattr(api, "_before_krx_regular_open", lambda: False)  # 장중
-    # 장중 시나리오이므로 '장 종료 후 KRX 종가 고정' 게이트는 통과시킨다
-    monkeypatch.setattr(api, "domestic_trading_session_open", lambda: True)
+    # 장중 시나리오이므로 지표 오버레이 게이트(KRX 정규장 전용)를 통과시킨다.
+    #  [2026-07-28] 게이트가 domestic_trading_session_open(08:00~20:00) → _nxt_quote_phase=='skip'
+    #  (KRX 정규장)으로 바뀌어, 종전 패치로는 실행 시각에 따라 오버레이가 차단됐다.
+    monkeypatch.setattr(api, "_nxt_quote_phase", lambda: 'skip')
     api.clear_chart_cache()
     api._MICRO_CACHE.clear()
     config.session.is_toss = True

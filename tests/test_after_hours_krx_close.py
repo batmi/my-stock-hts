@@ -1,9 +1,17 @@
-"""장 종료 후 국내 현재가·지표 기준(USE_KRX_CLOSE_AFTER_HOURS) 테스트.
+"""국내 현재가·지표의 기준 시장(KRX/NXT) 분리 테스트.
 
-배경: 토스 lastPrice는 NXT 프리/애프터 체결을 그대로 반영한다. 모든 장이 끝난 뒤에도
-그 값이 마지막 NXT 체결가로 굳어 있는데, 이것이 확정된 KRX 일봉의 종가를 덮어쓰면
+배경: 정규장 밖의 '현재가'는 NXT(대체거래소) 체결가다. NXT 거래량은 정규장의 수백분의 1이라
+소수 체결이 봉의 종가·고가·저가를 정하는데, 이것이 확정된 KRX 일봉을 덮으면
 EMA·RSI·CCI·ATR·52주 위치가 함께 흔들린다.
 (실측 2026-07-24 SK텔레콤: KRX 종가 100,000 / 애프터마켓 20:00 99,700)
+
+[2026-07-28 정책] 게이트를 두 축으로 분리했다.
+  - chart_overlay_enabled  (지표용): KRX 정규장에만 실시간가를 봉에 반영. **설정과 무관.**
+  - display_price_krx_fixed(표시용): USE_KRX_CLOSE_AFTER_HOURS가 좌우. 모든 장 마감 후
+    (20:00 종료 후·주말·휴장)에만 화면 현재가를 KRX 확정 종가로 고정하고, NXT 거래시간에는
+    설정과 무관하게 NXT 현재가를 보여준다.
+'무엇을 사고팔지'는 KRX 확정 데이터로 판단하고, '지금 얼마인지'(손절·트레일링 트리거,
+주문가)는 실시간가로 본다.
 """
 from datetime import datetime
 from unittest.mock import patch
@@ -86,9 +94,17 @@ def test_price_blocked_at_night_on_trading_day():
     assert _overlay_price(99700, datetime(2026, 7, 24, 21, 0)) == 0.0
 
 
-def test_setting_off_restores_previous_behavior():
+def test_indicator_gate_ignores_setting():
+    """[2026-07-28] 지표 오버레이는 설정과 무관하다 — 설정을 꺼도 정규장 밖에서는 반영하지 않는다.
+
+    종전에는 False면 NXT 체결가가 확정 봉을 덮었다. 지표는 '판단'의 축이라 언제나
+    KRX 확정 봉 하나로만 계산한다(설정은 표시 축만 좌우).
+    """
     config.settings.USE_KRX_CLOSE_AFTER_HOURS = False
-    assert _overlay_price(99700, datetime(2026, 7, 26, 15, 0), holiday=True) == 99700
+    assert _overlay_price(99700, datetime(2026, 7, 26, 15, 0), holiday=True) == 0.0   # 휴장일
+    assert _overlay_price(99700, datetime(2026, 7, 24, 16, 0)) == 0.0                 # NXT 애프터마켓
+    assert _overlay_price(99700, datetime(2026, 7, 24, 8, 30)) == 0.0                 # NXT 프리마켓
+    assert _overlay_price(99700, datetime(2026, 7, 24, 10, 0)) == 99700               # 정규장은 반영
 
 
 def test_overseas_never_gated():
@@ -137,12 +153,22 @@ def test_confirmed_bar_survives_after_hours():
     assert len(df) == 5          # 가짜 봉도 추가되지 않는다
 
 
-def test_confirmed_bar_overwritten_when_setting_off():
+def test_confirmed_bar_survives_even_when_setting_off():
+    """[2026-07-28] 설정을 꺼도 확정 봉은 보존된다 (설정은 표시 축만 좌우)."""
     config.settings.USE_KRX_CLOSE_AFTER_HOURS = False
     df = _skt_df()
     gated = _overlay_price(99700, datetime(2026, 7, 26, 15, 0), holiday=True)
     indicators.apply_realtime_price(df, gated, market_date='20260724')
-    assert float(df.iloc[-1]['close']) == 99700
+    assert float(df.iloc[-1]['close']) == 100000
+
+
+def test_confirmed_bar_survives_during_nxt_session():
+    """NXT 애프터마켓 체결가도 확정된 KRX 당일 봉을 덮지 않는다 (ATR 왜곡 차단)."""
+    df = _skt_df()
+    gated = _overlay_price(104900, datetime(2026, 7, 24, 16, 0))   # 당일 고가(104,800) 위 체결
+    indicators.apply_realtime_price(df, gated, market_date='20260724')
+    assert float(df.iloc[-1]['close']) == 100000
+    assert float(df.iloc[-1]['high']) == 104800    # True Range가 부풀지 않는다
 
 
 def test_session_price_still_applies():
@@ -177,7 +203,7 @@ def _long_skt_chart():
     return pd.DataFrame(rows + _skt_df().to_dict('records'))
 
 
-def _table_row(setting):
+def _table_row(setting, when=None, holiday=True):
     from modules import analysis
     config.settings.USE_KRX_CLOSE_AFTER_HOURS = setting
     bundle = {
@@ -187,7 +213,7 @@ def _table_row(setting):
         'chart_df': _long_skt_chart(), 'inv_list': None, 'rt_strength': None,
         'ask_bid_ratio': None, 'detail': None,
     }
-    md, hp, dt = _at(datetime(2026, 7, 26, 15, 0), holiday=True)
+    md, hp, dt = _at(when or datetime(2026, 7, 26, 15, 0), holiday=holiday)
     with md as m, hp:
         m.now.return_value = dt
         m.strptime = datetime.strptime
@@ -244,15 +270,56 @@ def test_auto_trade_window_defaults_to_krx_session():
             assert is_system_market_open() is want, f"{hh:02d}:{mm:02d}"
 
 
-@pytest.mark.parametrize("hh,mm", [(8, 30), (9, 30), (16, 0), (19, 30)])
-def test_live_price_still_available_during_nxt(hh, mm):
-    """자동매매 창을 좁혀도 NXT 프리/애프터 실시간가 조회는 막히지 않아야 한다."""
+@pytest.mark.parametrize("hh,mm", [(8, 30), (16, 0), (19, 30)])
+def test_nxt_session_shows_live_price_but_not_in_indicators(hh, mm):
+    """NXT 거래시간: 표시는 실시간(NXT)가, 지표는 KRX 확정 봉.
+
+    표시 게이트가 '고정 아님'을 돌려주면 호출부가 실시간가를 현재가로 쓴다.
+    """
     md, hp, dt = _at(datetime(2026, 7, 24, hh, mm), holiday=False)
     with md as m, hp:
         m.now.return_value = dt
         m.strptime = datetime.strptime
-        assert api.chart_overlay_enabled(False) is True
-        assert api.chart_overlay_price(99700, False) == 99700
+        assert api.chart_overlay_enabled(False) is False       # 지표엔 반영 안 함
+        assert api.display_price_krx_fixed(False) is False     # 표시는 NXT 실시간가
+
+
+@pytest.mark.parametrize("setting", [True, False])
+@pytest.mark.parametrize("hh,mm", [(8, 30), (10, 0), (16, 0), (19, 30)])
+def test_display_not_fixed_while_any_market_open(setting, hh, mm):
+    """장이 열려 있는 동안(정규장·NXT)에는 설정과 무관하게 표시 현재가를 고정하지 않는다."""
+    config.settings.USE_KRX_CLOSE_AFTER_HOURS = setting
+    md, hp, dt = _at(datetime(2026, 7, 24, hh, mm), holiday=False)
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        assert api.display_price_krx_fixed(False) is False
+
+
+@pytest.mark.parametrize("dt,holiday", [
+    (datetime(2026, 7, 24, 21, 0), False),   # 모든 장 마감 후(야간)
+    (datetime(2026, 7, 24, 7, 0), False),    # NXT 프리마켓 개장 전
+    (datetime(2026, 7, 26, 15, 0), True),    # 주말·휴장일
+])
+def test_display_fixed_after_all_markets_close(dt, holiday):
+    """모든 장 마감 후에는 설정에 따라 표시 현재가 고정 여부가 갈린다."""
+    for setting, expected in ((True, True), (False, False)):
+        config.settings.USE_KRX_CLOSE_AFTER_HOURS = setting
+        md, hp, _ = _at(dt, holiday)
+        with md as m, hp:
+            m.now.return_value = dt
+            m.strptime = datetime.strptime
+            assert api.display_price_krx_fixed(False) is expected
+
+
+def test_display_gate_never_applies_to_overseas():
+    """미국장은 별도 정책이므로 표시 고정 대상이 아니다."""
+    config.settings.USE_KRX_CLOSE_AFTER_HOURS = True
+    md, hp, dt = _at(datetime(2026, 7, 26, 15, 0), holiday=True)
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        assert api.display_price_krx_fixed(True) is False
 
 
 def test_table_row_w52_uses_same_basis():
@@ -260,3 +327,42 @@ def test_table_row_w52_uses_same_basis():
     cells = _table_row(True)
     w52 = next(c for c in cells if isinstance(c, str) and '%' in c and '(' not in c)
     assert "55.2%" in w52
+
+
+# ==========================================================
+# 5. 자정~개장 전(00:00~09:00) 회귀 — krx_last_settled_day
+#    market_today는 평일 새벽에도 '오늘'(아직 열리지 않은 날)을 돌려주므로,
+#    'last_bar >= market_today' 비교가 항상 실패해 KRX 고정이 걸리지 않았다.
+#    (2026-07-28 01:13 실측: 삼성전자에 전날 NXT 종가 255,000이 노출)
+# ==========================================================
+
+def test_settled_day_before_open_is_prev_trading_day():
+    """개장 전 새벽에는 '최신 확정 세션'이 직전 거래일이어야 한다."""
+    md, hp, dt = _at(datetime(2026, 7, 28, 1, 13), holiday=False)   # 화요일 새벽
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        assert api.market_today(False) == '20260728'        # 아직 열리지 않은 '오늘'
+        assert api.krx_last_settled_day() == '20260727'     # 실제 마지막 확정 세션(월)
+
+
+def test_settled_day_after_close_is_today():
+    """정규장 마감(+확정 여유) 뒤에는 오늘이 최신 확정 세션이다."""
+    md, hp, dt = _at(datetime(2026, 7, 27, 21, 0), holiday=False)
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        assert api.krx_last_settled_day() == '20260727'
+
+
+def test_table_row_krx_fixed_in_predawn():
+    """새벽에도 설정 True면 표시 현재가·등락이 KRX 확정 기준이어야 한다(회귀 방지)."""
+    cells = _table_row(True, when=datetime(2026, 7, 27, 1, 13), holiday=False)
+    assert "100,000" in cells[3]
+    assert "+500" in cells[4] and "+0.50%" in cells[4]
+
+
+def test_table_row_predawn_keeps_nxt_when_setting_off():
+    """새벽에 설정 False면 마지막 실거래가(NXT)가 그대로 보인다."""
+    cells = _table_row(False, when=datetime(2026, 7, 27, 1, 13), holiday=False)
+    assert "99,700" in cells[3]

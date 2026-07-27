@@ -420,7 +420,7 @@ def view_system_config(group=None):
         subheader("5-3. 데이터·통신")
         row("차트 캐시 시간(분)", "일봉 데이터 메모리 캐시 유지", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360)}")
         row("실시간 WebSocket 사용", "KIS 실시간 시세 push(끄면 REST 폴링). 토스 미지원", "USE_WEBSOCKET", f"{getattr(config.settings, 'USE_WEBSOCKET', True)}")
-        row("장 종료 후 KRX 종가 기준", "모든 장 마감 후 현재가·지표를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
+        row("장 종료 후 KRX 종가 기준", "모든 장 마감 후 현재가를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
 
         subheader("5-4. 텔레그램 및 AI 브리핑")
         row("사용 여부", "알림 기능 활성화 여부", "ENABLE_TELEGRAM", f"{getattr(config.settings, 'ENABLE_TELEGRAM', True)}")
@@ -1377,7 +1377,7 @@ def _trading_cycle_items():
          "get": lambda: getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360), "set": lambda v: setattr(config.settings, 'CHART_CACHE_TTL_MINUTES', v)},
         {"desc": "실시간 WebSocket 사용", "help": "KIS 실시간 시세 push 사용(끄면 REST 폴링). 미구독/끊김 시 자동 REST 폴백. 토스는 미지원", "name": "USE_WEBSOCKET", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_WEBSOCKET', True), "set": lambda v: setattr(config.settings, 'USE_WEBSOCKET', v)},
-        {"desc": "장 종료 후 KRX 종가 기준", "help": "모든 장(NXT 애프터마켓 20:00)이 끝난 뒤 종목 분석의 현재가·지표를 KRX 정규장 종가로 고정합니다. 과거 일봉이 전부 KRX 기준이라 기준이 일치합니다. 끄면 종전처럼 마지막 NXT 체결가를 반영합니다. (주문 가격은 이 설정과 무관하게 항상 실시간가)", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
+        {"desc": "장 종료 후 KRX 종가 기준", "help": "모든 장(NXT 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(전날 NXT 종가)가 다음 개장까지 그대로 보입니다. NXT 거래시간(08:00~09:00, 15:30~20:00)에는 설정과 무관하게 NXT 현재가를 표시합니다. ※ 지표는 이 설정과 무관하게 항상 KRX 정규장 확정 봉으로 계산하며, 주문 가격과 손절·트레일링 트리거도 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True), "set": lambda v: setattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', v)},
     ]
 

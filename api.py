@@ -448,33 +448,88 @@ def _krx_close_passed_at():
         return None
 
 
+def krx_last_settled_day():
+    """가장 최근 '확정된' KRX 정규장 세션 일자(YYYYMMDD).
+
+    오늘 정규장 마감(+확정 여유 15:40)이 지났으면 오늘, 아직이면 직전 거래일이다.
+    '보유한 마지막 일봉이 최신인가'를 판정할 때 쓴다.
+
+    [Fix 2026-07-28] 이 판정에 market_today()를 쓰면 자정~개장 전(00:00~09:00)에 깨진다.
+     market_today는 평일이면 아직 열리지도 않은 '오늘'을 돌려주는데, 그 시각에 존재하는
+     마지막 확정 봉은 '직전 거래일'이라 `last_bar >= market_today` 비교가 항상 실패했다.
+     그 결과 USE_KRX_CLOSE_AFTER_HOURS=True인데도 새벽 시간대의 표시 현재가가 KRX 확정
+     종가로 고정되지 않고 마지막 NXT 체결가로 노출됐다(2026-07-28 01:13 실측:
+     삼성전자 255,000 = 전날 NXT 종가). 20:00~자정에는 두 값이 같아 증상이 없었다.
+    """
+    try:
+        if _krx_close_passed_at() is not None:
+            return market_today(False)
+        return last_trading_day(datetime.now() - timedelta(days=1), 'KR')
+    except Exception:      # noqa: BLE001 - 판정 실패 시 종전 기준으로 폴백
+        return market_today(False)
+
+
 def chart_overlay_enabled(is_overseas=False):
-    """지금 차트 마지막 봉에 실시간가를 반영해도 되는가 (chart_overlay_price의 시간대 판정부).
+    """지금 차트 마지막 봉에 실시간가를 반영해도 되는가 (지표 전용 게이트).
 
     가격을 아직 조회하기 전에 확인해, 어차피 버릴 현재가 API 호출 자체를 생략하는 데 쓴다.
+
+    [Fix 2026-07-28] 국내는 KRX 정규장(09:00~15:30)에만 반영한다 — USE_KRX_CLOSE_AFTER_HOURS와
+     무관하다. 지표는 '판단'의 축이므로 언제나 KRX 확정 봉 하나로만 계산한다. 자세한 근거는
+     chart_overlay_price 참조.
     """
-    if is_overseas or not getattr(config, 'USE_KRX_CLOSE_AFTER_HOURS', True):
+    if is_overseas:
         return True
-    return domestic_trading_session_open()
+    try:
+        return _nxt_quote_phase() == 'skip'
+    except Exception:      # noqa: BLE001 - 판정 실패는 '정규장'으로 보고 종전 동작 유지
+        return True
+
+
+def display_price_krx_fixed(is_overseas=False):
+    """화면 표시 현재가를 KRX 정규장 확정 종가로 고정해야 하는가 (표시 전용 게이트).
+
+    USE_KRX_CLOSE_AFTER_HOURS(기본 True)면 '모든 장이 끝난 뒤'(NXT 애프터마켓 20:00 종료 후·
+    주말·휴장일)의 화면 현재가를 KRX 확정 종가로 고정한다. 끄면 그 시간대에도 '마지막 실거래가'
+    (= 전날 NXT 종가)를 그대로 노출해, 다음 NXT 개장 전까지 시간대별 최종가가 이어진다.
+
+    NXT 거래시간(프리 08:00~09:00 / 애프터 15:30~20:00)에는 설정과 무관하게 NXT 현재가를
+    보여준다 — 살아있는 시장의 가격이기 때문이다.
+
+    ※ 지표는 이 설정과 무관하게 항상 KRX 확정 봉으로 계산한다(chart_overlay_enabled).
+    ※ 주문 가격도 이 설정과 무관하게 항상 실시간가를 쓴다(체결 보장).
+    """
+    if is_overseas:
+        return False
+    if not getattr(config, 'USE_KRX_CLOSE_AFTER_HOURS', True):
+        return False
+    try:
+        return _nxt_quote_phase() == 'offhours'
+    except Exception:      # noqa: BLE001 - 판정 실패 시 고정하지 않음(실시간가 노출)
+        return False
 
 
 def chart_overlay_price(price, is_overseas=False):
     """차트 마지막 봉·지표에 반영해도 되는 실시간가. 반영 불가면 0.0.
 
-    USE_KRX_CLOSE_AFTER_HOURS(기본 True)면 국내는 '모든 장이 끝난 뒤'(NXT 애프터마켓 20:00
-    종료 후·주말·휴장일) 실시간가 반영을 막는다. 그 시간대의 lastPrice는 마지막 NXT 체결가로
-    굳어 있는데, 이 값이 확정된 KRX 일봉의 종가를 덮어쓰면 EMA·RSI·CCI·ATR·52주 위치가
-    전부 함께 흔들린다(시간외 거래량은 정규장의 수백분의 1이라 지표 기준엔 노이즈).
-    과거 일봉이 전부 KRX 정규장 기준(pykrx/FDR)이므로 기준을 맞추는 쪽이 정합적이다.
+    국내는 KRX 정규장(09:00~15:30)에만 반영한다. 정규장 밖의 현재가는 NXT(대체거래소) 체결가
+    이고, 이 값이 확정된 KRX 일봉의 종가를 덮어쓰면 EMA·RSI·CCI·ATR·52주 위치가 전부 함께
+    흔들린다. NXT 거래량은 정규장의 수백분의 1이라 소수 체결이 봉의 종가·고가·저가를 정하는데,
+    특히 ATR은 True Range를 통해 손절폭 → 포지션 크기 → 포트폴리오 리스크로 전파된다.
+    과거 일봉이 전부 KRX 정규장 기준(pykrx/FDR)이므로 기준을 맞추는 쪽이 정합적이고,
+    백테스트(KRX 일봉)와 실매매의 입력이 갈리지 않는다.
 
     실측 2026-07-24 SK텔레콤: KRX 종가 100,000 vs 애프터마켓 20:00 99,700
       → EMA5 94,805→94,705, RSI 61.8→61.54, CCI 231.6→230.10, 52주 위치 55.2%→54.8%
+    (토스 캔들로 NXT가 과거 봉까지 섞였을 때는 ATR 6~15%·ADX 최대 9.45 왜곡 — krx_daily 참조)
 
-    거래 시간대(08:00~20:00)에는 종전대로 실시간가를 반영한다 — 살아있는 시장의 가격을
-    보고 대응해야 하기 때문이다.
+    [Fix 2026-07-28] 종전에는 NXT 거래시간(08:00~20:00)에도 반영해, 그 시간대에 자동매매를
+     운용하면 지표가 NXT 기준으로 계산됐다. '무엇을 사고팔지'는 KRX 확정 데이터로 판단하고,
+     '지금 얼마인지'(손절·트레일링 트리거, 주문가)만 실시간가로 본다.
 
-    ※ 이 게이트는 '지표·표시' 경로 전용이다. 주문 가격은 호출부가 실시간가를 직접 쓰므로
-      NXT 시간대(자동매매 08:00~20:00)의 체결가 산정에는 영향이 없다.
+    ※ 이 게이트는 '지표' 전용이다.
+      - 화면 표시 현재가: display_price_krx_fixed() 참조(설정으로 선택, NXT 장중엔 NXT가).
+      - 손절·트레일링 트리거와 주문 가격: 호출부가 실시간가를 직접 쓰므로 영향 없다.
     """
     try:
         p = float(price or 0)
