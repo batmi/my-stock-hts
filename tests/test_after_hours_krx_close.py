@@ -224,14 +224,19 @@ def test_reserved_monitor_not_tied_to_auto_trade_hours():
 
 
 def test_auto_trade_window_defaults_to_krx_session():
-    """자동매매 기본 운용시간은 KRX 정규장. 단일가 구간(15:25~15:30)은 제외된다."""
+    """자동매매 기본 운용시간은 KRX 정규장. 종가 단일가 구간(15:20~15:30)은 제외된다.
+
+    실효 운용 시간은 '즉시 체결이 되는' 접속매매 구간(09:00~15:20)이다. 15:20~15:30에
+    나간 주문은 접수만 되고 15:30 단일가로 넘어가, 미체결 자동취소에 걸려 헛주문이 된다.
+    """
     from modules.auto_trade.common import is_system_market_open
 
     assert config.settings.SYSTEM_TRADING_START_TIME == "0900"
     assert config.settings.SYSTEM_TRADING_END_TIME == "1530"
 
     expected = {(8, 30): False, (8, 59): False, (9, 0): True, (12, 0): True,
-                (15, 24): True, (15, 25): False, (15, 30): False, (16, 0): False}
+                (15, 19): True, (15, 20): False, (15, 24): False, (15, 25): False,
+                (15, 30): False, (16, 0): False}
     for (hh, mm), want in expected.items():
         with patch('modules.auto_trade.common.datetime') as m, \
              patch('modules.auto_trade.common.api.is_holiday_today', return_value=False):

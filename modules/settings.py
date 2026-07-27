@@ -408,7 +408,7 @@ def view_system_config(group=None):
         header(5)
         subheader("5-1. 거래 시간·주기", first=True)
         row("거래 시작 시간", "매매 허용 시작 시각 (HHMM, 기본 KRX 개장 0900)", "SYSTEM_TRADING_START_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_START_TIME', '0900')}")
-        row("거래 종료 시간", "매매 허용 종료 시각 (HHMM, 기본 KRX 마감 1530)", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1530')}")
+        row("거래 종료 시간", "매매 허용 종료 시각 (HHMM, 기본 KRX 마감 1530 / 단일가 회피로 실효 15:20)", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1530')}")
         row("모니터링 주기 (초)", "자동매매 루프 실행 간격", "SYSTEM_TRADING_INTERVAL", f"{getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180)}")
 
         subheader("5-2. 주문·체결 감시")
@@ -1359,7 +1359,7 @@ def _trading_cycle_items():
     return [
         {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM). 기본값은 KRX 정규장 개장(0900). NXT 프리마켓까지 운용하려면 0800", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0900"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
-        {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM). 기본값은 KRX 정규장 마감(1530). NXT 애프터마켓까지 운용하려면 2000", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
+        {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM). 기본값은 KRX 정규장 마감(1530)이며, 종가 단일가(동시호가) 15:20~15:30은 자동 회피하므로 실효 매매는 15:20까지다. NXT 애프터마켓까지 운용하려면 2000", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1530"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
         {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},

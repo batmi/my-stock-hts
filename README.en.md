@@ -545,7 +545,7 @@ Background monitoring runs every 3 seconds and is persistently saved in SQLite D
 ### Smart Protection Logic
 *   **Expiration Date**: Auto-cancels upon expiry (Today, This week, This month, Indefinite).
 *   **Duplicate Prevention**: If a stock with a reserved sell is sold manually, the reserved sell is auto-cancelled.
-*   **Network Optimization**: API quote queries are completely blocked during off-hours to prevent traffic waste and mock trading rate limit exhaustion.
+*   **Network Optimization**: API quote queries are completely blocked during off-hours (20:00~08:00) and the single-price auction breaks (08:50~09:00, 15:20~15:30) to prevent traffic waste and mock trading rate limit exhaustion.
 
 ## 12. Known Issues
 

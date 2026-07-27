@@ -335,13 +335,17 @@ def is_system_market_open():
 
     if start_time <= current_time <= end_time:
         # 단일가(동시호가) 구간 회피. 08:50~09:00은 NXT 프리마켓이 KRX 시가 단일가에 맞춰 쉬는
-        # 시간이고(설정을 0800으로 넓힌 경우에만 해당), 15:25~15:30은 KRX 종가 단일가 구간이라
+        # 시간이고(설정을 0800으로 넓힌 경우에만 해당), 15:20~15:30은 KRX 종가 단일가 구간이라
         # 체결가를 예측할 수 없어 진입/청산 판단을 보류한다.
-        # → 기본값(0900~1530)에서 실효 운용 시간은 09:00~15:25다.
+        # → 기본값(0900~1530)에서 실효 운용 시간은 '즉시 체결이 되는' 09:00~15:20이다.
         #   15:30 정각도 포함한다 — 종료 시각 비교가 <= 라서, 기본값(1530)에서 KRX가 막 마감한
         #   그 1분만 매매가 켜지는 경계가 생긴다.
+        # [Fix 2026-07-27] 종가 단일가 시작을 15:25로 잡고 있었다. KRX 장 마감 동시호가는
+        #  15:20~15:30(10분)이라 15:20~15:25에 나간 주문은 접수만 되고 체결되지 않는다.
+        #  미체결 자동취소(UNFILLED_ORDER_CANCEL_SECONDS, 기본 120초)에 걸려 2분 뒤 취소되는
+        #  헛주문이 되므로, 접속매매가 끝나는 15:20을 경계로 맞춘다.
         if "0850" <= current_time < "0900": return False
-        if "1525" <= current_time <= "1530": return False
+        if "1520" <= current_time <= "1530": return False
         return True
     return False
 
@@ -349,11 +353,14 @@ def is_system_market_open():
 #  - 상태 안내 문구들이 각자 시각 문자열만 비교하다 보니, 휴장일(주말·공휴일)에도 같은 시각대면
 #    "단일가 매매 동기화 대기"로 안내되는 문제가 있었다. 휴장일에는 단일가 구간 자체가 없다.
 def is_single_price_break(now=None):
-    """지금이 거래일의 단일가(동시호가) 휴게 구간인지 확인 (휴장일에는 항상 False)"""
+    """지금이 거래일의 단일가(동시호가) 휴게 구간인지 확인 (휴장일에는 항상 False)
+
+    KRX 장 마감 동시호가는 15:20~15:30(10분)이다 — is_system_market_open과 경계를 맞춘다.
+    """
     if api.is_holiday_today(): return False
 
     current_time = (now or datetime.now()).strftime("%H%M")
-    return ("0850" <= current_time < "0900") or ("1525" <= current_time < "1530")
+    return ("0850" <= current_time < "0900") or ("1520" <= current_time < "1530")
 
 # [추가] 주문 상태 상수 정의 (Order State Machine)
 class OrderStatus:

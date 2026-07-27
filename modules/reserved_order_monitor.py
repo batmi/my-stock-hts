@@ -113,7 +113,8 @@ class ReservedOrderMonitor:
                     continue
 
                 # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵
-                if not is_overseas and (("0850" <= now_time_str_short < "0900") or ("1525" <= now_time_str_short < "1530")):
+                #  (KRX 장 마감 동시호가는 15:20~15:30 — auto_trade.common과 경계 일치)
+                if not is_overseas and (("0850" <= now_time_str_short < "0900") or ("1520" <= now_time_str_short < "1530")):
                     continue
                 # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
                 if is_overseas and ("0800" <= now_time_str_short < "1600"):
