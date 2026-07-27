@@ -48,6 +48,34 @@ def _pkg():
     return _at
 
 
+def format_holdings_block(valid_holdings, title="보유 종목 현황", name_decorator=None):
+    """보유 종목 목록 블록(헤더 + 종목별 4줄) 생성.
+
+    /status·/holdings·시스템 시작/종료 알림·장 시작/마감 알림이 모두 이 함수를 쓰도록 해
+    표기(종목 수, 불릿, 평단 포함 여부)가 메시지마다 달라지지 않게 한다.
+    name_decorator(code, name) -> str 를 주면 종목명에 제한/개별룰 표식을 덧붙일 수 있다.
+    보유 종목이 없을 때의 문구는 호출부마다 부가 설명이 달라 각자 처리한다.
+    """
+    msg = f"📋 [{title}] ({len(valid_holdings)}종목)"
+    for item in valid_holdings:
+        name = item['prdt_name']
+        qty = int(item['hldg_qty'])
+        cur_price = int(item['prpr'])
+        buy_price = float(item.get('pchs_avg_pric') or 0)
+        eval_amt = int(item['evlu_amt'])
+        profit = int(item['evlu_pfls_amt'])
+        rate = float(item['evlu_pfls_rt'])
+
+        name_display = name_decorator(item.get('pdno'), name) if name_decorator else name
+
+        msg += (
+            f"\n• {name_display} ({qty}주)"
+            f"\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원"
+            f"\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
+        )
+    return msg
+
+
 def get_mystock_log_tail(lines=20):
     """에러 발생 시 전송할 mystock.log의 꼬리 부분을 반환합니다."""
     log_path = os.path.join(getattr(config, 'LOG_DIR', 'logs'), 'mystock.log')

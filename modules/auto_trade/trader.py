@@ -476,15 +476,7 @@ class AutoTrader:
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
             if valid_holdings:
-                msg += "\n\n📋 [보유 종목 현황]"
-                for item in valid_holdings:
-                    name = item['prdt_name']
-                    qty = int(item['hldg_qty'])
-                    cur_price = int(item['prpr'])
-                    eval_amt = int(item['evlu_amt'])
-                    rate = float(item['evlu_pfls_rt'])
-                    profit = int(item['evlu_pfls_amt'])
-                    msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
+                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
                 if stock_eval_amt > 0:
@@ -665,15 +657,7 @@ class AutoTrader:
                     valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
                     if valid_holdings:
-                        msg += "\n\n📋 [최종 보유 종목 현황]"
-                        for item in valid_holdings:
-                            name = item['prdt_name']
-                            qty = int(item['hldg_qty'])
-                            cur_price = int(item['prpr'])
-                            eval_amt = int(item['evlu_amt'])
-                            rate = float(item['evlu_pfls_rt'])
-                            profit_amt = int(item['evlu_pfls_amt'])
-                            msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit_amt:+,}원 ({rate:+.2f}%)"
+                        msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, title="최종 보유 종목 현황")
                     else:
                         msg += "\n\n📋 [최종 보유 종목] 없음"
                         if not is_data_valid:
@@ -1014,15 +998,7 @@ class AutoTrader:
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
         if valid_holdings:
-            msg += "\n📋 [보유 종목 현황]"
-            for item in valid_holdings:
-                name = item['prdt_name']
-                qty = int(item['hldg_qty'])
-                cur_price = int(item['prpr'])
-                eval_amt = int(item['evlu_amt'])
-                rate = float(item['evlu_pfls_rt'])
-                profit = int(item['evlu_pfls_amt'])
-                msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
+            msg += "\n" + _pkg().format_holdings_block(valid_holdings)
         else:
             msg += "\n📋 [보유 종목] 없음"
             
@@ -2900,15 +2876,7 @@ class AutoTrader:
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
             if valid_holdings:
-                msg += "\n\n📋 [보유 종목 현황]"
-                for item in valid_holdings:
-                    name = item['prdt_name']
-                    qty = int(item['hldg_qty'])
-                    cur_price = int(item['prpr'])
-                    eval_amt = int(item['evlu_amt'])
-                    rate = float(item['evlu_pfls_rt'])
-                    profit = int(item['evlu_pfls_amt'])
-                    msg += f"\n• {name} ({qty}주)\n  현재가: {cur_price:,}원 | 평가: {eval_amt:,}원\n  손익: {profit:+,}원 ({rate:+.2f}%)"
+                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
         except Exception as e:

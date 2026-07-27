@@ -1477,28 +1477,19 @@ class TelegramCommander:
             if not valid_holdings:
                 return "📋 [보유 종목] 없음"
             
-            msg = f"📋 [보유 종목 현황] ({len(valid_holdings)}종목)\n"
-            
-            calc_total_pchs = 0 # [추가] 총 매입금액 직접 계산용 (API 0일 경우 대비)
-            
-            for item in valid_holdings:
-                name = item['prdt_name']
-                code = item['pdno']
-                qty = int(item['hldg_qty'])
-                cur_price = int(item['prpr'])
-                buy_price = float(item['pchs_avg_pric'])
-                eval_amt = int(item['evlu_amt'])
-                profit = int(item['evlu_pfls_amt'])
-                rate = float(item['evlu_pfls_rt'])
-                
-                calc_total_pchs += int(qty * buy_price)
-                
-                name_display = name
-                if code in restricted_stocks: name_display += "-"
-                if code in rules_map: name_display += "+"
-                
-                msg += f"\n{name_display} ({qty}주)\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
-            
+            def _decorate(code, name):
+                if code in restricted_stocks: name += "-"
+                if code in rules_map: name += "+"
+                return name
+
+            # [수정] 표기는 공용 포매터로 통일 (/status·시작/종료 알림과 동일 형식)
+            msg = auto_trade.format_holdings_block(valid_holdings, name_decorator=_decorate)
+
+            # [추가] 총 매입금액 직접 계산용 (API 0일 경우 대비)
+            calc_total_pchs = sum(
+                int(int(h['hldg_qty']) * float(h.get('pchs_avg_pric') or 0)) for h in valid_holdings
+            )
+
             # [추가] 총 평가금액 및 손익 요약
             if summary and len(summary) > 0:
                 s_data = summary[0]
