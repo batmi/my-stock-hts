@@ -1545,6 +1545,20 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 
 
+# [메뉴 봉인] 관심종목 포트폴리오(N슬롯) 백테스트 — 2026-07-27 숨김.
+#  시뮬레이터 자체(modules/portfolio_backtest.py)는 정상이며 슬롯·피라미딩 검증에 계속 쓰인다.
+#  문제는 이 메뉴가 슬롯/피라미딩을 쉼표로 여러 개 받아 '단일 경로' 결과를 표로 나란히
+#  보여준다는 점이다. 조합 간 성과 차이는 종목 구성 하나에 크게 좌우되므로, 그 표를 근거로
+#  조합을 고르면 반드시 틀린 결론에 도달한다.
+#    실측(2026-07-27, 시드 300만): 단일 경로는 슬롯2 +893% vs 슬롯4 +293%로 슬롯2 압승처럼
+#    보이지만, 종목 구성만 바꿔 80회 반복하면 중앙 수익이 +278% vs +271%로 사실상 동률이고
+#    MDD는 94%의 경로에서 슬롯2가 더 나쁘다(최악 -48.3% vs -31.5%, 최악 수익 -9.0% vs +48.6%).
+#    단일 경로에서 본 +839%는 슬롯2 분포의 상위 8% 구간이었다.
+#  조합 비교가 필요하면 부분집합 반복(쌍대 비교)으로 재야 하며, 그 기능이 메뉴에 생기기
+#  전까지는 이 항목을 노출하지 않는다. 상수를 True로 되돌리면 즉시 복구된다.
+SHOW_PORTFOLIO_BACKTEST_MENU = False
+
+
 def run_backtest():
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
     last_choice = "1"
@@ -1554,10 +1568,11 @@ def run_backtest():
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input"),
-            # 1~6은 '한 종목 × 계좌 전액' 검증이라 슬롯 경쟁·현금 제약·히트 캡이 빠진다.
-            # 실제 운용 형태(N슬롯 동시 보유)로 확인하려면 7번을 쓴다.
-            ("7", "관심종목 포트폴리오 (N슬롯)", "Portfolio (N slots)")
         ]
+        # 1~6은 '한 종목 × 계좌 전액' 검증이라 슬롯 경쟁·현금 제약·히트 캡이 빠진다.
+        # 7번(N슬롯 포트폴리오)은 그것들을 반영하지만 단일 경로 표라 조합 비교에 오용되어 숨긴다.
+        if SHOW_PORTFOLIO_BACKTEST_MENU:
+            menu_items.append(("7", "관심종목 포트폴리오 (N슬롯)", "Portfolio (N slots)"))
         sub_choice = utils.show_menu("전략 백테스팅 (Backtest)", menu_items, default_choice=last_choice)
         if sub_choice.lower() in ['b', 'q']: return False
         if sub_choice.lower() == 'h':
@@ -1768,7 +1783,8 @@ def run_backtest():
             def_buy_rsi = config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
             val = Prompt.ask(f"매수 허용 RSI 상한 (기본: {def_buy_rsi})\n[dim]RSI가 이 값보다 낮아야 매수 (과열 방지)[/dim]", default=str(def_buy_rsi))
             if val.lower() in ['b', 'q']: continue
-            buy_rsi = float(val)
+            try: buy_rsi = float(val)
+            except Exception: buy_rsi = float(def_buy_rsi)
             
             # --- 3. 청산 타점 ---
             #  잠긴 항목(설정 메뉴와 동일)은 묻지 않고 현재값을 그대로 쓴다.
@@ -1785,7 +1801,8 @@ def run_backtest():
                 def_tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
                 val = Prompt.ask(f"익절 수익률(%) (기본: {def_tp}%)\n[dim]수익이 이 비율에 도달하면 이익 실현 (0: 미사용)[/dim]", default=str(def_tp))
                 if val.lower() in ['b', 'q']: continue
-                take_profit = float(val)
+                try: take_profit = float(val)
+                except Exception: take_profit = float(def_tp)
             else:
                 locked_notes.append(f"익절 {take_profit}%")
 
@@ -1801,7 +1818,8 @@ def run_backtest():
                 def_tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
                 val = Prompt.ask(f"익절 RSI 기준 (기본: {def_tp_rsi})\n[dim]RSI가 이 값을 초과하면 과열로 판단하여 매도[/dim]", default=str(def_tp_rsi))
                 if val.lower() in ['b', 'q']: continue
-                take_profit_rsi = float(val)
+                try: take_profit_rsi = float(val)
+                except Exception: take_profit_rsi = float(def_tp_rsi)
             else:
                 locked_notes.append(f"익절 RSI {take_profit_rsi}")
 
@@ -1818,7 +1836,8 @@ def run_backtest():
                 def_ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
                 val = Prompt.ask(f"트레일링 스탑 발동 수익률(%) (기본: {def_ts_act}%)\n[dim]수익률이 이 값 이상일 때 트레일링 스탑 감시 시작[/dim]", default=str(def_ts_act))
                 if val.lower() in ['b', 'q']: continue
-                ts_activation = float(val)
+                try: ts_activation = float(val)
+                except Exception: ts_activation = float(def_ts_act)
             else:
                 locked_notes.append(f"TS 발동 +{ts_activation}%")
 
@@ -1826,7 +1845,8 @@ def run_backtest():
                 def_ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
                 val = Prompt.ask(f"트레일링 스탑 하락 감지율(%) (기본: {def_ts_call}%)\n[dim]최고가 대비 이 비율만큼 하락 시 매도[/dim]", default=str(def_ts_call))
                 if val.lower() in ['b', 'q']: continue
-                ts_callback = float(val)
+                try: ts_callback = float(val)
+                except Exception: ts_callback = float(def_ts_call)
             else:
                 locked_notes.append(f"TS 하락 감지율 {ts_callback}%")
 
@@ -1834,7 +1854,8 @@ def run_backtest():
                 def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
                 val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
                 if val.lower() in ['b', 'q']: continue
-                time_stop_days = int(val)
+                try: time_stop_days = int(val)
+                except Exception: time_stop_days = int(def_time_stop)
             else:
                 locked_notes.append(f"시간 청산 {time_stop_days}일")
 
@@ -1853,14 +1874,16 @@ def run_backtest():
                 if "ATR_STOP_MULTIPLIER" not in locked:
                     val = Prompt.ask(f"ATR 손절 배수 (기본: {atr_mult})\n[dim]ATR 값의 몇 배를 손절폭으로 할지 설정 (0: 미사용)[/dim]", default=str(atr_mult))
                     if val.lower() in ['b', 'q']: continue
-                    atr_mult = float(val)
+                    try: atr_mult = float(val)
+                    except Exception: pass  # 잘못 입력 시 기존 배수 유지 (프롬프트 기본값과 동일)
                 else:
                     locked_notes.append(f"손절 ATR x{atr_mult}")
             elif "STOP_LOSS_RATE" not in locked:
                 def_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
                 val = Prompt.ask(f"손절 수익률(%) (기본: {def_sl}%)\n[dim]손실이 이 비율에 도달하면 손절매 (0: 미사용)[/dim]", default=str(def_sl))
                 if val.lower() in ['b', 'q']: continue
-                stop_loss = float(val)
+                try: stop_loss = float(val)
+                except Exception: stop_loss = float(def_sl)
             else:
                 locked_notes.append(f"손절 {stop_loss}%")
 

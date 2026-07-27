@@ -3181,6 +3181,26 @@ def get_analysis_params(use_vol=True):
             config.console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
             continue
 
+    # [안내] 이 화면에서 묻지 않는 값 — 잠긴 항목은 '현재값 그대로' 쓰인다는 사실을 명시한다.
+    #  params에 없는 키는 평가 시 config 값으로 폴백하므로, 운용자가 여기서 본 조건만으로
+    #  결과가 결정된다고 오해하면 안 된다(백테스트 조건변경 화면의 잠금 안내와 같은 취지).
+    try:
+        from modules import settings as _settings
+        _locked = set(_settings.ANTI_TREND_HIDDEN_KEYS) | set(_settings.BACKTESTED_HIDDEN_KEYS)
+    except Exception:
+        _locked = set()
+    _fixed = []
+    if "SELL_SCORE" in _locked:
+        _fixed.append(f"매도(추세이탈) 점수 {config.SELL_STRATEGY.get('SELL_SCORE', 4.0)}")
+    if "SUPER_MOMENTUM_USE" in _locked and config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True):
+        _fixed.append(
+            f"슈퍼 모멘텀 ON (점수 {config.ANALYSIS_THRESHOLDS.get('SUPER_MOMENTUM_SCORE', 8.0)}↑ "
+            f"& 52주 {config.ANALYSIS_THRESHOLDS.get('SUPER_MOMENTUM_W52_POS', 90.0)}%↑ 이면 "
+            f"RSI 상한 {config.ANALYSIS_THRESHOLDS.get('SUPER_BUY_RSI_MAX', 80.0)}로 완화)")
+    if _fixed:
+        config.console.print("\n[dim]※ 추세추종 보호로 잠긴 항목은 현재값을 그대로 사용합니다 — "
+                             + " · ".join(_fixed) + "[/dim]")
+
     config.console.print("\n[bold]4. 최종 출력 대상 선택[/bold]")
     filter_choice = Prompt.ask("출력 대상 선택 (1: 매수, 2: 상승, 3: 매수+상승) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "3", "b", "q"], default="1")
     if filter_choice.lower() in ['b', 'q']: return None
@@ -3378,7 +3398,11 @@ def analyze_market_stocks(market_type):
         if c_params.get('SCORE_ADJ'):
             buy_score_str += f" (시장보정 {c_params['SCORE_ADJ']:+.1f}점)"
 
-        config.console.print(f"• 분석 조건: 매수 {buy_score_str}, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {c_params.get('BUY_VOL_STRENGTH', 100)}%, 상승 {c_params.get('RISE_SCORE')}점, 가중치 {w_str}")
+        # [표시] 체결강도 0%는 '기준이 0'이 아니라 '수급 조건 미사용'으로 돌렸다는 뜻이다.
+        #  아래 '현재 설정'(config 값 100%)과 나란히 보이면 값이 바뀐 것처럼 읽히므로 구분해 적는다.
+        _cached_vol = c_params.get('BUY_VOL_STRENGTH', 100)
+        _vol_str = "미사용" if not _cached_vol else f"{_cached_vol}%"
+        config.console.print(f"• 분석 조건: 매수 {buy_score_str}, RSI {c_params.get('BUY_RSI_MAX')}, 체결 {_vol_str}, 상승 {c_params.get('RISE_SCORE')}점, 가중치 {w_str}")
         
         config.console.print()
         choice = Prompt.ask("기존 결과를 보시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="y")

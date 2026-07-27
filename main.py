@@ -1281,11 +1281,19 @@ def main():
                 _last_fatal_ts = now
 
                 if _fatal_burst < 3:
-                    # [추가] 치명적 오류 발생 시 텔레그램 긴급 알림 및 로그 전송
+                    # [추가] 오류 발생 시 텔레그램 알림 및 로그 전송
+                    # [Fix] 문구 정정 — 이 except 블록은 continue/break 없이 끝나 while 루프로 복귀한다.
+                    #  즉 프로그램은 종료되지 않고 메인 메뉴가 다시 뜨며, 백그라운드 스레드(자동매매·
+                    #  체결 감시)도 그대로 살아 있다. 그런데 기존 문구가 '강제 종료'라고 단정해,
+                    #  운용자가 시스템이 죽은 줄 알고 불필요하게 재시작하게 만들었다.
+                    #  (실제 사례: 백테스트 프롬프트에 '2,3,4'를 잘못 입력해 ValueError가 올라온 것)
                     try:
                         from modules.auto_trade import get_mystock_log_tail
                         log_tail = get_mystock_log_tail(20)
-                        msg = f"🛑 [치명적 시스템 오류] 메인 프로그램 강제 종료\n\n원인: {err_text}\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
+                        msg = (f"⚠️ [시스템 오류] 메뉴 처리 중 예외 발생\n"
+                               f"메인 메뉴는 자동 복구되었고 자동매매·체결 감시는 계속 동작합니다.\n\n"
+                               f"원인: {err_text}\n\n"
+                               f"📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```")
                         api.send_telegram_message(msg)
                     except Exception: pass
                 else:

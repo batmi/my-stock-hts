@@ -129,13 +129,18 @@ def test_trading_send_order_sell_market(mock_price, mock_qty, mock_select, mock_
 # 4. telegram_bot.py 직접 매매 테스트 (63% -> Target 80%)
 # ==========================================
 def test_telegram_cmd_scan():
-    """/scan 명령어 서브 분기 (안전 호출) 테스트"""
+    """/scan 명령어 서브 분기 (안전 호출) 테스트
+
+    [Fix] bot_executor.submit을 반드시 mock해야 한다. _cmd_scan은 실제 스캔(_execute_scan)을
+    스레드 풀에 던지고 즉시 반환하는데, 그 작업은 with 블록이 끝난 뒤(=_send_reply 패치가
+    풀린 뒤) 실행된다. 그러면 진짜 TradingView 스크리너를 네트워크로 조회하고 그 결과를
+    운영자 텔레그램으로 실제 발송한다(실측: 테스트 1회 실행마다 시장 스캔 결과가 수신됨).
+    이 테스트의 검증 대상은 '명령이 실행기로 넘어가는가'이므로 submit만 확인하면 충분하다.
+    """
     bot = TelegramCommander()
     if hasattr(bot, '_cmd_scan'):
-        with patch.object(bot, '_send_reply') as mock_reply:
-            with patch('modules.telegram_bot.analysis.diagnose_group_stocks') as mock_diagnose:
-                try:
-                    bot._cmd_scan(["KOSPI"])
-                    assert mock_diagnose.call_count >= 0
-                except Exception:
-                    pass
+        with patch('modules.telegram_bot.bot_executor.submit') as mock_submit, \
+             patch.object(bot, '_send_reply') as mock_reply:
+            bot._cmd_scan(["KOSPI"])
+            mock_submit.assert_called_once()      # 실제 스캔은 실행되지 않는다
+            mock_reply.assert_called_once()       # 대기 안내만 즉시 회신

@@ -25,6 +25,49 @@ def setup_config():
     theme_analysis._ensure_genai()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def block_side_effects_for_whole_session():
+    """[격리] 세션 전체에서 '이미지 뷰어 팝업'과 '실제 텔레그램 전송'을 차단한다.
+
+    함수 스코프 fixture(monkeypatch)로는 막을 수 없다. 테스트가 띄운 백그라운드 스레드는
+    테스트 종료 후에도 살아남는데, 그 시점엔 monkeypatch가 원복되어 진짜 토큰으로 실제
+    메시지가 나간다(운영자 휴대폰에 더미 알림이 도착). 뷰어도 마찬가지로 테스트가 끝난 뒤
+    Popen이 살아 있어 ResourceWarning('subprocess is still running')을 남긴다.
+    그래서 세션 스코프로 원천 차단한다.
+
+    - 뷰어: chart.open_image_viewer 자체를 무력화한다(차트 파일 생성은 그대로 검증된다).
+    - 텔레그램: HTTP 경계에서 막는다. send_telegram_message 함수를 갈아끼우지 않으므로
+      '전송이 호출됐는가'를 검증하는 기존 테스트(각자 자기 참조를 patch)는 그대로 동작하고,
+      실제 네트워크 전송만 사라진다. getUpdates 폴링도 같은 경로라 함께 막힌다.
+    """
+    mp = pytest.MonkeyPatch()
+
+    from modules import chart as _chart
+    mp.setattr(_chart, "open_image_viewer", lambda *a, **k: True)
+
+    import requests as _requests
+
+    class _FakeTelegramResponse:
+        status_code = 200
+        text = '{"ok": true, "result": []}'
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": []}
+
+    _orig_request = _requests.Session.request
+
+    def _guarded_request(self, method, url, *args, **kwargs):
+        if "api.telegram.org" in str(url):
+            return _FakeTelegramResponse()
+        return _orig_request(self, method, url, *args, **kwargs)
+
+    mp.setattr(_requests.Session, "request", _guarded_request)
+
+    yield
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def isolate_session_state():
     """[격리] config.session은 전역 공유 객체이므로, 개별 테스트가 모드/키를

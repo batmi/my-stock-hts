@@ -247,8 +247,19 @@ def test_w52_window_returns_none_for_short_chart():
     assert analysis._w52_high_low(pd.DataFrame()) == (None, None)
 
 
-def test_analyze_table_row_w52_prefers_chart_over_api_and_uses_nxt_price():
-    """52주는 API w52_*(수정주가 미반영)보다 차트를 먼저 쓰고, 기준가는 표시 현재가(NXT)를 따른다."""
+def test_analyze_table_row_w52_uses_chart_band_not_api():
+    """52주 밴드는 API w52_*(수정주가 미반영)가 아니라 차트에서 산출한다.
+
+    [Fix] 종전에는 위치를 정확히 50%로 단정했으나 그 값은 장 세션에 따라 정당하게 달라진다.
+    analysis.py는 장 종료 후 표시 현재가·등락·52주 위치를 '확정 KRX 일봉' 기준으로 통일한다
+    (같은 줄에서 현재가는 NXT 애프터가인데 EMA·RSI는 KRX 종가 기준이던 불일치를 고친 로직).
+    그래서 장중에 돌리면 NXT가 기준 50%, 장 마감 후에 돌리면 KRX 종가 기준 94.6%가 나와
+    실행 시각에 따라 통과/실패가 갈렸다.
+
+    이 테스트가 지키려는 회귀는 '위치가 몇 %인가'가 아니라 '어느 밴드를 썼는가'다.
+    API 밴드(1~99999999)를 쓰면 위치가 0.1% 미만으로 붙으므로 그 지점만 검증하면
+    방어력은 그대로 두고 시간 의존성만 제거된다.
+    """
     chart_df = _mk_chart_df()
     ch, cl = analysis._w52_high_low(chart_df)
     nxt = int(cl + (ch - cl) * 0.5)         # 창 한가운데 → 기대 위치 50%
@@ -269,9 +280,10 @@ def test_analyze_table_row_w52_prefers_chart_over_api_and_uses_nxt_price():
             ('삼성전자', '005930'), '국내 주식 기술적 분석', False, False,
             set(), {}, {}, set(), set(), bundle
         )[0]
-    # API 값(1~99999999)을 썼다면 0%에 가깝게 나온다 → 차트 기준 50%여야 함
+    # API 값(1~99999999)을 썼다면 0.1% 미만으로 붙는다 → 차트 밴드를 썼는지만 본다.
+    #  (정확한 위치는 장중 50% / 장 종료 후 94.6%로 세션에 따라 달라지므로 고정하지 않는다)
     pos = float(row_data[5].split(']')[1].split('%')[0])
-    assert pos == pytest.approx(50.0, abs=1.5)
+    assert pos > 10.0, f"API w52 값을 사용한 것으로 보임 (52주 위치 {pos}%)"
 
 
 def _mk_nxt_response(codes, prpr='71000', vol='99999'):

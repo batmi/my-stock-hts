@@ -446,7 +446,13 @@ def run_portfolio_backtest():
         val = Prompt.ask("분석 기간(일)", default="1095")
         if val.lower() in ["b", "q"]:
             continue
-        days = max(200, int(val))
+        # [방어] 숫자가 아닌 입력(예: 슬롯 프롬프트용 '2,3,4'를 여기에 잘못 입력)에 ValueError가
+        #  나면 메인 루프의 치명 오류 핸들러까지 올라가 텔레그램 경보가 울린다. 기본값으로 되돌린다.
+        try:
+            days = max(200, int(val))
+        except (TypeError, ValueError):
+            config.console.print("[yellow]숫자가 아니어서 기본값 1095일로 진행합니다.[/yellow]")
+            days = 1095
         val = Prompt.ask("동시 보유 슬롯 수 [dim](쉼표로 여러 개 비교 가능: 4,6)[/dim]", default=str(max_holdings))
         if val.lower() in ["b", "q"]:
             continue
@@ -458,7 +464,11 @@ def run_portfolio_backtest():
         val = Prompt.ask("초기 자본(원)", default="10000000")
         if val.lower() in ["b", "q"]:
             continue
-        initial = max(1_000_000, int(val))
+        try:
+            initial = max(1_000_000, int(val.replace(",", "").strip()))
+        except (TypeError, ValueError):
+            config.console.print("[yellow]숫자가 아니어서 기본값 10,000,000원으로 진행합니다.[/yellow]")
+            initial = 10_000_000
 
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       BarColumn(), console=config.console, transient=True) as progress:
