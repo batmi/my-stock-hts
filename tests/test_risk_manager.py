@@ -166,7 +166,11 @@ def test_risk_and_volatility_caps_combine_by_min(risk_manager):
     실측 회귀(2026-07-23 GS건설): 자산 9,951,160 / 기초 25% / risk_scale 0.6 /
     ATR 손절 -15% / 연변동성 134%(scale는 하한 0.40에 클램프).
       종전(곱셈): min(기초, 리스크) 1,326,821 × 0.40 = 530,728  → 기초의 21%
-      현재(min) : min(기초 2,487,790, 리스크 1,326,821, 변동성 995,116) = 995,116
+      min 결합 : min(기초 2,487,790, 리스크 1,326,821, 변동성 995,116) = 995,116
+
+    [2026-07-27] risk_scale을 리스크층이 아닌 기초 비중에 적용하도록 바꾸면서 기대값이 바뀐다.
+      기초 2,487,790 × 0.6 = 1,492,674 → 변동성 캡 1,492,674 × 0.40 = 597,069
+    min 결합이라는 검증 대상 자체는 그대로다(곱셈이었다면 더 작았을 것).
     """
     config.USE_VOLATILITY_TARGETING = True
     config.TARGET_VOLATILITY = 0.20
@@ -182,8 +186,8 @@ def test_risk_and_volatility_caps_combine_by_min(risk_manager):
         amt = risk_manager.allocate_budget(
             9_951_160, 0.25, stop_loss_rate=-15.0, atr=atr, current_price=price
         )
-        assert amt == 995_116           # 기초 2,487,790 × 0.40 (변동성 캡이 최소)
-        assert amt > 530_728            # 종전 곱셈 결과보다 커야 한다
+        assert amt == 597_069           # (기초 2,487,790 × 배수 0.6) × 0.40 — 변동성 캡이 최소
+        assert amt > 530_728            # 종전 곱셈 결과보다는 여전히 커야 한다
 
         # 손실액 캡은 여전히 불가침: 최종액 × 손절폭 ≤ 자산 × (리스크% × 스케일)
         assert amt * 0.15 <= 9_951_160 * (4.0 * 0.6 / 100.0)
@@ -197,6 +201,10 @@ def test_base_ratio_change_now_moves_final_amount(risk_manager):
 
     종전 곱셈 결합에서는 리스크 캡이 바인딩하면 기초 비중을 2배로 올려도 최종액이
     똑같아 설정이 사문화됐다(0.25·0.5 모두 530,728원).
+
+    [2026-07-27] risk_scale이 기초 비중에 적용되면서 변동성 캡도 함께 내려가므로,
+    이 조건에서는 리스크 캡(1,326,821)이 아니라 변동성 캡이 상한이 된다.
+    검증 대상('기초 비중을 올리면 최종액이 실제로 따라 오른다')은 그대로 성립한다.
     """
     config.USE_VOLATILITY_TARGETING = True
     config.TARGET_VOLATILITY = 0.20
@@ -212,7 +220,9 @@ def test_base_ratio_change_now_moves_final_amount(risk_manager):
         small = risk_manager.allocate_budget(9_951_160, 0.25, **kw)
         large = risk_manager.allocate_budget(9_951_160, 0.50, **kw)
         assert large > small
-        assert large == 1_326_821       # 리스크 캡에서 멈춘다(무한정 증가하지 않음)
+        assert small == 597_069         # (9,951,160 × 0.25 × 0.6) × 0.40
+        assert large == 1_194_139       # (9,951,160 × 0.50 × 0.6) × 0.40 — 변동성 캡에서 멈춘다
+        assert large <= 9_951_160 * 0.50 * 0.6   # 기초 비중(집중 캡)을 넘지 않는다
     finally:
         risk_manager.trader.risk_scale = 1.0
         risk_manager.trader.initial_asset = 10_000_000

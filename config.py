@@ -185,6 +185,15 @@ class GlobalSettings(BaseModel):
                                             #   ※ 확대 결과가 기초 비중(SYSTEM_INVEST_PER_STOCK)을 넘지 않도록 최종 클램프됨(집중 방지)
     VOLATILITY_SCALING_MIN: float = Field(default=0.4, ge=0.0)     # 최소 축소 배수 (0.4배) - 변동성이 높을 때 최소 포지션 유지 (너무 적은 금액 매수 방지)
                                             #   (변동성 관리 강조로 0.5→0.4 하향 — 고변동성 종목 비중을 순수 타겟팅에 더 가깝게 축소)
+                                            # [실측 2026-07-27] 현 시장에서 이 층은 사실상 '전 종목 일괄 0.40'이다 —
+                                            #   관심종목 연변동성이 최소 55%·중앙 127%로 목표 25%보다 훨씬 높아 50종목 중
+                                            #   49종목이 바닥에 눌린다. 이를 '고장'으로 보고 차등화를 복원하려 목표·바닥을
+                                            #   재보정해봤으나(T0.40/F0.30, T0.50/F0.25, T0.60/F0.25, T0.80/F0.25)
+                                            #   **전부 현행보다 나빴다** (PF 2.68 → 2.08/1.72/1.73/1.57, MDD도 악화;
+                                            #   30종목 무작위 30회에서 MDD 개선 0~1/30). 차등화는 저변동성 종목의 비중을
+                                            #   키우는데, 이 시스템에서 저변동성은 곧 '추세가 약한 종목'이라 역효과다.
+                                            #   즉 바닥에 눌린 상태가 결함이 아니라 측정된 최적점이다. 변경하지 말 것.
+                                            #   (시장 변동성이 내려가면 자동으로 차등화가 살아나므로 구조는 그대로 둔다.)
 
     # ==========================================================
     # [설정] 리스크 한도 동적 스케일링 (Risk Scaling)
@@ -219,7 +228,16 @@ class GlobalSettings(BaseModel):
         "USE_WHIPSAW_RISK_SCALING": True,  # 휩소율 연동 사용
         "WHIPSAW_LO": 0.40,                # 이 값 이하 휩소율이면 축소 없음 (배수 1.0)
         "WHIPSAW_HI": 0.75,                # 이 값 이상이면 최대 축소
-        "WHIPSAW_MIN_SCALE": 0.6,          # 휩소율 연동 최소 배수
+        # 휩소율 연동 최소 배수. [2026-07-27] 0.6 → 0.85.
+        #  risk_scale이 기초 비중에 적용되기 시작하면서(engine.allocate_budget) 이 값이 처음으로
+        #  배분액에 영향을 준다. 종전 0.6은 축소일이 100%·평균 배수 0.694로 사실상 상시 과세였고,
+        #  방어 대비 비용이 나빴다. 시드 500만·30종목 무작위 40회, '방어 OFF' 대비:
+        #    WS_MIN 0.60 → MDD 이득 +2.82%p (36/40), 수익 비용 -21.15%p   (효율 0.13)
+        #    WS_MIN 0.75 → MDD 이득 +2.05%p (33/40), 수익 비용 -12.83%p   (효율 0.16)
+        #    WS_MIN 0.85 → MDD 이득 +2.05%p (32/40), 수익 비용  -2.91%p   (효율 0.70) ← 채택
+        #  방어 효과의 73%를 비용의 14%로 산다. 국면(PendDown 0.6) 배수는 그대로라 최소 배수는
+        #  0.51까지 내려가 진짜 위험 구간의 방어는 유지된다. 유휴현금도 60.8% → 56.7%로 완화.
+        "WHIPSAW_MIN_SCALE": 0.85,
         "USE_DRAWDOWN_RISK_SCALING": True, # 계좌 드로다운 단계적 감속 사용 (터틀식)
         "DD_LEVEL_1": 5.0,                 # 드로다운 1단계 기준 (%) — 자산 고점 대비 이 값 이상 하락 시
         "DD_SCALE_1": 0.75,                # 1단계 배수
@@ -1302,7 +1320,7 @@ def reset_all_settings():
         settings.RISK_SCALING_PARAMS = {
             "USE_REGIME_RISK_SCALING": True, "PENDING_DOWN_RISK_SCALE": 0.6, "BEAR_RISK_SCALE": 1.0,
             "USE_WHIPSAW_RISK_SCALING": True, "WHIPSAW_LO": 0.40, "WHIPSAW_HI": 0.75,
-            "WHIPSAW_MIN_SCALE": 0.6,
+            "WHIPSAW_MIN_SCALE": 0.85,
             "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.75,
             "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.5, "DD_LOOKBACK_DAYS": 90,
             "GAP_RISK_BUFFER": 1.2

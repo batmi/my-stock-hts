@@ -299,3 +299,27 @@ def test_allocate_budget_uses_own_market_scale(trader):
     kosdaq = rm.allocate_budget(10_000_000, 1.0, market_type="KOSDAQ", **kw)
     assert kospi > kosdaq
     assert kosdaq == pytest.approx(kospi * 0.5, rel=0.01)
+
+
+def test_risk_scale_actually_shrinks_allocation(trader):
+    """[2026-07-27] 배수가 기초 비중에 적용되어 배분액이 실제로 줄어야 한다.
+
+    종전에는 리스크층에만 곱했는데 그 층이 구속하지 않아, 배수가 0.45 미만이 되기 전까지
+    배분액이 1원도 변하지 않았다(사실상 무력). 변동성 타겟팅이 구속하는 상황에서도
+    배수에 비례해 줄어드는지 검증한다."""
+    from modules.auto_trade.engine import RiskManager
+
+    trader.risk_scale_by_market = {"KOSPI": 1.0, "KOSDAQ": 1.0}
+    trader.risk_scale_reason_by_market = {}
+    rm = RiskManager(trader)
+
+    # 변동성 캡이 확실히 구속하도록 고변동성 종목을 준다 (ATR/price 6.4% → 연 100%)
+    kw = dict(stop_loss_rate=-13.0, atr=6_400.0, current_price=100_000.0)
+    full = rm.allocate_budget(10_000_000, 0.25, market_type="KOSPI", **kw)
+
+    trader.risk_scale_by_market = {"KOSPI": 0.6, "KOSDAQ": 0.6}
+    trader.risk_scale = 0.6
+    reduced = rm.allocate_budget(10_000_000, 0.25, market_type="KOSPI", **kw)
+
+    assert reduced < full, "배수를 낮췄는데 배분액이 그대로면 방어가 작동하지 않는 것"
+    assert reduced == pytest.approx(full * 0.6, rel=0.02)

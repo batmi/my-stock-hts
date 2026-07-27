@@ -973,17 +973,17 @@ class RiskManager:
 
         3개 레이어가 각자 '상한'을 내고, 그 중 가장 작은 값을 쓴다(min 결합).
           1) 기초 비중(invest_ratio): 종목당 명목 상한 (집중 방지). SYSTEM_MAX_HOLDINGS와 곱해 1.0 이하 권장.
+             [리스크 스케일링] 여기에 risk_scale을 곱한다 — 약세 국면·톱니장·드로다운에서 노출을 실제로 줄이는 지점.
           2) 리스크 기반(SYSTEM_RISK_PER_TRADE): '손절 시 계좌 손실액'을 일정 이하로 고정 → 꼬리위험(tail loss) 상한.
              손절폭(ATR 손절이면 ATR 반영)이 넓을수록 상한을 줄인다.
              [갭 버퍼] 소프트 스탑의 갭하락 미끄러짐을 대비해 손절폭에 GAP_RISK_BUFFER 배수를 곱해 보수 계산.
              [리스크 스케일링] 약세 국면·드로다운 시 허용 손실액이 risk_scale 배수만큼 축소된다.
              market_type을 받으면 해당 시장(KOSPI/KOSDAQ)의 배수를 쓴다 — 코스닥이 톱니장이라고
              코스피 종목까지 줄이지 않는다.
-             ※ [실측 2026-07-27] 현재 파라미터에서 이 층은 **최종액을 결정하지 않는다** — 관심종목
-               실측상 3)이 96%, 1)이 4% 구속하고 2)의 상한은 항상 그보다 크다. 따라서
-               SYSTEM_RISK_PER_TRADE를 4→3%로 낮추거나 risk_scale이 0.5까지 내려가도
-               배분액은 변하지 않는다(배수 0.45 미만이라야 걸린다). risk_scale의 실효 방어는
-               사이징이 아니라 히트 캡(effective_portfolio_cap)의 신규 진입 차단에서 나온다.
+             ※ [실측 2026-07-27] 이 층은 현재 파라미터에서 **최종액을 결정하지 않는다** — 관심종목
+               50종목 전부에서 3)이 구속하고 2)의 상한은 항상 그보다 크다. 따라서
+               SYSTEM_RISK_PER_TRADE를 4→3%로 낮춰도 배분액은 변하지 않는다.
+               (그래서 risk_scale은 이 층이 아니라 1)에 적용한다 — 위 참조.)
           3) 변동성 타겟팅(TARGET_VOLATILITY): 종목의 연환산 변동성을 목표치로 정규화 → 변동성 균질화.
              상한 = 기초 비중 × scale (기초 대비 몇 %까지 허용하는가).
 
@@ -997,17 +997,28 @@ class RiskManager:
         최종액 ≤ 1)이므로 집중 캡도 유지된다. 다만 3)의 확대(scale>1)로 2)의 축소분을 되돌리던
         동작은 사라진다(그 복원은 손실액 캡을 넘길 수 있어 애초에 위험한 방향이었다).
         """
-        if self.trader.initial_asset > 0:
-            target_invest_amt = int(self.trader.initial_asset * invest_ratio)
-        else:
-            target_invest_amt = int(avail_cash * invest_ratio)
-
-        base_amt = target_invest_amt
-
         risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
         risk_based_amt = 0
         risk_scale = self.current_risk_scale(market_type)
         risk_params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+
+        # [리스크 스케일링] 배수를 '기초 비중'에 적용한다.
+        #  종전에는 2)리스크층에만 곱했는데 그 층이 최종액을 결정하는 일이 없어(3)이 상시 구속)
+        #  배수가 0.45 아래로 떨어지기 전까지 배분액이 1원도 변하지 않았다 = 사실상 무력.
+        #  기초 비중에 곱하면 3)의 상한(기초×변동성배수)도 함께 내려가 곧바로 방어가 걸린다.
+        #  [실측 2026-07-27, 시드 500만/1,000만 · 30종목 무작위 50회 짝비교]
+        #    MDD 개선 46/50·45/50 (중앙 +2.8%p·+3.2%p), PF 개선 41/50·44/50 (중앙 +0.27·+0.34),
+        #    대가는 3년 수익 중앙 -16.9%p·-24.1%p, 유휴현금 +13%p.
+        #    타이밍 가치 확인: 같은 평균 배수를 상수로 준 대조군은 수익이 절반(146.5%→71.0%)이고
+        #    PF도 낮아(2.83→2.20) 국면 판단이 실제로 기여함을 확인했다(셔플 대조군도 동일).
+        scaled_ratio = invest_ratio * risk_scale
+
+        if self.trader.initial_asset > 0:
+            target_invest_amt = int(self.trader.initial_asset * scaled_ratio)
+        else:
+            target_invest_amt = int(avail_cash * scaled_ratio)
+
+        base_amt = target_invest_amt
 
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
             total_equity = self.trader.initial_asset if self.trader.initial_asset > 0 else avail_cash

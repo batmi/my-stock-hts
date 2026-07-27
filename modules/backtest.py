@@ -314,7 +314,8 @@ def prepare_market_filter(code, is_overseas, days):
     """설정값(USE_MARKET_FILTER, MARKET_FILTER_MA)을 읽어 백테스트용 '신규 매수 차단일' 집합을 준비.
 
     실매매 필터(trader._update_market_indices_status)와 동일 기준: 지수 종가 < SMA(MARKET_FILTER_MA)
-    인 날짜에 신규 진입을 차단한다(매도·피라미딩은 실매매와 동일하게 영향 없음).
+    인 날짜에 신규 진입을 차단한다. 매도에는 영향이 없고, 피라미딩 증액은 실매매와 동일하게
+    PYRAMIDING_REQUIRE_HEALTHY_MARKET이 켜져 있으면 함께 보류된다.
     국내는 stock.json exchange로 KOSPI/KOSDAQ 지수를 구분하고, 해외는 S&P500을 사용한다.
     반환: (차단일수, 설명) 또는 None(미사용/실패 — 이때 필터 없이 시뮬레이션됨)
     """
@@ -426,6 +427,10 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     else:
         pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
     pyramid_count = 0
+    # [동기화] 실매매(trader._try_pyramid_buy)는 시장 필터가 켜져 있으면 약세 시장에서 증액도 보류한다.
+    #  필터가 꺼져 있던 동안에는 차이가 없었으나, 켠 뒤에는 이를 반영하지 않으면 증액이 과대평가된다.
+    pyr_require_healthy = (getattr(config, 'USE_MARKET_FILTER', True)
+                           and config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True))
 
     # [추가] 리스크 관리 설정 로드
     risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
@@ -725,8 +730,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
             # [동기화] 피라미딩 (수익 포지션 증액) - 실매매 trader._try_pyramid_buy와 동일 조건
             #  매도 신호가 없고, 수익률이 트리거 이상이며, 매수 신호(추세)가 유지 중일 때만 증액 (손실 종목 발동 불가)
+            pyr_market_blocked = (pyr_require_healthy and mf_dates is not None and str(date) in mf_dates)
             if (not sell_signal) and pyr_use and position['qty'] > 0 and pyramid_count < pyr_max \
-                    and loss_rate >= pyr_trigger and state in ("매수", "강매수"):
+                    and loss_rate >= pyr_trigger and state in ("매수", "강매수") and not pyr_market_blocked:
                 add_qty = int(position['qty'] * pyr_ratio)
                 if add_qty >= 1:
                     slippage_mult = random.uniform(0.5, 1.5) if execution_noise else 1.0

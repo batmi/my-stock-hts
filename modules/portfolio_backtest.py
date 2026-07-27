@@ -100,7 +100,8 @@ def allocate_amount(equity, cash, invest_ratio, sl_rate, atr, price):
 
 def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
-                  atr_mult=None, market_filter_dates=None, reserved_cash=0.0):
+                  atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
+                  risk_scale_by_date=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -108,9 +109,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         status: precompute_status 결과.
         dates: 시뮬레이션 대상 거래일(오름차순 'YYYYMMDD' 문자열).
         slots: 동시 보유 종목 수. invest_ratio 미지정 시 기초 비중은 1/slots.
-        market_filter_dates: {code: set(차단일)} 신규 진입 차단일. 실매매와 동일하게 매도·피라미딩엔 무관.
+        market_filter_dates: {code: set(차단일)} 신규 진입 차단일. 매도에는 영향이 없고,
+            피라미딩 증액은 실매매(trader._try_pyramid_buy)와 동일하게
+            PYRAMIDING_REQUIRE_HEALTHY_MARKET이 켜져 있으면 함께 보류된다.
         reserved_cash: 운용자가 수동 운용 등으로 묶어둔 금액. 같은 계좌에 있으므로
             사이징 기준 자산(_equity)에는 포함되지만 시스템이 집행할 수는 없다.
+        risk_scale_by_date: {날짜: 배수} 일별 리스크 배수. **기초 비중과 히트 캡에 곱한다.**
+            실매매의 현행 risk_scale은 리스크층에만 곱해 사실상 무력하므로(리스크층이 구속되지
+            않음), '기초 비중에 적용하면 실제로 방어가 되는가'를 검증하기 위한 실험용 경로다.
 
     하루 처리 순서는 실매매와 같다: 매도 → 피라미딩 → 신규 매수(점수 높은 순).
     """
@@ -124,6 +130,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     pyr_use = thr.get("PYRAMIDING_USE", True) and pyr_max > 0
     pyr_trigger = thr.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
     pyr_ratio = thr.get("PYRAMIDING_RATIO", 0.5)
+    # 실매매는 시장 필터가 켜져 있으면 약세 시장에서 증액도 보류한다(노출 확대 금지).
+    pyr_require_healthy = (getattr(config, "USE_MARKET_FILTER", True)
+                           and thr.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True))
 
     use_atr = sell_cfg.get("USE_ATR_STOP", True)
     default_sl = sell_cfg["STOP_LOSS_RATE"]
@@ -232,6 +241,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 del positions[code]
 
         # ---------- 히트(총 오픈 리스크) 예산 ----------
+        day_scale = float((risk_scale_by_date or {}).get(day, 1.0) or 1.0)
+        day_scale = min(1.0, day_scale) if day_scale > 0 else 1.0
         heat_budget = None
         if heat_cap_pct and heat_cap_pct > 0:
             heat = 0.0
@@ -242,13 +253,15 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 sl_rate, _applied, _bep = _effective_sl(pos)
                 if sl_rate < 0:
                     heat += pos["qty"] * row["close"] * (abs(sl_rate) / 100.0)
-            heat_budget = _equity(day) * heat_cap_pct / 100.0 - heat
+            heat_budget = _equity(day) * (heat_cap_pct * day_scale) / 100.0 - heat
 
         # ---------- 2) 피라미딩 (수익 포지션 증액) ----------
         if pyr_use:
             for code, pos in list(positions.items()):
                 row = rows[code].get(day)
                 if row is None or pos["pyr"] >= pyr_max:
+                    continue
+                if pyr_require_healthy and market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
                 _raw, _chk, _can, state, _reason = status[code][day]
                 price = row["close"]
@@ -307,7 +320,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     break
                 buy_price = utils.adjust_to_tick(row["close"] * (1 + slippage), False) or row["close"]
                 sl_rate = _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult) if use_atr else default_sl
-                amount = allocate_amount(_equity(day), cash, invest_ratio, sl_rate,
+                amount = allocate_amount(_equity(day), cash, invest_ratio * day_scale, sl_rate,
                                          row.get("ATR", 0), buy_price)
                 if heat_budget is not None and sl_rate:
                     amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))

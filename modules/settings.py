@@ -1300,7 +1300,7 @@ def _risk_portfolio_items():
          "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_LO", 0.40), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_LO": v}), "validator": lambda v: 0 <= v < 1.0},
         {"desc": "휩소율 상한", "help": "이 값 이상이면 최대 축소 (0~1, 하한보다 커야 함, 예: 0.75)", "name": "WHIPSAW_HI", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_HI", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_HI": v}), "validator": lambda v: 0 < v <= 1.0},
-        {"desc": "휩소율 최소 배수", "help": "휩소율 연동 최소 리스크 배수 (0<v<1, 예: 0.6)", "name": "WHIPSAW_MIN_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
+        {"desc": "휩소율 최소 배수", "help": "휩소율 연동 최소 리스크 배수 (0<v<1, 기본 0.85 — 낮출수록 톱니장에서 크게 줄이지만 수익 비용이 급증)", "name": "WHIPSAW_MIN_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_MIN_SCALE", 0.6), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_MIN_SCALE": v}), "validator": lambda v: 0 < v < 1.0},
         {"desc": "드로다운 리스크 감속 사용", "help": "계좌 고점(HWM) 대비 하락 시 단계적으로 리스크 한도 축소", "name": "USE_DRAWDOWN_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("USE_DRAWDOWN_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_DRAWDOWN_RISK_SCALING": v})},

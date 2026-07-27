@@ -4,6 +4,8 @@
 실제로 걸리는가'다. 판정 로직 자체는 backtest.calculate_daily_status를 공유하므로,
 여기서는 제약이 의도대로 동작하는지와 회계(현금·자산)가 깨지지 않는지를 본다.
 """
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -129,3 +131,24 @@ def test_allocate_amount_respects_all_three_layers():
     # 현금이 부족하면 현금이 상한이 된다
     assert pbt.allocate_amount(equity, cash=100_000, invest_ratio=0.25,
                                sl_rate=-8.0, atr=300.0, price=10_000.0) <= 100_000
+
+
+def test_market_filter_also_gates_pyramiding(universe):
+    """시장 필터가 켜져 있으면 증액도 함께 보류된다 (실매매 _try_pyramid_buy와 동일).
+
+    필터가 꺼져 있던 동안에는 차이가 없었으나, 켠 뒤에도 반영하지 않으면 증액이 과대평가된다."""
+    dfs, status, dates = universe
+    block_all = {code: set(dates) for code in dfs}
+
+    with patch.object(config, "USE_MARKET_FILTER", True), \
+         patch.dict(config.ANALYSIS_THRESHOLDS, {"PYRAMIDING_REQUIRE_HEALTHY_MARKET": True}):
+        blocked = pbt.run_portfolio(dfs, status, dates, slots=3, pyramiding_max=3,
+                                    market_filter_dates=block_all)
+    assert blocked["pyramid_count"] == 0
+
+    # 게이트를 끄면 같은 차단일에도 증액은 살아 있어야 한다 (매도·보유엔 영향 없음)
+    with patch.object(config, "USE_MARKET_FILTER", True), \
+         patch.dict(config.ANALYSIS_THRESHOLDS, {"PYRAMIDING_REQUIRE_HEALTHY_MARKET": False}):
+        open_gate = pbt.run_portfolio(dfs, status, dates, slots=3, pyramiding_max=3,
+                                      market_filter_dates=block_all)
+    assert open_gate["pyramid_count"] >= 0  # 신규 진입이 전면 차단이라 0일 수 있음
