@@ -202,6 +202,28 @@ def get_trend_quality(df, lookback=None):
     except Exception:
         return None
 
+TREND_QUALITY_BANDS = (
+    (0.0,   "하락"),    # 기울기가 음수 — 회귀선이 우하향
+    (10.0,  "미검증"),  # 기울기가 미미하거나 R²가 낮음(횡보 끝 급등 포함) — 추세로 검증되지 않음
+    (30.0,  "약함"),
+    (60.0,  "양호"),
+)
+
+
+def describe_trend_quality(tq):
+    """추세 품질 값 → 운용자용 한 단어 해석.
+
+    값만으로는 크기 감을 잡기 어려워(연환산 기울기 × R²의 곱이라 단위가 직관적이지 않다)
+    로그·화면 표시에 곁들인다. 경계는 TREND_QUALITY_BANDS 참조.
+    """
+    if tq is None:
+        return "이력부족"
+    for upper, label in TREND_QUALITY_BANDS:
+        if tq < upper:
+            return label
+    return "강함"
+
+
 def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     if af_start is None: af_start = config.INDICATOR_PARAMS["SAR_AF_START"]
     if af_step is None: af_step = config.INDICATOR_PARAMS["SAR_AF_STEP"]

@@ -924,14 +924,25 @@ class RiskManager:
 
         return total_risk
 
-    def current_risk_scale(self):
+    def current_risk_scale(self, market_type=None):
         """[리스크 스케일링] 트레이더가 주기마다 갱신한 리스크 한도 배수 (0<scale≤1)
 
-        약세 국면·계좌 드로다운에 따라 트레이더(_update_risk_scale)가 산출한다.
+        약세 국면·휩소율·계좌 드로다운에 따라 트레이더(_update_risk_scale)가 산출한다.
         신규 진입 사이징(SYSTEM_RISK_PER_TRADE)과 히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에만
-        적용되며 청산 로직에는 관여하지 않는다. 미산출 시 1.0(축소 없음)."""
+        적용되며 청산 로직에는 관여하지 않는다. 미산출 시 1.0(축소 없음).
+
+        market_type("KOSPI"/"KOSDAQ")을 주면 **해당 시장의 배수**를 돌려준다 — 코스피와
+        코스닥은 별개 시장이므로 종목 사이징에는 그 종목이 속한 시장의 국면·휩소율만 반영한다.
+        생략하면 계좌 단위 배수(두 시장 중 열위 쪽)를 쓴다. 히트 캡처럼 계좌 전체의 총
+        오픈 리스크를 묶는 용도는 시장별로 나눌 수 없으므로 이쪽(보수적)이 맞다."""
+        scale = None
+        if market_type:
+            by_market = getattr(self.trader, 'risk_scale_by_market', None) or {}
+            scale = by_market.get(market_type)
+        if scale is None:
+            scale = getattr(self.trader, 'risk_scale', 1.0)
         try:
-            scale = float(getattr(self.trader, 'risk_scale', 1.0) or 1.0)
+            scale = float(scale or 1.0)
         except (TypeError, ValueError):
             scale = 1.0
         return min(1.0, scale) if scale > 0 else 1.0
@@ -956,7 +967,8 @@ class RiskManager:
         heat = getattr(self.trader, 'portfolio_heat_amt', 0.0)
         return equity * (cap * self.current_risk_scale() / 100.0) - heat
 
-    def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None, current_price=None):
+    def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None,
+                        current_price=None, market_type=None):
         """자산 배분 계산
 
         3개 레이어가 각자 '상한'을 내고, 그 중 가장 작은 값을 쓴다(min 결합).
@@ -965,6 +977,8 @@ class RiskManager:
              손절폭(ATR 손절이면 ATR 반영)이 넓을수록 상한을 줄인다.
              [갭 버퍼] 소프트 스탑의 갭하락 미끄러짐을 대비해 손절폭에 GAP_RISK_BUFFER 배수를 곱해 보수 계산.
              [리스크 스케일링] 약세 국면·드로다운 시 허용 손실액이 risk_scale 배수만큼 축소된다.
+             market_type을 받으면 해당 시장(KOSPI/KOSDAQ)의 배수를 쓴다 — 코스닥이 톱니장이라고
+             코스피 종목까지 줄이지 않는다.
              ※ [실측 2026-07-27] 현재 파라미터에서 이 층은 **최종액을 결정하지 않는다** — 관심종목
                실측상 3)이 96%, 1)이 4% 구속하고 2)의 상한은 항상 그보다 크다. 따라서
                SYSTEM_RISK_PER_TRADE를 4→3%로 낮추거나 risk_scale이 0.5까지 내려가도
@@ -992,7 +1006,7 @@ class RiskManager:
 
         risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
         risk_based_amt = 0
-        risk_scale = self.current_risk_scale()
+        risk_scale = self.current_risk_scale(market_type)
         risk_params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
 
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
@@ -1028,7 +1042,12 @@ class RiskManager:
 
         log_msg = f"[자산배분] 기초:{base_amt:,}원"
         if risk_scale < 1.0:
-            log_msg += f" | 리스크스케일 x{risk_scale:.2f}({getattr(self.trader, 'risk_scale_reason', '') or '축소'})"
+            # 사유는 '그 종목이 속한 시장'의 것을 보여준다 (계좌 전역 사유를 찍으면 오인을 부른다).
+            by_market = getattr(self.trader, 'risk_scale_reason_by_market', None) or {}
+            reason = (by_market.get(market_type) if market_type else None) \
+                or getattr(self.trader, 'risk_scale_reason', '') or '축소'
+            label = f"{market_type} " if market_type else ""
+            log_msg += f" | 리스크스케일 x{risk_scale:.2f}({label}{reason})"
         if risk_based_amt > 0:
             log_msg += f" | 리스크캡:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
         if vol_based_amt > 0:

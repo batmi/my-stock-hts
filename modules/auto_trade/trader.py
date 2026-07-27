@@ -94,8 +94,10 @@ class AutoTrader:
             cls._instance.stock_state_cache = {}      # [추가] 분석된 종목 상태 캐시 (텔레그램 연동용)
             cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
             cls._instance.current_total_asset = 0     # [리스크 스케일링] 최근 조회된 현재 평가자산 (히트 캡 기준자산·드로다운 계산용)
-            cls._instance.risk_scale = 1.0            # [리스크 스케일링] 신규 진입 리스크 한도 배수 (약세 국면·드로다운 반영, 1.0=축소 없음)
+            cls._instance.risk_scale = 1.0            # [리스크 스케일링] 계좌 단위 배수 = 열위 시장 기준 (히트 캡용, 1.0=축소 없음)
             cls._instance.risk_scale_reason = ""      # [리스크 스케일링] 현재 배수의 사유 (로그 표시용)
+            cls._instance.risk_scale_by_market = {}   # [리스크 스케일링] 시장별 배수 {KOSPI: x, KOSDAQ: y} — 종목 사이징용
+            cls._instance.risk_scale_reason_by_market = {}
             cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
             cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
             cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
@@ -4482,9 +4484,13 @@ class AutoTrader:
 
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
-            self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순):")
+            lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+            self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순) "
+                     f"— 추세품질 = 최근 {lookback}일 회귀 '연환산 기울기(%) × R²(추세 매끄러움)'. "
+                     f"높을수록 검증된 추세이며 동점 후보 간 1순위 정렬 키다(매수 게이트 아님)")
             for i, c in enumerate(candidates):
-                tq_disp = f"{c['trend_quality']:.0f}" if c.get('trend_quality') is not None else "-"
+                tq = c.get('trend_quality')
+                tq_disp = f"{tq:.0f} ({indicators.describe_trend_quality(tq)})" if tq is not None else "- (이력부족)"
                 w52_disp = f"{c['w52_pos']:.0f}%" if c.get('w52_pos') else "-"
                 vol_disp = f"{c['vol_strength']:.1f}%" if c.get('vol_strength') else "-"
                 self.log(f"   {i+1}순위: {c['name']} (추세품질:{tq_disp}, 점수:{c['score']}, 52주위치:{w52_disp}, 체결:{vol_disp})")
@@ -4556,7 +4562,10 @@ class AutoTrader:
             remaining_slots = max_holdings - current_holdings_count
             
             # 1. 예산 할당 계산 (변동성 타겟팅 및 리스크 관리 적용)
-            calc_amt = self.risk_manager.allocate_budget(avail_cash, cand_invest_ratio, stop_loss_rate=sl_rate, atr=cand.get('atr'), current_price=cand.get('price'))
+            calc_amt = self.risk_manager.allocate_budget(
+                avail_cash, cand_invest_ratio, stop_loss_rate=sl_rate,
+                atr=cand.get('atr'), current_price=cand.get('price'),
+                market_type=self._get_stock_market_type(cand['code']))
             
             if remaining_slots == 1:
                 # 마지막 종목일 때: 변동성 타겟팅/리스크 관리가 꺼져있다면 잔여 예수금 전액 사용, 켜져 있다면 계산된 금액 준수
@@ -4795,9 +4804,18 @@ class AutoTrader:
 
         [추세추종 2원칙] "자본대비 리스크에 한도를 둬야 한다" — 추세가 먹히지 않는 구간과
         손실 구간에서는 신규 진입 리스크 한도를 줄여 드로다운을 통제한다(터틀식).
-        결과(self.risk_scale)는 RiskManager가 종목당 리스크(SYSTEM_RISK_PER_TRADE)와
+        결과는 RiskManager가 종목당 리스크(SYSTEM_RISK_PER_TRADE)와
         히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에 곱해 사용한다. 청산 로직에는 관여하지 않는다.
         (국면 배수 × 휩소율 배수) × 드로다운 배수가 곱으로 결합된다.
+
+        [시장별 분리 2026-07-27] 국면·휩소율은 KOSPI/KOSDAQ이 서로 다른 시장이므로 각각 산출해
+        self.risk_scale_by_market에 담고, 종목 사이징에는 **그 종목이 속한 시장의 배수**를 쓴다.
+        (종전에는 두 시장 중 나쁜 쪽 하나를 계좌 전체에 적용해, 코스닥이 톱니장이면 코스피
+         종목까지 축소되고 로그에도 'KOSDAQ'만 찍혀 오인을 샀다.)
+        계좌 드로다운은 시장과 무관한 계좌 상태이므로 두 시장 배수에 공통으로 곱한다.
+        반면 self.risk_scale(단일 값)은 **두 시장 중 열위 쪽**을 유지한다 — 이 값이 쓰이는
+        히트 캡은 계좌 전체의 총 오픈 리스크를 묶는 장치라 시장별로 나눌 수 없고,
+        보수적인 쪽을 택하는 것이 맞기 때문이다.
 
         [실측 2026-07-27 — 실제 동작은 '금액 축소'가 아니라 '신규 진입 차단'이다]
         allocate_budget의 3층 min 결합에서 현재 파라미터로는 **변동성 타겟팅이 96% 구속**하며
@@ -4813,9 +4831,12 @@ class AutoTrader:
         params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
         scale = 1.0
         reasons = []
+        # 시장별 맵은 항상 두 시장을 채운다 — 국면·휩소율을 모두 꺼도 드로다운 배수가 실릴 곳이 필요하다.
+        market_scales = {"KOSPI": 1.0, "KOSDAQ": 1.0}
+        market_reasons = {"KOSPI": "", "KOSDAQ": ""}
         try:
-            # 1) 시장 국면 + 휩소율: KOSPI/KOSDAQ 중 더 나쁜(배수가 작은) 쪽을 채택
-            #    (보수적 — "추세는 시장이다". 두 시장 배수를 곱하면 과도하게 축소되므로 최솟값 사용)
+            # 1) 시장 국면 + 휩소율: 시장별로 각각 산출한다(코스피/코스닥은 별개 시장).
+            #    종목 사이징엔 해당 종목의 시장 배수를, 계좌 단위 히트 캡엔 열위 시장 배수를 쓴다.
             use_regime = params.get("USE_REGIME_RISK_SCALING", True)
             use_whipsaw = params.get("USE_WHIPSAW_RISK_SCALING", True)
             if use_regime or use_whipsaw:
@@ -4844,6 +4865,8 @@ class AutoTrader:
                             m_scale *= ws_scale
                             m_parts.append(f"휩소율 {info['whipsaw_ratio']*100:.0f}% x{ws_scale:.2f}")
 
+                    market_scales[m_type] = m_scale
+                    market_reasons[m_type] = " ".join(m_parts)
                     if m_scale < best_scale:
                         best_scale, best_reason = m_scale, f"{m_type} " + " ".join(m_parts)
 
@@ -4859,12 +4882,19 @@ class AutoTrader:
                     lv2, sc2 = float(params.get("DD_LEVEL_2", 10.0)), float(params.get("DD_SCALE_2", 0.5))
                 except (TypeError, ValueError):
                     lv1, sc1, lv2, sc2 = 5.0, 0.75, 10.0, 0.5
+                # 드로다운은 계좌 상태(시장 무관)이므로 두 시장 배수에 공통으로 곱한다.
+                dd_scale, dd_reason = None, None
                 if lv2 > 0 and dd >= lv2 and 0 < sc2 < 1.0:
-                    scale *= sc2
-                    reasons.append(f"드로다운 {dd:.1f}% x{sc2:g}")
+                    dd_scale, dd_reason = sc2, f"드로다운 {dd:.1f}% x{sc2:g}"
                 elif lv1 > 0 and dd >= lv1 and 0 < sc1 < 1.0:
-                    scale *= sc1
-                    reasons.append(f"드로다운 {dd:.1f}% x{sc1:g}")
+                    dd_scale, dd_reason = sc1, f"드로다운 {dd:.1f}% x{sc1:g}"
+                if dd_scale is not None:
+                    scale *= dd_scale
+                    reasons.append(dd_reason)
+                    for m_type in market_scales:
+                        market_scales[m_type] *= dd_scale
+                        market_reasons[m_type] = " ".join(
+                            p for p in (market_reasons.get(m_type, ""), dd_reason) if p)
         except Exception as e:
             logger.debug(f"[리스크 스케일링] 배수 계산 실패 (기존값 유지): {e}")
             return
@@ -4872,12 +4902,18 @@ class AutoTrader:
         prev = getattr(self, 'risk_scale', 1.0)
         self.risk_scale = scale
         self.risk_scale_reason = ", ".join(reasons)
+        self.risk_scale_by_market = market_scales
+        self.risk_scale_reason_by_market = market_reasons
         if abs(scale - prev) > 1e-9:
             if scale < 1.0:
                 rpt = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
                 cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
-                self.log(f"[리스크 스케일링] 신규 진입 리스크 한도 축소 x{scale:.2f} ({self.risk_scale_reason}) "
-                         f"— 종목당 {rpt * scale:.1f}%, 히트 캡 {cap * scale:.1f}% (청산 로직 영향 없음)")
+                per_market = ", ".join(
+                    f"{m} x{market_scales[m]:.2f}(종목당 {rpt * market_scales[m]:.1f}%)"
+                    for m in ("KOSPI", "KOSDAQ") if m in market_scales)
+                self.log(f"[리스크 스케일링] 신규 진입 리스크 한도 축소 — {per_market or f'x{scale:.2f}'} "
+                         f"| 히트 캡 {cap * scale:.1f}%(계좌 전체, 열위 시장 x{scale:.2f} 기준) "
+                         f"({self.risk_scale_reason}) (청산 로직 영향 없음)")
             else:
                 self.log("[리스크 스케일링] 리스크 한도 정상 복원 (x1.00)")
 

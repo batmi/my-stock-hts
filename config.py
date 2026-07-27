@@ -367,12 +367,16 @@ class GlobalSettings(BaseModel):
         "PYRAMIDING_USE": True,           # 피라미딩 사용 여부
         "PYRAMIDING_PROFIT_TRIGGER": 10.0,  # 증액 발동 최소 수익률 (%) - TS 감시 시작(+10%)과 동일선
         "PYRAMIDING_RATIO": 0.5,          # 증액 수량 비율 (현재 보유 수량 대비, 0.5 = 50%)
-        # 포지션당 최대 증액 횟수. 4슬롯 포트폴리오 백테스트(2026-07-27, 3년) 결과 2회가 최적:
-        #  1회 → 2회로 올리면 수익 중앙 +50.8%p(30종목 무작위 24회 중 23회 개선), PF 1.75 → 2.06.
-        #  대가는 MDD 약 2%p 악화. 승률은 오히려 24.4% → 20.0%로 떨어지므로 레버리지가 아니라
-        #  fat-tail 강화(이긴 포지션에만 얹는 추세추종 원칙 그대로)에서 나온 이득이다.
-        #  3회는 수익이 더 늘지만 MDD가 5%p 이상 악화되어 채택하지 않았다.
-        "PYRAMIDING_MAX_COUNT": 2,
+        # 포지션당 최대 증액 횟수. 4슬롯 포트폴리오 백테스트(2026-07-27, 3년, 시드 500만) 기준 3회:
+        #  1 → 2 → 3회로 갈수록 수익 중앙 95.9 → 127.4 → 233.9%, PF 1.97 → 2.14 → 2.56.
+        #  3회는 30종목 무작위 30회 중 29회에서 2회를 앞섰다. 대가는 MDD 27.0 → 30.1%(30/30 악화).
+        #  승률은 오히려 떨어지므로 레버리지가 아니라 fat-tail 강화에서 나온 이득이다
+        #  (이긴 포지션에만 얹는 추세추종 원칙 그대로 — 물타기와 정반대).
+        #  [소액 시드] 시드가 작을수록 이점이 크다. 500만 기준 증액 시도가 수량 부족으로 불발되는
+        #  건수가 2회 58건 → 3회 34건으로 줄고, 유휴현금도 39.3% → 34.6%로 내려간다.
+        #  ※ 변동성 캡 바닥(VOLATILITY_SCALING_MIN) 인상은 같은 '현금 소진' 목적에 열위다 —
+        #    수익은 늘지만 PF가 1.92 → 1.83으로 깎인다(신규 매수가 증액 재원을 먼저 소진).
+        "PYRAMIDING_MAX_COUNT": 3,
         # [리스크 관리] 시장 필터(지수<SMA)가 '보류' 상태인 시장의 종목은 피라미딩 증액도 보류.
         # 신규 매수 차단과 동일 기준을 증액에 적용해 약세 시장에서의 노출 확대를 방지한다.
         # (USE_MARKET_FILTER가 꺼져 있으면 이 옵션도 무시됨)
@@ -1273,7 +1277,7 @@ def reset_all_settings():
             "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
             "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
             "SUPER_MOMENTUM_SCORE": 8.0, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 80.0,
-            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 2,
+            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 3,
             "PYRAMIDING_REQUIRE_HEALTHY_MARKET": True
         }
         settings.SELL_STRATEGY = {

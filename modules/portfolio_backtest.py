@@ -151,6 +151,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     cash = float(initial_capital) - reserved_cash
     positions, trades, equity_curve, cash_ratios = {}, [], [], []
     peak, mdd, slot_usage = initial_capital, 0.0, 0
+    # [소액 시드 진단] 배분액이 1주 값에 못 미쳐 버려진 기회. 시드가 작을수록 급증한다.
+    skipped_qty0, pyramid_blocked_qty0 = 0, 0
 
     def _equity(day):
         return cash + reserved_cash + sum(
@@ -255,6 +257,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
                 add_qty = int(pos["qty"] * pyr_ratio)
                 if add_qty < 1:
+                    # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
+                    pyramid_blocked_qty0 += 1
                     continue
                 add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
                 add_qty = min(add_qty, int(cash / add_price))
@@ -309,6 +313,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
                 qty = int(amount / buy_price)
                 if qty < 1:
+                    # 배분액 < 1주 값 → 매수 불가. 고가주는 소액 시드에서 아예 살 수 없다.
+                    skipped_qty0 += 1
                     continue
 
                 cash -= qty * buy_price
@@ -336,6 +342,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "pyramid_count": sum(1 for t in trades if "피라미딩" in t["reason"]),
         "avg_slots": slot_usage / len(dates) if dates else 0.0,
         "avg_cash_ratio": (sum(cash_ratios) / len(cash_ratios)) if cash_ratios else 0.0,
+        "skipped_qty0": skipped_qty0,                    # 1주도 못 사서 넘긴 진입 기회
+        "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
         "equity": equity_curve,
     }
 

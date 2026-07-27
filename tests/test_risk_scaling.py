@@ -232,3 +232,70 @@ def test_pyramid_blocked_in_bear_market(trader):
                                     result, last_buy=None, is_market_open=True, rule=None)
             # 증액 주문 경로로 진입하지 않고 보류 로그만 남아야 함
             assert any("약세" in str(c) for c in mock_log.call_args_list)
+
+
+# =========================================================
+# 시장별 배수 분리 (KOSPI/KOSDAQ은 별개 시장)
+# =========================================================
+def _patch_regime_per_market(mapping):
+    """시장별로 다른 국면 상세를 돌려주는 모킹 헬퍼. mapping = {시장: (regime, whipsaw)}"""
+    def _detail(m_type, *a, **kw):
+        regime, whipsaw = mapping[m_type]
+        return {'regime': regime, 'score_adj': 0.0, 'moved_pct': 0.0,
+                'whipsaw_ratio': whipsaw, 'segments': 10}
+    return patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+                 side_effect=_detail)
+
+
+def test_risk_scale_is_computed_per_market(trader):
+    """코스닥만 나쁠 때 코스피 배수는 1.0으로 남아야 한다.
+
+    종전에는 두 시장 중 열위 쪽 하나를 계좌 전체에 적용해, 코스닥이 톱니장이면
+    코스피 종목까지 축소됐다(2026-07-27 SK텔레콤 매수 로그에서 발견)."""
+    config.RISK_SCALING_PARAMS = dict(
+        config.RISK_SCALING_PARAMS, USE_REGIME_RISK_SCALING=True,
+        USE_WHIPSAW_RISK_SCALING=True, USE_DRAWDOWN_RISK_SCALING=False,
+        PENDING_DOWN_RISK_SCALE=0.6, BEAR_RISK_SCALE=1.0)
+    with _patch_regime_per_market({"KOSPI": ("Bull", 0.0), "KOSDAQ": ("PendDown", 0.9)}):
+        trader._update_risk_scale()
+
+    assert trader.risk_scale_by_market["KOSPI"] == pytest.approx(1.0)
+    assert trader.risk_scale_by_market["KOSDAQ"] < 0.6
+    # 계좌 단위 값(히트 캡용)은 여전히 열위 시장 기준을 유지한다
+    assert trader.risk_scale == pytest.approx(trader.risk_scale_by_market["KOSDAQ"])
+
+
+def test_drawdown_applies_to_both_markets(trader):
+    """계좌 드로다운은 시장과 무관하므로 두 시장 배수에 공통으로 곱해진다."""
+    config.RISK_SCALING_PARAMS = dict(
+        config.RISK_SCALING_PARAMS, USE_REGIME_RISK_SCALING=False,
+        USE_WHIPSAW_RISK_SCALING=False, USE_DRAWDOWN_RISK_SCALING=True,
+        DD_LEVEL_1=5.0, DD_SCALE_1=0.75, DD_LEVEL_2=10.0, DD_SCALE_2=0.5)
+    with _patch_regime_per_market({"KOSPI": ("Bull", 0.0), "KOSDAQ": ("Bull", 0.0)}), \
+         patch.object(trader, '_get_account_drawdown_pct', return_value=6.0):
+        trader._update_risk_scale()
+
+    assert trader.risk_scale == pytest.approx(0.75)
+    assert trader.risk_scale_by_market["KOSPI"] == pytest.approx(0.75)
+    assert trader.risk_scale_by_market["KOSDAQ"] == pytest.approx(0.75)
+
+
+def test_allocate_budget_uses_own_market_scale(trader):
+    """사이징은 그 종목이 속한 시장의 배수를 쓴다 (코스닥 톱니장 → 코스피 종목 영향 없음)."""
+    from modules.auto_trade.engine import RiskManager
+
+    trader.risk_scale = 0.5                                   # 계좌 단위(열위 = 코스닥)
+    trader.risk_scale_by_market = {"KOSPI": 1.0, "KOSDAQ": 0.5}
+    trader.risk_scale_reason_by_market = {"KOSPI": "", "KOSDAQ": "휩소율 62% x0.50"}
+    rm = RiskManager(trader)
+
+    assert rm.current_risk_scale("KOSPI") == pytest.approx(1.0)
+    assert rm.current_risk_scale("KOSDAQ") == pytest.approx(0.5)
+    assert rm.current_risk_scale() == pytest.approx(0.5)       # 생략 시 계좌 단위(보수적)
+
+    # 리스크층이 구속되도록 손절폭을 넓게 잡아 시장별 차이를 드러낸다
+    kw = dict(stop_loss_rate=-30.0, atr=None, current_price=None)
+    kospi = rm.allocate_budget(10_000_000, 1.0, market_type="KOSPI", **kw)
+    kosdaq = rm.allocate_budget(10_000_000, 1.0, market_type="KOSDAQ", **kw)
+    assert kospi > kosdaq
+    assert kosdaq == pytest.approx(kospi * 0.5, rel=0.01)

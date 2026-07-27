@@ -178,7 +178,7 @@
 *   **피라미딩 (`PYRAMIDING_USE`)**: 수익으로 추세가 검증된 보유 포지션에만 증액합니다. (물타기 반대 개념, 손실 종목 증액 불가)
     *   `PYRAMIDING_PROFIT_TRIGGER`: 증액 발동 최소 수익률 (기본 +10.0%)
     *   `PYRAMIDING_RATIO`: 보유 수량 대비 증액 비율 (기본 0.5 = 50%)
-    *   `PYRAMIDING_MAX_COUNT`: 포지션당 최대 증액 횟수 (기본 2회) — 4슬롯 포트폴리오 백테스트 기준 최적값
+    *   `PYRAMIDING_MAX_COUNT`: 포지션당 최대 증액 횟수 (기본 3회) — 4슬롯 포트폴리오 백테스트 기준 최적값. 소액 시드일수록 이점이 크다
 
 ### 3. 매도 전략 (`SELL_STRATEGY`)
 *   **손절 (Stop Loss)**: 손실률 **-7.0%** (`STOP_LOSS_RATE`) 도달 시 손실 확정.
