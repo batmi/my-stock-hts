@@ -158,7 +158,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     reserved_cash = float(reserved_cash or 0.0)
     cash = float(initial_capital) - reserved_cash
-    positions, trades, equity_curve, cash_ratios = {}, [], [], []
+    positions, trades, equity_curve, cash_ratios, full_slot_cash = {}, [], [], [], []
     peak, mdd, slot_usage = initial_capital, 0.0, 0
     # [소액 시드 진단] 배분액이 1주 값에 못 미쳐 버려진 기회. 시드가 작을수록 급증한다.
     skipped_qty0, pyramid_blocked_qty0 = 0, 0
@@ -296,6 +296,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
         # ---------- 3) 신규 매수 (점수 높은 순) ----------
         slot_usage += len(positions)
+        # [만재 현금] 슬롯이 다 찼을 때의 현금 비율 — 피라미딩에 쓸 수 있는 여력의 실제 지표.
+        #  전체 평균 현금은 슬롯이 덜 찬 기간이 섞여 과대평가되므로 따로 잰다.
+        if len(positions) >= slots and equity_curve[-1] > 0:
+            full_slot_cash.append(cash / equity_curve[-1] * 100)
         if len(positions) < slots:
             candidates = []
             for code, stock_rows in rows.items():
@@ -355,6 +359,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "pyramid_count": sum(1 for t in trades if "피라미딩" in t["reason"]),
         "avg_slots": slot_usage / len(dates) if dates else 0.0,
         "avg_cash_ratio": (sum(cash_ratios) / len(cash_ratios)) if cash_ratios else 0.0,
+        # 슬롯 만재 시점의 평균 현금 비율 — 피라미딩 여력의 실제 지표
+        "full_slot_cash_ratio": (sum(full_slot_cash) / len(full_slot_cash)) if full_slot_cash else 0.0,
+        "full_slot_days": len(full_slot_cash),
         "skipped_qty0": skipped_qty0,                    # 1주도 못 사서 넘긴 진입 기회
         "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
         "equity": equity_curve,
