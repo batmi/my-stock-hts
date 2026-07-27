@@ -143,6 +143,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         ind = indicators.calculate_indicators(df) 
         df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
+        df['EMA10'] = df['close'].ewm(span=10, adjust=False).mean()
         df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
         df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
         df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
@@ -208,6 +209,11 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         # 종가선(선택적 희미한 표시)
         ax1.plot(df.index, df['close'], label='종가', color='black', linewidth=1.0, alpha=0.3)
         ax1.plot(df.index, df['EMA5'], label='EMA 5', color='green', linewidth=1.2)
+        # [색] 10일선은 saddlebrown — 음봉·지지선·SAR·박스하단이 모두 blue라 파랑 계열을 쓰면
+        #  하락 구간에서 선이 캔들에 묻힌다. 5일선(green)과도 확실히 분리되고, 갈색은 기존
+        #  팔레트(red/blue/orange/purple/green/yellow/gray)에 없는 유일한 계열이다.
+        #  이격도 패널의 '이격도 10'도 같은 색을 쓴다.
+        ax1.plot(df.index, df['EMA10'], label='EMA 10', color='saddlebrown', linewidth=1.2)
         ax1.plot(df.index, df['EMA20'], label='EMA 20', color='red', linewidth=1.2)
         ax1.plot(df.index, df['EMA60'], label='EMA 60', color='orange', linewidth=1.2)
         ax1.plot(df.index, df['EMA120'], label='EMA 120', color='purple', linewidth=1.2)
@@ -277,7 +283,10 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             period_str = "분봉 (1분, 당일)"
         ax1.set_title(f"차트 분석 [{period_str}]: {name}", fontsize=16, pad=20)
         ax1.set_ylabel("지수" if is_index else "가격")
-        ax1.legend(loc='upper left', ncol=4, fontsize=9)
+        # [범례] 3열 고정 — 항목이 7~9개(종가·EMA 5종·SAR + 추세선 0~2개)라 4열이면
+        #  마지막 줄에 1개만 남아 들쭉날쭉해진다. 3열이면 열 단위로 성격이 묶인다
+        #  (1열: 종가·단기 EMA / 2열: 중장기 EMA / 3열: SAR·추세선).
+        ax1.legend(loc='upper left', ncol=3, fontsize=9)
         ax1.grid(True, alpha=0.2)
         try: ax1.yaxis.set_major_locator(MaxNLocator(nbins=30, prune='both'))
         except ImportError: pass 
@@ -374,7 +383,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         # [6] 이격도 (Disparity, 5/10/20/60일)
         ax6.plot(df.index, df['DISP5'], label='이격도 5', color='green', linewidth=1.0, alpha=0.8)
-        ax6.plot(df.index, df['DISP10'], label='이격도 10', color='blue', linewidth=1.0, alpha=0.8)
+        ax6.plot(df.index, df['DISP10'], label='이격도 10', color='saddlebrown', linewidth=1.0, alpha=0.8)
         ax6.plot(df.index, df['DISP20'], label='이격도 20', color='red', linewidth=1.2, alpha=0.8)
         ax6.plot(df.index, df['DISP60'], label='이격도 60', color='orange', linewidth=1.2, alpha=0.8)
         ax6.axhline(100, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
