@@ -81,6 +81,10 @@ class AutoTrader:
             # 운영 관제용 수명주기 정보. /health는 외부 API를 추가 호출하지 않고
             # 이 값을 읽어 현재 루프의 생존성·최근 장애를 보여준다.
             cls._instance.last_cycle_at = None
+            # [계측] 주기 소요 시간(초). 실제 청산 감시 간격 = 이 값 + SYSTEM_TRADING_INTERVAL
+            cls._instance.last_cycle_secs = None
+            cls._instance.cycle_secs_history = []   # 최근 값만 유지(라즈베리파이 메모리 고려)
+            cls._instance.cycle_secs_peak = 0.0
             cls._instance.last_success_at = None
             cls._instance.last_error_at = None
             cls._instance.last_error_message = ""
@@ -1033,6 +1037,52 @@ class AutoTrader:
             return value.strftime("%H:%M:%S")
         return str(value)
 
+    def _record_cycle_duration(self, secs, log=True):
+        """[계측] 한 모니터링 주기의 소요 시간을 기록한다.
+
+        SYSTEM_TRADING_INTERVAL은 주기가 끝난 뒤 쉬는 시간이므로, 실제 청산 감시 간격은
+        (이 소요 시간 + interval)이다. 관심종목을 늘리면 후보 분석이 길어져 이 값만 커지고,
+        그만큼 손절·트레일링 확인이 늦어진다. 유니버스를 어디까지 늘릴 수 있는지는
+        수익률이 아니라 이 값이 정한다.
+
+        최근 30회만 보관한다(라즈베리파이 1GB 환경에서 무한 증가 방지).
+        """
+        try:
+            secs = float(secs)
+        except (TypeError, ValueError):
+            return
+        if secs < 0:
+            return
+        self.last_cycle_secs = secs
+        hist = getattr(self, 'cycle_secs_history', None)
+        if hist is None:
+            hist = self.cycle_secs_history = []
+        hist.append(secs)
+        if len(hist) > 30:
+            del hist[:-30]
+        if secs > getattr(self, 'cycle_secs_peak', 0.0):
+            self.cycle_secs_peak = secs
+        if log:
+            interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+            self.log(f"모니터링 완료 (소요 {secs:.1f}초 · 다음 주기까지 {interval}초 대기 "
+                     f"→ 청산 감시 간격 {secs + interval:.0f}초). 대기 중...")
+
+    def _health_cycle_text(self):
+        """관제용 주기 소요 시간 문구와 '실제 감시 간격(초)'을 돌려준다.
+
+        Returns: (표시 문자열, 감시 간격 초 또는 None)
+        """
+        last = getattr(self, 'last_cycle_secs', None)
+        if last is None:
+            return "미측정 (루프 1회 실행 후 표시)", None
+        hist = getattr(self, 'cycle_secs_history', None) or [last]
+        avg = sum(hist) / len(hist)
+        interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+        gap = avg + interval
+        peak = getattr(self, 'cycle_secs_peak', 0.0) or last
+        return (f"분석 {avg:.1f}초 (최근 {len(hist)}회 평균, 최대 {peak:.1f}초) + 대기 {interval}초 "
+                f"= 청산 감시 간격 {gap:.0f}초", gap)
+
     @staticmethod
     def _health_memory():
         """프로세스/시스템 메모리 사용량(MB)을 추가 의존성 없이 조회한다.
@@ -1195,6 +1245,17 @@ class AutoTrader:
                 )
         resource_text = " · ".join(resource_parts) if resource_parts else "확인 불가"
 
+        # [운영 관제] 주기 소요 시간 — 관심종목을 늘릴 때의 실질 상한 지표.
+        #  SYSTEM_TRADING_INTERVAL은 '주기가 끝난 뒤 쉬는 시간'이므로 실제 감시 간격은
+        #  (소요 시간 + interval)이다. 종목이 늘면 소요 시간만 길어져 손절·트레일링 확인이
+        #  그만큼 늦어진다. 추세추종에서 청산은 생명줄이라 여기서 한계를 잡아야 한다.
+        cycle_text, cycle_gap = self._health_cycle_text()
+        if cycle_gap:
+            if cycle_gap >= 300:
+                risks.append(f"청산 감시 간격 {int(cycle_gap)}초 (관심종목 축소 또는 주기 간격 단축 필요)")
+            elif cycle_gap >= 180:
+                warnings.append(f"청산 감시 간격 {int(cycle_gap)}초 (종목 추가 시 주의)")
+
         # [운영 관제] 리스크 4종은 '지금 얼마나 위험한가'를 판단하는 핵심 수치다. 숫자만 나열하면
         #  운용자가 기준을 외우고 있어야 읽히므로, 각 값을 판단 기준(슬롯 수·히트 한도·기본 배수)
         #  대비로 함께 적는다. 값의 의미(무엇을 뜻하는 금액인지)도 짧게 덧붙인다.
@@ -1253,6 +1314,7 @@ class AutoTrader:
             f"• 모드/계좌: {mode} / {account or '-'}",
             f"• 실행 시간: {run_text}",
             f"• 자동매매 루프: 최근 시작 {self._health_time(self.last_cycle_at)} · 정상 완료 {self._health_time(self.last_success_at)}",
+            f"• 주기 소요: {cycle_text}",
             f"• 최근 오류: {self._health_time(self.last_error_at)}" + (f" — {self.last_error_message[:160]}" if self.last_error_message else ""),
             f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
@@ -1319,6 +1381,16 @@ class AutoTrader:
                     return f"[red]{detail}[/]"
                 if "한도 임박" in detail or "축소" in detail:
                     return f"[yellow]{detail}[/]"
+            if label == "주기 소요":
+                # 청산 감시가 늦어지면 손절이 늦게 걸린다 — 관심종목 확대의 실질 상한 지표.
+                m = re.search(r"청산 감시 간격 (\d+)초", detail)
+                if m:
+                    gap = int(m.group(1))
+                    if gap >= 300:
+                        return f"[red]{detail}[/]"
+                    if gap >= 180:
+                        return f"[yellow]{detail}[/]"
+                    return f"[dim green]{detail}[/]"
             return detail
 
         section = None
@@ -3066,9 +3138,12 @@ class AutoTrader:
                     
                     self.was_market_open = current_market_status
                     
-                    if is_log_needed:
-                        self.log("모니터링 완료. 대기 중...")
-                
+                    # [계측] 주기 소요 시간 — SYSTEM_TRADING_INTERVAL은 '주기 후 쉬는 시간'이므로
+                    #  실제 감시 간격은 (이 소요 시간 + interval)이다. 관심종목을 늘리면 이 값이
+                    #  길어지고 그만큼 손절·트레일링 감시가 늦어지므로, 유니버스 상한의 실질 기준이 된다.
+                    self._record_cycle_duration((datetime.now() - self.last_cycle_at).total_seconds(),
+                                                log=is_log_needed)
+
                 interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
                 
                 # [수정] 미체결 주문 확인 시 발생하는 API 호출 지연(Delay)이 누적되어

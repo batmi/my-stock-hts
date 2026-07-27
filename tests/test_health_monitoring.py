@@ -1,5 +1,8 @@
 """경량 운영 관제(/health) 회귀 테스트."""
 from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import pytest
 
 from rich.table import Table
 
@@ -112,3 +115,62 @@ def test_cli_health_uses_table_renderer(monkeypatch):
     table = next(value for value in printed if isinstance(value, type(__import__("rich.table", fromlist=["Table"]).Table())))
     assert table.columns[0].header == "구분"
     assert table.columns[1].header == "상세 내용"
+
+
+# =========================================================
+# 주기 소요 시간 계측 (관심종목 확대의 실질 상한 지표)
+# =========================================================
+def test_cycle_duration_records_and_bounds_history():
+    """주기 소요 시간을 기록하되 이력은 30개로 제한한다(라즈베리파이 메모리)."""
+    t = AutoTrader()
+    t.last_cycle_secs = None
+    t.cycle_secs_history = []
+    t.cycle_secs_peak = 0.0
+
+    for i in range(50):
+        t._record_cycle_duration(10.0 + i, log=False)
+
+    assert len(t.cycle_secs_history) == 30
+    assert t.last_cycle_secs == 59.0
+    assert t.cycle_secs_peak == 59.0
+
+    # 이상값은 무시한다 (기록이 깨지면 관제 판단이 흔들린다)
+    t._record_cycle_duration(None, log=False)
+    t._record_cycle_duration(-1, log=False)
+    t._record_cycle_duration("bad", log=False)
+    assert len(t.cycle_secs_history) == 30
+
+
+def test_cycle_gap_is_duration_plus_interval():
+    """청산 감시 간격 = 분석 소요 + SYSTEM_TRADING_INTERVAL.
+
+    SYSTEM_TRADING_INTERVAL은 '주기 후 쉬는 시간'이지 주기 상한이 아니다.
+    관심종목이 늘면 분석 소요만 커지고 그만큼 손절 확인이 늦어진다."""
+    t = AutoTrader()
+    t.last_cycle_secs = None
+    t.cycle_secs_history = []
+    t.cycle_secs_peak = 0.0
+    assert t._health_cycle_text()[1] is None      # 미측정이면 간격도 없음
+
+    with patch.object(config, "SYSTEM_TRADING_INTERVAL", 60):
+        t._record_cycle_duration(40.0, log=False)
+        t._record_cycle_duration(50.0, log=False)
+        text, gap = t._health_cycle_text()
+    assert gap == pytest.approx(105.0)            # 평균 45 + 60
+    assert "청산 감시 간격 105초" in text
+
+
+def test_cycle_gap_raises_health_alert_when_slow():
+    """감시 간격이 벌어지면 관제에 경고/위험으로 올라온다."""
+    t = AutoTrader()
+    t.cycle_secs_peak = 0.0
+
+    with patch.object(config, "SYSTEM_TRADING_INTERVAL", 60):
+        t.cycle_secs_history = [130.0]            # 130 + 60 = 190초 → 주의
+        t.last_cycle_secs = 130.0
+        assert "종목 추가 시 주의" in t.get_health_message()
+
+        t.cycle_secs_history = [260.0]            # 260 + 60 = 320초 → 위험
+        t.last_cycle_secs = 260.0
+        msg = t.get_health_message()
+        assert "관심종목 축소 또는 주기 간격 단축 필요" in msg
