@@ -4947,6 +4947,14 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     # 120봉 미만이면 EMA(120)가 계산되지 않아 지표가 빈다 → TV 폴백 시도.
     if have >= 120:
         return df
+    # [추가] 단, 토스가 커서를 끝까지 밀어 '더 받을 과거 봉이 없음'을 확인했다면 그게 그 종목의
+    #  전체 이력이다. 신규 상장 ETF는 TradingView에도 더 긴 이력이 없어 폴백이 매번 실패하는데,
+    #  그 호출이 전역 락(_TVDATAFEED_LOCK)을 쥐고 있어 나머지 종목까지 함께 멈춘다.
+    #  (실측 2026-07-29 RasPi3: NASA 82봉에 33.5초, DRAM 80봉에 16.8초 — 둘 다 소득 없음.
+    #   같은 표의 다른 ETF는 5~6초. 메뉴 2 '데이터 수신'이 88%에서 정지하던 원인)
+    if df is not None and not df.empty and df.attrs.get('exhausted'):
+        logger.debug(f"[API] {code} 토스 일봉 {have}봉이 전체 이력 — TV 폴백 생략")
+        return df
     try:
         from modules import analysis as _analysis
         tv_df = _analysis.fetch_overseas_daily_via_tvdatafeed(code)
@@ -5154,6 +5162,10 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     candles = []
     before = None
     prev_cursor = None
+    # [추가] 커서를 끝까지 밀어 '더 받을 과거 봉이 없음'을 확인했는가.
+    #  받은 봉 수가 적은 것과 '그게 전부인 것'은 다르다 — 신규 상장 종목은 후자다.
+    #  해외 폴백(_toss_daily_chart_with_tv_fallback)이 이 값을 보고 헛수고를 건너뛴다.
+    exhausted = False
     page_log = []  # [진단] 분봉 페이징 추적
     try:
         for _ in range(max_pages):
@@ -5166,6 +5178,7 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
                     f"before={before} → {len(batch)}건"
                     f"[{min(_tsb) if _tsb else '-'}~{max(_tsb) if _tsb else '-'}] nextBefore={nb}")
             if not batch:
+                exhausted = True     # 더 받을 과거 봉이 없다
                 break
             candles.extend(batch)
             if len(candles) >= target:
@@ -5176,6 +5189,7 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
                             default=None)
             before = nb or oldest_ts
             if not before or before == prev_cursor:  # 커서가 더 진행 못하면 중단(무한루프 방지)
+                exhausted = True
                 break
             prev_cursor = before
     except toss_api.TossApiError as e:
@@ -5225,6 +5239,9 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
             # 해외는 가격제한폭이 없어 '제한폭에 붙은 값' 판정이 성립하지 않으므로 제외.
             df = _toss_sanitize_daily_ohlc(df, code)
         df = df.tail(250).reset_index(drop=True)
+        df.attrs['source'] = 'TOSS'
+        # 커서를 끝까지 밀어 확인한 경우에만 True — 호출부가 '이게 전체 이력'으로 신뢰한다
+        df.attrs['exhausted'] = exhausted
         # 국내 일봉 종가는 NXT 연장(~20:00) 체결까지 포함한 값 그대로 둔다.
         # (과거엔 직전 봉 종가를 KRX 기준가로 역산 보정했으나 역산 로직을 폐기 —
         #  mode 3 등락률은 전일 NXT 종가 기준으로 계산하며, 기동 시 안내한다.)

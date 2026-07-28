@@ -323,3 +323,99 @@ def test_tv_fallback_budget_does_not_block_fast_success():
         out = _an.fetch_overseas_daily_via_tvdatafeed("QQQ")
     assert out is not None and not out.empty
     assert tv.hist_calls == ["NASDAQ"]
+
+
+# ==========================================================
+# Mode 3 — 신규 상장 종목의 헛된 TV 폴백
+# ==========================================================
+#  실측(2026-07-29 RasPi3, 미국 ETF 표):
+#    NASA 33.5초 봉=82 / DRAM 16.8초 봉=80  ← 폴백해도 소득 없음
+#    QQQ 5.3초 봉=250 / KDEF 6.0초 봉=250   ← 같은 표의 정상 종목
+#  토스가 준 봉이 적은 것과 '그게 전부인 것'은 다르다. 후자면 TradingView에도 더 없다.
+
+def _candle(day, price=10.0):
+    return {'timestamp': f'2026-07-{day:02d}T00:00:00', 'openPrice': price,
+            'highPrice': price, 'lowPrice': price, 'closePrice': price, 'volume': 100}
+
+
+def _toss_daily(pages):
+    """toss_api.get_candles가 pages를 순서대로 돌려주게 한다."""
+    seq = iter(pages)
+
+    def _fake(symbol, interval="1d", count=100, before=None, adjusted=True):
+        return next(seq, {'candles': [], 'nextBefore': None})
+
+    with patch.object(api.toss_api, 'get_candles', side_effect=_fake):
+        return api._toss_chart_data("NASA", 'daily', is_overseas=True)
+
+
+def test_toss_marks_history_exhausted_on_empty_batch():
+    """더 받을 봉이 없어 멈추면 '전체 이력'으로 표시한다."""
+    df = _toss_daily([
+        {'candles': [_candle(d) for d in range(1, 21)], 'nextBefore': 'c1'},
+        {'candles': [], 'nextBefore': None},
+    ])
+    assert df.attrs['exhausted'] is True
+    assert df.attrs['source'] == 'TOSS'
+
+
+def test_toss_marks_exhausted_when_cursor_stops_advancing():
+    df = _toss_daily([
+        {'candles': [_candle(d) for d in range(1, 21)], 'nextBefore': 'c1'},
+        {'candles': [_candle(d) for d in range(1, 21)], 'nextBefore': 'c1'},   # 커서 정지
+    ])
+    assert df.attrs['exhausted'] is True
+
+
+def test_toss_not_exhausted_when_target_reached():
+    """목표 봉 수를 채워서 멈춘 것은 '더 없음'이 아니다."""
+    df = _toss_daily([{'candles': [_candle(d % 28 + 1) for d in range(300)],
+                       'nextBefore': 'c1'}])
+    assert df.attrs.get('exhausted') is False
+
+
+def _run_fallback(toss_df):
+    called = {'tv': False}
+
+    def _tv(code, n_bars=260):
+        called['tv'] = True
+        return None
+
+    with patch.object(api, '_toss_chart_data', return_value=toss_df), \
+         patch('modules.analysis.fetch_overseas_daily_via_tvdatafeed', side_effect=_tv):
+        out = api._toss_daily_chart_with_tv_fallback("NASA", is_overseas=True)
+    return out, called['tv']
+
+
+def _short_df(n, exhausted):
+    df = pd.DataFrame({'date': [f'2026070{i%9+1}' for i in range(n)],
+                       'open': [1.0] * n, 'high': [1.0] * n, 'low': [1.0] * n,
+                       'close': [1.0] * n, 'volume': [1.0] * n})
+    df.attrs['source'] = 'TOSS'
+    df.attrs['exhausted'] = exhausted
+    return df
+
+
+def test_skips_tv_fallback_when_toss_history_is_complete():
+    """82봉이 전체 이력이면 TV를 두드리지 않는다 — 전역 락 점유가 사라진다."""
+    out, tv_called = _run_fallback(_short_df(82, exhausted=True))
+    assert tv_called is False
+    assert len(out) == 82
+
+
+def test_still_falls_back_when_history_may_be_longer():
+    """페이지네이션이 덜 끝났을 뿐이면 종전대로 폴백한다(동작 축소 금지)."""
+    out, tv_called = _run_fallback(_short_df(82, exhausted=False))
+    assert tv_called is True
+
+
+def test_no_fallback_when_enough_bars():
+    out, tv_called = _run_fallback(_short_df(130, exhausted=False))
+    assert tv_called is False
+    assert len(out) == 130
+
+
+def test_attrs_survive_chart_cache_copy():
+    """_get_cached_chart는 df를 copy해 돌려준다 — attrs가 유실되면 판정이 무력화된다."""
+    src = _short_df(82, exhausted=True)
+    assert src.copy().attrs.get('exhausted') is True
