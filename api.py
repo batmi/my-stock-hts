@@ -480,11 +480,16 @@ def us_session_phase():
     return 'after'
 
 
-def market_session_label(is_overseas=False):
+def market_session_label(is_overseas=False, is_domestic_etf=False):
     """현재 세션 라벨과 rich 스타일을 (텍스트, 스타일)로 반환한다.
 
     스타일 규약: 살아있는 대표시장(KRX 정규장·미국 정규장)=green,
-    보조 세션(NXT 프리/애프터, 미국 프리/애프터/데이마켓)=yellow, 마감·휴장=dim.
+    보조 세션(NXT 프리/애프터, 미국 프리/애프터/데이마켓)=yellow,
+    마감·휴장·'값이 멈춘' 구간=dim.
+
+    is_domestic_etf: 국내 ETF/ETN 표인가. NXT는 ETF/ETN을 취급하지 않으므로 NXT 시간대에도
+      화면값이 KRX 종가에 멈춘다 — 세션 이름만 띄우면 '지금 거래 중'으로 오독된다.
+      (매매 로직도 같은 판정으로 NXT 시간대 ETF 분석·주문을 스킵한다: auto_trade/trader.py)
     """
     if is_overseas:
         et = now_us_eastern()
@@ -506,26 +511,48 @@ def market_session_label(is_overseas=False):
     if phase in ('nxt_pre', 'nxt_after'):
         name, krx = (("NXT 프리마켓", "KRX 개장 전") if phase == 'nxt_pre'
                      else ("NXT 애프터마켓", "KRX 마감"))
+        # ETF/ETN은 NXT 비거래 → 세션은 열려 있어도 이 표의 값은 KRX 종가에서 멈춰 있다
+        if is_domestic_etf:
+            return (f"{name} · ETF 미거래(KRX 종가)", "dim")
         # 모의투자(VTS)는 NXT 미지원이라 이 시간대에도 화면값은 KRX 종가에 머문다
         if getattr(config.session, 'is_simulation', False):
             return (f"{name} · 모의투자 미지원(KRX 종가)", "dim")
         return (f"{name} · {krx}", "yellow")
-    # 마감·휴장: 화면 현재가의 기준이 설정(USE_KRX_CLOSE_AFTER_HOURS)에 따라 갈린다
+    # 마감·휴장: 화면 현재가의 기준이 설정(USE_KRX_CLOSE_AFTER_HOURS)에 따라 갈린다.
+    #  ETF/ETN은 NXT 체결 자체가 없어 설정과 무관하게 항상 KRX 종가다.
     try:
-        basis = "KRX 종가" if display_price_krx_fixed(False) else "NXT 최종가"
+        basis = "KRX 종가" if (is_domestic_etf or display_price_krx_fixed(False)) else "NXT 최종가"
     except Exception:      # noqa: BLE001
         basis = "최종가"
     head = "장 마감" if phase == 'closed' else "휴장(주말·공휴일)"
     return (f"{head} · {basis}", "dim")
 
 
-def market_session_tag(is_overseas=False):
+def market_session_tag(is_overseas=False, is_domestic_etf=False):
     """표 제목 뒤에 붙일 세션 표기(rich 마크업). 판정 실패 시 빈 문자열."""
     try:
-        text, style = market_session_label(is_overseas)
+        text, style = market_session_label(is_overseas, is_domestic_etf)
     except Exception:      # noqa: BLE001 - 표기는 부가정보이므로 실패해도 화면을 막지 않는다
         return ""
     return f"  [dim]│[/dim] [{style}]{text}[/{style}]"
+
+
+def market_session_token(is_overseas=False):
+    """분석 결과 스냅샷의 '유효 구간' 식별자. 값이 달라지면 그 스냅샷은 만료다.
+
+    (거래일, 세션 단계)로 만든다. 세션이 넘어가면 확정 종가·일봉이 바뀌어 같은 종목의
+    상태 판정도 달라지므로, 이전 세션에 계산한 상태를 계속 보여주면 안 된다.
+    달력일을 함께 넣어 연휴 등으로 같은 단계가 며칠 이어질 때 묵은 값이 남지 않게 한다.
+
+    미국 데이마켓은 ET 자정을 넘겨 이어지므로, 달력일 대신 세션 귀속 거래일을 쓴다
+    (그러지 않으면 세션 한복판인 ET 00:00에 스냅샷이 만료된다).
+    """
+    if is_overseas:
+        phase = us_session_phase()
+        day = (us_day_market_session() if phase == 'day' else None) \
+            or now_us_eastern().strftime('%Y%m%d')
+        return f"US:{day}:{phase}"
+    return f"KR:{datetime.now().strftime('%Y%m%d')}:{domestic_session_phase()}"
 
 
 # KRX 정규장 마감(15:30) + 확정 일봉 반영 여유 10분. 이 시각 이후엔 '당일 확정 종가'가

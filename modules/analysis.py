@@ -2887,7 +2887,10 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     config.console.print(idx_table)
                 else:
                     table_title = "미국 주식 분석 정보" if is_overseas else "국내 주식 분석 정보"
-                    print_table(table_title, [(name, code)], is_overseas=is_overseas)
+                    # 이 경로는 ETF도 '주식 분석 정보' 제목으로 출력하므로, 세션 표기가
+                    #  제목만 보고 오판하지 않도록 종목 단위로 ETF 여부를 넘긴다.
+                    is_etf = (not is_overseas) and api.is_domestic_etf_etn(code, name)
+                    print_table(table_title, [(name, code)], is_overseas=is_overseas, is_etf=is_etf)
                 
                 panel = Panel(md, title=title_str, border_style="cyan", padding=(1, 2), width=120)
                 config.console.print()
@@ -4518,6 +4521,11 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
             class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val, smart_money=sm_flag)
 
+            # [추가] 수동 조회 결과도 상태 캐시에 남긴다 — 텔레그램 /stocks가 조회 시각과 함께
+            #  보여준다. 시스템 트레이딩이 분석하지 않는 종목(ETF, NXT 시간대 비거래 종목)과
+            #  시스템 정지 중의 공백을 메운다. 세션이 넘어가면 자동 만료된다.
+            context.set_stock_state(code, class_name, src='manual')
+
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             # [통일] 지수 화면과 동일 규칙 — price_trend_color 단일 소스
@@ -4732,7 +4740,7 @@ def _name_map_from(data_list):
     return out
 
 
-def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
+def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_etf=None):
     use_investor_data = False
     if not is_overseas and data_list:
         with Progress(
@@ -4774,8 +4782,10 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
     failed_list = []
     # [추가] 제목 옆에 현재 세션 표기 — 같은 표라도 08:30은 NXT 프리마켓 체결가,
     #  10:00은 KRX 정규장가, 22:00은 이미 마감된 KRX 종가라 값만으로는 구분되지 않는다.
+    #  국내 ETF 표는 NXT 비거래라 NXT 시간대에도 값이 KRX 종가에서 멈추므로 따로 알린다.
     #  (title이 빈 문자열인 호출부[개별 주문 화면 등]는 제목 자체를 숨기므로 붙이지 않는다)
-    display_title = f"\n{title}{api.market_session_tag(is_overseas) if title else ''}"
+    kr_etf = (not is_overseas) and (("ETF" in title) if is_etf is None else bool(is_etf))
+    display_title = f"\n{title}{api.market_session_tag(is_overseas, kr_etf) if title else ''}"
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")

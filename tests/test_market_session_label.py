@@ -116,6 +116,46 @@ def test_domestic_label_closed_shows_price_basis(krx_fixed, expect_basis):
     assert style == "dim"
 
 
+# ==========================================================
+# 국내 ETF — NXT 비거래
+# ==========================================================
+
+@pytest.mark.parametrize("hh, mm, session", [
+    (8, 30, "NXT 프리마켓"),
+    (16, 0, "NXT 애프터마켓"),
+])
+def test_domestic_etf_label_marks_nxt_untraded(hh, mm, session):
+    """NXT는 ETF/ETN을 취급하지 않는다 — 세션은 열려도 값은 KRX 종가에서 멈춘다.
+    세션 이름만 띄우면 '지금 거래 중'으로 오독되므로 미거래를 명시하고 dim 처리한다."""
+    a, b, c = _freeze_kr(datetime(2026, 7, 28, hh, mm))
+    with a, b, c:
+        text, style = api.market_session_label(False, is_domestic_etf=True)
+    assert text == f"{session} · ETF 미거래(KRX 종가)"
+    assert style == "dim"
+
+
+def test_domestic_etf_label_regular_session_unchanged():
+    """정규장에는 ETF도 KRX에서 정상 거래된다 — 주식 표와 같은 라벨."""
+    a, b, c = _freeze_kr(datetime(2026, 7, 28, 10, 0))
+    with a, b, c:
+        assert api.market_session_label(False, is_domestic_etf=True) == ("KRX 정규장", "green")
+
+
+def test_domestic_etf_label_closed_always_krx_basis():
+    """ETF는 NXT 체결 자체가 없어, USE_KRX_CLOSE_AFTER_HOURS를 꺼도 기준은 KRX 종가다."""
+    a, b, c = _freeze_kr(datetime(2026, 7, 28, 22, 0))
+    with a, b, c, patch.object(api, 'display_price_krx_fixed', lambda _=False: False):
+        text, _style = api.market_session_label(False, is_domestic_etf=True)
+    assert text == "장 마감 · KRX 종가"
+
+
+def test_us_label_ignores_domestic_etf_flag():
+    """미국 표에는 국내 ETF 플래그가 영향을 주지 않는다."""
+    et = datetime(2026, 7, 22, 10, 30)
+    with patch.object(api, 'now_us_eastern', lambda: et):
+        assert api.market_session_label(True, is_domestic_etf=True)[0] == "정규장 · ET 10:30"
+
+
 def test_domestic_label_holiday():
     a, b, c = _freeze_kr(datetime(2026, 7, 28, 11, 0), holiday=True)
     with a, b, c, patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
@@ -185,3 +225,31 @@ def test_session_tag_never_raises():
     """표기는 부가정보 — 판정이 실패해도 빈 문자열로 화면을 막지 않는다."""
     with patch.object(api, 'market_session_label', side_effect=RuntimeError("boom")):
         assert api.market_session_tag(False) == ""
+
+
+# ==========================================================
+# print_table — ETF 플래그 전달
+# ==========================================================
+
+@pytest.mark.parametrize("title, is_overseas, is_etf, expect_kr_etf", [
+    ("국내 ETF 기술적 분석", False, None, True),    # 제목으로 판정
+    ("국내 ETF 분석 정보", False, None, True),
+    ("국내 주식 기술적 분석", False, None, False),
+    ("미국 ETF 기술적 분석", True, None, False),    # 미국 ETF는 NXT와 무관
+    ("국내 주식 분석 정보", False, True, True),     # 제목이 '주식'이어도 명시 인자가 이긴다
+    ("국내 ETF 기술적 분석", False, False, False),
+])
+def test_print_table_passes_etf_flag_to_session_tag(title, is_overseas, is_etf, expect_kr_etf):
+    from modules import analysis
+
+    seen = {}
+
+    def _tag(ovs, kr_etf=False):
+        seen['args'] = (ovs, kr_etf)
+        return ""
+
+    with patch.object(analysis.api, 'market_session_tag', _tag):
+        analysis.print_table(title, [], is_overseas=is_overseas,
+                             market_regime_adj={}, is_etf=is_etf)
+
+    assert seen['args'] == (is_overseas, expect_kr_etf)

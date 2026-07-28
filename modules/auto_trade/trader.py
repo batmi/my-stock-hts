@@ -95,7 +95,8 @@ class AutoTrader:
             cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
             cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
             cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
-            cls._instance.stock_state_cache = {}      # [추가] 분석된 종목 상태 캐시 (텔레그램 연동용)
+            # [이동] 분석된 종목 상태 캐시는 context._STOCK_STATE로 옮겼다 (수동 조회와 공용).
+            #  읽기는 stock_state_cache 프로퍼티가 그대로 제공한다.
             cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
             cls._instance.current_total_asset = 0     # [리스크 스케일링] 최근 조회된 현재 평가자산 (히트 캡 기준자산·드로다운 계산용)
             cls._instance.risk_scale = 1.0            # [리스크 스케일링] 계좌 단위 배수 = 열위 시장 기준 (히트 캡용, 1.0=축소 없음)
@@ -140,12 +141,23 @@ class AutoTrader:
             self.file_logger = config.get_autotrade_logger()
 
     def set_stock_state(self, code, state):
-        """종목의 기술적 상태 캐시 업데이트 (텔레그램 /stocks 연동용)"""
-        with self._lock:
-            if state:
-                self.stock_state_cache[code] = state
-            else:
-                self.stock_state_cache.pop(code, None)
+        """종목의 기술적 상태 캐시 업데이트 (텔레그램 /stocks 연동용)
+
+        [변경] 저장소를 context로 옮겨 수동 조회(메뉴 2) 결과와 한 곳에서 관리한다.
+         값의 의미가 같으므로(둘 다 classify_stock_state 결과) 출처는 표시하지 않고,
+         지우기 범위를 가르는 데만 쓴다 — 여기서 None을 넘겨도 더 신선한 수동 스냅샷은
+         남겨야 시스템이 분석하지 않는 종목(NXT 시간대 ETF 등)의 상태가 보인다.
+        """
+        if state:
+            context.set_stock_state(code, state, src='auto')
+        else:
+            context.clear_stock_state(code, src='auto')
+
+    @property
+    def stock_state_cache(self):
+        """[호환] 종목→상태 문자열 맵. 실제 저장소는 context._STOCK_STATE."""
+        with context.STOCK_STATE_LOCK:
+            return {c: e['state'] for c, e in context._STOCK_STATE.items()}
 
     def _refine_trade_records(self, records):
         """거래 내역 중복 제거 및 우선순위 적용 (전략 사유 > 체결 확인)"""
@@ -3120,10 +3132,7 @@ class AutoTrader:
                                 for item in config.session.stock_data.get(key, []):
                                     valid_codes.add(item['code'])
                                     
-                            with self._lock:
-                                keys_to_delete = [k for k in self.stock_state_cache if k not in valid_codes]
-                                for k in keys_to_delete:
-                                    del self.stock_state_cache[k]
+                            context.prune_stock_states(valid_codes)
                         except Exception as e:
                             logger.debug(f"상태 캐시 정리 중 오류: {e}")
                     
@@ -3770,6 +3779,11 @@ class AutoTrader:
                     "SELL_SCORE": rule['sell_score'],
                     "WEIGHTS": rule.get('weights'),
                     "BUY_SCORE": rule['buy_score'],
+                    # [Fix] 개별 룰의 RSI 상한을 매도 경로에도 전달한다.
+                    #  analyze_sell도 classify_stock_state로 상태를 재판정하는데(engine.py),
+                    #  이 키가 없으면 전역 BUY_RSI_MAX로 폴백해, 같은 종목·같은 시각인데도
+                    #  매수 경로/메뉴 2 화면과 상태가 갈렸다(룰 RSI ≠ 전역 RSI인 보유 종목).
+                    "BUY_RSI_MAX": rule['buy_rsi'],
                     "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
                     "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
                     # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달

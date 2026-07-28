@@ -2036,7 +2036,13 @@ class TelegramCommander:
         
         trader = auto_trade.AutoTrader()
         is_running = trader.is_running
-        state_cache = trader.stock_state_cache if is_running else {}
+        # [변경] 시스템 트레이딩 캐시 대신 공용 상태 저장소를 읽는다. 시스템이 멈춰 있어도
+        #  운영자가 메뉴 2에서 조회한 상태가 있으면 보여준다 — 값의 의미는 같고(둘 다
+        #  classify_stock_state 결과), 필요한 구분은 '언제 것인가'라 조회 시각을 함께 붙인다.
+        #  세션이 넘어간 스냅샷은 context가 만료 처리하므로 여기서 신선도를 따로 볼 필요가 없다.
+        state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "대기": "🟠",
+                           "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
+        has_any_state = False
 
         has_stock = False
         for key, label in groups.items():
@@ -2057,22 +2063,23 @@ class TelegramCommander:
                         name += "+"
                         
                     state_display = ""
-                    if is_running:
-                        state_str = state_cache.get(code)
-                        if state_str:
-                            state_emoji_map = {"매수": "🔴", "강매수": "💥", "역매수": "🟣", "상승": "🟠", "대기": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵"}
-                            emoji = state_emoji_map.get(state_str, "❓")
-                            state_display = f" {emoji} {state_str}"
-                    
+                    snap = context.get_stock_state(code)
+                    if snap:
+                        state_str, at = snap
+                        has_any_state = True
+                        emoji = state_emoji_map.get(state_str, "❓")
+                        state_display = f" {emoji} {state_str} {at}"
+
                     msg += f"\n - {name} ({code}){state_display}\n   /signal_{code}  /analyze_{code}  /chart_{code}"
                 msg += "\n"
-        
+
         if not has_stock:
             msg += "\n등록된 관심 종목이 없습니다."
-            
-        if not is_running:
-            msg += "\n⚠️ 시스템 트레이딩이 중지되어 있어 현재 상태가 표시되지 않습니다. (상태 확인: /signal_종목코드)"
-            
+        elif not has_any_state:
+            msg += "\nℹ️ 조회된 상태가 없습니다. (시스템 트레이딩 실행 또는 메뉴 2 종목 분석 후 표시됩니다 / 개별 확인: /signal_종목코드)"
+        elif not is_running:
+            msg += "\nℹ️ 시스템 트레이딩 중지 중 — 위 상태는 표기된 시각 기준입니다. (최신 확인: /signal_종목코드)"
+
         return msg
 
     def _get_strategy_config(self):
