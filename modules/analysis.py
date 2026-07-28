@@ -4772,7 +4772,10 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None):
         market_regime_adj = {}
 
     failed_list = []
-    display_title = f"\n{title}"
+    # [추가] 제목 옆에 현재 세션 표기 — 같은 표라도 08:30은 NXT 프리마켓 체결가,
+    #  10:00은 KRX 정규장가, 22:00은 이미 마감된 KRX 종가라 값만으로는 구분되지 않는다.
+    #  (title이 빈 문자열인 호출부[개별 주문 화면 등]는 제목 자체를 숨기므로 붙이지 않는다)
+    display_title = f"\n{title}{api.market_session_tag(is_overseas) if title else ''}"
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")

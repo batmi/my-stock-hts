@@ -424,6 +424,110 @@ def domestic_trading_session_open():
         return True
 
 
+# ==========================================================
+# [세션 표기] 화면에 뿌리는 현재가가 '어느 시장 · 어느 세션'의 값인지 알리는 라벨
+#  같은 표라도 08:30의 현재가는 NXT 프리마켓 체결가, 10:00은 KRX 정규장가, 22:00은
+#  이미 마감된 KRX 종가다. 값만 보면 구분이 안 되므로 표 제목에 붙여 오독을 막는다.
+# ==========================================================
+
+def domestic_session_phase():
+    """국내 시장 세션 단계.
+       'nxt_pre'   : NXT 프리마켓 (08:00~09:00)
+       'krx'       : KRX 정규장  (09:00~15:30)
+       'nxt_after' : NXT 애프터마켓 (15:30~20:00)
+       'closed'    : 거래일 야간 (20:00~익일 08:00)
+       'holiday'   : 주말·공휴일
+    시간 구간은 _nxt_quote_phase()와 동일하게 맞춘다(표기와 시세 처리의 경계 불일치 방지).
+    """
+    try:
+        if is_holiday_today():
+            return 'holiday'
+    except Exception:      # noqa: BLE001 - 휴장 판정 실패는 거래일로 보고 시간대만 판정
+        pass
+    hm = datetime.now().strftime('%H%M')
+    if "0800" <= hm < "0900":
+        return 'nxt_pre'
+    if "0900" <= hm < "1530":
+        return 'krx'
+    if "1530" <= hm <= "2000":
+        return 'nxt_after'
+    return 'closed'
+
+
+def us_session_phase():
+    """미국 시장 세션 단계 (ET 기준, 서머타임 자동판별).
+       'pre'     : 프리마켓 (ET 04:00~09:30)
+       'regular' : 정규장   (ET 09:30~16:00)
+       'after'   : 애프터마켓 (ET 16:00~20:00)
+       'day'     : 데이마켓/주간거래 (ET 20:00~익일 04:00, KST 주간)
+       'closed'  : 주말·휴장
+    구간 경계는 modules/trading.py의 주문 세션(ord_dvsn) 자동판별과 동일하다.
+    """
+    et = now_us_eastern()
+    hm = et.strftime('%H%M')
+    if hm >= "2000" or hm < "0400":
+        # 야간 ATS는 '다음 거래일' 세션에 귀속되므로 귀속일 판정을 그대로 쓴다
+        return 'day' if us_day_market_session() else 'closed'
+    try:
+        if _is_closed_day(et, 'US'):
+            return 'closed'
+    except Exception:      # noqa: BLE001 - 판정 실패 시 시간대만으로 결정
+        pass
+    if hm < "0930":
+        return 'pre'
+    if hm < "1600":
+        return 'regular'
+    return 'after'
+
+
+def market_session_label(is_overseas=False):
+    """현재 세션 라벨과 rich 스타일을 (텍스트, 스타일)로 반환한다.
+
+    스타일 규약: 살아있는 대표시장(KRX 정규장·미국 정규장)=green,
+    보조 세션(NXT 프리/애프터, 미국 프리/애프터/데이마켓)=yellow, 마감·휴장=dim.
+    """
+    if is_overseas:
+        et = now_us_eastern()
+        clock = f"ET {et.strftime('%H:%M')}"
+        phase = us_session_phase()
+        if phase == 'regular':
+            return (f"정규장 · {clock}", "green")
+        if phase == 'pre':
+            return (f"프리마켓 · {clock}", "yellow")
+        if phase == 'after':
+            return (f"애프터마켓 · {clock}", "yellow")
+        if phase == 'day':
+            return (f"데이마켓 · {clock}", "yellow")
+        return (f"휴장(주말·공휴일) · {clock}", "dim")
+
+    phase = domestic_session_phase()
+    if phase == 'krx':
+        return ("KRX 정규장", "green")
+    if phase in ('nxt_pre', 'nxt_after'):
+        name, krx = (("NXT 프리마켓", "KRX 개장 전") if phase == 'nxt_pre'
+                     else ("NXT 애프터마켓", "KRX 마감"))
+        # 모의투자(VTS)는 NXT 미지원이라 이 시간대에도 화면값은 KRX 종가에 머문다
+        if getattr(config.session, 'is_simulation', False):
+            return (f"{name} · 모의투자 미지원(KRX 종가)", "dim")
+        return (f"{name} · {krx}", "yellow")
+    # 마감·휴장: 화면 현재가의 기준이 설정(USE_KRX_CLOSE_AFTER_HOURS)에 따라 갈린다
+    try:
+        basis = "KRX 종가" if display_price_krx_fixed(False) else "NXT 최종가"
+    except Exception:      # noqa: BLE001
+        basis = "최종가"
+    head = "장 마감" if phase == 'closed' else "휴장(주말·공휴일)"
+    return (f"{head} · {basis}", "dim")
+
+
+def market_session_tag(is_overseas=False):
+    """표 제목 뒤에 붙일 세션 표기(rich 마크업). 판정 실패 시 빈 문자열."""
+    try:
+        text, style = market_session_label(is_overseas)
+    except Exception:      # noqa: BLE001 - 표기는 부가정보이므로 실패해도 화면을 막지 않는다
+        return ""
+    return f"  [dim]│[/dim] [{style}]{text}[/{style}]"
+
+
 # KRX 정규장 마감(15:30) + 확정 일봉 반영 여유 10분. 이 시각 이후엔 '당일 확정 종가'가
 # 어느 소스(KIS 일봉·pykrx·FDR)에서도 조회된다고 본다. 마감 직후 몇 분은 소스에 따라 아직
 # 확정 봉이 없어, 그 순간 받은 캐시를 6시간 붙들면 같은 문제가 다시 생긴다.
