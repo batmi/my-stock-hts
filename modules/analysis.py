@@ -438,6 +438,9 @@ _TVDATAFEED_NEG_TTL_SEC = 1800        # 30분
 #  메타데이터라 재사용해도 신선도에 영향이 없다(일봉은 매번 새로 받는다). KIS 경로의
 #  exchange_cache와 같은 성격으로, 재조회 때 search_symbol과 헛거래소 순회를 없앤다.
 _TVDATAFEED_EXCHANGE = {}             # code -> exchange 이름
+# 종목당 tvDatafeed 폴백 총 소요 상한(초). 전역 락을 쥐고 도는 경로라 상한이 없으면
+#  한 종목의 연결 타임아웃이 나머지 종목의 대기로 그대로 번진다.
+TVDATAFEED_FETCH_BUDGET_SEC = 12.0
 
 def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
     """해외 개별 종목/ETF 일봉을 TradingView(tvDatafeed)로 조회한다(토스 캔들 실패 시 폴백).
@@ -483,8 +486,17 @@ def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
         if not exchanges:
             exchanges = ['NASDAQ', 'NYSE', 'AMEX']
 
+    # [시간 예산] 익명 웹소켓은 응답이 없을 때 연결 타임아웃까지 통째로 기다린다. 이 호출은
+    #  전역 락을 쥐고 있어 한 종목의 지연이 나머지 종목의 대기로 번지므로(메뉴 2 '데이터 수신'
+    #  단계가 마지막 한두 종목에서 오래 멈추는 현상), 종목당 총 소요에 상한을 둔다.
+    #  예산을 넘기면 남은 거래소를 포기한다 — 폴백은 '있으면 더 좋은' 보강이지 필수가 아니다.
+    deadline = time.monotonic() + TVDATAFEED_FETCH_BUDGET_SEC
+
     df = None
     for i, exch in enumerate(exchanges):
+        if time.monotonic() >= deadline:
+            logger.debug(f"[TVDATAFEED] {code} 조회 예산 초과 — 남은 거래소 {exchanges[i:]} 생략")
+            break
         # 익명 웹소켓 간헐 실패 대비 재시도는 '가장 유력한 거래소'에만 준다.
         #  모든 거래소에 2회씩 주면 없는 종목 하나가 최대 12회 조회 + 락 점유로 번진다.
         attempts = 2 if i == 0 else 1
@@ -498,8 +510,10 @@ def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
             except Exception as e:
                 logger.debug(f"[TVDATAFEED] {code}@{exch} 조회 오류(attempt={attempt}): {e}")
                 df = None
-            if attempt < attempts - 1:
+            if attempt < attempts - 1 and time.monotonic() < deadline:
                 time.sleep(0.6)
+            else:
+                break
         if df is not None and not df.empty:
             _TVDATAFEED_EXCHANGE[code] = exch      # 다음 조회는 곧장 이 거래소로
             break
@@ -4094,6 +4108,12 @@ def save_all_market_analysis():
     except Exception as e:
         config.console.print(f"\n[bold red]오류 발생: {e}[/bold red]")
 
+# [진단] 일봉 수신이 이 시간을 넘긴 종목은 로그로 남긴다.
+#  '데이터 수신' 단계가 마지막 한두 종목에서 오래 멈추는데, 화면에는 진행률만 있어 어느
+#  종목이 원인인지 특정할 수 없었다. 프로그래스 바 표기는 그대로 두고 로그로만 알린다.
+SLOW_CHART_FETCH_SEC = 5.0
+
+
 def _fetch_chart_data(item, is_overseas):
     """(내부함수) print_table 1단계: 과거(전체) 일봉 차트 데이터 수신.
 
@@ -4101,11 +4121,26 @@ def _fetch_chart_data(item, is_overseas):
     → '데이터 수신' 프로그래스 바는 실제 전체 데이터를 받아오는 동안에만 길어진다.
     """
     name, code = item
+    started = time.monotonic()
+    df = None
     try:
-        return api.get_chart_data(code, is_overseas, 'daily', False)
+        df = api.get_chart_data(code, is_overseas, 'daily', False)
+        return df
     except Exception as e:
         logger.error(f"[{code}] 차트 데이터 수신 오류: {e}")
         return None
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= SLOW_CHART_FETCH_SEC:
+            # 어떤 소스로 받았는지(KIS/TVDATAFEED/토스 등)와 봉 수를 함께 남겨야
+            #  느린 구간이 어느 경로인지 한 번에 판별된다.
+            try:
+                src = (df.attrs.get('source') if df is not None and hasattr(df, 'attrs') else None) or '-'
+                bars = 0 if df is None or df.empty else len(df)
+            except Exception:      # noqa: BLE001 - 진단 로그가 본 흐름을 막지 않게 한다
+                src, bars = '-', 0
+            logger.warning(f"[느린 일봉 수신] {name}({code}) {elapsed:.1f}초 "
+                           f"| 소스={src} 봉={bars}")
 
 def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=None, preloaded_curr=None):
     """(내부함수) print_table 2단계 전반부: 당일 실시간 데이터(현재가/체결강도/수급/상세) 수신.

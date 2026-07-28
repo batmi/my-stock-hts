@@ -289,3 +289,37 @@ def test_stale_remembered_exchange_is_forgotten():
     tv = _FakeTv(hit_exchange=None)
     assert _run_tv(tv) is None
     assert "NASA" not in _an._TVDATAFEED_EXCHANGE
+
+
+def test_tv_fallback_respects_time_budget():
+    """조회 예산을 넘기면 남은 거래소를 포기한다 — 폴백은 보강이지 필수가 아니다.
+
+    tvDatafeed 호출은 전역 락을 쥐고 돌기 때문에, 한 종목의 연결 타임아웃이 나머지 종목의
+    대기로 그대로 번진다('데이터 수신' 단계가 마지막 한두 종목에서 멈추는 현상).
+    """
+    clock = {'t': 0.0}
+
+    class _SlowTv(_FakeTv):
+        def get_hist(self, symbol, exchange, interval, n_bars):
+            clock['t'] += 10.0          # 거래소마다 10초씩 소모
+            return super().get_hist(symbol, exchange, interval, n_bars)
+
+    tv = _SlowTv(hit_exchange=None)
+    with patch('modules.analysis._get_tvdatafeed', return_value=tv), \
+         patch('modules.analysis.time.sleep'), \
+         patch('modules.analysis.time.monotonic', side_effect=lambda: clock['t']):
+        assert _an.fetch_overseas_daily_via_tvdatafeed("NASA") is None
+
+    # 예산(12초) 안에서 가능한 만큼만 시도하고 나머지 거래소는 건너뛴다
+    assert len(tv.hist_calls) < 4, tv.hist_calls
+    assert clock['t'] <= _an.TVDATAFEED_FETCH_BUDGET_SEC + 10.0
+
+
+def test_tv_fallback_budget_does_not_block_fast_success():
+    """정상 응답이면 예산과 무관하게 종전대로 값을 돌려준다(동작 축소 금지)."""
+    tv = _FakeTv(hit_exchange="NASDAQ")
+    with patch('modules.analysis._get_tvdatafeed', return_value=tv), \
+         patch('modules.analysis.time.sleep'):
+        out = _an.fetch_overseas_daily_via_tvdatafeed("QQQ")
+    assert out is not None and not out.empty
+    assert tv.hist_calls == ["NASDAQ"]
