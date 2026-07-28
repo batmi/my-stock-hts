@@ -2696,9 +2696,14 @@ class AutoTrader:
                 r_color = "[red]" if avg_rate > 0 else ("[blue]" if avg_rate < 0 else "[white]")
                 
                 # 최대/최소 수익률 포맷팅
+                #  색상은 '최대/최소'라는 자리가 아니라 값의 부호를 따른다(+는 빨강, -는 파랑).
+                #  자리 고정 색상은 전 구간 손실 종목의 최대 수익률(-4.9%)까지 빨강으로 보여
+                #  같은 표의 총 손익·평균 수익률 색상과 어긋났다.
                 max_r = stat['max_rate'] if stat['max_rate'] != -999.0 else 0.0
                 min_r = stat['min_rate'] if stat['min_rate'] != 999.0 else 0.0
-                range_str = f"[red]{max_r:+.1f}%[/] / [blue]{min_r:+.1f}%[/]" if s_cnt > 0 else "-"
+                max_c = "[red]" if max_r > 0 else ("[blue]" if max_r < 0 else "[white]")
+                min_c = "[red]" if min_r > 0 else ("[blue]" if min_r < 0 else "[white]")
+                range_str = f"{max_c}{max_r:+.1f}%[/] / {min_c}{min_r:+.1f}%[/]" if s_cnt > 0 else "-"
                 
                 # 주요 매도 사유 (최빈값)
                 reason_str = "-"
