@@ -971,8 +971,13 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                     out = res.get('output', {})
                     curr = _safe_float(out.get('bstp_nmix_prpr', 0))
                     prev = _safe_float(out.get('bstp_nmix_prdy_clpr', 0))
-                    open_p, high_p, low_p = curr, curr, curr # 지수는 당일 고가/저가를 주지 않으므로 근사치 사용
-                    vol = 0
+                    # [Fix] 업종 현재가 TR은 당일 시가/고가/저가/누적거래량을 함께 준다.
+                    #  현재가로 근사하던 종전 방식은 당일 봉의 고저를 뭉개 ATR·CCI를 왜곡했다.
+                    #  (토스 경로는 이 필드들을 주지 않아 0 → 아래에서 현재가/캐시 값으로 보정)
+                    open_p = _safe_float(out.get('bstp_nmix_oprc', 0)) or curr
+                    high_p = _safe_float(out.get('bstp_nmix_hgpr', 0)) or curr
+                    low_p = _safe_float(out.get('bstp_nmix_lwpr', 0)) or curr
+                    vol = _safe_float(out.get('acml_vol', 0))
             elif is_index and is_overseas:
                 # yfinance 단건 현재가 빠른 조회
                 try:
@@ -1050,6 +1055,20 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                         df = pd.concat([df, new_row], ignore_index=True)
 
                     return df
+
+            # [Fix] 현재가를 못 얻은 채(오버레이 실패) 캐시의 마지막 봉이 '전일 종가 복제'
+            #  당일 봉이면, 개장 후에도 등락률이 0%로 굳은 채 캐시 TTL(기본 6시간) 내내 유지된다.
+            #  (실측 2026-07-28: 지수 현재가 TR 매핑 누락으로 장중 전 지수가 어제 값 + 0.00%)
+            #  이 조합은 정상 상태가 아니므로 캐시를 파기하고 원본을 다시 받는다 — 개장 후의
+            #  KIS 업종 일봉은 당일 봉을 실시간으로 채워 주므로 한 번의 재조회로 복구된다.
+            if (curr <= 0 and is_index and not is_overseas and len(df) >= 2
+                    and str(df.iloc[-1]['date']) == today_ymd
+                    and abs(float(df.iloc[-1]['close']) - float(df.iloc[-2]['close'])) < 1e-9
+                    and not _before_krx_regular_open()):
+                logger.debug(f"[Cache] 지수({code}) 당일 봉이 전일 종가와 동일 + 현재가 미확보 → 캐시 파기 후 재조회")
+                with _CHART_CACHE_LOCK:
+                    _CHART_CACHE.pop(cache_key, None)
+                cached = None
         except Exception as e:
             logger.debug(f"[Cache] Update failed for {code}: {e}")
         finally:
@@ -2682,7 +2701,17 @@ def get_domestic_index_chart(code):
             df = df[['stck_bsop_date', 'bstp_nmix_prpr', 'bstp_nmix_oprc', 'bstp_nmix_hgpr', 'bstp_nmix_lwpr', 'acml_vol']].copy()
             df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
             df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-            return df.sort_values('date', ascending=True).reset_index(drop=True)
+            df = df.sort_values('date', ascending=True).reset_index(drop=True)
+
+            # [Fix] 개장 전에는 아직 당일 세션이 없는데도 KIS 업종 일봉은 당일 행을 전일 종가
+            #  그대로(거래량 0) 채워 내려준다. 이 행을 남기면 마지막 두 봉의 종가가 같아져
+            #  등락률이 0%로 굳고, EMA·RSI·CCI가 같은 종가를 한 번 더 먹어 지표까지 틀어진다.
+            #  (실측 2026-07-28 KOSPI: EMA5 6,813→6,794, CCI -85.9→-74.0)
+            #  게다가 그 df가 지수 공유 캐시에 실리면 장중 내내 '어제 값 + 0%'로 보인다.
+            #  국내 지수는 NXT 연장거래가 없어 개장 전 당일 행은 언제나 가짜다 → 제거한다.
+            if len(df) >= 2 and _before_krx_regular_open() and str(df.iloc[-1]['date']) == market_today(False):
+                df = df.iloc[:-1].reset_index(drop=True)
+            return df
 
         return pd.DataFrame()
 
@@ -2744,6 +2773,18 @@ def get_domestic_index_price(code):
     }
     res = call_api(url, "domestic", "quotations", "index_price", params=params)
     if res.get('rt_cd') == '0':
+        # [Fix] 업종 현재가 TR은 '전일 종가'를 직접 주지 않는다(현재가 - 전일대비로만 구할 수 있다).
+        #  호출측(차트 오버레이의 수정주가 검증, 서킷브레이커 등락률, 토스 경로)이 공통으로
+        #  bstp_nmix_prdy_clpr를 읽으므로 여기서 계산해 채운다. 비워 두면 전일 종가 0으로
+        #  등락률 산출이 조용히 실패한다.
+        out = res.get('output') or {}
+        try:
+            prpr = float(str(out.get('bstp_nmix_prpr', '')).replace(',', '') or 0)
+            vrss = float(str(out.get('bstp_nmix_prdy_vrss', '')).replace(',', '') or 0)
+            if prpr > 0 and not out.get('bstp_nmix_prdy_clpr'):
+                out['bstp_nmix_prdy_clpr'] = f"{prpr - vrss:.2f}"
+        except (TypeError, ValueError):
+            pass
         _set_micro_cache(cache_key, res)
     return res
 

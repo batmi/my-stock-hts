@@ -26,6 +26,9 @@ TR_ID_CONFIG = {
             "price": {"real": "FHKST01010100", "sim": "FHKST01010100"},
             "chart": {"real": "FHKST03010100", "sim": "FHKST03010100"},
             "investor": {"real": "FHKST01010900", "sim": "FHKST01010900"},
+            # 업종(지수) 현재가 — 실전/모의 동일 TR. 이 매핑이 없으면 call_api가
+            # 'TR_ID not found'로 즉시 실패해 지수 차트의 당일 봉 실시간 갱신이 통째로 멈춘다.
+            "index_price": {"real": "FHPUP02100000", "sim": "FHPUP02100000"},
             "index_investor": {"real": "FHPTJ04040000", "sim": "VHPTJ04040000"},
             "index_investor_current": {"real": "FHKUP01010900", "sim": "FHKUP01010900"},
             "vol_strength": {"real": "FHKST01010300", "sim": "FHKST01010300"}

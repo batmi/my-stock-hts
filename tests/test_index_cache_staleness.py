@@ -133,3 +133,117 @@ def test_preopen_index_does_not_append_flat_bar(mock_price, monkeypatch):
     assert list(out['date']) == ['20260723', '20260724']    # 오늘자 가짜 봉 없음
     assert float(out['close'].iloc[-1]) != float(out['close'].iloc[-2])  # 등락률 0% 고착 없음
     api.clear_chart_cache()
+
+
+# ==========================================================
+# 장중 지수 실시간 갱신 (2026-07-28 실측: 장중 전 지수가 '어제 값 + 0.00%'로 고착)
+# ==========================================================
+
+def test_index_price_tr_id_is_mapped():
+    """지수 현재가 TR 매핑 누락 → call_api가 'TR_ID not found'로 즉시 실패하고
+    당일 봉 실시간 오버레이·서킷브레이커 등락률이 통째로 죽는다(무증상 회귀)."""
+    import constants
+    entry = constants.TR_ID_CONFIG['domestic']['quotations']['index_price']
+    assert entry['real'] and entry['sim']
+
+
+def test_index_price_fills_prev_close(monkeypatch):
+    """업종 현재가 TR은 전일 종가를 안 준다 → 현재가 - 전일대비로 채워야 한다."""
+    api._MICRO_CACHE.clear()
+    monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(api, 'call_api', lambda *a, **k: {'rt_cd': '0', 'output': {
+        'bstp_nmix_prpr': '6117.88', 'bstp_nmix_prdy_vrss': '-637.87', 'acml_vol': '189905'}})
+
+    out = api.get_domestic_index_price('0001')['output']
+    assert float(out['bstp_nmix_prdy_clpr']) == pytest.approx(6755.75, abs=0.01)
+
+
+def test_intraday_overlay_updates_today_bar(monkeypatch):
+    """장중: 캐시된 당일 봉이 실시간 지수(시/고/저/거래량 포함)로 갱신되어야 한다."""
+    monkeypatch.setattr(api, '_chart_disk_get', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_chart_disk_set', lambda *a, **k: None)
+    monkeypatch.setattr(api, 'market_today', lambda is_overseas=False: '20260728')
+    monkeypatch.setattr(api, '_before_krx_regular_open', lambda: False)
+    monkeypatch.setattr(api, '_krx_close_passed_at', lambda: None)
+    monkeypatch.setattr(api, 'chart_overlay_enabled', lambda is_overseas=False: True)
+    monkeypatch.setattr(api, 'get_domestic_index_price', lambda code: {'rt_cd': '0', 'output': {
+        'bstp_nmix_prpr': '6117.88', 'bstp_nmix_prdy_clpr': '6755.75',
+        'bstp_nmix_oprc': '6400.27', 'bstp_nmix_hgpr': '6413.57', 'bstp_nmix_lwpr': '6031.38',
+        'acml_vol': '189905'}})
+    api.clear_chart_cache()
+    config.settings.CHART_CACHE_TTL_MINUTES = 180
+
+    # 개장 직후 캐시된 당일 봉(= 전일 종가 복제)
+    stale = pd.DataFrame([
+        {'date': '20260727', 'open': 6806.27, 'high': 6806.27, 'low': 6557.39, 'close': 6755.75, 'volume': 275718.0},
+        {'date': '20260728', 'open': 6755.75, 'high': 6755.75, 'low': 6755.75, 'close': 6755.75, 'volume': 0.0},
+    ])
+    fetch = MagicMock(return_value=stale)
+    api._get_cached_chart('0001', False, True, fetch)          # 캐시 적재
+    out = api._get_cached_chart('0001', False, True, fetch)    # 캐시 적중 + 오버레이
+
+    assert float(out['close'].iloc[-1]) == pytest.approx(6117.88)   # 실시간 지수로 갱신
+    assert float(out['low'].iloc[-1]) == pytest.approx(6031.38)     # 고저도 TR 실제값
+    assert float(out['volume'].iloc[-1]) == pytest.approx(189905.0)
+    api.clear_chart_cache()
+
+
+def test_flat_today_bar_refetched_when_price_unavailable(monkeypatch):
+    """오버레이 실패 + 당일 봉이 전일 종가 복제 → 캐시를 파기하고 재조회(하루 종일 0% 고착 차단)."""
+    monkeypatch.setattr(api, '_chart_disk_get', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_chart_disk_set', lambda *a, **k: None)
+    monkeypatch.setattr(api, 'market_today', lambda is_overseas=False: '20260728')
+    monkeypatch.setattr(api, '_before_krx_regular_open', lambda: False)
+    monkeypatch.setattr(api, '_krx_close_passed_at', lambda: None)
+    monkeypatch.setattr(api, 'chart_overlay_enabled', lambda is_overseas=False: True)
+    monkeypatch.setattr(api, 'get_domestic_index_price', lambda code: {'rt_cd': '9999'})
+    api.clear_chart_cache()
+    config.settings.CHART_CACHE_TTL_MINUTES = 180
+
+    flat = pd.DataFrame([
+        {'date': '20260727', 'open': 1, 'high': 1, 'low': 1, 'close': 6755.75, 'volume': 0.0},
+        {'date': '20260728', 'open': 1, 'high': 1, 'low': 1, 'close': 6755.75, 'volume': 0.0},
+    ])
+    fresh = flat.copy()
+    fresh.loc[1, 'close'] = 6117.88
+    fetch = MagicMock(side_effect=[flat, fresh])
+
+    api._get_cached_chart('0001', False, True, fetch)          # 캐시 적재(가짜 평봉)
+    out = api._get_cached_chart('0001', False, True, fetch)    # 오버레이 실패 → 재조회
+
+    assert fetch.call_count == 2
+    assert float(out['close'].iloc[-1]) == pytest.approx(6117.88)
+    api.clear_chart_cache()
+
+
+@pytest.mark.real_index_chart
+def test_preopen_source_placeholder_bar_dropped(monkeypatch):
+    """장전 KIS 업종 일봉이 내려주는 '전일 종가 복제' 당일 행은 원본 단계에서 제거한다."""
+    monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(api, 'market_today', lambda is_overseas=False: '20260728')
+    monkeypatch.setattr(api, '_before_krx_regular_open', lambda: True)
+    monkeypatch.setattr(api, '_krx_close_passed_at', lambda: None)
+    monkeypatch.setattr(api, 'chart_overlay_enabled', lambda is_overseas=False: False)
+    api.clear_chart_cache()
+    config.settings.CHART_CACHE_TTL_MINUTES = 180
+
+    items = [
+        {'stck_bsop_date': '20260728', 'bstp_nmix_prpr': '6755.75', 'bstp_nmix_oprc': '6755.75',
+         'bstp_nmix_hgpr': '6755.75', 'bstp_nmix_lwpr': '6755.75', 'acml_vol': '0'},
+        {'stck_bsop_date': '20260727', 'bstp_nmix_prpr': '6755.75', 'bstp_nmix_oprc': '6806.27',
+         'bstp_nmix_hgpr': '6806.27', 'bstp_nmix_lwpr': '6557.39', 'acml_vol': '275718'},
+        {'stck_bsop_date': '20260724', 'bstp_nmix_prpr': '6690.62', 'bstp_nmix_oprc': '7000.78',
+         'bstp_nmix_hgpr': '7000.78', 'bstp_nmix_lwpr': '6650.41', 'acml_vol': '397655'},
+    ]
+    calls = {'n': 0}
+
+    def fake_call_api(*a, **k):
+        calls['n'] += 1
+        return {'rt_cd': '0', 'output2': items if calls['n'] == 1 else []}
+
+    monkeypatch.setattr(api, 'call_api', fake_call_api)
+    out = api.get_domestic_index_chart('0001')
+
+    assert list(out['date']) == ['20260724', '20260727']     # 장전 당일 placeholder 제거
+    assert float(out['close'].iloc[-1]) != float(out['close'].iloc[-2])
+    api.clear_chart_cache()
