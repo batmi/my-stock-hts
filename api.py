@@ -791,7 +791,9 @@ YF_TO_TV_EXACT = {
     "KRW=X": "FX_IDC:USDKRW",      # 원/달러 환율
     "DX-Y.NYB": "TVC:DXY",         # 달러인덱스
     "CL=F": "NYMEX:CL1!",          # WTI 원유
-    "BZ=F": "NYMEX:BRN1!",         # 브렌트유
+    # [Fix] 브렌트유는 NYMEX가 아니라 ICE 유럽(ICEEUR) 상장 — 실측상 NYMEX:BRN1!은 빈 응답이고
+    #  ICEEUR:BRN1!만 시세를 준다(2026-07-28). 종전 스크리너 경로가 통째로 죽어 있어 드러나지 않았다.
+    "BZ=F": "ICEEUR:BRN1!",        # 브렌트유
     "GC=F": "COMEX:GC1!",          # 금
     "SI=F": "COMEX:SI1!",          # 은
     "HG=F": "COMEX:HG1!",          # 구리
@@ -809,24 +811,107 @@ YF_TO_TV_EXACT = {
     "ZB=F": "CBOT:ZB1!"            # 미국채 30년물 선물
 }
 
+# ==========================================================
+# [폴백] TV 매핑 심볼(지수·선물·환율)의 tvDatafeed 시세
+# ==========================================================
+#  종전에는 이 심볼들을 tradingview_screener의 Query().get_tickers()로 조회했는데,
+#  설치된 tradingview-screener 3.x에는 그 메서드가 없어(2.x API) AttributeError가 나고
+#  바깥 except가 조용히 삼켜, YF_TO_TV_EXACT 매핑 전체가 무효인 채 yfinance로만 동작했다.
+#  스크리너는 미국 '주식' 스캔 유니버스라 set_tickers로 고쳐도 지수·선물이 나오지 않는다
+#  (실측: CBOE:VIX·TVC:DXY·COMEX:GC1!·TVC:US10Y 모두 빈 응답, set_markets('index')는 404).
+#  이미 미국채 현물·국내 지수에 쓰고 있는 tvDatafeed로 경로를 옮긴다.
+#
+#  [순서] yfinance를 1차로 두고 tvDatafeed는 폴백이다. tvDatafeed는 웹소켓이라 전역 락으로
+#   직렬화되고 간헐 타임아웃이 잦아, 지수 화면의 20여 심볼을 여기에 태우면 라즈베리파이에서
+#   체감 지연이 커진다. 실측상 이 심볼들은 yfinance가 평상시 정상이므로, TV는 yfinance가
+#   실패한 순간에만 값을 메우는 역할이 맞다.
+_TVD_QUOTE_FAIL = {}            # tv_symbol -> 마지막 실패 시각(time.time)
+_TVD_QUOTE_NEG_TTL_SEC = 600    # 실패 심볼 재시도 쿨다운(웹소켓 재연결 비용 절감)
+
+
+def _fast_info_via_tvdatafeed(tv_symbol):
+    """'EXCHANGE:SYMBOL' 일봉 마지막 2봉으로 (현재가, 전일종가)를 만든다. 실패 시 None.
+
+    tvDatafeed 일봉은 장중에도 마지막 봉이 갱신되므로 현재가로 쓸 수 있다.
+    다만 프리/애프터 세션가는 제공하지 않으므로 src는 스크리너('tv')와 구분해 'tvd'로 둔다
+    (해외 종목 장외 폴백 _overseas_tv_fallback_price가 src=='tv'만 채택한다).
+    """
+    if not tv_symbol or ':' not in tv_symbol:
+        return None
+    last_fail = _TVD_QUOTE_FAIL.get(tv_symbol)
+    if last_fail and (time.time() - last_fail) < _TVD_QUOTE_NEG_TTL_SEC:
+        return None
+    try:
+        from modules import analysis as _analysis
+        from tvDatafeed import Interval
+    except Exception:
+        return None
+    tv = _analysis._get_tvdatafeed()
+    if tv is None:
+        return None
+
+    exchange, symbol = tv_symbol.split(':', 1)
+    df = None
+    try:
+        with _analysis._TVDATAFEED_LOCK:
+            df = tv.get_hist(symbol=symbol, exchange=exchange,
+                             interval=Interval.in_daily, n_bars=5)
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {tv_symbol} 시세 조회 오류: {e}")
+
+    if df is None or df.empty or len(df) < 2:
+        _TVD_QUOTE_FAIL[tv_symbol] = time.time()
+        return None
+    try:
+        last_price = float(df['close'].iloc[-1])
+        prev_close = float(df['close'].iloc[-2])
+        if not (last_price > 0):
+            raise ValueError("invalid close")
+        year_high = float(df['high'].max()) if 'high' in df.columns else None
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] {tv_symbol} 시세 변환 실패: {e}")
+        _TVD_QUOTE_FAIL[tv_symbol] = time.time()
+        return None
+
+    _TVD_QUOTE_FAIL.pop(tv_symbol, None)
+    return {
+        'last_price': last_price,
+        'regular_market_previous_close': prev_close,
+        'last_volume': 0,
+        # n_bars=5의 최고가라 52주 고점이 아니다 → None으로 두어 호출부가 일봉 기준을 쓰게 한다
+        'year_high': None,
+        'src': 'tvd',
+        'is_extended': False,
+    }
+
+
+# yfinance·TV가 모두 실패했을 때 직전 성공값을 재사용하는 유예 시간(stale-if-error).
+#  지수 화면은 ~47개 심볼이 각자 fast_info를 호출하고 _YF_LOCK으로 직렬화되어, 야후의 순간
+#  스로틀 하나로 특정 지수만 '실시간 시세 지연' 경고가 뜨곤 했다(실측: DRG). 몇 분 전 값은
+#  마지막 확정 종가로 되돌아가는 것보다 훨씬 최신이므로, 유예 안에서는 직전 값을 재사용한다.
+_YF_FI_STALE_GRACE_SEC = 900
+
+
 def get_yf_fast_info(code, ttl=60.0):
-    """TV 단건 조회 + yf_fast_info Fallback (캐싱 포함)"""
+    """단건 시세 조회 (캐싱 포함).
+
+    순서: 마이크로 캐시 → TV 스크리너(미국 주식) → yfinance fast_info
+          → tvDatafeed(TV 매핑 심볼) → 유예시간 내 직전 성공값(stale-if-error).
+    """
     cache_key = f"yf_fi_{code}"
     cached = _get_micro_cache(cache_key, ttl=ttl) # [수정] 상황에 맞게 TTL 조절 가능토록 인자 추가
     if cached: return cached
 
     tv_exact_symbol = YF_TO_TV_EXACT.get(code)
     is_special_ticker = any(c in code for c in ['^', '=', '-', '.'])
-    
-    # 1. TradingView Screener 우선 조회 (일반 미국 주식 또는 TV 매핑이 존재하는 지수)
-    if not is_special_ticker or tv_exact_symbol:
+
+    # 1. TradingView Screener 조회 — 미국 개별 주식 전용.
+    #    (매핑 심볼(지수·선물·환율)은 스캐너 유니버스에 없어 아래 tvDatafeed 폴백이 담당한다)
+    if not is_special_ticker:
         try:
             from tradingview_screener import Query, Column
-            if tv_exact_symbol:
-                _, df = Query().select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').get_tickers([tv_exact_symbol])
-            else:
-                _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').where(Column('name') == code).limit(1).get_scanner_data()
-                
+            _, df = Query().set_markets('america').select('close', 'change_abs', 'volume', 'High.52Week', 'premarket_close', 'postmarket_close').where(Column('name') == code).limit(1).get_scanner_data()
+
             if df is not None and not df.empty:
                 row = df.iloc[0]
                 close_p = row.get('close')
@@ -861,30 +946,57 @@ def get_yf_fast_info(code, ttl=60.0):
         except Exception:
             pass
 
-    # 2. yfinance Fallback
+    # 2. yfinance
     try:
         # [수정] tz 캐시(SQLite) 동시 접근 경합 방지를 위해 yfinance 호출을 전역 락으로 직렬화
         with _YF_LOCK:
             fi = yf.Ticker(code).fast_info
-            
+
         # [수정] regular_market_previous_close가 없는 지수(달러인덱스 등)를 위한 Fallback
         prev_close = getattr(fi, 'regular_market_previous_close', None)
         if prev_close is None or pd.isna(prev_close):
             prev_close = getattr(fi, 'previous_close', None)
-                
+
+        last_price = getattr(fi, 'last_price', None)
+        if last_price is None or pd.isna(last_price):
+            raise ValueError("fast_info last_price 없음")
+
         data = {
-            'last_price': getattr(fi, 'last_price', None),
-                'regular_market_previous_close': prev_close,
+            'last_price': last_price,
+            'regular_market_previous_close': prev_close,
             'last_volume': getattr(fi, 'last_volume', 0),
             'year_high': getattr(fi, 'year_high', None),
             'src': 'yf',           # [추가] yfinance fast_info는 정규장가만 제공 (장외 시세 병합에 사용 금지)
             'is_extended': False
         }
-        _set_micro_cache(cache_key, data)
-        return data
+        if prev_close is not None and not pd.isna(prev_close):
+            _set_micro_cache(cache_key, data)
+            return data
+        # 전일 종가가 없으면 호출부가 실시간으로 인정하지 않는다(market.py) → TV가 온전한
+        #  값을 주면 그쪽을 쓰고, TV도 실패하면 이 반쪽 값이라도 종전처럼 돌려준다.
+        yf_partial = data
     except Exception as e:
         logger.debug(f"get_yf_fast_info Error ({code}): {e}")
-        return None
+        yf_partial = None
+
+    # 3. tvDatafeed 폴백 (TV 매핑이 있는 지수·선물·환율)
+    if tv_exact_symbol:
+        data = _fast_info_via_tvdatafeed(tv_exact_symbol)
+        if data:
+            _set_micro_cache(cache_key, data)
+            return data
+
+    if yf_partial:
+        _set_micro_cache(cache_key, yf_partial)
+        return yf_partial
+
+    # 4. stale-if-error — 유예 시간 안이면 직전 성공값을 재사용한다.
+    #    (한 번의 순간 실패로 '실시간 시세 지연' 경고가 뜨고 확정 종가로 되돌아가는 것을 막는다)
+    stale = _get_micro_cache(cache_key, ttl=_YF_FI_STALE_GRACE_SEC)
+    if stale:
+        logger.debug(f"get_yf_fast_info({code}): 조회 실패 → 직전 값 재사용(stale)")
+        return dict(stale, is_stale=True)
+    return None
 
 # ==========================================================
 # [추가] 차트 데이터 인메모리 캐싱 시스템 (하이브리드 패치)
