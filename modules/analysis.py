@@ -434,6 +434,10 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
 #  막기 위해 일정 시간 재조회를 건너뛴다. (성공 결과는 api._get_cached_chart가 6시간/디스크 캐싱)
 _TVDATAFEED_OVERSEAS_NEG_CACHE = {}   # code -> 실패 기록 시각(datetime)
 _TVDATAFEED_NEG_TTL_SEC = 1800        # 30분
+# [추가] 종목별로 한 번 확인된 TradingView 거래소 이름. 시세가 아니라 '어디에 상장돼 있는가'라는
+#  메타데이터라 재사용해도 신선도에 영향이 없다(일봉은 매번 새로 받는다). KIS 경로의
+#  exchange_cache와 같은 성격으로, 재조회 때 search_symbol과 헛거래소 순회를 없앤다.
+_TVDATAFEED_EXCHANGE = {}             # code -> exchange 이름
 
 def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
     """해외 개별 종목/ETF 일봉을 TradingView(tvDatafeed)로 조회한다(토스 캔들 실패 시 폴백).
@@ -457,25 +461,34 @@ def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
     except Exception:
         return None
 
-    # 거래소 자동 해석(검색) → 정확한 심볼 매칭 우선. 실패 시 미국 주요 거래소 폴백.
-    exchanges = []
-    try:
-        with _TVDATAFEED_LOCK:
-            matches = tv.search_symbol(code) or []
-        for m in matches:
-            sym = str(m.get('symbol', '')).upper()
-            exch = m.get('exchange') or ''
-            if sym == code.upper() and exch and exch not in exchanges:
-                exchanges.append(exch)
-    except Exception as e:
-        logger.debug(f"[TVDATAFEED] {code} 심볼 검색 실패: {e}")
-    for e in ['NASDAQ', 'NYSE', 'AMEX']:
-        if e not in exchanges:
-            exchanges.append(e)
+    # 거래소 자동 해석. tvDatafeed 호출은 전역 락(_TVDATAFEED_LOCK)으로 직렬화되므로 여기서
+    #  헛도는 호출 하나하나가 다른 종목의 대기 시간이 된다('데이터 수신' 단계가 마지막 몇
+    #  종목에서 오래 멈추는 원인). 그래서 (1) 한 번 성공한 거래소를 기억해 재조회 때 검색과
+    #  헛거래소 순회를 건너뛰고, (2) 검색이 성공하면 추측 거래소는 붙이지 않는다.
+    #  ※ 기억하는 것은 '거래소 이름'(메타데이터)이지 시세가 아니다 — 일봉은 매번 새로 받는다.
+    known = _TVDATAFEED_EXCHANGE.get(code)
+    exchanges = [known] if known else []
+    if not known:
+        try:
+            with _TVDATAFEED_LOCK:
+                matches = tv.search_symbol(code) or []
+            for m in matches:
+                sym = str(m.get('symbol', '')).upper()
+                exch = m.get('exchange') or ''
+                if sym == code.upper() and exch and exch not in exchanges:
+                    exchanges.append(exch)
+        except Exception as e:
+            logger.debug(f"[TVDATAFEED] {code} 심볼 검색 실패: {e}")
+        # 검색이 거래소를 찾아냈으면 그게 정답이다. 못 찾았을 때만 미국 주요 거래소를 추측한다.
+        if not exchanges:
+            exchanges = ['NASDAQ', 'NYSE', 'AMEX']
 
     df = None
-    for exch in exchanges:
-        for attempt in range(2):  # 익명 웹소켓 간헐 실패 대비 거래소별 2회 재시도
+    for i, exch in enumerate(exchanges):
+        # 익명 웹소켓 간헐 실패 대비 재시도는 '가장 유력한 거래소'에만 준다.
+        #  모든 거래소에 2회씩 주면 없는 종목 하나가 최대 12회 조회 + 락 점유로 번진다.
+        attempts = 2 if i == 0 else 1
+        for attempt in range(attempts):
             try:
                 with _TVDATAFEED_LOCK:
                     df = tv.get_hist(symbol=code, exchange=exch,
@@ -485,10 +498,14 @@ def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
             except Exception as e:
                 logger.debug(f"[TVDATAFEED] {code}@{exch} 조회 오류(attempt={attempt}): {e}")
                 df = None
-            if attempt == 0:
+            if attempt < attempts - 1:
                 time.sleep(0.6)
         if df is not None and not df.empty:
+            _TVDATAFEED_EXCHANGE[code] = exch      # 다음 조회는 곧장 이 거래소로
             break
+        if known:
+            # 기억한 거래소가 더 이상 맞지 않으면(상장 이전 등) 잊고 다음 기회에 다시 찾는다
+            _TVDATAFEED_EXCHANGE.pop(code, None)
 
     if df is None or df.empty:
         _TVDATAFEED_OVERSEAS_NEG_CACHE[code] = datetime.now()  # 실패 기록(TTL 재조회 억제)

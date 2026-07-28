@@ -336,6 +336,36 @@ US_DAY_MARKET_EXCD = {"NAS": "BAQ", "NASD": "BAQ",
 # 주간거래 코드는 exchange_cache/stock.json에 저장하면 안 되므로(정규장 조회가 깨진다) 역매핑을 둔다.
 US_REGULAR_EXCD = {"BAQ": "NAS", "BAY": "NYS", "BAA": "AMS"}
 
+# [추가] 미국 거래소 코드 정규화 — 시세(quotations) 조회용 표준 코드는 NAS/NYS/AMS 3종이다.
+#  NASD/NYSE/AMEX는 주문·잔고 API에서 쓰는 '같은 거래소의 다른 표기'이고(위 US_DAY_MARKET_EXCD가
+#  두 표기를 같은 주간코드로 매핑한다), BAQ/BAY/BAA는 그 거래소의 주간거래 코드다.
+#  거래소를 모르는 종목은 후보를 순회하며 탐색하는데, 6개를 다 돌면 같은 거래소를 두 번씩
+#  묻는 셈이라 최악 탐색 시간만 2배가 된다(모의투자 2 TPS에서는 그대로 체감 지연이 된다).
+US_EXCD_CANONICAL = {
+    "NAS": "NAS", "NASD": "NAS", "BAQ": "NAS",
+    "NYS": "NYS", "NYSE": "NYS", "BAY": "NYS",
+    "AMS": "AMS", "AMEX": "AMS", "BAA": "AMS",
+}
+# 시세 조회 시 순회할 거래소(중복 없는 표준 코드)
+US_EXCD_PROBE_ORDER = ("NAS", "NYS", "AMS")
+
+
+def us_excd_normalize(excd):
+    """거래소 코드를 시세 조회용 표준 코드(NAS/NYS/AMS)로 정규화한다. 모르는 값은 그대로."""
+    if not excd:
+        return None
+    return US_EXCD_CANONICAL.get(str(excd).upper(), excd)
+
+
+def us_excd_probe_list(cached_ex=None):
+    """시세 조회용 거래소 탐색 순서 — 캐시된 거래소를 앞에 두고 중복을 제거한다."""
+    out = []
+    for e in (cached_ex, *US_EXCD_PROBE_ORDER):
+        c = us_excd_normalize(e)
+        if c and c not in out:
+            out.append(c)
+    return out
+
 
 def us_day_market_session():
     """미국 주간거래(데이마켓) 세션이 열려 있으면 그 세션의 '거래일'(YYYYMMDD), 아니면 None.
@@ -367,13 +397,12 @@ def us_excd_candidates(cached_ex=None):
     주간거래 세션 중에는 주간 코드를 먼저 시도하고, 값이 없으면 정규 코드로 폴백한다
     (세션 중이라도 해당 종목에 체결이 없으면 주간 코드는 빈 응답을 준다).
     캐시된 거래소가 있으면 그 코드(및 대응 주간 코드)를 최우선으로 두어 호출 수를 줄인다.
+
+    [수정] 후보를 표준 코드(NAS/NYS/AMS)로 정규화한다. NASD/NYSE/AMEX는 같은 거래소의 다른
+     표기라 6개를 모두 순회하면 거래소를 못 맞힌 종목마다 같은 곳을 두 번씩 묻게 된다.
+     (조회 결과를 재사용하는 것이 아니라 헛호출만 없애므로 시세 신선도와는 무관하다)
     """
-    regular = []
-    if cached_ex:
-        regular.append(cached_ex)
-    for e in ("NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"):
-        if e not in regular:
-            regular.append(e)
+    regular = us_excd_probe_list(cached_ex)
 
     if not us_day_market_session():
         return regular
@@ -1574,6 +1603,31 @@ def start_overview_warmer():
     _OVERVIEW_WARMER_STARTED = True
     return t
 
+# Rate Limit(초당 한도 초과) 재시도 대기. 서버 장애용 지수 백오프와 분리한다 —
+#  한도 초과는 다음 TPS 창만 비면 풀리므로, 재시도까지 몇 초씩 잠들 이유가 없다.
+#  (전송 직전 스로틀이 TPS 창을 다시 지키므로 짧게 깨어나도 한도를 넘지 않는다)
+RATE_LIMIT_RETRY_WAIT = 0.2      # 시도 회차마다 선형 증가 (0.2 → 0.4 → 0.6 …)
+RATE_LIMIT_RETRY_WAIT_MAX = 1.0  # 지터 제외 상한
+
+
+def _retry_wait_seconds(attempt, reason):
+    """재시도 전 대기 시간(초).
+
+    Rate Limit(EGW00201/EGW00215)은 서버 장애가 아니라 '초당 한도 초과'다. 다음 TPS 창
+    (<1초)만 비면 곧바로 성공하는데도 장애용 지수 백오프(1→2→4→8→16초)를 그대로 태우면
+    한 번 걸릴 때마다 최대 31초를 잠든다. 모의투자(2 TPS)에서 콜드 캐시로 대량 일봉을 받는
+    '데이터 수신' 단계가 특정 종목에서 오래 멈추던 주된 원인이라, 짧은 선형 대기로 분리한다.
+    (전송 직전 스로틀이 TPS 창을 다시 지키므로 일찍 깨어나도 한도를 넘지 않는다)
+
+    그 외(연결 끊김·게이트웨이 오류 등 진짜 장애)는 종전 지수 백오프를 유지한다.
+    """
+    jitter = random.uniform(0.1, 0.5)   # 동시 재시도 스레드가 한꺼번에 깨어나는 것 방지
+    if "Rate Limit" in (reason or ""):
+        return min(RATE_LIMIT_RETRY_WAIT * (attempt + 1), RATE_LIMIT_RETRY_WAIT_MAX) + jitter
+    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
+    return (base_delay * (2 ** attempt)) + jitter
+
+
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
@@ -1816,11 +1870,10 @@ class ThrottledSession(requests.Session):
 
                 # [수정] 모든 예외(연결 끊김, API 에러 등)에 대해 백오프 후 재시도
                 if attempt < max_retries:
-                    base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
-                    # [수정] 동시에 여러 스레드가 깨어나는 것을 방지하기 위해 랜덤 지터(Jitter) 추가
-                    jitter = random.uniform(0.1, 0.5)
-                    wait_time = (base_delay * (2 ** attempt)) + jitter
-                    
+                    # [수정] 대기 시간 계산은 _retry_wait_seconds로 분리 — Rate Limit은 짧은
+                    #  선형 대기, 진짜 장애는 종전 지수 백오프. (근거는 해당 함수 주석 참조)
+                    wait_time = _retry_wait_seconds(attempt, str(e))
+
                     msg = f"⚠️ API 요청 실패. {wait_time:.1f}초 후 재시도합니다. 사유: {str(e)}"
                     # [수정] Rate Limit(EGW00201/EGW00215)은 정상적인 백오프 재시도 흐름이므로
                     #        DEBUG로 강등하여 로그 노이즈를 줄인다. (진짜 오류만 WARNING 유지)
@@ -2573,15 +2626,28 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
             current_start_date = start_date_origin
 
             retry_count = 0
+            seen_dates = set()
             while len(all_items) < 250 and retry_count < 10:
                 params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
                 data = call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
                 if data.get('rt_cd') == '0':
                     items = data.get('output2')
                     if items:
+                        before = len(seen_dates)
+                        seen_dates.update(x.get('stck_bsop_date') for x in items)
                         all_items.extend(items)
+                        # [추가] 새 거래일이 하나도 없으면(같은 구간을 반복 응답) 더 받을 과거 봉이 없다.
+                        #  종전에는 중복만 돌아와도 페이지 예산(10회)을 끝까지 소진했다.
+                        #  상장 이력이 짧은 종목·ETF에서 헛도는 호출이 모의투자 2 TPS와 겹쳐
+                        #  '데이터 수신' 단계가 특정 종목에서 오래 멈추는 원인이 됐다.
+                        if len(seen_dates) == before:
+                            break
                         temp_dates = sorted([x['stck_bsop_date'] for x in items])
-                        current_end_date = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        next_end = (datetime.strptime(temp_dates[0], "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                        # [추가] 커서가 조회 시작일 이전으로 넘어가면 받을 것이 남아 있지 않다
+                        if next_end < current_start_date:
+                            break
+                        current_end_date = next_end
                     else:
                         break
                     retry_count += 1
@@ -2605,15 +2671,15 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     else:
         def _fetch_overseas_daily():
             cached_ex = config.session.exchange_cache.get(code)
-            exchanges = []
-            if cached_ex: exchanges.append(cached_ex)
-            for e in ["NAS", "NYS", "AMS", "NASD", "NYSE", "AMEX"]:
-                if e not in exchanges: exchanges.append(e)
+            # [수정] NASD/NYSE/AMEX는 NAS/NYS/AMS와 같은 거래소의 다른 표기라 6개를 다 도는 것은
+            #  같은 곳을 두 번씩 묻는 낭비였다. 표준 코드 3개로 정규화해 최악 탐색 시간을 절반으로 줄인다.
+            exchanges = us_excd_probe_list(cached_ex)
 
             url_path = constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["CHART"]
 
             for excd in exchanges:
                 all_items = []
+                seen_dates = set()
                 next_bymd = today
 
                 retry_count = 0
@@ -2625,9 +2691,18 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
                         if items:
                             if not all_items:
                                 if cached_ex != excd: config.session.update_cache_and_save(code, excd)
+                            before = len(seen_dates)
+                            seen_dates.update(i.get('xymd') for i in items)
                             all_items.extend(items)
+                            # [추가] 새 거래일이 하나도 없으면(같은 구간을 반복 응답) 더 받을 과거 봉이 없다.
+                            #  종전에는 중복만 돌아와도 페이지 예산(10회)을 끝까지 소진했다.
+                            if len(seen_dates) == before:
+                                break
                             last = items[-1]['xymd']
                             next_bymd = (datetime.strptime(last, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+                            # [추가] 커서가 조회 시작일 이전으로 넘어가면 받을 것이 남아 있지 않다
+                            if next_bymd < start_date_origin:
+                                break
                         else:
                             break
                         retry_count += 1
