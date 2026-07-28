@@ -161,13 +161,27 @@ def _fetch_fdr(code, start, end):
     return _normalize(_fdr.DataReader(code, start, end), 'FDR')
 
 
+def is_domestic_code(code):
+    """국내 6자리 종목코드인가.
+
+    [Fix] 종전엔 isdigit()만 봐서 문자가 섞인 코드(KODEX K방산TOP10 '0080G0' 등 최근 상장
+     ETF/ETN)를 전부 배제했다. 그 종목은 KRX 공식 일봉을 못 받고 토스 캔들로 폴백하는데,
+     토스 캔들에는 NXT 연장 체결이 섞여 ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋난다
+     (ATR은 손절폭 → 포지션 크기 → 포트폴리오 리스크로 전파된다).
+     실측 2026-07-29: pykrx·FDR 모두 '0080G0'을 정상 조회한다(240봉, 종가 9,560 일치).
+     KRX 코드는 '숫자로 시작하는 6자리 영숫자'이므로 해외 티커(AAPL 등)와도 구분된다.
+    """
+    c = str(code or '').strip()
+    return len(c) == 6 and c[0].isdigit() and c.isalnum()
+
+
 def get_daily(code, lookback_days=None, use_cache=True):
     """KRX 정규장 기준 일봉 DataFrame(['date','open','high','low','close','volume']).
 
     실패 시 None을 반환한다(호출부가 토스 캔들로 폴백). 국내 6자리 종목코드만 지원한다.
     """
     code = str(code or '').strip()
-    if not code.isdigit() or len(code) != 6:
+    if not is_domestic_code(code):
         return None
     if not is_available():
         return None
@@ -322,7 +336,7 @@ def get_listing_map(use_cache=True):
     has_name = 'Name' in df.columns
     for row in df.itertuples(index=False):
         code = str(getattr(row, 'Code', '') or '').strip()
-        if len(code) != 6 or not code.isdigit():
+        if not is_domestic_code(code):
             continue
         try:
             marcap = float(getattr(row, 'Marcap', 0) or 0) if has_marcap else 0.0
@@ -347,7 +361,7 @@ def get_listing_map(use_cache=True):
 def get_ticker_name(code):
     """종목코드 → 종목명. 상장 목록에 없으면 '' , 조회 자체가 불가하면 None."""
     code = str(code or '').strip()
-    if len(code) != 6 or not code.isdigit():
+    if not is_domestic_code(code):
         return ''
 
     listing = get_listing_map()

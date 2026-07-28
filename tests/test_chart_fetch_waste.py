@@ -419,3 +419,54 @@ def test_attrs_survive_chart_cache_copy():
     """_get_cached_chart는 df를 copy해 돌려준다 — attrs가 유실되면 판정이 무력화된다."""
     src = _short_df(82, exhausted=True)
     assert src.copy().attrs.get('exhausted') is True
+
+
+# ==========================================================
+# 국내 종목코드 판정 — 문자가 섞인 코드
+# ==========================================================
+#  KODEX K방산TOP10('0080G0')처럼 최근 상장 ETF/ETN은 코드에 문자가 섞인다.
+#  종전 가드가 isdigit()이라 이런 종목은 KRX 공식 일봉(pykrx/FDR)을 통째로 건너뛰고
+#  토스 캔들로 폴백했는데, 토스 캔들에는 NXT 연장 체결이 섞여 ATR이 6~15% 부풀고
+#  ADX가 최대 9.45 어긋난다(ATR은 손절폭 → 포지션 크기 → 리스크로 전파된다).
+#  실측 2026-07-29: pykrx·FDR 모두 '0080G0'을 정상 조회(240봉, 종가 9,560 일치).
+
+from modules import krx_daily as _kd
+
+
+@pytest.mark.parametrize("code, expect", [
+    ("0080G0", True),     # KODEX K방산TOP10 — 문자 포함
+    ("069500", True),
+    ("005930", True),
+    ("AAPL", False),      # 해외 티커
+    ("SPCX", False),
+    ("00500", False),     # 5자리
+    ("0069500", False),   # 7자리
+    ("A05930", False),    # 숫자로 시작하지 않음
+    ("", False), (None, False),
+])
+def test_is_domestic_code(code, expect):
+    assert _kd.is_domestic_code(code) is expect
+
+
+def test_krx_daily_chart_accepts_alnum_code():
+    """문자가 섞인 코드도 KRX 일봉 경로를 타야 한다."""
+    df = pd.DataFrame({'date': [f'2026{i:04d}' for i in range(1, 131)],
+                       'open': [1.0] * 130, 'high': [1.0] * 130, 'low': [1.0] * 130,
+                       'close': [1.0] * 130, 'volume': [1.0] * 130})
+    df.attrs['source'] = 'pykrx'
+    with patch('modules.krx_daily.get_daily', return_value=df) as m, \
+         patch.object(api, '_append_today_bar_from_price', side_effect=lambda d, c: d):
+        out = api._krx_daily_chart("0080G0")
+    m.assert_called_once_with("0080G0")
+    assert out is not None
+    assert out.attrs['source'] == 'KRX/pykrx'
+
+
+def test_krx_daily_chart_rejects_overseas_code_with_warning():
+    """국내 코드가 아니면 조용히 넘어가지 말고 폴백 사유를 남긴다."""
+    with patch('modules.krx_daily.get_daily') as m, \
+         patch.object(api, 'note_krx_fallback') as note:
+        assert api._krx_daily_chart("AAPL") is None
+    m.assert_not_called()
+    note.assert_called_once()
+    assert "6자리" in note.call_args.args[1]

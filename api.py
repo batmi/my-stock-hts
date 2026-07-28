@@ -5005,10 +5005,14 @@ def _krx_daily_chart(code):
     지표 산출에 못 미치는 짧은 결과(신규 상장 등)는 채택하지 않고 토스 캔들에 맡긴다 —
     EMA120이 계산되지 않으면 화면 지표가 통째로 비기 때문이다.
     """
-    if not code or not str(code).isdigit() or len(str(code)) != 6:
-        return None
     try:
         from modules import krx_daily
+        # [Fix] 종전 가드가 isdigit()이라 문자가 섞인 코드('0080G0' 등)를 조용히 배제했고,
+        #  note_krx_fallback도 거치지 않아 'KRX 일봉 미확보' 경고조차 뜨지 않았다.
+        #  그 종목은 NXT 체결이 섞인 토스 캔들로 지표가 계산된다(ATR 6~15% 부풀림).
+        if not krx_daily.is_domestic_code(code):
+            note_krx_fallback(code, "국내 6자리 코드 아님")
+            return None
         df = krx_daily.get_daily(code)
     except Exception as e:      # noqa: BLE001 - 외부 소스 장애가 시세 경로를 막지 않게 한다
         logger.debug(f"[API] KRX 일봉 조회 실패({code}): {e}")

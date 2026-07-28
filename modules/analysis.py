@@ -4112,6 +4112,9 @@ def save_all_market_analysis():
 #  '데이터 수신' 단계가 마지막 한두 종목에서 오래 멈추는데, 화면에는 진행률만 있어 어느
 #  종목이 원인인지 특정할 수 없었다. 프로그래스 바 표기는 그대로 두고 로그로만 알린다.
 SLOW_CHART_FETCH_SEC = 5.0
+# 단계별 총계 로그에서 '이 표에 느린 종목이 몇 건이었는지'를 세는 카운터(스레드에서 증가).
+#  GIL 하에서 리스트 원소 증가는 원자적이지 않지만, 진단용 근사치라 락을 두지 않는다.
+_SLOW_FETCH_COUNT = [0]
 
 
 def _fetch_chart_data(item, is_overseas):
@@ -4122,6 +4125,7 @@ def _fetch_chart_data(item, is_overseas):
     """
     name, code = item
     started = time.monotonic()
+    started_at = datetime.now()
     df = None
     try:
         df = api.get_chart_data(code, is_overseas, 'daily', False)
@@ -4139,7 +4143,12 @@ def _fetch_chart_data(item, is_overseas):
                 bars = 0 if df is None or df.empty else len(df)
             except Exception:      # noqa: BLE001 - 진단 로그가 본 흐름을 막지 않게 한다
                 src, bars = '-', 0
+            # 시작 시각을 함께 남긴다 — 완료 시각만으로는 여러 종목이 실제로 겹쳐 돌았는지
+            #  (병렬) 차례로 돌았는지(직렬) 구분할 수 없다. 표 꼬리가 한 종목의 소요로
+            #  수렴하는지, 소요의 합으로 늘어지는지가 여기서 갈린다.
+            _SLOW_FETCH_COUNT[0] += 1
             logger.warning(f"[느린 일봉 수신] {name}({code}) {elapsed:.1f}초 "
+                           f"(시작 {started_at.strftime('%H:%M:%S.%f')[:-3]}) "
                            f"| 소스={src} 봉={bars}")
 
 def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=None, preloaded_curr=None):
@@ -4945,6 +4954,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
             transient=True
         ) as progress:
             task_d = progress.add_task(f"[cyan]{title} (데이터 수신)[/cyan]", total=len(data_list))
+            _stage1_started = time.monotonic()
+            _slow_before = _SLOW_FETCH_COUNT[0]
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 fut_map = {
                     executor.submit(_fetch_chart_data, item, is_overseas): i
@@ -4958,6 +4969,13 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
                         logger.error(f"Chart fetch error: {e}")
                         charts[idx] = None
                     progress.advance(task_d)
+        # [진단] 느린 종목이 있었던 표만 단계 총계를 남긴다. 개별 소요의 '합'에 가까우면
+        #  직렬, '최댓값'에 가까우면 병렬이다 — 워커를 늘려 효과가 있을지가 여기서 갈린다.
+        _slow_n = _SLOW_FETCH_COUNT[0] - _slow_before
+        if _slow_n:
+            logger.warning(f"[일봉 수신 완료] {title} {len(data_list)}종목 "
+                           f"{time.monotonic() - _stage1_started:.1f}초 "
+                           f"(느린 종목 {_slow_n}건 / 워커 {max_w})")
 
         # [멀티시세] 국내 그룹 현재가를 30종목/1콜로 프리페치 (종목당 현재가 REST 제거 → TPS 절감)
         #  정규장(phase 'skip')은 KRX 대표가만, 장전/장후 NXT 시간(phase 'active')은 KRX+NXT를 각각
