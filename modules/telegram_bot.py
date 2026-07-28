@@ -1538,7 +1538,13 @@ class TelegramCommander:
                 type_str = r.get('type', '')
                 simple_type = "buy" if "매수" in type_str or "buy" in type_str.lower() else "sell"
                 parsed_r = dict(r)
+                # [Fix] type을 'buy'/'sell'로 덮어쓰면 주문 출처 꼬리표((AUTO)/(수동)/(예약)/(외부))가
+                #  통째로 사라진다. 집계 코드는 단순 타입을 쓰고(_refine_trade_records 등), 화면
+                #  표기는 꼬리표가 필요하므로 원본을 type_full로 함께 보존한다.
+                #  (종전에는 /history의 모든 거래가 꼬리표 없는 '매수'/'매도'로 남아 자동·수동·예약
+                #   주문까지 전부 '(외부)'로 표시됐다)
                 parsed_r['type'] = simple_type
+                parsed_r['type_full'] = type_str
                 trades.append(parsed_r)
 
             if hasattr(self.trader, '_refine_trade_records'):
@@ -2315,7 +2321,8 @@ class TelegramCommander:
         rules_map = {r['code']: True for r in custom_rules}
         
         for t in trades:
-            raw_type = str(t['type'])
+            # [Fix] 집계용으로 단순화된 type이 아니라 꼬리표가 살아 있는 원본을 쓴다.
+            raw_type = str(t.get('type_full') or t.get('type') or '')
             clean_type = raw_type.replace("buy", "매수").replace("BUY", "매수").replace("sell", "매도").replace("SELL", "매도").replace("AUTO", "자동")
             
             base_type = "기타"
@@ -2335,7 +2342,13 @@ class TelegramCommander:
             elif is_buy: base_type = "매수"
             elif is_sell: base_type = "매도"
             
-            tag_disp = "(자동)" if "자동" in clean_type else ("(수동)" if "수동" in clean_type else "(외부)")
+            # [Fix] 예약 주문에 꼬리표가 없어 (외부)로 표시됐고, 꼬리표를 판정할 수 없는
+            #  레코드까지 (외부)로 단정했다. 출처를 알 수 없으면 꼬리표를 붙이지 않는다.
+            if "자동" in clean_type: tag_disp = "(자동)"
+            elif "수동" in clean_type: tag_disp = "(수동)"
+            elif "예약" in clean_type: tag_disp = "(예약)"
+            elif "외부" in clean_type: tag_disp = "(외부)"
+            else: tag_disp = ""
             type_str = f"{base_type}{tag_disp}"
             name = t['name']
             code = t['code']
@@ -2470,13 +2483,17 @@ class TelegramCommander:
                 if not reason.startswith("["):
                     reason = f"[미체결] {reason}"
 
-            # [추가] 자동/수동/외부 사유 태그 적용
+            # [추가] 자동/수동/예약/외부 사유 태그 적용
+            # [Fix] 종전 else 분기가 '자동·수동·예약이 아니면 외부'로 단정해, 꼬리표를 잃은
+            #  레코드가 전부 [외부]로 찍혔다. 이제 꼬리표가 실제로 외부일 때만 붙인다.
             if reason:
                 if "자동" in clean_type and "[자동]" not in reason:
                     reason = f"[자동] {reason}"
                 elif "수동" in clean_type and "[수동]" not in reason:
                     reason = f"[수동] {reason}"
-                elif "자동" not in clean_type and "수동" not in clean_type and "예약" not in clean_type and "[외부]" not in reason:
+                elif "예약" in clean_type and "[예약]" not in reason:
+                    reason = f"[예약] {reason}"
+                elif "외부" in clean_type and "[외부]" not in reason:
                     reason = f"[외부] {reason}"
 
             reason_msg = ""

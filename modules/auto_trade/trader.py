@@ -205,6 +205,12 @@ class AutoTrader:
                 existing['time'] = r.get('time', existing.get('time'))
                 if r.get('order_status'):
                     existing['order_status'] = r['order_status']
+
+                # [추가] 주문 출처 꼬리표(type_full)는 '접수' 원본이 정확하다. 레코드는 시간
+                #  오름차순으로 들어오므로 먼저 자리잡은 값(=접수)을 유지하고, 비어 있을 때만 채운다.
+                #  (체결 확인 시점에 원주문 조회가 실패하면 그 레코드에는 (외부)가 붙는다)
+                if not existing.get('type_full') and r.get('type_full'):
+                    existing['type_full'] = r['type_full']
         
         return list(unique_records.values())
 
