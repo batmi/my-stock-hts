@@ -1106,6 +1106,11 @@ def _chart_disk_set(cache_key, df, today_str):
             # 거래일이 바뀌면 과거일자 항목 일괄 정리(디스크 무제한 누적 방지)
             if _chart_disk_pruned_date != today_str:
                 conn.execute("DELETE FROM chart_cache WHERE trade_date != ?", (today_str,))
+                # 만료된 토스 일봉 시드도 함께 지운다 — TTL은 '사용'만 막을 뿐이라
+                # 관심종목에서 뺀 종목의 시드(종목당 약 18KB)가 계속 쌓인다.
+                conn.execute(_TOSS_SEED_DDL)
+                conn.execute("DELETE FROM toss_daily_seed WHERE ts < ?",
+                             (time.time() - _TOSS_SEED_TTL_DAYS * 86400,))
                 _chart_disk_pruned_date = today_str
     except Exception as e:
         logger.debug(f"[ChartDisk] set 실패({cache_key}): {e}")
@@ -1121,6 +1126,124 @@ def _chart_disk_delete(cache_key):
             conn.execute("DELETE FROM chart_cache WHERE cache_key=?", (cache_key,))
     except Exception as e:
         logger.debug(f"[ChartDisk] delete 실패({cache_key}): {e}")
+
+
+# =========================================================================
+# [최적화] 토스 일봉 '과거 구간' 시드 — 종목당 캔들 콜 2회를 1회로 줄인다.
+#
+# 토스 캔들은 호출당 200봉이 상한이고(실측: count=250은 [400] invalid-request),
+# 52주 밴드(_w52_band)에 250봉이 필요해 종목당 2콜이 강제된다. 그런데 /candles 그룹은
+# 서버 한도가 5 RPS(실측: X-RateLimit-Limit 헤더)라 콜 수가 그대로 표 소요를 결정한다:
+#   18종목 × 2콜 ÷ 5 RPS = 7.2초 하한 (실측 7.1초 — 이미 하한에 붙어 있다)
+# 워커를 늘려도 _throttle 앞에 줄만 더 설 뿐이라 이 하한은 내려가지 않는다.
+#
+# 두 번째 페이지가 담는 '더 오래된 봉'은 불변이므로 날짜가 바뀌어도 다시 받을 이유가 없다.
+# 그래서 일자 무관 장기 보관하고, 다음 조회 때 최신 1페이지(200봉)만 받아 앞을 채운다.
+#   → 종목당 1콜, 표 하한 절반.
+#
+# 유일한 위험은 액면분할·유상증자다(adjusted=true라 과거 값이 통째로 바뀐다). 시드와 새
+# 페이지는 ~199봉이 겹치므로, 그 구간 종가가 하나라도 어긋나면 시드를 버리고 정상 페이징한다.
+# 게다가 최종 tail(250)까지 살아남는 시드 구간은 겹침 바로 앞 ~50봉뿐이다.
+# =========================================================================
+_TOSS_SEED_MIN_OVERLAP = 20      # 수정주가 검증 표본 최소 봉 수 (미달이면 시드를 쓰지 않는다)
+_TOSS_SEED_MAX_ROWS = 400        # 종목당 보관 봉 수 (2페이지 분량)
+_TOSS_SEED_TTL_DAYS = 30         # 이 기간 갱신되지 않은 시드는 폐기 (장기 미조회 종목 정리)
+_TOSS_SEED_DDL = ("CREATE TABLE IF NOT EXISTS toss_daily_seed "
+                  "(code TEXT PRIMARY KEY, df_blob BLOB, ts REAL)")
+
+
+def _toss_seed_get(code):
+    """토스 일봉 시드를 읽는다(거래일 무관). 없거나 만료면 None."""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return None
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn:
+            conn.execute(_TOSS_SEED_DDL)
+            row = conn.execute("SELECT df_blob, ts FROM toss_daily_seed WHERE code=?", (code,)).fetchone()
+        if not row or not row[0]:
+            return None
+        if (time.time() - float(row[1] or 0)) > _TOSS_SEED_TTL_DAYS * 86400:
+            return None
+        df = pickle.loads(row[0])
+        return df if df is not None and not df.empty else None
+    except Exception as e:
+        logger.debug(f"[TossSeed] get 실패({code}): {e}")
+        return None
+
+
+def _toss_seed_set(code, df):
+    """토스 일봉 시드를 저장한다(확정된 최근 _TOSS_SEED_MAX_ROWS봉).
+
+    [중요] 마지막 봉은 버린다. 장중(국내는 NXT 연장 20:00까지)에 받은 당일 봉은 아직
+    움직이므로, 그대로 저장하면 다음 조회의 겹침 대조에서 종가가 어긋나 시드가 매번
+    폐기된다(실측: 5종목 중 3종목이 당일 봉 변동만으로 재페이징 — 콜 10→8에 그쳤다).
+    시드는 '불변 구간'만 담아야 한다.
+    """
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return
+    if df is None or len(df) < 2:
+        return
+    try:
+        blob = pickle.dumps(df.iloc[:-1].tail(_TOSS_SEED_MAX_ROWS).reset_index(drop=True))
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
+            conn.execute(_TOSS_SEED_DDL)
+            conn.execute("INSERT OR REPLACE INTO toss_daily_seed (code, df_blob, ts) VALUES (?,?,?)",
+                         (code, blob, time.time()))
+    except Exception as e:
+        logger.debug(f"[TossSeed] set 실패({code}): {e}")
+
+
+def _toss_seed_delete(code):
+    """시드를 폐기한다(수정주가 등으로 과거 값이 바뀐 경우)."""
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
+            conn.execute(_TOSS_SEED_DDL)
+            conn.execute("DELETE FROM toss_daily_seed WHERE code=?", (code,))
+    except Exception as e:
+        logger.debug(f"[TossSeed] delete 실패({code}): {e}")
+
+
+def _toss_seed_extend(code, fresh_df, need):
+    """시드의 과거 구간으로 fresh_df 앞을 채운다. 쓸 수 없으면 None(→ 정상 페이징).
+
+    fresh_df: 방금 받은 최신 페이지(오름차순, date=YYYYMMDD).
+    need: 목표 봉 수. 병합 결과가 이에 못 미치면 시드로 콜을 아낄 수 없으니 None.
+    """
+    if fresh_df is None or fresh_df.empty:
+        return None
+    seed = _toss_seed_get(code)
+    if seed is None or 'date' not in seed.columns or 'close' not in seed.columns:
+        return None
+
+    oldest = str(fresh_df['date'].iloc[0])
+    older = seed[seed['date'].astype(str) < oldest]
+    if older.empty or (len(older) + len(fresh_df)) < need:
+        return None      # 시드가 짧아 어차피 2페이지가 필요하다
+
+    # 겹침 구간 종가 대조 — 수정주가가 발생했으면 여기서 어긋난다.
+    a = seed.set_index(seed['date'].astype(str))['close']
+    b = fresh_df.set_index(fresh_df['date'].astype(str))['close']
+    common = a.index.intersection(b.index)
+    if len(common) < _TOSS_SEED_MIN_OVERLAP:
+        return None      # 검증 표본 부족(신규 상장·장기 미조회) — 안전하게 정상 페이징
+    try:
+        diff = (a.loc[common].astype(float) - b.loc[common].astype(float)).abs()
+        ref = b.loc[common].astype(float).abs().clip(lower=1e-9)
+        if not bool(((diff / ref) <= 1e-6).all()):
+            _toss_seed_delete(code)
+            logger.debug(f"[TossSeed] 폐기({code}): 겹침 {len(common)}봉 종가 불일치(수정주가 추정)")
+            return None
+    except Exception as e:
+        logger.debug(f"[TossSeed] 대조 실패({code}): {e}")
+        return None
+
+    merged = pd.concat([older, fresh_df], ignore_index=True)
+    merged = merged.drop_duplicates(subset=['date'], keep='last')
+    return merged.sort_values('date').reset_index(drop=True)
+
+
 # [추가] 캐시 오버레이(get_current_price_data) 재진입 방지용 가드.
 # 액면분할 보정 경로(get_current_price_data → get_chart_data → 오버레이 → get_current_price_data)에서
 # 무한 재귀가 발생하지 않도록, 오버레이 진행 중 같은 스레드의 재진입 시 과거봉 캐시만 반환한다.
@@ -1134,6 +1257,9 @@ def _chart_disk_clear():
         with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn, conn:
             conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
             conn.execute("DELETE FROM chart_cache")
+            # 토스 일봉 시드도 함께 비운다 — 남겨두면 '전체 갱신'이 과거 구간을 재조회하지 않는다.
+            conn.execute(_TOSS_SEED_DDL)
+            conn.execute("DELETE FROM toss_daily_seed")
     except Exception as e:
         logger.debug(f"[ChartDisk] clear 실패: {e}")
 
@@ -5144,6 +5270,25 @@ def _toss_sanitize_daily_ohlc(df, code=""):
     return df
 
 
+def _toss_daily_df(candles):
+    """토스 일봉 캔들 리스트 → DataFrame(date=YYYYMMDD 문자열, 오름차순).
+
+    시드 대조와 최종 반환이 같은 형태를 쓰도록 한 곳에 모은다 — 형식이 갈라지면
+    겹침 구간 종가 대조가 매번 실패해 시드가 조용히 무력화된다.
+    """
+    rows = [{
+        'date': str(c.get('timestamp', ''))[:10].replace('-', ''),  # KIS 일봉과 동일 형식
+        'open': _toss_float(c.get('openPrice')),
+        'high': _toss_float(c.get('highPrice')),
+        'low': _toss_float(c.get('lowPrice')),
+        'close': _toss_float(c.get('closePrice')),
+        'volume': _toss_float(c.get('volume')),
+    } for c in candles]
+    df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+    df = df.drop_duplicates(subset=['date'])
+    return df.sort_values('date', ascending=True).reset_index(drop=True)
+
+
 def _toss_chart_data(code, period_type='daily', is_overseas=False):
     """토스 캔들 → KIS get_chart_data 형태의 DataFrame.
     columns=['date','open','high','low','close','volume'] (date=YYYYMMDD, 오름차순).
@@ -5170,6 +5315,7 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     #  받은 봉 수가 적은 것과 '그게 전부인 것'은 다르다 — 신규 상장 종목은 후자다.
     #  해외 폴백(_toss_daily_chart_with_tv_fallback)이 이 값을 보고 헛수고를 건너뛴다.
     exhausted = False
+    seeded_df = None  # [최적화] 시드로 과거 구간을 채워 2페이지 요청을 생략한 경우의 병합 결과
     page_log = []  # [진단] 분봉 페이징 추적
     try:
         for _ in range(max_pages):
@@ -5187,6 +5333,13 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
             candles.extend(batch)
             if len(candles) >= target:
                 break
+            # [최적화] 일봉: 최신 페이지를 받은 뒤 저장해 둔 시드로 앞을 채울 수 있으면 여기서 멈춘다.
+            #  과거 봉은 불변이라 재조회가 낭비이고, /candles는 5 RPS라 콜 1회가 곧 소요다.
+            #  (수정주가 검증에 실패하면 None → 아래 정상 페이징을 그대로 탄다)
+            if interval == '1d':
+                seeded_df = _toss_seed_extend(code, _toss_daily_df(candles), target)
+                if seeded_df is not None:
+                    break
             # 다음 페이지 커서: nextBefore 우선, 없으면 이번 배치의 가장 오래된 timestamp로 폴백.
             # (분봉은 nextBefore가 1페이지 후 끊기는 경우가 있어 09:00까지 못 가는 문제를 보완)
             oldest_ts = min((str(c.get('timestamp', '')) for c in batch if c.get('timestamp')),
@@ -5215,29 +5368,35 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
             logger.warning(f"[Toss] 일봉({code}) 조회 결과 없음"
                            + (f" | ERROR={cand_err}" if cand_err else " (요청은 성공했으나 캔들 0건)"))
         return pd.DataFrame()
-    rows = []
-    for c in candles:
-        ts = str(c.get('timestamp', ''))
-        if interval == '1d':
-            date = ts[:10].replace('-', '')  # YYYYMMDD 문자열 (KIS 일봉과 동일)
-        else:
+    if interval == '1d':
+        df = _toss_daily_df(candles)
+    else:
+        rows = []
+        for c in candles:
+            ts = str(c.get('timestamp', ''))
             # 분봉: KIS(_get_intraday_chart_data)와 동일하게 Timestamp로 보관해야
             # chart.format_date가 strftime 경로를 타 'MM-DD HH:MM' 라벨을 동일하게 출력한다.
             # (12자리 문자열로 두면 format_date 어느 분기에도 안 걸려 raw 숫자가 X축에 찍힘)
             date = pd.to_datetime(ts, errors='coerce')
             if pd.notna(date) and getattr(date, 'tzinfo', None) is not None:
                 date = date.tz_convert('Asia/Seoul').tz_localize(None)
-        rows.append({
-            'date': date,
-            'open': _toss_float(c.get('openPrice')),
-            'high': _toss_float(c.get('highPrice')),
-            'low': _toss_float(c.get('lowPrice')),
-            'close': _toss_float(c.get('closePrice')),
-            'volume': _toss_float(c.get('volume')),
-        })
-    df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
-    df = df.sort_values('date', ascending=True).reset_index(drop=True)
+            rows.append({
+                'date': date,
+                'open': _toss_float(c.get('openPrice')),
+                'high': _toss_float(c.get('highPrice')),
+                'low': _toss_float(c.get('lowPrice')),
+                'close': _toss_float(c.get('closePrice')),
+                'volume': _toss_float(c.get('volume')),
+            })
+        df = pd.DataFrame(rows).drop_duplicates(subset=['date'])
+        df = df.sort_values('date', ascending=True).reset_index(drop=True)
     if interval == '1d':
+        # 시드 병합에 성공했으면 그 결과가 곧 전체 구간이다(받은 페이지는 최신 1장뿐).
+        if seeded_df is not None:
+            df = seeded_df
+        # 다음 조회가 최신 1페이지만으로 끝나도록, 정제 전 원본을 시드로 남긴다.
+        #  (정제 후를 저장하면 다음 번 겹침 대조가 원본 종가와 어긋나 매번 폐기된다)
+        _toss_seed_set(code, df)
         if not is_overseas:
             # NXT 프리마켓 상·하한가 체결이 섞인 봉을 먼저 정제한다(tail 이전 = 첫 봉도 전일 종가 확보).
             # 해외는 가격제한폭이 없어 '제한폭에 붙은 값' 판정이 성립하지 않으므로 제외.

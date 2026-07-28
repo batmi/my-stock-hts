@@ -470,3 +470,113 @@ def test_krx_daily_chart_rejects_overseas_code_with_warning():
     m.assert_not_called()
     note.assert_called_once()
     assert "6자리" in note.call_args.args[1]
+
+
+# ==========================================================
+# 토스 일봉 시드 — 종목당 캔들 콜 2회 → 1회
+# ==========================================================
+#  토스 캔들은 호출당 200봉이 상한이고(실측: count=250은 [400] invalid-request), 52주 밴드에
+#  250봉이 필요해 종목당 2콜이 강제된다. /candles 그룹은 서버 한도 5 RPS(실측: X-RateLimit-Limit)
+#  라 콜 수가 그대로 표 소요를 정한다 — 18종목×2콜÷5 = 7.2초 하한(실측 7.1초, 이미 하한).
+#  워커를 늘려도 _throttle 앞에 줄만 더 서므로 이 하한은 내려가지 않는다.
+#  두 번째 페이지의 '더 오래된 봉'은 불변이라 시드로 재사용하면 종목당 1콜이 된다.
+#  실측 2026-07-29: 미국 8종목 전량 페이징 16콜 → 시드 8콜, 249봉 전 구간 완전 일치.
+
+import pandas as pd
+
+
+def _seed_df(n, start=0, close=100.0):
+    """date=YYYYMMDD 문자열, 오름차순 — _toss_daily_df와 같은 형태."""
+    dates = [f"2026{(start + i) // 30 + 1:02d}{(start + i) % 30 + 1:02d}" for i in range(n)]
+    return pd.DataFrame({'date': dates, 'open': [close] * n, 'high': [close] * n,
+                         'low': [close] * n, 'close': [close] * n, 'volume': [1.0] * n})
+
+
+def test_seed_extends_fresh_page(tmp_path, monkeypatch):
+    """시드가 겹치면 최신 1페이지만으로 목표 봉 수를 채운다."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(400))          # 마지막 봉은 저장 시 버려진다 → 399봉
+    fresh = _seed_df(200, start=200)                 # 시드와 199봉 겹침
+    out = api._toss_seed_extend('X', fresh, 260)
+    assert out is not None
+    assert len(out) >= 260
+    assert out['date'].is_monotonic_increasing
+    assert out['date'].duplicated().sum() == 0
+    assert str(out['date'].iloc[-1]) == str(fresh['date'].iloc[-1])
+
+
+def test_seed_drops_live_last_bar(tmp_path, monkeypatch):
+    """장중 당일 봉을 시드에 담으면 다음 대조가 매번 깨진다 — 마지막 봉은 저장하지 않는다."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    df = _seed_df(300)
+    api._toss_seed_set('X', df)
+    saved = api._toss_seed_get('X')
+    assert len(saved) == len(df) - 1
+    assert str(saved['date'].iloc[-1]) != str(df['date'].iloc[-1])
+
+
+def test_seed_discarded_on_adjusted_price_change(tmp_path, monkeypatch):
+    """액면분할 등으로 겹침 구간 종가가 어긋나면 시드를 폐기하고 정상 페이징한다."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(400, close=100.0))
+    fresh = _seed_df(200, start=200, close=50.0)     # 1:2 분할로 과거 종가가 통째로 바뀐 상태
+    assert api._toss_seed_extend('X', fresh, 260) is None
+    assert api._toss_seed_get('X') is None           # 재사용되지 않도록 폐기까지 확인
+
+
+def test_seed_skipped_when_overlap_too_small(tmp_path, monkeypatch):
+    """겹침이 검증 표본에 못 미치면(신규 상장·장기 미조회) 시드를 쓰지 않는다."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(300))
+    fresh = _seed_df(200, start=295)                 # 겹침 약 4봉
+    assert api._toss_seed_extend('X', fresh, 260) is None
+
+
+def test_seed_skipped_when_too_short(tmp_path, monkeypatch):
+    """시드가 짧아 목표 봉 수를 못 채우면 어차피 2페이지가 필요하다 — None."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(210))
+    fresh = _seed_df(200, start=10)
+    assert api._toss_seed_extend('X', fresh, 400) is None
+
+
+def test_seed_absent_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    assert api._toss_seed_extend('NOPE', _seed_df(200), 260) is None
+
+
+def test_seed_expires(tmp_path, monkeypatch):
+    """오래 갱신되지 않은 시드는 폐기한다(장기 미조회 종목의 무기한 재사용 방지)."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(300))
+    assert api._toss_seed_get('X') is not None
+    monkeypatch.setattr(api.time, 'time',
+                        lambda: __import__('time').time() + (api._TOSS_SEED_TTL_DAYS + 1) * 86400)
+    assert api._toss_seed_get('X') is None
+
+
+def test_daily_df_matches_seed_format():
+    """시드 대조가 성립하려면 _toss_daily_df와 시드 형태가 같아야 한다."""
+    candles = [{'timestamp': '2026-07-2{}T00:00:00.000+09:00'.format(i),
+                'openPrice': 1, 'highPrice': 2, 'lowPrice': 0.5,
+                'closePrice': 1.5, 'volume': 10} for i in range(1, 6)]
+    df = api._toss_daily_df(candles)
+    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
+    assert str(df['date'].iloc[0]) == '20260721'
+    assert df['date'].is_monotonic_increasing
+
+
+def test_daily_df_empty_keeps_columns():
+    """빈 입력에도 컬럼이 유지돼야 시드 대조(_toss_seed_extend)가 KeyError를 내지 않는다."""
+    df = api._toss_daily_df([])
+    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
+    assert api._toss_seed_extend('X', df, 260) is None
+
+
+def test_clear_chart_cache_clears_seed(tmp_path, monkeypatch):
+    """'전체 갱신'이 시드를 남기면 과거 구간이 재조회되지 않는다."""
+    monkeypatch.setattr(api, '_chart_disk_path', lambda: str(tmp_path / 'c.db'))
+    api._toss_seed_set('X', _seed_df(300))
+    assert api._toss_seed_get('X') is not None
+    api._chart_disk_clear()
+    assert api._toss_seed_get('X') is None
