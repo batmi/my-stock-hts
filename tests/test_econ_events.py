@@ -119,56 +119,49 @@ def test_collect_dedupes_same_day_same_name():
     assert len(out) == 1 and complete
 
 
-def test_get_events_uses_cache_without_refetch(tmp_path):
-    """당일 캐시가 구간을 덮으면 재수집하지 않는다."""
+def test_get_events_always_refetches(tmp_path):
+    """당일 캐시가 있어도 매번 새로 수집한다 (캐시는 읽기용이 아니라 폴백용)."""
     today = datetime.now().date()
     cache = {
         "fetched": today.strftime("%Y-%m-%d"),
         "covers_until": (today + timedelta(days=60)).strftime("%Y-%m-%d"),
         "complete": True,
         "events": [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
-                    "name": "미국 CPI", "country": "US", "weight": 1, "source": "FRED"}],
+                    "name": "묵은 CPI", "country": "US", "weight": 1, "source": "FRED"}],
     }
+    fresh = [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
+              "name": "미국 CPI", "country": "US", "weight": 1, "source": "FRED"}]
+
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "load_json", return_value=cache), \
-         patch.object(econ_events, "_collect") as mock_collect:
-        out = econ_events.get_events(days=30)
-
-    mock_collect.assert_not_called()
-    assert len(out) == 1 and out[0]["name"] == "미국 CPI"
-
-
-def test_get_events_retries_incomplete_cache(tmp_path):
-    """일부 소스가 실패한 캐시는 당일이어도 다시 수집한다.
-
-    (일시적 타임아웃 한 번으로 지표가 빠진 캘린더가 하루 종일 굳는 것을 막는다)
-    """
-    today = datetime.now().date()
-    partial = {
-        "fetched": today.strftime("%Y-%m-%d"),
-        "covers_until": (today + timedelta(days=60)).strftime("%Y-%m-%d"),
-        "complete": False,   # FRED 릴리스 일부가 타임아웃된 캐시
-        "events": [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
-                    "name": "FOMC 금리결정", "country": "US", "weight": 1, "source": "Fed"}],
-    }
-    full = [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
-             "name": "FOMC 금리결정", "country": "US", "weight": 1, "source": "Fed"},
-            {"date": (today + timedelta(days=7)).strftime("%Y-%m-%d"),
-             "name": "미국 CPI", "country": "US", "weight": 1, "source": "FRED"}]
-
-    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
-         patch.object(econ_events.jsonio, "load_json", return_value=partial), \
          patch.object(econ_events.jsonio, "save_json") as mock_save, \
-         patch.object(econ_events, "_collect", return_value=(full, True)) as mock_collect:
-        out = econ_events.get_events(days=30)
+         patch.object(econ_events, "_collect", return_value=(fresh, True)) as mock_collect:
+        out, status = econ_events.get_events(days=30)
 
     mock_collect.assert_called_once()
-    assert [e["name"] for e in out] == ["FOMC 금리결정", "미국 CPI"]
+    assert [e["name"] for e in out] == ["미국 CPI"]     # 캐시가 아니라 새로 받은 값
+    assert status == {"stale_since": None, "complete": True}
     assert mock_save.call_args.args[1]["complete"] is True
 
 
+def test_get_events_flags_partial_collection(tmp_path):
+    """일부 소스가 실패하면 받은 것만 쓰되 complete=False로 알린다."""
+    today = datetime.now().date()
+    partial = [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
+                "name": "FOMC 금리결정", "country": "US", "weight": 1, "source": "Fed"}]
+
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.jsonio, "save_json") as mock_save, \
+         patch.object(econ_events, "_collect", return_value=(partial, False)):
+        out, status = econ_events.get_events(days=30)
+
+    assert [e["name"] for e in out] == ["FOMC 금리결정"]
+    assert status["stale_since"] is None and status["complete"] is False
+    assert mock_save.call_args.args[1]["complete"] is False
+
+
 def test_get_events_falls_back_to_stale_cache(tmp_path):
-    """수집이 전부 실패하면 날짜 지난 캐시라도 살려서 쓴다."""
+    """수집이 전부 실패하면 날짜 지난 캐시라도 살려 쓰고, 언제 기준인지 알려준다."""
     today = datetime.now().date()
     stale = {
         "fetched": "2000-01-01",
@@ -179,28 +172,35 @@ def test_get_events_falls_back_to_stale_cache(tmp_path):
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "load_json", return_value=stale), \
          patch.object(econ_events, "_collect", return_value=([], False)):
-        out = econ_events.get_events(days=30)
+        out, status = econ_events.get_events(days=30)
 
     assert len(out) == 1 and out[0]["name"] == "FOMC 금리결정"
+    assert status["stale_since"] == "2000-01-01"
+
+
+def test_get_events_empty_when_collect_fails_without_cache(tmp_path):
+    """수집도 실패하고 폴백할 캐시도 없으면 빈 목록 — stale 표시는 붙이지 않는다."""
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.jsonio, "load_json", return_value={}), \
+         patch.object(econ_events, "_collect", return_value=([], False)):
+        out, status = econ_events.get_events(days=30)
+
+    assert out == [] and status["stale_since"] is None
 
 
 def test_get_events_drops_past_dates(tmp_path):
     """이미 지난 이벤트는 결과에서 빠진다."""
     today = datetime.now().date()
-    cache = {
-        "fetched": today.strftime("%Y-%m-%d"),
-        "covers_until": (today + timedelta(days=60)).strftime("%Y-%m-%d"),
-        "complete": True,
-        "events": [
-            {"date": (today - timedelta(days=1)).strftime("%Y-%m-%d"), "name": "지난 CPI",
-             "country": "US", "weight": 1, "source": "FRED"},
-            {"date": today.strftime("%Y-%m-%d"), "name": "오늘 FOMC",
-             "country": "US", "weight": 1, "source": "Fed"},
-        ],
-    }
+    collected = [
+        {"date": (today - timedelta(days=1)).strftime("%Y-%m-%d"), "name": "지난 CPI",
+         "country": "US", "weight": 1, "source": "FRED"},
+        {"date": today.strftime("%Y-%m-%d"), "name": "오늘 FOMC",
+         "country": "US", "weight": 1, "source": "Fed"},
+    ]
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
-         patch.object(econ_events.jsonio, "load_json", return_value=cache):
-        out = econ_events.get_events(days=30)
+         patch.object(econ_events.jsonio, "save_json"), \
+         patch.object(econ_events, "_collect", return_value=(collected, True)):
+        out, _ = econ_events.get_events(days=30)
 
     assert [e["name"] for e in out] == ["오늘 FOMC"]
 
@@ -214,12 +214,28 @@ def test_load_seed_missing_file_is_harmless(tmp_path):
 def test_render_warns_when_no_fred_key():
     """FRED 키가 없으면 발급 안내를 띄운다."""
     with patch.object(config, "FRED_API_KEY", ""), \
-         patch.object(econ_events, "get_events", return_value=[]), \
+         patch.object(econ_events, "get_events",
+                      return_value=([], {"stale_since": None, "complete": True})), \
          patch("config.console.print") as mock_print:
         econ_events.render()
 
     out = " ".join(str(c.args) for c in mock_print.call_args_list)
     assert "FRED API 키가 없어" in out
+
+
+def test_render_warns_when_showing_stale_events():
+    """묵은 저장분을 보여줄 때는 기준일을 화면에 밝힌다."""
+    today = datetime.now().date()
+    ev = [{"date": today.strftime("%Y-%m-%d"), "name": "FOMC 금리결정",
+           "country": "US", "weight": 1, "source": "Fed"}]
+    with patch.object(config, "FRED_API_KEY", "DUMMY"), \
+         patch.object(econ_events, "get_events",
+                      return_value=(ev, {"stale_since": "2026-07-20", "complete": False})), \
+         patch("config.console.print") as mock_print:
+        econ_events.render()
+
+    out = " ".join(str(c.args) for c in mock_print.call_args_list)
+    assert "2026-07-20 기준 저장분" in out
 
 
 def test_render_marks_dday():
@@ -228,7 +244,8 @@ def test_render_marks_dday():
     ev = [{"date": today.strftime("%Y-%m-%d"), "name": "FOMC 금리결정",
            "country": "US", "weight": 1, "source": "Fed"}]
     with patch.object(config, "FRED_API_KEY", "DUMMY"), \
-         patch.object(econ_events, "get_events", return_value=ev), \
+         patch.object(econ_events, "get_events",
+                      return_value=(ev, {"stale_since": None, "complete": True})), \
          patch("config.console.print") as mock_print:
         econ_events.render()
 

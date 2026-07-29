@@ -8,8 +8,8 @@
   - 계산/시드  : 국내·미국 선물옵션 동시만기는 규칙으로 계산하고,
                  기계 판독이 불가능한 일정(한은 금통위)만 시드 파일에서 읽는다.
 
-수집 결과는 하루 단위로 디스크에 캐시한다. 라즈베리파이에서 매 실행마다
-8회씩 외부 호출을 반복하지 않기 위한 것으로, 캐시가 있으면 네트워크를 아예 타지 않는다.
+수집은 호출할 때마다 실제로 한다(외부 호출 8회, 실측 1초 내외). 디스크 캐시는
+읽기 가속용이 아니라 폴백 전용이다 — 수집이 통째로 실패했을 때만 마지막 성공분을 쓴다.
 """
 import concurrent.futures
 import logging
@@ -250,35 +250,42 @@ def _collect(start, end):
     return uniq, complete
 
 
-def get_events(days=60, force=False):
-    """향후 `days`일간의 경제 이벤트. 하루 1회만 실제 수집하고 나머지는 캐시로 답한다.
+def get_events(days=60):
+    """향후 `days`일간의 경제 이벤트와 수집 상태.
 
-    수집이 통째로 실패하면(네트워크 단절 등) 날짜가 지난 캐시라도 그대로 쓴다 —
-    빈 화면보다 하루 이틀 묵은 일정이 낫기 때문이다.
+    호출할 때마다 실제로 수집한다. 발표 일정은 몇 주에 한 번 바뀌는 데이터라
+    하루 캐시로 읽어도 손해는 크지 않지만, 수집 비용이 1초 내외라 굳이 신선도
+    판정을 껴 두느니 매번 받는 편이 단순하고 정확하다.
+
+    캐시는 폴백 전용이다 — 수집이 통째로 실패하면(네트워크 단절 등) 날짜가 지난
+    캐시라도 그대로 쓴다. 빈 화면보다 하루 이틀 묵은 일정이 낫기 때문이다.
+    대신 묵었다는 사실을 status로 함께 돌려줘 화면에서 밝힌다.
+
+    Returns:
+        (events, status) — status = {"stale_since": 'YYYY-MM-DD'|None, "complete": bool}
+        stale_since가 있으면 그 날짜에 받아둔 저장분을 보여주고 있다는 뜻이다.
     """
     today = datetime.now().date()
     end = today + timedelta(days=days)
-    cache = jsonio.load_json(CACHE_FILE, default={}) or {}
 
-    fresh = cache.get("fetched") == today.strftime("%Y-%m-%d")
-    covers = _parse_date(cache.get("covers_until")) or today
-    # 일부 소스가 실패한 캐시는 당일이어도 다시 시도한다 —
-    #  안 그러면 일시적 타임아웃 한 번에 지표가 빠진 캘린더를 종일 보게 된다.
-    if not force and fresh and covers >= end and cache.get("complete", False):
-        events = cache.get("events", [])
+    events, complete = _collect(today, end)
+    stale_since = None
+    if events:
+        jsonio.save_json(CACHE_FILE, {"fetched": today.strftime("%Y-%m-%d"),
+                                      "covers_until": end.strftime("%Y-%m-%d"),
+                                      "complete": complete,
+                                      "events": events})
     else:
-        events, complete = _collect(today, end)
+        cache = jsonio.load_json(CACHE_FILE, default={}) or {}
+        events = cache.get("events", [])
         if events:
-            jsonio.save_json(CACHE_FILE, {"fetched": today.strftime("%Y-%m-%d"),
-                                          "covers_until": end.strftime("%Y-%m-%d"),
-                                          "complete": complete,
-                                          "events": events})
-        else:
-            events = cache.get("events", [])  # 수집 실패 → 묵은 캐시로 폴백
+            stale_since = cache.get("fetched")
+            complete = False
 
-    return [e for e in events
-            if (_parse_date(e.get("date")) or today) >= today
-            and (_parse_date(e.get("date")) or today) <= end]
+    return ([e for e in events
+             if (_parse_date(e.get("date")) or today) >= today
+             and (_parse_date(e.get("date")) or today) <= end],
+            {"stale_since": stale_since, "complete": complete})
 
 
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
@@ -292,7 +299,16 @@ def render(days=45):
         config.console.print("  [dim yellow]※ FRED API 키가 없어 미국 지표(CPI·고용보고서 등)는 제외됩니다. "
                              "(환경변수 FRED_API_KEY — https://fredaccount.stlouisfed.org/apikeys 무료 발급)[/dim yellow]")
 
-    events = get_events(days=days)
+    events, status = get_events(days=days)
+
+    # 수집이 실패했는데 조용히 옛 일정을 보여주면 그게 언제 기준인지 알 길이 없다 —
+    #  FOMC가 이미 지나갔는지 여부까지 걸린 문제라 반드시 밝힌다.
+    if status.get("stale_since"):
+        config.console.print(f"  [yellow]※ 일정 수집에 실패해 {status['stale_since']} 기준 저장분을 표시합니다 "
+                             f"(그 이후 변경·추가된 일정은 반영되지 않습니다).[/yellow]")
+    elif not status.get("complete", True):
+        config.console.print("  [dim yellow]※ 일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다.[/dim yellow]")
+
     if not events:
         config.console.print("  [dim]표시할 경제 이벤트가 없습니다.[/dim]\n")
         return
