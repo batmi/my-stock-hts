@@ -75,3 +75,33 @@ def test_cmd_report_args(commander):
     # 임의 숫자
     commander._cmd_report(["10"])
     commander.trader.get_performance_report.assert_called_with(days=10)
+
+def test_cmd_calendar_default_days(commander):
+    """/calendar 는 기본 30일 캘린더 메시지를 돌려준다"""
+    from modules.manage import events as calendar_events
+    with patch.object(commander, '_send_reply'), \
+         patch.object(calendar_events, 'build_telegram_message', return_value="📅 캘린더") as mock_build:
+        res = commander._cmd_calendar([])
+    mock_build.assert_called_once_with(days=30)
+    assert res == "📅 캘린더"
+
+def test_cmd_calendar_clamps_days(commander):
+    """/calendar 인자는 1~180일로 제한된다"""
+    from modules.manage import events as calendar_events
+    with patch.object(commander, '_send_reply'), \
+         patch.object(calendar_events, 'build_telegram_message', return_value="ok") as mock_build:
+        commander._cmd_calendar(["365"])
+    mock_build.assert_called_once_with(days=180)
+
+def test_cmd_calendar_handles_failure(commander):
+    """조회 실패 시 예외를 삼키고 안내 문구를 돌려준다"""
+    from modules.manage import events as calendar_events
+    with patch.object(commander, '_send_reply'), \
+         patch.object(calendar_events, 'build_telegram_message', side_effect=RuntimeError("boom")):
+        res = commander._cmd_calendar([])
+    assert "오류가 발생했습니다" in res
+
+def test_calendar_command_registered(commander):
+    """/calendar 가 명령어 핸들러와 도움말에 모두 등록돼 있다"""
+    assert "/calendar" in commander.command_handlers
+    assert "/calendar" in commander._cmd_help([])

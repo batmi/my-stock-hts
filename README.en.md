@@ -484,7 +484,7 @@ Register `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config.py` or as enviro
 ### 4. Main Commands
 *   **System Control**: `/start`, `/stop`, `/restart`, `/status`, `/health` (operations monitoring), `/config` (strategy settings)
 *   **Account & Assets**: `/balance`, `/holdings`, `/pending` (unfilled orders), `/reserves` (reserved orders), `/profit [period]` (realized P&L, d/w/m/n), `/history [period]` (trade history), `/report [period]` (performance report), `/stats [stock]` (per-stock performance)
-*   **Market & Stock Analysis**: `/market [group]` (indices, k/u/s/r/g/c/b), `/signal <stock/index>` (technical diagnosis), `/analyze <stock/index>` (AI in-depth diagnosis), `/chart [period] <stock/index>` (chart, d/h/m), `/briefing` (on-demand AI market briefing), `/closing` (AI closing briefing), `/curate` (AI leading-stock curation), `/scan [market]` (TradingView scan, k/u), `/news <stock>` (AI latest news), `/ask <question>` (free-form AI Q&A)
+*   **Market & Stock Analysis**: `/market [group]` (indices, k/u/s/r/g/c/b), `/signal <stock/index>` (technical diagnosis), `/analyze <stock/index>` (AI in-depth diagnosis), `/chart [period] <stock/index>` (chart, d/h/m), `/briefing` (on-demand AI market briefing), `/closing` (AI closing briefing), `/curate` (AI leading-stock curation), `/scan [market]` (TradingView scan, k/u), `/news <stock>` (AI latest news), `/calendar [days]` (economic events & dividend/earnings schedule, default 30 days), `/ask <question>` (free-form AI Q&A)
 *   **Management & Misc**: `/stocks` (watchlist), `/rules [stock]` (per-stock trading rules), `/restrict` (restricted stocks), `/addrestrict <stock> [reason]`, `/delrestrict <stock>`, `/memo [a/d/stock]`, `/log` (recent logs), `/help`
 
 > Commands may be added or changed over time. **Type `/help` in the bot for the latest full list.**
@@ -503,6 +503,7 @@ By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use
         *   Note: DART does not expose the reason for a holding change, so **non-trading events are removed by pattern**: (a) new/re-filed reports put the *entire* holding in the change column, which is corrected by **differencing successive holding quantities** (e.g. NPS re-filing `+1,281,813` is really `+12,343`); (b) when 5+ executives file on the same day in the same direction it is treated as a **bulk grant (ESOP/stock grant)** and excluded from both summary and detail (mixed directions are kept as genuine trading).
     *   `[8] Financial Snapshot`: Revenue/operating profit/net profit with YoY from the latest periodic report, **standalone quarterly operating profit** (cumulative-difference method), and DART-computed **ROE / debt ratio**.
     *   **Telegram Alerts**: Sends instant pushes for major disclosures (capital increase, administrative issues, etc.).
+    *   **Calendar Telegram Alerts** (ON by default): Once a day at `AUTO_CALENDAR_ALERT_TIME` (default 08:20) the scheduler pushes a **single digest** of today's (D-DAY) and tomorrow's (D-1) items — major economic events plus watchlist ex-dividend/earnings dates — with duplicate suppression. Disable via `AUTO_CALENDAR_ALERT_USE`; request it anytime with `/calendar [days]` in Telegram.
 
 ### FRED API Key (Free)
 

@@ -77,7 +77,8 @@ class TelegramCommander:
             "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
             "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
             "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
-            "/stats": self._cmd_stats                # [추가] 종목별 성과 분석
+            "/stats": self._cmd_stats,               # [추가] 종목별 성과 분석
+            "/calendar": self._cmd_calendar          # [추가] 투자 캘린더(경제 이벤트·배당/실적)
         }
 
     def start(self):
@@ -233,6 +234,20 @@ class TelegramCommander:
     def _cmd_stats(self, args):
         keyword = " ".join(args).strip() if args else None
         return self._get_stock_stats_message(keyword)
+
+    def _cmd_calendar(self, args):
+        """투자 캘린더 — 주요 경제 이벤트 + 관심종목 예정 일정 (메뉴 6-5와 동일 소스)."""
+        days = 30
+        if args and args[0].isdigit():
+            days = max(1, min(180, int(args[0])))  # 너무 긴 구간은 메시지만 길어져 무의미
+
+        self._send_reply(f"⏳ [투자 캘린더] 향후 {days}일 경제 이벤트·배당/실적 일정을 수집 중입니다...")
+        try:
+            from modules.manage import events as calendar_events
+            return calendar_events.build_telegram_message(days=days)
+        except Exception as e:
+            logger.error(f"[Telegram] 투자 캘린더 조회 실패: {e}")
+            return "⚠️ 투자 캘린더 조회 중 오류가 발생했습니다."
 
     def _get_stock_stats_message(self, keyword=None):
         """종목별 매매 성과 분석 조회"""
@@ -573,6 +588,7 @@ class TelegramCommander:
             "• /curate : 실시간 시장 주도주 AI 추천\n"
             "• /scan [시장] : 트레이딩뷰 종목 스캔 (k/u)\n"
             "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
+            "• /calendar [일수] : 경제 이벤트·배당/실적 일정\n"
             "• /ask <질문> : AI 주식/경제 자유 질문\n\n"
             "📝 [관리 및 기타]\n"
             "• /stocks : 감시 중인 관심 종목 리스트\n"

@@ -142,3 +142,115 @@ def test_parse_us_date_variants():
     assert calendar_events._parse_us_date(None) is None
     assert calendar_events._parse_us_date("2026-06-23") == datetime(2026, 6, 23).date()
     assert calendar_events._parse_us_date([datetime(2026, 6, 23)]) == datetime(2026, 6, 23).date()
+
+
+def test_build_telegram_message_includes_both_sections():
+    """/calendar 메시지에 경제 이벤트와 예정 일정이 함께 담긴다."""
+    _set_watchlist(us=[{"code": "NVDA", "name": "NVIDIA"}])
+    ex = (datetime.now() + timedelta(days=2)).date()
+
+    with patch.object(econ_events, "build_lines",
+                      return_value=["▸ 주요 경제 이벤트", "❗ 07-30(목) D-1 FOMC 금리결정 [Fed]"]), \
+         patch.object(calendar_events, "_collect_watchlist_events",
+                      return_value=([{"code": "NVDA", "name": "NVIDIA", "type": "배당락",
+                                      "date": ex}], [])):
+        msg = calendar_events.build_telegram_message(days=30)
+
+    assert "주요 경제 이벤트" in msg and "FOMC 금리결정" in msg
+    assert "예정 일정" in msg and "NVIDIA (NVDA)" in msg and "D-2" in msg
+
+
+def test_build_telegram_message_drops_events_beyond_horizon():
+    """지정한 일수 밖의 일정은 빠진다."""
+    _set_watchlist(us=[{"code": "NVDA", "name": "NVIDIA"}])
+    far = (datetime.now() + timedelta(days=90)).date()
+
+    with patch.object(econ_events, "build_lines", return_value=["▸ 주요 경제 이벤트"]), \
+         patch.object(calendar_events, "_collect_watchlist_events",
+                      return_value=([{"code": "NVDA", "name": "NVIDIA", "type": "배당락",
+                                      "date": far}], [])):
+        msg = calendar_events.build_telegram_message(days=30)
+
+    assert "NVDA" not in msg and "표시할 예정 일정이 없습니다" in msg
+
+
+def test_build_telegram_message_without_watchlist():
+    """관심종목이 없어도 경제 이벤트만으로 메시지가 나간다."""
+    _set_watchlist([], [])
+    with patch.object(econ_events, "build_lines",
+                      return_value=["▸ 주요 경제 이벤트", "❗ 07-30(목) D-1 FOMC 금리결정 [Fed]"]):
+        msg = calendar_events.build_telegram_message()
+    assert "FOMC 금리결정" in msg and "등록된 관심종목이 없습니다" in msg
+
+
+def _alert_env(econ=None, stock_events=None, notified=()):
+    """check_and_alert_calendar 호출용 공통 모킹 묶음."""
+    from modules import db_manager
+    return (
+        patch.object(econ_events, "get_events",
+                     return_value=(econ or [], {"stale_since": None, "complete": True})),
+        patch.object(calendar_events, "_collect_watchlist_events",
+                     return_value=(stock_events or [], [])),
+        patch.object(db_manager.db, "is_disclosure_notified", side_effect=lambda k: k in notified),
+        patch.object(db_manager.db, "mark_disclosure_notified"),
+        patch.object(api, "send_telegram_message"),
+    )
+
+
+def test_calendar_alert_sends_digest_for_today_and_tomorrow():
+    """D-DAY·D-1 일정을 하루 한 통의 요약으로 묶어 보낸다."""
+    _set_watchlist(kr=[{"code": "005930", "name": "삼성전자"}])
+    today = datetime.now().date()
+    econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+    stocks = [{"code": "005930", "name": "삼성전자", "type": "배당락",
+               "date": today + timedelta(days=1), "estimated": True, "freq": "분기배당"}]
+
+    p1, p2, p3, p4, p5 = _alert_env(econ, stocks)
+    with p1, p2, p3, p4 as mark, p5 as send:
+        assert calendar_events.check_and_alert_calendar() == 1
+
+    assert send.call_count == 1  # 건별이 아니라 요약 한 통
+    msg = send.call_args.args[0]
+    assert "캘린더 알림" in msg
+    assert "오늘" in msg and "미국 CPI" in msg
+    assert "내일" in msg and "삼성전자 (005930)" in msg
+    assert mark.call_count == 2  # 경제 1건 + 종목 1건
+
+
+def test_calendar_alert_skips_already_notified():
+    """이미 보낸 일정만 남으면 아무것도 발송하지 않는다."""
+    _set_watchlist([], [])
+    today = datetime.now().date()
+    econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+    key = calendar_events._alert_key("econ", today.strftime("%Y-%m-%d"), "미국 CPI", 0)
+
+    p1, p2, p3, p4, p5 = _alert_env(econ, notified={key})
+    with p1, p2, p3, p4, p5 as send:
+        assert calendar_events.check_and_alert_calendar() == 0
+    send.assert_not_called()
+
+
+def test_calendar_alert_ignores_far_events():
+    """D-2 이후 일정은 아직 알리지 않는다."""
+    _set_watchlist([], [])
+    today = datetime.now().date()
+    econ = [{"date": (today + timedelta(days=5)).strftime("%Y-%m-%d"),
+             "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+
+    p1, p2, p3, p4, p5 = _alert_env(econ)
+    with p1, p2, p3, p4, p5 as send:
+        assert calendar_events.check_and_alert_calendar() == 0
+    send.assert_not_called()
+
+
+def test_calendar_alert_does_not_mark_when_send_fails():
+    """발송이 실패하면 '보냄'으로 기록하지 않는다 (다음 순회에 재시도)."""
+    _set_watchlist([], [])
+    today = datetime.now().date()
+    econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+
+    p1, p2, p3, p4, p5 = _alert_env(econ)
+    with p1, p2, p3, p4 as mark, p5 as send:
+        send.side_effect = RuntimeError("network down")
+        assert calendar_events.check_and_alert_calendar() == 0
+    mark.assert_not_called()

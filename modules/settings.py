@@ -46,6 +46,8 @@ def _save_dynamic_config():
         "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
         "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
         "AUTO_DISCLOSURE_ALERT_USE": getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True),
+        "AUTO_CALENDAR_ALERT_USE": getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', True),
+        "AUTO_CALENDAR_ALERT_TIME": getattr(config.settings, 'AUTO_CALENDAR_ALERT_TIME', "0820"),
         "MARKET_HALT_ALERT_USE": getattr(config.settings, 'MARKET_HALT_ALERT_USE', True),
         "MARKET_HALT_VI_USE": getattr(config.settings, 'MARKET_HALT_VI_USE', False),
         "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),

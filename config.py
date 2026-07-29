@@ -82,6 +82,8 @@ class GlobalSettings(BaseModel):
     AUTO_MORNING_BRIEFING_USE: bool = False
     AUTO_MORNING_BRIEFING_TIME: str = "0830"
     AUTO_DISCLOSURE_ALERT_USE: bool = True  # 관심종목 중대 공시 텔레그램 알림 (기본 ON)
+    AUTO_CALENDAR_ALERT_USE: bool = True    # 임박 일정(경제 이벤트·배당/실적) 텔레그램 알림 (기본 ON)
+    AUTO_CALENDAR_ALERT_TIME: str = "0820"  # 캘린더 알림 발송 시각 (하루 1회, D-1·D-DAY 요약)
     # [추가] 시장정지 알림: 서킷브레이커(CB)와 VI를 '독립 스위치'로 각각 ON/OFF한다.
     #  CB·VI 모두 REST 폴링이며(WS 슬롯은 현재가에 우선 배정), 사이드카는 REST 미지원으로 제외.
     #  - CB(MARKET_HALT_ALERT_USE): 시장 전체 정지. KIS 전용, 대표종목 바스켓만 조회해 부하가 작음(기본 ON).

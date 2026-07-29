@@ -29,6 +29,7 @@ class SystemScheduler:
         self.thread = None
         self.last_holiday_notified_date = None
         self.last_briefing_date = None
+        self.last_calendar_alert_date = None
         self.last_heartbeat_time = time.time()
         self.trader = AutoTrader()
 
@@ -54,6 +55,8 @@ class SystemScheduler:
                     self._check_morning_briefing()
                 if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', False):
                     self._check_disclosure_alerts()
+                if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', False):
+                    self._check_calendar_alerts()
                 if getattr(config, 'MARKET_HALT_ALERT_USE', True):
                     self._check_market_halt()
                 self._check_heartbeat()
@@ -76,6 +79,36 @@ class SystemScheduler:
             threading.Thread(target=disclosure.check_and_alert_disclosures, daemon=True).start()
         except Exception as e:
             logger.error(f"[Scheduler] 공시 알림 체크 오류: {e}")
+
+    def _check_calendar_alerts(self):
+        """임박한 경제 이벤트·배당/실적 일정 알림 (하루 1회, 지정 시각 이후 첫 순회).
+
+        공시(30분 폴링)와 달리 하루 한 번이면 충분한 일정 정보다. 수집이 DART·yfinance
+        전종목 조회라 무거워서 별도 스레드로 돌리고, 발송 여부와 무관하게 하루 한 번만 시도한다.
+        주말도 거른다 — 월요일 일정의 D-1(일요일) 알림까지 챙기기 위해서다.
+        """
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        if getattr(self, 'last_calendar_alert_date', None) == today_str:
+            return
+
+        target_str = getattr(config.settings, 'AUTO_CALENDAR_ALERT_TIME', "0820")
+        try:
+            target = datetime.strptime(target_str, "%H%M")
+        except ValueError:
+            target = datetime.strptime("0820", "%H%M")
+        # 발송 창을 3시간으로 잡는다 — 낮에 켠 인스턴스가 한밤중에 '오늘 일정'을 쏘지 않도록
+        end = (target + timedelta(hours=3)).time()
+        if not (target.time() <= now.time() <= end):
+            return
+
+        self.last_calendar_alert_date = today_str
+        try:
+            from modules.manage import events as calendar_events
+            threading.Thread(target=calendar_events.check_and_alert_calendar,
+                             daemon=True, name="CalendarAlert").start()
+        except Exception as e:
+            logger.error(f"[Scheduler] 캘린더 알림 체크 오류: {e}")
 
     def _check_market_halt(self):
         """서킷브레이커(CB)/VI 시장정지 감지 및 알림 (KIS:CB+VI, 토스:VI)."""

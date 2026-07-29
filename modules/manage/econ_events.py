@@ -291,6 +291,43 @@ def get_events(days=60):
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
 
+def build_lines(days=45):
+    """경제 이벤트를 텍스트 줄 목록으로 (텔레그램 /calendar 용).
+
+    화면(render)과 같은 자료·같은 경고를 쓰되 rich 테이블 대신 한 줄씩 만든다.
+    """
+    lines = ["▸ 주요 경제 이벤트"]
+
+    if not config.FRED_API_KEY:
+        lines.append("  ※ FRED API 키가 없어 미국 지표(CPI·고용보고서 등)는 제외됩니다.")
+
+    events, status = get_events(days=days)
+
+    if status.get("stale_since"):
+        lines.append(f"  ※ 수집 실패로 {status['stale_since']} 기준 저장분을 표시합니다.")
+    elif not status.get("complete", True):
+        lines.append("  ※ 일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다.")
+
+    if not events:
+        lines.append("  표시할 경제 이벤트가 없습니다.")
+        return lines
+
+    today = datetime.now().date()
+    for ev in events:
+        d = _parse_date(ev["date"])
+        if not d:
+            continue
+        gap = (d - today).days
+        dday = "D-DAY" if gap == 0 else f"D-{gap}"
+        # 중요도 1(FOMC·CPI·고용보고서)만 표식을 달아 한눈에 걸러 보이게 한다
+        mark = "❗" if ev.get("weight", 3) == 1 else "•"
+        lines.append(f"{mark} {d.strftime('%m-%d')}({_WEEKDAY_KR[d.weekday()]}) {dday} "
+                     f"{ev['name']} [{ev.get('source', '')}]")
+
+    lines.append("  ※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각 대체로 익일 새벽).")
+    return lines
+
+
 def render(days=45):
     """경제 이벤트 일정 테이블 출력."""
     config.console.print("[bold]▸ 주요 경제 이벤트[/bold]")

@@ -91,3 +91,40 @@ def test_execute_daily_closing_report(mock_tg, mock_dep, mock_bal, mock_generate
     
     mock_tg.assert_called_once()
     assert "Closing Report Content" in mock_tg.call_args[0][0]
+
+def _calendar_scheduler(scheduler):
+    scheduler.last_calendar_alert_date = None
+    return scheduler
+
+
+@patch('modules.scheduler.threading.Thread')
+def test_check_calendar_alerts_fires_once_a_day(mock_thread, scheduler):
+    """발송 시각 이후 첫 순회에 한 번만 트리거되고, 같은 날 재호출은 무시된다."""
+    _calendar_scheduler(scheduler)
+    config.settings.AUTO_CALENDAR_ALERT_TIME = "0820"
+
+    with patch('modules.scheduler.datetime') as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 7, 29, 8, 30)
+        mock_dt.strptime = datetime.strptime
+        scheduler._check_calendar_alerts()
+        scheduler._check_calendar_alerts()
+
+    assert scheduler.last_calendar_alert_date == "2026-07-29"
+    assert mock_thread.call_count == 1
+    from modules.manage import events as calendar_events
+    assert mock_thread.call_args.kwargs["target"] is calendar_events.check_and_alert_calendar
+
+
+@patch('modules.scheduler.threading.Thread')
+def test_check_calendar_alerts_skips_outside_window(mock_thread, scheduler):
+    """발송 시각 전이거나 창(3시간)을 넘긴 시각에는 트리거되지 않는다."""
+    _calendar_scheduler(scheduler)
+    config.settings.AUTO_CALENDAR_ALERT_TIME = "0820"
+
+    for hour in (7, 23):
+        scheduler.last_calendar_alert_date = None
+        with patch('modules.scheduler.datetime') as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 7, 29, hour, 0)
+            mock_dt.strptime = datetime.strptime
+            scheduler._check_calendar_alerts()
+        assert scheduler.last_calendar_alert_date is None

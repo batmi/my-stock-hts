@@ -254,3 +254,30 @@ def test_render_marks_dday():
     cells = [str(c) for col in rendered[0].columns for c in col._cells]
     assert any("D-DAY" in c for c in cells)
     assert any("FOMC 금리결정" in c for c in cells)
+
+
+def test_build_lines_marks_important_events():
+    """텍스트 출력에도 D-day가 붙고, 중요도 1 이벤트는 표식(❗)이 달린다."""
+    today = datetime.now().date()
+    ev = [{"date": today.strftime("%Y-%m-%d"), "name": "FOMC 금리결정",
+           "country": "US", "weight": 1, "source": "Fed"},
+          {"date": (today + timedelta(days=3)).strftime("%Y-%m-%d"), "name": "미국 JOLTS",
+           "country": "US", "weight": 3, "source": "FRED"}]
+    with patch.object(config, "FRED_API_KEY", "DUMMY"), \
+         patch.object(econ_events, "get_events",
+                      return_value=(ev, {"stale_since": None, "complete": True})):
+        lines = econ_events.build_lines(days=45)
+
+    text = "\n".join(lines)
+    assert "▸ 주요 경제 이벤트" in text
+    assert "❗" in text and "D-DAY" in text and "FOMC 금리결정" in text
+    assert "• " in text and "D-3" in text and "미국 JOLTS" in text
+
+
+def test_build_lines_reports_stale_cache():
+    """묵은 저장분이면 텍스트에도 기준일을 밝힌다."""
+    with patch.object(config, "FRED_API_KEY", "DUMMY"), \
+         patch.object(econ_events, "get_events",
+                      return_value=([], {"stale_since": "2026-07-20", "complete": False})):
+        text = "\n".join(econ_events.build_lines())
+    assert "2026-07-20 기준 저장분" in text

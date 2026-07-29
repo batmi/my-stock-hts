@@ -24,6 +24,9 @@ except Exception:  # pragma: no cover
     yf = None
 
 
+_WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
+
+
 def _kr_year_end_holiday(year):
     """KRX 연말 휴장일 = 그 해 마지막 평일(12/31이 주말이면 직전 평일)."""
     d = date(year, 12, 31)
@@ -306,6 +309,208 @@ def _gather_watchlist():
     return kr, us
 
 
+def _collect_watchlist_events(kr, us, on_progress=None):
+    """관심종목 배당/실적 일정 수집 → (예정 일정, 국내 배당 행).
+
+    화면 출력(show_calendar)과 텔레그램(build_telegram_message)이 같은 자료를 쓰도록
+    수집만 떼어냈다. on_progress는 작업 하나가 끝날 때마다 호출된다(진행률 표시용).
+    """
+    events, kr_rows = [], []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {}
+        if config.DART_API_KEY:
+            for code, name in kr:
+                futures[ex.submit(_collect_kr, code, name)] = ("kr", code)
+                futures[ex.submit(_collect_kr_earnings_est, code, name)] = ("kr_earn", code)
+        for code, name in us:
+            futures[ex.submit(_collect_us, code, name)] = ("us", code)
+
+        for fut in concurrent.futures.as_completed(futures):
+            kind, _ = futures[fut]
+            try:
+                res = fut.result()
+            except Exception:
+                res = None
+            if res:
+                if kind == "kr":
+                    kr_rows.append(res)
+                elif kind == "kr_earn":
+                    events.append(res)  # 예정 일정 테이블에 합류
+                else:
+                    events.extend(res)
+            if on_progress:
+                on_progress()
+
+    # 국내 예상 배당락일(추정/확정)을 예정 일정에 합류
+    for r in kr_rows:
+        if r.get("ex_date"):
+            events.append({
+                "code": r["code"], "name": r["name"], "type": "배당락",
+                "date": r["ex_date"], "estimated": True,
+                "freq": r.get("freq_label", ""),
+                "exact": r.get("exact", False),
+                "confirmed": r.get("confirmed", False),
+                "decl_dps": r.get("decl_dps"),
+            })
+    return events, kr_rows
+
+
+def _upcoming_note(e):
+    """예정 일정 한 건의 '비고' 문구 → (문구, 추정 여부)."""
+    if e.get("confirmed"):
+        # 배당결정 공시에서 확정된 기준일 기반 — 추정 아님
+        note = "확정(배당결정 공시)"
+        if e.get("decl_dps"):
+            note += f" 주당 {e['decl_dps']:,.0f}원"
+        return note, False
+    if e.get("basis"):
+        return e["basis"], True
+    if e.get("estimated"):
+        freq = e.get("freq", "")
+        basis = "전년패턴" if e.get("exact") else "추정"
+        return (f"{freq}·{basis}" if freq else basis), True
+    return "", False
+
+
+def build_telegram_message(days=30):
+    """텔레그램 /calendar 용 메시지 — 주요 경제 이벤트 + 예정 일정.
+
+    화면 6-5와 같은 소스를 쓰되, 국내 배당 정보 테이블(최근 확정분)은 일정이 아니라
+    참고 자료라 넣지 않는다. 예정 일정은 앞으로 `days`일 이내만 추린다.
+    """
+    from modules.manage import econ_events
+
+    today = datetime.now().date()
+    lines = [f"📅 [투자 캘린더] 향후 {days}일", ""]
+    lines.extend(econ_events.build_lines(days=days))
+    lines.append("")
+
+    kr, us = _gather_watchlist()
+    if not kr and not us:
+        lines.append("▸ 예정 일정")
+        lines.append("  등록된 관심종목이 없습니다.")
+        return "\n".join(lines)
+
+    events, _ = _collect_watchlist_events(kr, us)
+    horizon = today + timedelta(days=days)
+    upcoming = sorted([e for e in events if today <= e["date"] <= horizon], key=lambda e: e["date"])
+
+    lines.append("▸ 예정 일정 (관심종목 배당·실적)")
+    if kr and not config.DART_API_KEY:
+        lines.append("  ※ DART API 키가 없어 국내 배당 정보는 조회되지 않습니다.")
+    if not upcoming:
+        lines.append("  표시할 예정 일정이 없습니다.")
+        return "\n".join(lines)
+
+    has_estimated = False
+    for e in upcoming:
+        gap = (e["date"] - today).days
+        dday = "D-DAY" if gap == 0 else f"D-{gap}"
+        note, est = _upcoming_note(e)
+        has_estimated = has_estimated or est
+        icon = "💰" if e["type"] == "배당락" else "📊"
+        row = (f"{icon} {e['date'].strftime('%m-%d')}({_WEEKDAY_KR[e['date'].weekday()]}) {dday} "
+               f"{e['name']} ({e['code']}) {e['type']}")
+        if note:
+            row += f" — {note}"
+        lines.append(row)
+
+    if has_estimated:
+        lines.append("  ※ '추정'은 결산월·전년 패턴 기반 예상치로 실제와 다를 수 있습니다.")
+    return "\n".join(lines)
+
+
+ALERT_LEAD_DAYS = (1, 0)   # 알림을 보내는 시점: 전일(D-1)과 당일(D-DAY)
+
+
+def _alert_key(kind, ev_date, label, gap):
+    """알림 중복방지 키 — 같은 일정이라도 D-1/D-DAY는 각각 한 번씩 보낸다.
+
+    공시 알림 테이블(notified_disclosures)을 그대로 쓰되 'CAL:' 접두로 접수번호와 구분한다.
+    """
+    return f"CAL:{kind}:{ev_date}:{label}:D{gap}"
+
+
+def _alert_dday_label(gap, d):
+    return f"▸ {'오늘' if gap == 0 else '내일' if gap == 1 else f'D-{gap}'} " \
+           f"({d.strftime('%m-%d')} {_WEEKDAY_KR[d.weekday()]})"
+
+
+def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
+    """임박한 경제 이벤트·관심종목 일정을 텔레그램으로 푸시 (scheduler 백그라운드용, UI 없음).
+
+    공시 알림과 같은 방식이지만 건당이 아니라 하루 한 통의 요약으로 보낸다 —
+    같은 날 FOMC·CPI·배당락이 겹치면 알림이 세 통 오는 게 오히려 묻히기 때문.
+    중복방지는 DB(notified_disclosures)에 'CAL:' 접두 키로 기록. 반환: 발송 건수(0/1).
+    """
+    from modules import db_manager
+    from modules.manage import econ_events
+
+    today = datetime.now().date()
+    horizon = max(lead_days)
+    targets = {}   # gap -> [(icon, 본문)]
+    keys = []
+
+    try:
+        econ, _ = econ_events.get_events(days=horizon)
+    except Exception:
+        econ = []
+    for ev in econ:
+        d = econ_events._parse_date(ev.get("date"))
+        if not d:
+            continue
+        gap = (d - today).days
+        if gap not in lead_days:
+            continue
+        key = _alert_key("econ", ev["date"], ev["name"], gap)
+        if db_manager.db.is_disclosure_notified(key):
+            continue
+        mark = "❗" if ev.get("weight", 3) == 1 else "•"
+        targets.setdefault(gap, []).append(f"{mark} {ev['name']} [{ev.get('source', '')}]")
+        keys.append(key)
+
+    kr, us = _gather_watchlist()
+    if kr or us:
+        try:
+            events, _ = _collect_watchlist_events(kr, us)
+        except Exception:
+            events = []
+        for e in events:
+            gap = (e["date"] - today).days
+            if gap not in lead_days:
+                continue
+            key = _alert_key("stock", e["date"].strftime("%Y-%m-%d"), f"{e['code']}:{e['type']}", gap)
+            if db_manager.db.is_disclosure_notified(key):
+                continue
+            note, _est = _upcoming_note(e)
+            icon = "💰" if e["type"] == "배당락" else "📊"
+            row = f"{icon} {e['name']} ({e['code']}) {e['type']}"
+            if note:
+                row += f" — {note}"
+            targets.setdefault(gap, []).append(row)
+            keys.append(key)
+
+    if not targets:
+        return 0
+
+    lines = ["🔔 [캘린더 알림] 임박한 일정"]
+    for gap in sorted(targets):   # 오늘 → 내일 순
+        lines.append("")
+        lines.append(_alert_dday_label(gap, today + timedelta(days=gap)))
+        lines.extend(targets[gap])
+
+    try:
+        api.send_telegram_message("\n".join(lines))
+    except Exception:
+        return 0
+
+    # 발송이 성공한 뒤에만 기록한다 — 실패한 알림까지 '보냈다'로 굳으면 영영 못 받는다
+    for key in keys:
+        db_manager.db.mark_disclosure_notified(key)
+    return 1
+
+
 def show_calendar():
     """경제 이벤트 + 관심종목 배당/실적 캘린더 출력."""
     utils.clear_screen()
@@ -324,9 +529,6 @@ def show_calendar():
     if kr and not config.DART_API_KEY:
         config.console.print("[dim yellow]※ DART API 키가 설정되지 않아 국내 배당 정보는 조회되지 않습니다. (환경변수 DART_API_KEY)[/dim yellow]\n")
 
-    us_events = []
-    kr_rows = []
-
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
@@ -335,44 +537,8 @@ def show_calendar():
         #  (총량을 종목 수로 잡으면 절반만 끝나도 100%가 되어 완료된 척 몇 초 머무는 문제)
         total = (len(kr) * 2 if config.DART_API_KEY else 0) + len(us)
         task = progress.add_task("[cyan]배당/실적 일정 조회 중...[/cyan]", total=total)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-            futures = {}
-            if config.DART_API_KEY:
-                for code, name in kr:
-                    futures[ex.submit(_collect_kr, code, name)] = ("kr", code)
-                    futures[ex.submit(_collect_kr_earnings_est, code, name)] = ("kr_earn", code)
-            for code, name in us:
-                futures[ex.submit(_collect_us, code, name)] = ("us", code)
-
-            for fut in concurrent.futures.as_completed(futures):
-                kind, _ = futures[fut]
-                try:
-                    res = fut.result()
-                except Exception:
-                    res = None
-                if res:
-                    if kind == "kr":
-                        kr_rows.append(res)
-                    elif kind == "kr_earn":
-                        us_events.append(res)  # 예정 일정 테이블에 합류
-                    else:
-                        us_events.extend(res)
-                progress.advance(task)
-            progress.update(task, completed=total)
-
-    # 국내 예상 배당락일(추정/확정)을 예정 일정에 합류
-    events = list(us_events)
-    for r in kr_rows:
-        if r.get("ex_date"):
-            events.append({
-                "code": r["code"], "name": r["name"], "type": "배당락",
-                "date": r["ex_date"], "estimated": True,
-                "freq": r.get("freq_label", ""),
-                "exact": r.get("exact", False),
-                "confirmed": r.get("confirmed", False),
-                "decl_dps": r.get("decl_dps"),
-            })
+        events, kr_rows = _collect_watchlist_events(kr, us, on_progress=lambda: progress.advance(task))
+        progress.update(task, completed=total)
 
     _print_report_deadline()
     _render_upcoming(events)
@@ -419,20 +585,10 @@ def _render_upcoming(events):
         d = (e["date"] - today).days
         dday = "D-DAY" if d == 0 else f"D-{d}"
         type_color = "yellow" if e["type"] == "배당락" else "cyan"
-        note = ""
-        if e.get("confirmed"):
-            # 배당결정 공시에서 확정된 기준일 기반 — 추정 아님
-            note = "[green]확정(배당결정 공시)[/green]"
-            if e.get("decl_dps"):
-                note += f" [dim]주당 {e['decl_dps']:,.0f}원[/dim]"
-        elif e.get("basis"):
-            note = f"[dim]{e['basis']}[/dim]"
-            has_estimated = True
-        elif e.get("estimated"):
-            freq = e.get("freq", "")
-            basis = "전년패턴" if e.get("exact") else "추정"
-            note = f"[dim]{freq}·{basis}[/dim]" if freq else f"[dim]{basis}[/dim]"
-            has_estimated = True
+        raw_note, est = _upcoming_note(e)
+        has_estimated = has_estimated or est
+        # 확정분은 초록으로 강조하고, 추정·근거 문구는 흐리게
+        note = f"[green]{raw_note}[/green]" if (raw_note and not est) else (f"[dim]{raw_note}[/dim]" if raw_note else "")
         table.add_row(
             e["date"].strftime("%Y-%m-%d (%a)"),
             f"[bold]{dday}[/bold]" if d <= 3 else dday,
