@@ -155,6 +155,42 @@ def _get_trade_account():
     acnt = getattr(config.session, 'auto_acnt_prdt_cd', None) or config.session.acnt_prdt_cd
     return cano, acnt
 
+_MARKET_TYPE_CACHE = {}
+
+def resolve_market_type(code, cache=None):
+    """종목 코드로 시장 구분(KOSPI/KOSDAQ)을 확인한다. (캐싱 적용)
+
+    cache를 넘기면 호출자 전용 캐시를 쓰고(트레이더 인스턴스 등), 생략하면 모듈 캐시를 쓴다.
+    """
+    if cache is None:
+        cache = _MARKET_TYPE_CACHE
+    if code in cache:
+        return cache[code]
+
+    # 1. stock.json에 사전 정의된 exchange 정보 직접 탐색 (가장 빠르고 정확함)
+    for key in ("stocks_kr", "etfs_kr"):
+        for item in config.session.stock_data.get(key, []):
+            if item['code'] == code and "exchange" in item:
+                m_type = item['exchange'].upper()
+                if m_type in ("KOSPI", "KOSDAQ"):
+                    cache[code] = m_type
+                    return m_type
+
+    # 2. API 조회를 통한 Fallback (한글 '코스닥' 포함)
+    try:
+        res = api.get_current_price_data(code, is_overseas=False)
+        if res and res.get('rt_cd') == '0':
+            market_name = res['output'].get('rprs_mrkt_kor_name', '')
+            if "KOSDAQ" in market_name or "코스닥" in market_name:
+                cache[code] = "KOSDAQ"
+                return "KOSDAQ"
+    except Exception:
+        pass
+
+    # 3. API 조회 실패 또는 정보 누락 시 기본값 'KOSPI'로 설정
+    cache[code] = "KOSPI"
+    return "KOSPI"
+
 def load_restricted_stocks():
     with _RESTRICTED_LOCK:
         return jsonio.load_json(RESTRICTED_FILE, default={}) or {}

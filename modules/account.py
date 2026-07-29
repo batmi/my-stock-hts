@@ -5,6 +5,7 @@ from rich.panel import Panel
 from rich import box
 from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.markup import escape
 from datetime import datetime, timedelta
 import os
 import time
@@ -12,6 +13,7 @@ import config
 import context # [추가]
 import utils
 import api
+import jsonio
 from modules import db_manager
 import json
 import pandas as pd
@@ -217,9 +219,741 @@ def sync_today_trades():
     logger.debug(f"[HISTORY_DEBUG] sync_today_trades() 종료. 처리 건수: {total_count}")
     return total_count
 
+def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
+    """국내/해외 보유 종목에 시스템 매도 판단을 적용한다. (읽기 전용 · 부수효과 없음)
+
+    메뉴 2의 종목 분석은 차트만 보고 '지금 새로 살 만한가'를 판정하지만, 보유 분석은
+    매입단가·수익률·최고가(트레일링)·보유일수·반익절 이력·매수 시점 ATR 손절률·개별 룰까지
+    반영한다. 같은 종목이라도 두 결과가 갈릴 수 있으며, 여기서 쓰는 판정 로직은 자동매매가
+    실제로 청산에 쓰는 analyze_sell과 동일하다.
+
+    반환: {code: analyze_sell 결과} — 실패한 종목은 키가 없다.
+    """
+    entries = []
+    for item in domestic_items:
+        entries.append({
+            'code': item['pdno'],
+            'name': item.get('prdt_name', ''),
+            'buy_price': float(item.get('pchs_avg_pric') or 0),
+            'current_price': float(item.get('prpr') or 0),
+            'profit_rate': float(item.get('evlu_pfls_rt') or 0),
+            'is_overseas': False,
+        })
+
+    for item in overseas_items:
+        qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+        pchs_avg = float(item.get('pchs_avg_pric') or 0)
+        cur_price = float(item.get('ovrs_now_pric') or 0)
+        if cur_price == 0 and qty > 0:
+            # 현재가 미제공 시 평가금액에서 역산 (표시 로직과 동일 기준)
+            profit = float(item.get('frcr_evlu_pfls_amt') or 0)
+            cur_price = (qty * pchs_avg + profit) / qty
+        entries.append({
+            'code': item.get('ovrs_pdno', ''),
+            'name': item.get('ovrs_item_name', ''),
+            'buy_price': pchs_avg,
+            'current_price': cur_price,
+            'profit_rate': float(item.get('evlu_pfls_rt') or 0),
+            'is_overseas': True,
+        })
+
+    entries = [e for e in entries if e['code']]
+    if not entries:
+        return {}
+
+    try:
+        from modules import auto_trade
+        return auto_trade.analyze_holdings(entries, restricted_codes=restricted_codes)
+    except Exception as e:
+        logger.warning(f"보유 분석 실패: {e}")
+        return {}
+
+def _fmt_state_cell(res):
+    """보유분석 결과를 잔고 테이블의 '상태' 셀로 변환. (상태/점수, 청산 신호는 강조)
+
+    시스템 자동 매도 대상이 아닌 포지션은 둘째 줄에 '수동'을 붙인다.
+    청산 신호가 떠도 시스템이 팔지 않는다는 사실을 표에서 바로 알 수 있어야 한다.
+    """
+    if not res:
+        return "[dim]-[/dim]"
+
+    score = res.get('score')
+    score_str = f" [dim]{score:.1f}[/dim]" if isinstance(score, (int, float)) else ""
+
+    if res.get('action') == 'sell':
+        cell = f"[bold blue]청산[/]{score_str}"
+    else:
+        state = res.get('state') or "-"
+        color = (res.get('state_color') or "[white]").strip('[]') or "white"
+        cell = f"[{color}]{state}[/]{score_str}"
+
+    if res.get('unmanaged'):
+        cell += "\n[yellow]수동[/]"
+    return cell
+
+def _fmt_holding_days_cell(res):
+    """보유일수 — 시간청산 임계에 도달하면 노란색으로 경고한다.
+
+    매수일은 시스템 DB → 증권사 체결 내역 순으로 찾고, 둘 다 없으면 오늘 매수로 본다(0일).
+    """
+    if not res:
+        return "[dim]-[/dim]"
+
+    days = res.get('holding_days') or 0
+    limit = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+    if config.SELL_STRATEGY.get("TIME_STOP_USE", True) and limit and days >= limit:
+        return f"[yellow]{days}일[/]"
+    return f"{days}일"
+
+def _fmt_mfe_cell(res, is_overseas=False):
+    """최고가와 그 시점의 최대 평가수익(MFE) — 수익 반납폭 확인용."""
+    if not res:
+        return "[dim]-[/dim]"
+
+    highest = res.get('highest_price') or 0
+    if highest <= 0:
+        return "[dim]-[/dim]"
+
+    price_str = f"${highest:,.2f}" if is_overseas else f"{int(highest):,}"
+    mfe = res.get('max_profit_rate') or 0.0
+    return f"{price_str}[dim]({mfe:+.1f}%)[/dim]"
+
+def _fmt_ts_stop(res, is_overseas=False):
+    """샹들리에 TS 청산선. 고정/ATR 손절과 달리 실제 주청산선이라 별도 줄로 표시한다."""
+    ts = (res or {}).get('ts')
+    if not ts:
+        return None
+
+    if not ts.get('armed'):
+        return f"[dim]TS: +{ts['activation']:.0f}% 도달 시[/dim]"
+
+    price = ts['stop_price']
+    price_str = f"${price:,.2f}" if is_overseas else f"{int(price):,}"
+    return f"[dim]TS:[/dim][cyan]{price_str}[/][dim](-{ts['callback']:.1f}%)[/dim]"
+
+def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
+    """손절가 셀 — 실제로 지배하는 손절선만 표시한다.
+
+    USE_ATR_STOP이 켜져 있으면 고정 손절(STOP_LOSS_RATE)은 'ATR 산출 실패 시 폴백'일
+    뿐 판정을 지배하지 않는다(2026-07-26 설정 감사). 지배하지 않는 값을 손절가로
+    띄우면 그 선에서 잘릴 것처럼 읽히므로 감춘다. STOP_LOSS_RATE가 0인 미사용
+    설정도 마찬가지다.
+    """
+    sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+
+    # 개별 룰 확인
+    rule = db_manager.db.get_stock_strategy(code) if code else None
+    if rule:
+        sl_rate = rule['stop_loss']
+        if rule.get('use_atr_stop') is not None:
+            use_atr_stop = bool(rule['use_atr_stop'])
+
+    def _p(v):
+        return f"${v:,.2f}" if is_overseas else f"{int(v):,}"
+
+    parts = []
+    if use_atr_stop:
+        # 매수 시점에 확정된 ATR 손절률이 있을 때만 표시. 기록이 없으면(수동 매수 등)
+        # 진입 기준 손절선 자체가 없고 TS만 남는다.
+        last_buy = db_manager.db.get_latest_buy_trade(code) if code else None
+        atr_sl_rate = None
+        if last_buy and last_buy.get('stop_loss_rate'):
+            val = float(last_buy['stop_loss_rate'])
+            if val != 0.0:
+                atr_sl_rate = val
+
+        if atr_sl_rate is not None:
+            atr_stop_price = buy_price * (1 + atr_sl_rate / 100)
+            parts.append(f"[dim]ATR:[/dim][blue]{_p(atr_stop_price)}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
+    elif sl_rate != 0:
+        fixed_stop_price = buy_price * (1 + sl_rate / 100)
+        parts.append(f"[dim]고정:[/dim][blue]{_p(fixed_stop_price)}[/][dim]({sl_rate:.0f}%)[/dim]")
+
+    ts_line = _fmt_ts_stop(res, is_overseas=is_overseas)
+    if ts_line:
+        parts.append(ts_line)
+
+    return "\n".join(parts) if parts else "[dim]미사용[/dim]"
+
+def _decorate_name(name, code, marks_ctx):
+    """종목명 뒤에 제한(-)/개별룰(+)/메모(=)/예약(*) 마크를 붙인다."""
+    if not marks_ctx:
+        return name
+
+    marks = []
+    if code in marks_ctx.get('restricted', ()): marks.append("-")
+    if code in marks_ctx.get('rules', ()): marks.append("+")
+    if code in marks_ctx.get('memo', ()): marks.append("=")
+    if code in marks_ctx.get('reserved', ()): marks.append("[magenta]*[/magenta]")
+
+    mark_str = "".join(marks)
+    return f"{name}[dim]{mark_str}[/dim]".strip() if mark_str else name
+
+def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황"):
+    """국내 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 수동 보유 분석이 공유)
+
+    items: KIS 국내 잔고 output1 형식 (pdno/prdt_name/hldg_qty/pchs_avg_pric/prpr/...)
+    반환: (table, {'pchs','eval','profit','count'}, [(종목명, 코드, 청산사유, 미관리사유)])
+    """
+    # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
+    #  행 사이 흐린 실선으로 구분한다.
+    table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
+                  border_style="dim", show_lines=True)
+    table.add_column("종목명", justify="left")
+    table.add_column("코드", justify="center", style="dim")
+    table.add_column("상태", justify="center")            # [추가] 보유 분석 결과
+    table.add_column("보유수량", justify="right")
+    table.add_column("매입단가", justify="right")
+    table.add_column("현재가", justify="right")
+    table.add_column("매입금액", justify="right")
+    table.add_column("평가금액", justify="right")
+    table.add_column("평가손익", justify="right")
+    table.add_column("수익률", justify="right")
+    table.add_column("보유일", justify="right", style="dim")
+    table.add_column("최고가(MFE)", justify="right", style="dim")
+    table.add_column("손절가", justify="right", style="dim")
+
+    totals = {'pchs': 0, 'eval': 0, 'profit': 0, 'count': 0}
+    sell_signals = []
+
+    for item in items:
+        code = item['pdno']
+        raw_name = item['prdt_name']
+        res = holding_analysis.get(code)
+
+        qty = int(item['hldg_qty'])
+        buy_price = float(item['pchs_avg_pric'])
+        cur_price = int(item['prpr'])
+        eval_amt = int(item['evlu_amt'])
+        profit = int(item['evlu_pfls_amt'])
+        rate = float(item['evlu_pfls_rt'])
+        pchs_amt = int(qty * buy_price)
+
+        totals['pchs'] += pchs_amt
+        totals['eval'] += eval_amt
+        totals['profit'] += profit
+        totals['count'] += 1
+
+        if res and res.get('action') == 'sell':
+            sell_signals.append((raw_name, code, res.get('reason', '')))
+
+        p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
+        table.add_row(
+            _decorate_name(raw_name, code, marks_ctx),
+            code,
+            _fmt_state_cell(res),
+            f"{qty:,}주",
+            f"{buy_price:,.0f}원",
+            f"{cur_price:,}원",
+            f"{pchs_amt:,}원",
+            f"{eval_amt:,}원",
+            f"{p_color}{profit:+,}원[/]",
+            f"{p_color}{rate:.2f}%[/]",
+            _fmt_holding_days_cell(res),
+            _fmt_mfe_cell(res, is_overseas=False),
+            _fmt_stop_cell(res, buy_price, is_overseas=False, code=code)
+        )
+
+    return table, totals, sell_signals
+
+def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[해외] 계좌 잔고 현황"):
+    """해외 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 수동 보유 분석이 공유)
+
+    items: KIS 해외 잔고 형식 (ovrs_pdno/ovrs_item_name/ovrs_cblc_qty/pchs_avg_pric/...)
+    반환: (table, {'pchs','eval','profit','count'}, [(종목명, 코드, 청산사유, 미관리사유)])
+    """
+    # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
+    #  행 사이 흐린 실선으로 구분한다.
+    table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
+                  border_style="dim", show_lines=True)
+    table.add_column("종목명", justify="left")
+    table.add_column("코드", justify="center", style="dim")
+    table.add_column("상태", justify="center")            # [추가] 보유 분석 결과
+    table.add_column("거래소", justify="center")
+    table.add_column("보유수량", justify="right")
+    table.add_column("매입단가($)", justify="right")
+    table.add_column("현재가($)", justify="right")
+    table.add_column("매입금액($)", justify="right")
+    table.add_column("평가금액($)", justify="right")
+    table.add_column("평가손익($)", justify="right")
+    table.add_column("수익률(%)", justify="right")
+    table.add_column("보유일", justify="right", style="dim")
+    table.add_column("최고가(MFE)", justify="right", style="dim")
+    table.add_column("손절가", justify="right", style="dim")
+
+    totals = {'pchs': 0.0, 'eval': 0.0, 'profit': 0.0, 'count': 0}
+    sell_signals = []
+
+    for item in items:
+        qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+        if qty <= 0:
+            continue
+
+        code = item.get('ovrs_pdno', '-')
+        raw_name = item.get('ovrs_item_name', '-')
+        res = holding_analysis.get(code)
+
+        pchs_avg = float(item.get('pchs_avg_pric', 0))
+        profit = float(item.get('frcr_evlu_pfls_amt', 0))
+        rate = float(item.get('evlu_pfls_rt', 0))
+        exc_name = item.get('_exchange', '')
+        cur_price = float(item.get('ovrs_now_pric', 0))
+        item_pchs = qty * pchs_avg
+        item_eval = item_pchs + profit
+        if cur_price == 0 and qty > 0: cur_price = item_eval / qty
+
+        totals['pchs'] += item_pchs
+        totals['eval'] += item_eval
+        totals['profit'] += profit
+        totals['count'] += 1
+
+        if res and res.get('action') == 'sell':
+            sell_signals.append((raw_name, code, res.get('reason', '')))
+
+        color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
+        table.add_row(
+            _decorate_name(raw_name, code, marks_ctx),
+            code,
+            _fmt_state_cell(res),
+            exc_name,
+            f"{qty:,.0f}",
+            f"{pchs_avg:,.2f}",
+            f"{cur_price:,.2f}",
+            f"{item_pchs:,.2f}",
+            f"{item_eval:,.2f}",
+            f"{color}{profit:+,.2f}[/]",
+            f"{color}{rate:+.2f}[/]",
+            _fmt_holding_days_cell(res),
+            _fmt_mfe_cell(res, is_overseas=True),
+            _fmt_stop_cell(res, pchs_avg, is_overseas=True, code=code)
+        )
+
+    return table, totals, sell_signals
+
+def _print_sell_signals(signals):
+    """청산 신호가 걸린 종목의 사유를 표 아래 각주로 출력한다.
+
+    signals: [(종목명, 코드, 사유)]
+    (시스템 미관리 여부는 표의 상태 칸 '수동' 표기로 드러나므로 여기서 중복하지 않는다)
+    """
+    if not signals:
+        return
+
+    config.console.print()
+    config.console.print(f"[bold blue]  ⚠ 청산 신호 {len(signals)}건[/bold blue] [dim](시스템 트레이딩 매도 기준)[/dim]")
+    for name, code, reason in signals:
+        # 사유에 '[점수:3.1, RSI:...]' 형태의 대괄호가 포함되므로 rich 마크업으로 해석되지 않게 이스케이프
+        config.console.print(f"    [dim]·[/dim] [bold]{name}[/bold]([dim]{code}[/dim]): {escape(reason)}")
+
+def _ask_positive_number(prompt, cast=float, default=None, allow_cancel=True):
+    """양수 입력 헬퍼. 취소(b/q)면 None을 반환한다."""
+    while True:
+        raw = Prompt.ask(prompt, default=default) if default is not None else Prompt.ask(prompt)
+        if raw is None:
+            return None
+        raw = str(raw).strip().replace(",", "")
+        if allow_cancel and raw.lower() in ('b', 'q', ''):
+            return None
+        try:
+            val = cast(raw)
+        except ValueError:
+            config.console.print("[red]숫자를 입력하세요.[/red]")
+            continue
+        if val <= 0:
+            config.console.print("[red]0보다 큰 값을 입력하세요.[/red]")
+            continue
+        return val
+
+def _ask_buy_date(prompt, default=""):
+    """매수일 입력 헬퍼. 반환 (date, 취소여부).
+
+    빈 입력이면 (None, False) — 매수일 미상 처리. 수정 시에는 현재값을 default로 넘기며,
+    '-'를 입력하면 기존 매수일을 지운다.
+    """
+    while True:
+        raw = Prompt.ask(prompt, default=default)
+        raw = (raw or "").strip()
+        if raw.lower() in ('b', 'q'):
+            return None, True
+        if raw == '-':
+            return None, False
+        if not raw:
+            return None, False
+
+        digits = raw.replace("-", "").replace("/", "").replace(".", "")
+        try:
+            parsed = datetime.strptime(digits, "%Y%m%d").date()
+        except ValueError:
+            config.console.print("[red]YYYY-MM-DD 형식으로 입력하세요. (예: 2026-07-01)[/red]")
+            continue
+
+        if parsed > datetime.now().date():
+            config.console.print("[red]미래 날짜는 입력할 수 없습니다.[/red]")
+            continue
+        return parsed, False
+
+MANUAL_POSITIONS_FILE = os.path.join(config.JSON_DIR, "manual_positions.json")
+
+def load_manual_positions():
+    """저장된 수동 보유 포지션을 불러온다. (매수일은 date로 복원)"""
+    rows = jsonio.load_json(MANUAL_POSITIONS_FILE, default=[]) or []
+    positions = []
+    for row in rows:
+        try:
+            buy_date = None
+            if row.get('buy_date'):
+                buy_date = datetime.strptime(row['buy_date'], "%Y-%m-%d").date()
+            positions.append({
+                'code': str(row['code']), 'name': row.get('name') or str(row['code']),
+                'is_overseas': bool(row.get('is_overseas')),
+                'buy_price': float(row['buy_price']), 'qty': int(row['qty']),
+                'buy_date': buy_date,
+            })
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug(f"수동 포지션 항목 파싱 실패({row}): {e}")
+    return positions
+
+def save_manual_positions(positions):
+    """수동 보유 포지션을 저장한다. (현재가/수익률 등 조회값은 저장하지 않음)"""
+    rows = [{
+        'code': p['code'], 'name': p['name'], 'is_overseas': bool(p['is_overseas']),
+        'buy_price': p['buy_price'], 'qty': p['qty'],
+        'buy_date': p['buy_date'].strftime("%Y-%m-%d") if p.get('buy_date') else None,
+    } for p in positions]
+    return jsonio.save_json(MANUAL_POSITIONS_FILE, rows)
+
+def _collect_manual_position():
+    """수동 보유 분석용 포지션 정보를 입력받는다. 취소 시 None."""
+    from modules import auto_trade
+
+    code, name, is_overseas = auto_trade._select_stock_for_rules()
+    if not code:
+        return None
+
+    unit = "$" if is_overseas else "원"
+    config.console.print()
+    config.console.print(f"[bold cyan]{name}({code})[/bold cyan] 보유 정보를 입력하세요. [dim](취소: b)[/dim]")
+
+    buy_price = _ask_positive_number(f"  매수단가 ({unit})", cast=float)
+    if buy_price is None:
+        return None
+
+    qty = _ask_positive_number("  보유수량 (주)", cast=int)
+    if qty is None:
+        return None
+
+    buy_date, cancelled = _ask_buy_date("  매수일 (YYYY-MM-DD, 미입력 시 보유일수 미적용)")
+    if cancelled:
+        return None
+
+    return {
+        'code': code, 'name': name, 'is_overseas': is_overseas,
+        'buy_price': buy_price, 'qty': qty, 'buy_date': buy_date,
+    }
+
+def _print_saved_positions(positions):
+    """저장된 수동 포지션 목록을 요약 출력한다. (분석 전 확인용)"""
+    table = Table(title="\n저장된 수동 보유 포지션", box=box.HORIZONTALS,
+                  show_header=True, header_style="dim", border_style="dim")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("종목명", justify="left")
+    table.add_column("코드", justify="center", style="dim")
+    table.add_column("구분", justify="center", style="dim")
+    table.add_column("매수단가", justify="right")
+    table.add_column("보유수량", justify="right")
+    table.add_column("매수일", justify="center")
+
+    for i, p in enumerate(positions, 1):
+        unit = "$" if p['is_overseas'] else "원"
+        price = f"{p['buy_price']:,.2f}{unit}" if p['is_overseas'] else f"{p['buy_price']:,.0f}{unit}"
+        table.add_row(
+            str(i), p['name'], p['code'], "해외" if p['is_overseas'] else "국내",
+            price, f"{p['qty']:,}주",
+            p['buy_date'].strftime("%Y-%m-%d") if p.get('buy_date') else "[dim]-[/dim]",
+        )
+
+    config.console.print(table)
+
+def _fmt_position_summary(pos):
+    """포지션 한 줄 요약 (수정/삭제 대상 확인용)."""
+    price = f"${pos['buy_price']:,.2f}" if pos['is_overseas'] else f"{pos['buy_price']:,.0f}원"
+    date_str = pos['buy_date'].strftime("%Y-%m-%d") if pos.get('buy_date') else "매수일 없음"
+    return f"[bold]{pos['name']}[/bold]([dim]{pos['code']}[/dim]) {price} · {pos['qty']:,}주 · {date_str}"
+
+def _edit_position(pos):
+    """저장된 포지션의 매수 정보를 수정한다. 취소하면 None (원본 유지).
+
+    종목 자체는 바꾸지 않는다 — 다른 종목은 신규 입력으로 추가한다.
+    """
+    unit = "$" if pos['is_overseas'] else "원"
+    cur_price = f"{pos['buy_price']:.2f}" if pos['is_overseas'] else f"{pos['buy_price']:.0f}"
+    cur_date = pos['buy_date'].strftime("%Y-%m-%d") if pos.get('buy_date') else ""
+
+    config.console.print()
+    config.console.print(f"[bold cyan]{pos['name']}({pos['code']})[/bold cyan] 수정 "
+                         f"[dim](Enter=현재값 유지, 취소: b)[/dim]")
+
+    buy_price = _ask_positive_number(f"  매수단가 ({unit})", cast=float, default=cur_price)
+    if buy_price is None:
+        return None
+
+    qty = _ask_positive_number("  보유수량 (주)", cast=int, default=str(pos['qty']))
+    if qty is None:
+        return None
+
+    buy_date, cancelled = _ask_buy_date(
+        "  매수일 (YYYY-MM-DD, 지우려면 '-')", default=cur_date)
+    if cancelled:
+        return None
+
+    updated = dict(pos)
+    updated.update({'buy_price': buy_price, 'qty': qty, 'buy_date': buy_date})
+    return updated
+
+def _select_position(positions, action_label):
+    """목록에서 번호로 포지션을 고른다. 취소하거나 잘못된 번호면 None."""
+    raw = Prompt.ask(f"{action_label}할 번호 (취소: Enter)", default="")
+    raw = (raw or "").strip()
+    if not raw or raw.lower() in ('b', 'q'):
+        return None
+
+    if not raw.isdigit() or not (1 <= int(raw) <= len(positions)):
+        config.console.print("[red]목록에 있는 번호를 입력하세요.[/red]")
+        return None
+
+    return int(raw) - 1
+
+def _modify_saved_position(positions):
+    """저장 목록의 한 항목을 수정한다. 반환: (포지션 리스트, 변경 여부)."""
+    idx = _select_position(positions, "수정")
+    if idx is None:
+        return positions, False
+
+    updated = _edit_position(positions[idx])
+    if not updated:
+        return positions, False
+
+    positions[idx] = updated
+    config.console.print(f"[green]✓ 수정됨: {_fmt_position_summary(updated)}[/green]")
+    return positions, True
+
+def _delete_saved_position(positions):
+    """저장 목록의 한 항목을 삭제한다. 반환: (포지션 리스트, 변경 여부)."""
+    idx = _select_position(positions, "삭제")
+    if idx is None:
+        return positions, False
+
+    target = positions[idx]
+    config.console.print(f"  → {_fmt_position_summary(target)}")
+    if Prompt.ask("  삭제하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        return positions, False
+
+    positions.pop(idx)
+    config.console.print(f"[yellow]✗ 삭제됨: {_fmt_position_summary(target)}[/yellow]")
+    return positions, True
+
+def _add_manual_positions(positions, base_breadcrumb_len):
+    """신규 종목을 연속 입력받아 목록에 추가한다. 반환: (목록, 추가 여부)."""
+    added = False
+    while True:
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        pos = _collect_manual_position()
+        if pos:
+            positions.append(pos)
+            added = True
+            config.console.print(f"[green]✓ 추가됨: {_fmt_position_summary(pos)}[/green]")
+
+        config.console.print()
+        if Prompt.ask("종목을 더 추가하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            break
+
+    return positions, added
+
+def manual_holding_analysis():
+    """[9]-5 수동 보유 분석 — 계좌 잔고에 없는 포지션을 직접 입력해 [9]-2와 같은 판정을 본다.
+
+    타 계좌 보유분, 매수 검토 중인 시나리오, 시스템 도입 전 매수분 등 잔고 API로는
+    잡히지 않는 포지션을 같은 기준(analyze_sell)으로 확인하기 위한 메뉴다.
+    입력한 포지션은 저장해 두고 다음 실행 때 바로 재분석할 수 있다.
+    """
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+
+    positions = load_manual_positions()
+    dirty = False
+
+    if positions:
+        _print_saved_positions(positions)
+    else:
+        # 저장분이 없으면 물어볼 것이 없다 — 바로 입력으로 들어간다.
+        config.console.print("\n[dim]저장된 수동 보유 포지션이 없습니다.[/dim]")
+        positions, dirty = _add_manual_positions(positions, base_breadcrumb_len)
+        if positions:
+            _print_saved_positions(positions)
+
+    while positions:
+        config.console.print()
+        choice = Prompt.ask("작업 선택 (0: 분석, 1: 추가, 2: 수정, 3: 삭제) [dim](이전: b, 메인: q)[/dim]",
+                            choices=["0", "1", "2", "3", "b", "q"], default="0")
+        if choice.lower() in ('b', 'q'):
+            # 분석 없이 나가더라도 편집분은 잃지 않도록 저장 여부는 물어본다.
+            if dirty:
+                _prompt_save_positions(positions)
+            return False
+
+        if choice == "0":
+            break
+
+        if choice == "1":
+            positions, changed = _add_manual_positions(positions, base_breadcrumb_len)
+        elif choice == "2":
+            positions, changed = _modify_saved_position(positions)
+        else:
+            positions, changed = _delete_saved_position(positions)
+        dirty = dirty or changed
+
+        if positions:
+            _print_saved_positions(positions)
+
+    if not positions:
+        config.console.print("[yellow]분석할 종목이 없습니다.[/yellow]")
+        if dirty:
+            save_manual_positions(positions)
+        return True
+
+    # 현재가 조회 → 평가금액/수익률 산출 (사용자 입력은 매수 정보뿐)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        console=config.console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("[cyan]현재가 조회 중...[/cyan]", total=None)
+
+        priced = []
+        for pos in positions:
+            cur_price = api.get_current_price(pos['code'], pos['is_overseas'])
+            if not cur_price or cur_price <= 0:
+                config.console.print(f"[red]현재가 조회 실패: {pos['name']}({pos['code']}) — 제외합니다.[/red]")
+                continue
+            pos['current_price'] = float(cur_price)
+            pos['profit_rate'] = ((pos['current_price'] - pos['buy_price']) / pos['buy_price']) * 100
+            priced.append(pos)
+
+        if not priced:
+            config.console.print("[red]현재가를 조회할 수 있는 종목이 없습니다.[/red]")
+            if dirty:
+                save_manual_positions(positions)
+            return True
+
+        progress.update(task, description="[cyan]보유 종목 분석 중 (시스템 매도 기준)...[/cyan]")
+        holding_analysis = _analyze_manual_positions(priced)
+
+    _print_manual_positions(priced, holding_analysis)
+
+    # 추가·수정·삭제가 있었을 때만 저장 여부를 묻는다. (변경 없이 재분석만 한 경우는 묻지 않음)
+    if dirty:
+        _prompt_save_positions(positions)
+
+    return True
+
+def _prompt_save_positions(positions):
+    """변경된 수동 포지션의 저장 여부를 묻고 저장한다."""
+    config.console.print()
+    if Prompt.ask("변경한 보유 정보를 저장하시겠습니까? [dim](다음 실행 시 자동 표시)[/dim]",
+                  choices=["y", "n"], default="y") != "y":
+        return
+
+    if save_manual_positions(positions):
+        config.console.print(f"[green]✓ 저장 완료 ({len(positions)}종목)[/green]")
+    else:
+        config.console.print("[red]저장에 실패했습니다. 로그를 확인하세요.[/red]")
+
+def _analyze_manual_positions(positions):
+    """수동 입력 포지션을 [9]-2와 같은 기준으로 분석한다. (읽기 전용)
+
+    잔고 경로와 달리 보유일수는 입력한 매수일에서, 트레일링 스탑 앵커(최고가)는
+    매수일 이후 실제 일봉 고가에서 유도한다. (DB에 매수·최고가 기록이 없는 포지션)
+    """
+    from modules import auto_trade
+
+    restricted_codes = {}
+    try:
+        restricted_codes = auto_trade.get_restricted_stocks()
+    except Exception as e:
+        logger.debug(f"제한 종목 조회 실패: {e}")
+
+    entries = []
+    for pos in positions:
+        entry = {
+            'code': pos['code'], 'name': pos['name'],
+            'buy_price': pos['buy_price'], 'current_price': pos['current_price'],
+            'profit_rate': pos['profit_rate'], 'is_overseas': pos['is_overseas'],
+        }
+        if pos.get('buy_date'):
+            entry['holding_days'] = (datetime.now().date() - pos['buy_date']).days
+            entry['highest_since'] = pos['buy_date']
+        entries.append(entry)
+
+    try:
+        return auto_trade.analyze_holdings(entries, restricted_codes=restricted_codes)
+    except Exception as e:
+        logger.warning(f"수동 보유 분석 실패: {e}")
+        return {}
+
+def _print_manual_positions(positions, holding_analysis):
+    """수동 입력 포지션을 [9]-2 잔고와 같은 표로 출력한다."""
+    domestic_items = []
+    overseas_items = []
+
+    for pos in positions:
+        qty = pos['qty']
+        buy_price = pos['buy_price']
+        cur_price = pos['current_price']
+        eval_amt = qty * cur_price
+        profit = eval_amt - (qty * buy_price)
+
+        if pos['is_overseas']:
+            overseas_items.append({
+                'ovrs_pdno': pos['code'], 'ovrs_item_name': pos['name'],
+                'ovrs_cblc_qty': qty, 'pchs_avg_pric': buy_price,
+                'ovrs_now_pric': cur_price, 'frcr_evlu_pfls_amt': profit,
+                'evlu_pfls_rt': pos['profit_rate'], '_exchange': '-',
+            })
+        else:
+            domestic_items.append({
+                'pdno': pos['code'], 'prdt_name': pos['name'],
+                'hldg_qty': qty, 'pchs_avg_pric': buy_price,
+                'prpr': int(cur_price), 'evlu_amt': int(eval_amt),
+                'evlu_pfls_amt': int(profit), 'evlu_pfls_rt': pos['profit_rate'],
+            })
+
+    if domestic_items:
+        table, totals, signals = build_domestic_holdings_table(
+            domestic_items, holding_analysis, title="\n[국내] 수동 보유 분석")
+        config.console.print(table)
+
+        total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
+        p_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
+        config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {totals['pchs']:,}원  |  [bold dim]총 평가금액:[/bold dim] {totals['eval']:,}원  |  [bold dim]총 평가손익:[/bold dim] {p_color}{totals['profit']:+,}원 ({total_rate:+.2f}%)[/]")
+        _print_sell_signals(signals)
+
+    if overseas_items:
+        if domestic_items:
+            config.console.print()
+        table, totals, signals = build_overseas_holdings_table(
+            overseas_items, holding_analysis, title="\n[해외] 수동 보유 분석")
+        config.console.print(table)
+
+        total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
+        p_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
+        config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${totals['pchs']:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${totals['eval']:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {p_color}${totals['profit']:+,.2f} ({total_rate:+.2f}%)[/]")
+        _print_sell_signals(signals)
+
 def _display_balance_details(cano, acnt_prdt_cd):
     """특정 계좌의 잔고 상세 출력"""
-    
+
     reserved_codes = set()
     try:
         pending_reserves = db_manager.db.get_pending_reserved_orders()
@@ -233,10 +967,18 @@ def _display_balance_details(cano, acnt_prdt_cd):
     custom_rules = db_manager.db.get_all_stock_strategies()
     rules_map = {r['code']: True for r in custom_rules}
 
+    marks_ctx = {
+        'restricted': restricted_stocks,
+        'rules': rules_map,
+        'memo': utils.get_memo_codes(),
+        'reserved': reserved_codes,
+    }
+
     # ---------------------------
-    # [국내 주식 잔고]
+    # [잔고 조회 + 보유 분석]
+    # 국내·해외를 먼저 모두 조회한 뒤 보유 분석을 1회만 수행한다.
+    # (DB 배치 로드와 시장 국면 조회가 종목 수와 무관하게 1회로 끝남)
     # ---------------------------
-    
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -244,10 +986,10 @@ def _display_balance_details(cano, acnt_prdt_cd):
         console=config.console,
         transient=True
     ) as progress:
-        progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
+        task = progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
         # [수정] api.get_domestic_balance 직접 호출
         raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
-        
+
         if raw_holdings is None:
             config.console.print("[red]잔고 조회 실패 (API 오류)[/red]")
             return
@@ -255,233 +997,59 @@ def _display_balance_details(cano, acnt_prdt_cd):
         # 보유수량 0 이상인 종목만 필터링
         output1 = [item for item in raw_holdings if int(item.get('hldg_qty', 0)) > 0]
         summary = raw_summary[0] if raw_summary else None
-        
-        if output1:
-            table = Table(title="\n[국내] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-            table.add_column("종목명", justify="left")
-            table.add_column("코드", justify="center", style="dim")
-            table.add_column("보유수량", justify="right")
-            table.add_column("매입단가", justify="right")
-            table.add_column("현재가", justify="right")
-            table.add_column("매입금액", justify="right")
-            table.add_column("평가금액", justify="right")
-            table.add_column("평가손익", justify="right")
-            table.add_column("수익률", justify="right")
-            table.add_column("목표가", justify="right", style="dim")
-            table.add_column("손절가", justify="right", style="dim")
-            
-            calculated_total_pchs = 0
-            calculated_total_eval = 0
-            calculated_total_profit = 0
-            
-            m_codes = utils.get_memo_codes() # [추가]
-            for item in output1:
-                code = item['pdno']
-                name = item['prdt_name']
-                
-                marks = []
-                if code in restricted_stocks: marks.append("-")
-                if code in rules_map: marks.append("+")
-                if code in m_codes: marks.append("=")
-                if code in reserved_codes: marks.append("[magenta]*[/magenta]")
-                mark_str = "".join(marks)
-                if mark_str: name = f"{name}[dim]{mark_str}[/dim]".strip()
-                qty = int(item['hldg_qty'])
-                buy_price = float(item['pchs_avg_pric'])
-                cur_price = int(item['prpr'])
-                eval_amt = int(item['evlu_amt'])
-                profit = int(item['evlu_pfls_amt'])
-                rate = float(item['evlu_pfls_rt'])
-                pchs_amt = int(qty * buy_price)
-                calculated_total_pchs += pchs_amt
-                calculated_total_eval += eval_amt
-                calculated_total_profit += profit
-                
-                # [추가] 손절가 및 기준 계산
-                sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-                tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-                
-                # 개별 룰 확인
-                rule = db_manager.db.get_stock_strategy(code)
-                if rule:
-                    sl_rate = rule['stop_loss']
-                    tp_rate = rule['take_profit']
-                
-                if tp_rate > 0:
-                    target_price = buy_price * (1 + tp_rate / 100)
-                    target_str = f"[red]{int(target_price):,}[/][dim](+{tp_rate:.0f}%)[/dim]"
-                else:
-                    target_str = "[dim]미사용(TS)[/dim]"
-                
-                fixed_stop_price = buy_price * (1 + sl_rate / 100)
-                stop_str_list = [f"[dim]고정:[/dim][blue]{int(fixed_stop_price):,}[/][dim]({sl_rate:.0f}%)[/dim]"]
-                
-                atr_sl_rate = None
-                last_buy = db_manager.db.get_latest_buy_trade(code)
-                if last_buy and last_buy.get('stop_loss_rate'):
-                    val = float(last_buy['stop_loss_rate'])
-                    if val != 0.0:
-                        atr_sl_rate = val
-                
-                if atr_sl_rate is not None:
-                    atr_stop_price = buy_price * (1 + atr_sl_rate / 100)
-                    stop_str_list.append(f"[dim]ATR:[/dim][blue]{int(atr_stop_price):,}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
-                
-                stop_str = " ".join(stop_str_list)
-                
-                p_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
-                table.add_row(
-                    name,
-                    code,
-                    f"{qty:,}주",
-                    f"{buy_price:,.0f}원",
-                    f"{cur_price:,}원",
-                    f"{pchs_amt:,}원",
-                    f"{eval_amt:,}원",
-                    f"{p_color}{profit:+,}원[/]",
-                    f"{p_color}{rate:.2f}%[/]",
-                    target_str,
-                    stop_str
-                )
-            
-            config.console.print(table)
-            
-            # 요약 정보 출력
-            if summary:
-                total_rate = 0.0
-                if calculated_total_pchs > 0:
-                    total_rate = (calculated_total_profit / calculated_total_pchs) * 100
-                
-                profit_color = "[red]" if calculated_total_profit > 0 else ("[blue]" if calculated_total_profit < 0 else "[white]")
-                config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {calculated_total_pchs:,}원  |  [bold dim]총 평가금액:[/bold dim] {calculated_total_eval:,}원  |  [bold dim]총 평가손익:[/bold dim] {profit_color}{calculated_total_profit:+,}원 ({total_rate:+.2f}%)[/]")
-        else:
-            config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
+
+        progress.update(task, description="[cyan]해외 잔고 조회 중...[/cyan]")
+        # [수정] api.get_overseas_balance 직접 호출
+        all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd) or []
+        ovrs_output = [item for item in all_overseas_holdings
+                       if float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)) > 0]
+
+        # [추가] 보유 분석 — 자동매매가 실제로 쓰는 매도 판단(analyze_sell)을 그대로 적용
+        progress.update(task, description="[cyan]보유 종목 분석 중 (시스템 매도 기준)...[/cyan]")
+        holding_analysis = run_holding_analysis(output1, ovrs_output, restricted_codes=restricted_stocks)
+
+    # ---------------------------
+    # [국내 주식 잔고]
+    # ---------------------------
+    if output1:
+        table, totals, sell_signals = build_domestic_holdings_table(
+            output1, holding_analysis, marks_ctx=marks_ctx)
+        config.console.print(table)
+
+        # 요약 정보 출력
+        if summary:
+            total_rate = 0.0
+            if totals['pchs'] > 0:
+                total_rate = (totals['profit'] / totals['pchs']) * 100
+
+            profit_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
+            config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {totals['pchs']:,}원  |  [bold dim]총 평가금액:[/bold dim] {totals['eval']:,}원  |  [bold dim]총 평가손익:[/bold dim] {profit_color}{totals['profit']:+,}원 ({total_rate:+.2f}%)[/]")
+
+        _print_sell_signals(sell_signals)
+    else:
+        config.console.print("\n[yellow]국내 보유 종목이 없습니다.[/yellow]")
 
     config.console.print()
 
     # ---------------------------
     # [해외 주식 잔고]
     # ---------------------------
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        console=config.console,
-        transient=True
-    ) as progress:
-        progress.add_task("[cyan]해외 잔고 조회 중...[/cyan]", total=None)
-        # [수정] api.get_overseas_balance 직접 호출
-        all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd)
-
     if not all_overseas_holdings:
         config.console.print("\n[yellow]해외 보유 종목이 없습니다.[/yellow]\n")
     else:
-        table_ovrs = Table(title="\n[해외] 계좌 잔고 현황", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
-        table_ovrs.add_column("종목명", justify="left")
-        table_ovrs.add_column("코드", justify="center", style="dim")
-        table_ovrs.add_column("거래소", justify="center")
-        table_ovrs.add_column("보유수량", justify="right")
-        table_ovrs.add_column("매입단가($)", justify="right")
-        table_ovrs.add_column("현재가($)", justify="right") 
-        table_ovrs.add_column("매입금액($)", justify="right") 
-        table_ovrs.add_column("평가금액($)", justify="right")
-        table_ovrs.add_column("평가손익($)", justify="right")
-        table_ovrs.add_column("수익률(%)", justify="right")
-        table_ovrs.add_column("목표가", justify="right", style="dim")
-        table_ovrs.add_column("손절가", justify="right", style="dim")
+        table_ovrs, totals_ovrs, ovrs_sell_signals = build_overseas_holdings_table(
+            all_overseas_holdings, holding_analysis, marks_ctx=marks_ctx)
 
-        tot_ovrs_evlu = 0.0
-        tot_ovrs_profit = 0.0
-        tot_ovrs_pchs = 0.0
-        has_ovrs_item = False
-        
-        m_codes = utils.get_memo_codes() # [추가]
-
-        for item in all_overseas_holdings:
-            qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
-            
-            if qty > 0:
-                has_ovrs_item = True
-                code = item.get('ovrs_pdno', '-')
-                name = item.get('ovrs_item_name', '-')
-                
-                marks = []
-                if code in restricted_stocks: marks.append("-")
-                if code in rules_map: marks.append("+")
-                if code in m_codes: marks.append("=")
-                if code in reserved_codes: marks.append("[magenta]*[/magenta]")
-                mark_str = "".join(marks)
-                if mark_str: name = f"{name}[dim]{mark_str}[/dim]".strip()
-                pchs_avg = float(item.get('pchs_avg_pric', 0))
-                profit = float(item.get('frcr_evlu_pfls_amt', 0))
-                rate = float(item.get('evlu_pfls_rt', 0))
-                exc_name = item.get('_exchange', '')
-                cur_price = float(item.get('ovrs_now_pric', 0))
-                item_pchs = qty * pchs_avg
-                item_eval = item_pchs + profit
-                if cur_price == 0 and qty > 0: cur_price = item_eval / qty
-
-                tot_ovrs_evlu += item_eval
-                tot_ovrs_pchs += item_pchs
-                tot_ovrs_profit += profit
-
-                # [추가] 손절가 및 기준 계산
-                sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-                tp_rate = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-                
-                # 개별 룰 확인
-                rule = db_manager.db.get_stock_strategy(code)
-                if rule:
-                    sl_rate = rule['stop_loss']
-                    tp_rate = rule['take_profit']
-                
-                if tp_rate > 0:
-                    target_price = pchs_avg * (1 + tp_rate / 100)
-                    target_str = f"[red]${target_price:,.2f}[/][dim](+{tp_rate:.0f}%)[/dim]"
-                else:
-                    target_str = "[dim]미사용(TS)[/dim]"
-                
-                fixed_stop_price = pchs_avg * (1 + sl_rate / 100)
-                stop_str_list = [f"[dim]고정:[/dim][blue]${fixed_stop_price:,.2f}[/][dim]({sl_rate:.0f}%)[/dim]"]
-                
-                atr_sl_rate = None
-                last_buy = db_manager.db.get_latest_buy_trade(code)
-                if last_buy and last_buy.get('stop_loss_rate'):
-                    val = float(last_buy['stop_loss_rate'])
-                    if val != 0.0:
-                        atr_sl_rate = val
-                
-                if atr_sl_rate is not None:
-                    atr_stop_price = pchs_avg * (1 + atr_sl_rate / 100)
-                    stop_str_list.append(f"[dim]ATR:[/dim][blue]${atr_stop_price:,.2f}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
-                    
-                stop_str = " ".join(stop_str_list)
-
-                color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
-                
-                table_ovrs.add_row(
-                    name,
-                    code,
-                    exc_name,
-                    f"{qty:,.0f}", 
-                    f"{pchs_avg:,.2f}",
-                    f"{cur_price:,.2f}", 
-                    f"{item_pchs:,.2f}", 
-                    f"{item_eval:,.2f}", 
-                    f"{color}{profit:+,.2f}[/]", 
-                    f"{color}{rate:+.2f}[/]",
-                    target_str,
-                    stop_str
-                )
-
-        if has_ovrs_item:
+        if totals_ovrs['count'] > 0:
             config.console.print(table_ovrs)
             total_ovrs_rate = 0.0
-            if tot_ovrs_pchs > 0:
-                total_ovrs_rate = (tot_ovrs_profit / tot_ovrs_pchs) * 100
-                
-            profit_color = "[red]" if tot_ovrs_profit > 0 else ("[blue]" if tot_ovrs_profit < 0 else "[white]")
-            config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${tot_ovrs_pchs:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${tot_ovrs_evlu:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {profit_color}${tot_ovrs_profit:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+            if totals_ovrs['pchs'] > 0:
+                total_ovrs_rate = (totals_ovrs['profit'] / totals_ovrs['pchs']) * 100
+
+            profit_color = "[red]" if totals_ovrs['profit'] > 0 else ("[blue]" if totals_ovrs['profit'] < 0 else "[white]")
+            config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${totals_ovrs['pchs']:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${totals_ovrs['eval']:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {profit_color}${totals_ovrs['profit']:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+
+            _print_sell_signals(ovrs_sell_signals)
 
         else:
             config.console.print("\n[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
@@ -1481,7 +2049,7 @@ def asset_management_menu():
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report")]
+        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report"), ("5", "수동 보유 분석", "Manual Holding Analysis")]
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() in ['b', 'q']: return False
@@ -1492,7 +2060,7 @@ def asset_management_menu():
             continue
         
         last_choice = choice
-        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가"}
+        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가", "5": "수동 보유 분석"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -1516,3 +2084,7 @@ def asset_management_menu():
                 target_acc = f"{target_cano}-{target_acnt}"
                 if trader.print_report(target_account=target_acc) is not False:
                     utils.pause()
+        elif choice == "5":
+            logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+            if manual_holding_analysis() is not False:
+                utils.pause()

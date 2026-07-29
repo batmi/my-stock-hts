@@ -552,6 +552,67 @@ class DBManager:
         except Exception:
             return result
 
+    def get_position_entry_dates(self, codes):
+        """[배치] 현재 보유 포지션의 진입일을 일괄 조회합니다. {code: 'YYYY-MM-DD'}
+
+        진입일 = 누적 보유수량이 0에서 1 이상으로 바뀐 '마지막' 시점.
+        부분 매도(반익절)는 포지션을 끊지 않으므로 '마지막 매도 이후 첫 매수'로는 진입일을
+        구할 수 없고, 분할 매수·피라미딩의 '최근 매수'를 쓰면 1주만 더 담아도 보유일수가
+        0으로 리셋된다. 그래서 체결 내역을 시간순으로 재생해 수량 흐름으로 판정한다.
+
+        trades에는 접수·정정·취소 행이 섞여 있어 체결(order_status='체결') 행만 집계한다.
+        """
+        codes = [c for c in dict.fromkeys(codes or []) if c]
+        if not codes:
+            return {}
+
+        result = {}
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            ph = ",".join("?" * len(codes))
+            cursor.execute(f"""
+                SELECT code, time, type, qty FROM trades
+                WHERE code IN ({ph}) AND order_status = '체결'
+                ORDER BY code, time ASC""", codes)
+
+            running = {}
+            for row in cursor.fetchall():
+                t = dict(row)
+                code = t['code']
+                type_str = str(t.get('type') or '')
+                # 취소·정정 행이 체결로 기록된 경우가 있어 한 번 더 걸러낸다
+                if '취소' in type_str or '정정' in type_str:
+                    continue
+
+                try:
+                    qty = int(float(t.get('qty') or 0))
+                except (TypeError, ValueError):
+                    continue
+                if qty <= 0:
+                    continue
+
+                is_buy = ('매수' in type_str) or ('buy' in type_str.lower())
+                is_sell = ('매도' in type_str) or ('sell' in type_str.lower())
+                if not (is_buy or is_sell):
+                    continue
+
+                prev = running.get(code, 0)
+                if is_buy:
+                    if prev <= 0:
+                        # 수량이 0에서 양수로 바뀌는 순간 = 이번 포지션의 진입
+                        result[code] = str(t.get('time') or '')[:10] or None
+                    running[code] = prev + qty
+                else:
+                    running[code] = max(0, prev - qty)
+                    if running[code] == 0:
+                        result.pop(code, None)   # 전량 청산 — 다음 매수가 새 진입
+
+            return {c: d for c, d in result.items() if d}
+        except Exception as e:
+            logger.debug(f"진입일 조회 실패: {e}")
+            return result
+
     def get_latest_buy_trades(self, codes):
         """[배치] 여러 종목의 최근 매수 내역을 일괄 조회합니다. {code: trade|None 미포함}
 

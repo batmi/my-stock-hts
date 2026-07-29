@@ -49,6 +49,401 @@ def _pkg():
     return _at
 
 
+# 시스템 자동 매도 대상에서 빠지는 사유. 매도 루프의 스킵 로그·경보와 잔고 화면 표기가
+# 같은 문구를 쓰도록 상수로 둔다.
+UNMANAGED_RESTRICTED = "트레이딩 제한"
+UNMANAGED_ETF = "ETF 제외 설정"
+UNMANAGED_OVERSEAS = "해외 미지원"
+
+
+def get_unmanaged_reason(code, name="", is_overseas=False, restricted_codes=None):
+    """시스템 자동 매도 대상에서 제외되는 사유를 반환한다. 대상이면 None.
+
+    _check_sell_conditions의 스킵 분기와 같은 기준이며, 장중 특정 시간대에만 걸리는
+    일시적 스킵(진행 중 주문·NXT 비거래 시간)은 포함하지 않는다.
+
+    해외 종목이 항상 제외인 이유: 매도 루프는 국내 잔고(get_domestic_balance)만 순회한다.
+    해외 포지션은 손절을 포함해 전량 수동 관리 대상이다.
+    """
+    if restricted_codes and code in restricted_codes:
+        return UNMANAGED_RESTRICTED
+    if is_overseas:
+        return UNMANAGED_OVERSEAS
+    if api.is_domestic_etf_etn(code, name) and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
+        return UNMANAGED_ETF
+    return None
+
+
+def giveback_callback_cap(max_profit_rate, giveback_ratio):
+    """'최고 수익의 giveback_ratio 이상은 반납하지 않는다'를 만족하는 콜백 상한(%)을 구한다.
+
+    [Fix] 기존 식은 `max_profit_rate × ratio`를 그대로 콜백 상한으로 썼는데, 콜백은 '최고가'
+    대비 비율이고 max_profit_rate는 '매수가' 대비 비율이라 기준이 달랐다. 수익이 커질수록
+    상한이 과대평가되어(예: MFE +108%, ratio 0.30 → 상한 32.5%, 실제 반납 60%p 이상 허용)
+    캡이 사실상 무력화됐다. 두 기준을 정확히 환산한다.
+
+        청산가 = 매수가 × (1 + MFE(1-R)/100),  최고가 = 매수가 × (1 + MFE/100)
+        상한   = 1 - 청산가/최고가 = MFE·R / (100 + MFE)
+
+    (같은 MFE +108%, R 0.30이면 32.5%가 아니라 15.6%가 정답)
+    """
+    if max_profit_rate <= 0 or giveback_ratio <= 0:
+        return 0.0
+    return (max_profit_rate * giveback_ratio) / (100.0 + max_profit_rate) * 100.0
+
+
+def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thresholds=None,
+                          ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None):
+    """샹들리에 트레일링 스탑 발동선을 계산한다. (순수 함수 · 부수효과 없음)
+
+    주청산 로직인 TS 콜백 산식의 단일 소스. analyze_sell의 청산 판정과 잔고 화면의
+    'TS 청산가' 표시가 같은 식을 쓰도록 분리했다(표시선 ≠ 실제 청산선 방지).
+
+    반환: None(계산 불가) 또는
+      {'armed'(발동 조건 도달), 'triggered'(청산 조건 충족), 'stop_price'(청산선),
+       'callback'(적용 콜백%), 'drop_rate'(최고가 대비 하락%), 'max_profit_rate', 'activation'}
+    """
+    if not (highest_price and buy_price) or highest_price <= 0 or buy_price <= 0:
+        return None
+
+    t = thresholds or {}
+    ss = config.SELL_STRATEGY
+    if use_atr_stop is None:
+        use_atr_stop = t.get("USE_ATR_STOP", ss.get("USE_ATR_STOP", True))
+    if ts_activation is None:
+        ts_activation = t.get("ts_activation", ss.get("TRAILING_STOP_ACTIVATION_RATE", 10.0))
+    if ts_callback is None:
+        ts_callback = t.get("ts_callback", ss.get("TRAILING_STOP_CALLBACK_RATE", 5.0))
+    if ts_atr_mult is None:
+        ts_atr_mult = t.get("TRAILING_ATR_MULTIPLIER", ss.get("TRAILING_ATR_MULTIPLIER", 3.0))
+
+    max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
+    drop_rate = ((highest_price - current_price) / highest_price) * 100
+
+    actual_callback = ts_callback
+    atr_val = (ind.get('atr') if ind else None) or 0
+    if use_atr_stop and atr_val > 0:
+        dynamic_callback = (atr_val * ts_atr_mult / highest_price) * 100
+
+        # [리스크 관리 방어 로직]
+        # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
+        # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 일정 비율 이상을 반납하는 것 방지.
+        #    TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제(순수 샹들리에).
+        giveback_ratio = ss.get("TS_MAX_GIVEBACK_RATIO", 0.0)
+        if giveback_ratio > 0:
+            actual_callback = min(max(ts_callback, dynamic_callback),
+                                  max(ts_callback, giveback_callback_cap(max_profit_rate, giveback_ratio)))
+        else:
+            actual_callback = max(ts_callback, dynamic_callback)
+
+    armed = max_profit_rate >= ts_activation
+    return {
+        'armed': armed,
+        'triggered': bool(armed and drop_rate >= actual_callback),
+        'stop_price': highest_price * (1 - actual_callback / 100),
+        'callback': actual_callback,
+        'drop_rate': drop_rate,
+        'max_profit_rate': max_profit_rate,
+        'activation': ts_activation,
+    }
+
+
+def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None):
+    """보유 종목의 매도 판단(analyze_sell)에 넘길 임계값을 조립한다. (부수효과 없음)
+
+    시스템 트레이딩 루프(_check_sell_conditions)와 잔고 화면의 보유 분석이 같은
+    임계값을 쓰도록 SSOT로 둔다. 개별 룰 > ATR 수량가중 손절 > 전역 설정 순으로 덮어쓴다.
+    """
+    if rule:
+        thresholds = {
+            "TAKE_PROFIT_RATE": rule['take_profit'],
+            "STOP_LOSS_RATE": rule['stop_loss'],
+            "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
+            "SELL_SCORE": rule['sell_score'],
+            "WEIGHTS": rule.get('weights'),
+            "BUY_SCORE": rule['buy_score'],
+            # [Fix] 개별 룰의 RSI 상한을 매도 경로에도 전달한다.
+            #  analyze_sell도 classify_stock_state로 상태를 재판정하는데,
+            #  이 키가 없으면 전역 BUY_RSI_MAX로 폴백해, 같은 종목·같은 시각인데도
+            #  매수 경로/메뉴 2 화면과 상태가 갈렸다(룰 RSI ≠ 전역 RSI인 보유 종목).
+            "BUY_RSI_MAX": rule['buy_rsi'],
+            "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
+            "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
+            # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
+            "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+            "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+        }
+        # [Fix] 룰의 ATR 손절 사용 여부를 TS 동적 콜백(샹들리에) 판정에도 일관 적용
+        if rule.get('use_atr_stop') is not None:
+            thresholds["USE_ATR_STOP"] = bool(rule['use_atr_stop'])
+    else:
+        thresholds = {
+            "WEIGHTS": config.SCORING_WEIGHTS,
+            "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
+            "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20),
+        }
+
+    use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
+    if rule and rule.get('use_atr_stop') is not None:
+        use_atr_stop = bool(rule['use_atr_stop'])
+
+    applied_sl_rate = None
+    if use_atr_stop and buy_trades:
+        # [Fix: Point 4] 분할 매수를 고려하여, 현재 보유량에 해당하는 모든 매수 기록의
+        # ATR 손절률을 수량 가중 평균하여 적용합니다.
+        total_qty_trade = 0
+        weighted_sl_sum = 0
+        for trade in buy_trades:
+            qty_trade = api.safe_int(trade.get('qty', 0))
+            sl_rate_trade = float(trade.get('stop_loss_rate') or 0.0)
+            if qty_trade > 0 and sl_rate_trade != 0.0:
+                total_qty_trade += qty_trade
+                weighted_sl_sum += qty_trade * sl_rate_trade
+
+        if total_qty_trade > 0:
+            avg_sl_rate = weighted_sl_sum / total_qty_trade
+            if avg_sl_rate != 0.0:
+                applied_sl_rate = avg_sl_rate
+
+    if applied_sl_rate is not None:
+        thresholds["STOP_LOSS_RATE"] = applied_sl_rate
+        # 손절 사유 표기('ATR손절')·화면 표시용 마커. analyze_sell은 이 키를 읽지 않는다.
+        thresholds["ATR_APPLIED_SL_RATE"] = applied_sl_rate
+
+        # [Fix] ATR 동적 손절 사용 시, 본전 청산(BEP) 발동 기준을 손절폭(절대값)과 1:1로 동기화
+        #  (기본 +5%에 조기 발동하면 ATR 손절폭이 넓은 변동성 종목이 정상 눌림에서 조기 청산된다)
+        if applied_sl_rate < 0:
+            thresholds["BREAK_EVEN_PROFIT_RATE"] = abs(applied_sl_rate)
+
+    return thresholds
+
+
+def highest_since(df, since_date):
+    """일봉에서 since_date(포함) 이후의 최고가를 구한다. 근거가 없으면 None.
+
+    시스템이 감시하지 않은 수동 포지션에는 trailing_stops 기록이 없어, 트레일링 스탑
+    앵커(최고가)를 매수일 이후 실제 고가에서 유도한다.
+    """
+    if df is None or df.empty or since_date is None or 'high' not in df.columns:
+        return None
+    try:
+        dates = pd.to_datetime(df['date']) if 'date' in df.columns else pd.to_datetime(df.index)
+
+        # [Fix] tvDatafeed 경로 차트는 date가 tz-aware(Asia/Seoul)라 naive 기준일과 비교 시
+        #  TypeError가 난다. 양쪽을 tz 없는 '날짜'로 정규화해 비교한다.
+        #  (예외를 삼키면 앵커가 조용히 사라져 해외 종목의 TS가 통째로 빠졌다)
+        if getattr(dates.dt, 'tz', None) is not None:
+            dates = dates.dt.tz_localize(None)
+        dates = dates.dt.normalize()
+
+        since = pd.Timestamp(since_date)
+        if since.tz is not None:
+            since = since.tz_localize(None)
+        since = since.normalize()
+
+        highs = df.loc[(dates >= since).values, 'high']
+        if highs.empty:
+            return None
+        val = float(highs.max())
+        return val if val > 0 else None
+    except Exception as e:
+        logger.debug(f"highest_since 계산 실패: {e}")
+        return None
+
+
+def resolve_entry_date(entry_date=None, last_buy=None, fallback_buy_date=None):
+    """현재 보유 포지션의 진입일을 확정한다. 'YYYY-MM-DD' 또는 None.
+
+    [중요] 진입일은 '최근 매수일'이 아니라 '보유수량이 0에서 1 이상으로 바뀐 시점'이다.
+    분할 매수·피라미딩으로 1주만 더 담아도 최근 매수 기준이면 보유일수가 0으로 리셋되어
+    시간청산 시계가 무한히 미뤄진다. 시간청산의 취지는 '자본이 얼마나 오래 묶였나'이므로
+    수량 흐름으로 잰다(db_manager.get_position_entry_dates).
+
+    우선순위: 수량 재생으로 구한 진입일 → 최근 매수 기록 → 증권사 체결 내역(HTS 직접 매수분).
+    """
+    if entry_date:
+        return str(entry_date)[:10]
+
+    if last_buy and last_buy.get('time'):
+        return str(last_buy['time'])[:10]
+
+    if fallback_buy_date:
+        try:
+            s = (fallback_buy_date if isinstance(fallback_buy_date, str)
+                 else fallback_buy_date.strftime("%Y%m%d")).replace('-', '').strip()
+            if len(s) == 8 and s.isdigit():
+                return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        except Exception:
+            pass
+
+    return None
+
+
+def resolve_holding_context(last_buy, fallback_buy_date=None, entry_date=None):
+    """(보유일수, 역추세 보유 여부)를 유도한다. (부수효과 없음)
+
+    보유일수는 진입일(resolve_entry_date) 기준이며, 어디서도 매수일을 찾지 못하면
+    0일(오늘 매수)로 본다. 역추세 보유 여부는 진입 성격이므로 최근 매수 사유로 판정한다.
+    """
+    is_mr_holding = False
+    if last_buy:
+        reason_str = str(last_buy.get('reason', ''))
+        if '역매수' in reason_str or '역추세' in reason_str:
+            is_mr_holding = True
+
+    holding_days = 0
+    resolved = resolve_entry_date(entry_date, last_buy, fallback_buy_date)
+    if resolved:
+        try:
+            buy_d = datetime.strptime(resolved, "%Y-%m-%d").date()
+            holding_days = max(0, (datetime.now().date() - buy_d).days)
+        except Exception:
+            pass
+
+    return holding_days, is_mr_holding
+
+
+def analyze_holdings(entries, max_workers=None, restricted_codes=None):
+    """보유 종목에 시스템 매도 판단(analyze_sell)을 그대로 적용한다. (읽기 전용)
+
+    시스템 트레이딩 루프와 달리 DB 최고가 갱신·주문·상태 캐시 변경 등 부수효과가 전혀 없어
+    자동매매 미실행 상태나 수동 매수 계좌에서도 안전하게 호출할 수 있다.
+
+    restricted_codes를 넘기면 각 결과에 'unmanaged'(자동 매도 제외 사유)를 채운다.
+    청산 신호가 떠도 시스템이 팔지 않는 포지션을 화면에서 구분하기 위한 정보다.
+
+    entries: [{'code', 'name', 'buy_price', 'current_price', 'profit_rate', 'is_overseas'}]
+    반환: {code: analyze_sell 결과 + holding_days/highest_price/has_rule/unmanaged}
+    """
+    results = {}
+    if not entries:
+        return results
+
+    codes = [e['code'] for e in entries]
+
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            logger.debug(f"보유분석 사전 로드 실패({fn}): {e}")
+            return default
+
+    rules_list = _safe(lambda: _pkg()._enrich_rules_with_weights(db_manager.db.get_all_stock_strategies()), [])
+    rules_map = {r['code']: r for r in rules_list}
+    latest_buy_map = _safe(lambda: db_manager.db.get_latest_buy_trades(codes), {})
+    buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes), {})
+    highest_map = _safe(lambda: db_manager.db.get_all_trailing_stops(), {})
+    half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), set())
+    # 진입일(보유수량이 0 → 1 이상이 된 시점). 분할 매수·부분 매도가 섞여도 정확하다.
+    entry_date_map = _safe(lambda: db_manager.db.get_position_entry_dates(codes), {})
+
+    # [추가] HTS·MTS 직접 매수분은 시스템 DB에 매수 기록이 없다. 증권사 체결 내역에서
+    #  실제 매수일을 복원해 보유일수·시간청산 판정이 '오늘 매수'로 굳는 것을 막는다.
+    #  (기간 단위 조회라 보유 종목 수와 무관하게 호출 수가 고정된다)
+    missing = [e['code'] for e in entries
+               if not e.get('is_overseas') and e['code'] not in entry_date_map
+               and e['code'] not in latest_buy_map and e.get('holding_days') is None]
+    broker_buy_dates = _safe(lambda: api.get_period_buy_dates(missing), {}) if missing else {}
+
+    # 시장 국면 보정 (매수 임계값 → 상태 분류에 반영). 매도 분석 경로와 동일하게 적용한다.
+    market_regime_adj = {}
+    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+        for m_type in ("KOSPI", "KOSDAQ"):
+            try:
+                _regime, adj = analysis.get_market_regime(m_type)
+                market_regime_adj[m_type] = adj
+            except Exception:
+                market_regime_adj[m_type] = 0.0
+
+    strategy = DefaultStrategy()
+    market_cache = {}
+
+    def _worker(entry):
+        code = entry['code']
+        try:
+            is_overseas = bool(entry.get('is_overseas'))
+            buy_price = float(entry.get('buy_price') or 0)
+            current_price = float(entry.get('current_price') or 0)
+            profit_rate = float(entry.get('profit_rate') or 0)
+            if buy_price <= 0 or current_price <= 0:
+                return code, None
+
+            rule = rules_map.get(code)
+            score_adj = 0.0
+            if not is_overseas:
+                m_type = _pkg().resolve_market_type(code, market_cache)
+                score_adj = market_regime_adj.get(m_type, 0.0)
+
+            thresholds = build_sell_thresholds(rule=rule, score_adj=score_adj,
+                                               buy_trades=buy_trades_map.get(code))
+            last_buy = latest_buy_map.get(code)
+            broker_date = broker_buy_dates.get(code)
+            entry_date = resolve_entry_date(entry_date_map.get(code), last_buy, broker_date)
+            holding_days, is_mr_holding = resolve_holding_context(
+                last_buy, fallback_buy_date=broker_date, entry_date=entry_date_map.get(code))
+            has_buy_record = entry_date is not None
+
+            # [수동 분석] 계좌에 없는 가상 포지션은 DB에 매수 기록이 없으므로 입력값을 우선한다.
+            if entry.get('holding_days') is not None:
+                holding_days = int(entry['holding_days'])
+                has_buy_record = True
+
+            df = api.get_chart_data(code, is_overseas=is_overseas)
+            # [일관성] 매도 분석 경로와 동일하게 당일 봉을 실시간가로 덮어 지표 불일치를 막는다.
+            #  (장 종료 후에는 chart_overlay_price가 KRX 확정 종가를 유지한다)
+            indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas))
+
+            # [읽기 전용] 트레이더와 달리 최고가를 DB에 기록하지 않는다. 다만 표시할 TS 라인이
+            #  실제 청산선과 어긋나지 않도록, 현재가가 기록된 최고가를 넘었으면 현재가를 쓴다.
+            highest_price = float(highest_map.get(code) or 0.0)
+            if entry.get('highest_price') is not None:
+                highest_price = float(entry['highest_price'])
+            elif entry.get('highest_since') is not None:
+                # [수동 분석] 입력한 매수일이 시스템 DB 기록보다 우선한다.
+                derived = highest_since(df, entry['highest_since'])
+                if derived:
+                    highest_price = derived
+            elif highest_price <= 0 and entry_date:
+                # 시스템이 감시하지 않은 포지션(HTS 직접 매수 등)은 trailing_stops 기록이
+                # 없다. 진입일 이후 실제 고가에서 TS 앵커를 유도한다.
+                derived = highest_since(df, entry_date)
+                if derived:
+                    highest_price = derived
+            if current_price > buy_price and current_price > highest_price:
+                highest_price = current_price
+
+            res = strategy.analyze_sell(
+                code, entry.get('name', ''), df, current_price, buy_price, profit_rate,
+                thresholds=thresholds, already_half_sold=(code in half_tp_set),
+                holding_days=holding_days, is_mr_holding=is_mr_holding,
+                highest_price=highest_price,
+            )
+            res['holding_days'] = holding_days
+            res['highest_price'] = highest_price
+            res['has_rule'] = bool(rule)
+            res['is_mr_holding'] = is_mr_holding
+            # 수동 매수 등 DB 매수 기록이 없으면 보유일수가 0으로 나오므로 표시부에서 구분한다
+            res['has_buy_record'] = has_buy_record
+            res['unmanaged'] = get_unmanaged_reason(code, entry.get('name', ''),
+                                                    is_overseas=is_overseas,
+                                                    restricted_codes=restricted_codes)
+            return code, res
+        except Exception as e:
+            logger.debug(f"보유분석 실패 {code}: {e}")
+            return code, None
+
+    if max_workers is None:
+        max_workers = 2 if config.session.is_simulation else 4
+    max_workers = max(1, min(max_workers, len(entries)))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for code, res in executor.map(_worker, entries):
+            if res:
+                results[code] = res
+
+    return results
+
+
 class DefaultStrategy:
     """기본 매매 전략 클래스 (매수/매도 판단 로직 분리)"""
     def __init__(self):
@@ -184,6 +579,7 @@ class DefaultStrategy:
         ind = {}
         score = 0
         state = ""
+        state_color = "[white]"
         sell_ratio = 1.0 # 기본값 전량 매도
         
         # 설정값 로드 (thresholds가 있으면 우선 사용)
@@ -236,7 +632,7 @@ class DefaultStrategy:
             is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
-            state, _, state_reason = analysis.classify_stock_state(
+            state, state_color, state_reason = analysis.classify_stock_state(
                 df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
             
@@ -256,29 +652,16 @@ class DefaultStrategy:
                     is_bep_applied = True
                     
         # [추가] 트레일링 스탑 동적 콜백 계산 및 판별
+        # [SSOT] 콜백 산식은 compute_trailing_stop()이 단독 보유한다. 잔고 화면(메뉴 9-2)의
+        #  'TS 청산가' 표시도 같은 함수를 호출해, 표시된 선과 실제 청산선이 어긋나지 않게 한다.
         ts_msg = ""
-        if highest_price > 0 and buy_price > 0:
-            if max_profit_rate >= ts_activation:
-                drop_rate = ((highest_price - current_price) / highest_price) * 100
-                actual_ts_callback = ts_callback
-                
-                atr_val = ind.get('atr', 0) if ind else 0
-                if use_atr_stop and atr_val > 0:
-                    dynamic_callback = (atr_val * ts_atr_mult / highest_price) * 100
-                    
-                    # [리스크 관리 방어 로직 추가]
-                    # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
-                    # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 일정 비율(기본 50%) 이상을
-                    #    반납하는 것 방지. TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제(순수 샹들리에).
-                    giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
-                    if giveback_ratio > 0:
-                        max_allowed_callback = max(ts_callback, max_profit_rate * giveback_ratio)
-                        actual_ts_callback = min(max(ts_callback, dynamic_callback), max_allowed_callback)
-                    else:
-                        actual_ts_callback = max(ts_callback, dynamic_callback)
-                    
-                if drop_rate >= actual_ts_callback:
-                    ts_msg = f"트레일링스탑 (최고가:{int(highest_price):,}원, 하락률:-{drop_rate:.1f}%, 기준:-{actual_ts_callback:.1f}%)"
+        ts_info = compute_trailing_stop(highest_price, buy_price, current_price, ind=ind,
+                                        thresholds=thresholds,
+                                        ts_activation=ts_activation, ts_callback=ts_callback,
+                                        ts_atr_mult=ts_atr_mult, use_atr_stop=use_atr_stop)
+        if ts_info and ts_info['triggered']:
+            ts_msg = (f"트레일링스탑 (최고가:{int(highest_price):,}원, "
+                      f"하락률:-{ts_info['drop_rate']:.1f}%, 기준:-{ts_info['callback']:.1f}%)")
 
         # 2. 고정 익절/손절 및 시간 청산
         # [수정] 반익절 후 잔여 물량(천장 해제, Let profit run)은 이 elif 체인을 '소비'하면 안 된다.
@@ -379,7 +762,13 @@ class DefaultStrategy:
             'sell_ratio': sell_ratio,
             'ind': ind,
             'score': score,
-            'state': state
+            'state': state,
+            # [추가] 표시 전용 부가 정보 (매매 판단에는 관여하지 않음)
+            'state_color': state_color,
+            'ts': ts_info,
+            'applied_sl_rate': sl_rate,
+            'is_bep_applied': is_bep_applied,
+            'max_profit_rate': max_profit_rate,
         }
 
 class OrderManager:

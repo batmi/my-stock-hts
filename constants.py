@@ -16,6 +16,9 @@ TR_ID_CONFIG = {
         "inquiry": {
             "balance": {"real": "TTTC8434R", "sim": "VTTC8434R"},
             "history": {"real": "TTTC8001R", "sim": "VTTC8001R"},
+            # [추가] 주식일별주문체결조회는 3개월 경계로 TR이 갈린다.
+            #  위 history(TTTC8001R)는 '3개월 이내'만 조회되고, 그보다 과거는 아래 TR을 써야 한다.
+            "history_old": {"real": "CTSC9115R", "sim": "VTSC9115R"},
             "profit": {"real": "TTTC8494R", "sim": "VTTC8494R"},
             "open_orders": {"real": "TTTC8036R", "sim": "VTTC8001R"},
             "deposit": {"real": "CTRP6548R", "sim": "VTTC8908R"},

@@ -1,0 +1,803 @@
+"""메뉴 9-2 보유 분석(잔고 화면의 '상태' 컬럼) 검증.
+
+보유 분석은 자동매매의 매도 판단(analyze_sell)을 읽기 전용으로 재사용한다.
+여기서는 (1) 임계값 조립 SSOT, (2) TS 청산선 계산, (3) 읽기 전용 보장,
+(4) 표시 셀 포맷을 검증한다.
+"""
+import os
+import sys
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import config
+from modules import account
+from modules.auto_trade import (UNMANAGED_ETF, UNMANAGED_OVERSEAS, UNMANAGED_RESTRICTED,
+                                build_sell_thresholds, compute_trailing_stop,
+                                get_unmanaged_reason, highest_since, resolve_holding_context)
+
+
+def _make_df(n=260, peak=260):
+    """완만한 상승 후(peak 이후) 하락하는 가짜 일봉."""
+    values = list(np.linspace(9000, 13000, min(peak, n)))
+    if n > peak:
+        values += list(np.linspace(13000, 11000, n - peak))
+    close = np.array(values[:n], dtype=float)
+    return pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=n),
+        "open": close * 0.99, "high": close * 1.01,
+        "low": close * 0.98, "close": close,
+        "volume": np.full(n, 100000.0),
+    })
+
+
+# ---------------------------------------------------------------- thresholds
+
+def test_atr_stop_is_quantity_weighted_and_syncs_bep():
+    """분할 매수분의 ATR 손절률은 수량 가중 평균이고, BEP 발동선이 그 절대값과 일치한다."""
+    buy_trades = [
+        {"qty": 10, "stop_loss_rate": -10.0},
+        {"qty": 30, "stop_loss_rate": -14.0},
+    ]
+    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True}):
+        th = build_sell_thresholds(rule=None, buy_trades=buy_trades)
+
+    assert th["STOP_LOSS_RATE"] == pytest.approx(-13.0)   # (10*-10 + 30*-14) / 40
+    assert th["ATR_APPLIED_SL_RATE"] == pytest.approx(-13.0)
+    assert th["BREAK_EVEN_PROFIT_RATE"] == pytest.approx(13.0)
+
+
+def test_atr_stop_ignored_when_disabled():
+    """ATR 손절 미사용 설정이면 매수 기록이 있어도 전역 손절률을 그대로 둔다."""
+    with patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": False}):
+        th = build_sell_thresholds(rule=None, buy_trades=[{"qty": 10, "stop_loss_rate": -12.0}])
+
+    assert "ATR_APPLIED_SL_RATE" not in th
+    assert "STOP_LOSS_RATE" not in th
+
+
+def test_null_stop_loss_rate_does_not_crash():
+    """stop_loss_rate가 NULL인 과거 매수 기록이 섞여도 조립이 실패하지 않는다."""
+    th = build_sell_thresholds(rule=None, buy_trades=[
+        {"qty": 10, "stop_loss_rate": None},
+        {"qty": 10, "stop_loss_rate": -9.0},
+    ])
+    assert th["STOP_LOSS_RATE"] == pytest.approx(-9.0)
+
+
+def test_resolve_holding_context_detects_mean_reversion():
+    days, is_mr = resolve_holding_context({"time": "2020-01-01 09:00:00", "reason": "역매수 진입"})
+    assert is_mr is True and days > 0
+
+    assert resolve_holding_context(None) == (0, False)
+
+
+def test_holding_days_use_entry_date_not_latest_buy():
+    """진입일 기준이라 오늘 1주를 더 담아도 보유일수가 리셋되지 않는다.
+
+    실제 사례(395160): 07-02·07-09·07-28 매수로 373주를 쌓은 뒤 07-29에 1주를 더 담자
+    '최근 매수' 기준이던 기존 로직이 보유일수를 0일로 리셋해 시간청산 시계가 미뤄졌다.
+    """
+    from datetime import datetime, timedelta
+
+    today = datetime.now().date()
+    entry = (today - timedelta(days=27)).strftime("%Y-%m-%d")
+    latest = {"time": today.strftime("%Y-%m-%d 14:18:41"), "reason": "체결 확인"}
+
+    days, _ = resolve_holding_context(latest, entry_date=entry)
+    assert days == 27          # 최근 매수 기준이었다면 0일
+
+
+def test_entry_date_priority_order():
+    """진입일 우선순위: 수량 재생 진입일 → 최근 매수 → 증권사 체결 내역."""
+    from modules.auto_trade import resolve_entry_date
+
+    latest = {"time": "2026-07-29 14:00:00"}
+    assert resolve_entry_date("2026-03-31", latest, "20250101") == "2026-03-31"
+    assert resolve_entry_date(None, latest, "20250101") == "2026-07-29"
+    assert resolve_entry_date(None, None, "20250101") == "2025-01-01"
+    assert resolve_entry_date(None, None, None) is None
+    assert resolve_entry_date(None, None, "깨짐") is None
+
+
+def test_position_entry_date_replays_quantity(tmp_path):
+    """진입일은 보유수량이 0 → 1 이상이 된 마지막 시점이다. (부분 매도는 포지션을 끊지 않음)"""
+    import sqlite3
+    from modules import db_manager
+
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE trades (code TEXT, time TEXT, type TEXT, qty TEXT, order_status TEXT)")
+    rows = [
+        # 전량 청산된 옛 포지션 — 진입일로 잡히면 안 된다
+        ("005930", "2026-01-05 09:00:00", "매수(수동)", "10", "체결"),
+        ("005930", "2026-02-01 09:00:00", "매도(수동)", "10", "체결"),
+        # 현재 포지션: 03-10 진입 → 부분 매도 → 추가 매수 (진입은 03-10 유지)
+        ("005930", "2026-03-10 09:00:00", "매수(수동)", "50", "체결"),
+        ("005930", "2026-04-01 09:00:00", "매도(수동)", "20", "체결"),
+        ("005930", "2026-07-29 14:18:41", "매수(수동)", "1", "체결"),
+        # 접수·취소 행은 집계에서 빠져야 한다
+        ("035720", "2026-05-01 09:00:00", "매수(수동)", "99", "접수"),
+        ("035720", "2026-05-02 09:00:00", "매수취소(수동)", "99", "취소"),
+        ("035720", "2026-06-20 09:00:00", "매수(수동)", "7", "체결"),
+    ]
+    conn.executemany("INSERT INTO trades VALUES (?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+
+    mgr = db_manager.DBManager.__new__(db_manager.DBManager)
+
+    def _conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    mgr._get_conn = _conn
+    res = mgr.get_position_entry_dates(["005930", "035720", "없음"])
+
+    assert res["005930"] == "2026-03-10"   # 부분 매도·추가 매수에도 진입일 유지
+    assert res["035720"] == "2026-06-20"   # 접수·취소 행 무시
+    assert "없음" not in res
+
+
+def test_position_entry_date_drops_fully_closed(tmp_path):
+    """전량 청산된 종목은 진입일이 없다."""
+    import sqlite3
+    from modules import db_manager
+
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE trades (code TEXT, time TEXT, type TEXT, qty TEXT, order_status TEXT)")
+    conn.executemany("INSERT INTO trades VALUES (?,?,?,?,?)", [
+        ("042660", "2026-01-05 09:00:00", "매수(수동)", "10", "체결"),
+        ("042660", "2026-02-01 09:00:00", "매도(수동)", "10", "체결"),
+    ])
+    conn.commit()
+    conn.close()
+
+    mgr = db_manager.DBManager.__new__(db_manager.DBManager)
+
+    def _conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    mgr._get_conn = _conn
+    assert mgr.get_position_entry_dates(["042660"]) == {}
+
+
+def test_holding_context_falls_back_to_broker_buy_date():
+    """DB 매수 기록이 없으면 증권사 체결일로 보유일수를 계산한다 (HTS 직접 매수분)."""
+    from datetime import datetime, timedelta
+
+    d = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
+    days, is_mr = resolve_holding_context(None, fallback_buy_date=d)
+    assert days == 45 and is_mr is False
+
+    # DB 기록이 있으면 그쪽이 우선한다
+    db_time = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+    days, _ = resolve_holding_context({"time": db_time, "reason": "매수"}, fallback_buy_date=d)
+    assert days == 3
+
+    # 둘 다 없으면 오늘 매수(0일)로 본다
+    assert resolve_holding_context(None, fallback_buy_date=None) == (0, False)
+    # 형식이 깨진 값도 0일로 흘려보낸다 (보유일수 때문에 분석이 죽으면 안 됨)
+    assert resolve_holding_context(None, fallback_buy_date="깨짐") == (0, False)
+
+
+def test_period_buy_dates_switches_tr_past_three_months():
+    """3개월 경계에서 과거 조회 TR로 전환한다 (한 TR로 계속 훑으면 과거 구간이 통째로 빈다)."""
+    import api
+
+    calls = []
+
+    def _fake(url, market, category, action, params=None, tr_id=None, **kw):
+        calls.append((tr_id, params["INQR_STRT_DT"], params["INQR_END_DT"]))
+        if len(calls) < 3:                       # 처음 두 구간은 해당 종목 체결 없음
+            return {"rt_cd": "0", "output1": []}
+        return {"rt_cd": "0", "output1": [{"pdno": "950160", "ord_dt": "20250910"}]}
+
+    with patch("api.call_api", side_effect=_fake), \
+         patch("api._prepare_account_params", return_value=("12345678", "01")), \
+         patch.object(config.session, "is_toss", False, create=True), \
+         patch.object(config.session, "is_simulation", False, create=True):
+        found = api.get_period_buy_dates(["950160"], months=12)
+
+    assert found == {"950160": "20250910"}
+    assert calls[0][0] == "TTTC8001R"             # 최근 3개월
+    assert all(c[0] == "CTSC9115R" for c in calls[1:])   # 그 이전
+    assert calls[0][1] > calls[1][1]              # 구간이 과거로 이동
+
+
+def test_period_buy_dates_stops_on_unsupported_tr():
+    """과거 조회 TR을 지원하지 않으면 찾은 것까지만 반환하고 멈춘다."""
+    import api
+
+    def _fake(url, market, category, action, params=None, tr_id=None, **kw):
+        if tr_id == "TTTC8001R":
+            return {"rt_cd": "0", "output1": [{"pdno": "005930", "ord_dt": "20260701"}]}
+        return {"rt_cd": "1", "msg1": "지원하지 않는 TR"}
+
+    with patch("api.call_api", side_effect=_fake), \
+         patch("api._prepare_account_params", return_value=("12345678", "01")), \
+         patch.object(config.session, "is_toss", False, create=True), \
+         patch.object(config.session, "is_simulation", False, create=True):
+        found = api.get_period_buy_dates(["005930", "950160"], months=12)
+
+    assert found == {"005930": "20260701"}        # 950160은 못 찾아도 예외 없이 진행
+
+
+def test_period_buy_dates_skips_toss_and_empty():
+    import api
+    with patch.object(config.session, "is_toss", True, create=True):
+        assert api.get_period_buy_dates(["005930"]) == {}
+    assert api.get_period_buy_dates([]) == {}
+
+
+def test_analyze_holdings_uses_broker_history_for_hts_positions(_no_db):
+    """DB에 없는 종목만 골라 체결 내역을 조회하고, 그 날짜로 보유일수를 채운다."""
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    d = (datetime.now() - timedelta(days=120)).strftime("%Y%m%d")
+    entries = [{"code": "950160", "name": "코오롱티슈진", "buy_price": 107833,
+                "current_price": 13200, "profit_rate": -87.75, "is_overseas": False}]
+
+    with patch("api.get_period_buy_dates", return_value={"950160": d}) as spy, \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("하락", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["950160"]
+
+    spy.assert_called_once_with(["950160"])
+    assert res["holding_days"] == 120
+    assert res["has_buy_record"] is True
+
+
+def test_analyze_holdings_skips_history_lookup_when_db_has_record(_no_db):
+    """DB 기록이 있으면 불필요한 체결 내역 조회를 하지 않는다 (API 호출 절감)."""
+    from modules import auto_trade
+
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000,
+                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False}]
+
+    with patch("modules.db_manager.db.get_latest_buy_trades",
+               return_value={"005930": {"time": "2026-07-01 09:00:00", "reason": "매수"}}), \
+         patch("api.get_period_buy_dates") as spy, \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        auto_trade.analyze_holdings(entries)
+
+    spy.assert_not_called()
+
+
+# ------------------------------------------------------------ trailing stop
+
+def test_trailing_stop_arms_only_after_activation():
+    """발동 임계 미만이면 armed=False — 화면에도 '도달 시'로 표기된다."""
+    ts = compute_trailing_stop(highest_price=10500, buy_price=10000, current_price=10100,
+                               ind={}, thresholds={"ts_activation": 10.0, "ts_callback": 5.0})
+    assert ts["armed"] is False
+    assert ts["triggered"] is False
+
+
+def test_trailing_stop_price_matches_callback():
+    """표시용 청산가는 최고가 × (1 - 콜백%)이며, 현재가가 그 아래면 triggered."""
+    ts = compute_trailing_stop(highest_price=13000, buy_price=10000, current_price=12000,
+                               ind={}, thresholds={"ts_activation": 10.0, "ts_callback": 5.0,
+                                                   "USE_ATR_STOP": False})
+    assert ts["armed"] is True
+    assert ts["stop_price"] == pytest.approx(13000 * 0.95)   # = 12,350
+    assert ts["triggered"] is True    # 현재가 12,000 < 12,350 (하락률 7.7% ≥ 5%)
+
+    ts2 = compute_trailing_stop(highest_price=13000, buy_price=10000, current_price=12800,
+                                ind={}, thresholds={"ts_activation": 10.0, "ts_callback": 5.0,
+                                                    "USE_ATR_STOP": False})
+    assert ts2["triggered"] is False  # 현재가 12,800 > 12,350 (하락률 1.5% < 5%)
+
+
+def test_trailing_stop_atr_widens_callback():
+    """ATR이 크면 콜백이 넓어져(샹들리에) 청산선이 더 아래로 내려간다."""
+    fixed = compute_trailing_stop(13000, 10000, 12500, ind={"atr": 0},
+                                  thresholds={"ts_activation": 10.0, "ts_callback": 5.0,
+                                              "TRAILING_ATR_MULTIPLIER": 3.0, "USE_ATR_STOP": True})
+    wide = compute_trailing_stop(13000, 10000, 12500, ind={"atr": 500},
+                                 thresholds={"ts_activation": 10.0, "ts_callback": 5.0,
+                                             "TRAILING_ATR_MULTIPLIER": 3.0, "USE_ATR_STOP": True})
+    assert wide["callback"] > fixed["callback"]
+    assert wide["stop_price"] < fixed["stop_price"]
+
+
+def test_giveback_cap_converts_between_bases():
+    """'최고 수익의 R만 반납'을 콜백(최고가 대비 %)으로 정확히 환산한다.
+
+    구 산식은 max_profit_rate × R을 그대로 콜백 상한으로 써서(기준 혼용) 수익이 클수록
+    캡이 무력화됐다. MFE +108.4%, R=0.30이면 32.5%가 아니라 15.6%가 정답이다.
+    """
+    from modules.auto_trade import giveback_callback_cap
+
+    cap = giveback_callback_cap(108.4, 0.30)
+    assert cap == pytest.approx(15.60, abs=0.05)
+    assert cap < 108.4 * 0.30            # 구 산식(32.5%)보다 반드시 타이트
+
+    # 환산 검증: 최고가에서 cap%만큼 빠진 가격이 '최고 수익의 70%'를 남긴다
+    buy, mfe, r = 100.0, 108.4, 0.30
+    high = buy * (1 + mfe / 100)
+    exit_price = high * (1 - cap / 100)
+    assert (exit_price - buy) / buy * 100 == pytest.approx(mfe * (1 - r), abs=0.05)
+
+    assert giveback_callback_cap(0, 0.3) == 0.0
+    assert giveback_callback_cap(50, 0) == 0.0
+
+
+def test_giveback_cap_never_tightens_below_floor():
+    """수익이 작을 때는 하한(ts_callback)이 지켜져 조기 청산되지 않는다."""
+    ts = compute_trailing_stop(11000, 10000, 10900, ind={"atr": 300},
+                               thresholds={"ts_activation": 5.0, "ts_callback": 5.0,
+                                           "TRAILING_ATR_MULTIPLIER": 3.5, "USE_ATR_STOP": True})
+    with patch.dict(config.SELL_STRATEGY, {"TS_MAX_GIVEBACK_RATIO": 0.25}):
+        capped = compute_trailing_stop(11000, 10000, 10900, ind={"atr": 300},
+                                       thresholds={"ts_activation": 5.0, "ts_callback": 5.0,
+                                                   "TRAILING_ATR_MULTIPLIER": 3.5, "USE_ATR_STOP": True})
+    assert capped['callback'] >= 5.0
+    assert capped['callback'] <= ts['callback']
+
+
+def test_trailing_stop_returns_none_without_position():
+    assert compute_trailing_stop(0, 10000, 10000) is None
+    assert compute_trailing_stop(10000, 0, 10000) is None
+
+
+# --------------------------------------------------------- unmanaged position
+
+def test_restricted_stock_is_unmanaged():
+    assert get_unmanaged_reason("005930", "삼성전자", restricted_codes={"005930": {}}) == UNMANAGED_RESTRICTED
+
+
+def test_overseas_is_always_unmanaged():
+    """매도 루프는 국내 잔고만 순회하므로 해외 포지션은 전량 수동 관리 대상이다."""
+    assert get_unmanaged_reason("AAPL", "APPLE", is_overseas=True) == UNMANAGED_OVERSEAS
+
+
+def test_etf_unmanaged_follows_include_setting():
+    with patch("api.is_domestic_etf_etn", return_value=True):
+        with patch.object(config, "SYSTEM_INCLUDE_ETF", False, create=True):
+            assert get_unmanaged_reason("102780", "KODEX 삼성그룹") == UNMANAGED_ETF
+        with patch.object(config, "SYSTEM_INCLUDE_ETF", True, create=True):
+            assert get_unmanaged_reason("102780", "KODEX 삼성그룹") is None
+
+
+def test_normal_domestic_stock_is_managed():
+    with patch("api.is_domestic_etf_etn", return_value=False):
+        assert get_unmanaged_reason("005930", "삼성전자", restricted_codes={}) is None
+
+
+# ------------------------------------------------------------ analyze_holdings
+
+@pytest.fixture
+def _no_db():
+    """보유 분석이 읽는 DB 배치 조회를 전부 빈 값으로 고정."""
+    targets = {
+        "get_all_stock_strategies": [],
+        "get_latest_buy_trades": {},
+        "get_buy_trades_for_current_holdings": {},
+        "get_all_trailing_stops": {},
+        "get_all_half_tp": set(),
+    }
+    patchers = [patch(f"modules.db_manager.db.{k}", return_value=v) for k, v in targets.items()]
+    for p in patchers:
+        p.start()
+    yield
+    for p in patchers:
+        p.stop()
+
+
+def test_analyze_holdings_is_read_only(_no_db):
+    """DB 최고가 갱신 등 부수효과 없이 종목별 판정만 반환한다."""
+    from modules import auto_trade
+
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000,
+                "current_price": 11000, "profit_rate": 10.0, "is_overseas": False}]
+
+    with patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)), \
+         patch("modules.db_manager.db.update_highest_price") as upd:
+        res = auto_trade.analyze_holdings(entries)
+
+    upd.assert_not_called()
+    assert "005930" in res
+    assert res["005930"]["action"] in ("sell", "hold")
+    assert res["005930"]["state"]
+    assert res["005930"]["has_buy_record"] is False   # 매수 기록 없음 → 보유일 '-'
+
+
+def test_analyze_holdings_flags_restricted_position(_no_db):
+    """제한 종목은 판정은 하되 '자동 매도 제외'로 표시된다."""
+    from modules import auto_trade
+
+    entries = [{"code": "950160", "name": "코오롱티슈진", "buy_price": 50000,
+                "current_price": 6100, "profit_rate": -87.8, "is_overseas": False}]
+
+    with patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("하락", 0.0)):
+        res = auto_trade.analyze_holdings(entries, restricted_codes={"950160": {}})
+
+    assert res["950160"]["unmanaged"] == UNMANAGED_RESTRICTED
+    assert res["950160"]["action"] == "sell"   # -87.8%는 손절선을 한참 벗어남
+
+
+def test_analyze_holdings_skips_invalid_entry(_no_db):
+    """매입단가/현재가가 0인 종목은 판정하지 않는다 (잘못된 손절 표시 방지)."""
+    from modules import auto_trade
+
+    entries = [{"code": "000000", "name": "이상", "buy_price": 0,
+                "current_price": 0, "profit_rate": 0.0, "is_overseas": False}]
+    with patch("api.get_chart_data", return_value=_make_df()):
+        assert auto_trade.analyze_holdings(entries) == {}
+
+
+def test_analyze_holdings_empty():
+    from modules import auto_trade
+    assert auto_trade.analyze_holdings([]) == {}
+
+
+# ------------------------------------------------------------ display cells
+
+def test_state_cell_marks_sell_signal():
+    assert "청산" in account._fmt_state_cell({"action": "sell", "score": 3.1, "state": "주의"})
+
+    hold = account._fmt_state_cell({"action": "hold", "score": 8.2, "state": "매수",
+                                    "state_color": "[red]"})
+    assert "매수" in hold and "8.2" in hold and "[red]" in hold
+
+    assert account._fmt_state_cell(None) == "[dim]-[/dim]"
+
+
+def test_state_cell_marks_unmanaged_position():
+    """시스템이 팔지 않는 포지션은 '수동'이 함께 표시된다."""
+    cell = account._fmt_state_cell({"action": "sell", "score": 0.0, "state": "매도",
+                                    "unmanaged": UNMANAGED_ETF})
+    assert "청산" in cell and "수동" in cell
+
+    managed = account._fmt_state_cell({"action": "sell", "score": 0.0, "state": "매도",
+                                       "unmanaged": None})
+    assert "수동" not in managed
+
+
+def test_holding_days_cell_flags_time_stop():
+    with patch.dict(config.SELL_STRATEGY, {"TIME_STOP_USE": True, "TIME_STOP_DAYS": 20}):
+        assert "yellow" in account._fmt_holding_days_cell({"has_buy_record": True, "holding_days": 25})
+        assert "yellow" not in account._fmt_holding_days_cell({"has_buy_record": True, "holding_days": 5})
+
+    # 매수일을 어디서도 못 찾으면 오늘 매수로 보고 0일을 표시한다
+    assert account._fmt_holding_days_cell({"has_buy_record": False, "holding_days": 0}) == "0일"
+    assert account._fmt_holding_days_cell(None) == "[dim]-[/dim]"
+
+
+def test_stop_cell_hides_fixed_stop_when_atr_stop_is_on():
+    """USE_ATR_STOP이 켜져 있으면 고정 손절은 폴백일 뿐이라 표시하지 않는다."""
+    with patch("modules.db_manager.db.get_stock_strategy", return_value=None):
+        # ATR 손절률 기록이 있으면 그 값이 실제 손절선
+        with patch("modules.db_manager.db.get_latest_buy_trade", return_value={"stop_loss_rate": -11.0}), \
+             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
+            cell = account._fmt_stop_cell(None, 10000, code="005930")
+        assert "ATR:" in cell and "고정:" not in cell
+
+        # ATR 기록이 없어도(수동 매수 등) 고정선은 감춘다 — 판정을 지배하지 않는다
+        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
+             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
+            cell = account._fmt_stop_cell(None, 10000, code="005930")
+        assert "고정:" not in cell and cell == "[dim]미사용[/dim]"
+
+        # ATR 손절을 끈 설정에서는 고정선이 실제 손절선이므로 표시한다
+        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
+             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": False, "STOP_LOSS_RATE": -7.0}):
+            cell = account._fmt_stop_cell(None, 10000, code="005930")
+        assert "고정:" in cell and "9,300" in cell
+
+        # 고정 손절 미사용(0) + ATR 미사용 → 표시할 손절선이 없다
+        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
+             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": False, "STOP_LOSS_RATE": 0.0}):
+            cell = account._fmt_stop_cell(None, 10000, code="005930")
+        assert cell == "[dim]미사용[/dim]"
+
+def test_stop_cell_keeps_ts_line_without_entry_stop():
+    """진입 기준 손절선이 없어도 TS 라인은 남는다 (주청산 수단)."""
+    res = {"ts": {"armed": True, "stop_price": 286632.0, "callback": 23.5, "activation": 10.0}}
+    with patch("modules.db_manager.db.get_stock_strategy", return_value=None), \
+         patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
+         patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
+        cell = account._fmt_stop_cell(res, 179694, code="005930")
+    assert "고정:" not in cell
+    assert "286,632" in cell
+
+
+def test_mfe_cell_and_ts_line():
+    cell = account._fmt_mfe_cell({"highest_price": 13000, "max_profit_rate": 30.0})
+    assert "13,000" in cell and "+30.0%" in cell
+
+    armed = account._fmt_ts_stop({"ts": {"armed": True, "stop_price": 11221.0,
+                                         "callback": 13.7, "activation": 10.0}})
+    assert "11,221" in armed and "13.7" in armed
+
+    pending = account._fmt_ts_stop({"ts": {"armed": False, "stop_price": 0,
+                                           "callback": 5.0, "activation": 10.0}})
+    assert "도달 시" in pending
+
+    assert account._fmt_ts_stop(None) is None
+
+
+# ------------------------------------------------- [9]-5 수동 보유 분석
+
+def test_highest_since_uses_only_bars_after_buy_date():
+    """매수일 이전의 더 높은 고점은 TS 앵커에서 제외된다."""
+    df = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]),
+        "high": [99000.0, 50000.0, 61000.0, 55000.0],
+    })
+    assert highest_since(df, pd.Timestamp("2026-02-01")) == pytest.approx(61000.0)
+    assert highest_since(df, pd.Timestamp("2027-01-01")) is None   # 이후 봉 없음
+    assert highest_since(None, pd.Timestamp("2026-02-01")) is None
+
+
+def test_highest_since_handles_tz_aware_dates():
+    """tvDatafeed 경로 차트(tz-aware)에서도 앵커가 조용히 사라지지 않는다."""
+    df = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-01", "2026-03-01", "2026-04-01"]).tz_localize("Asia/Seoul"),
+        "high": [99000.0, 61000.0, 55000.0],
+    })
+    from datetime import date
+    assert highest_since(df, date(2026, 3, 1)) == pytest.approx(61000.0)
+
+
+def test_highest_since_accepts_yyyymmdd_string_dates():
+    """KIS 국내 일봉은 date가 'YYYYMMDD' 문자열이다."""
+    df = pd.DataFrame({"date": ["20260101", "20260301", "20260401"],
+                       "high": [99000.0, 61000.0, 55000.0]})
+    from datetime import date
+    assert highest_since(df, date(2026, 3, 1)) == pytest.approx(61000.0)
+
+
+def test_manual_positions_round_trip(tmp_path):
+    """저장 → 로드 시 매수일(date)과 국내/해외 구분이 보존된다."""
+    from datetime import date
+
+    positions = [
+        {"code": "005930", "name": "삼성전자", "is_overseas": False,
+         "buy_price": 179694.0, "qty": 95, "buy_date": date(2026, 3, 31)},
+        {"code": "AAPL", "name": "APPLE", "is_overseas": True,
+         "buy_price": 200.0, "qty": 5, "buy_date": None},
+    ]
+
+    with patch.object(account, "MANUAL_POSITIONS_FILE", str(tmp_path / "manual.json")):
+        assert account.save_manual_positions(positions) is True
+        loaded = account.load_manual_positions()
+
+    assert loaded == positions
+
+
+def test_load_manual_positions_skips_corrupt_rows(tmp_path):
+    """손상된 항목이 섞여도 나머지는 살린다 (수기 편집 파일 방어)."""
+    import json as _json
+    path = tmp_path / "manual.json"
+    path.write_text(_json.dumps([
+        {"code": "005930", "name": "삼성전자", "buy_price": 10000, "qty": 10, "buy_date": None},
+        {"code": "BAD", "name": "깨진행"},                       # buy_price/qty 없음
+        {"code": "X", "buy_price": "abc", "qty": 1},             # 숫자 아님
+    ]), encoding="utf-8")
+
+    with patch.object(account, "MANUAL_POSITIONS_FILE", str(path)):
+        loaded = account.load_manual_positions()
+
+    assert [p["code"] for p in loaded] == ["005930"]
+
+
+def test_load_manual_positions_missing_file(tmp_path):
+    with patch.object(account, "MANUAL_POSITIONS_FILE", str(tmp_path / "none.json")):
+        assert account.load_manual_positions() == []
+
+
+def _positions():
+    from datetime import date
+    return [
+        {"code": "005930", "name": "삼성전자", "is_overseas": False,
+         "buy_price": 179694.0, "qty": 95, "buy_date": date(2026, 3, 31)},
+        {"code": "005380", "name": "현대차", "is_overseas": False,
+         "buy_price": 630000.0, "qty": 25, "buy_date": date(2025, 5, 12)},
+    ]
+
+
+def test_modify_saved_position_updates_in_place():
+    """[2] 수정 → 번호 1 → 수량만 변경, 나머지는 Enter로 현재값 유지."""
+    from datetime import date
+    answers = iter(["1", "179694", "100", "2026-03-31"])
+
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+         patch.object(config.console, "print"):
+        kept, changed = account._modify_saved_position(_positions())
+
+    assert changed is True
+    assert len(kept) == 2
+    assert kept[0]["qty"] == 100                            # 변경됨
+    assert kept[0]["buy_price"] == pytest.approx(179694.0)  # 유지
+    assert kept[0]["buy_date"] == date(2026, 3, 31)         # 유지
+    assert kept[1]["qty"] == 25                             # 다른 항목은 무손상
+
+
+def test_delete_saved_position_requires_confirmation():
+    """[3] 삭제는 확인을 받은 뒤에만 지운다."""
+    with patch("rich.prompt.Prompt.ask", side_effect=(lambda it: (lambda *a, **k: next(it)))(iter(["2", "y"]))), \
+         patch.object(config.console, "print"):
+        kept, changed = account._delete_saved_position(_positions())
+    assert changed is True and [p["code"] for p in kept] == ["005930"]
+
+    # 확인에서 n을 고르면 그대로 둔다
+    with patch("rich.prompt.Prompt.ask", side_effect=(lambda it: (lambda *a, **k: next(it)))(iter(["2", "n"]))), \
+         patch.object(config.console, "print"):
+        kept, changed = account._delete_saved_position(_positions())
+    assert changed is False and kept == _positions()
+
+
+def test_modify_saved_position_cancel_keeps_original():
+    """번호 입력 취소(Enter)와 수정 중 취소(b) 모두 원본을 바꾸지 않는다."""
+    with patch("rich.prompt.Prompt.ask", side_effect=(lambda it: (lambda *a, **k: next(it)))(iter([""]))), \
+         patch.object(config.console, "print"):
+        kept, changed = account._modify_saved_position(_positions())
+    assert changed is False and kept == _positions()
+
+    with patch("rich.prompt.Prompt.ask", side_effect=(lambda it: (lambda *a, **k: next(it)))(iter(["1", "b"]))), \
+         patch.object(config.console, "print"):
+        kept, changed = account._modify_saved_position(_positions())
+    assert changed is False and kept == _positions()
+
+
+def test_select_position_rejects_bad_index():
+    for bad in ("9", "abc"):
+        with patch("rich.prompt.Prompt.ask", side_effect=(lambda it: (lambda *a, **k: next(it)))(iter([bad]))), \
+             patch.object(config.console, "print") as pr:
+            assert account._select_position(_positions(), "수정") is None
+        printed = " ".join(c.args[0] for c in pr.call_args_list
+                           if c.args and isinstance(c.args[0], str))
+        assert "목록에 있는 번호" in printed
+
+
+def test_edit_position_can_clear_buy_date():
+    """매수일에 '-'를 넣으면 지워진다 (보유일수·TS 앵커 미적용으로 되돌림)."""
+    answers = iter(["179694", "95", "-"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+         patch.object(config.console, "print"):
+        updated = account._edit_position(_positions()[0])
+
+    assert updated["buy_date"] is None
+    assert updated["qty"] == 95
+
+
+def test_manual_entry_overrides_holding_days_and_anchor(_no_db):
+    """수동 입력 포지션은 DB 기록 대신 입력한 매수일/유도한 최고가를 쓴다."""
+    from modules import auto_trade
+
+    df = _make_df()
+    df["date"] = pd.date_range(end=pd.Timestamp("2026-07-29"), periods=len(df))
+
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000,
+                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False,
+                "holding_days": 58, "highest_since": pd.Timestamp("2026-06-01")}]
+
+    with patch("api.get_chart_data", return_value=df), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["005930"]
+
+    assert res["holding_days"] == 58
+    assert res["has_buy_record"] is True          # 입력값이 있으므로 보유일 '-'가 아님
+    assert res["highest_price"] > 12000           # 매수일 이후 실제 고가에서 유도
+
+
+def test_analyze_holdings_without_buy_date_has_no_history(_no_db):
+    """매수일 미입력이면 보유일수 0·기록 없음으로 남아 시간청산이 걸리지 않는다."""
+    from modules import auto_trade
+
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000,
+                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False}]
+
+    with patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["005930"]
+
+    assert res["holding_days"] == 0
+    assert res["has_buy_record"] is False
+    assert "시간청산" not in res.get("reason", "")
+
+
+def test_analyze_manual_positions_derives_entry_fields():
+    """매수일을 넣으면 보유일수와 TS 앵커 기준일이 함께 전달된다."""
+    captured = {}
+
+    def _fake(entries, **kw):
+        captured["entries"] = entries
+        return {}
+
+    from datetime import date, timedelta
+    buy_date = date.today() - timedelta(days=30)
+    positions = [{"code": "005930", "name": "삼성전자", "is_overseas": False,
+                  "buy_price": 10000.0, "qty": 10, "buy_date": buy_date,
+                  "current_price": 12000.0, "profit_rate": 20.0}]
+
+    with patch("modules.auto_trade.analyze_holdings", side_effect=_fake), \
+         patch("modules.auto_trade.get_restricted_stocks", return_value={}):
+        account._analyze_manual_positions(positions)
+
+    entry = captured["entries"][0]
+    assert entry["holding_days"] == 30
+    assert entry["highest_since"] == buy_date
+
+
+def test_manual_positions_render_into_shared_tables():
+    """수동 분석 결과는 [9]-2와 같은 표 빌더로 그려진다 (국내/해외 분리)."""
+    positions = [
+        {"code": "005930", "name": "삼성전자", "is_overseas": False, "buy_price": 10000.0,
+         "qty": 10, "buy_date": None, "current_price": 12000.0, "profit_rate": 20.0},
+        {"code": "AAPL", "name": "APPLE", "is_overseas": True, "buy_price": 200.0,
+         "qty": 5, "buy_date": None, "current_price": 215.0, "profit_rate": 7.5},
+    ]
+    analysis_map = {
+        "005930": {"action": "hold", "score": 8.2, "state": "매수", "state_color": "[red]"},
+        "AAPL": {"action": "sell", "score": 2.0, "state": "매도",
+                 "reason": "손절(-8.0%)", "unmanaged": UNMANAGED_OVERSEAS},
+    }
+
+    with patch("modules.db_manager.db.get_stock_strategy", return_value=None), \
+         patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
+         patch.object(config.console, "print") as pr:
+        account._print_manual_positions(positions, analysis_map)
+
+    from rich.table import Table as RichTable
+    titles = [c.args[0].title for c in pr.call_args_list
+              if c.args and isinstance(c.args[0], RichTable)]
+    assert any("[국내] 수동 보유 분석" in t for t in titles)
+    assert any("[해외] 수동 보유 분석" in t for t in titles)
+
+    printed = " ".join(c.args[0] for c in pr.call_args_list
+                       if c.args and isinstance(c.args[0], str))
+    assert "청산 신호" in printed                     # 해외 종목의 청산 사유 각주
+    assert "손절(-8.0%)" in printed
+    # 미관리 여부는 표의 상태 칸에서만 알린다 — 각주에는 중복 표기하지 않는다
+    assert UNMANAGED_OVERSEAS not in printed
+
+
+def test_run_holding_analysis_normalizes_overseas_price():
+    """해외 종목의 현재가 미제공 시 평가금액에서 역산해 넘긴다."""
+    captured = {}
+
+    def _fake(entries, **kw):
+        captured["entries"] = entries
+        return {}
+
+    ovrs = [{"ovrs_pdno": "AAPL", "ovrs_item_name": "APPLE", "ovrs_cblc_qty": "10",
+             "pchs_avg_pric": "200", "ovrs_now_pric": "0", "frcr_evlu_pfls_amt": "100",
+             "evlu_pfls_rt": "5.0"}]
+
+    with patch("modules.auto_trade.analyze_holdings", side_effect=_fake):
+        account.run_holding_analysis([], ovrs)
+
+    entry = captured["entries"][0]
+    assert entry["is_overseas"] is True
+    assert entry["current_price"] == pytest.approx(210.0)   # (10*200 + 100) / 10

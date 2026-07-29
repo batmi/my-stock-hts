@@ -5902,6 +5902,73 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     
     return call_api(url, "domestic", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
 
+def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
+    """보유 종목의 '최근 매수 체결일'을 증권사 체결 내역에서 찾는다. {code: 'YYYYMMDD'}
+
+    HTS·MTS로 직접 매수한 포지션은 시스템 DB에 매수 기록이 없어 보유일수를 알 수 없다.
+    주식일별주문체결조회(inquire-daily-ccld)를 기간으로 훑어 실제 체결일을 복원한다.
+    종목별이 아니라 기간 단위 조회이므로 보유 종목 수와 무관하게 호출 수가 고정된다.
+
+    [중요] KIS는 3개월 경계로 TR이 갈린다 — 최근 3개월은 TTTC8001R, 그 이전은 CTSC9115R.
+    한 TR로 계속 거슬러 올라가면 3개월 이전 구간이 통째로 빈다. 3개월씩 끊어 최신 구간부터
+    조회하되 두 번째 구간부터 과거용 TR로 바꾸고, 찾는 종목을 모두 채우면 조기 종료한다.
+
+    실패는 조용히 빈 dict로 흘려보낸다(보유일수는 부가 정보이므로 잔고 조회를 막아선 안 된다).
+    """
+    if not codes or config.session.is_toss:
+        return {}
+
+    try:
+        cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
+        is_sim = config.session.is_simulation
+        tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]["sim" if is_sim else "real"]
+        tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]["sim" if is_sim else "real"]
+
+        remaining = set(codes)
+        found = {}
+        end = datetime.now()
+
+        for chunk in range(max(1, int(math.ceil(months / 3.0)))):
+            if not remaining:
+                break
+            start = end - timedelta(days=90)
+            params = {
+                "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
+                "INQR_STRT_DT": start.strftime("%Y%m%d"),
+                "INQR_END_DT": end.strftime("%Y%m%d"),
+                "SLL_BUY_DVSN_CD": "02",   # 02: 매수만
+                "INQR_DVSN": "00",
+                "PDNO": "",
+                "CCLD_DVSN": "01",         # 01: 체결분만 (미체결·취소 제외)
+                "ORD_GNO_BRNO": "", "ODNO": "",
+                "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
+                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            }
+
+            res = call_api(url, "domestic", "inquiry", "history", params=params,
+                           tr_id=(tr_recent if chunk == 0 else tr_old))
+            if not res or res.get('rt_cd') != '0':
+                # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(찾은 것까지 반환).
+                break
+
+            for row in (res.get('output1') or []):
+                code = str(row.get('pdno') or '').strip()
+                date = str(row.get('ord_dt') or '').strip()
+                if code not in remaining or len(date) != 8:
+                    continue
+                # 같은 구간 내 여러 체결이면 가장 최근 것을 취한다
+                if date > found.get(code, ''):
+                    found[code] = date
+
+            remaining -= set(found)
+            end = start - timedelta(days=1)
+
+        return found
+    except Exception as e:
+        logger.debug(f"기간 매수 체결일 조회 실패: {e}")
+        return {}
+
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 해외주식 체결 내역 조회"""
     # [추가] 토스: CLOSED 주문 이력에서 당일 해외 체결을 KIS 형태로 변환

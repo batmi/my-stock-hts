@@ -31,7 +31,8 @@ from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
 
-from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager)
+from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager,
+                                       UNMANAGED_ETF, UNMANAGED_RESTRICTED)
 from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
@@ -3684,6 +3685,8 @@ class AutoTrader:
         _all_hold_codes = [h['pdno'] for h in holdings]
         latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes)
         buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes)
+        # 진입일(보유수량이 0 → 1 이상이 된 시점) — 시간청산 기준
+        entry_date_map = db_manager.db.get_position_entry_dates(_all_hold_codes)
 
         # [추가] 포트폴리오 히트(총 오픈 리스크) 스냅샷 갱신 — 같은 주기의 피라미딩/신규 매수 캡 판정에 사용
         try:
@@ -3723,8 +3726,8 @@ class AutoTrader:
             #  [Fix] 단, 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
             if code in restricted_stocks:
                 self.set_stock_state(code, None)
-                self.log(f"[분석스킵] {name}: 트레이딩 제한 종목 (수동 홀딩)")
-                self._alert_unmanaged_stop(code, name, item, "트레이딩 제한 종목(수동 홀딩)",
+                self.log(f"[분석스킵] {name}: {UNMANAGED_RESTRICTED}")
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_RESTRICTED,
                                            buy_trades_map.get(code))
                 return
             
@@ -3752,9 +3755,9 @@ class AutoTrader:
             #   ETF는 전적으로 수동 관리하도록 한다. 단 시스템이 손절하지 않으므로 주의)
             if is_domestic_etf and not getattr(config, 'SYSTEM_INCLUDE_ETF', False):
                 self.set_stock_state(code, None)
-                self.log(f"[매도스킵] {name}({code}): ETF 포함 설정(False)으로 자동 매도 제외")
+                self.log(f"[매도스킵] {name}({code}): {UNMANAGED_ETF}")
                 # [Fix] 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
-                self._alert_unmanaged_stop(code, name, item, "ETF 자동매매 제외 설정",
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_ETF,
                                            buy_trades_map.get(code))
                 return
 
@@ -3776,82 +3779,19 @@ class AutoTrader:
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)
             
-            thresholds = None
-            if rule:
-                thresholds = {
-                    "TAKE_PROFIT_RATE": rule['take_profit'],
-                    "STOP_LOSS_RATE": rule['stop_loss'],
-                    "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
-                    "SELL_SCORE": rule['sell_score'],
-                    "WEIGHTS": rule.get('weights'),
-                    "BUY_SCORE": rule['buy_score'],
-                    # [Fix] 개별 룰의 RSI 상한을 매도 경로에도 전달한다.
-                    #  analyze_sell도 classify_stock_state로 상태를 재판정하는데(engine.py),
-                    #  이 키가 없으면 전역 BUY_RSI_MAX로 폴백해, 같은 종목·같은 시각인데도
-                    #  매수 경로/메뉴 2 화면과 상태가 갈렸다(룰 RSI ≠ 전역 RSI인 보유 종목).
-                    "BUY_RSI_MAX": rule['buy_rsi'],
-                    "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
-                    "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
-                    # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
-                    #  (기존: 지역변수로만 읽고 미사용 → 룰 TS가 무시되고 항상 전역 설정으로 동작)
-                    "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
-                    "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
-                }
-                # [Fix] 룰의 ATR 손절 사용 여부를 TS 동적 콜백(샹들리에) 판정에도 일관 적용
-                if rule.get('use_atr_stop') is not None:
-                    thresholds["USE_ATR_STOP"] = bool(rule['use_atr_stop'])
-            else:
-                thresholds = {
-                    "WEIGHTS": config.SCORING_WEIGHTS,
-                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-                    "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
-                }
+            # [SSOT] 임계값 조립은 build_sell_thresholds가 단독 보유한다.
+            #  잔고 화면(메뉴 9-2)의 보유 분석도 같은 함수를 호출해 판정이 갈리지 않게 한다.
+            # [최적화] 주기 시작 시 배치 로드한 buy_trades_map 사용 (종목별 개별 쿼리 제거)
+            thresholds = _pkg().build_sell_thresholds(
+                rule=rule, score_adj=score_adj, buy_trades=buy_trades_map.get(code, [])
+            )
 
-            use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
-            if rule and rule.get('use_atr_stop') is not None:
-                use_atr_stop = bool(rule['use_atr_stop'])
-
-            applied_sl_rate = None
-            if use_atr_stop:
-                # [Fix: Point 4] 분할 매수를 고려하여, 현재 보유량에 해당하는 모든 매수 기록의
-                # ATR 손절률을 수량 가중 평균하여 적용합니다.
-                # [최적화] 주기 시작 시 배치 로드한 결과 사용 (종목별 개별 쿼리 제거)
-                buy_trades = buy_trades_map.get(code, [])
-                if buy_trades:
-                    total_qty_trade = 0
-                    weighted_sl_sum = 0
-                    for trade in buy_trades:
-                        qty_trade = api.safe_int(trade.get('qty', 0))
-                        sl_rate_trade = float(trade.get('stop_loss_rate', 0.0))
-                        if qty_trade > 0 and sl_rate_trade != 0.0:
-                            total_qty_trade += qty_trade
-                            weighted_sl_sum += qty_trade * sl_rate_trade
-                    
-                    if total_qty_trade > 0:
-                        avg_sl_rate = weighted_sl_sum / total_qty_trade
-                        if avg_sl_rate != 0.0: applied_sl_rate = avg_sl_rate
-            
-            if applied_sl_rate is not None:
-                if thresholds is None: thresholds = {}
-                thresholds["STOP_LOSS_RATE"] = applied_sl_rate
-
-                # [Fix] ATR 동적 손절 사용 시, 본전 청산(BEP) 발동 기준을 손절폭(절대값)과 1:1로 동기화
-                #  (기존: 지역변수에만 대입되고 analyze_sell에 미전달 → 항상 기본 +5%에 조기 발동되어
-                #   ATR 손절폭이 넓은 변동성 종목이 정상 눌림에서 본전청산으로 조기 청산되는 문제)
-                if applied_sl_rate < 0:
-                    thresholds["BREAK_EVEN_PROFIT_RATE"] = abs(applied_sl_rate)
-                
-            holding_days = 0
-            is_mr_holding = False
             # [최적화] 주기 시작 시 배치 로드한 결과 사용 (종목별 개별 쿼리 제거)
+            # [Fix] 보유일수는 '최근 매수'가 아니라 진입일(보유수량이 0 → 1 이상이 된 시점) 기준.
+            #  분할 매수·피라미딩으로 1주만 더 담아도 시간청산 시계가 0으로 리셋되던 문제.
             last_buy = latest_buy_map.get(code)
-            if last_buy and last_buy.get('time'):
-                if '역매수' in str(last_buy.get('reason', '')) or '역추세' in str(last_buy.get('reason', '')):
-                    is_mr_holding = True
-                try:
-                    buy_dt = datetime.strptime(last_buy['time'], "%Y-%m-%d %H:%M:%S")
-                    holding_days = (datetime.now() - buy_dt).days
-                except Exception: pass
+            holding_days, is_mr_holding = _pkg().resolve_holding_context(
+                last_buy, entry_date=entry_date_map.get(code))
 
             with self._lock:
                 cached_highest = self.trailing_stop_cache.get(code)
@@ -3911,7 +3851,7 @@ class AutoTrader:
                     target_sell_qty = qty
                 
                 if rule: reason += " [개별 룰 적용]"
-                if applied_sl_rate is not None and "손절" in reason: reason = reason.replace("손절", "ATR손절")
+                if thresholds.get("ATR_APPLIED_SL_RATE") is not None and "손절" in reason: reason = reason.replace("손절", "ATR손절")
                 
                 raw_order_price = current_price * (1 - config.SLIPPAGE_RATE)
                 order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
@@ -5054,30 +4994,5 @@ class AutoTrader:
         return max(0.0, (hwm - equity) / hwm * 100.0)
 
     def _get_stock_market_type(self, code):
-        """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (캐싱 적용)"""
-        if code in self.stock_market_map:
-            return self.stock_market_map[code]
-
-        # 1. stock.json에 사전 정의된 exchange 정보 직접 탐색 (가장 빠르고 정확함)
-        for key in ["stocks_kr", "etfs_kr"]:
-            for item in config.session.stock_data.get(key, []):
-                if item['code'] == code and "exchange" in item:
-                    m_type = item['exchange'].upper()
-                    if m_type in ["KOSPI", "KOSDAQ"]:
-                        self.stock_market_map[code] = m_type
-                        return m_type
-
-        # 2. API 조회를 통한 Fallback (한글 '코스닥' 포함)
-        try:
-            res = api.get_current_price_data(code, is_overseas=False)
-            if res and res.get('rt_cd') == '0':
-                market_name = res['output'].get('rprs_mrkt_kor_name', '')
-                if "KOSDAQ" in market_name or "코스닥" in market_name:
-                    self.stock_market_map[code] = "KOSDAQ"
-                    return "KOSDAQ"
-        except Exception:
-            pass
-
-        # 3. API 조회 실패 또는 정보 누락 시 기본값 'KOSPI'로 설정
-        self.stock_market_map[code] = "KOSPI"
-        return "KOSPI"
+        """종목 코드로 시장 구분(KOSPI/KOSDAQ) 확인 (인스턴스 캐시 사용)"""
+        return _pkg().resolve_market_type(code, self.stock_market_map)
