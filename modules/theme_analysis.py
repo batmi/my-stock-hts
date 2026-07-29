@@ -1779,7 +1779,7 @@ def run_theme_analysis():
             ("2", "트레이딩뷰 종목 검색", "TradingView Screener"),
             ("3", "AI 시장 테마 분석", "AI Market Theme Analysis"),
             ("4", "AI 종목 심층 진단", "AI Stock Analysis"),
-            ("5", "배당 · 실적 캘린더", "Dividend & Earnings Calendar"),
+            ("5", "투자 캘린더", "Investment Calendar"),
             ("6", "공시 모니터링", "Disclosure Monitoring"),
             ("7", "수급 · 물량 신호", "Supply-Demand & Overhang"),
             ("8", "재무 스냅샷", "Financial Snapshot")

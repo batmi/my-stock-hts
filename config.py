@@ -693,6 +693,14 @@ GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta") # 사용 가능�
 DART_API_KEY = os.getenv("DART_API_KEY", "")  # https://opendart.fss.or.kr 발급 (무료, 40자리)
 
 # ==========================================================
+# [설정] FRED (미국 경제지표 발표일정) API 설정
+# ==========================================================
+# CPI·고용보고서·PCE 등 미국 지표의 '발표 예정일'을 조회하는 데 쓴다(메뉴 6-5 캘린더).
+#  미설정 시 FOMC·국내 일정만 표시되며, 그 외 기능에는 영향이 없다.
+#  (~/.htsrc 에 `export FRED_API_KEY=...` 추가 후 재시작)
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")  # https://fredaccount.stlouisfed.org/apikeys 발급 (무료, 32자리)
+
+# ==========================================================
 # [설정] TradingView 계정 (tvDatafeed 로그인용)
 # ==========================================================
 # 둘 다 설정되어 있으면 tvDatafeed가 로그인 모드로 동작한다(익명 대비 데이터 한도·안정성 우수).

@@ -1,9 +1,19 @@
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 import config
 import api
 from modules.manage import events as calendar_events
+from modules.manage import econ_events
+
+
+@pytest.fixture(autouse=True)
+def _mute_econ_events():
+    """show_calendar이 부르는 경제 이벤트 조회를 막는다(테스트가 외부 API를 타지 않도록)."""
+    with patch.object(econ_events, "render"):
+        yield
 
 
 def _set_watchlist(kr=None, us=None, kr_etf=None, us_etf=None):

@@ -307,9 +307,14 @@ def _gather_watchlist():
 
 
 def show_calendar():
-    """관심종목 배당/실적 캘린더 출력."""
+    """경제 이벤트 + 관심종목 배당/실적 캘린더 출력."""
     utils.clear_screen()
-    config.console.print("\n[bold cyan][관심종목 배당 · 실적 캘린더][/bold cyan]\n")
+    config.console.print("\n[bold cyan][투자 캘린더][/bold cyan] [dim]경제 이벤트 · 배당 · 실적[/dim]\n")
+
+    # 경제 이벤트는 관심종목과 무관하게 항상 먼저 보여준다 —
+    #  FOMC·CPI 같은 매크로 일정은 보유 종목이 없어도 진입 시점 판단에 쓰이기 때문.
+    from modules.manage import econ_events
+    econ_events.render()
 
     kr, us = _gather_watchlist()
     if not kr and not us:

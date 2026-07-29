@@ -4,6 +4,7 @@
 기존 단일 파일들을 관심종목·펀더멘털 단위로 묶어 분해:
   - watchlist.py       : [7] 관심 종목 관리 (기존 modules/manage.py)
   - events.py          : 배당·실적 캘린더 (DART + yfinance)
+  - econ_events.py     : 주요 경제 이벤트 일정 (FRED + 연준 캘린더)
   - disclosure.py      : [6-6] 공시 모니터링·실적 추적 + 공시 텔레그램 알림
 
 기존 인터페이스(modules.manage.X) 완전 호환:

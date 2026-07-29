@@ -441,6 +441,7 @@ Register sensitive information like API Keys as **environment variables**:
 *   `GEMINI_MODEL`: Gemini model name to use (Optional, default: `gemini-flash-latest`)
 *   `GEMINI_FALLBACK_MODEL`: Lighter fallback model automatically retried when the free-tier quota is exceeded (429) (Optional, default: `gemini-flash-lite-latest`)
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
+*   `FRED_API_KEY`: FRED API Key for US economic release dates — CPI, employment report, PCE, etc. (Optional, [how to get one](#fred-api-key-free))
 *   `TV_USERNAME`, `TV_PASSWORD`: TradingView account (Optional). Lets tvDatafeed (indices, US Treasury yields) run in **logged-in mode**, with better quotas/stability than anonymous access. If unset, it stays anonymous (nologin) as before and a WARNING is written to the file log (INFO on successful login). The issued token is cached in `data/tv_token.json` for 7 days so restarts don't re-login (frequent logins trigger TradingView's captcha). If a captcha is returned, retry later or sign in once from a browser and restart.
 
 **Example (`export` in a shell profile such as `~/.htsrc`):**
@@ -496,12 +497,40 @@ By integrating the Financial Supervisory Service's **DART OpenAPI**, you can use
 1.  **Issue API Key (Free)**: Apply on the OpenDART website.
 2.  **Environment Variable**: Register `DART_API_KEY`.
 3.  **Features** (Menu `[6]` Discovery & Financials):
-    *   `[5] Dividend/Earnings Calendar`: Estimates the next ex-dividend date per dividend cycle, and when a cash/in-kind dividend decision disclosure exists, parses the document to replace the estimate with the **confirmed record date and dividend per share**. Also shows estimated Korean earnings announcement dates (based on last year's provisional-earnings filing pattern) and the next statutory report deadline.
+    *   `[5] Investment Calendar`: Leads with **major economic events** (FOMC rate decisions & minutes; US CPI, employment report, PCE, PPI, GDP, retail sales; Korean & US quadruple-witching expiry) shown with D-day countdowns — see [FRED integration](#fred-api-key-free) — followed by the watchlist dividend/earnings schedule. Estimates the next ex-dividend date per dividend cycle, and when a cash/in-kind dividend decision disclosure exists, parses the document to replace the estimate with the **confirmed record date and dividend per share**. Also shows estimated Korean earnings announcement dates (based on last year's provisional-earnings filing pattern) and the next statutory report deadline.
     *   `[6] Disclosure Monitoring`: Classifies recent disclosures by importance with Gemini AI good/bad-news summaries. Auto-extracts details: provisional earnings (revenue/OP/NP with YoY), paid-in capital increases (dilution), CB/BW terms, **supply contracts (amount, % of revenue, counterparty)**, **treasury stock decisions (amount, period)**, **bonus issues (allotment ratio)**, and **capital reductions (ratio)**.
     *   `[7] Supply-Demand & Overhang Signals`: (1) **Treasury stock acquisition/disposal/trust decisions** (company-level supply signal), (2) **mezzanine (CB/BW/EB) overhang watch** — conversion price vs. current price, potential conversion volume vs. shares outstanding, recent conversion-exercise filings, (3) **bonus issue decisions**, (4) insider (elestock) and 5% holder (majorstock) net buy/sell summary (per-stock **last report date**, report count, net change) plus detail.
         *   Note: DART does not expose the reason for a holding change, so **non-trading events are removed by pattern**: (a) new/re-filed reports put the *entire* holding in the change column, which is corrected by **differencing successive holding quantities** (e.g. NPS re-filing `+1,281,813` is really `+12,343`); (b) when 5+ executives file on the same day in the same direction it is treated as a **bulk grant (ESOP/stock grant)** and excluded from both summary and detail (mixed directions are kept as genuine trading).
     *   `[8] Financial Snapshot`: Revenue/operating profit/net profit with YoY from the latest periodic report, **standalone quarterly operating profit** (cumulative-difference method), and DART-computed **ROE / debt ratio**.
     *   **Telegram Alerts**: Sends instant pushes for major disclosures (capital increase, administrative issues, etc.).
+
+### FRED API Key (Free)
+
+The **major economic events** section at the top of `[5] Investment Calendar` merges three sources. Only the US release dates need a FRED API Key; the rest work without one.
+
+| Events | Source | API Key |
+| --- | --- | --- |
+| US CPI · employment report · PCE · PPI · GDP · retail sales · JOLTS | [FRED](https://fred.stlouisfed.org) (St. Louis Fed) | **Required** |
+| FOMC rate decisions · minutes · Beige Book | Federal Reserve official calendar (`federalreserve.gov`) | Not needed |
+| Korean & US quadruple-witching expiry | Computed locally (KR: 2nd Thursday / US: 3rd Friday of Mar/Jun/Sep/Dec) | Not needed |
+
+> The FRED API Key is **optional**. Without it only the US release dates are omitted — FOMC and Korean events still show, and every other feature works normally.
+
+**How to get one:**
+1. Go to the [FRED API Keys page](https://fredaccount.stlouisfed.org/apikeys) → create a free account if needed (email verification).
+2. Click **Request API Key**, briefly describe your use, and submit (issued instantly, free).
+3. Copy the **32-character key**.
+4. Register it as `FRED_API_KEY` and restart the program:
+   ```sh
+   # add to a shell profile such as ~/.htsrc
+   export FRED_API_KEY="your_32_char_key"
+   ```
+
+**Behavior:**
+*   FRED publishes scheduled release dates ahead of time, so the dates shown are **official confirmed release dates**, not estimates. (US local time — typically the following early morning in KST.)
+*   When an expiry date falls on a market holiday it is **rolled back to the previous business day** (this applies in 2026 and 2027, when the US third Friday of June coincides with Juneteenth).
+*   Results are **cached daily** in `json/econ_calendar_cache.json`, so re-running on the same day makes no external calls. On network failure it falls back to the previous cache. A cache in which some source failed is re-fetched even on the same day, so a transient timeout can't freeze an incomplete calendar for the rest of the day.
+*   Events with no machine-readable forward schedule (e.g. Bank of Korea rate decisions) can be entered manually in `json/econ_calendar_seed.json` (refresh once a year). The `_help` block inside that file documents the format.
 
 > **Filing-date handling**: DART provides the date field inconsistently across API families. The disclosure-list family (`list`/`elestock`/`majorstock`) returns `rcept_dt`, but the **material-report "decision" family** (treasury stock, mezzanine, bonus issue, capital reduction) omits `rcept_dt` entirely — the filing date lives in the **first 8 digits of the 14-digit receipt number**. The system recovers the date from the receipt number in that case. (Without it the date column renders blank and date-based newest-first sorting is silently defeated.)
 
