@@ -3779,19 +3779,13 @@ class AutoTrader:
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)
             
-            # [SSOT] 임계값 조립은 build_sell_thresholds가 단독 보유한다.
-            #  잔고 화면(메뉴 9-2)의 보유 분석도 같은 함수를 호출해 판정이 갈리지 않게 한다.
-            # [최적화] 주기 시작 시 배치 로드한 buy_trades_map 사용 (종목별 개별 쿼리 제거)
-            thresholds = _pkg().build_sell_thresholds(
-                rule=rule, score_adj=score_adj, buy_trades=buy_trades_map.get(code, [])
-            )
-
             # [최적화] 주기 시작 시 배치 로드한 결과 사용 (종목별 개별 쿼리 제거)
             # [Fix] 보유일수는 '최근 매수'가 아니라 진입일(보유수량이 0 → 1 이상이 된 시점) 기준.
             #  분할 매수·피라미딩으로 1주만 더 담아도 시간청산 시계가 0으로 리셋되던 문제.
             last_buy = latest_buy_map.get(code)
             holding_days, is_mr_holding = _pkg().resolve_holding_context(
                 last_buy, entry_date=entry_date_map.get(code))
+            entry_date = _pkg().resolve_entry_date(entry_date_map.get(code), last_buy)
 
             with self._lock:
                 cached_highest = self.trailing_stop_cache.get(code)
@@ -3815,6 +3809,16 @@ class AutoTrader:
             #  모든 장 종료 후에는 반영하지 않는다(KRX 확정 종가 유지). 손절·트레일링 판정은
             #  아래 analyze_sell에 current_price를 그대로 넘기므로 실시간 대응에는 영향이 없다.
             indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas_stock))
+
+            # [SSOT] 임계값 조립은 build_sell_thresholds가 단독 보유한다.
+            #  잔고 화면(메뉴 9-2)의 보유 분석도 같은 함수를 호출해 판정이 갈리지 않게 한다.
+            # [최적화] 주기 시작 시 배치 로드한 buy_trades_map 사용 (종목별 개별 쿼리 제거)
+            # [Fix] 매수 기록이 없는 포지션(HTS 직접 매수)은 진입 시점 봉의 ATR에서 손절률을
+            #  복원한다. 차트가 필요하므로 df 확보 뒤로 옮겼다(그 전까지 thresholds는 쓰이지 않는다).
+            thresholds = _pkg().build_sell_thresholds(
+                rule=rule, score_adj=score_adj, buy_trades=buy_trades_map.get(code, []),
+                fallback_atr_rate=_pkg().entry_atr_stop_rate(df, entry_date)
+            )
 
             already_half_sold = code in self.half_tp_cache
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)

@@ -5648,6 +5648,50 @@ def _toss_today_closed_orders():
     return todays
 
 
+def _toss_period_buy_dates(codes, months=12):
+    """토스 CLOSED 주문 이력에서 최근 매수 체결일을 찾는다. {code: 'YYYYMMDD'}
+
+    KIS의 get_period_buy_dates와 같은 역할. 토스는 기간(from/to) 조회를 한 번에
+    받으므로 3개월씩 끊을 필요가 없다.
+    """
+    remaining = set(codes)
+    found = {}
+
+    today = datetime.now()
+    start = today - timedelta(days=int(months * 30.5))
+    cursor = None
+
+    for _ in range(20):  # 최대 20페이지(=2000건) 방어
+        kwargs = {"status": "CLOSED", "limit": 100,
+                  "from_date": start.strftime("%Y-%m-%d"),
+                  "to_date": today.strftime("%Y-%m-%d")}
+        if cursor:
+            kwargs["cursor"] = cursor
+
+        res = toss_api.get_orders(**kwargs)
+        for o in ((res or {}).get('orders') or []):
+            if o.get('side') != 'BUY':
+                continue
+            code = str(o.get('symbol') or '').strip()
+            if code not in remaining:
+                continue
+            ex = o.get('execution') or {}
+            if _toss_int(ex.get('filledQuantity')) <= 0:
+                continue  # 취소·미체결 주문은 매수일 근거가 못 된다
+            ts = str(ex.get('filledAt') or o.get('orderedAt') or '')
+            date = ts[:10].replace('-', '')
+            if len(date) == 8 and date > found.get(code, ''):
+                found[code] = date
+
+        if not (res or {}).get('hasNext'):
+            break
+        cursor = (res or {}).get('nextCursor')
+        if not cursor:
+            break
+
+    return found
+
+
 def _toss_history_item(o, overseas, name_map):
     """토스 CLOSED 주문 1건 → KIS 당일 체결이력 항목."""
     symbol = o.get('symbol', '')
@@ -5915,8 +5959,17 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
 
     실패는 조용히 빈 dict로 흘려보낸다(보유일수는 부가 정보이므로 잔고 조회를 막아선 안 된다).
     """
-    if not codes or config.session.is_toss:
+    if not codes:
         return {}
+
+    # 토스 모드는 KIS TR이 없다. 주문 이력 API(기간 조회)로 같은 값을 만든다.
+    #  (이 분기가 없던 동안 토스 모드는 HTS 매수분 보유일수가 전부 0일로 굳었다)
+    if config.session.is_toss:
+        try:
+            return _toss_period_buy_dates(codes, months=months)
+        except Exception as e:
+            logger.debug(f"[Toss] 기간 매수 체결일 조회 실패: {e}")
+            return {}
 
     try:
         cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)

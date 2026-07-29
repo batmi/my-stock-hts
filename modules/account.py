@@ -332,43 +332,30 @@ def _fmt_ts_stop(res, is_overseas=False):
     return f"[dim]TS:[/dim][cyan]{price_str}[/][dim](-{ts['callback']:.1f}%)[/dim]"
 
 def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
-    """손절가 셀 — 실제로 지배하는 손절선만 표시한다.
+    """손절가 셀 — 손절선과 TS 청산선을 항상 두 줄로 표시한다.
 
-    USE_ATR_STOP이 켜져 있으면 고정 손절(STOP_LOSS_RATE)은 'ATR 산출 실패 시 폴백'일
-    뿐 판정을 지배하지 않는다(2026-07-26 설정 감사). 지배하지 않는 값을 손절가로
-    띄우면 그 선에서 잘릴 것처럼 읽히므로 감춘다. STOP_LOSS_RATE가 0인 미사용
-    설정도 마찬가지다.
+    [중요] 표시값은 보유 분석(analyze_sell)이 실제로 적용한 손절률(applied_sl_rate)에서
+    유도한다. 예전에는 이 셀이 DB의 매수 기록을 따로 읽어 손절선을 재구성했는데, 기록이
+    없는 HTS 직접 매수분은 '미사용'으로 비워두면서도 엔진은 전역 고정 손절로 판정하고
+    있어 화면과 판정이 어긋났다(잔고에 '미사용'인데 청산 사유는 '손절').
+
+    접두어는 실제로 지배하는 선을 가리킨다 — BEP(본전 청산이 손절선을 끌어올린 상태)
+    > ATR(변동성 기반) > 고정(USE_ATR_STOP이 꺼졌거나 ATR 산출 불가).
     """
-    sl_rate = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-    use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
-
-    # 개별 룰 확인
-    rule = db_manager.db.get_stock_strategy(code) if code else None
-    if rule:
-        sl_rate = rule['stop_loss']
-        if rule.get('use_atr_stop') is not None:
-            use_atr_stop = bool(rule['use_atr_stop'])
-
     def _p(v):
         return f"${v:,.2f}" if is_overseas else f"{int(v):,}"
 
     parts = []
-    if use_atr_stop:
-        # 매수 시점에 확정된 ATR 손절률이 있을 때만 표시. 기록이 없으면(수동 매수 등)
-        # 진입 기준 손절선 자체가 없고 TS만 남는다.
-        last_buy = db_manager.db.get_latest_buy_trade(code) if code else None
-        atr_sl_rate = None
-        if last_buy and last_buy.get('stop_loss_rate'):
-            val = float(last_buy['stop_loss_rate'])
-            if val != 0.0:
-                atr_sl_rate = val
-
-        if atr_sl_rate is not None:
-            atr_stop_price = buy_price * (1 + atr_sl_rate / 100)
-            parts.append(f"[dim]ATR:[/dim][blue]{_p(atr_stop_price)}[/][dim]({atr_sl_rate:.0f}%)[/dim]")
-    elif sl_rate != 0:
-        fixed_stop_price = buy_price * (1 + sl_rate / 100)
-        parts.append(f"[dim]고정:[/dim][blue]{_p(fixed_stop_price)}[/][dim]({sl_rate:.0f}%)[/dim]")
+    sl_rate = (res or {}).get('applied_sl_rate')
+    if sl_rate is not None and sl_rate != 0 and buy_price > 0:
+        if (res or {}).get('is_bep_applied'):
+            label = "BEP"
+        elif (res or {}).get('is_atr_stop'):
+            label = "ATR"
+        else:
+            label = "고정"
+        stop_price = buy_price * (1 + sl_rate / 100)
+        parts.append(f"[dim]{label}:[/dim][blue]{_p(stop_price)}[/][dim]({sl_rate:+.1f}%)[/dim]")
 
     ts_line = _fmt_ts_stop(res, is_overseas=is_overseas)
     if ts_line:
@@ -785,13 +772,11 @@ def manual_holding_analysis():
     if positions:
         _print_saved_positions(positions)
     else:
-        # 저장분이 없으면 물어볼 것이 없다 — 바로 입력으로 들어간다.
-        config.console.print("\n[dim]저장된 수동 보유 포지션이 없습니다.[/dim]")
-        positions, dirty = _add_manual_positions(positions, base_breadcrumb_len)
-        if positions:
-            _print_saved_positions(positions)
+        # 저장분이 없어도 곧바로 입력으로 밀어넣지 않는다. 메뉴를 잘못 눌렀을 때
+        # 빠져나갈 곳 없이 종목 입력이 시작되던 문제.
+        config.console.print("\n[dim]저장된 수동 보유 포지션이 없습니다. [1] 추가로 종목을 입력하세요.[/dim]")
 
-    while positions:
+    while True:
         config.console.print()
         choice = Prompt.ask("작업 선택 (0: 분석, 1: 추가, 2: 수정, 3: 삭제) [dim](이전: b, 메인: q)[/dim]",
                             choices=["0", "1", "2", "3", "b", "q"], default="0")
@@ -802,10 +787,16 @@ def manual_holding_analysis():
             return False
 
         if choice == "0":
-            break
+            if positions:
+                break
+            config.console.print("[yellow]분석할 종목이 없습니다. [1] 추가로 종목을 먼저 입력하세요.[/yellow]")
+            continue
 
         if choice == "1":
             positions, changed = _add_manual_positions(positions, base_breadcrumb_len)
+        elif not positions:
+            config.console.print("[yellow]수정·삭제할 종목이 없습니다.[/yellow]")
+            continue
         elif choice == "2":
             positions, changed = _modify_saved_position(positions)
         else:
@@ -814,12 +805,6 @@ def manual_holding_analysis():
 
         if positions:
             _print_saved_positions(positions)
-
-    if not positions:
-        config.console.print("[yellow]분석할 종목이 없습니다.[/yellow]")
-        if dirty:
-            save_manual_positions(positions)
-        return True
 
     # 현재가 조회 → 평가금액/수익률 산출 (사용자 입력은 매수 정보뿐)
     with Progress(

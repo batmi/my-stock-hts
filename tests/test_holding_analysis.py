@@ -487,42 +487,41 @@ def test_holding_days_cell_flags_time_stop():
     assert account._fmt_holding_days_cell(None) == "[dim]-[/dim]"
 
 
-def test_stop_cell_hides_fixed_stop_when_atr_stop_is_on():
-    """USE_ATR_STOP이 켜져 있으면 고정 손절은 폴백일 뿐이라 표시하지 않는다."""
-    with patch("modules.db_manager.db.get_stock_strategy", return_value=None):
-        # ATR 손절률 기록이 있으면 그 값이 실제 손절선
-        with patch("modules.db_manager.db.get_latest_buy_trade", return_value={"stop_loss_rate": -11.0}), \
-             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
-            cell = account._fmt_stop_cell(None, 10000, code="005930")
-        assert "ATR:" in cell and "고정:" not in cell
+def test_stop_cell_renders_the_stop_the_engine_actually_applied():
+    """셀은 DB를 다시 읽지 않고 analyze_sell이 적용한 손절률을 그대로 보여준다."""
+    ts = {"armed": True, "stop_price": 286632.0, "callback": 23.5, "activation": 10.0}
 
-        # ATR 기록이 없어도(수동 매수 등) 고정선은 감춘다 — 판정을 지배하지 않는다
-        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
-             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
-            cell = account._fmt_stop_cell(None, 10000, code="005930")
-        assert "고정:" not in cell and cell == "[dim]미사용[/dim]"
+    # ATR 손절이 적용된 포지션 — 접두어 ATR
+    cell = account._fmt_stop_cell(
+        {"applied_sl_rate": -11.0, "is_atr_stop": True, "ts": ts}, 10000)
+    assert "ATR:" in cell and "8,900" in cell and "고정:" not in cell
 
-        # ATR 손절을 끈 설정에서는 고정선이 실제 손절선이므로 표시한다
-        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
-             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": False, "STOP_LOSS_RATE": -7.0}):
-            cell = account._fmt_stop_cell(None, 10000, code="005930")
-        assert "고정:" in cell and "9,300" in cell
+    # ATR을 못 구해 전역 고정 손절로 판정된 포지션 — 감추지 않는다.
+    #  (감췄더니 화면은 '미사용'인데 청산 사유는 '손절'로 나오는 모순이 있었다)
+    cell = account._fmt_stop_cell(
+        {"applied_sl_rate": -7.0, "is_atr_stop": False, "ts": ts}, 10000)
+    assert "고정:" in cell and "9,300" in cell
 
-        # 고정 손절 미사용(0) + ATR 미사용 → 표시할 손절선이 없다
-        with patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
-             patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": False, "STOP_LOSS_RATE": 0.0}):
-            cell = account._fmt_stop_cell(None, 10000, code="005930")
-        assert cell == "[dim]미사용[/dim]"
+    # 본전 청산이 손절선을 끌어올린 상태
+    cell = account._fmt_stop_cell(
+        {"applied_sl_rate": 0.5, "is_atr_stop": True, "is_bep_applied": True, "ts": ts}, 10000)
+    assert "BEP:" in cell and "10,050" in cell
 
-def test_stop_cell_keeps_ts_line_without_entry_stop():
-    """진입 기준 손절선이 없어도 TS 라인은 남는다 (주청산 수단)."""
-    res = {"ts": {"armed": True, "stop_price": 286632.0, "callback": 23.5, "activation": 10.0}}
-    with patch("modules.db_manager.db.get_stock_strategy", return_value=None), \
-         patch("modules.db_manager.db.get_latest_buy_trade", return_value=None), \
-         patch.dict(config.SELL_STRATEGY, {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0}):
-        cell = account._fmt_stop_cell(res, 179694, code="005930")
-    assert "고정:" not in cell
-    assert "286,632" in cell
+    # 손절 미사용(0) + TS 없음 → 표시할 선이 없다
+    assert account._fmt_stop_cell({"applied_sl_rate": 0.0}, 10000) == "[dim]미사용[/dim]"
+
+
+def test_stop_cell_always_shows_both_stop_and_ts():
+    """손절선과 TS는 항상 두 줄로 함께 나온다."""
+    res = {"applied_sl_rate": -11.0, "is_atr_stop": True,
+           "ts": {"armed": True, "stop_price": 286632.0, "callback": 23.5, "activation": 10.0}}
+    cell = account._fmt_stop_cell(res, 179694)
+    assert "ATR:" in cell and "286,632" in cell and "\n" in cell
+
+    # TS 미발동이어도 발동 조건을 남긴다
+    res["ts"] = {"armed": False, "stop_price": 0, "callback": 5.0, "activation": 10.0}
+    cell = account._fmt_stop_cell(res, 179694)
+    assert "ATR:" in cell and "도달 시" in cell
 
 
 def test_mfe_cell_and_ts_line():

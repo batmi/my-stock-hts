@@ -148,11 +148,85 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     }
 
 
-def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None):
+def atr_stop_rate(atr, price, atr_mult=None, max_cap=None):
+    """ATR 손절률(%, 음수)을 구한다. 산출 불가하면 None. (부수효과 없음)
+
+    매수 체결 시 trades.stop_loss_rate에 굳는 값과 같은 식이다. 신규 매수·피라미딩·
+    보유 분석이 각자 같은 식을 복제하고 있어 캡(MAX_ATR_STOP_LOSS_RATE) 적용 여부가
+    갈릴 위험이 있어 SSOT로 모은다.
+    """
+    try:
+        atr = float(atr or 0)
+        price = float(price or 0)
+    except (TypeError, ValueError):
+        return None
+    if atr <= 0 or price <= 0:
+        return None
+
+    if atr_mult is None:
+        atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
+    if not atr_mult:
+        return None
+
+    rate = -((atr * atr_mult / price) * 100)
+    if max_cap is None:
+        max_cap = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+    if max_cap and rate < max_cap:
+        rate = max_cap
+    return rate
+
+
+def entry_atr_stop_rate(df, entry_date=None, atr_mult=None):
+    """진입 시점 봉의 ATR로 손절률을 복원한다. 근거가 없으면 None. (부수효과 없음)
+
+    HTS·MTS로 직접 매수한 포지션은 trades에 매수 기록이 없어 매수 시점 ATR 손절률이
+    남아 있지 않다. 그러면 USE_ATR_STOP이 켜져 있어도 판정이 전역 고정 손절률로
+    떨어져, 변동성이 큰 종목이 좁은 고정폭에서 잘려 나간다. 진입일 봉의 ATR로
+    '매수 당시 기록됐을 값'을 복원해 시스템 매수분과 같은 기준으로 맞춘다.
+
+    진입일을 모르면 최신 봉의 ATR을 쓴다(현재 변동성 기준의 근사).
+    """
+    if df is None or df.empty or 'close' not in df.columns:
+        return None
+    try:
+        atr_series = indicators.get_atr_full_series(df)
+        if atr_series is None or atr_series.empty:
+            return None
+
+        pos = len(df) - 1
+        if entry_date is not None:
+            dates = pd.to_datetime(df['date']) if 'date' in df.columns else pd.to_datetime(df.index)
+            if getattr(dates.dt, 'tz', None) is not None:
+                dates = dates.dt.tz_localize(None)
+            dates = dates.dt.normalize()
+
+            since = pd.Timestamp(entry_date)
+            if since.tz is not None:
+                since = since.tz_localize(None)
+            since = since.normalize()
+
+            # 진입일 당일 봉(없으면 직후 첫 봉). 차트가 진입일까지 거슬러 가지 못하면
+            # 최신 봉으로 두어 조용히 폴백한다.
+            mask = (dates >= since).values
+            if mask.any():
+                pos = int(mask.argmax())
+
+        atr_val = float(atr_series.iloc[pos])
+        price_val = float(df['close'].iloc[pos])
+        return atr_stop_rate(atr_val, price_val, atr_mult=atr_mult)
+    except Exception as e:
+        logger.debug(f"진입 시점 ATR 손절률 복원 실패: {e}")
+        return None
+
+
+def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_atr_rate=None):
     """보유 종목의 매도 판단(analyze_sell)에 넘길 임계값을 조립한다. (부수효과 없음)
 
     시스템 트레이딩 루프(_check_sell_conditions)와 잔고 화면의 보유 분석이 같은
     임계값을 쓰도록 SSOT로 둔다. 개별 룰 > ATR 수량가중 손절 > 전역 설정 순으로 덮어쓴다.
+
+    fallback_atr_rate: 매수 기록이 없어 ATR 손절률을 못 구할 때 쓸 복원값
+                       (entry_atr_stop_rate). 기록에서 구한 값이 항상 우선한다.
     """
     if rule:
         thresholds = {
@@ -204,6 +278,17 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None):
             avg_sl_rate = weighted_sl_sum / total_qty_trade
             if avg_sl_rate != 0.0:
                 applied_sl_rate = avg_sl_rate
+
+    # [Fix] 매수 기록이 없는 포지션(HTS·MTS 직접 매수)은 여기서 전역 고정 손절률로
+    #  떨어졌다. USE_ATR_STOP이 켜져 있는데 실제 판정만 고정폭으로 도는 셈이라,
+    #  진입 시점 봉에서 복원한 ATR 손절률로 시스템 매수분과 기준을 맞춘다.
+    if applied_sl_rate is None and use_atr_stop and fallback_atr_rate is not None:
+        try:
+            fb = float(fallback_atr_rate)
+        except (TypeError, ValueError):
+            fb = 0.0
+        if fb < 0:
+            applied_sl_rate = fb
 
     if applied_sl_rate is not None:
         thresholds["STOP_LOSS_RATE"] = applied_sl_rate
@@ -374,8 +459,6 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                 m_type = _pkg().resolve_market_type(code, market_cache)
                 score_adj = market_regime_adj.get(m_type, 0.0)
 
-            thresholds = build_sell_thresholds(rule=rule, score_adj=score_adj,
-                                               buy_trades=buy_trades_map.get(code))
             last_buy = latest_buy_map.get(code)
             broker_date = broker_buy_dates.get(code)
             entry_date = resolve_entry_date(entry_date_map.get(code), last_buy, broker_date)
@@ -392,6 +475,12 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
             # [일관성] 매도 분석 경로와 동일하게 당일 봉을 실시간가로 덮어 지표 불일치를 막는다.
             #  (장 종료 후에는 chart_overlay_price가 KRX 확정 종가를 유지한다)
             indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas))
+
+            # 임계값 조립은 차트 확보 후. 매수 기록이 없는 포지션은 진입일 봉의 ATR에서
+            # 손절률을 복원해야 하므로 df가 먼저 필요하다.
+            thresholds = build_sell_thresholds(
+                rule=rule, score_adj=score_adj, buy_trades=buy_trades_map.get(code),
+                fallback_atr_rate=entry_atr_stop_rate(df, entry_date))
 
             # [읽기 전용] 트레이더와 달리 최고가를 DB에 기록하지 않는다. 다만 표시할 TS 라인이
             #  실제 청산선과 어긋나지 않도록, 현재가가 기록된 최고가를 넘었으면 현재가를 쓴다.
@@ -767,6 +856,7 @@ class DefaultStrategy:
             'state_color': state_color,
             'ts': ts_info,
             'applied_sl_rate': sl_rate,
+            'is_atr_stop': bool(thresholds and thresholds.get("ATR_APPLIED_SL_RATE") is not None),
             'is_bep_applied': is_bep_applied,
             'max_profit_rate': max_profit_rate,
         }
