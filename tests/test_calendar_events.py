@@ -150,7 +150,7 @@ def test_build_telegram_message_includes_both_sections():
     ex = (datetime.now() + timedelta(days=2)).date()
 
     with patch.object(econ_events, "build_lines",
-                      return_value=["▸ 주요 경제 이벤트", "❗ 07-30(목) D-1 FOMC 금리결정 [Fed]"]), \
+                      return_value=["▸ 주요 경제 이벤트", "• 07-30(목) D-1 FOMC 금리결정 [Fed]"]), \
          patch.object(calendar_events, "_collect_watchlist_events",
                       return_value=([{"code": "NVDA", "name": "NVIDIA", "type": "배당락",
                                       "date": ex}], [])):
@@ -158,6 +158,9 @@ def test_build_telegram_message_includes_both_sections():
 
     assert "주요 경제 이벤트" in msg and "FOMC 금리결정" in msg
     assert "예정 일정" in msg and "NVIDIA (NVDA)" in msg and "D-2" in msg
+    # 일정 줄은 이모지 없이 '•'로만 나열한다
+    assert "💰" not in msg and "📊" not in msg
+    assert "• " in msg.split("▸ 예정 일정")[1]
 
 
 def test_build_telegram_message_drops_events_beyond_horizon():
@@ -178,7 +181,7 @@ def test_build_telegram_message_without_watchlist():
     """관심종목이 없어도 경제 이벤트만으로 메시지가 나간다."""
     _set_watchlist([], [])
     with patch.object(econ_events, "build_lines",
-                      return_value=["▸ 주요 경제 이벤트", "❗ 07-30(목) D-1 FOMC 금리결정 [Fed]"]):
+                      return_value=["▸ 주요 경제 이벤트", "• 07-30(목) D-1 FOMC 금리결정 [Fed]"]):
         msg = calendar_events.build_telegram_message()
     assert "FOMC 금리결정" in msg and "등록된 관심종목이 없습니다" in msg
 

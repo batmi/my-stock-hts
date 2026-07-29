@@ -409,8 +409,7 @@ def build_telegram_message(days=30):
         dday = "D-DAY" if gap == 0 else f"D-{gap}"
         note, est = _upcoming_note(e)
         has_estimated = has_estimated or est
-        icon = "💰" if e["type"] == "배당락" else "📊"
-        row = (f"{icon} {e['date'].strftime('%m-%d')}({_WEEKDAY_KR[e['date'].weekday()]}) {dday} "
+        row = (f"• {e['date'].strftime('%m-%d')}({_WEEKDAY_KR[e['date'].weekday()]}) {dday} "
                f"{e['name']} ({e['code']}) {e['type']}")
         if note:
             row += f" — {note}"

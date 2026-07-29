@@ -256,8 +256,8 @@ def test_render_marks_dday():
     assert any("FOMC 금리결정" in c for c in cells)
 
 
-def test_build_lines_marks_important_events():
-    """텍스트 출력에도 D-day가 붙고, 중요도 1 이벤트는 표식(❗)이 달린다."""
+def test_build_lines_uses_plain_bullets():
+    """텍스트 출력은 D-day를 달되 중요도와 무관하게 이모지 없이 '•'로만 나열한다."""
     today = datetime.now().date()
     ev = [{"date": today.strftime("%Y-%m-%d"), "name": "FOMC 금리결정",
            "country": "US", "weight": 1, "source": "Fed"},
@@ -270,8 +270,9 @@ def test_build_lines_marks_important_events():
 
     text = "\n".join(lines)
     assert "▸ 주요 경제 이벤트" in text
-    assert "❗" in text and "D-DAY" in text and "FOMC 금리결정" in text
-    assert "• " in text and "D-3" in text and "미국 JOLTS" in text
+    assert "❗" not in text
+    assert "• " in text and "D-DAY" in text and "FOMC 금리결정" in text
+    assert "D-3" in text and "미국 JOLTS" in text
 
 
 def test_build_lines_reports_stale_cache():

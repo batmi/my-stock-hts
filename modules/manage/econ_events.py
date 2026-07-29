@@ -319,9 +319,7 @@ def build_lines(days=45):
             continue
         gap = (d - today).days
         dday = "D-DAY" if gap == 0 else f"D-{gap}"
-        # 중요도 1(FOMC·CPI·고용보고서)만 표식을 달아 한눈에 걸러 보이게 한다
-        mark = "❗" if ev.get("weight", 3) == 1 else "•"
-        lines.append(f"{mark} {d.strftime('%m-%d')}({_WEEKDAY_KR[d.weekday()]}) {dday} "
+        lines.append(f"• {d.strftime('%m-%d')}({_WEEKDAY_KR[d.weekday()]}) {dday} "
                      f"{ev['name']} [{ev.get('source', '')}]")
 
     lines.append("  ※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각 대체로 익일 새벽).")
