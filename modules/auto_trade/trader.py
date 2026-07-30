@@ -126,6 +126,7 @@ class AutoTrader:
             cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
             
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
+            cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
             if not os.path.exists(log_dir):
@@ -2985,6 +2986,19 @@ class AutoTrader:
                             self.log(f"당일 시작 자산 갱신 실패: {e}")
 
                     # [추가] 장 시작/마감 상태 변경 감지 및 로그
+                    # [추가] 국내장 세션 단계 전환 감지 및 텔레그램 알림
+                    current_phase = api.domestic_session_phase()
+                    if self.last_session_phase is None:
+                        self.last_session_phase = current_phase
+                    elif self.last_session_phase != current_phase:
+                        self.last_session_phase = current_phase
+                        phase_label = api.market_session_label(False, False)
+                        if phase_label:
+                            phase_text = phase_label[0]
+                            self.log(f"🔔 [시장 상태 변경] 세션 전환: {phase_text}")
+                            msg = f"🔔 [시장 상태 변경]\n현재 시장 세션이 다음으로 전환되었습니다:\n👉 {phase_text}"
+                            api.send_telegram_message(msg)
+
                     if self.was_market_open is not None:
                         if not self.was_market_open and current_market_status:
                             now_time_str = datetime.now().strftime("%H%M")
