@@ -28,15 +28,24 @@ def _get_telegram_footer():
         return
 
     cano = config.session.cano
-    acc_label = "모의" if config.session.is_simulation else "실전"
+    acnt = config.session.acnt_prdt_cd
+    
+    if config.session.is_toss:
+        acc_label = "토스"
+    else:
+        acc_label = "모의" if config.session.is_simulation else "실전"
 
     # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if not config.session.is_simulation and not config.session.is_toss and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
+        acnt = config.session.auto_acnt_prdt_cd
         acc_label = "자동"
 
+    # 계좌번호 뒤에 상품코드(01, 22 등)를 붙여 사용자가 정확한 계좌를 식별할 수 있도록 함
+    full_acc = f"{cano}-{acnt}" if acnt else cano
     instance_name = config.TELEGRAM_INSTANCE_NAME
-    return f"[{instance_name} | {acc_label} {cano}]"
+    
+    return f"[{instance_name} | {acc_label} {full_acc}]"
 
 def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=False):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""

@@ -510,6 +510,7 @@ class AutoTrader:
             # 초기화에 사용된 데이터는 비워줌
             self.initial_holdings = None
             self.initial_summary = None
+            self.initialized = False
 
         except Exception as e:
             logger.error(f"자동매매 시작 실패: {e}")
