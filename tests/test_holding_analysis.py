@@ -231,11 +231,62 @@ def test_period_buy_dates_stops_on_unsupported_tr():
     assert found == {"005930": "20260701"}        # 950160은 못 찾아도 예외 없이 진행
 
 
-def test_period_buy_dates_skips_toss_and_empty():
+def test_period_buy_dates_empty_codes_short_circuits():
     import api
-    with patch.object(config.session, "is_toss", True, create=True):
-        assert api.get_period_buy_dates(["005930"]) == {}
     assert api.get_period_buy_dates([]) == {}
+
+
+def test_period_buy_dates_uses_toss_order_history():
+    """토스 모드는 KIS TR 대신 주문 이력(기간 조회)에서 같은 값을 만든다.
+
+    이 분기가 없던 동안 토스 모드는 HTS 직접 매수분 보유일수가 전부 0일로 굳었다.
+    """
+    import api
+
+    with patch.object(config.session, "is_toss", True, create=True), \
+         patch("api._toss_period_buy_dates", return_value={"005930": "20260310"}) as spy:
+        assert api.get_period_buy_dates(["005930"], months=6) == {"005930": "20260310"}
+
+    assert spy.call_args.kwargs["months"] == 6
+
+    # 조회가 깨져도 잔고 표시를 막지 않는다 (보유일수는 부가 정보)
+    with patch.object(config.session, "is_toss", True, create=True), \
+         patch("api._toss_period_buy_dates", side_effect=RuntimeError("토스 응답 없음")):
+        assert api.get_period_buy_dates(["005930"]) == {}
+
+
+def test_toss_period_buy_dates_picks_latest_filled_buy():
+    """매수·체결된 주문만 세고, 같은 종목이 여러 번이면 가장 최근 체결일을 쓴다."""
+    import api
+
+    pages = [
+        {"orders": [
+            {"symbol": "005930", "side": "BUY",
+             "execution": {"filledQuantity": 10, "filledAt": "2026-03-10T09:31:00"}},
+            {"symbol": "005930", "side": "SELL",       # 매도는 매수일 근거가 못 된다
+             "execution": {"filledQuantity": 10, "filledAt": "2026-05-20T10:00:00"}},
+            {"symbol": "000660", "side": "BUY",        # 취소·미체결도 제외
+             "execution": {"filledQuantity": 0, "filledAt": "2026-04-01T09:00:00"}},
+            {"symbol": "035720", "side": "BUY",        # 찾는 종목이 아니면 무시
+             "execution": {"filledQuantity": 5, "filledAt": "2026-06-01T09:00:00"}},
+        ], "hasNext": True, "nextCursor": "c2"},
+        {"orders": [
+            {"symbol": "005930", "side": "BUY",        # 더 최근 매수가 있으면 갱신
+             "execution": {"filledQuantity": 3, "filledAt": "2026-04-15T13:20:00"}},
+        ], "hasNext": False},
+    ]
+    calls = []
+
+    def _fake(**kwargs):
+        calls.append(kwargs)
+        return pages[len(calls) - 1]
+
+    with patch("api.toss_api.get_orders", side_effect=_fake):
+        found = api._toss_period_buy_dates(["005930", "000660"], months=6)
+
+    assert found == {"005930": "20260415"}
+    assert len(calls) == 2
+    assert "cursor" not in calls[0] and calls[1]["cursor"] == "c2"
 
 
 def test_analyze_holdings_uses_broker_history_for_hts_positions(_no_db):

@@ -483,8 +483,9 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
             if db_manager.db.is_disclosure_notified(key):
                 continue
             note, _est = _upcoming_note(e)
-            icon = "💰" if e["type"] == "배당락" else "📊"
-            row = f"{icon} {e['name']} ({e['code']}) {e['type']}"
+            # 종목 줄도 경제 이벤트와 같은 '•'로 통일한다 — 줄마다 다른 이모지가 앞에 서면
+            #  정작 읽어야 할 종목명의 시작 위치가 어긋나 훑어보기가 나빠진다(/calendar와 동일).
+            row = f"• {e['name']} ({e['code']}) {e['type']}"
             if note:
                 row += f" — {note}"
             targets.setdefault(gap, []).append(row)

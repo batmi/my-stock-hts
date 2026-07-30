@@ -328,7 +328,7 @@ def _fmt_ts_stop(res, is_overseas=False):
         return f"[dim]TS: +{ts['activation']:.0f}% 도달 시[/dim]"
 
     price = ts['stop_price']
-    price_str = f"${price:,.2f}" if is_overseas else f"{int(price):,}"
+    price_str = f"${price:,.2f}" if is_overseas else f"{round(price):,}"
     return f"[dim]TS:[/dim][cyan]{price_str}[/][dim](-{ts['callback']:.1f}%)[/dim]"
 
 def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
@@ -343,7 +343,9 @@ def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
     > ATR(변동성 기반) > 고정(USE_ATR_STOP이 꺼졌거나 ATR 산출 불가).
     """
     def _p(v):
-        return f"${v:,.2f}" if is_overseas else f"{int(v):,}"
+        # int() 절삭이 아니라 반올림 — buy_price*(1+rate/100)은 부동소수점 오차로 정수 바로
+        #  아래에 떨어지는 일이 흔해(10000*1.005 = 10049.999…) 손절가가 1원씩 낮게 찍혔다.
+        return f"${v:,.2f}" if is_overseas else f"{round(v):,}"
 
     parts = []
     sl_rate = (res or {}).get('applied_sl_rate')

@@ -217,6 +217,8 @@ def test_calendar_alert_sends_digest_for_today_and_tomorrow():
     assert "캘린더 알림" in msg
     assert "오늘" in msg and "미국 CPI" in msg
     assert "내일" in msg and "삼성전자 (005930)" in msg
+    assert "📊" not in msg and "💰" not in msg   # 종목 줄도 '•'로 통일
+    assert "• 삼성전자 (005930)" in msg
     assert mark.call_count == 2  # 경제 1건 + 종목 1건
 
 
