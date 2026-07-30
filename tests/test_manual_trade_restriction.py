@@ -179,7 +179,7 @@ def test_manual_sell_removes_restriction_from_account(mock_dependencies):
     mock_api.get_domestic_balance.return_value = ([], {}) # Empty holdings means qty = 0
     
     # We need to speed up the time.sleep(3) in the thread, so patch time.sleep
-    with patch('modules.auto_trade.time.sleep', return_value=None):
+    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
         monitor = ConclusionMonitor()
         monitor.initialized = True
         
@@ -232,7 +232,7 @@ def test_manual_sell_partial_keeps_restriction_in_account(mock_dependencies):
         'hldg_qty': '5'
     }], {})
     
-    with patch('modules.auto_trade.time.sleep', return_value=None):
+    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
         monitor = ConclusionMonitor()
         monitor.initialized = True
         monitor.order_status = {}
@@ -275,7 +275,7 @@ def test_manual_sell_removes_only_account_restriction(mock_dependencies):
     # Mock domestic balance to return 0 holdings
     mock_api.get_domestic_balance.return_value = ([], {})
     
-    with patch('modules.auto_trade.time.sleep', return_value=None):
+    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
         monitor = ConclusionMonitor()
         monitor.initialized = True
         monitor.order_status = {}
