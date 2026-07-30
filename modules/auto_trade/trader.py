@@ -787,11 +787,13 @@ class AutoTrader:
                         qty = int(item['hldg_qty'])
                         buy_price = float(item['pchs_avg_pric'])
                         cur_price = int(item['prpr'])
-                        pchs_amt = int(item.get('pchs_amt', 0))
+                        # 매입금액: 실전 잔고(INQR_DVSN=01)·토스 어댑터는 pchs_amt가 0/누락으로 오므로
+                        # 합계 줄·잔고 화면과 동일하게 평단×수량으로 복원한다.
+                        pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
                         eval_amt = int(item.get('evlu_amt', 0))
                         profit = int(item['evlu_pfls_amt'])
                         rate = float(item['evlu_pfls_rt'])
-                        
+
                         row_str = f"{pad(name, name_col_width, '<')} {pad(f'{qty:,}주', 10, '>')} {pad(f'{buy_price:,.0f}원', 12, '>')} {pad(f'{cur_price:,.0f}원', 12, '>')} {pad(f'{pchs_amt:,}원', 15, '>')} {pad(f'{eval_amt:,}원', 15, '>')} {pad(f'{profit:+,}원', 14, '>')} {pad(f'{rate:.2f}%', 10, '>')}"
                         self.log(row_str)
                 self.log("─" * line_length)
@@ -3306,7 +3308,9 @@ class AutoTrader:
                     qty = int(item['hldg_qty'])
                     buy_price = float(item['pchs_avg_pric'])
                     cur_price = int(item['prpr'])
-                    pchs_amt = int(item.get('pchs_amt', 0))
+                    # 매입금액: 실전 잔고(INQR_DVSN=01)·토스 어댑터는 pchs_amt가 0/누락으로 오므로
+                    # 아래 합계 줄과 동일하게 평단×수량으로 복원한다.
+                    pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
                     eval_amt = int(item.get('evlu_amt', 0))
                     profit = int(item['evlu_pfls_amt'])
                     rate = float(item['evlu_pfls_rt'])

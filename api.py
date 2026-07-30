@@ -4993,11 +4993,15 @@ def _toss_domestic_balance():
         pl = it.get('profitLoss', {}) or {}
         evlu_amt = _toss_int(mv.get('amount'))
         tot_eval += evlu_amt
+        qty = _toss_int(it.get('quantity'))
+        avg_pric = _toss_float(it.get('averagePurchasePrice'))
         output1.append({
             'pdno': it.get('symbol', ''),
             'prdt_name': it.get('name', ''),
-            'hldg_qty': str(_toss_int(it.get('quantity'))),
-            'pchs_avg_pric': str(_toss_float(it.get('averagePurchasePrice'))),
+            'hldg_qty': str(qty),
+            'pchs_avg_pric': str(avg_pric),
+            # 토스는 매입금액을 주지 않는다 → KIS 형태를 맞추려 평단×수량으로 채운다(화면 0원 방지)
+            'pchs_amt': str(int(qty * avg_pric)),
             'evlu_amt': str(evlu_amt),
             'evlu_pfls_amt': str(_toss_int(pl.get('amount'))),
             'evlu_pfls_rt': str(round(_toss_float(pl.get('rate')) * 100, 2)),
