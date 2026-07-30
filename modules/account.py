@@ -554,11 +554,11 @@ def _ask_positive_number(prompt, cast=float, default=None, allow_cancel=True):
             continue
         return val
 
-def _ask_buy_date(prompt, default=""):
+def _ask_buy_date(prompt, default="", empty_as_today=False):
     """매수일 입력 헬퍼. 반환 (date, 취소여부).
 
-    빈 입력이면 (None, False) — 매수일 미상 처리. 수정 시에는 현재값을 default로 넘기며,
-    '-'를 입력하면 기존 매수일을 지운다.
+    빈 입력이면 (None, False) — 매수일 미상 처리 (empty_as_today=True인 경우 오늘 날짜).
+    수정 시에는 현재값을 default로 넘기며, '-'를 입력하면 기존 매수일을 지운다.
     """
     while True:
         raw = Prompt.ask(prompt, default=default)
@@ -568,6 +568,8 @@ def _ask_buy_date(prompt, default=""):
         if raw == '-':
             return None, False
         if not raw:
+            if empty_as_today:
+                return datetime.now().date(), False
             return None, False
 
         digits = raw.replace("-", "").replace("/", "").replace(".", "")
@@ -632,7 +634,7 @@ def _collect_manual_position():
     if qty is None:
         return None
 
-    buy_date, cancelled = _ask_buy_date("  매수일 (YYYY-MM-DD, 미입력 시 보유일수 미적용)")
+    buy_date, cancelled = _ask_buy_date("  매수일 (YYYY-MM-DD, 미입력 시 오늘날짜 적용)", empty_as_today=True)
     if cancelled:
         return None
 
