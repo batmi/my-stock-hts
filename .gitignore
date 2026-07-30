@@ -6,6 +6,7 @@ venv/
 .coverage
 .coveragerc
 .vscode
+.agents
 coverage.json
 pyrightconfig.json
 
