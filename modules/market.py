@@ -914,8 +914,8 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
 
-                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
-                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y")]
+                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년·HYOAS는 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
+                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y", "^HYOAS")]
                 if not yf_t_list:
                     continue
 
@@ -1029,9 +1029,9 @@ def _show_market_indices_core(target_indices=None):
                                         }
                                         
                         # 누락된 티커 추출 후 재시도
-                        missing_tickers = [t for t in tickers_to_fetch if t not in success_tickers]
-                        if missing_tickers and attempt < 1:
-                            tickers_to_fetch = missing_tickers
+                        _missing_yf = [t for t in tickers_to_fetch if t not in success_tickers]
+                        if _missing_yf and attempt < 1:
+                            tickers_to_fetch = _missing_yf
                             tickers_str = " ".join(tickers_to_fetch)
                             time.sleep(0.5)
                             continue # 다음 attempt로 즉시 이동하여 누락분만 재다운로드
