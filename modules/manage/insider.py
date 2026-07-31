@@ -18,6 +18,19 @@ import config
 import api
 import utils
 
+def _show_fake_progress(desc, count=1):
+    """테이블 출력 전 짧은 시각적 분리를 위한 프로그래스바 애니메이션."""
+    with Progress(
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+        BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
+    ) as progress:
+        task = progress.add_task(f"[cyan]{desc}[/cyan]", total=max(count, 1))
+        import time
+        for _ in range(max(count, 1)):
+            time.sleep(0.02)
+            progress.advance(task)
+
+
 _MEZZ_LOOKBACK_DAYS = 365 * 3   # 메자닌 오버행 발행 이력 조회 기간 (통상 만기 3~5년)
 _EXERCISE_LOOKBACK_DAYS = 90    # 전환청구권/신주인수권 행사 공시 감지 기간
 
@@ -216,7 +229,7 @@ def show_insider_trades(days=90):
     treasury, frees, mezz = [], [], []
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                   BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
-        task = progress.add_task("[cyan]수급·물량 신호 조회 중...[/cyan]", total=len(codes) * 2)
+        task = progress.add_task("[cyan]자기주식 취득·처분 내역 조회 중...[/cyan]", total=len(codes) * 2)
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             futs = {ex.submit(_collect, c, n, cutoff): "insider" for c, n in codes}
             futs.update({ex.submit(_collect_supply, c, n, days): "supply" for c, n in codes})
@@ -286,6 +299,7 @@ def _render_free_increase(rows):
     """무상증자 결정 (단기 모멘텀 이벤트)."""
     if not rows:
         return
+    _show_fake_progress("무상증자 결정 내역 정리 중...", len(rows))
     config.console.print("[bold]▸ 무상증자 결정[/bold]")
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("일자", justify="center")
@@ -309,6 +323,7 @@ def _render_free_increase(rows):
 
 def _render_overhang(rows, limit=20):
     """메자닌(CB/BW/EB) 오버행 — 전환가 vs 현재가로 잠재 매도물량 감시."""
+    _show_fake_progress("메자닌 오버행 현황 분석 중...", len(rows))
     config.console.print(f"[bold]▸ 메자닌 오버행 현황[/bold] [dim](최근 {_MEZZ_LOOKBACK_DAYS // 365}년 발행 결정 기준)[/dim]")
     if not rows:
         config.console.print("  [dim]최근 발행된 CB/BW/EB가 없습니다.[/dim]\n")
@@ -432,6 +447,7 @@ def _render_summary(insiders, bulk=None):
     # 이 화면의 다른 표와 같이 최신순. 같은 날이면 순증감 규모가 큰 쪽을 위로.
     rows = sorted(agg.items(), key=lambda kv: (kv[1]["last"], abs(kv[1]["net"])), reverse=True)
 
+    _show_fake_progress("내부자 순증감 요약 분석 중...", len(rows))
     config.console.print("[bold]▸ 종목별 내부자 순증감 요약[/bold] [dim](매매 외 사유 제외)[/dim]")
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("최근 보고일", justify="center")   # 다른 표와 같이 일자를 맨 앞에 둔다
@@ -461,13 +477,14 @@ def _render_insiders(insiders, limit=30, bulk=None):
     일괄 지급·배정 건은 제외한다. 제외하지 않으면 우리사주 지급 한 번에 수백 건이
     쏟아져(실측: 삼성전자 743건) 최신순 상위 목록을 통째로 덮어버린다.
     """
-    config.console.print("[bold]▸ 임원 · 주요주주 소유상황 보고[/bold]")
     bulk = _bulk_event_keys(insiders) if bulk is None else bulk
     # 기준선 행은 기간 밖 보조 데이터라 '제외 건수'에 넣지 않는다
     dropped = sum(1 for r in insiders
                   if not r.get("baseline") and (r["code"], r["rcept_dt"]) in bulk)
     insiders = [r for r in insiders
                 if not r.get("baseline") and (r["code"], r["rcept_dt"]) not in bulk]
+    _show_fake_progress("임원·주요주주 소유상황 정리 중...", len(insiders))
+    config.console.print("[bold]▸ 임원 · 주요주주 소유상황 보고[/bold]")
     if not insiders:
         config.console.print("  [dim]해당 기간 보고가 없습니다.[/dim]\n")
         return
@@ -507,6 +524,7 @@ def _render_insiders(insiders, limit=30, bulk=None):
 
 def _render_majors(majors, limit=20):
     """대량보유(5%) 상황 보고 상세 (최신순)."""
+    _show_fake_progress("대량보유 상황 정리 중...", len(majors))
     config.console.print("[bold]▸ 대량보유(5%) 상황 보고[/bold]")
     if not majors:
         config.console.print("  [dim]해당 기간 보고가 없습니다.[/dim]\n")
