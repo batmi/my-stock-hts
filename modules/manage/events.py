@@ -466,7 +466,11 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
         if not d:
             continue
         gap = (d - today).days
-        if gap not in lead_days:
+        is_alert = (gap in lead_days)
+        if not is_alert and today == _prev_trading_day(d):
+            is_alert = True
+            
+        if not is_alert:
             continue
         key = _alert_key("econ", ev["date"], ev["name"], gap)
         if db_manager.db.is_disclosure_notified(key):
@@ -483,7 +487,12 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
             events = []
         for e in events:
             gap = (e["date"] - today).days
-            if gap not in lead_days:
+            is_alert = (gap in lead_days)
+            # 배당락일/실적 등 주식 일정은 달력 D-1 외에 '직전 거래일'에도 추가 알림
+            if not is_alert and today == _prev_trading_day(e["date"]):
+                is_alert = True
+                
+            if not is_alert:
                 continue
             key = _alert_key("stock", e["date"].strftime("%Y-%m-%d"), f"{e['code']}:{e['type']}", gap)
             if db_manager.db.is_disclosure_notified(key):
