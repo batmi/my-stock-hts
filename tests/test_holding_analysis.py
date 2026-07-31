@@ -590,7 +590,7 @@ def test_mfe_cell_and_ts_line():
     assert account._fmt_ts_stop(None) is None
 
 
-# ------------------------------------------------- [9]-5 수동 보유 분석
+# ------------------------------------------------- [9]-5 포지션 분석
 
 def test_highest_since_uses_only_bars_after_buy_date():
     """매수일 이전의 더 높은 고점은 TS 앵커에서 제외된다."""
@@ -822,8 +822,8 @@ def test_manual_positions_render_into_shared_tables():
     from rich.table import Table as RichTable
     titles = [c.args[0].title for c in pr.call_args_list
               if c.args and isinstance(c.args[0], RichTable)]
-    assert any("[국내] 수동 보유 분석" in t for t in titles)
-    assert any("[해외] 수동 보유 분석" in t for t in titles)
+    assert any("[국내] 포지션 분석" in t for t in titles)
+    assert any("[해외] 포지션 분석" in t for t in titles)
 
     printed = " ".join(c.args[0] for c in pr.call_args_list
                        if c.args and isinstance(c.args[0], str))

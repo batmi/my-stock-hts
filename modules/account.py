@@ -380,7 +380,7 @@ def _decorate_name(name, code, marks_ctx):
     return f"{name}[dim]{mark_str}[/dim]".strip() if mark_str else name
 
 def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황"):
-    """국내 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 수동 보유 분석이 공유)
+    """국내 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 포지션 분석이 공유)
 
     items: KIS 국내 잔고 output1 형식 (pdno/prdt_name/hldg_qty/pchs_avg_pric/prpr/...)
     반환: (table, {'pchs','eval','profit','count'}, [(종목명, 코드, 청산사유, 미관리사유)])
@@ -447,7 +447,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     return table, totals, sell_signals
 
 def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[해외] 계좌 잔고 현황"):
-    """해외 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 수동 보유 분석이 공유)
+    """해외 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 포지션 분석이 공유)
 
     items: KIS 해외 잔고 형식 (ovrs_pdno/ovrs_item_name/ovrs_cblc_qty/pchs_avg_pric/...)
     반환: (table, {'pchs','eval','profit','count'}, [(종목명, 코드, 청산사유, 미관리사유)])
@@ -615,7 +615,7 @@ def save_manual_positions(positions):
     return jsonio.save_json(MANUAL_POSITIONS_FILE, rows)
 
 def _collect_manual_position():
-    """수동 보유 분석용 포지션 정보를 입력받는다. 취소 시 None."""
+    """포지션 분석용 포지션 정보를 입력받는다. 취소 시 None."""
     from modules import auto_trade
 
     code, name, is_overseas = auto_trade._select_stock_for_rules()
@@ -762,7 +762,7 @@ def _add_manual_positions(positions, base_breadcrumb_len):
     return positions, added
 
 def manual_holding_analysis():
-    """[9]-5 수동 보유 분석 — 계좌 잔고에 없는 포지션을 직접 입력해 [9]-2와 같은 판정을 본다.
+    """[9]-5 포지션 분석 — 계좌 잔고에 없는 포지션을 직접 입력해 [9]-2와 같은 판정을 본다.
 
     타 계좌 보유분, 매수 검토 중인 시나리오, 시스템 도입 전 매수분 등 잔고 API로는
     잡히지 않는 포지션을 같은 기준(analyze_sell)으로 확인하기 위한 메뉴다.
@@ -888,7 +888,7 @@ def _analyze_manual_positions(positions):
     try:
         return auto_trade.analyze_holdings(entries, restricted_codes=restricted_codes)
     except Exception as e:
-        logger.warning(f"수동 보유 분석 실패: {e}")
+        logger.warning(f"포지션 분석 실패: {e}")
         return {}
 
 def _print_manual_positions(positions, holding_analysis):
@@ -920,7 +920,7 @@ def _print_manual_positions(positions, holding_analysis):
 
     if domestic_items:
         table, totals, signals = build_domestic_holdings_table(
-            domestic_items, holding_analysis, title="\n[국내] 수동 보유 분석")
+            domestic_items, holding_analysis, title="\n[국내] 포지션 분석")
         config.console.print(table)
 
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
@@ -932,7 +932,7 @@ def _print_manual_positions(positions, holding_analysis):
         if domestic_items:
             config.console.print()
         table, totals, signals = build_overseas_holdings_table(
-            overseas_items, holding_analysis, title="\n[해외] 수동 보유 분석")
+            overseas_items, holding_analysis, title="\n[해외] 포지션 분석")
         config.console.print(table)
 
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
@@ -2038,7 +2038,7 @@ def asset_management_menu():
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report"), ("5", "수동 보유 분석", "Manual Holding Analysis")]
+        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report"), ("5", "포지션 분석", "Position Analysis")]
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() in ['b', 'q']: return False
@@ -2049,7 +2049,7 @@ def asset_management_menu():
             continue
         
         last_choice = choice
-        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가", "5": "수동 보유 분석"}
+        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가", "5": "포지션 분석"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
