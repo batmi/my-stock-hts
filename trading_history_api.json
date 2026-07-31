@@ -1,0 +1,308 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Universal Trading History API (Push & Pull Supported)",
+    "description": "시스템 트레이딩 봇(HTS)과 원격 웹 서버 간의 매매 기록 송수신을 위한 범용 REST API 설계입니다.\n이 API 규격은 환경에 따라 두 가지 방식으로 배포 및 활용될 수 있습니다.\n\n1. **Push 방식**: 원격 웹 서버에 API를 구동합니다. HTS는 매매 체결 시 `POST` 요청을 통해 데이터를 원격 서버로 밀어넣습니다(Push). 웹 화면은 원격 서버의 `GET` API를 호출합니다.\n2. **Pull 방식**: HTS 프로그램 내부에 API 서버를 구동합니다. 원격 웹 서버나 프론트엔드가 HTS의 `GET` API를 호출하여 실시간으로 데이터를 가져갑니다(Pull).",
+    "version": "1.1.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "API 서버 주소 (HTS 로컬망 또는 원격 서버)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Trading History",
+      "description": "매매 히스토리 기록 및 실시간 조회 API"
+    },
+    {
+      "name": "Dashboard",
+      "description": "대시보드 시각화용 요약 통계 API"
+    },
+    {
+      "name": "System Status",
+      "description": "HTS 시스템 상태 및 연결 확인 API"
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": ["System Status"],
+        "summary": "서버/HTS 상태 확인",
+        "description": "API 서버(또는 HTS)가 정상적으로 구동되어 응답 가능한 상태인지 확인합니다. Pull 방식에서 원격 서버가 HTS의 온라인 여부를 체크할 때 유용합니다.",
+        "responses": {
+          "200": {
+            "description": "정상 작동 중",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "timestamp": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trades": {
+      "post": {
+        "tags": ["Trading History"],
+        "summary": "[Push 전용] 매매 기록 전송/저장",
+        "description": "HTS가 매매 체결 직후 해당 내역을 원격 웹 서버로 전송하여 데이터베이스에 저장할 때 사용합니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradeRecordInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "저장 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "잘못된 요청 (파라미터 누락 또는 형식 오류)"
+          }
+        }
+      },
+      "get": {
+        "tags": ["Trading History"],
+        "summary": "[Pull / Web 공용] 매매 기록 목록 조회",
+        "description": "데이터베이스(또는 HTS의 메모리)에서 매매 히스토리 목록을 조회합니다. Pull 방식일 경우 원격 서버가 HTS로 요청하며, Push 방식일 경우 웹 브라우저가 원격 서버로 요청합니다.",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "description": "종목 코드 필터",
+            "required": false,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "side",
+            "in": "query",
+            "description": "매수(BUY) / 매도(SELL) 필터",
+            "required": false,
+            "schema": { "type": "string", "enum": ["BUY", "SELL"] }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "description": "조회 시작일 (YYYY-MM-DD)",
+            "required": false,
+            "schema": { "type": "string", "format": "date" }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "description": "조회 종료일 (YYYY-MM-DD)",
+            "required": false,
+            "schema": { "type": "string", "format": "date" }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "페이지 번호",
+            "required": false,
+            "schema": { "type": "integer", "default": 1 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "페이지당 조회 건수",
+            "required": false,
+            "schema": { "type": "integer", "default": 50 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalCount": {
+                      "type": "integer",
+                      "description": "전체 레코드 수"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TradeRecord"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trades/summary": {
+      "get": {
+        "tags": ["Dashboard"],
+        "summary": "[Pull / Web 공용] 매매 요약 통계 조회",
+        "description": "대시보 상단에 표시할 총 수익, 승률, 누적 거래 횟수 등의 통계를 제공합니다.",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "통계 기간 (일, 주, 월, 전체)",
+            "required": false,
+            "schema": { "type": "string", "enum": ["day", "week", "month", "all"], "default": "all" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TradeRecordInput": {
+        "type": "object",
+        "required": ["symbol", "name", "side", "price", "volume", "executedAt"],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "종목 코드 (stock-memo: stockCode)"
+          },
+          "name": {
+            "type": "string",
+            "description": "종목 명 (stock-memo: stockName)"
+          },
+          "side": {
+            "type": "string",
+            "enum": ["BUY", "SELL"],
+            "description": "매매 구분 (매수/매도, stock-memo: tradeType)"
+          },
+          "price": {
+            "type": "number",
+            "description": "체결 가격 (stock-memo: price)"
+          },
+          "volume": {
+            "type": "number",
+            "description": "체결 수량 (stock-memo: quantity)"
+          },
+          "currency": {
+            "type": "string",
+            "default": "KRW",
+            "description": "통화 (KRW, USD)"
+          },
+          "executedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "체결 일시 (ISO 8601, stock-memo: rawDate)"
+          },
+          "profit": {
+            "type": "number",
+            "description": "실현 손익금"
+          },
+          "profitRate": {
+            "type": "number",
+            "description": "수익률 (%)"
+          },
+          "memo": {
+            "type": "string",
+            "description": "해당 매매에 대한 시스템 봇의 판단 근거 등 메모 (stock-memo: thoughts)"
+          },
+          "brokerAccount": {
+            "type": "string",
+            "description": "증권사 명 (예: 키움증권, 한국투자증권 등 - stock-memo: brokerAccount)"
+          },
+          "subAccount": {
+            "type": "string",
+            "description": "서브 계좌번호 또는 구분자 (예: 01, 02 - stock-memo: subAccount)"
+          },
+          "accountName": {
+            "type": "string",
+            "description": "계좌 별칭 (예: 자동매매 봇 계좌 - stock-memo: accountName)"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "매매 기록에 부여할 태그 (예: [\"시스템트레이딩\", \"돌파매매\"] - stock-memo: tags)"
+          }
+        }
+      },
+      "TradeRecord": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TradeRecordInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "데이터 고유 ID"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "조회 응답 생성 일시"
+              }
+            }
+          }
+        ]
+      },
+      "TradeSummary": {
+        "type": "object",
+        "properties": {
+          "totalTrades": {
+            "type": "integer",
+            "description": "총 거래 횟수"
+          },
+          "winTrades": {
+            "type": "integer",
+            "description": "수익 거래 횟수"
+          },
+          "lossTrades": {
+            "type": "integer",
+            "description": "손실 거래 횟수"
+          },
+          "winRate": {
+            "type": "number",
+            "description": "승률 (%)"
+          },
+          "totalProfit": {
+            "type": "number",
+            "description": "총 누적 수익금"
+          },
+          "averageProfitPerTrade": {
+            "type": "number",
+            "description": "건당 평균 수익금"
+          }
+        }
+      }
+    }
+  }
+}
