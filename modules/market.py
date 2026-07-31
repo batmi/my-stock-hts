@@ -72,6 +72,77 @@ def _k200_night_session(now=None):
     h = (now or datetime.now()).hour
     return h >= 18 or h < 8
 
+def is_market_open_for_index(name):
+    """현재 시각 기준으로 해당 지수의 실시간 거래가 진행 중인지 판별한다."""
+    if name in ["비트코인", "이더리움", "솔라나", "리플"]:
+        return True
+    if name == "HY OAS (신용위험)":
+        return False
+        
+    kst_now = datetime.now()
+    h = kst_now.hour
+    m = kst_now.minute
+    t = h * 100 + m
+    wd = kst_now.weekday()
+    
+    if name == "코스피200선물":
+        if api.is_holiday_today(): 
+            return False
+        if 845 <= t <= 1545: return True
+        if t >= 1800 or t <= 500: return True
+        return False
+
+    if name in ["코스피", "코스닥", "코스피200", "코스닥150", "V코스피200"]:
+        if api.is_holiday_today(): 
+            return False
+        if 900 <= t <= 1530: return True
+        return False
+
+    us_regular = [
+        "나스닥", "S&P500", "다우존스", "러셀2000",
+        "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)",
+        "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)",
+        "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
+    ]
+    if name in us_regular:
+        if api.is_us_holiday_today():
+            return False
+        et_now = api.now_us_eastern()
+        if et_now.weekday() < 5:
+            et_t = et_now.hour * 100 + et_now.minute
+            if 930 <= et_t < 1600: return True
+        return False
+
+    us_futures = [
+        "나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물",
+        "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀",
+        "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리",
+        "달러인덱스", "달러환율"
+    ]
+    if name in us_futures:
+        return not _us_futures_closed_now()
+
+    if name == "Japan - 닛케이":
+        if wd < 5 and 900 <= t <= 1500: return True
+        return False
+    if name == "Taiwan - 대만가권":
+        if wd < 5 and 1000 <= t <= 1430: return True
+        return False
+    if name == "Hong Kong - 항셍":
+        if wd < 5 and 1030 <= t <= 1700: return True
+        return False
+    if name == "China - 상해종합":
+        if wd < 5 and 1030 <= t <= 1600: return True
+        return False
+    
+    eu_markets = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
+    if name in eu_markets:
+        if wd < 5:
+            if t >= 1600 or t <= 130: return True
+        return False
+        
+    return False
+
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
     # 1. 국내 지수
@@ -823,6 +894,12 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if is_proxy_yield:
             display_name += " [dim](F)[/dim]"
 
+        if is_market_open_for_index(name):
+            display_name += "[dim]*[/dim]"
+
+
+
+
         return {
             'status': 'success',
             'row_data': [display_name, curr_str, change_str, high_52_str, fmt_val(ema5, ema5_color), fmt_val(ema20, ema20_color), fmt_val(ema60, ema60_color), fmt_val(ema120, ema120_color), trend_str, adx_str, rsi_str, cci_str, obv_disp],
@@ -1138,6 +1215,8 @@ def _show_market_indices_core(target_indices=None):
         config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
     
     # [하단 경고 출력]
+    config.console.print(" [dim]※ ( [/dim]*[dim] ) 현재 장이 열려 실시간으로 움직이는 지수[/dim]")
+    
     if patched_tickers:
         targets = ", ".join(patched_tickers)
         config.console.print(f"[dim][yellow] 알림: {targets} 등 일부 지수의 전일 일봉 데이터가 지연되어 분봉 데이터를 기준으로 등락폭을 계산했습니다.[/yellow][/dim]")
