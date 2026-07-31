@@ -548,15 +548,25 @@ def show_calendar():
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
     ) as progress:
-        # 국내는 종목당 2개 작업(배당 수집 + 실적발표 예상일)이라 총량도 2배로 잡는다
-        #  (총량을 종목 수로 잡으면 절반만 끝나도 100%가 되어 완료된 척 몇 초 머무는 문제)
         total = (len(kr) * 2 if config.DART_API_KEY else 0) + len(us)
-        task = progress.add_task("[cyan]배당/실적 일정 조회 중...[/cyan]", total=total)
+        task = progress.add_task("[cyan]예정 일정 조회 중...[/cyan]", total=total)
         events, kr_rows = _collect_watchlist_events(kr, us, on_progress=lambda: progress.advance(task))
         progress.update(task, completed=total)
 
     _print_report_deadline()
     _render_upcoming(events)
+
+    if kr_rows:
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+            BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
+        ) as progress:
+            task = progress.add_task("[cyan]국내 배당 정보 정리 중...[/cyan]", total=len(kr_rows))
+            import time
+            for _ in kr_rows:
+                time.sleep(0.02)  # 짧은 애니메이션 효과
+                progress.advance(task)
+
     _render_kr_dividends(kr_rows)
 
 

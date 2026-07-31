@@ -20,6 +20,7 @@ from datetime import datetime, date, timedelta
 import requests
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 import api
 import config
@@ -220,7 +221,7 @@ def _load_seed(start, end):
     return out
 
 
-def _collect(start, end):
+def _collect(start, end, on_progress=None):
     """모든 소스를 합쳐 날짜순 정렬 → (이벤트, 전 소스 성공 여부).
 
     같은 날 같은 이름은 중복 제거한다.
@@ -234,12 +235,16 @@ def _collect(start, end):
         except Exception as e:
             logger.warning(f"[econ] {fn.__name__} 실패: {e}")
             complete = False
+        if on_progress:
+            on_progress()
     for fn in (_option_expiry, _load_seed):        # 로컬 소스 (계산·파일이라 실패할 일이 없다)
         try:
             events.extend(fn(start, end))
         except Exception as e:
             logger.warning(f"[econ] {fn.__name__} 실패: {e}")
             complete = False
+        if on_progress:
+            on_progress()
 
     seen, uniq = set(), []
     for ev in sorted(events, key=lambda e: (e["date"], e["weight"], e["name"])):
@@ -250,7 +255,7 @@ def _collect(start, end):
     return uniq, complete
 
 
-def get_events(days=60):
+def get_events(days=60, on_progress=None):
     """향후 `days`일간의 경제 이벤트와 수집 상태.
 
     호출할 때마다 실제로 수집한다. 발표 일정은 몇 주에 한 번 바뀌는 데이터라
@@ -268,7 +273,7 @@ def get_events(days=60):
     today = datetime.now().date()
     end = today + timedelta(days=days)
 
-    events, complete = _collect(today, end)
+    events, complete = _collect(today, end, on_progress)
     stale_since = None
     if events:
         jsonio.save_json(CACHE_FILE, {"fetched": today.strftime("%Y-%m-%d"),
@@ -334,7 +339,13 @@ def render(days=45):
         config.console.print("  [dim yellow]※ FRED API 키가 없어 미국 지표(CPI·고용보고서 등)는 제외됩니다. "
                              "(환경변수 FRED_API_KEY — https://fredaccount.stlouisfed.org/apikeys 무료 발급)[/dim yellow]")
 
-    events, status = get_events(days=days)
+    with Progress(
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+        BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
+    ) as progress:
+        task = progress.add_task("[cyan]경제 이벤트 일정 조회 중...[/cyan]", total=4)
+        events, status = get_events(days=days, on_progress=lambda: progress.advance(task))
+        progress.update(task, completed=4)
 
     # 수집이 실패했는데 조용히 옛 일정을 보여주면 그게 언제 기준인지 알 길이 없다 —
     #  FOMC가 이미 지나갔는지 여부까지 걸린 문제라 반드시 밝힌다.
