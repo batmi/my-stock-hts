@@ -429,6 +429,31 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         ent["fail"] = now
         return cached
 
+def get_fred_data(symbol, n_bars=300):
+    """FRED 일봉을 tvDatafeed로 조회한다."""
+    tv = _get_tvdatafeed()
+    if tv is None:
+        return None
+    try:
+        from tvDatafeed import Interval
+        with _TVDATAFEED_LOCK:
+            df = tv.get_hist(symbol=symbol, exchange="FRED",
+                             interval=Interval.in_daily, n_bars=n_bars)
+        if df is None or df.empty:
+            return None
+            
+        out = df.reset_index().rename(columns={'datetime': 'date'})
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col not in out.columns:
+                out[col] = 0.0
+        out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+        out = out.sort_values('date', ascending=True).reset_index(drop=True)
+        out.attrs['source'] = 'TVDATAFEED'
+        return out
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] FRED:{symbol} 조회 오류: {e}")
+        return None
+
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
 #  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을
 #  막기 위해 일정 시간 재조회를 건너뛴다. (성공 결과는 api._get_cached_chart가 6시간/디스크 캐싱)

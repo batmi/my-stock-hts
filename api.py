@@ -829,6 +829,7 @@ YF_TO_TV_EXACT = {
     "NG=F": "NYMEX:NG1!",          # 천연가스
     "ZW=F": "CBOT:ZW1!",           # 밀
     "^VIX": "CBOE:VIX",            # 변동성 지수
+    "^HYOAS": "FRED:BAMLH0A0HYM2", # 하이일드 OAS 스프레드
     "BTC-USD": "CRYPTO:BTCUSD",    # 비트코인
     "ETH-USD": "CRYPTO:ETHUSD",    # 이더리움
     "^TNX": "TVC:US10Y",           # 미국채 10년물

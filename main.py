@@ -390,6 +390,12 @@ def show_help():
     table.add_row("", "지수 ≥ 40", "[magenta]보라색[/]", "시스템 위기 (블랙스완/투매)")
     table.add_section()
 
+    table.add_row("HY OAS 지수명", "지수 < 4.0", "[green]초록색[/]", "Risk-On: 안정 (평화로운 시기, 주식 비중 유지)")
+    table.add_row("(신용위험/스프레드)", "4.0 ≤ 지수 < 5.0", "[orange3]주황색[/]", "스프레드 확대 조짐 (주의 구간)")
+    table.add_row("", "5.0 ≤ 지수 < 8.0", "[red]빨간색[/]", "Warning: 경계 (부도위험 반영 시작, 레버리지 축소)")
+    table.add_row("", "지수 ≥ 8.0", "[magenta]보라색[/]", "Risk-Off: 위기 (침체 본궤도 진입, 폭락장 우려)")
+    table.add_section()
+
     table.add_row("등락폭/등락률 값", "상승 (> 0)", "[red]빨간색[/]", "전일 대비 상승")
     table.add_row("", "하락 (< 0)", "[blue]파란색[/]", "전일 대비 하락")
     table.add_row("", "보합 (== 0)", "[white]흰색[/]", "전일 대비 보합")

@@ -85,7 +85,7 @@ ALL_INDICES = [
     # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
     # 3. 섹터 및 지표
-    ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
+    ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"), ("HY OAS (신용위험)", "^HYOAS"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
     #  미국채 2년물은 야후에 현물 금리 지수 티커(^FVX류)가 없고 CBOT 금리선물(2YY=F)은 유동성
@@ -325,6 +325,23 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 logger.debug(f"{name} 현물(TV) 조회 실패: {e}")
             if name == "미국채 2년물 금리" and not is_treasury_spot:
                 return {'status': 'failed', 'name': name, 'src': 'TradingView'}
+
+        if name == "HY OAS (신용위험)":
+            try:
+                tv_df = analysis.get_fred_data("BAMLH0A0HYM2")
+                if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
+                    df_daily = tv_df.copy()
+                    df_daily['date'] = pd.to_datetime(df_daily['date'])
+                    df_daily.set_index('date', inplace=True)
+                    current = float(df_daily['close'].iloc[-1])
+                    prev = float(df_daily['close'].iloc[-2])
+                    chart_calc_price = current
+                    hi_max = float(df_daily['high'].tail(250).max() or 0)
+                    high_52 = hi_max if hi_max > 0 else float(df_daily['close'].tail(250).max())
+                    use_fast_info = True
+                    is_treasury_spot = True  # 동일한 플래그로 yfinance 폴백 생략
+            except Exception as e:
+                logger.debug(f"HY OAS 조회 실패: {e}")
 
         if not is_domestic_index and not is_treasury_spot:
             try:
@@ -747,6 +764,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 20 <= current < 30: display_name = f"[orange3]{name}[/]"
             elif 30 <= current < 40: display_name = f"[red]{name}[/]"
             elif current >= 40: display_name = f"[magenta]{name}[/]"
+        elif name == "HY OAS (신용위험)":
+            if current >= 8.0: display_name = f"[magenta]{name}[/]"
+            elif 5.0 <= current < 8.0: display_name = f"[red]{name}[/]"
+            elif 4.0 <= current < 5.0: display_name = f"[orange3]{name}[/]"
+            elif current < 4.0: display_name = f"[green]{name}[/]"
         elif name == "달러인덱스":
             if current >= 115: display_name = f"[magenta]{name}[/]"
             elif 110 <= current < 115: display_name = f"[red]{name}[/]"
