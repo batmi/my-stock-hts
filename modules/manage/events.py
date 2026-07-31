@@ -108,8 +108,9 @@ def _kr_dividend_count(div_series, today):
     return sum(1 for d in _yf_ex_dates(div_series) if d >= cutoff)
 
 
-def _project_next_ex_date(div_series, today):
-    """과거 배당락일 패턴을 1년 미뤄 '오늘 이후' 가장 가까운 실제 패턴 기반 배당락일 추정."""
+def _project_next_ex_date(div_series, today, last_confirmed_rec=None):
+    """과거 배당락일 패턴을 1년 미뤄 '오늘 이후' 가장 가까운 실제 패턴 기반 배당락일 추정.
+    단, 이미 확정 공시된 최근 기준일(last_confirmed_rec)과 비슷한 시기(예: 45일 이내)라면 해당 사이클은 지나간 것으로 간주하고 제외한다."""
     cands = []
     for d in _yf_ex_dates(div_series):
         if d < today - timedelta(days=400):
@@ -120,6 +121,8 @@ def _project_next_ex_date(div_series, today):
             nd = date(d.year + 1, d.month, 28)
         while not _is_kr_trading_day(nd):  # 휴장일이면 직전 거래일로
             nd -= timedelta(days=1)
+        if last_confirmed_rec and abs((nd - last_confirmed_rec).days) < 45:
+            continue
         cands.append(nd)
     fut = sorted(c for c in cands if c >= today)
     return fut[0] if fut else None
@@ -167,30 +170,33 @@ def _collect_kr(code, name):
     count = _kr_dividend_count(div, today)
     months, freq_label = _kr_dividend_plan(count, acc)
 
-    # 1) 실제 과거 배당락일 패턴으로 정밀 추정 → 2) 실패 시 결산월/주기 일반 규칙 폴백
-    ex_date = _project_next_ex_date(div, today)
-    exact = ex_date is not None
-    if ex_date is None:
-        try:
-            ex_date = _next_kr_ex_date(months, today)
-        except Exception:
-            ex_date = None
-
-    # 3) [확정 대체] 최근 '현금ㆍ현물배당결정' 공시가 있으면 배당기준일에서 확정 배당락일 산출
-    #    (배당락일 = 기준일의 직전 거래일). 기준일이 미래인 결정만 유효 — 과거 결정은 추정 유지.
+    # 1) DART 공시로 최근 확정된 '현금ㆍ현물배당결정' 내역 확인
     confirmed = False
     decl_dps = None
+    last_confirmed_rec = None
     try:
         dec = api.get_dart_dividend_decision(code, days=200)
         if dec and dec.get("record_date"):
-            rec = datetime.strptime(dec["record_date"], "%Y%m%d").date()
-            if rec >= today:
-                ex_date = _prev_trading_day(rec)
-                exact = True
-                confirmed = True
-                decl_dps = dec.get("dps")
+            last_confirmed_rec = datetime.strptime(dec["record_date"], "%Y%m%d").date()
     except Exception:
         pass
+
+    # 2) 미래의 확정 기준일이 있다면 추정 대신 확정값으로 바로 사용
+    if last_confirmed_rec and last_confirmed_rec >= today:
+        ex_date = _prev_trading_day(last_confirmed_rec)
+        exact = True
+        confirmed = True
+        decl_dps = dec.get("dps")
+    else:
+        # 3) 미래 확정 기준일이 없으면 과거 배당락일 패턴으로 정밀 추정 (이미 확정공시된 과거 사이클은 제외)
+        ex_date = _project_next_ex_date(div, today, last_confirmed_rec=last_confirmed_rec)
+        exact = ex_date is not None
+        # 4) 패턴 실패 시 결산월/주기 일반 규칙 폴백
+        if ex_date is None:
+            try:
+                ex_date = _next_kr_ex_date(months, today)
+            except Exception:
+                ex_date = None
 
     return {
         "code": code, "name": name, "overseas": False,
