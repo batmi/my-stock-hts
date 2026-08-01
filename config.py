@@ -1202,6 +1202,12 @@ def setup_logging():
     #   FILE_DEBUG_LEVEL=DEBUG 로 더 자세히 보려는 경우는 그 설정을 존중한다.)
     logging.getLogger("modules.journal_sync").setLevel(min(numeric_level, logging.INFO))
 
+    # [추가] 시스템 시작 표시는 FILE_DEBUG_LEVEL 과 무관하게 항상 남긴다.
+    #  로그 파일은 하루 단위로만 나뉘어 한 파일에 여러 번의 실행이 섞인다. 어디서부터가
+    #  이번 실행인지 가르는 기준선이 없으면 사후 추적이 사실상 불가능하다.
+    #  (기본값 WARNING 에서는 이 한 줄마저 통째로 사라진다)
+    logging.getLogger(STARTUP_LOGGER_NAME).setLevel(min(numeric_level, logging.INFO))
+
     # [추가] urllib3 커넥션 재시도 WARNING 억제.
     #  KIS 서버가 idle keep-alive 연결을 먼저 끊어(RemoteDisconnected) 발생하는
     #  "Retrying (Retry(total=...)) after connection broken by ..." 경고는 어댑터가
@@ -1246,6 +1252,22 @@ def setup_logging():
     file_handler.addFilter(_DemoteExpectedLibErrors())
         
     logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
+
+
+# [추가] 시스템 시작을 알리는 한 줄 로그 (파일 로그 레벨과 무관하게 항상 INFO 로 기록)
+STARTUP_LOGGER_NAME = "startup"
+
+
+def log_system_start():
+    """프로그램 구동 시작을 파일 로그에 한 줄로 남긴다.
+
+    setup_logging() 직후에 호출한다. 전용 로거를 쓰는 이유는 FILE_DEBUG_LEVEL 이
+    기본값(WARNING)이면 루트 로거의 INFO 가 막혀 이 한 줄까지 사라지기 때문이다.
+    """
+    level_name = settings.FILE_DEBUG_LEVEL.upper()
+    logging.getLogger(STARTUP_LOGGER_NAME).info(
+        f"=== MyStock HTS 시스템 시작 "
+        f"(PID {os.getpid()}, 파일 로그 레벨: {level_name}) ===")
 
 # [추가] 시스템 트레이딩 전용 로거 설정 함수
 def get_autotrade_logger():

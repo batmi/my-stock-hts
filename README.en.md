@@ -660,6 +660,32 @@ The server derives the **exchange-local trading day** from those two. A fill at 
 Positions held before the integration started have no buy record on the server, so their first sell raises a "no holding record" warning.
 Register the opening balance first via `POST /api/v1/positions/opening` to avoid it.
 
+### Verification tool
+
+To confirm the **web server actually receives** what you send, run the mock-account E2E verifier.
+Unit tests mock out HTTP, so they can never prove the server got the data — this tool closes that last gap.
+
+```sh
+python tools/journal_sync_e2e.py             # send, then verify receipt (records kept on the server)
+python tools/journal_sync_e2e.py --cleanup   # verify, then delete the records from the server
+python tools/journal_sync_e2e.py --count 8   # number of fills to generate (default 4)
+```
+
+It generates synthetic fills and pushes them through the **exact production code path** —
+`insert_trade → outbox queue → batch send → read back → field-by-field comparison`.
+Buys and sells are paired on the same symbol so realized P&L and the holdings check are exercised too,
+and one overseas symbol verifies exchange-local trading-day attribution.
+
+Safeguards:
+* Uses a **temporary DB**, so no fake fills land in the production DB (`db/trade_history.db`).
+* Everything is sent with `isSimulated=True`, so it never mixes into real statistics or the portfolio.
+* Sends `source=my-stock-hts-e2e`, keeping it distinct from real bot records and leaving the bot's last-sync checkpoint untouched.
+* The menu toggle is flipped in memory only, so `dynamic_config.json` is never modified.
+
+> Repeated runs without `--cleanup` accumulate verification records on the server, skewing the holdings
+> for those symbols so that later sells get flagged as "needs review". The tool reports the leftover
+> count — run with `--cleanup` when you see it.
+
 ## 14. License
 
 This project is licensed under the Apache License 2.0.
