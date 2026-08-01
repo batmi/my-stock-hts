@@ -338,7 +338,7 @@ def _patch_transport(monkeypatch, response):
     monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
     calls = []
 
-    def fake_request(method, path, *, json_body=None, params=None, retry_on_401=True):
+    def fake_request(method, path, *, json_body=None, **kwargs):
         calls.append((method, path, json_body))
         return response
 
@@ -416,3 +416,91 @@ def test_missing_result_item_is_retried(db, monkeypatch):
 
     assert journal_sync.flush_once() == (0, 1)
     assert journal_sync.pending_count() == 1
+
+
+# ── 상태 Ping / 종료 통지 ─────────────────────────────────────────────
+
+def test_ping_interval_matches_three_strike_detection():
+    """웹 대시보드가 3회 누락으로 장애를 판정하므로 주기가 늘어나면 감지도 늦어진다."""
+    assert journal_sync._PING_INTERVAL_SEC == 10
+    assert journal_sync._TICK_INTERVAL_SEC == journal_sync._PING_INTERVAL_SEC
+
+
+def test_ping_sends_status_and_resets_fail_streak(db, monkeypatch):
+    calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+    journal_sync._ping_fail_streak = 5
+
+    assert journal_sync.ping('running') is True
+    assert calls[0][0] == 'POST' and calls[0][1] == '/api/v1/bot/status'
+    assert calls[0][2]['status'] == 'running'
+    assert journal_sync._ping_fail_streak == 0
+
+
+def test_ping_failure_accumulates_streak(db, monkeypatch):
+    """3회 연속 실패가 곧 웹 표시등의 '통신단절' 판정 시점이다."""
+    _patch_transport(monkeypatch, None)
+    journal_sync._ping_fail_streak = 0
+
+    for _ in range(3):
+        assert journal_sync.ping('running') is False
+    assert journal_sync._ping_fail_streak == 3
+
+
+def test_notify_shutdown_sends_stopped(db, monkeypatch):
+    """HTS 종료 시 stopped 를 보내야 웹 표시등이 즉시 '정지됨'으로 바뀐다."""
+    calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+
+    assert journal_sync.notify_shutdown() is True
+    assert calls[-1][1] == '/api/v1/bot/status'
+    assert calls[-1][2]['status'] == 'stopped'
+
+
+def test_notify_shutdown_works_while_toggle_already_off(db, monkeypatch):
+    """메뉴로 연동을 끄면 토글이 먼저 False 가 된다 — 그래도 종료 통지는 나가야 한다."""
+    calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+
+    assert journal_sync.notify_shutdown() is True
+    assert calls[-1][2]['status'] == 'stopped'
+
+
+def test_notify_shutdown_without_credentials_is_noop(monkeypatch):
+    monkeypatch.setattr(config, 'JOURNAL_API_URL', '', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_API_KEY', '', raising=False)
+    assert journal_sync.notify_shutdown() is False
+
+
+def test_notify_shutdown_never_raises_on_transport_error(db, monkeypatch):
+    """종료 경로에서 예외가 올라오면 프로그램 종료 절차 자체가 깨진다."""
+    def boom(*a, **kw):
+        raise RuntimeError('network down')
+    monkeypatch.setattr(journal_sync, '_request', boom)
+
+    assert journal_sync.notify_shutdown() is False
+
+
+def test_worker_stop_notifies_stopped(db, monkeypatch):
+    """워커를 멈출 때 종료 통지가 함께 나가는지 (main.py 종료 경로의 계약)."""
+    sent = []
+    monkeypatch.setattr(journal_sync, '_notify_shutdown',
+                        lambda status='stopped', message=None: sent.append(status))
+
+    worker = journal_sync.JournalSyncWorker()
+    worker.is_running = True
+    worker.thread = None
+    worker.stop()
+
+    assert sent == ['stopped']
+
+
+def test_worker_stop_can_skip_notification(db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(journal_sync, '_notify_shutdown',
+                        lambda status='stopped', message=None: sent.append(status))
+
+    worker = journal_sync.JournalSyncWorker()
+    worker.is_running = True
+    worker.thread = None
+    worker.stop(notify=None)
+
+    assert sent == []

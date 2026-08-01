@@ -885,6 +885,36 @@ def flush_input():
         except Exception:
             pass
 
+def _install_journal_sigterm_handler():
+    """[추가] kill / systemd stop 등 SIGTERM 종료에도 매매일지 표시등을 내린다.
+
+    메뉴에서 종료하면 finally 블록이 journal_sync.stop() 을 부르지만, 외부에서
+    프로세스를 내리면 그 경로를 타지 않아 웹 대시보드가 계속 '정상 가동중'으로
+    남는다. 통지만 끼워 넣고 기존 종료 동작(기본 처리)은 그대로 이어가도록
+    핸들러를 원복한 뒤 시그널을 다시 올린다.
+
+    SIGINT 는 건드리지 않는다 — 메인 메뉴가 KeyboardInterrupt 로 종료 확인을
+    받는 기존 흐름을 깨뜨리기 때문이다.
+    """
+    def _on_sigterm(signum, frame):
+        try:
+            from modules import journal_sync
+            journal_sync.notify_shutdown('stopped', message=f'signal {signum}')
+        except Exception:
+            pass
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for _name in ('SIGTERM', 'SIGHUP'):
+        sig = getattr(signal, _name, None)
+        if sig is None:
+            continue  # Windows 에는 SIGHUP 이 없다
+        try:
+            signal.signal(sig, _on_sigterm)
+        except (ValueError, OSError):
+            pass  # 메인 스레드가 아니거나 지원되지 않는 환경
+
+
 def main():
     # [수정] 커맨드 라인 인자 파싱 설정 개선 (상세 도움말 추가)
     parser = argparse.ArgumentParser(
@@ -1006,6 +1036,7 @@ def main():
         try:
             from modules import journal_sync
             journal_sync.start()
+            _install_journal_sigterm_handler()
         except Exception as _e:
             logging.warning(f"[Journal] 매매일지 연동 시작 실패(무시): {_e}")
         api.prefetch_watchlists_async() # [수정] 관심종목 예열도 초기화 이후로 지연
@@ -1346,6 +1377,14 @@ def main():
             auto_trade.ConclusionMonitor().stop()
             telegram_cmd.stop()
             ReservedOrderMonitor().stop() # [추가] 예약 주문 모니터링 중지
+            # [추가] 매매일지 웹서버에 '정지됨'을 통지한 뒤 워커 종료.
+            #  이 신호가 없으면 웹 대시보드 표시등이 Ping 3회 누락(약 35초) 전까지
+            #  '정상 가동중'으로 남아, 종료한 뒤에도 가동 중인 것처럼 보인다.
+            try:
+                from modules import journal_sync
+                journal_sync.stop()
+            except Exception as _e:
+                logging.warning(f"[Journal] 종료 통지 실패(무시): {_e}")
             time.sleep(0.5)
             config.console.print("[2/4] 백그라운드 서비스(텔레그램/감시) 종료 [bold green][완료][/]")
             

@@ -43,11 +43,20 @@ _SYNCABLE_STATUS = {
     '체결(추정)': 'ESTIMATED',
 }
 
-_FLUSH_INTERVAL_SEC = 30      # 워커 순회 주기
+_FLUSH_INTERVAL_SEC = 30      # 대기열 전송 주기
 _BATCH_SIZE = 100             # 한 번에 보낼 최대 건수 (라즈베리파이 메모리 여유 고려)
 _HTTP_TIMEOUT = 8             # 초 — 짧게 잡아 워커가 오래 물리지 않게 한다
 _MAX_ATTEMPTS = 12            # 이후로는 백오프 상한(1시간)으로만 재시도
-_PING_INTERVAL_SEC = 300      # 봇 상태 Ping 주기
+
+# 봇 상태 Ping 주기. 웹 대시보드는 3회 연속 누락(+여유)되면 '통신단절'로 표시하므로,
+# 이 값을 늘리면 장애 감지가 그만큼 늦어진다. 서버 상수와 짝을 이룬다.
+_PING_INTERVAL_SEC = 10
+_PING_TIMEOUT = 4             # 초 — 10초마다 도는 하트비트가 통신 지연에 오래 물리면 안 된다
+_TICK_INTERVAL_SEC = _PING_INTERVAL_SEC   # 워커 순회 주기(Ping 주기에 맞춘다)
+# 10초 간격이라 실패 로그를 매번 남기면 로그가 이것만으로 찬다.
+# 첫 실패(= 감지 시점)와 이후 5분마다 한 번씩만 WARNING 으로 남긴다.
+_PING_WARN_EVERY = 30
+_SHUTDOWN_PING_TIMEOUT = 3    # 초 — 종료 통지가 프로그램 종료를 붙잡지 않도록 짧게
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -56,6 +65,10 @@ _PING_INTERVAL_SEC = 300      # 봇 상태 Ping 주기
 
 def _cfg(name, default=''):
     return getattr(config, name, default) or default
+
+
+def _has_credentials():
+    return bool(_cfg('JOURNAL_API_URL') and _cfg('JOURNAL_API_KEY'))
 
 
 def is_enabled():
@@ -67,7 +80,7 @@ def is_enabled():
     """
     if not getattr(config.settings, 'JOURNAL_SYNC_USE', False):
         return False
-    return bool(_cfg('JOURNAL_API_URL') and _cfg('JOURNAL_API_KEY'))
+    return _has_credentials()
 
 
 def _base_url():
@@ -338,8 +351,12 @@ class _TokenCache:
 _tokens = _TokenCache()
 
 
-def _request(method, path, *, json_body=None, params=None, retry_on_401=True):
-    """인증 헤더를 붙여 요청한다. (response 또는 None)"""
+def _request(method, path, *, json_body=None, params=None, retry_on_401=True,
+             timeout=None, quiet=False):
+    """인증 헤더를 붙여 요청한다. (response 또는 None)
+
+    quiet=True 는 호출부가 실패 로그를 직접 관리할 때 쓴다(하트비트 등).
+    """
     import requests
 
     token = _tokens.get()
@@ -350,15 +367,17 @@ def _request(method, path, *, json_body=None, params=None, retry_on_401=True):
         res = requests.request(
             method, f'{_base_url()}{path}',
             headers={'Authorization': f'Bearer {token}'},
-            json=json_body, params=params, timeout=_HTTP_TIMEOUT)
+            json=json_body, params=params, timeout=timeout or _HTTP_TIMEOUT)
     except Exception as e:
-        logger.warning(f"[Journal] {method} {path} 요청 실패: {e}")
+        if not quiet:
+            logger.warning(f"[Journal] {method} {path} 요청 실패: {e}")
         return None
 
     if res.status_code == 401 and retry_on_401:
         # 토큰 만료·키 폐기 — 한 번만 새로 받아 재시도한다.
         _tokens.invalidate()
-        return _request(method, path, json_body=json_body, params=params, retry_on_401=False)
+        return _request(method, path, json_body=json_body, params=params,
+                        retry_on_401=False, timeout=timeout, quiet=quiet)
     return res
 
 
@@ -501,23 +520,73 @@ def flush_once():
     return ok, fail
 
 
-def ping(status='running', message=None):
-    """봇 상태 Ping. 웹 대시보드의 가동 표시등을 켠다."""
-    if not is_enabled():
+_ping_fail_streak = 0
+
+
+def ping(status='running', message=None, timeout=None, force=False):
+    """봇 상태 Ping. 웹 대시보드의 가동 표시등을 켠다.
+
+    status: running(가동) / stopped(정상 종료) / error(오류)
+    force:  메뉴 토글(JOURNAL_SYNC_USE)을 무시하고 자격증명만으로 보낸다.
+            연동을 '끄는' 순간의 종료 통지가 여기에 해당한다 — 토글이 이미
+            False 로 바뀐 뒤에 stop() 이 불리므로, 검사하면 통지가 통째로
+            누락되어 웹 표시등이 계속 '정상 가동중'으로 남는다.
+    """
+    global _ping_fail_streak
+
+    if not (_has_credentials() if force else is_enabled()):
         return False
     body = {'status': status, 'isSimulated': bool(getattr(config.session, 'is_simulation', False))}
     if message:
         body['message'] = message[:500]
-    res = _request('POST', '/api/v1/bot/status', json_body=body)
+
+    res = _request('POST', '/api/v1/bot/status', json_body=body,
+                   timeout=timeout or _PING_TIMEOUT, quiet=True)
     ok = bool(res is not None and res.status_code == 200)
-    # 5분마다 도는 하트비트라 성공은 DEBUG로 둔다(INFO로 남기면 로그가 이것만으로 채워진다).
-    # 실패는 연동 단절 신호이므로 WARNING.
+
     if ok:
-        logger.debug("[Journal] 봇 상태 Ping 전송")
+        # 끊겼다가 살아난 것은 운용자가 알아야 하므로 회복만 INFO 로 남긴다.
+        if _ping_fail_streak:
+            logger.info(f"[Journal] 봇 상태 Ping 회복 (연속 실패 {_ping_fail_streak}회 후)")
+        _ping_fail_streak = 0
+        logger.debug(f"[Journal] 봇 상태 Ping 전송 (status={status})")
     else:
-        logger.warning(f"[Journal] 봇 상태 Ping 실패 "
-                       f"({res.status_code if res is not None else '응답 없음'})")
+        _ping_fail_streak += 1
+        reason = res.status_code if res is not None else '응답 없음'
+        # 10초 간격이라 매번 남기면 로그가 이것만으로 찬다 — 첫 실패와 이후 5분마다만.
+        if _ping_fail_streak == 1 or _ping_fail_streak % _PING_WARN_EVERY == 0:
+            logger.warning(f"[Journal] 봇 상태 Ping 실패 ({reason}) "
+                           f"— 연속 {_ping_fail_streak}회")
     return ok
+
+
+def _notify_shutdown(status='stopped', message=None):
+    """종료 사실을 웹서버에 한 번 알린다.
+
+    종료 경로에서 호출되므로 무슨 일이 있어도 예외를 올리지 않고, 응답이 늦어도
+    프로그램 종료를 붙잡지 않도록 타임아웃을 짧게 둔다.
+    """
+    try:
+        ok = ping(status, message=message, timeout=_SHUTDOWN_PING_TIMEOUT, force=True)
+        if ok:
+            logger.info(f"[Journal] 종료 상태 통지 완료 (status={status})")
+        else:
+            # 못 보내도 서버는 Ping 누락으로 곧 '통신단절'을 표시하므로 치명적이지 않다.
+            logger.warning("[Journal] 종료 상태 통지 실패 — 웹 표시등은 Ping 누락으로 전환됩니다.")
+        return ok
+    except Exception as e:
+        logger.debug(f"[Journal] 종료 상태 통지 중 오류(무시): {e}")
+        return False
+
+
+def notify_shutdown(status='stopped', message=None):
+    """프로그램 종료 시 호출 — 웹 대시보드 표시등을 즉시 '정지됨'으로 바꾼다.
+
+    이 통지가 없으면 Ping 이 3회 누락될 때까지 '정상 가동중'으로 남는다.
+    """
+    if not _has_credentials():
+        return False
+    return _notify_shutdown(status, message)
 
 
 def pending_count():
@@ -551,6 +620,8 @@ class JournalSyncWorker:
         self.thread = None
         self._wake = threading.Event()
         self._last_ping = 0.0
+        self._last_flush = 0.0
+        self._force_flush = False
 
     def start(self):
         if self.is_running:
@@ -569,31 +640,50 @@ class JournalSyncWorker:
         logger.info(f"[Journal] 매매일지 연동 시작 — {_base_url()} "
                     f"(source={_source()}, 대기 잔량 {pending_count()}건)")
 
-    def stop(self):
+    def stop(self, notify='stopped'):
+        """워커를 멈춘다.
+
+        notify 에 상태를 주면 종료 사실을 웹서버에 즉시 알린다. 이 신호가 없으면
+        웹 대시보드는 Ping 이 3회 누락될 때까지 '정상 가동중'으로 남아 있게 된다.
+        """
         if not self.is_running:
             return
         self.is_running = False
         self._wake.set()
         if self.thread:
             self.thread.join(timeout=3)
+
+        if notify:
+            # 워커 스레드가 멈춘 뒤에 보낸다 — 루프의 running Ping 이 이 값을 덮어쓰지 않도록.
+            _notify_shutdown(notify)
         logger.info(f"[Journal] 매매일지 연동 중지 (미전송 {pending_count()}건은 큐에 보존)")
 
     def trigger(self):
         """즉시 1회 순회를 깨운다 (체결 직후 지연 없이 반영하고 싶을 때)."""
+        self._force_flush = True
         self._wake.set()
 
     def _run_loop(self):
+        # 순회는 Ping 주기(10초)에 맞춰 돌되, 대기열 전송은 종전대로 30초마다만 한다.
+        # (하트비트를 빠르게 하려고 전송까지 10초마다 돌리면 서버 부하만 3배가 된다)
         while self.is_running:
             try:
-                flush_once()
-                if time.time() - self._last_ping > _PING_INTERVAL_SEC:
-                    if ping('running'):
-                        self._last_ping = time.time()
+                now = time.time()
+                if self._force_flush or (now - self._last_flush) >= _FLUSH_INTERVAL_SEC:
+                    self._force_flush = False
+                    flush_once()
+                    self._last_flush = time.time()
+
+                if time.time() - self._last_ping >= _PING_INTERVAL_SEC:
+                    # 실패해도 _last_ping 을 갱신한다. 갱신하지 않으면 서버가 죽어 있는 동안
+                    # 매 순회마다 재시도해 타임아웃으로 루프가 계속 물린다.
+                    self._last_ping = time.time()
+                    ping('running')
             except Exception as e:
                 # 워커가 죽으면 큐가 영영 쌓이기만 한다 — 어떤 예외도 루프를 끊지 못하게 한다.
                 logger.error(f"[Journal] 동기화 루프 오류(계속 진행): {e}")
 
-            self._wake.wait(timeout=_FLUSH_INTERVAL_SEC)
+            self._wake.wait(timeout=_TICK_INTERVAL_SEC)
             self._wake.clear()
 
 
@@ -602,12 +692,13 @@ def start():
     JournalSyncWorker().start()
 
 
-def stop():
-    """메뉴에서 연동을 끌 때 호출 — 워커 스레드를 정리한다.
+def stop(notify='stopped'):
+    """메뉴에서 연동을 끌 때 / 프로그램 종료 시 호출 — 워커 스레드를 정리한다.
 
     대기열에 쌓인 미전송 건은 지우지 않는다. 다시 켜면 그대로 이어서 전송된다.
+    종료 사실은 웹서버에 알려 대시보드 표시등을 즉시 '정지됨'으로 바꾼다.
     """
-    JournalSyncWorker().stop()
+    JournalSyncWorker().stop(notify=notify)
 
 
 def trigger():
