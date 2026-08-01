@@ -141,6 +141,11 @@ class GlobalSettings(BaseModel):
     # 미구독/끊김/비활성 시 자동으로 기존 REST 조회로 폴백한다. (토스 mode 3는 공식 미지원→REST 유지)
     USE_WEBSOCKET: bool = True
 
+    # [추가] 매매일지 웹서버 연동 사용 여부 (메뉴 0 → 5-3 에서 토글)
+    # 기본값 False. 켜더라도 JOURNAL_API_URL/JOURNAL_API_KEY 환경변수가 모두 있어야 실제로 동작한다.
+    # 끄면 체결 기록이 전송 대기열(journal_outbox)에 쌓이지도 않고 워커도 기동하지 않는다.
+    JOURNAL_SYNC_USE: bool = False
+
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
     # [추세추종 검증] 상대강도(RS) 필터 — 기본 OFF. 실증 결과 추세 초입 진입을 막는 역효과가 확인되었다.
     #   운영 유니버스 37종목×9년(2016~2026)의 실제 매수 신호 10,307건 검증:

@@ -40,6 +40,7 @@ def _save_dynamic_config():
         "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
         "CHART_CACHE_TTL_MINUTES": getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360),
         "USE_KRX_CLOSE_AFTER_HOURS": getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True),
+        "JOURNAL_SYNC_USE": getattr(config.settings, 'JOURNAL_SYNC_USE', False),
         "ENABLE_TELEGRAM": getattr(config.settings, 'ENABLE_TELEGRAM', True),
         "TELEGRAM_INSTANCE_NAME": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', "HTS"),
         "TELEGRAM_POLLING_TIMEOUT": getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10),
@@ -423,6 +424,7 @@ def view_system_config(group=None):
         row("차트 캐시 시간(분)", "일봉 데이터 메모리 캐시 유지", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360)}")
         row("실시간 WebSocket 사용", "KIS 실시간 시세 push(끄면 REST 폴링). 토스 미지원", "USE_WEBSOCKET", f"{getattr(config.settings, 'USE_WEBSOCKET', True)}")
         row("장 종료 후 KRX 종가 기준", "모든 장 마감 후 현재가를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
+        row("매매일지 웹서버 연동", "체결 내역을 원격 매매일지 서버로 전송 (JOURNAL_API_URL/KEY 환경변수 필요)", "JOURNAL_SYNC_USE", f"{getattr(config.settings, 'JOURNAL_SYNC_USE', False)}")
 
         subheader("5-4. 텔레그램 및 AI 브리핑")
         row("사용 여부", "알림 기능 활성화 여부", "ENABLE_TELEGRAM", f"{getattr(config.settings, 'ENABLE_TELEGRAM', True)}")
@@ -1356,6 +1358,41 @@ def _risk_portfolio_items():
 def modify_risk_portfolio_settings():
     return _edit_config_table("리스크 및 자산 배분 설정 (Risk & Portfolio)", _risk_portfolio_items)
 
+def _set_journal_sync_use(value):
+    """매매일지 연동 토글 — 값 반영 + 워커 기동/중지 + 미설정 환경변수 안내.
+
+    환경변수(JOURNAL_API_URL/KEY)가 없으면 켜도 동작하지 않으므로, 조용히 넘어가지 않고
+    그 자리에서 무엇이 빠졌는지 알려준다. 재시작을 기다리지 않도록 워커도 즉시 제어한다.
+    """
+    setattr(config.settings, 'JOURNAL_SYNC_USE', value)
+
+    try:
+        from modules import journal_sync
+    except Exception as e:
+        config.console.print(f"\n[red]매매일지 연동 모듈 로드 실패: {e}[/red]")
+        return
+
+    if not value:
+        journal_sync.stop()
+        config.console.print("\n[yellow]매매일지 웹서버 연동을 껐습니다. (전송 대기열 적재도 중단)[/yellow]")
+        return
+
+    missing = [name for name in ('JOURNAL_API_URL', 'JOURNAL_API_KEY')
+               if not getattr(config, name, '')]
+    if missing:
+        config.console.print(
+            f"\n[yellow]※ 환경변수 {', '.join(missing)} 가 설정되지 않아 연동이 동작하지 않습니다.[/yellow]")
+        config.console.print(
+            "[dim]  ~/.htsrc 에 export 로 추가한 뒤 `source ~/.htsrc` 하고 프로그램을 재시작하세요.[/dim]")
+        return
+
+    journal_sync.start()
+    pending = journal_sync.pending_count()
+    config.console.print(f"\n[green]매매일지 웹서버 연동을 켰습니다. ({config.JOURNAL_API_URL})[/green]")
+    if pending:
+        config.console.print(f"[dim]  미전송 대기 {pending}건은 곧 자동으로 전송됩니다.[/dim]")
+
+
 def _trading_cycle_items():
     """트레이딩 시간/주기/통신 항목 (섹션 5-1 ~ 5-3)"""
     return [
@@ -1381,6 +1418,8 @@ def _trading_cycle_items():
          "get": lambda: getattr(config.settings, 'USE_WEBSOCKET', True), "set": lambda v: setattr(config.settings, 'USE_WEBSOCKET', v)},
         {"desc": "장 종료 후 KRX 종가 기준", "help": "모든 장(NXT 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(전날 NXT 종가)가 다음 개장까지 그대로 보입니다. NXT 거래시간(08:00~09:00, 15:30~20:00)에는 설정과 무관하게 NXT 현재가를 표시합니다. ※ 지표는 이 설정과 무관하게 항상 KRX 정규장 확정 봉으로 계산하며, 주문 가격과 손절·트레일링 트리거도 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True), "set": lambda v: setattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', v)},
+        {"desc": "매매일지 웹서버 연동", "help": "체결 내역을 원격 매매일지 웹서버(stock-memo)로 자동 전송합니다. 켜려면 환경변수 JOURNAL_API_URL·JOURNAL_API_KEY 가 모두 필요하며(~/.htsrc 에 export 후 재시작), 둘 중 하나라도 없으면 켜도 동작하지 않습니다. 전송은 체결 기록과 같은 트랜잭션으로 대기열에 쌓고 백그라운드 워커가 배치로 보내므로 매매 루프가 네트워크에 지연되지 않습니다. 끄면 대기열 적재도 워커 기동도 하지 않습니다. (기본 OFF)", "name": "JOURNAL_SYNC_USE", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
+         "get": lambda: getattr(config.settings, 'JOURNAL_SYNC_USE', False), "set": _set_journal_sync_use},
     ]
 
 def modify_trading_cycle_settings():
@@ -1890,6 +1929,7 @@ def manage_custom_settings():
             "CHART_CACHE_TTL_MINUTES": "차트 캐시 시간(분)",
             "USE_WEBSOCKET": "실시간 WebSocket 사용",
             "USE_KRX_CLOSE_AFTER_HOURS": "장 종료 후 KRX 종가 기준",
+            "JOURNAL_SYNC_USE": "매매일지 웹서버 연동",
             "ENABLE_TELEGRAM": "사용 여부",
             "TELEGRAM_INSTANCE_NAME": "인스턴스 이름",
             "TELEGRAM_POLLING_TIMEOUT": "폴링 타임아웃",
@@ -2028,6 +2068,7 @@ def manage_custom_settings():
             "CHART_CACHE_TTL_MINUTES": (_CAT5, "5-3. 데이터·통신"),
             "USE_WEBSOCKET": (_CAT5, "5-3. 데이터·통신"),
             "USE_KRX_CLOSE_AFTER_HOURS": (_CAT5, "5-3. 데이터·통신"),
+            "JOURNAL_SYNC_USE": (_CAT5, "5-3. 데이터·통신"),
             "ENABLE_TELEGRAM": (_CAT5, "5-4. 텔레그램 및 AI 브리핑"),
             "TELEGRAM_INSTANCE_NAME": (_CAT5, "5-4. 텔레그램 및 AI 브리핑"),
             "TELEGRAM_POLLING_TIMEOUT": (_CAT5, "5-4. 텔레그램 및 AI 브리핑"),

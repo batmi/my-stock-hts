@@ -59,7 +59,14 @@ def _cfg(name, default=''):
 
 
 def is_enabled():
-    """URL·API 키가 모두 설정돼야 연동이 켜진다."""
+    """메뉴 0 토글이 켜져 있고, URL·API 키가 모두 설정돼야 연동이 동작한다.
+
+    설정(JOURNAL_SYNC_USE)과 자격증명(환경변수)을 분리한 이유:
+      - 자격증명은 소스·설정파일에 남기면 안 되므로 환경변수로만 받는다
+      - 사용 여부는 재시작 없이 껐다 켤 수 있어야 하므로 dynamic_config 에 둔다
+    """
+    if not getattr(config.settings, 'JOURNAL_SYNC_USE', False):
+        return False
     return bool(_cfg('JOURNAL_API_URL') and _cfg('JOURNAL_API_KEY'))
 
 
@@ -563,6 +570,14 @@ class JournalSyncWorker:
 def start():
     """앱 기동 시 호출 — 연동이 꺼져 있으면 아무 일도 하지 않는다."""
     JournalSyncWorker().start()
+
+
+def stop():
+    """메뉴에서 연동을 끌 때 호출 — 워커 스레드를 정리한다.
+
+    대기열에 쌓인 미전송 건은 지우지 않는다. 다시 켜면 그대로 이어서 전송된다.
+    """
+    JournalSyncWorker().stop()
 
 
 def trigger():

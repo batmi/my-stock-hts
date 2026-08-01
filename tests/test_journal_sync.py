@@ -24,6 +24,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'JOURNAL_API_KEY', 'skm_test', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'my-stock-hts', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_SYNC_SIMULATION', False, raising=False)
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
     monkeypatch.setattr(config.session, 'is_simulation', False)
     monkeypatch.setattr(config.session, 'cano', '12345678')
     monkeypatch.setattr(config.session, 'acnt_prdt_cd', '01')
@@ -101,6 +102,71 @@ def test_disabled_integration_queues_nothing(db, monkeypatch):
     assert _outbox(db) == []
     # 연동이 꺼져도 거래 기록 자체는 정상 저장되어야 한다.
     assert len(db.get_trades()) == 1
+
+
+def test_menu_toggle_off_queues_nothing(db, monkeypatch):
+    """환경변수가 다 있어도 메뉴 0 스위치가 꺼져 있으면 아무것도 하지 않는다."""
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    assert journal_sync.is_enabled() is False
+    _fill(db)
+    assert _outbox(db) == []
+    assert len(db.get_trades()) == 1
+
+
+def test_toggle_default_is_off():
+    """기본값은 OFF — 설정하지 않은 사용자에게 외부 전송이 켜져 있으면 안 된다."""
+    from config import GlobalSettings
+    assert GlobalSettings().JOURNAL_SYNC_USE is False
+
+
+def test_toggle_persisted_in_dynamic_config(monkeypatch):
+    """재시작 후에도 유지되도록 dynamic_config 저장 대상에 포함되어야 한다."""
+    from modules import settings as settings_module
+
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
+    saved = {}
+    monkeypatch.setattr(settings_module.jsonio, 'save_json',
+                        lambda path, data: saved.update(data) or True)
+    settings_module._save_dynamic_config()
+    assert saved['JOURNAL_SYNC_USE'] is True
+
+
+def test_toggle_appears_in_settings_menu():
+    """메뉴 0 → 5-3(데이터·통신)에서 편집할 수 있어야 한다."""
+    from modules import settings as settings_module
+
+    item = next(i for i in settings_module._trading_cycle_items()
+                if i['name'] == 'JOURNAL_SYNC_USE')
+    assert item['type'] == 'bool'
+    assert item['section'] == '5-3. 데이터·통신'
+
+
+def test_toggle_off_warns_and_stops_worker(monkeypatch):
+    """끄면 워커도 즉시 멈춰야 한다 (재시작을 기다리게 하지 않는다)."""
+    from modules import settings as settings_module
+
+    stopped = []
+    monkeypatch.setattr(journal_sync, 'stop', lambda: stopped.append(True))
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
+
+    settings_module._set_journal_sync_use(False)
+    assert config.settings.JOURNAL_SYNC_USE is False
+    assert stopped == [True]
+
+
+def test_toggle_on_without_credentials_does_not_start(monkeypatch):
+    """환경변수가 없으면 켜도 워커를 띄우지 않고 무엇이 빠졌는지 알린다."""
+    from modules import settings as settings_module
+
+    started = []
+    monkeypatch.setattr(journal_sync, 'start', lambda: started.append(True))
+    monkeypatch.setattr(config, 'JOURNAL_API_URL', '', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_API_KEY', '', raising=False)
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+
+    settings_module._set_journal_sync_use(True)
+    assert config.settings.JOURNAL_SYNC_USE is True   # 설정 자체는 저장된다
+    assert started == []                              # 그러나 워커는 뜨지 않는다
 
 
 def test_unparseable_type_is_not_queued(db):

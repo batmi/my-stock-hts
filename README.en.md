@@ -597,6 +597,16 @@ The protocol follows the [`UniversalTradingHistoryAPI.json`](UniversalTradingHis
 
 ### Configuration
 
+The integration needs both **① the on/off switch** and **② the connection credentials**.
+(Credentials must never live in a config file, so they come from environment variables only; the on/off state belongs in the menu so it can be toggled without a restart.)
+
+**① On/off switch — `Menu 0 → 5. Environment & System → 3. Data & Comm → Trading journal sync`**
+
+**Defaults to `False` (off).** Toggling takes effect immediately (the worker starts/stops) and is persisted to `json/dynamic_config.json`, so it survives restarts.
+While off, nothing is even queued and the worker never starts. (Anything already queued is kept, and resumes when you switch it back on.)
+
+**② Credentials — environment variables**
+
 ```sh
 # add to ~/.htsrc, then restart
 export JOURNAL_API_URL="https://memo.example.com"   # required
@@ -605,7 +615,8 @@ export JOURNAL_SOURCE="my-stock-hts"                # optional
 export JOURNAL_SYNC_SIMULATION="0"                  # optional, 1 also sends mock-trading fills
 ```
 
-If either the URL or the key is empty the whole integration stays off, with no effect on anything else.
+If you turn the switch on while the URL or key is missing, the menu tells you **exactly which one is missing** and the integration stays inactive.
+Either way, leaving it off has no effect on anything else.
 
 ### How it works — the Outbox pattern
 
