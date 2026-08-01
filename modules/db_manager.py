@@ -317,7 +317,9 @@ class DBManager:
             from modules import journal_sync
             journal_sync.enqueue(cursor, trade)
         except Exception as e:
-            logger.debug(f"[Journal] 전송 대기열 적재 실패(무시): {e}")
+            # 거래 기록은 그대로 저장되지만 이 체결은 일지로 나가지 않는다 —
+            # 조용히 넘기면 나중에 누락 원인을 못 찾으므로 반드시 남긴다.
+            logger.warning(f"[Journal] 전송 대기열 적재 실패 (거래 기록은 정상 저장됨): {e}")
 
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
         """거래 내역 및 스냅샷 저장"""

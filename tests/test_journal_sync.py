@@ -276,6 +276,49 @@ def test_flush_is_noop_when_disabled(db, monkeypatch):
     assert journal_sync.flush_once() == (0, 0)
 
 
+# ── 로그 레벨 ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize('file_level,expect_info,expect_debug', [
+    ('WARNING', True, False),   # 기본 설정 — 연동 로그는 그래도 남아야 한다
+    ('ERROR', True, False),
+    ('DEBUG', True, True),      # 더 자세히 보려는 설정은 존중한다
+])
+def test_journal_logs_at_info_regardless_of_file_level(
+        monkeypatch, tmp_path, file_level, expect_info, expect_debug):
+    """외부로 나가는 전송은 사후 추적이 되어야 하므로 항상 INFO 이상을 남긴다."""
+    import logging
+
+    monkeypatch.setattr(config, 'LOG_DIR', str(tmp_path))
+    monkeypatch.setattr(config.settings, 'FILE_DEBUG_LEVEL', file_level)
+    config.setup_logging()
+
+    journal_logger = logging.getLogger('modules.journal_sync')
+    assert journal_logger.isEnabledFor(logging.INFO) is expect_info
+    assert journal_logger.isEnabledFor(logging.DEBUG) is expect_debug
+
+
+def test_other_modules_keep_configured_level(monkeypatch, tmp_path):
+    """연동 로거만 낮추고 나머지는 FILE_DEBUG_LEVEL 을 그대로 따라야 한다."""
+    import logging
+
+    monkeypatch.setattr(config, 'LOG_DIR', str(tmp_path))
+    monkeypatch.setattr(config.settings, 'FILE_DEBUG_LEVEL', 'WARNING')
+    config.setup_logging()
+
+    assert logging.getLogger('modules.trading').isEnabledFor(logging.INFO) is False
+
+
+def test_queued_fill_is_logged_at_info(db, caplog):
+    """어떤 체결이 언제 큐에 들어갔는지 로그만으로 추적할 수 있어야 한다."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger='modules.journal_sync'):
+        _fill(db)
+
+    messages = [r.message for r in caplog.records]
+    assert any('대기열 적재' in m and '005930' in m for m in messages)
+
+
 # ── 전송 결과 반영 ────────────────────────────────────────────────────
 
 class _FakeResponse:

@@ -1195,6 +1195,13 @@ def setup_logging():
     for lib in ["httpcore", "httpx", "urllib3", "google", "google.genai", "mistune", "markdown_it", "yfinance", "peewee"]:
         logging.getLogger(lib).setLevel(logging.WARNING)
 
+    # [추가] 매매일지 웹서버 연동 로그는 FILE_DEBUG_LEVEL 과 무관하게 항상 INFO 이상을 남긴다.
+    #  기본 파일 로그 레벨이 WARNING 이라 연동 시작·전송 완료 같은 '정상 동작' 기록이 통째로
+    #  사라지는데, 외부 서버로 나가는 전송은 무엇이 언제 나갔는지 사후 추적이 되어야 한다.
+    #  (자식 로거의 레벨만 낮추면 되고, 루트 핸들러는 레벨 필터가 없어 그대로 파일에 기록된다.
+    #   FILE_DEBUG_LEVEL=DEBUG 로 더 자세히 보려는 경우는 그 설정을 존중한다.)
+    logging.getLogger("modules.journal_sync").setLevel(min(numeric_level, logging.INFO))
+
     # [추가] urllib3 커넥션 재시도 WARNING 억제.
     #  KIS 서버가 idle keep-alive 연결을 먼저 끊어(RemoteDisconnected) 발생하는
     #  "Retrying (Retry(total=...)) after connection broken by ..." 경고는 어댑터가

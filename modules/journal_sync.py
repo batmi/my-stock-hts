@@ -262,6 +262,15 @@ def enqueue(cursor, trade):
         "INSERT OR IGNORE INTO journal_outbox (exec_id, payload, created_at) VALUES (?, ?, ?)",
         (payload['brokerExecutionId'], json.dumps(payload, ensure_ascii=False),
          datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')))
+
+    if cursor.rowcount:
+        logger.info(
+            f"[Journal] 대기열 적재: {payload['side']} {payload['name']}({payload['symbol']}) "
+            f"{payload['volume']:g}주 @{payload['price']:,g} "
+            f"[{payload['brokerExecutionId']}]")
+    else:
+        # 같은 체결이 다시 기록된 경우(재확인·재시작 등). 중복 전송이 아니라 정상 동작이다.
+        logger.info(f"[Journal] 대기열 중복 스킵: {payload['brokerExecutionId']}")
     return True
 
 
@@ -320,6 +329,9 @@ class _TokenCache:
             self._token = data.get('access_token')
             # 만료 5분 전에 미리 갱신해 경계에서 401 을 맞지 않게 한다.
             self._expires_at = time.time() + max(int(data.get('expires_in', 86400)) - 300, 60)
+            logger.info(f"[Journal] 접속 토큰 발급 완료 "
+                        f"(유효 {int(data.get('expires_in', 86400)) // 3600}시간, "
+                        f"권한: {' '.join(data.get('scopes') or []) or '미표기'})")
             return self._token
 
 
@@ -483,8 +495,9 @@ def flush_once():
             fail += 1
 
     _mark_result(marks, now_str)
-    if ok:
-        logger.info(f"[Journal] 매매 기록 {ok}건 전송 완료 (실패 {fail}건)")
+    if ok or fail:
+        remaining = pending_count()
+        logger.info(f"[Journal] 전송 완료 {ok}건 / 실패 {fail}건 (대기 잔량 {remaining}건)")
     return ok, fail
 
 
@@ -496,7 +509,15 @@ def ping(status='running', message=None):
     if message:
         body['message'] = message[:500]
     res = _request('POST', '/api/v1/bot/status', json_body=body)
-    return bool(res is not None and res.status_code == 200)
+    ok = bool(res is not None and res.status_code == 200)
+    # 5분마다 도는 하트비트라 성공은 DEBUG로 둔다(INFO로 남기면 로그가 이것만으로 채워진다).
+    # 실패는 연동 단절 신호이므로 WARNING.
+    if ok:
+        logger.debug("[Journal] 봇 상태 Ping 전송")
+    else:
+        logger.warning(f"[Journal] 봇 상태 Ping 실패 "
+                       f"({res.status_code if res is not None else '응답 없음'})")
+    return ok
 
 
 def pending_count():
@@ -535,18 +556,27 @@ class JournalSyncWorker:
         if self.is_running:
             return
         if not is_enabled():
-            logger.debug("[Journal] JOURNAL_API_URL/KEY 미설정 — 매매일지 연동 비활성")
+            # 왜 안 도는지가 로그만 봐도 판별되어야 한다 — 설정(메뉴)과 자격증명(환경변수)을 구분해 남긴다.
+            if not getattr(config.settings, 'JOURNAL_SYNC_USE', False):
+                logger.info("[Journal] 매매일지 연동 비활성 (메뉴 0 → 5-3 스위치 OFF)")
+            else:
+                missing = [n for n in ('JOURNAL_API_URL', 'JOURNAL_API_KEY') if not _cfg(n)]
+                logger.info(f"[Journal] 매매일지 연동 비활성 (환경변수 미설정: {', '.join(missing)})")
             return
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="JournalSync")
         self.thread.start()
-        logger.info(f"[Journal] 매매일지 연동 시작 ({_base_url()})")
+        logger.info(f"[Journal] 매매일지 연동 시작 — {_base_url()} "
+                    f"(source={_source()}, 대기 잔량 {pending_count()}건)")
 
     def stop(self):
+        if not self.is_running:
+            return
         self.is_running = False
         self._wake.set()
         if self.thread:
             self.thread.join(timeout=3)
+        logger.info(f"[Journal] 매매일지 연동 중지 (미전송 {pending_count()}건은 큐에 보존)")
 
     def trigger(self):
         """즉시 1회 순회를 깨운다 (체결 직후 지연 없이 반영하고 싶을 때)."""
