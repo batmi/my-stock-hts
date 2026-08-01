@@ -32,7 +32,8 @@ It operates in a terminal (Console) environment and provides real-time market qu
 10. [AI-Powered Assistant](#10-ai-powered-assistant)
 11. [Reserved Order System](#11-reserved-order-system)
 12. [Known Issues](#12-known-issues)
-13. [License](#13-license)
+13. [Trading Journal Sync](#13--trading-journal-sync)
+14. [License](#14-license)
 
 ## 1. Overview & Objective
 
@@ -443,6 +444,9 @@ Register sensitive information like API Keys as **environment variables**:
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
 *   `FRED_API_KEY`: FRED API Key for US economic release dates — CPI, employment report, PCE, etc. (Optional, [how to get one](#fred-api-key-free))
 *   `TV_USERNAME`, `TV_PASSWORD`: TradingView account (Optional). Lets tvDatafeed (indices, US Treasury yields) run in **logged-in mode**, with better quotas/stability than anonymous access. If unset, it stays anonymous (nologin) as before and a WARNING is written to the file log (INFO on successful login). The issued token is cached in `data/tv_token.json` for 7 days so restarts don't re-login (frequent logins trigger TradingView's captcha). If a captcha is returned, retry later or sign in once from a browser and restart.
+*   `JOURNAL_API_URL`, `JOURNAL_API_KEY`: Sync fills to a remote trading-journal web server (Optional, [details](#13--trading-journal-sync)). Both must be set for the integration to turn on.
+*   `JOURNAL_SOURCE`: Server-side sync scope identifier (Optional, default: `my-stock-hts`)
+*   `JOURNAL_SYNC_SIMULATION`: Set to `1` to also send mock-trading fills (Optional, default: `0`)
 
 **Example (`export` in a shell profile such as `~/.htsrc`):**
 ```sh
@@ -453,6 +457,10 @@ export SIM_APP_KEY="..."   ; export SIM_APP_SECRET="..."   ; export SIM_ACC_NUM=
 # (Optional) real-time execution-notice WebSocket key = KIS HTS login ID
 export REAL_HTS_ID="myhtsid"   # real
 export SIM_HTS_ID="myhtsid"    # mock (a single KIS_HTS_ID covers both if identical)
+
+# (Optional) trading-journal web server sync
+export JOURNAL_API_URL="https://memo.example.com"   # HTTPS recommended (so the API key isn't sent in the clear)
+export JOURNAL_API_KEY="skm_..."                    # issued from the web dashboard settings
 ```
 > After adding/changing env vars, reload the shell (`source ~/.htsrc`) and **restart the program** for them to take effect.
 
@@ -582,6 +590,65 @@ Background monitoring runs every 3 seconds and is persistently saved in SQLite D
 *   **Unfilled Order Query Error (KIS Mock)**: Due to a KIS API bug, unfilled order queries may return empty lists even if the order was successfully placed. The system handles this via local order state tracking and blind cancellations.
 *   **NXT and SOR Unsupported (KIS Mock)**: NXT real-time quotes and SOR unified orders are not supported in the KIS mock trading environment; only KRX regular-session trading is available. As a result, trading attempts during the post-15:30 NXT session raise errors, and **the price on the analysis screen stays frozen at the regular-session close and does not update** (because NXT quotes cannot be retrieved). They only work in the real investment mode.
 
-## 13. License
+## 13. 📓 Trading Journal Sync
+
+Streams fills to a remote trading-journal web server ([stock-memo](https://github.com/batmi/stock-memo)).
+The protocol follows the [`UniversalTradingHistoryAPI.json`](UniversalTradingHistoryAPI.json) (OpenAPI 3.1) contract shared by both projects.
+
+### Configuration
+
+```sh
+# add to ~/.htsrc, then restart
+export JOURNAL_API_URL="https://memo.example.com"   # required
+export JOURNAL_API_KEY="skm_..."                    # required (web dashboard → Settings → HTS API key)
+export JOURNAL_SOURCE="my-stock-hts"                # optional
+export JOURNAL_SYNC_SIMULATION="0"                  # optional, 1 also sends mock-trading fills
+```
+
+If either the URL or the key is empty the whole integration stays off, with no effect on anything else.
+
+### How it works — the Outbox pattern
+
+The fill-handling path **never touches the network.**
+
+1. `db_manager.insert_trade()` queues the record into the `journal_outbox` table **in the same transaction** as the trade itself.
+2. A background worker (the `JournalSync` thread) flushes the queue in batches every 30s (woken immediately after a fill).
+3. Failures are retried with exponential backoff (capped at 1 hour).
+
+Why this matters:
+
+*   The fill-confirmation loop is never blocked by multi-second network latency.
+*   If the Raspberry Pi loses connectivity or reboots, the queue survives in the DB and resends automatically. **Fire-and-forget POSTs will lose records.**
+*   The server deduplicates on `brokerExecutionId`, so resending is always safe.
+
+### What gets sent
+
+| Order status | Sent | Note |
+|---|:---:|---|
+| Filled (`체결`) | ✅ | `confidence=CONFIRMED` |
+| Presumed fill (`체결(추정)`) | ✅ | `confidence=ESTIMATED` — inferred from balance reconciliation, so it is recorded distinctly |
+| Submitted (`접수`) | ❌ | Not a fill yet |
+| Canceled (`취소` / `취소(추정)`) | ❌ | Not a trade record |
+| Mock trading (`is_sim=1`) | ❌ | Enable with `JOURNAL_SYNC_SIMULATION=1`; even then the server stores it separately via `isSimulated` |
+
+Beyond symbol/quantity/price, each record carries **realized P&L (`profit_amt`/`profit_rate`), strategy score, stop-loss rate, entry/exit rationale (`reason`), and order origin (AUTO/manual/reserved/external)** so the server can compute accurate win-rate and P&L statistics.
+
+### Idempotency key
+
+Built as `{env}:{account}:{fill date}:{order no}:{status}` — e.g. `REAL:1234567801:20260801:0000012345:F`.
+
+> ⚠️ Broker order numbers (KIS `odno`) are **reused every business day**. Keying on the order number alone makes a different fill on a different day look like a duplicate, and the server silently drops it — the account and date must be included.
+
+### Trading day for overseas stocks
+
+Fill timestamps always carry the KST offset (`+09:00`), and the exchange code (from `stock.json`'s `exchange`) is sent alongside.
+The server derives the **exchange-local trading day** from those two. A fill at 16:30 ET on Aug 1 is early morning Aug 2 in Korea, but is attributed to the Aug 1 trading day.
+
+### First-time setup
+
+Positions held before the integration started have no buy record on the server, so their first sell raises a "no holding record" warning.
+Register the opening balance first via `POST /api/v1/positions/opening` to avoid it.
+
+## 14. License
 
 This project is licensed under the Apache License 2.0.

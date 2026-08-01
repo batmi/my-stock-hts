@@ -734,6 +734,20 @@ TV_USERNAME = os.getenv("TV_USERNAME", "")
 TV_PASSWORD = os.getenv("TV_PASSWORD", "")
 
 # ==========================================================
+# [설정] 매매일지 웹서버 연동 (Universal Trading History API v2)
+# ==========================================================
+# 체결 내역을 원격 매매일지 서버(stock-memo)로 자동 전송한다.
+#  URL·KEY 가 둘 다 설정돼야 연동이 켜지며, 미설정 시 나머지 기능에는 영향이 없다.
+#  전송은 Outbox 큐(journal_outbox 테이블) + 백그라운드 워커가 담당하므로
+#  네트워크가 끊겨도 체결 처리는 지연되지 않고 복구 후 자동 재전송된다.
+#  (~/.htsrc 에 export 추가 후 재시작)
+JOURNAL_API_URL = os.getenv("JOURNAL_API_URL", "")   # 예: https://memo.example.com (HTTPS 권장)
+JOURNAL_API_KEY = os.getenv("JOURNAL_API_KEY", "")   # 웹 대시보드 설정에서 발급 (skm_...)
+JOURNAL_SOURCE = os.getenv("JOURNAL_SOURCE", "my-stock-hts")  # 서버 측 동기화 스코프 식별자
+# 모의투자 체결도 전송할지 여부. 기본 OFF — 켜더라도 서버가 isSimulated 로 분리 보관한다.
+JOURNAL_SYNC_SIMULATION = os.getenv("JOURNAL_SYNC_SIMULATION", "0") == "1"
+
+# ==========================================================
 # [설정] 지수 색상 규칙 (지수명 = 상태 라벨 / 지수값 = 추세 위치)
 # ==========================================================
 # 값(현재가·등락률·52주 고점대비) 색상은 자산 종류와 무관하게 '값 자체의 방향'만 나타낸다.

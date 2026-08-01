@@ -32,7 +32,8 @@
 10. [AI 기반 투자 어시스턴트 및 테마 분석 (AI-Powered Assistant)](#10-ai-기반-투자-어시스턴트-및-테마-분석-ai-powered-assistant)
 11. [예약 주문 시스템 (Reserved Order System)](#11-예약-주문-시스템-reserved-order-system)
 12. [모의투자 환경 유의사항 (Known Issues)](#12-모의투자-환경-유의사항-known-issues)
-13. [라이선스 (License)](#13-라이선스-license)
+13. [매매일지 웹서버 연동 (Trading Journal Sync)](#13--매매일지-웹서버-연동-trading-journal-sync)
+14. [라이선스 (License)](#14-라이선스-license)
 
 ## 1. 프로그램 개요 및 목적 (Overview & Objective)
 
@@ -472,6 +473,9 @@ pip install -r requirements.txt
 *   `DART_API_KEY`: (선택) 국내 공시·배당·실적 조회용 OpenDART API Key ([발급 안내](#12--opendart-전자공시-연동-설정-disclosure-integration))
 *   `FRED_API_KEY`: (선택) 미국 경제지표 발표일정(CPI·고용보고서·PCE 등) 조회용 FRED API Key ([발급 안내](#fred-api-key-발급-무료))
 *   `TV_USERNAME`, `TV_PASSWORD`: (선택) TradingView 계정. 지수·미국채 금리 조회에 쓰는 tvDatafeed가 **로그인 모드**로 동작해 익명 대비 조회 한도·안정성이 좋아집니다. 미설정 시 종전대로 익명(nologin)으로 동작하며 파일 로그에 WARNING이 남습니다(로그인 성공 시 INFO). 발급 토큰은 `data/tv_token.json`에 7일간 캐시되어 재시작 때마다 재로그인하지 않습니다(잦은 로그인은 TradingView 캡차를 유발). 캡차가 뜨면 잠시 후 다시 시도하거나 브라우저에서 한 번 로그인한 뒤 재시작하세요.
+*   `JOURNAL_API_URL`, `JOURNAL_API_KEY`: (선택) 체결 내역을 원격 매매일지 웹서버로 자동 전송하는 연동 설정 ([상세](#13--매매일지-웹서버-연동-trading-journal-sync)). 둘 다 설정돼야 연동이 켜집니다.
+*   `JOURNAL_SOURCE`: (선택) 서버 측 동기화 스코프 식별자 (기본값: `my-stock-hts`)
+*   `JOURNAL_SYNC_SIMULATION`: (선택) `1`이면 모의투자 체결도 전송 (기본값: `0`)
 
 **설정 예시 (`~/.htsrc` 등 셸 프로파일에 `export`로 등록):**
 ```sh
@@ -482,6 +486,10 @@ export SIM_APP_KEY="..."       ; export SIM_APP_SECRET="..."    ; export SIM_ACC
 # (선택) 실시간 체결통보 WebSocket 구독키 = KIS HTS 로그인 ID
 export REAL_HTS_ID="myhtsid"   # 실전
 export SIM_HTS_ID="myhtsid"    # 모의 (동일 ID면 KIS_HTS_ID 하나로 갈음 가능)
+
+# (선택) 매매일지 웹서버 연동
+export JOURNAL_API_URL="https://memo.example.com"   # HTTPS 권장 (API 키가 평문으로 나가지 않도록)
+export JOURNAL_API_KEY="skm_..."                    # 웹 대시보드 설정에서 발급
 ```
 > 환경 변수를 추가/변경한 뒤에는 셸에 다시 반영(`source ~/.htsrc`)하고 **프로그램을 재시작**해야 적용됩니다.
 
@@ -649,7 +657,66 @@ KIS/Gemini Key와 동일하게 **환경 변수**로 등록합니다. (셸 환경
 *   **대응책**: 본 시스템은 이를 해결하기 위해 **로컬 주문 상태 추적** 기능을 탑재하고 있습니다. API 조회 결과에 없더라도 로컬에 기록된 미체결 주문이 있다면, 설정된 시간 경과 후 자동으로 **강제 취소(Blind Cancel)** 및 **잔고 확인**을 수행하여 상태를 동기화합니다.
 *   **대체거래소(NXT) 및 SOR 주문 미지원**: KIS OpenAPI 스펙상 모의투자 환경에서는 대체거래소(NXT) 시세 조회 및 SOR 통합 주문이 지원되지 않으며, 오직 한국거래소(KRX) 정규장 거래만 가능합니다. 따라서 모의투자 모드에서는 15:30 이후 NXT 장 시간에 매매 시도 시 에러가 발생하며, **종목 분석 화면의 시세도 정규장 종가에서 갱신되지 않고 멈춰 보입니다**(NXT 시세를 받아올 수 없기 때문). (실전투자 모드에서만 NXT 및 SOR 기능이 정상 작동합니다.)
 
-## 13. 라이선스 (License)
+## 13. 📓 매매일지 웹서버 연동 (Trading Journal Sync)
+
+체결 내역을 원격 매매일지 웹서버([stock-memo](https://github.com/batmi/stock-memo))로 실시간 전송합니다.
+프로토콜은 두 프로젝트가 공유하는 [`UniversalTradingHistoryAPI.json`](UniversalTradingHistoryAPI.json) (OpenAPI 3.1) 계약을 따릅니다.
+
+### 설정
+
+```sh
+# ~/.htsrc 에 추가 후 재시작
+export JOURNAL_API_URL="https://memo.example.com"   # 필수
+export JOURNAL_API_KEY="skm_..."                    # 필수 (웹 대시보드 → 설정 → HTS 연동 API 키)
+export JOURNAL_SOURCE="my-stock-hts"                # 선택
+export JOURNAL_SYNC_SIMULATION="0"                  # 선택, 1이면 모의투자 체결도 전송
+```
+
+URL·KEY 중 하나라도 비어 있으면 연동 전체가 꺼지며, 다른 기능에는 아무 영향이 없습니다.
+
+### 동작 방식 — Outbox 패턴
+
+체결 처리 경로에서는 **네트워크를 전혀 타지 않습니다.**
+
+1. `db_manager.insert_trade()` 가 거래 기록과 **같은 트랜잭션**으로 `journal_outbox` 테이블에 적재
+2. 백그라운드 워커(`JournalSync` 스레드)가 30초 주기로 큐를 배치 전송 (체결 직후에는 즉시 깨움)
+3. 실패하면 지수 백오프(최대 1시간)로 재시도
+
+이렇게 하는 이유:
+
+*   체결 확인 루프가 네트워크 지연(수 초)에 묶이지 않습니다.
+*   라즈베리파이가 단절·재부팅돼도 큐가 DB에 남아 복구 후 자동 재전송됩니다. **전송 즉시(fire-and-forget) 방식은 반드시 유실이 생깁니다.**
+*   서버가 `brokerExecutionId`로 멱등 처리하므로 재전송이 언제나 안전합니다.
+
+### 전송 대상
+
+| 주문 상태 | 전송 | 비고 |
+|---|:---:|---|
+| `체결` | ✅ | `confidence=CONFIRMED` |
+| `체결(추정)` | ✅ | `confidence=ESTIMATED` — 잔고 대조로 추정한 건이라 구분해서 기록 |
+| `접수` | ❌ | 아직 체결이 아님 |
+| `취소` / `취소(추정)` | ❌ | 매매 기록이 아님 |
+| 모의투자(`is_sim=1`) | ❌ | `JOURNAL_SYNC_SIMULATION=1` 로 켤 수 있으며, 켜도 서버가 `isSimulated`로 분리 보관 |
+
+전송 시 종목·수량·단가뿐 아니라 **실현손익(`profit_amt`/`profit_rate`), 전략 점수, 손절률, 매매 근거(`reason`), 주문 출처(AUTO/수동/예약/외부)** 를 함께 넘겨 서버가 승률·손익 통계를 정확히 낼 수 있게 합니다.
+
+### 멱등키
+
+`{env}:{계좌}:{체결일}:{주문번호}:{상태}` 형태로 만듭니다. (예: `REAL:1234567801:20260801:0000012345:F`)
+
+> ⚠️ 증권사 주문번호(KIS `odno`)는 **영업일마다 재사용**됩니다. 주문번호만 키로 쓰면 다른 날의 다른 체결이 중복으로 오인되어 서버에서 조용히 버려지므로, 계좌·일자를 반드시 포함해야 합니다.
+
+### 해외 주식 거래일
+
+체결 시각은 항상 KST 오프셋(`+09:00`)을 붙여 보내고, 거래소 코드(`stock.json`의 `exchange`)를 함께 넘깁니다.
+서버는 이 둘로 **거래소 현지 거래일**을 계산합니다. 미 동부 8/1 16:30 체결은 한국시간으로 8/2 새벽이지만 거래일은 8/1로 귀속됩니다.
+
+### 최초 연동 시
+
+연동 이전부터 보유 중이던 종목은 서버에 매수 기록이 없어 첫 매도가 "보유 기록 없음" 경고를 답니다.
+`POST /api/v1/positions/opening` 으로 기초잔고를 먼저 등록하면 깔끔합니다.
+
+## 14. 라이선스 (License)
 
 이 프로젝트는 Apache License 2.0 하에 배포됩니다.
 

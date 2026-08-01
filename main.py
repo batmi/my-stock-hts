@@ -1002,6 +1002,12 @@ def main():
     def _start_kis_monitors():
         auto_trade.ConclusionMonitor().start()
         ReservedOrderMonitor().start() # [추가] 예약 주문 모니터링 스레드 시작
+        # [추가] 매매일지 웹서버 동기화 워커 (KIS API와 무관 — 미설정 시 즉시 반환)
+        try:
+            from modules import journal_sync
+            journal_sync.start()
+        except Exception as _e:
+            logging.warning(f"[Journal] 매매일지 연동 시작 실패(무시): {_e}")
         api.prefetch_watchlists_async() # [수정] 관심종목 예열도 초기화 이후로 지연
         api.start_overview_warmer() # [추가] 개요 화면(시세/지수) 상시 백그라운드 예열 (실전 계좌)
         # [WS] KIS 실시간 시세 피드 시작 + 초기 구독 종목 설정.

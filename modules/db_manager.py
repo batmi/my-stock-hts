@@ -1,6 +1,7 @@
 # modules/db_manager.py
 import sqlite3
 import json
+import logging
 import threading
 import os
 import time
@@ -8,6 +9,9 @@ from datetime import datetime
 import config
 import context
 import atexit
+
+logger = logging.getLogger(__name__)
+
 
 class DBManager:
     def __init__(self):
@@ -169,6 +173,27 @@ class DBManager:
                         notified_at TEXT
                     )
                 ''')
+
+                # [추가] 매매일지 웹서버 전송 대기열 (Outbox 패턴)
+                #  체결 기록과 '같은 트랜잭션'으로 적재해 두고 백그라운드 워커가 배치 전송한다.
+                #  체결 처리 루프에서 직접 HTTP를 때리면 네트워크 지연에 매매가 묶이고,
+                #  전송 실패 시 그 기록이 그대로 유실된다. 큐에 남겨야 재부팅·단절 후에도 복구된다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS journal_outbox (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        exec_id TEXT UNIQUE,
+                        payload TEXT,
+                        created_at TEXT,
+                        attempts INTEGER DEFAULT 0,
+                        last_attempt_at TEXT,
+                        last_error TEXT,
+                        synced_at TEXT,
+                        remote_id TEXT
+                    )
+                ''')
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_journal_outbox_pending "
+                    "ON journal_outbox(synced_at, id)")
                 
                 # [추가] 예약 주문 테이블 생성
                 cursor.execute('''
@@ -282,6 +307,18 @@ class DBManager:
                 if conn is not None:
                     conn.close()
 
+    def _enqueue_journal(self, cursor, trade):
+        """매매일지 웹서버 전송 대기열에 적재 (호출자의 트랜잭션 안에서 실행).
+
+        연동이 꺼져 있거나 어떤 이유로든 실패해도 **거래 기록 저장은 절대 방해하지 않는다.**
+        일지 전송은 부가 기능이고 거래 기록이 본질이므로, 여기서 예외를 올리면 안 된다.
+        """
+        try:
+            from modules import journal_sync
+            journal_sync.enqueue(cursor, trade)
+        except Exception as e:
+            logger.debug(f"[Journal] 전송 대기열 적재 실패(무시): {e}")
+
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
         """거래 내역 및 스냅샷 저장"""
         # 쓰기 작업은 락으로 보호하여 순차 처리 (SQLite 특성상 안전)
@@ -307,7 +344,19 @@ class DBManager:
                         INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate))
-                    
+
+                    # [추가] 매매일지 웹서버 전송 대기열 적재.
+                    #  거래 기록과 같은 트랜잭션에서 처리해야 '기록은 남았는데 전송 큐엔 없는'
+                    #  틈이 생기지 않는다. 전송 자체는 백그라운드 워커가 담당한다.
+                    self._enqueue_journal(cursor, {
+                        'time': now_str, 'type': type_str, 'code': code, 'name': name,
+                        'qty': qty, 'price': price, 'odno': odno, 'org_odno': org_odno,
+                        'account': acc_no, 'is_sim': is_sim, 'profit_amt': profit_amt,
+                        'profit_rate': profit_rate, 'reason': reason,
+                        'strategy_score': score, 'order_status': order_status,
+                        'stop_loss_rate': stop_loss_rate,
+                    })
+
                     conn.commit()
                     
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":

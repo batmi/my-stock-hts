@@ -702,7 +702,17 @@ class ConclusionMonitor:
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
                                     db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
-                                    
+
+                                    # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
+                                    #  적재 자체는 insert_trade 가 같은 트랜잭션에서 끝냈으므로
+                                    #  여기서 실패해도 워커가 다음 주기에 자동으로 보낸다.
+                                    try:
+                                        from modules import journal_sync
+                                        journal_sync.trigger()
+                                    except Exception as _je:
+                                        logger.debug(f"[Journal] 즉시 전송 트리거 실패(무시): {_je}")
+
+
                                     # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                     # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
                                     db_manager.db.update_trade(odno, price=avg_price)

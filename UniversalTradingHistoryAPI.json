@@ -1,0 +1,887 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Universal Trading History API",
+    "version": "2.0.0",
+    "summary": "시스템 트레이딩 봇과 매매일지 웹 서버 간의 매매 기록 송수신 REST API",
+    "description": "시스템 트레이딩 봇(HTS)이 체결 내역을 원격 매매일지 서버로 실시간 전송하기 위한 API입니다.\n\n## 인증\n1. 웹 대시보드에서 발급받은 정적 API 키(`skm_...`)를 `X-API-KEY` 헤더로 `/api/v1/auth/token`에 전송합니다.\n2. 응답으로 받은 24시간 유효 Access Token을 이후 모든 요청의 `Authorization: Bearer <token>` 헤더에 실습니다.\n3. API 키를 폐기하면 그 키로 발급된 토큰도 **즉시** 무효화됩니다.\n\n## 스코프\n API 키에는 스코프가 부여됩니다. 토큰은 키의 스코프를 그대로 상속합니다.\n\n| 스코프 | 허용 동작 |\n|---|---|\n| `trades:write` | 매매 기록 생성·수정·삭제, 기초잔고 등록 |\n| `trades:read` | 매매 기록 조회, 동기화 지점 조회 |\n| `bot:write` | 봇 상태(Ping) 전송 |\n\n## 멱등성(Idempotency)\n`brokerExecutionId`는 사용자 범위에서 유일해야 하며, DB UNIQUE 제약으로 보호됩니다.\n동일한 `brokerExecutionId`로 재전송하면 새로 저장하지 않고 기존 기록을 `200 OK`로 반환합니다.\n따라서 네트워크 타임아웃 등으로 응답을 못 받았을 때 **무조건 재전송해도 안전**합니다.\n\n### brokerExecutionId 권장 형식\n`{env}:{계좌}:{체결일}:{주문번호}` — 예: `REAL:12345678:20260801:0000012345`\n\n증권사 주문번호(KIS `odno` 등)는 **영업일마다 재사용**되므로 주문번호만 쓰면\n다른 날의 다른 체결이 중복으로 오인되어 유실됩니다. 반드시 계좌·일자를 포함하세요.\n\n## 시각 표기\n`executedAt`은 **UTC 오프셋을 포함한 RFC3339** 형식이어야 합니다. (예: `2026-08-01T09:30:00+09:00`)\n오프셋 없는 값도 하위 호환을 위해 허용하지만 KST(+09:00)로 간주되므로,\n해외 주식(미국 정규장·프리·애프터) 체결에서는 거래일 귀속이 어긋납니다.\n\n## 오류 응답\n모든 오류는 아래 형태입니다. `errorCode`로 분기하고 `error`는 사용자 노출용으로만 쓰세요.\n\n```json\n{ \"error\": \"사람이 읽는 메시지\", \"errorCode\": \"OVERSELL\", \"details\": {} }\n```\n\n## 레이트 리밋\n응답 헤더 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`을 참고하세요.\n초과 시 `429`와 `Retry-After`(초)가 반환됩니다."
+  },
+  "servers": [
+    {
+      "url": "https://{host}",
+      "description": "운영 서버 (HTTPS 필수 — API 키가 평문으로 전송되지 않도록)",
+      "variables": {
+        "host": {
+          "default": "stock-memo.example.com",
+          "description": "매매일지 서버 호스트"
+        }
+      }
+    },
+    {
+      "url": "http://localhost:5000",
+      "description": "로컬 개발 서버"
+    }
+  ],
+  "tags": [
+    { "name": "Auth", "description": "API 토큰 발급" },
+    { "name": "Bot Status", "description": "봇 가동 상태 동기화" },
+    { "name": "Trading History", "description": "매매 히스토리 기록·조회·정정" },
+    { "name": "Positions", "description": "기초 보유 잔고 등록" },
+    { "name": "System", "description": "서버 상태 확인" }
+  ],
+  "security": [{ "BearerAuth": [] }],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": ["System"],
+        "summary": "서버 상태 확인",
+        "operationId": "getHealth",
+        "description": "인증 없이 호출할 수 있습니다. 응답의 `serverTime`은 봇의 시계 오차 보정에 사용할 수 있습니다.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "정상 작동 중",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "const": "ok" },
+                    "serverTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "서버의 현재 시각 (오프셋 포함 RFC3339)",
+                      "examples": ["2026-08-01T15:04:05+09:00"]
+                    },
+                    "apiVersion": { "type": "string", "examples": ["2.0.0"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/token": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "단기 Access Token 발급",
+        "operationId": "issueAccessToken",
+        "description": "정적 API 키를 24시간 유효한 Access Token으로 교환합니다.\nAPI 키가 폐기되면 그 키로 발급된 토큰도 즉시 무효화됩니다.\n\n무차별 대입 방지를 위해 IP 단위 레이트 리밋이 적용됩니다.",
+        "security": [{ "ApiKeyAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "토큰 발급 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["access_token", "token_type", "expires_in"],
+                  "properties": {
+                    "access_token": { "type": "string" },
+                    "token_type": { "type": "string", "const": "Bearer" },
+                    "expires_in": { "type": "integer", "examples": [86400], "description": "만료까지 남은 초" },
+                    "scopes": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "이 토큰에 부여된 스코프",
+                      "examples": [["trades:write", "trades:read", "bot:write"]]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/bot/status": {
+      "post": {
+        "tags": ["Bot Status"],
+        "summary": "봇 상태 전송 (Ping)",
+        "operationId": "reportBotStatus",
+        "description": "봇이 주기적으로 자신의 상태를 보고합니다. 필요 스코프: `bot:write`\n\n응답의 `nextPingSeconds`를 지키면 서버가 부하에 따라 주기를 조절할 수 있고,\n`command`가 내려오면 봇이 그에 따라 동작할 수 있습니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["running", "stopped", "error"]
+                  },
+                  "message": { "type": "string", "maxLength": 500 },
+                  "version": { "type": "string", "description": "봇 버전", "maxLength": 50 },
+                  "isSimulated": {
+                    "type": "boolean",
+                    "description": "현재 모의투자 모드로 가동 중인지 여부"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "상태 업데이트 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "const": "success" },
+                    "updatedAt": { "type": "string", "format": "date-time" },
+                    "nextPingSeconds": {
+                      "type": "integer",
+                      "description": "서버가 권장하는 다음 Ping 간격(초). 봇은 이 값을 따르는 것이 좋습니다.",
+                      "examples": [60]
+                    },
+                    "command": {
+                      "type": ["string", "null"],
+                      "enum": ["none", "pause", "resume", "resync", null],
+                      "description": "서버가 봇에 내리는 지시. `resync`는 누락분 재동기화 요청입니다."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/trades": {
+      "get": {
+        "tags": ["Trading History"],
+        "summary": "매매 기록 조회 (대사/Reconcile용)",
+        "operationId": "listTrades",
+        "description": "봇이 서버에 실제로 무엇이 저장됐는지 확인하여 로컬 DB와 대사(reconcile)할 수 있습니다.\n필요 스코프: `trades:read`",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "조회 시작 (체결 시각 기준, RFC3339 또는 YYYY-MM-DD)",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "조회 종료 (포함)",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "기록 출처로 필터링 (예: `my-stock-hts`). 생략 시 전체",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "isSimulated",
+            "in": "query",
+            "description": "모의투자 여부로 필터링. 생략 시 실거래만(false) 반환",
+            "schema": { "type": "boolean" }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "이전 응답의 `nextCursor` 값. 페이지네이션용",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["trades"],
+                  "properties": {
+                    "trades": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/TradeRecord" }
+                    },
+                    "nextCursor": {
+                      "type": ["string", "null"],
+                      "description": "다음 페이지 커서. null이면 마지막 페이지"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Trading History"],
+        "summary": "매매 기록 단건 전송",
+        "operationId": "createTrade",
+        "description": "체결 직후 1건을 전송합니다. 필요 스코프: `trades:write`\n\n`brokerExecutionId`가 이미 존재하면 새로 만들지 않고 기존 기록을 `200`으로 반환합니다.\n(신규 생성 시에만 `201`)",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "`brokerExecutionId`를 제공할 수 없는 클라이언트를 위한 대체 멱등키.\n둘 다 없으면 중복 방지가 되지 않습니다.",
+            "schema": { "type": "string", "maxLength": 200 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TradeRecordInput" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "신규 저장 성공",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradeRecord" }
+              }
+            }
+          },
+          "200": {
+            "description": "이미 저장된 기록 (멱등 재전송). 기존 기록을 반환합니다.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradeRecord" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/trades/batch": {
+      "post": {
+        "tags": ["Trading History"],
+        "summary": "매매 기록 일괄 전송",
+        "operationId": "createTradesBatch",
+        "description": "통신 장애 복구 후 누락분을 일괄 전송합니다. 필요 스코프: `trades:write`\n\n**부분 성공이 정상 동작입니다.** 응답의 `results` 배열은 요청 배열과 **같은 순서·같은 길이**이며,\n각 항목의 `index`로 원본을 특정할 수 있습니다. 봇은 `status`가 `failed`인 항목만 재처리하면 됩니다.\n\n요청 본문은 `{ \"trades\": [...] }` 엔벌로프를 권장하며, 하위 호환을 위해 배열 그대로도 허용합니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/BatchRequest" },
+                  {
+                    "type": "array",
+                    "description": "레거시(v1) 형식 — 최상위 배열",
+                    "maxItems": 500,
+                    "items": { "$ref": "#/components/schemas/TradeRecordInput" }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "1건 이상 신규 저장됨",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BatchResponse" }
+              }
+            }
+          },
+          "200": {
+            "description": "신규 저장 없음 (전부 중복이거나 전부 실패)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BatchResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        }
+      }
+    },
+    "/api/v1/trades/last-sync": {
+      "get": {
+        "tags": ["Trading History"],
+        "summary": "마지막 동기화 지점 조회 (Backfill용)",
+        "operationId": "getLastSync",
+        "description": "봇이 누락 구간을 계산하기 위해 서버가 마지막으로 저장한 체결 지점을 조회합니다.\n필요 스코프: `trades:read`\n\n**반드시 `source`를 지정하세요.** 지정하지 않으면 웹 UI에서 손으로 입력한 기록까지\n집계에 섞여, 미래 날짜 기록 하나만 있어도 백필 구간이 통째로 건너뛰어집니다.",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "description": "기록 출처 (예: `my-stock-hts`). 봇이 자기가 넣은 기록만 기준으로 삼도록 합니다.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "account",
+            "in": "query",
+            "description": "계좌(subAccount)로 범위 한정",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "isSimulated",
+            "in": "query",
+            "description": "모의투자 여부. 생략 시 실거래(false) 기준",
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "마지막 동기화 지점",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lastExecutedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time",
+                      "description": "가장 최근 체결 시각. 기록이 없으면 null"
+                    },
+                    "lastBrokerExecutionId": {
+                      "type": ["string", "null"],
+                      "description": "그 체결의 멱등키. 경계값 중복 판단에 사용"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "description": "해당 범위에 저장된 총 기록 수. 봇의 로컬 건수와 대조하여 누락 감지"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/v1/trades/by-exec-id/{brokerExecutionId}": {
+      "get": {
+        "tags": ["Trading History"],
+        "summary": "멱등키로 기록 조회",
+        "operationId": "getTradeByExecutionId",
+        "description": "전송 결과가 불확실할 때(타임아웃 등) 실제 저장 여부를 확인합니다. 필요 스코프: `trades:read`",
+        "parameters": [
+          {
+            "name": "brokerExecutionId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 성공",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradeRecord" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/trades/{tradeId}": {
+      "parameters": [
+        {
+          "name": "tradeId",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "patch": {
+        "tags": ["Trading History"],
+        "summary": "매매 기록 정정",
+        "operationId": "patchTrade",
+        "description": "이미 보낸 기록을 정정합니다. 필요 스코프: `trades:write`\n\n**추정 체결이 나중에 확정/취소로 판명되는 경우가 실제로 발생하므로 필수 기능입니다.**\n예: `confidence=ESTIMATED`로 보낸 체결이 취소로 확정되면 `status=CANCELED`로 정정하거나 삭제합니다.\n\n본문에 포함된 필드만 갱신하며, 생략한 필드는 유지됩니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TradeRecordPatch" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "정정 성공",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradeRecord" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["Trading History"],
+        "summary": "매매 기록 삭제",
+        "operationId": "deleteTrade",
+        "description": "잘못 전송된 기록(예: 취소로 확정된 추정 체결)을 삭제합니다. 필요 스코프: `trades:write`\n\n봇이 만들지 않은 기록(웹 UI 수동 입력)은 API로 삭제할 수 없습니다.",
+        "responses": {
+          "204": { "description": "삭제 완료" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/positions/opening": {
+      "post": {
+        "tags": ["Positions"],
+        "summary": "기초 보유 잔고 등록",
+        "operationId": "createOpeningPositions",
+        "description": "봇 연동을 **처음 시작할 때** 이미 보유 중인 포지션을 매수 기록으로 등록합니다.\n필요 스코프: `trades:write`\n\n이 단계를 건너뛰면 연동 이전부터 보유하던 종목의 첫 매도가 \"매수 기록 없음\"으로\n검증 경고를 유발하고 보유수량 집계가 음수가 됩니다.\n\n동일 `asOf` + 동일 종목으로 재전송하면 중복 생성되지 않습니다(멱등).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["asOf", "positions"],
+                "properties": {
+                  "asOf": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "잔고 기준일 (YYYY-MM-DD)",
+                    "examples": ["2026-08-01"]
+                  },
+                  "isSimulated": { "type": "boolean", "default": false },
+                  "source": { "type": "string", "examples": ["my-stock-hts"] },
+                  "positions": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": { "$ref": "#/components/schemas/OpeningPositionInput" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "등록 완료",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BatchResponse" }
+              }
+            }
+          },
+          "200": { "description": "신규 등록 없음 (전부 중복)" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`/api/v1/auth/token`에서 발급받은 Access Token"
+      },
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-KEY",
+        "description": "웹 대시보드 설정에서 발급받은 정적 API 키 (`skm_`으로 시작). 토큰 발급 시에만 사용합니다."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "잘못된 요청",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "Unauthorized": {
+        "description": "인증 실패 (토큰 누락·만료·위조, 폐기된 키)",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "Forbidden": {
+        "description": "스코프 부족",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "NotFound": {
+        "description": "대상 없음",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "요청 본문 또는 배열 길이 초과",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "TooManyRequests": {
+        "description": "레이트 리밋 초과",
+        "headers": {
+          "Retry-After": {
+            "description": "재시도까지 대기할 초",
+            "schema": { "type": "integer" }
+          }
+        },
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error", "errorCode"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "사람이 읽는 오류 메시지. 문구는 예고 없이 바뀔 수 있으니 분기 조건으로 쓰지 마세요."
+          },
+          "errorCode": {
+            "type": "string",
+            "description": "기계 판독용 오류 코드. 분기는 이 값으로 하세요.",
+            "enum": [
+              "INVALID_REQUEST",
+              "MISSING_FIELD",
+              "INVALID_FIELD",
+              "INVALID_API_KEY",
+              "MISSING_API_KEY",
+              "TOKEN_MISSING",
+              "TOKEN_EXPIRED",
+              "TOKEN_INVALID",
+              "TOKEN_REVOKED",
+              "INSUFFICIENT_SCOPE",
+              "NOT_FOUND",
+              "DUPLICATE",
+              "NO_POSITION",
+              "OVERSELL",
+              "PAYLOAD_TOO_LARGE",
+              "RATE_LIMITED",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "description": "필드명 등 부가 정보",
+            "additionalProperties": true
+          }
+        }
+      },
+      "TradeRecordInput": {
+        "type": "object",
+        "required": ["symbol", "side", "price", "volume", "executedAt"],
+        "description": "매매 기록 입력. 필수 5개 외에는 모두 선택이지만,\n`brokerExecutionId`(중복 방지)와 `isSimulated`(모의/실거래 분리)는 **사실상 필수**입니다.",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "(필수) 종목코드 또는 티커",
+            "examples": ["005930", "AAPL"]
+          },
+          "side": {
+            "type": "string",
+            "enum": ["BUY", "SELL"],
+            "description": "(필수) 매매 구분"
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "description": "(필수) 체결 단가. 통화는 `currency`를 따릅니다."
+          },
+          "volume": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "(필수) 체결 수량. 부분체결을 누적해 보낼 경우 **누적 수량**을 보내고 같은 `brokerExecutionId`로 갱신하세요."
+          },
+          "executedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "(필수) 체결 시각. **UTC 오프셋 포함 RFC3339 권장.**\n오프셋을 생략하면 KST(+09:00)로 간주되며, 해외 주식에서는 거래일이 어긋납니다.",
+            "examples": ["2026-08-01T09:30:00+09:00", "2026-07-31T16:05:00-04:00"]
+          },
+          "brokerExecutionId": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "(강력 권장) 사용자 범위에서 유일한 멱등키.\n권장 형식 `{env}:{계좌}:{체결일}:{주문번호}`.\n증권사 주문번호는 영업일마다 재사용되므로 주문번호 단독 사용은 금지합니다.",
+            "examples": ["REAL:12345678:20260801:0000012345"]
+          },
+          "isSimulated": {
+            "type": "boolean",
+            "default": false,
+            "description": "(강력 권장) 모의투자 체결 여부. `true`면 실거래 통계·포트폴리오 집계에서 제외됩니다.\n**이 값을 보내지 않으면 모의투자 체결이 실거래 일지를 오염시킵니다.**"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["FILLED", "PARTIALLY_FILLED", "CANCELED", "SUBMITTED"],
+            "default": "FILLED",
+            "description": "주문 상태. `SUBMITTED`(접수)·`CANCELED`는 통계에서 제외되고 이력으로만 남습니다."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["CONFIRMED", "ESTIMATED"],
+            "default": "CONFIRMED",
+            "description": "체결 확실성. 잔고 대조 등으로 **추정**한 체결은 `ESTIMATED`로 보내고,\n나중에 확정되면 PATCH로 `CONFIRMED`로 정정하세요. 추정 기록은 UI에서 구분 표시됩니다."
+          },
+          "orderOrigin": {
+            "type": "string",
+            "enum": ["AUTO", "MANUAL", "RESERVED", "EXTERNAL", "BACKFILL"],
+            "description": "주문 출처. `AUTO`=자동매매, `RESERVED`=예약주문, `EXTERNAL`=봇 외부(MTS/HTS 앱) 주문 감지, `BACKFILL`=사후 보정"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "기록을 만든 클라이언트 식별자. `last-sync`/조회 필터의 스코프 기준이 됩니다.",
+            "examples": ["my-stock-hts"]
+          },
+          "orderId": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "증권사 주문번호 원본 (KIS `odno` 등). 추적·대사용"
+          },
+          "originalOrderId": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "정정·취소 주문의 원주문번호 (KIS `org_odno` 등)"
+          },
+          "realizedPnl": {
+            "type": ["number", "null"],
+            "description": "(매도) 실현손익 금액. 봇이 이미 계산해 갖고 있다면 보내는 편이 서버 통계 정확도에 유리합니다."
+          },
+          "realizedPnlRate": {
+            "type": ["number", "null"],
+            "description": "(매도) 실현손익률 (%). 예: 5.25는 +5.25%"
+          },
+          "fee": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "수수료"
+          },
+          "tax": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "세금(거래세 등)"
+          },
+          "strategyScore": {
+            "type": ["number", "null"],
+            "description": "진입·청산 시점의 전략 점수"
+          },
+          "stopLossRate": {
+            "type": ["number", "null"],
+            "description": "설정된 손절률 (%). 예: -7.5"
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 5000,
+            "description": "매매 근거 메모. 웹 일지의 '메모(진입/청산 근거)' 영역에 기록됩니다."
+          },
+          "tradeClass": {
+            "type": "string",
+            "enum": ["장기투자", "중기투자", "단기스윙", "단타(스캘핑)", "배당투자", "공모주", "시스템", "기타"],
+            "default": "시스템",
+            "description": "투자 분류. 시스템 트레이딩 봇은 `시스템`을 권장합니다.\n하위 호환으로 숫자 코드(1~8)도 허용하지만 신규 클라이언트는 문자열을 쓰세요."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "종목명. 누락 시 서버가 **같은 사용자의** 기존 기록에서 종목코드로 조회합니다."
+          },
+          "brokerAccount": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "금융결제원 금융기관 공동코드 3자리. 예: 264(키움), 238(미래에셋), 247(NH), 243(한국투자), 240(삼성), 271(토스).\n'계좌 관리'에 등록된 매핑으로 이름 자동 치환됩니다."
+          },
+          "subAccount": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "체결 계좌번호. 서버에 사전 등록한 계좌번호면 별칭이 자동 할당됩니다."
+          },
+          "accountName": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "계좌 별칭. `subAccount` 매핑이 있으면 생략 가능합니다."
+          },
+          "currency": {
+            "type": "string",
+            "maxLength": 10,
+            "default": "KRW",
+            "description": "통화 (KRW, USD 등)"
+          },
+          "exchange": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "거래소 구분. 거래일 판정에도 사용됩니다.",
+            "examples": ["KRX", "NXT", "NASDAQ", "NYSE", "AMEX"]
+          },
+          "assetType": {
+            "type": "string",
+            "maxLength": 20,
+            "examples": ["STOCK", "ETF", "ETN", "REIT"]
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 30,
+            "items": { "type": "string", "maxLength": 50 },
+            "description": "추가 태그"
+          }
+        }
+      },
+      "TradeRecordPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "정정 가능한 필드만 추린 부분 갱신 스키마. 포함된 필드만 반영됩니다.",
+        "properties": {
+          "price": { "type": "number", "minimum": 0 },
+          "volume": { "type": "number", "exclusiveMinimum": 0 },
+          "executedAt": { "type": "string", "format": "date-time" },
+          "status": {
+            "type": "string",
+            "enum": ["FILLED", "PARTIALLY_FILLED", "CANCELED", "SUBMITTED"]
+          },
+          "confidence": { "type": "string", "enum": ["CONFIRMED", "ESTIMATED"] },
+          "realizedPnl": { "type": ["number", "null"] },
+          "realizedPnlRate": { "type": ["number", "null"] },
+          "fee": { "type": ["number", "null"] },
+          "tax": { "type": ["number", "null"] },
+          "strategyScore": { "type": ["number", "null"] },
+          "stopLossRate": { "type": ["number", "null"] },
+          "memo": { "type": "string", "maxLength": 5000 },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "name": { "type": "string", "maxLength": 100 }
+        }
+      },
+      "TradeRecord": {
+        "allOf": [
+          { "$ref": "#/components/schemas/TradeRecordInput" },
+          {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "description": "서버가 부여한 기록 ID" },
+              "createdAt": { "type": "string", "format": "date-time" },
+              "updatedAt": { "type": ["string", "null"], "format": "date-time" },
+              "tradeDate": {
+                "type": "string",
+                "format": "date",
+                "description": "거래소 현지 기준 거래일. 서버가 `executedAt`과 `exchange`로 산출합니다."
+              },
+              "needsReview": {
+                "type": "boolean",
+                "description": "무결성 검증에 걸렸지만 유실 방지를 위해 저장된 기록. 웹 UI에서 확인 배지가 표시됩니다."
+              },
+              "warnings": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "저장은 됐으나 확인이 필요한 사항 (예: 보유 수량 초과 매도)"
+              }
+            }
+          }
+        ]
+      },
+      "BatchRequest": {
+        "type": "object",
+        "required": ["trades"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "배치 전체에 적용할 기본 출처. 항목별 `source`가 우선합니다."
+          },
+          "trades": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": { "$ref": "#/components/schemas/TradeRecordInput" }
+          }
+        }
+      },
+      "BatchResponse": {
+        "type": "object",
+        "required": ["inserted", "skipped", "failed", "results"],
+        "properties": {
+          "status": { "type": "string", "examples": ["success", "partial"] },
+          "inserted": { "type": "integer", "description": "신규 저장 건수" },
+          "skipped": { "type": "integer", "description": "멱등키 중복으로 건너뛴 건수" },
+          "failed": { "type": "integer", "description": "검증 실패 건수" },
+          "results": {
+            "type": "array",
+            "description": "요청 배열과 **같은 순서·같은 길이**. 봇은 `status`가 `failed`인 항목만 재처리하면 됩니다.",
+            "items": {
+              "type": "object",
+              "required": ["index", "status"],
+              "properties": {
+                "index": { "type": "integer", "description": "요청 배열에서의 0-based 위치" },
+                "status": {
+                  "type": "string",
+                  "enum": ["created", "duplicate", "failed"]
+                },
+                "id": { "type": ["string", "null"], "description": "저장된 기록 ID" },
+                "brokerExecutionId": { "type": ["string", "null"] },
+                "errorCode": { "type": ["string", "null"] },
+                "error": { "type": ["string", "null"] },
+                "warnings": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "errors": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "(레거시 v1 호환) 오류 메시지 문자열 목록. 신규 클라이언트는 `results`를 쓰세요."
+          }
+        }
+      },
+      "OpeningPositionInput": {
+        "type": "object",
+        "required": ["symbol", "volume", "avgPrice"],
+        "properties": {
+          "symbol": { "type": "string", "maxLength": 32 },
+          "name": { "type": "string", "maxLength": 100 },
+          "volume": { "type": "number", "exclusiveMinimum": 0, "description": "보유 수량" },
+          "avgPrice": { "type": "number", "minimum": 0, "description": "평균 매입 단가" },
+          "currency": { "type": "string", "default": "KRW" },
+          "exchange": { "type": "string" },
+          "assetType": { "type": "string" },
+          "brokerAccount": { "type": "string" },
+          "subAccount": { "type": "string" },
+          "memo": { "type": "string", "maxLength": 5000 }
+        }
+      }
+    }
+  }
+}
