@@ -1127,6 +1127,11 @@ class CustomTimedRotatingFileHandler(TimedRotatingFileHandler):
             result = result[:len(result) - self.backupCount]
         return result
 
+# [추가] 시스템 시작 표시 전용 로거 이름.
+#  FILE_DEBUG_LEVEL(기본 WARNING)과 무관하게 항상 INFO 로 기록되도록 setup_logging 에서
+#  이 로거의 레벨만 따로 낮춰 준다.
+STARTUP_LOGGER_NAME = "startup"
+
 # [추가] 로깅 설정 초기화 함수
 def setup_logging():
     # 기존 핸들러 제거
@@ -1252,10 +1257,6 @@ def setup_logging():
     file_handler.addFilter(_DemoteExpectedLibErrors())
         
     logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
-
-
-# [추가] 시스템 시작을 알리는 한 줄 로그 (파일 로그 레벨과 무관하게 항상 INFO 로 기록)
-STARTUP_LOGGER_NAME = "startup"
 
 
 def log_system_start():

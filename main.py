@@ -946,7 +946,10 @@ def main():
     config.setup_logging()
 
     # [추가] 프로그램 구동 시작 로그 기록 (mystock.log 생성 보장)
-    logging.info("=== MyStock HTS 프로그램 구동 시작 ===")
+    # [수정] 루트 로거로 남기면 FILE_DEBUG_LEVEL 이 기본값(WARNING)일 때 이 한 줄이 통째로
+    #  사라진다. 로그 파일은 하루 단위라 한 파일에 여러 실행이 섞이는데, 실행 구분선이
+    #  없으면 사후 추적이 어렵다. 전용 로거로 레벨과 무관하게 항상 남긴다.
+    config.log_system_start()
 
     # [추가] 메인 스레드 ID 등록 (토큰 발급 권한 제어용)
     context.MAIN_THREAD_ID = threading.get_ident()

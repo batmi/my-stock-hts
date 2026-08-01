@@ -91,3 +91,57 @@ def test_setup_logging(tmp_path):
     finally:
         config.LOG_DIR = original_log_dir
 
+
+
+# ── 시스템 시작 로그 ──────────────────────────────────────────────────
+
+def _read_log(tmp_path):
+    import logging
+    for h in logging.getLogger().handlers:
+        h.flush()
+    logs = [f for f in os.listdir(tmp_path) if f.endswith('.log')]
+    assert logs, "로그 파일이 생성되지 않았다"
+    return (tmp_path / logs[0]).read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('file_level', ['WARNING', 'ERROR', 'INFO', 'DEBUG'])
+def test_system_start_logged_regardless_of_file_level(tmp_path, file_level):
+    """시작 표시는 실행 구분선이므로 FILE_DEBUG_LEVEL 이 무엇이든 남아야 한다.
+
+    기본값(WARNING)에서 사라지면 하루치 로그에 섞인 여러 실행을 구분할 수 없다.
+    """
+    original_log_dir = config.LOG_DIR
+    original_level = config.settings.FILE_DEBUG_LEVEL
+    config.LOG_DIR = str(tmp_path)
+    config.settings.FILE_DEBUG_LEVEL = file_level
+    try:
+        setup_logging()
+        config.log_system_start()
+
+        content = _read_log(tmp_path)
+        start_lines = [ln for ln in content.splitlines() if '시스템 시작' in ln]
+        assert len(start_lines) == 1, f"시작 로그가 1줄이어야 한다: {start_lines}"
+        assert '[INFO]' in start_lines[0]
+    finally:
+        config.LOG_DIR = original_log_dir
+        config.settings.FILE_DEBUG_LEVEL = original_level
+
+
+def test_system_start_does_not_leak_other_info_logs(tmp_path):
+    """시작 로그를 위해 루트 로거 전체를 INFO 로 여는 부작용이 없어야 한다."""
+    import logging
+    original_log_dir = config.LOG_DIR
+    original_level = config.settings.FILE_DEBUG_LEVEL
+    config.LOG_DIR = str(tmp_path)
+    config.settings.FILE_DEBUG_LEVEL = 'WARNING'
+    try:
+        setup_logging()
+        config.log_system_start()
+        logging.info('평범한 INFO 는 WARNING 설정에서 기록되면 안 된다')
+
+        content = _read_log(tmp_path)
+        assert '시스템 시작' in content
+        assert '평범한 INFO' not in content
+    finally:
+        config.LOG_DIR = original_log_dir
+        config.settings.FILE_DEBUG_LEVEL = original_level
