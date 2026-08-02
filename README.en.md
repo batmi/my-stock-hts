@@ -632,6 +632,31 @@ Why this matters:
 *   If the Raspberry Pi loses connectivity or reboots, the queue survives in the DB and resends automatically. **Fire-and-forget POSTs will lose records.**
 *   The server deduplicates on `brokerExecutionId`, so resending is always safe.
 
+### Two layers of defense — the hole the queue cannot cover
+
+The queue protects fills that happen **while the server is down**, but fills that happen **while the integration itself is off** never enter the queue at all. That covers periods when the menu toggle was OFF or the process restarted without the environment variables — and no amount of retrying will ever recover them.
+
+| Failure | Covered by | Recovery |
+|---|---|---|
+| Web server down / network cut | Layer 1: the queue | Rows stay queued and flush once the server returns |
+| Toggle OFF / env vars missing | Layer 2: backfill | Local `trades` is reconciled against the server's last-sync point |
+
+Backfill runs once 60s after startup and every **6 hours** thereafter. It asks `GET /api/v1/trades/last-sync` where the server left off, then queues only those local fills after that point that are missing from the outbox. Whenever it recovers anything, `[Journal] 백필 — 대기열에 없던 체결 N건 회수` is logged at WARNING.
+
+> If the API key lacks the `trades:read` scope, only backfill stops working (sending is unaffected). Reissue the key from the web dashboard.
+
+### When sending is abandoned (dead-letter)
+
+Only the number of times the server **explicitly rejected that record** is counted; at 5 the row leaves the queue and is stamped into `journal_outbox.dead_at`. Transport failures are deliberately not counted — counting them would discard a perfectly good queue just because the web server stayed down for a while. Conversely, never removing anything lets one permanently-rejected row sit at the head of every batch and **block the healthy records behind it.**
+
+If a whole batch is rejected with a 4xx, it is bisected until the single offender is isolated and everything else goes through. 5xx and timeouts are not the record's fault, so those are retried whole without splitting.
+
+Abandoned records are reported by count when you enable the integration from the menu; the cause is in `journal_outbox.last_error`.
+
+### Queue retention
+
+Rows sent more than **90 days** ago are deleted once a day (to protect the Raspberry Pi's SD card). Unsent and dead-lettered rows are never removed. No `VACUUM` is run — on a Pi it blocks all writes for little benefit.
+
 ### What gets sent
 
 | Order status | Sent | Note |

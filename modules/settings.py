@@ -1361,6 +1361,10 @@ def _set_journal_sync_use(value):
     if not value:
         journal_sync.stop()
         config.console.print("\n[yellow]매매일지 웹서버 연동을 껐습니다. (전송 대기열 적재도 중단)[/yellow]")
+        # 끈 동안의 체결은 큐에 쌓이지 않는다. 다시 켜면 백필이 로컬 거래기록에서
+        # 주워 담으므로 유실은 아니지만, 그 사실을 모르면 불필요하게 불안해진다.
+        config.console.print(
+            "[dim]  끈 동안의 체결은 다시 켤 때 로컬 거래기록에서 자동 회수됩니다.[/dim]")
         return
 
     missing = [name for name in ('JOURNAL_API_URL', 'JOURNAL_API_KEY')
@@ -1374,9 +1378,17 @@ def _set_journal_sync_use(value):
 
     journal_sync.start()
     pending = journal_sync.pending_count()
+    buried = journal_sync.dead_count()
     config.console.print(f"\n[green]매매일지 웹서버 연동을 켰습니다. ({config.JOURNAL_API_URL})[/green]")
     if pending:
         config.console.print(f"[dim]  미전송 대기 {pending}건은 곧 자동으로 전송됩니다.[/dim]")
+    config.console.print(
+        "[dim]  꺼져 있던 동안의 체결이 있으면 잠시 뒤 백필이 자동으로 회수합니다.[/dim]")
+    if buried:
+        # 자동으로는 더 나가지 않는 건이다 — 조용히 두면 영원히 모른 채 지나간다.
+        config.console.print(
+            f"[yellow]  ※ 서버가 반복 거절해 전송을 포기한 기록이 {buried}건 있습니다. "
+            f"journal_outbox.last_error 를 확인하세요.[/yellow]")
 
 
 def _trading_cycle_items():

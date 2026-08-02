@@ -188,12 +188,34 @@ class DBManager:
                         last_attempt_at TEXT,
                         last_error TEXT,
                         synced_at TEXT,
-                        remote_id TEXT
+                        remote_id TEXT,
+                        dead_at TEXT,
+                        reject_count INTEGER DEFAULT 0
                     )
                 ''')
+                # dead_at      : 서버가 반복 거절한 행을 대기열에서 뺀다. 지우지 않고 표시만
+                #                하는 이유 — 무엇이 왜 못 나갔는지 last_error 와 함께 남아야
+                #                운용자가 원인을 찾는다.
+                # reject_count : '서버가 이 건을 명시적으로 거절한' 횟수만 센다. attempts 와
+                #                반드시 분리해야 한다 — attempts 로 포기 판정을 하면 웹서버가
+                #                반나절만 죽어 있어도 대기열 전체가 통째로 폐기된다.
+                cursor.execute("PRAGMA table_info(journal_outbox)")
+                outbox_columns = [info[1] for info in cursor.fetchall()]
+                for col, dtype in (("dead_at", "TEXT"),
+                                   ("reject_count", "INTEGER DEFAULT 0")):
+                    if col not in outbox_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE journal_outbox ADD COLUMN {col} {dtype}")
+                        except Exception as e:
+                            config.console.print(
+                                f"[red][DB] journal_outbox 컬럼 추가 실패({col}): {e}[/red]")
+                # 전송 대기 행 조회는 synced_at·dead_at 이 모두 NULL 인 것만 본다.
+                #  dead_at 이전 스키마의 인덱스(idx_journal_outbox_pending)는 이름이 같으면
+                #  IF NOT EXISTS 로 갱신되지 않으므로 새 이름을 쓰고 옛 것은 지운다.
+                cursor.execute("DROP INDEX IF EXISTS idx_journal_outbox_pending")
                 cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_journal_outbox_pending "
-                    "ON journal_outbox(synced_at, id)")
+                    "CREATE INDEX IF NOT EXISTS idx_journal_outbox_queue "
+                    "ON journal_outbox(synced_at, dead_at, id)")
                 
                 # [추가] 예약 주문 테이블 생성
                 cursor.execute('''

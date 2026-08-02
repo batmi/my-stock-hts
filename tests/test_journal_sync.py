@@ -504,3 +504,302 @@ def test_worker_stop_can_skip_notification(db, monkeypatch):
     worker.stop(notify=None)
 
     assert sent == []
+
+
+# ── dead-letter (전송 포기) ───────────────────────────────────────────
+
+def _clear_backoff(db):
+    """백오프를 무시하고 곧바로 다음 전송을 시도하게 만든다."""
+    conn = db._get_conn()
+    conn.execute("UPDATE journal_outbox SET last_attempt_at = NULL")
+    conn.commit()
+
+
+def test_transport_failure_never_dead_letters(db, monkeypatch):
+    """웹서버가 오래 죽어 있어도 대기열을 버리면 안 된다.
+
+    통신 실패까지 포기 횟수로 세면 주말 내내 서버가 내려간 것만으로 그 사이의
+    체결이 통째로 폐기된다. 이 시스템에서 가장 피해야 할 사고다.
+    """
+    _fill(db)
+    _patch_transport(monkeypatch, None)
+
+    for _ in range(journal_sync._MAX_REJECTS * 3):
+        _clear_backoff(db)
+        journal_sync.flush_once()
+
+    row = _outbox(db)[0]
+    assert row['dead_at'] is None
+    assert row['reject_count'] == 0
+    assert journal_sync.pending_count() == 1
+
+
+def test_repeated_server_rejection_is_dead_lettered(db, monkeypatch):
+    """서버가 사유를 붙여 거절하는 건은 재시도해도 결과가 같다 — 큐에서 뺀다."""
+    _fill(db)
+    _patch_transport(monkeypatch, _FakeResponse(200, {
+        'inserted': 0, 'skipped': 0, 'failed': 1,
+        'results': [{'index': 0, 'status': 'failed',
+                     'errorCode': 'VALIDATION_ERROR', 'error': '가격이 필요합니다'}]}))
+
+    for _ in range(journal_sync._MAX_REJECTS):
+        _clear_backoff(db)
+        journal_sync.flush_once()
+
+    row = _outbox(db)[0]
+    assert row['dead_at'] is not None
+    assert row['reject_count'] == journal_sync._MAX_REJECTS
+    assert journal_sync.pending_count() == 0      # 더는 배치 앞자리를 잡지 않는다
+    assert journal_sync.dead_count() == 1
+    assert 'VALIDATION_ERROR' in row['last_error']
+
+
+def test_dead_letter_frees_the_queue_behind_it(db, monkeypatch):
+    """독약 한 건이 뒤에 쌓인 정상 건까지 막지 않아야 한다."""
+    _fill(db, odno='0000000001')          # 서버가 영구 거절할 건
+    _fill(db, odno='0000000002')          # 정상 건
+
+    poison = _outbox(db)[0]['exec_id']
+
+    def respond(method, path, *, json_body=None, **kwargs):
+        results = []
+        for i, item in enumerate(json_body['trades']):
+            if item['brokerExecutionId'] == poison:
+                results.append({'index': i, 'status': 'failed',
+                                'brokerExecutionId': item['brokerExecutionId'],
+                                'errorCode': 'VALIDATION_ERROR', 'error': '거절'})
+            else:
+                results.append({'index': i, 'status': 'created', 'id': 'ok',
+                                'brokerExecutionId': item['brokerExecutionId']})
+        return _FakeResponse(201, {'inserted': 1, 'results': results})
+
+    monkeypatch.setattr(journal_sync._tokens, '_token', 'tok')
+    monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
+    monkeypatch.setattr(journal_sync, '_request', respond)
+
+    journal_sync.flush_once()
+    assert journal_sync.pending_count() == 1      # 정상 건은 이미 나갔다
+
+    for _ in range(journal_sync._MAX_REJECTS):
+        _clear_backoff(db)
+        journal_sync.flush_once()
+
+    assert journal_sync.pending_count() == 0
+    assert journal_sync.dead_count() == 1
+
+
+# ── 배치 전체 거절 시 분할 재시도 ─────────────────────────────────────
+
+def test_whole_batch_rejection_is_bisected_to_the_offender(db, monkeypatch):
+    """묶음 전체가 4xx 로 튕기면 반씩 쪼개 진범만 남기고 나머지는 보낸다."""
+    for i in range(4):
+        _fill(db, odno=f'000000000{i}')
+    poison = _outbox(db)[1]['exec_id']
+
+    def respond(method, path, *, json_body=None, **kwargs):
+        trades = json_body['trades']
+        if any(t['brokerExecutionId'] == poison for t in trades):
+            # 서버가 항목별 결과 없이 요청 전체를 거절하는 상황
+            return _FakeResponse(400, {'error': 'BAD_REQUEST'})
+        return _FakeResponse(201, {
+            'inserted': len(trades),
+            'results': [{'index': i, 'status': 'created', 'id': str(i),
+                         'brokerExecutionId': t['brokerExecutionId']}
+                        for i, t in enumerate(trades)]})
+
+    monkeypatch.setattr(journal_sync._tokens, '_token', 'tok')
+    monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
+    monkeypatch.setattr(journal_sync, '_request', respond)
+
+    ok, fail = journal_sync.flush_once()
+
+    assert (ok, fail) == (3, 1)               # 진범 1건만 실패
+    rows = {r['exec_id']: r for r in _outbox(db)}
+    assert rows[poison]['reject_count'] == 1  # 분할로 특정됐으니 거절로 센다
+    assert all(r['synced_at'] for k, r in rows.items() if k != poison)
+
+
+def test_server_error_is_not_bisected(db, monkeypatch):
+    """5xx 는 이 건의 문제가 아니다 — 쪼개지 말고 통째로 다시 보낸다."""
+    for i in range(4):
+        _fill(db, odno=f'000000000{i}')
+    calls = _patch_transport(monkeypatch, _FakeResponse(503, {'error': 'down'}))
+
+    ok, fail = journal_sync.flush_once()
+
+    assert (ok, fail) == (0, 4)
+    assert len(calls) == 1                    # 분할 재시도를 하지 않았다
+    assert all(r['reject_count'] == 0 for r in _outbox(db))
+
+
+# ── 응답 매핑 ─────────────────────────────────────────────────────────
+
+def test_results_are_matched_by_exec_id_not_position(db, monkeypatch):
+    """순서가 어긋난 응답을 위치로 믿으면 엉뚱한 행이 전송 완료로 표시된다."""
+    _fill(db, odno='0000000001')
+    _fill(db, odno='0000000002')
+    first, second = [r['exec_id'] for r in _outbox(db)]
+
+    # 서버가 순서를 뒤집어 돌려준 상황 — 두 번째 건만 실패다.
+    _patch_transport(monkeypatch, _FakeResponse(201, {
+        'inserted': 1, 'results': [
+            {'index': 1, 'status': 'failed', 'brokerExecutionId': second,
+             'errorCode': 'VALIDATION_ERROR', 'error': '거절'},
+            {'index': 0, 'status': 'created', 'id': '11', 'brokerExecutionId': first},
+        ]}))
+
+    assert journal_sync.flush_once() == (1, 1)
+    rows = {r['exec_id']: r for r in _outbox(db)}
+    assert rows[first]['remote_id'] == '11'
+    assert rows[first]['synced_at'] is not None
+    assert rows[second]['synced_at'] is None
+
+
+def test_mismatched_index_without_exec_id_is_not_trusted(db, monkeypatch):
+    """멱등키도 없고 index 도 어긋나면 짝을 지을 수 없다 — 재전송에 맡긴다."""
+    _fill(db)
+    _patch_transport(monkeypatch, _FakeResponse(201, {
+        'inserted': 1, 'results': [{'index': 7, 'status': 'created', 'id': '99'}]}))
+
+    assert journal_sync.flush_once() == (0, 1)
+    assert journal_sync.pending_count() == 1
+    assert _outbox(db)[0]['reject_count'] == 0   # 서버 거절이 아니므로 세지 않는다
+
+
+# ── 대기열 정리 (retention) ───────────────────────────────────────────
+
+def test_purge_removes_only_old_synced_rows(db, monkeypatch):
+    """라파 SD카드 보호. 미전송·dead-letter 행은 건드리면 안 된다."""
+    for i in range(3):
+        _fill(db, odno=f'000000000{i}')
+    conn = db._get_conn()
+    conn.execute("UPDATE journal_outbox SET synced_at = '2020-01-01 00:00:00' WHERE id = 1")
+    conn.execute("UPDATE journal_outbox SET synced_at = datetime('now') WHERE id = 2")
+    conn.execute("UPDATE journal_outbox SET dead_at = '2020-01-01 00:00:00' WHERE id = 3")
+    conn.commit()
+
+    assert journal_sync.purge_synced(days=30) == 1
+
+    remaining = {r['id'] for r in _outbox(db)}
+    assert remaining == {2, 3}   # 최근 전송분과 dead-letter 는 남는다
+
+
+def test_retention_outlives_the_backfill_window():
+    """보존 기간이 백필 스캔 범위보다 짧으면 이미 보낸 건을 매번 다시 주워 담는다."""
+    assert journal_sync._RETENTION_DAYS > journal_sync._BACKFILL_LOOKBACK_DAYS
+
+
+# ── 백필 (큐에 들어가지 못한 체결 회수) ───────────────────────────────
+
+def _recent(minutes_ago):
+    from datetime import datetime, timedelta
+    return (datetime.now(journal_sync.KST)
+            - timedelta(minutes=minutes_ago)).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _patch_backfill_transport(monkeypatch, last_sync=None):
+    """last-sync 조회만 응답하고 배치 전송은 하지 않는 전송 계층."""
+    monkeypatch.setattr(journal_sync._tokens, '_token', 'tok')
+    monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
+    calls = []
+
+    def fake_request(method, path, *, json_body=None, params=None, **kwargs):
+        calls.append((method, path, params))
+        if path == '/api/v1/trades/last-sync':
+            return _FakeResponse(200, last_sync if last_sync is not None else
+                                 {'lastExecutedAt': None, 'lastBrokerExecutionId': None,
+                                  'count': 0})
+        return _FakeResponse(201, {'inserted': 0, 'results': []})
+
+    monkeypatch.setattr(journal_sync, '_request', fake_request)
+    return calls
+
+
+def test_backfill_recovers_fills_made_while_integration_was_off(db, monkeypatch):
+    """연동이 꺼져 있던 동안의 체결은 큐에 없다 — 큐 재시도로는 영영 복구되지 않는다."""
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    _fill(db, custom_time=_recent(30))
+    assert _outbox(db) == []          # 적재 자체가 일어나지 않았다
+
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
+    _patch_backfill_transport(monkeypatch)
+
+    assert journal_sync.backfill_once() == (1, 1)
+    assert journal_sync.pending_count() == 1
+    assert _outbox(db)[0]['payload']
+
+
+def test_backfill_asks_the_server_with_source_scope(db, monkeypatch):
+    """source 를 빼면 웹에서 손으로 넣은 기록까지 섞여 구간이 통째로 건너뛰어진다."""
+    calls = _patch_backfill_transport(monkeypatch)
+    journal_sync.backfill_once()
+
+    method, path, params = calls[0]
+    assert (method, path) == ('GET', '/api/v1/trades/last-sync')
+    assert params['source'] == 'my-stock-hts'
+    assert params['isSimulated'] == 'false'
+
+
+def test_backfill_does_not_duplicate_rows_already_queued(db, monkeypatch):
+    """정상 경로로 이미 큐에 있는 건을 다시 넣으면 안 된다."""
+    _fill(db, custom_time=_recent(30))
+    assert len(_outbox(db)) == 1
+
+    _patch_backfill_transport(monkeypatch)
+    assert journal_sync.backfill_once() == (0, 1)   # 스캔은 했지만 회수 0건
+    assert len(_outbox(db)) == 1
+
+
+def test_backfill_converts_server_utc_to_local_kst(db, monkeypatch):
+    """서버는 UTC, 로컬 trades.time 은 KST — 변환을 빠뜨리면 9시간이 어긋난다."""
+    from datetime import datetime, timedelta, timezone
+    utc_point = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    since = journal_sync._backfill_since(
+        {'lastExecutedAt': utc_point.strftime('%Y-%m-%dT%H:%M:%S%z')})
+    expected = (utc_point.astimezone(journal_sync.KST)
+                - timedelta(minutes=journal_sync._BACKFILL_OVERLAP_MIN))
+
+    assert since == expected.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def test_backfill_falls_back_to_lookback_when_server_is_empty(db):
+    """서버에 기록이 없으면 기본 조회 범위로 거슬러 올라간다."""
+    from datetime import datetime, timedelta
+    since = journal_sync._backfill_since({'lastExecutedAt': None})
+    expected = (datetime.now(journal_sync.KST)
+                - timedelta(days=journal_sync._BACKFILL_LOOKBACK_DAYS))
+
+    assert since[:10] == expected.strftime('%Y-%m-%d')
+
+
+def test_backfill_ignores_non_fill_rows(db, monkeypatch):
+    """접수·취소는 체결이 아니다 — 백필도 전송 대상 판정을 똑같이 따른다."""
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    _fill(db, order_status='접수', custom_time=_recent(30))
+    _fill(db, order_status='취소', odno='0000000099', custom_time=_recent(30))
+
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
+    _patch_backfill_transport(monkeypatch)
+
+    assert journal_sync.backfill_once() == (0, 0)
+    assert _outbox(db) == []
+
+
+def test_backfill_is_noop_when_disabled(db, monkeypatch):
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    calls = _patch_backfill_transport(monkeypatch)
+
+    assert journal_sync.backfill_once() == (0, 0)
+    assert calls == []                 # 서버를 건드리지도 않는다
+
+
+def test_backfill_gives_up_quietly_without_read_scope(db, monkeypatch):
+    """trades:read 없는 키면 백필은 못 하지만 전송은 계속돼야 한다."""
+    monkeypatch.setattr(journal_sync._tokens, '_token', 'tok')
+    monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
+    monkeypatch.setattr(journal_sync, '_request',
+                        lambda *a, **kw: _FakeResponse(403, {'error': 'forbidden'}))
+
+    # 조회에 실패하면 기본 범위로라도 스캔한다 — 예외로 워커를 끊지 않는다.
+    assert journal_sync.backfill_once() == (0, 0)
