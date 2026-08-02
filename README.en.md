@@ -696,10 +696,24 @@ Beyond symbol/quantity/price, each record carries **realized P&L (`profit_amt`/`
 
 In the local `trades` table the **entry/exit rationale lives only on the `접수` (submitted) row**. The `체결` (filled) row's reason is always just a "fill confirmed (...)" note, so sending only the fill row drops the entire reason you bought or sold. The originating order's rationale is therefore looked up and sent alongside it.
 
+This is how it renders on the web card:
+
 ```
-Buy  → [추세매수] 조건 만족 [점수:8.5, RSI:61.6, 체결강도:106.7%] [ATR:11,025/변동성:90.6%] [ATR손절:-11%] · 체결 확인 (잔고 입고 확인)
-Sell → [추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5, RSI:47.5] · 체결 확인 (잔고 0 확인) · 손익: -103,100원 (-10.67%)
+[Buy]   조건 만족(슈퍼모멘텀)
+        [당일 재진입(기존 100.1% 경신)]
+        [점수:9.5, RSI:70.4, 체결강도:102.7%]
+        [ATR:1,129/변동성:54.4%]
+        [ATR손절:-7%]
+        · 체결 확인 (잔고 입고 확인)
+
+[Sell]  반익절(10.3%)
+        · 체결 확인 (잔고 0 확인)
+        · 손익: +88,000원 (+10.34%)
 ```
+
+Each bracketed group of the entry rationale gets its own line; the sections that follow (fill confirmation, P&L) are joined with `·`. External orders with no submission row leave just the confirmation line, with no leading `·`.
+
+> **Sent as `<p>` blocks.** The server renders `memo` into the card as **raw HTML**, so newline characters do not break lines. The card body sits inside Quill's `.ql-editor`, where paragraph margins are zero, and `<p>` is also Quill's native block format so opening the entry in the editor preserves the layout. Reason strings are escaped for `&`, `<` and `>` so a stray character cannot break the card.
 
 *   **Sells also spell out the realized P&L in the memo.** It is sent as the structured `realizedPnl` field too, but that value is not rendered in the web card body, so the journal alone would never tell you the outcome. Overseas fills are labelled in their own currency, e.g. `-12.34 USD`.
 *   The lookup **must be scoped by date**: `odno` is reused every business day, so without it the rationale from a different day's identically-numbered order would be attached.

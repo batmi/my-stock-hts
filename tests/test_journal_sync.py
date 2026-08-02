@@ -7,6 +7,7 @@
   - 전송 실패·서버 장애가 매매 로직으로 새어 나오지 않고, 재시도로 복구된다
 """
 import json
+import re
 import sqlite3
 
 import pytest
@@ -221,7 +222,7 @@ def test_strategy_fields_are_carried(db):
     payload = json.loads(_outbox(db)[0]['payload'])
     assert payload['strategyScore'] == 7.2
     assert payload['stopLossRate'] == -7.0
-    assert payload['memo'] == '추세 진입'
+    assert payload['memo'] == '<p>추세 진입</p>'
 
 
 def test_executed_at_carries_kst_offset(db):
@@ -521,24 +522,59 @@ def _memo(db, index=0):
     return json.loads(_outbox(db)[index]['payload'])['memo']
 
 
+def _memo_lines(db, index=0):
+    """웹 카드에 표시될 메모를 줄 단위로 돌려준다.
+
+    memo 는 `<p>` 문단으로 나가는데(서버가 HTML 그대로 카드에 그리므로 개행문자로는
+    줄이 나뉘지 않는다), 검증은 표시될 줄 목록으로 하는 편이 의도가 드러난다.
+    """
+    return re.findall(r'<p>(.*?)</p>', _memo(db, index), re.S)
+
+
+def test_memo_is_split_into_lines_for_the_web_card(db):
+    """한 줄로 붙여 보내면 카드에서 통째로 흘러 눈으로 훑을 수 없다."""
+    _submit(db, reason='조건 만족(슈퍼모멘텀) [당일 재진입(기존 100.1% 경신)] '
+                       '[점수:9.5, RSI:70.4, 체결강도:102.7%] '
+                       '[ATR:1,129/변동성:54.4%] [ATR손절:-7%]')
+    _fill(db, reason='체결 확인 (잔고 입고 확인)')
+
+    assert _memo_lines(db) == [
+        '조건 만족(슈퍼모멘텀)',
+        '[당일 재진입(기존 100.1% 경신)]',
+        '[점수:9.5, RSI:70.4, 체결강도:102.7%]',
+        '[ATR:1,129/변동성:54.4%]',
+        '[ATR손절:-7%]',
+        '· 체결 확인 (잔고 입고 확인)',
+    ]
+
+
 def test_memo_carries_the_reason_from_the_submission(db):
     """왜 샀는지는 '접수' 행에만 있다 — 체결 행만 보내면 근거가 통째로 사라진다."""
     _submit(db, reason='[추세매수] 조건 만족 [점수:8.5, RSI:61.6]')
     _fill(db, reason='체결 확인 (잔고 입고 확인)')
 
-    assert _memo(db) == ('[추세매수] 조건 만족 [점수:8.5, RSI:61.6] · '
-                         '체결 확인 (잔고 입고 확인)')
+    assert _memo_lines(db) == ['[추세매수] 조건 만족', '[점수:8.5, RSI:61.6]',
+                               '· 체결 확인 (잔고 입고 확인)']
 
 
 def test_sell_memo_includes_realized_pnl(db):
     """구조화 필드로도 보내지만 웹 카드 본문엔 안 나온다 — 메모에도 적는다."""
     _submit(db, type_str='매도(AUTO)', odno='0000003867',
-            reason='[추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5]')
+            reason='반익절(10.3%)')
     _fill(db, type_str='매도(AUTO)', odno='0000003867',
-          reason='체결 확인 (잔고 0 확인)', profit_amt=-103100, profit_rate=-10.67)
+          reason='체결 확인 (잔고 0 확인)', profit_amt=88000, profit_rate=10.34)
 
-    assert _memo(db) == ('[추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5] · '
-                         '체결 확인 (잔고 0 확인) · 손익: -103,100원 (-10.67%)')
+    assert _memo_lines(db) == ['반익절(10.3%)', '· 체결 확인 (잔고 0 확인)',
+                               '· 손익: +88,000원 (+10.34%)']
+
+
+def test_memo_escapes_html_so_a_stray_bracket_cannot_break_the_card(db):
+    """memo 는 카드에 HTML 그대로 들어간다 — 이스케이프하지 않으면 화면이 깨진다."""
+    _submit(db, reason='<b>조건</b> & 만족')
+    _fill(db, reason='체결 확인')
+
+    assert '&lt;b&gt;조건&lt;/b&gt; &amp; 만족' in _memo(db)
+    assert '<b>' not in _memo(db)
 
 
 def test_buy_memo_has_no_pnl_section(db):
@@ -555,14 +591,17 @@ def test_memo_ignores_the_same_order_number_from_another_day(db):
             custom_time='2026-06-30 10:00:00', reason='[다른날] 붙으면 안 되는 근거')
     _fill(db, reason='체결 확인 (잔고 입고 확인)')
 
-    assert _memo(db) == '체결 확인 (잔고 입고 확인)'
+    assert _memo_lines(db) == ['체결 확인 (잔고 입고 확인)']
 
 
 def test_memo_falls_back_when_there_is_no_submission_row(db):
-    """외부(앱/HTS) 주문은 접수 기록이 없다 — 확인 문구만 남기고 넘어간다."""
+    """외부(앱/HTS) 주문은 접수 기록이 없다 — 확인 문구만 남기고 넘어간다.
+
+    앞이 비었는데 '·' 를 붙이면 점만 덩그러니 남는다.
+    """
     _fill(db, type_str='현금매수(외부)', reason='체결 확인 (앱/HTS 외부 주문)')
 
-    assert _memo(db) == '체결 확인 (앱/HTS 외부 주문)'
+    assert _memo_lines(db) == ['체결 확인 (앱/HTS 외부 주문)']
 
 
 def test_memo_follows_the_original_order_when_amended(db):
@@ -571,7 +610,7 @@ def test_memo_follows_the_original_order_when_amended(db):
     _fill(db, odno='0000022222', org_odno='0000011111',
           reason='체결 확인 (사용자 정정)')
 
-    assert _memo(db).startswith('[추세매수] 조건 만족 [점수:8.0]')
+    assert _memo_lines(db)[0] == '[추세매수] 조건 만족'
 
 
 def test_memo_does_not_repeat_an_identical_reason(db):
@@ -579,7 +618,7 @@ def test_memo_does_not_repeat_an_identical_reason(db):
     _submit(db, type_str='매수(수동)', reason='사용자 수동 주문')
     _fill(db, type_str='매수(수동)', reason='사용자 수동 주문')
 
-    assert _memo(db) == '사용자 수동 주문'
+    assert _memo_lines(db) == ['사용자 수동 주문']
 
 
 def test_overseas_pnl_is_labelled_with_its_own_currency(db):
@@ -610,7 +649,7 @@ def test_entry_reason_lookup_failure_never_breaks_recording(db, monkeypatch):
     _fill(db, reason='체결 확인 (잔고 입고 확인)')
 
     assert len(_outbox(db)) == 1
-    assert _memo(db) == '체결 확인 (잔고 입고 확인)'
+    assert _memo_lines(db) == ['체결 확인 (잔고 입고 확인)']
 
 
 def test_backfill_also_recovers_the_entry_reason(db, monkeypatch):
@@ -623,7 +662,7 @@ def test_backfill_also_recovers_the_entry_reason(db, monkeypatch):
     _patch_backfill_transport(monkeypatch)
     assert journal_sync.backfill_once() == (1, 1)
 
-    assert _memo(db).startswith('[추세매수] 조건 만족 [점수:8.5]')
+    assert _memo_lines(db)[:2] == ['[추세매수] 조건 만족', '[점수:8.5]']
 
 
 # ── 재동기화 (웹에서 지운 기록 복구) ─────────────────────────────────

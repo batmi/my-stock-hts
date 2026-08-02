@@ -43,6 +43,7 @@ Outbox 패턴
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -235,6 +236,44 @@ def _format_pnl(trade, currency):
     return f'손익: {amount_text} ({rate:+.2f}%)'
 
 
+# 진입 사유의 대괄호 묶음(`[점수:9.5, ...]`)을 줄 단위로 끊기 위한 경계.
+#  한 줄로 붙여 보내면 카드에서 통째로 흘러 눈으로 훑기 어렵다.
+_MEMO_SEGMENT = re.compile(r'\s+(?=\[)')
+
+# 서버 상한은 5000자. 넘기면 요청이 거절되고 결국 dead-letter 로 빠지므로 여유를
+# 두고 자른다 — 메모가 길어서 체결 기록을 통째로 잃는 건 말이 안 된다.
+_MEMO_MAX_CHARS = 4900
+
+
+def _memo_lines(trade, side, currency):
+    """메모에 넣을 줄 목록. 표시(HTML) 이전의 순수 텍스트."""
+    entry = (trade.get('_entry_reason') or '').strip()
+    fill = (trade.get('reason') or '').strip()
+
+    lines = []
+    if entry:
+        # `조건 만족(슈퍼모멘텀) [점수:9.5] [ATR:1,129]` → 세 줄.
+        # 대괄호 묶음은 하나의 진입 사유를 나눠 적은 것이므로 '·' 를 붙이지 않는다.
+        lines.extend(seg for seg in _MEMO_SEGMENT.split(entry) if seg)
+
+    def _section(text):
+        """항목 구분자. 앞에 아무것도 없으면 점만 덩그러니 남으므로 붙이지 않는다."""
+        return f'· {text}' if lines else text
+
+    # 외부·수동 주문은 접수와 체결 사유가 같을 수 있다 — 같은 문장을 두 번 적지 않는다.
+    if fill and fill != entry:
+        lines.append(_section(fill))
+    if side == 'SELL':
+        pnl = _format_pnl(trade, currency)
+        if pnl:
+            lines.append(_section(pnl))
+    return lines
+
+
+def _html_escape(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
 def _compose_memo(trade, side, currency):
     """웹 일지에 남길 메모를 만든다.
 
@@ -245,21 +284,24 @@ def _compose_memo(trade, side, currency):
 
     매도는 실현손익을 함께 적는다 — 구조화 필드(realizedPnl)로도 보내지만
     웹 카드 본문에는 그 값이 나오지 않아 일지만 봐서는 결과를 알 수 없다.
+
+    출력은 `<p>` 문단들이다. 서버의 memo 는 웹 카드에 **HTML 그대로** 그려지므로
+    개행문자로는 줄이 나뉘지 않는다. 카드 본문이 Quill 의 `.ql-editor` 안이라
+    문단 여백이 0 이고, 그래서 `<p>` 가 `<br>` 보다 안전하다(편집기로 열었을 때도
+    Quill 의 기본 표현과 같아 서식이 흐트러지지 않는다).
     """
-    entry = (trade.get('_entry_reason') or '').strip()
-    fill = (trade.get('reason') or '').strip()
+    lines = _memo_lines(trade, side, currency)
 
-    parts = [text for text in (entry, fill) if text]
-    if len(parts) == 2 and parts[0] == parts[1]:
-        parts = parts[:1]          # 외부·수동 주문은 양쪽 사유가 같을 수 있다
-    if side == 'SELL':
-        pnl = _format_pnl(trade, currency)
-        if pnl:
-            parts.append(pnl)
-
-    # 서버는 5000자를 넘기면 요청을 거절한다. 거절당하면 dead-letter 로 빠지므로
-    # 애초에 잘라 보낸다 — 메모가 길어서 체결 기록을 통째로 잃는 건 말이 안 된다.
-    return ' · '.join(parts)[:4900]
+    html, used = [], 0
+    for line in lines:
+        block = f'<p>{_html_escape(line)}</p>'
+        # 상한을 넘기면 그 줄부터 버린다. 중간에서 자르면 태그가 깨져 카드 전체가
+        # 망가지므로, 줄 단위로만 끊는다.
+        if used + len(block) > _MEMO_MAX_CHARS:
+            break
+        html.append(block)
+        used += len(block)
+    return ''.join(html)
 
 
 def build_payload(trade):
