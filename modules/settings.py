@@ -353,22 +353,8 @@ def view_system_config(group=None):
         #  값만 보고 "1회 4% 리스크로 돌고 있다"고 오해하지 않도록 실효값을 함께 적는다.
         _vt_governs = getattr(config.settings, 'USE_VOLATILITY_TARGETING', True)
         _risk_pt = getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0)
-        row("1회 최대 리스크 (%)",
-            "계좌 대비 1회 매매 손실폭 상한" + (" — 현재 변동성 타겟팅이 더 낮게 제한 중" if _vt_governs else ""),
-            "SYSTEM_RISK_PER_TRADE", f"{_risk_pt}", key="SYSTEM_RISK_PER_TRADE")
-        if _vt_governs and _risk_pt > 0:
-            _eff_ratio = config.resolve_invest_ratio() * getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)
-            _atr_mult = config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)
-            table.add_row(
-                f"  [dim]└ 실효: 종목당 비중 약 {_eff_ratio * 100:.1f}% "
-                f"(= 기초 {config.resolve_invest_ratio() * 100:.0f}% × 변동성 하한 "
-                f"{getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)}) × 손절폭(ATR×{_atr_mult:g})\n"
-                f"    손절 8% 가정 시 1회 리스크 약 {_eff_ratio * 8:.1f}% — 이 한도({_risk_pt:g}%)는 미발동[/dim]",
-                "", "")
-        row("총 오픈 리스크 한도 (%)",
-            "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)"
-            + (" — 실제 히트는 약 3~4% 수준" if _vt_governs else ""),
-            "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
+        row("1회 최대 리스크 (%)", "계좌 대비 1회 매매 손실폭 상한", "SYSTEM_RISK_PER_TRADE", f"{_risk_pt}", key="SYSTEM_RISK_PER_TRADE")
+        row("총 오픈 리스크 한도 (%)", "보유 전체 동시 손절 잠재손실 상한 (0%면 미사용)", "SYSTEM_MAX_PORTFOLIO_RISK", f"{getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)}", key="SYSTEM_MAX_PORTFOLIO_RISK")
 
         # [백테스트 보호] 3-4 리스크 한도 동적 스케일링(국면·휩소율·드로다운 배수)은
         #  조회·편집 화면 모두에서 숨긴다 (BACKTESTED_HIDDEN_KEYS 주석 참조).
