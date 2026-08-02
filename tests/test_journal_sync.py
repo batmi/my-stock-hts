@@ -626,6 +626,199 @@ def test_backfill_also_recovers_the_entry_reason(db, monkeypatch):
     assert _memo(db).startswith('[추세매수] 조건 만족 [점수:8.5]')
 
 
+# ── 재동기화 (웹에서 지운 기록 복구) ─────────────────────────────────
+
+def _mark_synced(db):
+    """이미 서버로 보내진 상태로 만든다."""
+    conn = db._get_conn()
+    conn.execute("UPDATE journal_outbox SET synced_at = ?, remote_id = '1'",
+                 (_recent(5),))
+    conn.commit()
+
+
+def test_resync_resends_records_already_marked_as_sent(db, monkeypatch):
+    """운용자가 웹에서 지운 기록은 outbox 에 '전송 완료'로 남아 백필로는 못 잡는다."""
+    _fill(db, custom_time=_recent(30))
+    _mark_synced(db)
+    assert journal_sync.pending_count() == 0
+
+    _patch_backfill_transport(monkeypatch)
+    assert journal_sync.backfill_once() == (0, 1)      # 백필로는 회수되지 않는다
+    assert journal_sync.pending_count() == 0
+
+    queued, scanned = journal_sync.resync_once(date_from=_recent(60)[:10])
+
+    assert (queued, scanned) == (1, 1)
+    assert journal_sync.pending_count() == 1           # 다시 보낼 대기 상태
+    row = _outbox(db)[0]
+    assert row['synced_at'] is None and row['attempts'] == 0
+
+
+def test_resync_honours_the_requested_period(db):
+    """기간 밖의 체결까지 되보내면 운용자가 지정한 범위의 의미가 없어진다."""
+    _fill(db, odno='0000000001', custom_time='2026-05-01 09:30:00')   # 범위 밖
+    _fill(db, odno='0000000002', custom_time='2026-07-15 09:30:00')   # 범위 안
+    _mark_synced(db)
+
+    queued, scanned = journal_sync.resync_once(date_from='2026-07-01',
+                                               date_to='2026-07-31')
+
+    assert (queued, scanned) == (1, 1)
+    rows = {r['exec_id']: r for r in _outbox(db)}
+    resent = [k for k, r in rows.items() if r['synced_at'] is None]
+    assert len(resent) == 1 and '20260715' in resent[0]
+
+
+def test_resync_end_date_covers_the_whole_day(db):
+    """종료일을 2026-07-31 로 주면 그날 장중 체결이 빠지면 안 된다."""
+    _fill(db, custom_time='2026-07-31 15:20:00')
+    _mark_synced(db)
+
+    assert journal_sync.resync_once(date_from='2026-07-01',
+                                    date_to='2026-07-31') == (1, 1)
+
+
+def test_resync_leaves_dead_lettered_rows_alone(db):
+    """서버가 반복 거절한 건은 '지운 기록 복구'와 무관하다 — 되살리지 않는다."""
+    _fill(db, custom_time=_recent(30))
+    conn = db._get_conn()
+    conn.execute("UPDATE journal_outbox SET synced_at = NULL, dead_at = ?, reject_count = 5",
+                 (_recent(5),))
+    conn.commit()
+
+    assert journal_sync.resync_once(date_from=_recent(60)[:10]) == (0, 1)
+    assert journal_sync.dead_count() == 1
+    assert journal_sync.pending_count() == 0
+
+
+def test_resync_marks_rows_as_backlog(db):
+    """재동기화분이 실시간 체결보다 먼저 나가면 일지 반영이 몇 분씩 밀린다."""
+    _fill(db, odno='0000000001', custom_time=_recent(30))
+    _mark_synced(db)
+    journal_sync.resync_once(date_from=_recent(60)[:10])
+
+    # 재동기화 뒤에 실시간 체결이 하나 발생
+    _fill(db, odno='0000000002', custom_time=_recent(1))
+
+    backlog = {r['exec_id']: r['is_backlog'] for r in _outbox(db)}
+    assert sorted(backlog.values()) == [0, 1]
+
+    # 전송 순서: 실시간 체결이 먼저다
+    first = journal_sync._fetch_pending()[0]
+    assert backlog[first['exec_id']] == 0
+
+
+def test_resync_is_noop_when_disabled(db, monkeypatch):
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    assert journal_sync.resync_once(date_from='2026-01-01') == (0, 0)
+
+
+# ── 서버 지시(Ping 응답) 처리 ────────────────────────────────────────
+
+def _ping_response(monkeypatch, body):
+    """Ping 응답만 갈아끼우고, 보낸 요청 본문을 기록한다."""
+    monkeypatch.setattr(journal_sync._tokens, '_token', 'tok')
+    monkeypatch.setattr(journal_sync._tokens, '_expires_at', 1e18)
+    monkeypatch.setattr(journal_sync, '_handled_command_id', None)
+    monkeypatch.setattr(journal_sync, '_pending_ack', None)
+    sent = []
+
+    def fake_request(method, path, *, json_body=None, params=None, **kwargs):
+        sent.append((path, json_body))
+        if path == '/api/v1/bot/status':
+            return _FakeResponse(200, body)
+        return _FakeResponse(200, {'lastExecutedAt': None, 'count': 0})
+
+    monkeypatch.setattr(journal_sync, '_request', fake_request)
+    return sent
+
+
+def test_ping_runs_resync_command_from_server(db, monkeypatch):
+    """웹에서 누른 재동기화가 Ping 응답을 타고 봇까지 도달해야 한다."""
+    _fill(db, custom_time=_recent(30))
+    _mark_synced(db)
+    sent = _ping_response(monkeypatch, {
+        'status': 'success', 'command': 'resync', 'commandId': 7,
+        'commandParams': {'from': _recent(60)[:10], 'to': None}})
+
+    assert journal_sync.ping('running') is True
+    assert journal_sync.pending_count() == 1          # 재동기화가 실제로 돌았다
+
+    # 결과는 다음 Ping 에 실려 서버로 보고된다
+    journal_sync.ping('running')
+    ack = sent[-1][1]['commandAck']
+    assert ack['id'] == 7 and ack['result'] == 'queued' and ack['count'] == 1
+
+
+def test_same_command_is_not_run_twice(db, monkeypatch):
+    """서버는 ack 받을 때까지 같은 명령을 계속 준다 — 10초마다 재실행하면 안 된다."""
+    _fill(db, custom_time=_recent(30))
+    _mark_synced(db)
+    _ping_response(monkeypatch, {
+        'status': 'success', 'command': 'resync', 'commandId': 7,
+        'commandParams': {'from': _recent(60)[:10]}})
+
+    calls = []
+    real = journal_sync.resync_once
+    monkeypatch.setattr(journal_sync, 'resync_once',
+                        lambda *a, **kw: (calls.append(1), real(*a, **kw))[1])
+
+    for _ in range(5):
+        journal_sync.ping('running')
+
+    assert len(calls) == 1
+
+
+def test_pause_command_is_refused(db, monkeypatch):
+    """웹서버가 매매봇을 멈추게 하는 지시는 구현하지 않는다."""
+    _ping_response(monkeypatch, {
+        'status': 'success', 'command': 'pause', 'commandId': 9})
+
+    ran = []
+    monkeypatch.setattr(journal_sync, 'resync_once',
+                        lambda *a, **kw: (ran.append(1), (0, 0))[1])
+
+    assert journal_sync.ping('running') is True
+    assert ran == []
+    assert journal_sync._pending_ack is None      # ack 도 보내지 않는다(미구현이므로)
+
+
+def test_command_without_id_is_refused(db, monkeypatch):
+    """commandId 가 없으면 중복 실행을 막을 수 없다 — 실행하지 않는다."""
+    _ping_response(monkeypatch, {'status': 'success', 'command': 'resync'})
+
+    ran = []
+    monkeypatch.setattr(journal_sync, 'resync_once',
+                        lambda *a, **kw: (ran.append(1), (0, 0))[1])
+
+    journal_sync.ping('running')
+    assert ran == []
+
+
+def test_ping_without_command_is_unchanged(db, monkeypatch):
+    """평소 Ping 은 예전과 똑같이 동작해야 한다."""
+    sent = _ping_response(monkeypatch, {'status': 'success', 'command': 'none'})
+
+    assert journal_sync.ping('running') is True
+    assert 'commandAck' not in sent[0][1]
+
+
+def test_resync_failure_is_reported_back(db, monkeypatch):
+    """봇이 조용히 실패하면 운용자는 영영 복구된 줄 안다."""
+    _ping_response(monkeypatch, {
+        'status': 'success', 'command': 'resync', 'commandId': 3,
+        'commandParams': {'from': '2026-01-01'}})
+
+    def boom(*a, **kw):
+        raise sqlite3.OperationalError('disk I/O error')
+
+    monkeypatch.setattr(journal_sync, 'resync_once', boom)
+    journal_sync.ping('running')
+
+    assert journal_sync._pending_ack['result'] == 'failed'
+    assert 'disk I/O error' in journal_sync._pending_ack['message']
+
+
 # ── dead-letter (전송 포기) ───────────────────────────────────────────
 
 def _clear_backoff(db):
@@ -923,3 +1116,53 @@ def test_backfill_gives_up_quietly_without_read_scope(db, monkeypatch):
 
     # 조회에 실패하면 기본 범위로라도 스캔한다 — 예외로 워커를 끊지 않는다.
     assert journal_sync.backfill_once() == (0, 0)
+
+
+# ── 서버와의 계약 고정 ────────────────────────────────────────────────
+#  아래 두 본문은 stock-memo 의 실제 /api/v1/bot/status 응답을 그대로 옮긴 것이다.
+#  양쪽 저장소가 따로 움직이므로, 필드 이름이 어긋나면 재동기화 버튼이 조용히
+#  죽는다(봇이 명령을 못 알아듣고 아무 일도 하지 않는다). 그 순간을 여기서 잡는다.
+
+_SERVER_PING_IDLE = {
+    "command": "none",
+    "nextPingSeconds": 10,
+    "status": "success",
+    "updatedAt": "2026-08-02T21:59:51+09:00",
+}
+
+_SERVER_PING_WITH_RESYNC = {
+    "command": "resync",
+    "commandId": 1,
+    "commandParams": {"from": "2026-05-04", "to": None},
+    "nextPingSeconds": 10,
+    "status": "success",
+    "updatedAt": "2026-08-02T21:59:51+09:00",
+}
+
+
+def test_real_server_idle_response_asks_for_nothing(db):
+    assert journal_sync._handle_command(_SERVER_PING_IDLE) is None
+
+
+def test_real_server_resync_response_is_understood(db, monkeypatch):
+    """서버가 실제로 내려보내는 본문을 봇이 해석하지 못하면 버튼이 죽는다."""
+    seen = {}
+    monkeypatch.setattr(journal_sync, 'resync_once',
+                        lambda f=None, t=None: (seen.update(f=f, t=t), (3, 9))[1])
+
+    ack = journal_sync._handle_command(_SERVER_PING_WITH_RESYNC)
+
+    assert seen == {'f': '2026-05-04', 't': None}      # 기간이 그대로 전달된다
+    assert ack['id'] == 1
+    assert ack['result'] == 'queued'
+    assert ack['count'] == 3
+
+
+def test_ack_shape_matches_what_the_server_stores(db, monkeypatch):
+    """서버는 ack 에서 id/result/count/message 를 읽는다 — 이름이 어긋나면 안 된다."""
+    monkeypatch.setattr(journal_sync, 'resync_once', lambda f=None, t=None: (2, 5))
+    ack = journal_sync._handle_command(_SERVER_PING_WITH_RESYNC)
+
+    assert set(ack) == {'id', 'result', 'count', 'message'}
+    assert isinstance(ack['id'], int) and isinstance(ack['count'], int)
+    assert ack['result'] in ('queued', 'skipped', 'failed')

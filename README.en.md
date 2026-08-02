@@ -645,6 +645,29 @@ Backfill runs once 60s after startup and every **6 hours** thereafter. It asks `
 
 > If the API key lacks the `trades:read` scope, only backfill stops working (sending is unaffected). Reissue the key from the web dashboard.
 
+### Restoring records deleted on the web — the Re-Sync button
+
+The bot only remembers *that it sent* a record; it never checks whether the record is **still there**. So when an operator deletes something on the web, nothing is automatically re-sent — if deliberate deletions kept coming back, there would be no way to delete anything at all.
+
+To bring them back, use **Account Settings → 🔄 재동기화 (Re-Sync)** on the web.
+
+| | |
+|---|---|
+| Range | Quarter (90d) / Half (180d) / Year (365d) — all **rolling**, not calendar |
+| Delivery | Rides along on the bot's next ping response (≤10s) |
+| Duplicates | **None.** The server filters on `brokerExecutionId` |
+| Result | Shown as `restored 10 / already present 80` — which is itself the answer to "what was missing?" |
+
+Since duplicates cost nothing, **err on the side of a longer range.** Operators rarely remember when they deleted something, and a range too short to cover the gap defeats the purpose.
+
+> The ping response is the *only* channel through which the server can instruct the bot — the bot sits behind a home network, so the server can never initiate a connection.
+
+**Deliberately not implemented**: the API spec also defines `pause`/`resume`, but these are **intentionally left unimplemented.** Re-sync means "send me data that is already mine"; `pause` means the web server can halt a trading bot. A compromised or buggy web layer could then stop the bot while it holds a position. The bot logs and ignores any command it does not implement, and the server refuses to even queue one.
+
+Re-synced rows are flagged `is_backlog` and therefore **yield priority to live fills.** A fill that happens during a one-year re-sync must not wait minutes behind the backlog.
+
+Dead-lettered records are not revived by re-sync. There is a reason the server kept rejecting them, and what the operator asked for was "restore what I deleted", not "retry what was rejected".
+
 ### When sending is abandoned (dead-letter)
 
 Only the number of times the server **explicitly rejected that record** is counted; at 5 the row leaves the queue and is stamped into `journal_outbox.dead_at`. Transport failures are deliberately not counted — counting them would discard a perfectly good queue just because the web server stayed down for a while. Conversely, never removing anything lets one permanently-rejected row sit at the head of every batch and **block the healthy records behind it.**

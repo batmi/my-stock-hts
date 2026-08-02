@@ -103,7 +103,7 @@
         "tags": ["Bot Status"],
         "summary": "봇 상태 전송 (Ping)",
         "operationId": "reportBotStatus",
-        "description": "봇이 주기적으로 자신의 상태를 보고합니다. 필요 스코프: `bot:write`\n\n응답의 `nextPingSeconds`를 지키면 서버가 부하에 따라 주기를 조절할 수 있고,\n`command`가 내려오면 봇이 그에 따라 동작할 수 있습니다.",
+        "description": "봇이 주기적으로 자신의 상태를 보고합니다. 필요 스코프: `bot:write`\n\n응답의 `nextPingSeconds`를 지키면 서버가 부하에 따라 주기를 조절할 수 있고,\n`command`가 내려오면 봇이 그에 따라 동작할 수 있습니다.\n\n**이 응답은 서버가 봇에 무언가를 시킬 수 있는 유일한 경로입니다.** 봇은 대개\n가정용 네트워크 뒤에 있어 서버가 먼저 접속할 수 없으므로, 웹 화면에서 누른\n지시는 다음 Ping 응답에 실려 전달됩니다.",
         "requestBody": {
           "required": true,
           "content": {
@@ -121,6 +121,21 @@
                   "isSimulated": {
                     "type": "boolean",
                     "description": "현재 모의투자 모드로 가동 중인지 여부"
+                  },
+                  "commandAck": {
+                    "type": "object",
+                    "description": "직전 Ping 으로 받은 명령의 처리 결과. 이 값을 받아야 서버가 명령을 완료 처리하고 웹 화면에 결과를 표시합니다. 보내지 않으면 서버는 만료될 때까지 같은 명령을 계속 내려보냅니다(재실행은 멱등하므로 안전합니다).",
+                    "required": ["id"],
+                    "properties": {
+                      "id": { "type": "integer", "description": "처리한 명령의 commandId" },
+                      "result": {
+                        "type": "string",
+                        "enum": ["queued", "skipped", "failed"],
+                        "description": "queued=재전송 대기열에 넣음, skipped=대상이 없어 할 일이 없었음, failed=처리 실패"
+                      },
+                      "count": { "type": "integer", "description": "재전송 대기열에 넣은 체결 건수" },
+                      "message": { "type": "string", "maxLength": 500 }
+                    }
                   }
                 }
               }
@@ -145,7 +160,25 @@
                     "command": {
                       "type": ["string", "null"],
                       "enum": ["none", "pause", "resume", "resync", null],
-                      "description": "서버가 봇에 내리는 지시. `resync`는 누락분 재동기화 요청입니다."
+                      "description": "서버가 봇에 내리는 지시. `resync`는 운용자가 웹 화면에서 누른 재동기화 요청으로, `commandParams`의 기간에 해당하는 체결을 다시 보내라는 뜻입니다.\n\n**봇은 자신이 구현한 명령만 실행하고 나머지는 무시해야 합니다.** 특히 `pause`/`resume`는 매매 자체를 멈추는 지시이므로, 재확인·자동 만료 같은 안전장치 없이 구현해서는 안 됩니다."
+                    },
+                    "commandId": {
+                      "type": ["integer", "null"],
+                      "description": "명령 식별자. 봇은 같은 id 를 두 번 실행하지 않아야 합니다. `command`가 `none`/`null`이면 함께 생략됩니다."
+                    },
+                    "commandParams": {
+                      "type": ["object", "null"],
+                      "description": "명령 인자. `resync`의 경우 재전송할 체결 시각 범위입니다. 봇은 로컬 거래기록에서 이 범위의 체결을 다시 전송 대기열에 넣고, 서버는 `brokerExecutionId`로 멱등 처리하므로 이미 있는 기록은 `duplicate`로 건너뜁니다. 따라서 범위를 넉넉히 잡아도 중복이 생기지 않습니다.",
+                      "properties": {
+                        "from": {
+                          "type": ["string", "null"],
+                          "description": "재전송 시작 (YYYY-MM-DD 또는 RFC3339). 생략 시 봇의 기본 범위"
+                        },
+                        "to": {
+                          "type": ["string", "null"],
+                          "description": "재전송 종료 (포함). 생략 시 현재까지"
+                        }
+                      }
                     }
                   }
                 }

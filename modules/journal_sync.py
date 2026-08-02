@@ -370,7 +370,7 @@ def _lookup_entry_reason(cursor, trade):
     return reason
 
 
-def enqueue(cursor, trade, quiet=False):
+def enqueue(cursor, trade, quiet=False, backlog=False):
     """전송 대기열에 적재한다. 호출자의 트랜잭션·커서를 그대로 쓴다.
 
     전송 대상이 아니면 조용히 무시한다. **여기서 예외를 올리면 거래 기록 저장이
@@ -378,6 +378,9 @@ def enqueue(cursor, trade, quiet=False):
 
     quiet=True 는 백필처럼 수백 건을 한 번에 훑는 경로용이다. 건별 로그를 남기면
     로그가 그것만으로 차므로 호출부가 요약 한 줄만 남긴다.
+
+    backlog=True 는 뒤늦게 밀어 넣는 건(재동기화)이라는 표시다. 전송 순서에서
+    뒤로 밀려, 대량 적재 뒤에 난 실시간 체결이 그 뒤에 줄 서지 않게 한다.
 
     반환값이 True 면 INSERT 문을 실제로 실행했다는 뜻이다(중복이라 무시됐을 수도
     있다). 신규 적재 여부까지 알아야 하면 호출 직후 `cursor.rowcount` 를 본다.
@@ -406,9 +409,10 @@ def enqueue(cursor, trade, quiet=False):
         return False
 
     cursor.execute(
-        "INSERT OR IGNORE INTO journal_outbox (exec_id, payload, created_at) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO journal_outbox (exec_id, payload, created_at, is_backlog) "
+        "VALUES (?, ?, ?, ?)",
         (payload['brokerExecutionId'], json.dumps(payload, ensure_ascii=False),
-         datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')))
+         datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'), 1 if backlog else 0))
 
     if quiet:
         return True
@@ -545,13 +549,16 @@ def _fetch_pending(limit=_BATCH_SIZE):
         # CAST 는 생략하면 안 된다. strftime 은 TEXT 를 돌려주는데 SQLite 는 숫자를
         # 언제나 텍스트보다 작다고 보므로, 캐스팅 없이 비교하면 백오프가 통째로
         # 무력화되어 죽은 서버에 매 순회 재요청을 때린다.
+        # is_backlog 를 먼저 정렬한다. 재동기화로 1년치를 밀어 넣으면 그 뒤에 난
+        # 실시간 체결이 backlog 전체 뒤에 줄을 서서 몇 분씩 밀린다. 유지보수
+        # 작업이 실시간 경로 앞에 서면 안 된다.
         cursor.execute(
             "SELECT id, exec_id, payload, attempts, last_attempt_at FROM journal_outbox "
             "WHERE synced_at IS NULL AND dead_at IS NULL "
             "  AND (last_attempt_at IS NULL "
             f"      OR CAST(strftime('%s', last_attempt_at) AS INTEGER) + {_BACKOFF_SQL} "
             "          <= CAST(strftime('%s', ?) AS INTEGER)) "
-            "ORDER BY id LIMIT ?", (now_str, limit))
+            "ORDER BY COALESCE(is_backlog, 0), id LIMIT ?", (now_str, limit))
         return cursor.fetchall()
     except Exception as e:
         logger.warning(f"[Journal] 대기열 조회 실패: {e}")
@@ -737,9 +744,16 @@ def flush_once():
 
 _ping_fail_streak = 0
 
+# 다음 Ping 에 실어 보낼 명령 처리 결과. 서버는 이걸 받아야 명령을 완료 처리한다.
+_pending_ack = None
+# 이미 실행한 명령 id. 서버는 ack 를 받을 때까지 같은 명령을 계속 내려보내므로,
+# 이 값이 없으면 10초마다 재동기화가 반복된다. 재시작하면 잊는데, 그때는 한 번 더
+# 실행될 뿐 결과가 달라지지 않으므로(멱등) 디스크에 남기지 않는다.
+_handled_command_id = None
+
 
 def ping(status='running', message=None, timeout=None, force=False):
-    """봇 상태 Ping. 웹 대시보드의 가동 표시등을 켠다.
+    """봇 상태 Ping. 웹 대시보드의 가동 표시등을 켜고, 서버 지시를 받아 처리한다.
 
     status: running(가동) / stopped(정상 종료) / error(오류)
     force:  메뉴 토글(JOURNAL_SYNC_USE)을 무시하고 자격증명만으로 보낸다.
@@ -747,24 +761,42 @@ def ping(status='running', message=None, timeout=None, force=False):
             False 로 바뀐 뒤에 stop() 이 불리므로, 검사하면 통지가 통째로
             누락되어 웹 표시등이 계속 '정상 가동중'으로 남는다.
     """
-    global _ping_fail_streak
+    global _ping_fail_streak, _pending_ack, _handled_command_id
 
     if not (_has_credentials() if force else is_enabled()):
         return False
     body = {'status': status, 'isSimulated': bool(getattr(config.session, 'is_simulation', False))}
     if message:
         body['message'] = message[:500]
+    if _pending_ack:
+        body['commandAck'] = _pending_ack
 
     res = _request('POST', '/api/v1/bot/status', json_body=body,
                    timeout=timeout or _PING_TIMEOUT, quiet=True)
     ok = bool(res is not None and res.status_code == 200)
 
     if ok:
+        # 서버가 200 을 줬으면 ack 도 전달됐다 — 다음 Ping 에 또 실어 보내지 않는다.
+        _pending_ack = None
         # 끊겼다가 살아난 것은 운용자가 알아야 하므로 회복만 INFO 로 남긴다.
         if _ping_fail_streak:
             logger.info(f"[Journal] 봇 상태 Ping 회복 (연속 실패 {_ping_fail_streak}회 후)")
         _ping_fail_streak = 0
         logger.debug(f"[Journal] 봇 상태 Ping 전송 (status={status})")
+
+        try:
+            payload = res.json() or {}
+        except Exception:
+            payload = {}
+        command_id = payload.get('commandId')
+        if command_id is not None and command_id != _handled_command_id:
+            _handled_command_id = command_id
+            ack = _handle_command(payload)
+            if ack:
+                # 다음 순회에서 보낸다. 여기서 곧바로 다시 Ping 하면 하트비트
+                # 주기가 흐트러지고, 실패 시 재시도 경로가 두 벌이 된다.
+                _pending_ack = ack
+                trigger()   # 재동기화분을 다음 주기까지 묵혀 둘 이유가 없다
     else:
         _ping_fail_streak += 1
         reason = res.status_code if res is not None else '응답 없음'
@@ -916,21 +948,28 @@ def _backfill_since(last_sync):
     return max(since, default).strftime('%Y-%m-%d %H:%M:%S')
 
 
+_FILL_COLUMNS = ("time, type, code, name, qty, price, odno, org_odno, account, "
+                 "is_sim, profit_amt, profit_rate, reason, strategy_score, "
+                 "order_status, stop_loss_rate")
+
+
+def _local_fills_between(cursor, since_str, until_str, limit):
+    """[since, until] 구간의 로컬 체결. 오래된 것부터. 호출자의 커서를 쓴다."""
+    statuses = tuple(_SYNCABLE_STATUS)
+    placeholders = ','.join('?' * len(statuses))
+    cursor.execute(
+        f"SELECT {_FILL_COLUMNS} FROM trades "
+        f"WHERE order_status IN ({placeholders}) AND time >= ? AND time <= ? "
+        f"ORDER BY time LIMIT ?", statuses + (since_str, until_str, limit))
+    return [dict(row) for row in cursor.fetchall()]
+
+
 def _local_fills_since(since_str, limit=_BACKFILL_MAX_ROWS):
     """`since_str` 이후의 로컬 체결 기록. 오래된 것부터."""
     from modules import db_manager
-    statuses = tuple(_SYNCABLE_STATUS)
-    placeholders = ','.join('?' * len(statuses))
     try:
         conn = db_manager.db._get_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT time, type, code, name, qty, price, odno, org_odno, account, "
-            f"       is_sim, profit_amt, profit_rate, reason, strategy_score, "
-            f"       order_status, stop_loss_rate "
-            f"FROM trades WHERE order_status IN ({placeholders}) AND time >= ? "
-            f"ORDER BY time LIMIT ?", statuses + (since_str, limit))
-        return [dict(row) for row in cursor.fetchall()]
+        return _local_fills_between(conn.cursor(), since_str, '9999-12-31 23:59:59', limit)
     except Exception as e:
         logger.warning(f"[Journal] 로컬 체결 조회 실패: {e}")
         return []
@@ -978,6 +1017,133 @@ def backfill_once():
     else:
         logger.debug(f"[Journal] 백필 — 누락 없음 (스캔 {len(rows)}건, {since} 이후)")
     return queued, len(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 재동기화 — 웹에서 지운 기록을 다시 보낸다
+# ══════════════════════════════════════════════════════════════════════
+
+def _parse_command_date(value, default=None, end_of_day=False):
+    """`YYYY-MM-DD` 또는 RFC3339 를 로컬(KST) 비교용 문자열로 바꾼다."""
+    if not value:
+        return default
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except ValueError:
+        return default
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(KST)
+    if end_of_day and len(text) <= 10:
+        # 종료일만 준 경우(2026-08-01)는 그날 하루를 통째로 포함해야 한다.
+        parsed = parsed.replace(hour=23, minute=59, second=59)
+    return parsed.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def resync_once(date_from=None, date_to=None):
+    """지정 기간의 로컬 체결을 전송 대기열에 되돌린다. (대상 건수, 스캔 건수)
+
+    **백필과 다른 점**: 백필은 '큐에 없는' 건만 줍지만, 재동기화는 **이미 보낸
+    건까지 다시 보낸다.** 서버에서 운용자가 지운 기록은 로컬 outbox 에 전송 완료로
+    남아 있어 백필로는 절대 회수되지 않기 때문이다.
+
+    중복 걱정은 하지 않아도 된다 — 서버가 `brokerExecutionId` 로 멱등 처리해
+    이미 있는 기록은 `duplicate` 로 건너뛴다. 그래서 기간을 넉넉히 잡는 편이 낫다.
+
+    dead-letter 행은 건드리지 않는다. 서버가 반복 거절한 데는 이유가 있고,
+    운용자가 원한 것은 '지운 기록 복구'이지 '거절된 기록 재시도'가 아니다.
+    """
+    if not is_enabled():
+        return 0, 0
+
+    from modules import db_manager
+    since = _parse_command_date(
+        date_from,
+        (datetime.now(KST) - timedelta(days=_BACKFILL_LOOKBACK_DAYS)
+         ).strftime('%Y-%m-%d %H:%M:%S'))
+    until = _parse_command_date(date_to, '9999-12-31 23:59:59', end_of_day=True)
+
+    queued = scanned = 0
+    with db_manager.db.lock:
+        try:
+            conn = db_manager.db._get_conn()
+            cursor = conn.cursor()
+            # 라파 메모리를 지키려 한 번에 다 읽지 않고 끊어서 훑는다. 범위를
+            # 소진할 때까지 계속한다 — 1년을 눌렀는데 중간에 잘리면 그게 더 나쁘다.
+            cutoff = since
+            while True:
+                rows = _local_fills_between(cursor, cutoff, until, _BACKFILL_MAX_ROWS)
+                if not rows:
+                    break
+                for trade in rows:
+                    scanned += 1
+                    if not enqueue(cursor, trade, quiet=True, backlog=True):
+                        continue
+                    if cursor.rowcount:
+                        queued += 1          # 큐에 없던 건 — 새로 적재됐다
+                        continue
+                    # 이미 있는 행이면 전송 완료 표시를 지워 다시 보내게 한다.
+                    cursor.execute(
+                        "UPDATE journal_outbox SET synced_at = NULL, remote_id = NULL, "
+                        "attempts = 0, last_attempt_at = NULL, last_error = NULL, "
+                        "is_backlog = 1 WHERE exec_id = ? AND dead_at IS NULL",
+                        (_exec_id(trade),))
+                    queued += cursor.rowcount
+                last_time = str(rows[-1].get('time') or '')
+                if len(rows) < _BACKFILL_MAX_ROWS or last_time <= cutoff:
+                    break                     # 다 훑었거나 더 진전이 없다
+                cutoff = last_time
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[Journal] 재동기화 적재 실패: {e}")
+            return 0, scanned
+
+    logger.info(f"[Journal] 재동기화 — {queued}건 재전송 대기 "
+                f"(스캔 {scanned}건, {since} ~ {date_to or '현재'})")
+    return queued, scanned
+
+
+def _handle_command(body):
+    """Ping 응답에 실려 온 서버 지시를 처리한다. ack 로 보낼 dict 또는 None.
+
+    **구현한 명령만 실행하고 나머지는 무시한다.** 특히 `pause`/`resume` 은 매매
+    자체를 멈추는 지시라, 웹서버가 침해되거나 버그를 내면 포지션을 든 채로 봇이
+    멈춘다. 재동기화(이미 내 것인 데이터를 다시 보내는 일)와 같은 취급을 하면 안 된다.
+    """
+    if not isinstance(body, dict):
+        return None
+    command = body.get('command')
+    if not command or command == 'none':
+        return None
+
+    command_id = body.get('commandId')
+    if command != 'resync':
+        logger.warning(f"[Journal] 지원하지 않는 서버 지시 무시: {command} "
+                       f"(id={command_id})")
+        return None
+    if command_id is None:
+        logger.warning("[Journal] commandId 없는 재동기화 지시 무시 "
+                       "— 중복 실행을 막을 수 없습니다.")
+        return None
+
+    params = body.get('commandParams') or {}
+    date_from = params.get('from') if isinstance(params, dict) else None
+    date_to = params.get('to') if isinstance(params, dict) else None
+
+    logger.info(f"[Journal] 서버 재동기화 지시 수신 (id={command_id}, "
+                f"{date_from or '기본범위'} ~ {date_to or '현재'})")
+    try:
+        queued, scanned = resync_once(date_from, date_to)
+    except Exception as e:
+        logger.error(f"[Journal] 재동기화 실패: {e}")
+        return {'id': command_id, 'result': 'failed', 'count': 0, 'message': str(e)[:500]}
+
+    return {
+        'id': command_id,
+        'result': 'queued' if queued else 'skipped',
+        'count': queued,
+        'message': f'로컬 체결 {scanned}건 확인, {queued}건 재전송 대기열 적재',
+    }
 
 
 class JournalSyncWorker:

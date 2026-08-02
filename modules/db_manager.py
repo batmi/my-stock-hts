@@ -190,7 +190,8 @@ class DBManager:
                         synced_at TEXT,
                         remote_id TEXT,
                         dead_at TEXT,
-                        reject_count INTEGER DEFAULT 0
+                        reject_count INTEGER DEFAULT 0,
+                        is_backlog INTEGER DEFAULT 0
                     )
                 ''')
                 # dead_at      : 서버가 반복 거절한 행을 대기열에서 뺀다. 지우지 않고 표시만
@@ -201,21 +202,27 @@ class DBManager:
                 #                반나절만 죽어 있어도 대기열 전체가 통째로 폐기된다.
                 cursor.execute("PRAGMA table_info(journal_outbox)")
                 outbox_columns = [info[1] for info in cursor.fetchall()]
+                # is_backlog  : 재동기화처럼 뒤늦게 밀어 넣은 행. 정렬에서 뒤로 보내
+                #               실시간 체결이 대량 backlog 뒤에 줄 서지 않게 한다.
                 for col, dtype in (("dead_at", "TEXT"),
-                                   ("reject_count", "INTEGER DEFAULT 0")):
+                                   ("reject_count", "INTEGER DEFAULT 0"),
+                                   ("is_backlog", "INTEGER DEFAULT 0")):
                     if col not in outbox_columns:
                         try:
                             cursor.execute(f"ALTER TABLE journal_outbox ADD COLUMN {col} {dtype}")
                         except Exception as e:
                             config.console.print(
                                 f"[red][DB] journal_outbox 컬럼 추가 실패({col}): {e}[/red]")
-                # 전송 대기 행 조회는 synced_at·dead_at 이 모두 NULL 인 것만 본다.
-                #  dead_at 이전 스키마의 인덱스(idx_journal_outbox_pending)는 이름이 같으면
-                #  IF NOT EXISTS 로 갱신되지 않으므로 새 이름을 쓰고 옛 것은 지운다.
-                cursor.execute("DROP INDEX IF EXISTS idx_journal_outbox_pending")
+                # 전송 대기 행 조회는 synced_at·dead_at 이 모두 NULL 인 것만 보고,
+                # is_backlog 순으로 실시간 체결을 먼저 집는다.
+                #  CREATE INDEX IF NOT EXISTS 는 '이름'만 보므로, 정의를 바꿀 때는
+                #  이름에 버전을 올려야 한다. 같은 이름을 쓰면 기존 DB 는 옛 정의를
+                #  그대로 들고 있게 되어 새 정렬이 인덱스를 타지 못한다.
+                for stale in ('idx_journal_outbox_pending', 'idx_journal_outbox_queue'):
+                    cursor.execute(f"DROP INDEX IF EXISTS {stale}")
                 cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_journal_outbox_queue "
-                    "ON journal_outbox(synced_at, dead_at, id)")
+                    "CREATE INDEX IF NOT EXISTS idx_journal_outbox_queue_v2 "
+                    "ON journal_outbox(synced_at, dead_at, is_backlog, id)")
                 
                 # [추가] 예약 주문 테이블 생성
                 cursor.execute('''
