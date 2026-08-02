@@ -506,6 +506,126 @@ def test_worker_stop_can_skip_notification(db, monkeypatch):
     assert sent == []
 
 
+# ── 메모 구성 (진입/청산 근거 + 실현손익) ────────────────────────────
+
+def _submit(db, **kw):
+    """원 주문('접수') 기록. 진입/청산 근거는 여기에만 남는다."""
+    args = dict(type_str='매수(AUTO)', code='005930', name='삼성전자', qty=10,
+                price=71000, odno='0000012345', order_status='접수',
+                custom_time='2026-08-01 09:29:00')
+    args.update(kw)
+    db.insert_trade(**args)
+
+
+def _memo(db, index=0):
+    return json.loads(_outbox(db)[index]['payload'])['memo']
+
+
+def test_memo_carries_the_reason_from_the_submission(db):
+    """왜 샀는지는 '접수' 행에만 있다 — 체결 행만 보내면 근거가 통째로 사라진다."""
+    _submit(db, reason='[추세매수] 조건 만족 [점수:8.5, RSI:61.6]')
+    _fill(db, reason='체결 확인 (잔고 입고 확인)')
+
+    assert _memo(db) == ('[추세매수] 조건 만족 [점수:8.5, RSI:61.6] · '
+                         '체결 확인 (잔고 입고 확인)')
+
+
+def test_sell_memo_includes_realized_pnl(db):
+    """구조화 필드로도 보내지만 웹 카드 본문엔 안 나온다 — 메모에도 적는다."""
+    _submit(db, type_str='매도(AUTO)', odno='0000003867',
+            reason='[추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5]')
+    _fill(db, type_str='매도(AUTO)', odno='0000003867',
+          reason='체결 확인 (잔고 0 확인)', profit_amt=-103100, profit_rate=-10.67)
+
+    assert _memo(db) == ('[추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5] · '
+                         '체결 확인 (잔고 0 확인) · 손익: -103,100원 (-10.67%)')
+
+
+def test_buy_memo_has_no_pnl_section(db):
+    """매수에는 실현손익이 없다 — 0원이라고 적으면 오히려 오해를 부른다."""
+    _submit(db, reason='[추세매수] 조건 만족')
+    _fill(db, reason='체결 확인 (잔고 입고 확인)')
+
+    assert '손익' not in _memo(db)
+
+
+def test_memo_ignores_the_same_order_number_from_another_day(db):
+    """odno 는 영업일마다 재사용된다 — 날짜로 좁히지 않으면 남의 근거가 따라붙는다."""
+    _submit(db, code='017670', name='SK텔레콤',
+            custom_time='2026-06-30 10:00:00', reason='[다른날] 붙으면 안 되는 근거')
+    _fill(db, reason='체결 확인 (잔고 입고 확인)')
+
+    assert _memo(db) == '체결 확인 (잔고 입고 확인)'
+
+
+def test_memo_falls_back_when_there_is_no_submission_row(db):
+    """외부(앱/HTS) 주문은 접수 기록이 없다 — 확인 문구만 남기고 넘어간다."""
+    _fill(db, type_str='현금매수(외부)', reason='체결 확인 (앱/HTS 외부 주문)')
+
+    assert _memo(db) == '체결 확인 (앱/HTS 외부 주문)'
+
+
+def test_memo_follows_the_original_order_when_amended(db):
+    """정정 행의 사유는 '사용자 정정'뿐 — 원주문까지 한 단계 거슬러 올라간다."""
+    _submit(db, odno='0000011111', reason='[추세매수] 조건 만족 [점수:8.0]')
+    _fill(db, odno='0000022222', org_odno='0000011111',
+          reason='체결 확인 (사용자 정정)')
+
+    assert _memo(db).startswith('[추세매수] 조건 만족 [점수:8.0]')
+
+
+def test_memo_does_not_repeat_an_identical_reason(db):
+    """수동 주문은 접수·체결 사유가 같을 수 있다 — 같은 문장을 두 번 적지 않는다."""
+    _submit(db, type_str='매수(수동)', reason='사용자 수동 주문')
+    _fill(db, type_str='매수(수동)', reason='사용자 수동 주문')
+
+    assert _memo(db) == '사용자 수동 주문'
+
+
+def test_overseas_pnl_is_labelled_with_its_own_currency(db):
+    """해외 체결 손익에 '원'을 붙이면 금액을 완전히 잘못 읽게 된다."""
+    _submit(db, type_str='매도(AUTO)', code='AAPL', name='Apple', odno='0000009999',
+            reason='[추세이탈] 매도진입')
+    _fill(db, type_str='매도(AUTO)', code='AAPL', name='Apple', odno='0000009999',
+          reason='체결 확인', profit_amt=-12.34, profit_rate=-3.5)
+
+    assert '손익: -12.34 USD (-3.50%)' in _memo(db)
+
+
+def test_memo_is_truncated_below_the_server_limit(db):
+    """5000자를 넘기면 서버가 거절한다 — 메모가 길어서 체결을 잃으면 안 된다."""
+    _submit(db, reason='가' * 6000)
+    _fill(db, reason='체결 확인')
+
+    assert len(_memo(db)) <= 4900
+
+
+def test_entry_reason_lookup_failure_never_breaks_recording(db, monkeypatch):
+    """근거 조회는 부가 기능이다 — 실패해도 거래 기록·큐 적재를 막으면 안 된다."""
+    def boom(cursor, trade):
+        raise sqlite3.OperationalError('boom')
+
+    monkeypatch.setattr(journal_sync, '_lookup_entry_reason', boom)
+    _submit(db, reason='[추세매수] 조건 만족')
+    _fill(db, reason='체결 확인 (잔고 입고 확인)')
+
+    assert len(_outbox(db)) == 1
+    assert _memo(db) == '체결 확인 (잔고 입고 확인)'
+
+
+def test_backfill_also_recovers_the_entry_reason(db, monkeypatch):
+    """백필로 뒤늦게 회수한 건도 근거가 붙어야 한다."""
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    _submit(db, reason='[추세매수] 조건 만족 [점수:8.5]', custom_time=_recent(35))
+    _fill(db, reason='체결 확인 (잔고 입고 확인)', custom_time=_recent(30))
+
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
+    _patch_backfill_transport(monkeypatch)
+    assert journal_sync.backfill_once() == (1, 1)
+
+    assert _memo(db).startswith('[추세매수] 조건 만족 [점수:8.5]')
+
+
 # ── dead-letter (전송 포기) ───────────────────────────────────────────
 
 def _clear_backoff(db):

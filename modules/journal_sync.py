@@ -217,6 +217,51 @@ def _exec_id(trade):
     return f'{env}:{account}:{day}:{odno}:{status}'
 
 
+def _format_pnl(trade, currency):
+    """매도 실현손익을 사람이 읽는 한 줄로. 값이 없으면 빈 문자열."""
+    def _num(key):
+        try:
+            return float(trade.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    amount, rate = _num('profit_amt'), _num('profit_rate')
+    if not amount and not rate:
+        return ''
+    if currency == 'KRW':
+        amount_text = f'{amount:+,.0f}원'
+    else:
+        amount_text = f'{amount:+,.2f} {currency}'
+    return f'손익: {amount_text} ({rate:+.2f}%)'
+
+
+def _compose_memo(trade, side, currency):
+    """웹 일지에 남길 메모를 만든다.
+
+    **왜 샀는지·왜 팔았는지는 `접수` 행에만 있다.** `체결` 행의 reason 은 언제나
+    "체결 확인 (...)" 확인 문구뿐이라, 그것만 보내면 정작 판단 근거가 통째로
+    빠진다. 호출 전에 `enqueue()` 가 원 주문의 사유를 `_entry_reason` 으로 붙여
+    준다(없으면 확인 문구만 남는다).
+
+    매도는 실현손익을 함께 적는다 — 구조화 필드(realizedPnl)로도 보내지만
+    웹 카드 본문에는 그 값이 나오지 않아 일지만 봐서는 결과를 알 수 없다.
+    """
+    entry = (trade.get('_entry_reason') or '').strip()
+    fill = (trade.get('reason') or '').strip()
+
+    parts = [text for text in (entry, fill) if text]
+    if len(parts) == 2 and parts[0] == parts[1]:
+        parts = parts[:1]          # 외부·수동 주문은 양쪽 사유가 같을 수 있다
+    if side == 'SELL':
+        pnl = _format_pnl(trade, currency)
+        if pnl:
+            parts.append(pnl)
+
+    # 서버는 5000자를 넘기면 요청을 거절한다. 거절당하면 dead-letter 로 빠지므로
+    # 애초에 잘라 보낸다 — 메모가 길어서 체결 기록을 통째로 잃는 건 말이 안 된다.
+    return ' · '.join(parts)[:4900]
+
+
 def build_payload(trade):
     """로컬 trades 행(dict)을 API TradeRecordInput 으로 변환한다."""
     code = (trade.get('code') or '').strip()
@@ -251,8 +296,8 @@ def build_payload(trade):
         'assetType': 'STOCK',
         'subAccount': (trade.get('account') or '').replace('-', ''),
         'orderId': trade.get('odno') or '',
-        'memo': trade.get('reason') or '',
     }
+    payload['memo'] = _compose_memo(trade, payload['side'], payload['currency'])
 
     origin = _order_origin(trade.get('type'))
     if origin:
@@ -288,6 +333,43 @@ def build_payload(trade):
 # 큐 적재 (db_manager 의 트랜잭션 안에서 호출)
 # ══════════════════════════════════════════════════════════════════════
 
+# 원 주문(진입/청산 근거)이 실려 있는 상태들. '취소'는 근거가 아니라 결과다.
+_ENTRY_STATUS = ('접수', '정정')
+
+
+def _lookup_entry_reason(cursor, trade):
+    """이 체결을 낳은 원 주문의 사유를 찾는다. 호출자의 커서를 그대로 쓴다.
+
+    같은 주문번호(odno)라도 **영업일마다 재사용**되므로 날짜로 반드시 좁혀야 한다.
+    좁히지 않으면 다른 날 같은 번호였던 주문의 근거가 엉뚱하게 따라붙는다.
+
+    정정 주문은 '정정' 행의 사유가 "사용자 정정" 같은 확인 문구뿐이라 근거가 되지
+    못한다. 그 경우 원주문번호(org_odno)로 한 단계만 거슬러 올라가 진짜 근거를 찾는다.
+    """
+    odno = (trade.get('odno') or '').strip()
+    day = str(trade.get('time') or '')[:10]
+    account = trade.get('account') or ''
+    if not odno or not day:
+        return ''
+
+    placeholders = ','.join('?' * len(_ENTRY_STATUS))
+
+    def _fetch(order_no):
+        cursor.execute(
+            f"SELECT reason FROM trades "
+            f"WHERE odno = ? AND substr(time, 1, 10) = ? AND account = ? "
+            f"  AND order_status IN ({placeholders}) AND reason IS NOT NULL AND reason != '' "
+            f"ORDER BY id DESC LIMIT 1",
+            (order_no, day, account) + _ENTRY_STATUS)
+        row = cursor.fetchone()
+        return (row[0] or '').strip() if row else ''
+
+    reason = _fetch(odno)
+    if not reason and trade.get('org_odno'):
+        reason = _fetch(str(trade['org_odno']).strip())
+    return reason
+
+
 def enqueue(cursor, trade, quiet=False):
     """전송 대기열에 적재한다. 호출자의 트랜잭션·커서를 그대로 쓴다.
 
@@ -308,6 +390,16 @@ def enqueue(cursor, trade, quiet=False):
         return False
     if not _side(trade.get('type')):
         return False  # 매수/매도로 해석되지 않는 기록(확인요망 등)은 보내지 않는다
+
+    if not trade.get('_entry_reason'):
+        try:
+            # 진입/청산 근거는 원 주문('접수') 행에만 있다 — 없으면 메모가
+            # "체결 확인" 한 줄로 끝나 판단 근거가 통째로 사라진다.
+            trade = dict(trade, _entry_reason=_lookup_entry_reason(cursor, trade))
+        except Exception as e:
+            # 근거가 없어도 체결 기록 자체는 반드시 나가야 한다. 여기서 예외를
+            # 올리면 호출자의 트랜잭션이 통째로 롤백되어 거래 기록까지 날아간다.
+            logger.debug(f"[Journal] 원 주문 사유 조회 실패(무시): {e}")
 
     payload = build_payload(trade)
     if not payload['symbol'] or payload['volume'] <= 0:

@@ -669,6 +669,20 @@ Rows sent more than **90 days** ago are deleted once a day (to protect the Raspb
 
 Beyond symbol/quantity/price, each record carries **realized P&L (`profit_amt`/`profit_rate`), strategy score, stop-loss rate, entry/exit rationale (`reason`), and order origin (AUTO/manual/reserved/external)** so the server can compute accurate win-rate and P&L statistics.
 
+### What goes into the memo
+
+In the local `trades` table the **entry/exit rationale lives only on the `접수` (submitted) row**. The `체결` (filled) row's reason is always just a "fill confirmed (...)" note, so sending only the fill row drops the entire reason you bought or sold. The originating order's rationale is therefore looked up and sent alongside it.
+
+```
+Buy  → [추세매수] 조건 만족 [점수:8.5, RSI:61.6, 체결강도:106.7%] [ATR:11,025/변동성:90.6%] [ATR손절:-11%] · 체결 확인 (잔고 입고 확인)
+Sell → [추세이탈] 매도진입 (이평선 완전이탈(60&120)) [점수:3.5, RSI:47.5] · 체결 확인 (잔고 0 확인) · 손익: -103,100원 (-10.67%)
+```
+
+*   **Sells also spell out the realized P&L in the memo.** It is sent as the structured `realizedPnl` field too, but that value is not rendered in the web card body, so the journal alone would never tell you the outcome. Overseas fills are labelled in their own currency, e.g. `-12.34 USD`.
+*   The lookup **must be scoped by date**: `odno` is reused every business day, so without it the rationale from a different day's identically-numbered order would be attached.
+*   For amended orders the `정정` row only says "user amended", so the lookup follows `org_odno` one hop back to the original rationale.
+*   External (mobile/HTS app) orders have no submission row, so only the confirmation note remains.
+
 ### Idempotency key
 
 Built as `{env}:{account}:{fill date}:{order no}:{status}` — e.g. `REAL:1234567801:20260801:0000012345:F`.
