@@ -411,7 +411,7 @@ def view_system_config(group=None):
         header(5)
         subheader("5-1. 거래 시간·주기", first=True)
         row("거래 시작 시간", "매매 허용 시작 시각 (HHMM, 기본 KRX 개장 0900)", "SYSTEM_TRADING_START_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_START_TIME', '0900')}")
-        row("거래 종료 시간", "매매 허용 종료 시각 (HHMM, 기본 KRX 마감 1530 / 단일가 회피로 실효 15:20)", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1530')}")
+        row("거래 종료 시간", "매매 허용 종료 시각 (HHMM, 기본 KRX 마감 1530)", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1530')}")
         row("모니터링 주기 (초)", "자동매매 루프 실행 간격", "SYSTEM_TRADING_INTERVAL", f"{getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 180)}")
 
         subheader("5-2. 주문·체결 감시")
@@ -424,7 +424,7 @@ def view_system_config(group=None):
         row("차트 캐시 시간(분)", "일봉 데이터 메모리 캐시 유지", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360)}")
         row("실시간 WebSocket 사용", "KIS 실시간 시세 push(끄면 REST 폴링). 토스 미지원", "USE_WEBSOCKET", f"{getattr(config.settings, 'USE_WEBSOCKET', True)}")
         row("장 종료 후 KRX 종가 기준", "모든 장 마감 후 현재가를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
-        row("매매일지 웹서버 연동", "체결 내역을 원격 매매일지 서버로 전송 (JOURNAL_API_URL/KEY 환경변수 필요)", "JOURNAL_SYNC_USE", f"{getattr(config.settings, 'JOURNAL_SYNC_USE', False)}")
+        row("매매일지 웹서버 연동", "체결 내역을 원격 매매일지 서버로 전송", "JOURNAL_SYNC_USE", f"{getattr(config.settings, 'JOURNAL_SYNC_USE', False)}")
 
         subheader("5-4. 텔레그램 및 AI 브리핑")
         row("사용 여부", "알림 기능 활성화 여부", "ENABLE_TELEGRAM", f"{getattr(config.settings, 'ENABLE_TELEGRAM', True)}")
