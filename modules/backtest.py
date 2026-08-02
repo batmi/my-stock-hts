@@ -1655,10 +1655,10 @@ def run_backtest():
         msg_preset = ""
         if apply_preset == "y":
             preset_items = [
+                ("0", "기본설정 (Default) - 시스템 권장 설정", "Default"),
                 ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
                 ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
-                ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
-                ("0", "기본설정 (Default) - 시스템 권장 설정", "Default")
+                ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways")
             ]
             preset_choice = utils.show_menu("시장 상황 프리셋 선택", preset_items, default_choice="1")
             if preset_choice.lower() in ['b', 'q']: continue

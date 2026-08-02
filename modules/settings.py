@@ -1699,10 +1699,10 @@ def edit_strategy_preset_menu():
     while True:
         utils.clear_screen()
         menu_items = [
+            ("0", "커스텀 프리셋 전체 초기화", "Reset All Custom Presets"),
             ("1", "강세장 (Bull) 프리셋 수정", "Edit Bull"),
             ("2", "약세장 (Bear) 프리셋 수정", "Edit Bear"),
-            ("3", "횡보장 (Sideways) 프리셋 수정", "Edit Sideways"),
-            ("0", "커스텀 프리셋 전체 초기화", "Reset All Custom Presets")
+            ("3", "횡보장 (Sideways) 프리셋 수정", "Edit Sideways")
         ]
         choice = utils.show_menu("전략 프리셋 세부 조정", menu_items, default_choice="b")
         if choice.lower() in ['b', 'q']: return False
@@ -1724,11 +1724,11 @@ def edit_strategy_preset_menu():
 def select_strategy_preset():
     """시장 국면별 전략 프리셋 선택 메뉴"""
     menu_items = [
+        ("0", "전략 프리셋 조정", "Edit Presets"),
         ("1", "강세장  (Bull) - 수익 극대화 & 추세 추종", "Bull"),
         ("2", "약세장  (Bear) - 생존 우선 & 낙폭과대 스윙", "Bear"),
         ("3", "횡보장  (Sideways) - 박스권 단기 스윙", "Sideways"),
-        ("9", "기본설정 (Default) - 시스템 권장 설정", "Default"),
-        ("0", "전략 프리셋 조정", "Edit Presets")
+        ("9", "기본설정 (Default) - 시스템 권장 설정", "Default")
     ]
     choice = utils.show_menu("시장 국면별 전략 프리셋 (Strategy Presets)", menu_items, default_choice="b")
     if choice.lower() in ['b', 'q']: return False
@@ -2186,6 +2186,7 @@ def system_config_menu():
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
         menu_items = [
+            ("0", "설정 초기화", "Reset to Default"),
             ("1", "매수 및 매도 전략 설정", "Buy & Sell Strategy"),
             ("2", "스코어링 및 시장 국면 설정", "Scoring & Regime"),
             ("3", "리스크 및 자산 배분 설정", "Risk & Portfolio"),
@@ -2194,8 +2195,7 @@ def system_config_menu():
             ("6", "커스텀 설정 조회 및 초기화", "Manage Custom Settings"),
             # [추세추종 보호] 7번 '시장 국면별 전략 프리셋' 제거 (PRESET_RETIRED 주석 참조)
             ("8", "데이터 캐시 초기화", "Clear Cache"),
-            ("9", "시스템 설정 전체 조회", "View Config"),
-            ("0", "설정 초기화", "Reset to Default")
+            ("9", "시스템 설정 전체 조회", "View Config")
         ]
         choice = utils.show_menu("시스템 설정 (System Settings)", menu_items, default_choice=last_choice)
         if choice.lower() in ['b', 'q']: return False
