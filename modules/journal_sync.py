@@ -412,7 +412,7 @@ def _lookup_entry_reason(cursor, trade):
     return reason
 
 
-def enqueue(cursor, trade, quiet=False, backlog=False):
+def enqueue(cursor, trade, quiet=False, backlog=False, resend=False):
     """전송 대기열에 적재한다. 호출자의 트랜잭션·커서를 그대로 쓴다.
 
     전송 대상이 아니면 조용히 무시한다. **여기서 예외를 올리면 거래 기록 저장이
@@ -423,6 +423,10 @@ def enqueue(cursor, trade, quiet=False, backlog=False):
 
     backlog=True 는 뒤늦게 밀어 넣는 건(재동기화)이라는 표시다. 전송 순서에서
     뒤로 밀려, 대량 적재 뒤에 난 실시간 체결이 그 뒤에 줄 서지 않게 한다.
+
+    resend=True 는 이미 큐에 있는 건도 **페이로드를 다시 만들어 덮고** 전송 대기로
+    되돌린다. 큐에는 적재 시점에 만든 JSON 이 통째로 들어 있어서, 그대로 다시 보내면
+    그동안 고친 표현·필드가 반영되지 않는다. dead-letter 행은 건드리지 않는다.
 
     반환값이 True 면 INSERT 문을 실제로 실행했다는 뜻이다(중복이라 무시됐을 수도
     있다). 신규 적재 여부까지 알아야 하면 호출 직후 `cursor.rowcount` 를 본다.
@@ -450,11 +454,21 @@ def enqueue(cursor, trade, quiet=False, backlog=False):
     if not payload['symbol'] or payload['volume'] <= 0:
         return False
 
-    cursor.execute(
-        "INSERT OR IGNORE INTO journal_outbox (exec_id, payload, created_at, is_backlog) "
-        "VALUES (?, ?, ?, ?)",
-        (payload['brokerExecutionId'], json.dumps(payload, ensure_ascii=False),
-         datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'), 1 if backlog else 0))
+    row = (payload['brokerExecutionId'], json.dumps(payload, ensure_ascii=False),
+           datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'), 1 if backlog else 0)
+    if resend:
+        cursor.execute(
+            "INSERT INTO journal_outbox (exec_id, payload, created_at, is_backlog) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(exec_id) DO UPDATE SET "
+            "  payload = excluded.payload, is_backlog = excluded.is_backlog, "
+            "  synced_at = NULL, remote_id = NULL, attempts = 0, "
+            "  last_attempt_at = NULL, last_error = NULL "
+            "WHERE dead_at IS NULL", row)
+    else:
+        cursor.execute(
+            "INSERT OR IGNORE INTO journal_outbox "
+            "(exec_id, payload, created_at, is_backlog) VALUES (?, ?, ?, ?)", row)
 
     if quiet:
         return True
@@ -1119,18 +1133,11 @@ def resync_once(date_from=None, date_to=None):
                     break
                 for trade in rows:
                     scanned += 1
-                    if not enqueue(cursor, trade, quiet=True, backlog=True):
-                        continue
-                    if cursor.rowcount:
-                        queued += 1          # 큐에 없던 건 — 새로 적재됐다
-                        continue
-                    # 이미 있는 행이면 전송 완료 표시를 지워 다시 보내게 한다.
-                    cursor.execute(
-                        "UPDATE journal_outbox SET synced_at = NULL, remote_id = NULL, "
-                        "attempts = 0, last_attempt_at = NULL, last_error = NULL, "
-                        "is_backlog = 1 WHERE exec_id = ? AND dead_at IS NULL",
-                        (_exec_id(trade),))
-                    queued += cursor.rowcount
+                    # resend=True: 큐에 없으면 새로 넣고, 있으면 페이로드를 다시
+                    #  만들어 덮은 뒤 전송 대기로 되돌린다. 저장된 JSON 을 그대로
+                    #  다시 보내면 그동안 고친 표현이 반영되지 않는다.
+                    if enqueue(cursor, trade, quiet=True, backlog=True, resend=True):
+                        queued += cursor.rowcount   # dead-letter 행은 0 이 나온다
                 last_time = str(rows[-1].get('time') or '')
                 if len(rows) < _BACKFILL_MAX_ROWS or last_time <= cutoff:
                     break                     # 다 훑었거나 더 진전이 없다

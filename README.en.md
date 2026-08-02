@@ -666,6 +666,8 @@ Since duplicates cost nothing, **err on the side of a longer range.** Operators 
 
 Re-synced rows are flagged `is_backlog` and therefore **yield priority to live fills.** A fill that happens during a one-year re-sync must not wait minutes behind the backlog.
 
+**A re-sync is also required after restoring the web server from a backup.** Records sent after the backup point are still marked as sent in the bot's queue, so backfill cannot see them. Re-sync reads the local `trades` table as the source of truth and therefore recovers even records already pruned from the queue by retention.
+
 Dead-lettered records are not revived by re-sync. There is a reason the server kept rejecting them, and what the operator asked for was "restore what I deleted", not "retry what was rejected".
 
 ### When sending is abandoned (dead-letter)

@@ -1205,3 +1205,39 @@ def test_ack_shape_matches_what_the_server_stores(db, monkeypatch):
     assert set(ack) == {'id', 'result', 'count', 'message'}
     assert isinstance(ack['id'], int) and isinstance(ack['count'], int)
     assert ack['result'] in ('queued', 'skipped', 'failed')
+
+
+def test_resync_rebuilds_the_payload(db):
+    """큐에는 적재 시점의 JSON 이 통째로 들어 있다.
+
+    그대로 다시 보내면 그동안 고친 표현·필드가 반영되지 않는다. 실제로 메모 형식을
+    바꾼 뒤 재동기화를 걸었는데 옛 문구가 그대로 나가는 일이 있었다.
+    """
+    _submit(db, reason='[추세매수] 조건 만족', custom_time=_recent(35))
+    _fill(db, reason='체결 확인', custom_time=_recent(30))
+    _mark_synced(db)
+
+    # 큐에 저장된 페이로드를 옛 형식으로 되돌려 놓는다
+    conn = db._get_conn()
+    stale = json.loads(_outbox(db)[0]['payload'])
+    stale['memo'] = '옛 형식 한 줄짜리 메모'
+    conn.execute("UPDATE journal_outbox SET payload = ?",
+                 (json.dumps(stale, ensure_ascii=False),))
+    conn.commit()
+
+    journal_sync.resync_once(date_from=_recent(60)[:10])
+
+    assert _memo_lines(db) == ['[추세매수] 조건 만족', '· 체결 확인']
+
+
+def test_resync_does_not_revive_dead_letter_via_upsert(db):
+    """페이로드를 덮어쓰는 경로에서도 dead-letter 는 그대로 둬야 한다."""
+    _fill(db, custom_time=_recent(30))
+    conn = db._get_conn()
+    conn.execute("UPDATE journal_outbox SET synced_at = NULL, dead_at = ?, reject_count = 5",
+                 (_recent(5),))
+    conn.commit()
+
+    assert journal_sync.resync_once(date_from=_recent(60)[:10]) == (0, 1)
+    assert journal_sync.dead_count() == 1
+    assert journal_sync.pending_count() == 0
