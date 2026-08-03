@@ -2038,7 +2038,7 @@ def asset_management_menu():
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
         
-        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report"), ("5", "포지션 분석", "Position Analysis")]
+        menu_items = [("1", "자산 조회", "Asset Inquiry"), ("2", "보유 잔고", "Holdings"), ("3", "거래 내역", "Trade History"), ("4", "거래 평가", "Trading Report"), ("5", "포지션 분석", "Position Analysis"), ("6", "가상투자 관리", "Paper Account")]
         choice = utils.show_menu("자산 관리 (Asset Management)", menu_items, default_choice=last_choice)
         
         if choice.lower() in ['b', 'q']: return False
@@ -2049,7 +2049,7 @@ def asset_management_menu():
             continue
         
         last_choice = choice
-        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가", "5": "포지션 분석"}
+        menu_map = {"1": "자산 조회", "2": "보유 잔고", "3": "거래 내역", "4": "거래 평가", "5": "포지션 분석", "6": "가상투자 관리"}
         if choice in menu_map:
             context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -2077,3 +2077,8 @@ def asset_management_menu():
             logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
             if manual_holding_analysis() is not False:
                 utils.pause()
+        elif choice == "6":
+            # 가상투자 계좌 관리(입출금·초기화·자산곡선). 계좌 성격의 기능이라 자산 관리에 둔다.
+            logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
+            from modules import paper_report
+            paper_report.show_paper_menu()
