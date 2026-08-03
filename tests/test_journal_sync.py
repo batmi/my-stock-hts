@@ -310,29 +310,76 @@ def test_is_system_helper_maps_every_origin():
 
 # ── 봇 인스턴스 식별 ──────────────────────────────────────────────────
 
+def _set_mode(monkeypatch, *, toss=False, simulation=False, cano='68029263', auto=''):
+    monkeypatch.setattr(config.session, 'is_toss', toss, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', simulation)
+    monkeypatch.setattr(config.session, 'cano', cano)
+    monkeypatch.setattr(config.session, 'auto_cano', auto, raising=False)
+
+
 def test_bot_id_defaults_to_source(db, monkeypatch):
-    """JOURNAL_SOURCE 는 이미 인스턴스마다 달라야 하므로 기본값으로 충분하다."""
-    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'hts-real', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'raspi', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_BOT_ID', '', raising=False)
-    assert journal_sync._bot_id() == 'hts-real'
+    _set_mode(monkeypatch)
+    assert journal_sync._bot_id() == 'raspi:real:68029263'
 
 
-def test_bot_id_override_wins(db, monkeypatch):
-    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'hts-real', raising=False)
-    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi-sim', raising=False)
-    assert journal_sync._bot_id() == 'raspi-sim'
+def test_bot_id_override_is_used_as_prefix(db, monkeypatch):
+    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'raspi', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'pi3b', raising=False)
+    _set_mode(monkeypatch, simulation=True, cano='50196591')
+    assert journal_sync._bot_id() == 'pi3b:sim:50196591'
+
+
+def test_bot_id_differs_per_mode_on_one_machine(db, monkeypatch):
+    """모드는 `--mode` CLI 인자라 환경변수로는 구분되지 않는다.
+
+    같은 기기에서 ~/.htsrc 하나로 세 모드를 돌리면 JOURNAL_BOT_ID·JOURNAL_SOURCE 가
+    셋 다 같은 값이 된다. 환경변수만 식별자로 쓰면 세 인스턴스가 서버의 같은 칸을
+    덮어써서, 웹 목록에 자기 자리가 없는 봇이 생긴다
+    (실측 2026-08-03: 모의·실전·토스 3대를 돌렸는데 2대만 표시됨).
+    """
+    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'raspi', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', '', raising=False)
+
+    _set_mode(monkeypatch, simulation=True, cano='50196591')
+    sim = journal_sync._bot_id()
+    _set_mode(monkeypatch, cano='68029263', auto='44048158')
+    real = journal_sync._bot_id()
+    _set_mode(monkeypatch, toss=True, cano='189-01-501685')
+    toss = journal_sync._bot_id()
+
+    assert len({sim, real, toss}) == 3
+
+
+def test_bot_id_stays_within_length_limit_without_losing_the_discriminator(db, monkeypatch):
+    """상한을 뒤에서 자르면 구분자가 날아가 충돌이 되살아난다 — 접두어 쪽을 깎는다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'x' * 200, raising=False)
+    _set_mode(monkeypatch, cano='68029263')
+    bot_id = journal_sync._bot_id()
+    assert len(bot_id) <= 64
+    assert bot_id.endswith(':real:68029263')
+
+
+def test_bot_label_shows_the_auto_trading_account_too(db, monkeypatch):
+    """한투 실전은 거래 계좌와 자동매매 계좌가 다르다 — 둘 다 보여야 한다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    _set_mode(monkeypatch, cano='68029263', auto='44048158')
+    label = journal_sync._bot_label()
+    assert '68029263' in label and '44048158' in label
 
 
 def test_ping_carries_bot_identity(db, monkeypatch):
     """botId 가 빠지면 서버가 사용자당 한 칸에 상태를 겹쳐 쓴다 — 여러 대를 돌릴 때
     실전봇의 죽음이 모의봇 Ping 에 가려지고, 재동기화도 엉뚱한 봇이 채간다."""
-    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi-real', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    _set_mode(monkeypatch, cano='68029263')
     calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
 
     assert journal_sync.ping('running') is True
     body = calls[0][2]
-    assert body['botId'] == 'raspi-real'
+    assert body['botId'] == 'raspi:real:68029263'
     assert body['label']          # 표시명이 비면 웹 목록에서 어느 봇인지 알 수 없다
 
 

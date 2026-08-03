@@ -751,11 +751,11 @@ JOURNAL_API_KEY = os.getenv("JOURNAL_API_KEY", "")   # 웹 대시보드 설정�
 JOURNAL_SOURCE = os.getenv("JOURNAL_SOURCE", "my-stock-hts")  # 서버 측 동기화 스코프 식별자
 # 모의투자 체결도 전송할지 여부. 기본 OFF — 켜더라도 서버가 isSimulated 로 분리 보관한다.
 JOURNAL_SYNC_SIMULATION = os.getenv("JOURNAL_SYNC_SIMULATION", "0") == "1"
-# 봇 인스턴스 식별자. **HTS 를 여러 대 돌린다면 반드시 서로 달라야 한다.**
-#  서버의 하트비트·재동기화 명령은 API 키가 아니라 사용자 단위라, 이 값이 겹치면
-#  상태가 한 칸에 덮여 쓰이고(실전봇이 죽어도 모의봇 Ping 이 '정상'으로 유지) 웹에서
-#  누른 재동기화를 엉뚱한 봇이 채간다. 비워 두면 JOURNAL_SOURCE 를 그대로 쓴다 —
-#  그 값도 인스턴스마다 달라야 백필 기준점이 섞이지 않으므로 대개 그걸로 충분하다.
+# 봇 인스턴스 식별자의 **접두어**(설치 단위 이름). 비우면 JOURNAL_SOURCE 를 쓴다.
+#  실제 botId 는 여기에 운용 모드·계좌가 붙는다(`{접두어}:real:68029263` 형태).
+#  모드는 `--mode` CLI 인자라 환경변수로는 구분되지 않기 때문이다 — 같은 기기에서
+#  ~/.htsrc 하나로 모의·실전·토스를 함께 돌리면 이 값이 셋 다 같아져, 세 인스턴스가
+#  서버의 같은 칸을 덮어써 웹 목록에서 봇 하나가 통째로 사라진다.
 JOURNAL_BOT_ID = os.getenv("JOURNAL_BOT_ID", "")
 JOURNAL_BOT_LABEL = os.getenv("JOURNAL_BOT_LABEL", "")  # 웹 화면 표시명. 비우면 자동 생성
 

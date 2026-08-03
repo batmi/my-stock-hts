@@ -445,8 +445,8 @@ Register sensitive information like API Keys as **environment variables**:
 *   `FRED_API_KEY`: FRED API Key for US economic release dates — CPI, employment report, PCE, etc. (Optional, [how to get one](#fred-api-key-free))
 *   `TV_USERNAME`, `TV_PASSWORD`: TradingView account (Optional). Lets tvDatafeed (indices, US Treasury yields) run in **logged-in mode**, with better quotas/stability than anonymous access. If unset, it stays anonymous (nologin) as before and a WARNING is written to the file log (INFO on successful login). The issued token is cached in `data/tv_token.json` for 7 days so restarts don't re-login (frequent logins trigger TradingView's captcha). If a captcha is returned, retry later or sign in once from a browser and restart.
 *   `JOURNAL_API_URL`, `JOURNAL_API_KEY`: Sync fills to a remote trading-journal web server (Optional, [details](#13--trading-journal-sync)). Both must be set for the integration to turn on.
-*   `JOURNAL_SOURCE`: Server-side sync scope identifier (Optional, default: `my-stock-hts`). **Must differ per instance if you run more than one HTS.**
-*   `JOURNAL_BOT_ID`: Bot instance identifier (Optional, default: the `JOURNAL_SOURCE` value). Keeps bot status and resync commands from colliding across instances.
+*   `JOURNAL_SOURCE`: Server-side sync scope identifier (Optional, default: `my-stock-hts`). **Must differ per machine (installation).**
+*   `JOURNAL_BOT_ID`: Prefix for the bot identifier (Optional, default: the `JOURNAL_SOURCE` value). The actual `botId` appends the runtime mode and account (`raspi:real:68029263`), because the mode comes from the `--mode` CLI flag and is invisible to environment variables.
 *   `JOURNAL_BOT_LABEL`: Display name shown on the web dashboard (Optional, default: generated from the trading account and environment)
 *   `JOURNAL_SYNC_SIMULATION`: Set to `1` to also send mock-trading fills (Optional, default: `0`)
 
@@ -619,13 +619,18 @@ export JOURNAL_BOT_LABEL=""                         # optional (display name, au
 export JOURNAL_SYNC_SIMULATION="0"                  # optional, 1 also sends mock-trading fills
 ```
 
-**If you run several HTS instances (live, mock, Toss, …), `JOURNAL_SOURCE` and `JOURNAL_BOT_ID` must differ per instance.** The server scopes heartbeats and resync commands by **user**, not by API key (the key is exchanged for a username right after authentication), so issuing separate keys does not separate the instances. When the values collide:
+**When you run several HTS instances (live, mock, Toss, …)**, the server scopes heartbeats and resync commands by **user**, not by API key (the key is exchanged for a username right after authentication), so issuing separate keys does not separate the instances. If the bot identifiers collide:
 
-*   Bot status is overwritten in a single slot, so **a dead live bot stays "running" on screen because the mock bot keeps pinging**.
+*   Bot status is overwritten in a single slot, so **a dead live bot stays "running" on screen because the mock bot keeps pinging** — at worst a bot disappears from the web list entirely.
 *   A resync you triggered on the web is picked up by the wrong bot, which then acks it — the screen shows "done" while nothing was recovered (a silent failure).
-*   With a shared `JOURNAL_SOURCE`, the backfill watermark (last-sync) is advanced by another instance's fills, so the lagging instance skips its own gap entirely.
 
-Leave `JOURNAL_BOT_ID` empty to reuse `JOURNAL_SOURCE` — if that value already differs per instance, there is nothing else to set.
+The bot identifier (`botId`) is built from **`JOURNAL_BOT_ID` (or `JOURNAL_SOURCE`) + runtime mode + account** — e.g. `raspi:real:68029263`.
+
+The trading mode comes from the `--mode` **CLI flag**, not an environment variable, so running mock, live, and Toss from one machine with a single `~/.htsrc` cannot be told apart by environment alone. Appending the runtime identity makes collisions **structurally impossible**. On a single machine you never need to set `JOURNAL_BOT_ID`.
+
+`JOURNAL_SOURCE` must differ **per machine (installation)** — sharing it advances the backfill watermark (last-sync) with another instance's fills, so the lagging instance skips its own gap entirely.
+
+> If the identifier scheme changes or you retire a machine, a stale row lingers in the web list. Since the indicator follows the **worst** bot, that one ghost row pins the status to "offline" forever. Remove it with the `✕` on its row (a running bot re-registers on its next ping).
 
 If you turn the switch on while the URL or key is missing, the menu tells you **exactly which one is missing** and the integration stays inactive.
 Either way, leaving it off has no effect on anything else.

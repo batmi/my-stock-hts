@@ -45,10 +45,15 @@ HTS 를 여러 대 돌릴 때
 ----------------------
 서버의 하트비트·재동기화 명령 스코프는 API 키가 아니라 **사용자**다(키는 인증 직후
 username 으로 바뀐다). 그래서 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
-`JOURNAL_BOT_ID`(기본값 = JOURNAL_SOURCE)가 그 구분자다. 값이 겹치면
+`botId` 가 그 구분자다. 겹치면
   - 상태가 한 칸에 덮여 쓰여 실전봇이 죽어도 모의봇 Ping 이 '정상'으로 유지되고
   - 웹에서 누른 재동기화를 엉뚱한 봇이 채가서 '완료'로 뜬다(조용한 실패)
-`JOURNAL_SOURCE` 도 인스턴스마다 달라야 한다 — 같으면 백필 기준점(last-sync)이
+
+**모드는 `--mode` CLI 인자라 환경변수로 구분되지 않는다.** 그래서 botId 는
+`JOURNAL_BOT_ID`(없으면 `JOURNAL_SOURCE`)에 런타임 모드·계좌를 붙여 만든다
+(`_bot_id`). 같은 기기에서 ~/.htsrc 하나로 세 모드를 돌려도 충돌하지 않는다.
+
+`JOURNAL_SOURCE` 는 **설치(기기)마다** 달라야 한다 — 같으면 백필 기준점(last-sync)이
 남의 체결까지 포함해 앞당겨져, 뒤처진 인스턴스의 누락 구간이 스캔에서 통째로 빠진다.
 
 설정 (~/.htsrc 에 export 후 재시작)
@@ -152,15 +157,42 @@ def _sync_simulation():
     return bool(getattr(config, 'JOURNAL_SYNC_SIMULATION', False))
 
 
+def _bot_env():
+    """운용 환경 토큰 (sim/toss/real). 실패하면 빈 문자열."""
+    try:
+        if getattr(config.session, 'is_toss', False):
+            return 'toss'
+        return 'sim' if getattr(config.session, 'is_simulation', False) else 'real'
+    except Exception:      # noqa: BLE001
+        return ''
+
+
 def _bot_id():
     """봇 인스턴스 식별자. HTS 를 여러 대 돌릴 때 서로를 구분하는 유일한 값이다.
 
     서버의 하트비트·명령 스코프는 API 키가 아니라 **사용자**라(키는 인증 직후
     username 으로 바뀐다), 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
-    기본값을 JOURNAL_SOURCE 로 두는 이유: 그 값은 백필 기준점이 섞이지 않도록
-    이미 인스턴스마다 달라야 하므로, 대개 따로 정해 줄 필요가 없다.
+
+    **환경변수만으로는 부족하다.** 투자 모드는 `--mode` CLI 인자로 정해지므로
+    (main.py), 같은 기기에서 `~/.htsrc` 하나를 공유한 채 모의·실전·토스를 함께
+    돌리면 JOURNAL_BOT_ID·JOURNAL_SOURCE 가 셋 다 같은 값이 된다. 그러면 세
+    인스턴스가 서버의 같은 칸을 10초마다 덮어써서, 웹 목록에 자기 자리가 없는
+    봇이 생긴다(실측 2026-08-03: 3대를 돌렸는데 2대만 보임).
+
+    그래서 환경변수는 '설치 식별자'로만 쓰고, 여기에 런타임 정체성(모드·계좌)을
+    덧붙여 **구성상 충돌이 불가능하게** 만든다. 모드·계좌는 재시작해도 변하지
+    않으므로 식별자도 안정적이다(매번 바뀌면 유령 봇이 쌓인다).
     """
-    return (_cfg('JOURNAL_BOT_ID') or _source())[:64]
+    base = _cfg('JOURNAL_BOT_ID') or _source()
+    try:
+        account = (getattr(config.session, 'cano', '') or '').replace('-', '').strip()
+    except Exception:      # noqa: BLE001
+        account = ''
+    suffix = ':'.join(part for part in (_bot_env(), account) if part)
+    if not suffix:
+        return base[:64]
+    # 길이 상한은 base 쪽에서 깎는다 — 뒤를 자르면 구분자가 날아가 충돌이 되살아난다.
+    return f'{base[:64 - len(suffix) - 1]}:{suffix}'
 
 
 def _bot_label():
@@ -168,19 +200,21 @@ def _bot_label():
 
     botId 는 기계용 식별자라 화면에 그대로 띄우면 어느 계좌인지 알 수 없다.
     목록에서 '어느 봇이 죽었나'를 판단하려면 사람이 읽는 이름이 필요하다.
+
+    한투 실전은 거래 계좌와 시스템 트레이딩 계좌가 다를 수 있어 둘 다 적는다 —
+    거래 계좌만 띄우면 정작 자동매매가 도는 계좌가 화면에서 사라진다.
     """
     label = _cfg('JOURNAL_BOT_LABEL')
     if label:
         return label[:60]
     try:
-        if getattr(config.session, 'is_toss', False):
-            env = '토스'
-        elif getattr(config.session, 'is_simulation', False):
-            env = '모의'
-        else:
-            env = '실전'
+        env = {'toss': '토스', 'sim': '모의', 'real': '실전'}.get(_bot_env(), '')
         account = (getattr(config.session, 'cano', '') or '').strip()
-        return (f'{env} {account}'.strip() or _bot_id())[:60]
+        auto = (getattr(config.session, 'auto_cano', '') or '').strip()
+        name = f'{env} {account}'.strip()
+        if auto and auto != (account or '').replace('-', '') and auto != account:
+            name = f'{name}·자동 {auto}'
+        return (name or _bot_id())[:60]
     except Exception:      # noqa: BLE001 - 표시명은 부가정보라 실패해도 Ping 을 막지 않는다
         return _bot_id()[:60]
 
