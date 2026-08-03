@@ -32,7 +32,7 @@ import re # [추가] 정규식 모듈
 import pandas as pd
 
 from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager,
-                                       UNMANAGED_ETF, UNMANAGED_RESTRICTED)
+                                       UNMANAGED_BAD_PRICE, UNMANAGED_ETF, UNMANAGED_RESTRICTED)
 from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
@@ -3817,9 +3817,24 @@ class AutoTrader:
             
             if not self.is_running: return # 대기 후 재확인
             
-            if qty <= 0: 
+            if qty <= 0:
                 self.set_stock_state(code, None)
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 주문 가능 수량 0")
+                return
+
+            # [안전장치] 현재가가 0/음수면 판정 자체가 불가능하다. 잔고 응답의 prpr은 거래정지·
+            #  장 시작 전·API 이상에서 0으로 올 수 있는데, 그대로 태우면 수익률이 -100%로 계산되어
+            #  본전청산·트레일링이 동시에 오발동하고(실측: analyze_sell이 '본전청산(-100.0%)'로
+            #  매도 판정), 주문가도 0원이 되어(order_price<=0 폴백이 current_price=0을 되돌림)
+            #  지정가 0원 매도가 전송된다. 거부되더라도 그 종목은 is_pending으로 다음 주기의 매도
+            #  분석에서 빠져, 정작 진짜 손절이 필요할 때 막힌다.
+            #  판정 불가이므로 주문을 내지 않고 보류하되, 시스템이 지켜주지 못하는 포지션이므로
+            #  손절선 이탈 경보는 보낸다(트레이딩 제한·ETF 제외와 같은 취급).
+            if current_price <= 0:
+                self.set_stock_state(code, None)
+                self.log(f"[분석스킵] {name}({code}): 현재가 이상({current_price}) — {UNMANAGED_BAD_PRICE}")
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_BAD_PRICE,
+                                           buy_trades_map.get(code))
                 return
             
             rule = rules_map.get(code)

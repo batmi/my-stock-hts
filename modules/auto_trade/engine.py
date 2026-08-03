@@ -53,6 +53,7 @@ def _pkg():
 # 같은 문구를 쓰도록 상수로 둔다.
 UNMANAGED_RESTRICTED = "트레이딩 제한"
 UNMANAGED_ETF = "ETF 제외 설정"
+UNMANAGED_BAD_PRICE = "현재가 이상(판정 불가)"
 UNMANAGED_OVERSEAS = "해외 미지원"
 
 

@@ -9,6 +9,7 @@
   · 판단 불가 상태에서 매수 후보 스캔이 실제로 종목을 걸러내는가
   · 피라미딩 증액도 같은 기준으로 막히는가
   · 매도·손절은 시장 판정과 무관하게 살아 있는가
+  · 손상된 시세(현재가 0/음수)로 엉뚱한 매도 주문이 나가지 않는가
 
 기준 문서: trader._update_market_indices_status / _analyze_candidate_worker 주석
 ('모르겠으면 아무것도 하지 마라').
@@ -169,3 +170,74 @@ def test_sell_path_untouched_by_index_failure(mock_tg, trader):
 
     assert res is not None and res['action'] == 'sell', \
         "지수 장애가 매도 판단까지 막았다 — 손절이 죽으면 fail-closed가 아니라 fail-deadly다"
+
+
+# ---------------------------------------------------------------------------
+# 5. 손상된 시세(현재가 0/음수)로 엉뚱한 매도가 나가지 않는가
+# ---------------------------------------------------------------------------
+def _holding(prpr):
+    return [{'pdno': '005930', 'prdt_name': '삼성전자', 'ord_psbl_qty': '10',
+             'evlu_pfls_rt': '30.0', 'prpr': str(prpr), 'pchs_avg_pric': '100000',
+             'evlu_pfls_amt': '300000'}]
+
+
+def test_analyze_sell_does_not_validate_price():
+    """[하자 문서화] analyze_sell 자체는 현재가 0을 걸러내지 않는다.
+
+    수익률이 -100%로 계산되어 본전청산·트레일링이 동시에 오발동한다. 그래서 호출부(_sell_worker)
+    에서 막아야 한다 — 아래 테스트가 그 방어를 검증한다.
+    """
+    import numpy as np
+    from modules.auto_trade import DefaultStrategy
+
+    n = 300
+    close = np.linspace(90000.0, 120000.0, n)
+    df = pd.DataFrame({'date': pd.date_range('2024-01-01', periods=n).strftime('%Y%m%d'),
+                       'open': close, 'high': close * 1.01, 'low': close * 0.99,
+                       'close': close, 'volume': np.full(n, 10000)})
+    with patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, "")):
+        res = DefaultStrategy().analyze_sell('005930', '삼성전자', df, 0, 100000.0, -100.0,
+                                             highest_price=130000.0)
+    assert res and res['action'] == 'sell', "전제가 바뀌었다면 호출부 방어의 근거를 재검토할 것"
+
+
+@pytest.mark.parametrize("prpr,label", [(0, "현재가 0(거래정지·장 시작 전·API 이상)"),
+                                        (-1, "현재가 음수")])
+@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.load_restricted_stocks', return_value={})
+@patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=10)
+@patch('modules.auto_trade.api.get_chart_data')
+def test_no_sell_order_on_broken_price(mock_chart, mock_qty, mock_restricted, mock_tg,
+                                       trader, prpr, label):
+    """손상된 시세로는 주문을 내지 않는다 — 지정가 0원 매도가 나가면 안 된다."""
+    mock_chart.return_value = pd.DataFrame({
+        'close': [100000], 'high': [100000], 'low': [100000],
+        'open': [100000], 'volume': [1000]})
+
+    with patch.object(trader.order_manager, 'is_pending', return_value=False), \
+         patch.object(trader.order_manager, 'send_order', return_value='1') as mock_send:
+        trader._check_sell_conditions(_holding(prpr), is_market_open=True)
+
+    mock_send.assert_not_called(), f"{label}: 판정 불가인데 매도 주문이 전송됐다"
+
+
+@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.load_restricted_stocks', return_value={})
+@patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=10)
+@patch('modules.auto_trade.api.get_chart_data')
+@patch('modules.auto_trade.DefaultStrategy.analyze_sell')
+def test_valid_price_still_sells(mock_analyze, mock_chart, mock_qty, mock_restricted,
+                                 mock_tg, trader):
+    """대조군 — 정상 시세에서는 매도가 정상적으로 나가야 한다."""
+    mock_chart.return_value = pd.DataFrame({
+        'close': [130000], 'high': [130000], 'low': [130000],
+        'open': [130000], 'volume': [1000]})
+    mock_analyze.return_value = {'action': 'sell', 'reason': '트레일링스탑', 'score': 4.0,
+                                 'state': '매도', 'ind': {'rsi': 80, 'adx': 30, 'cci': 100}}
+
+    with patch.object(trader.order_manager, 'is_pending', return_value=False), \
+         patch.object(trader.order_manager, 'send_order', return_value='1') as mock_send:
+        trader._check_sell_conditions(_holding(130000), is_market_open=True)
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][2] == 'sell'
