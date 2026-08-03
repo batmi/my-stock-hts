@@ -117,9 +117,16 @@ def test_overseas_order_blocked(paper):
 
 
 def test_unfilled_always_empty(paper):
-    """즉시 체결 모델이므로 미체결은 항상 비어 있다."""
+    """즉시 체결 모델이므로 미체결은 항상 비어 있다.
+
+    [2026-08-04] 이 테스트는 원래 응답 봉투 dict({'rt_cd','output'})를 단언해,
+    '주문 dict의 리스트'라는 실제 계약과 어긋난 형태를 고정하고 있었다. 그 탓에
+    mode 4에서 호출부가 봉투를 순회하며 키 문자열을 원소로 받아 매 주기 터졌다
+    ("미체결 관리 중 오류: 'str' object has no attribute 'get'").
+    계약대로 리스트를 단언한다. 상세는 tests/test_open_orders_contract.py 참조.
+    """
     res = api.get_domestic_open_orders()
-    assert res['rt_cd'] == '0' and res['output'] == []
+    assert isinstance(res, list) and res == []
 
 
 def test_performance_metrics(paper):

@@ -109,6 +109,48 @@ def test_get_access_token_skips_refresh_when_peer_already_renewed():
     mp.assert_not_called()
 
 
+def test_concurrent_401_issues_token_only_once():
+    """[폭주 방지] 여러 스레드가 동시에 401을 맞아도 실제 발급은 1회여야 한다.
+
+    [2026-08-04] 운영 로그에 401 warning이 10줄 연달아 찍혀 토큰 폭주가 의심됐다.
+    실제로는 '1회 발급 + 9회 재사용'이며(경고는 재시도한 스레드 수만큼 남는다),
+    저마다 재발급하면 서로의 토큰을 무효화해 무한 401 루프가 된다. 그 경계를 고정한다.
+    """
+    import threading
+
+    stale = "STALE"
+    issued = []
+    lock = threading.Lock()
+    store = {"tok": stale}
+
+    def fake_post(url, **kw):
+        with lock:
+            issued.append(1)
+            tok = f"NEW-{len(issued)}"
+        return FakeResponse(200, {"access_token": tok, "expires_in": 3600})
+
+    config.session.toss_app_key = "K"
+    config.session.toss_app_secret = "S"
+    results = []
+
+    with patch("toss_api.requests.post", side_effect=fake_post), \
+         patch.object(config.session, "get_valid_token", side_effect=lambda _p: store["tok"]), \
+         patch.object(config.session, "set_token",
+                      side_effect=lambda _p, t, _e: store.__setitem__("tok", t)):
+        def worker():
+            results.append(toss_api.get_access_token(force_refresh=True, stale_token=stale))
+
+        threads = [threading.Thread(target=worker) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(issued) == 1, f"토큰이 {len(issued)}회 발급됐다 — 서로 무효화하는 폭주"
+    assert len(set(results)) == 1, "스레드마다 다른 토큰을 받았다"
+    assert results[0] != stale
+
+
 def test_resolve_account_seq_matches_acc_num():
     config.session.toss_account_seq = None
     config.session.toss_acc_num = "12345678901"

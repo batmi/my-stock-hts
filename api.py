@@ -6091,8 +6091,13 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
     """국내주식 미체결 내역 조회 (모의/실전/토스/관찰 분기 처리)"""
     # [관찰 모드] 즉시 전량 체결로 모델링하므로 미체결은 항상 없다.
     #  (미체결·부분체결 재현은 1단계 범위 밖 — paper_broker 모듈 주석 참조)
+    # [Fix] 이 함수는 **주문 dict의 리스트**를 반환하는 계약이다(모의·실전·토스 경로 모두 list).
+    #  응답 봉투 dict를 돌려주면 호출부가 그대로 순회하면서 키 문자열을 원소로 받아
+    #  'str' object has no attribute 'get' 로 터진다. 실제로 mode 4에서 매 주기
+    #  engine.manage_unfilled_orders 가 실패했고, trader._get_toss_open_buy_reserved 도
+    #  같은 이유로 예외를 내 입금 자동 감지가 조용히 건너뛰어졌다.
     if _paper_active():
-        return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자: 미체결 없음", "output": []}
+        return []
     if config.session.is_toss:
         return _toss_open_orders('domestic')
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)

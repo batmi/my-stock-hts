@@ -108,6 +108,10 @@ def get_access_token(force_refresh=False, stale_token=None):
         elif stale_token:
             cached = config.session.get_valid_token("TOSS")
             if cached and cached != stale_token:
+                # 동시에 401을 맞은 스레드들은 모두 아래 warning을 남기므로, 로그만 봐서는
+                # '한 번 재발급 + 나머지 재사용'인지 '전부 재발급(폭주)'인지 구분되지 않는다.
+                # 재사용을 명시해 다음 발생 시 원인을 바로 가릴 수 있게 한다.
+                logger.info("[Toss] 401 복구: 다른 스레드가 발급한 토큰 재사용 (재발급 생략)")
                 return cached
 
         key = config.session.toss_app_key
