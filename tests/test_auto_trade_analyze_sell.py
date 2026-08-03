@@ -322,3 +322,35 @@ def test_analyze_buy_vol_unknown_overseas_passes(mock_ind, mock_cls, mock_score,
         thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
     )
     assert res['action'] == 'buy'
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_analyze_buy_uses_same_w52_for_state_and_score(mock_ind, mock_cls, mock_score, mock_sm,
+                                                      strategy, df_up):
+    """[SSOT] 52주 위치는 상태 분류와 점수 계산에 같은 값이 들어가야 한다.
+
+    calculate_score에 w52_pos를 넘기지 않으면 내부 폴백(_w52_band, 365 달력일)이 쓰이는데,
+    바로 위 classify_stock_state에는 tail(250 거래일)로 계산한 값을 넘기고 있어 같은 시점에
+    52주 위치가 두 개 존재하게 된다. 그러면 가격 모멘텀 팩터(+0.5, 임계 80%)가 상태와 점수에서
+    다르게 매겨지고, 백테스트(rolling 250 거래일)와의 판정도 어긋난다.
+    (실측: 20종목 6069건 대조에서 2건이 이 원인으로 0.5점 갈렸다 —
+     tools/audit_live_backtest_parity.py)
+    """
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매수", "", "조건충족")
+    mock_score.return_value = (8.0, [])
+
+    strategy.analyze_buy(
+        "005930", "삼성전자", df_up, 10000, vol_strength=150.0, ask_bid_ratio=2.0,
+        thresholds={"BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0},
+    )
+
+    w52_state = mock_cls.call_args.kwargs.get('w52_pos')
+    w52_score = mock_score.call_args.kwargs.get('w52_pos')
+    assert w52_state is not None, "classify_stock_state에 w52_pos가 전달되지 않았다"
+    assert w52_score is not None, \
+        "calculate_score에 w52_pos가 전달되지 않았다 — _w52_band(365일) 폴백으로 갈라진다"
+    assert w52_score == pytest.approx(w52_state)

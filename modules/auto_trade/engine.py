@@ -567,11 +567,16 @@ class DefaultStrategy:
             df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
         )
         
+        # [SSOT] w52_pos를 반드시 함께 넘긴다. 넘기지 않으면 calculate_score가 내부 폴백으로
+        #  _w52_band(365 달력일)를 쓰는데, 바로 위 classify_stock_state에는 tail(250 거래일)로
+        #  계산한 값을 넘기고 있어 같은 시점에 52주 위치가 두 개 존재하게 된다. 그러면 가격
+        #  모멘텀 팩터(+0.5, 임계 80%)가 상태와 점수에서 다르게 매겨진다.
         score, _ = analysis.calculate_score(
-            df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag
+            df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
+            smart_money=sm_flag, w52_pos=w52_pos
         )
         score = round(score, 1)
-        
+
         # [수정] 역매수 상태에 따른 체결강도 분기
         if state == "역매수":
             min_vol = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
@@ -725,8 +730,10 @@ class DefaultStrategy:
                 df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
             )
             
+            # [SSOT] 위 classify_stock_state와 같은 w52_pos를 쓴다 (analyze_buy 주석 참조)
             score, _ = analysis.calculate_score(
-                df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag
+                df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
+                smart_money=sm_flag, w52_pos=w52_pos
             )
             score = round(score, 1)
 

@@ -590,8 +590,11 @@ class ConclusionMonitor:
                                                     df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
                                                 )
 
+                                                # [SSOT] 위 classify_stock_state와 같은 w52_pos를 쓴다
+                                                #  (engine.DefaultStrategy.analyze_buy 주석 참조)
                                                 score, _ = analysis.calculate_score(
-                                                    df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None, smart_money=sm_flag
+                                                    df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
+                                                    smart_money=sm_flag, w52_pos=w52_pos
                                                 )
                                                 score = round(score, 1)
                                                 
