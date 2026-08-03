@@ -1,5 +1,6 @@
 import json
 import jsonio
+import logging
 import os
 from rich.prompt import Prompt
 from rich.console import Console
@@ -1370,10 +1371,18 @@ def _set_journal_sync_use(value):
     missing = [name for name in ('JOURNAL_API_URL', 'JOURNAL_API_KEY')
                if not getattr(config, name, '')]
     if missing:
+        # 화면 안내만 남기면 사라진다 — 스위치는 ON 으로 저장됐는데 워커는 뜨지 않은
+        # 상태가 되고, 나중에 로그를 뒤져도 그 사실이 어디에도 없다. 로그에도 남긴다.
+        # (실측 2026-08-03: 웹에서 봇이 안 보여 원인을 찾는 데 이 줄이 없어 헤맸다)
+        logging.getLogger(__name__).warning(
+            f"[Journal] 스위치는 켰지만 환경변수 미설정으로 워커를 시작하지 못했습니다: "
+            f"{', '.join(missing)}")
         config.console.print(
             f"\n[yellow]※ 환경변수 {', '.join(missing)} 가 설정되지 않아 연동이 동작하지 않습니다.[/yellow]")
         config.console.print(
-            "[dim]  ~/.htsrc 에 export 로 추가한 뒤 `source ~/.htsrc` 하고 프로그램을 재시작하세요.[/dim]")
+            "[dim]  ~/.htsrc 에 export 로 추가한 뒤 새 터미널에서 프로그램을 재시작하세요.[/dim]")
+        config.console.print(
+            "[dim]  (이미 열려 있던 터미널은 그 터미널이 열린 시점의 환경을 그대로 씁니다.)[/dim]")
         return
 
     journal_sync.start()
