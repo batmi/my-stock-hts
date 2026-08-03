@@ -164,6 +164,49 @@ def test_domestic_label_holiday():
 
 
 # ==========================================================
+# 세션 전환 알림 — 자정 날짜 변경 노이즈 차단
+# ==========================================================
+
+def test_session_phase_key_folds_closed_and_holiday():
+    """마감·휴장은 둘 다 '거래 없음' — 같은 키여야 한다.
+
+    휴장 판정이 달력일 기준이라 자정에 'holiday'↔'closed'가 뒤집힌다. 접지 않으면
+    시장에서 아무 일도 없는 자정마다 '시장 상태 변경' 텔레그램이 나간다
+    (실측 2026-08-03 00:00 "장 마감 · KRX 종가").
+    """
+    from modules.auto_trade.trader import session_phase_key
+    assert session_phase_key('closed') == session_phase_key('holiday')
+    # 거래 있는 단계는 서로/idle과 구분된 채로 남아야 한다
+    live = {session_phase_key(p) for p in ('nxt_pre', 'krx', 'nxt_after')}
+    assert live == {'nxt_pre', 'krx', 'nxt_after'}
+    assert session_phase_key('closed') not in live
+
+
+def test_session_phase_key_midnight_rollover_is_silent():
+    """일 23:59 → 월 00:00: 실제 phase는 바뀌지만 알림 키는 그대로다."""
+    from modules.auto_trade.trader import session_phase_key
+    a, b, c = _freeze_kr(datetime(2026, 8, 2, 23, 59), holiday=True)   # 일요일 심야
+    with a, b, c:
+        before = session_phase_key(api.domestic_session_phase())
+    a, b, c = _freeze_kr(datetime(2026, 8, 3, 0, 0), holiday=False)    # 월요일 자정
+    with a, b, c:
+        after = session_phase_key(api.domestic_session_phase())
+    assert before == after == 'idle'
+
+
+def test_session_phase_key_market_close_still_notifies():
+    """20:00 애프터마켓 → 20:01 마감은 진짜 전환 — 알림이 살아 있어야 한다."""
+    from modules.auto_trade.trader import session_phase_key
+    a, b, c = _freeze_kr(datetime(2026, 7, 28, 20, 0))
+    with a, b, c:
+        before = session_phase_key(api.domestic_session_phase())
+    a, b, c = _freeze_kr(datetime(2026, 7, 28, 20, 1))
+    with a, b, c:
+        after = session_phase_key(api.domestic_session_phase())
+    assert before == 'nxt_after' and after == 'idle'
+
+
+# ==========================================================
 # 미국 — us_session_phase / 라벨
 # ==========================================================
 

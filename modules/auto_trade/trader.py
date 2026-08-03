@@ -51,6 +51,17 @@ def _pkg():
     return _at
 
 
+#  휴장 판정은 달력일 기준이라 자정에 뒤집힌다(일 23:59 'holiday' → 월 00:00 'closed').
+#  둘 다 거래가 없는 같은 상태인데 문자열만 달라 자정마다 '시장 상태 변경' 알림이 나갔다
+#  (실측 2026-08-03 00:00 "장 마감 · KRX 종가"). 알림 비교에서는 한 상태로 묶는다.
+_IDLE_SESSION_PHASES = frozenset({'closed', 'holiday'})
+
+
+def session_phase_key(phase):
+    """세션 전환 알림용 비교 키. 거래 없는 단계(마감·휴장)는 하나로 접는다."""
+    return 'idle' if phase in _IDLE_SESSION_PHASES else phase
+
+
 def candidate_priority_key(c):
     """[추세추종] 매수 후보 우선순위 정렬 키 — 게이트(매수 점수 통과)와 랭킹을 분리한다.
 
@@ -2987,7 +2998,9 @@ class AutoTrader:
 
                     # [추가] 장 시작/마감 상태 변경 감지 및 로그
                     # [추가] 국내장 세션 단계 전환 감지 및 텔레그램 알림
-                    current_phase = api.domestic_session_phase()
+                    # [수정] 마감/휴장은 같은 '거래 없음'으로 접어 자정 날짜 변경만으로 알림이
+                    #        나가지 않게 한다(session_phase_key 주석 참고).
+                    current_phase = _pkg().session_phase_key(api.domestic_session_phase())
                     if self.last_session_phase is None:
                         self.last_session_phase = current_phase
                     elif self.last_session_phase != current_phase:
