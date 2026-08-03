@@ -5833,8 +5833,20 @@ def _toss_sellable_qty(code):
     return _toss_int((sq or {}).get('sellableQuantity'))
 
 
+def _paper_active():
+    """관찰(페이퍼) 모드 여부. 잔고·예수금·주문 가로채기의 단일 판정점."""
+    try:
+        return bool(getattr(config.session, 'is_paper', False))
+    except Exception:
+        return False
+
+
 def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """국내 주식 잔고 조회"""
+    # [관찰 모드] 가상 포트폴리오로 대체. 토스 분기보다 먼저 와야 실계좌 조회가 나가지 않는다.
+    if _paper_active():
+        from modules import paper_broker
+        return paper_broker.get_domestic_balance()
     if config.session.is_toss:
         return _toss_domestic_balance()
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
@@ -6076,7 +6088,11 @@ def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     return get_domestic_open_orders(cano, acnt_prdt_cd)
 
 def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
-    """국내주식 미체결 내역 조회 (모의/실전/토스 분기 처리)"""
+    """국내주식 미체결 내역 조회 (모의/실전/토스/관찰 분기 처리)"""
+    # [관찰 모드] 즉시 전량 체결로 모델링하므로 미체결은 항상 없다.
+    #  (미체결·부분체결 재현은 1단계 범위 밖 — paper_broker 모듈 주석 참조)
+    if _paper_active():
+        return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자: 미체결 없음", "output": []}
     if config.session.is_toss:
         return _toss_open_orders('domestic')
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
@@ -6171,6 +6187,14 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     market: "domestic" or "overseas"
     action: "buy" or "sell"
     """
+    # [관찰 모드 하드 가드] 호출부 실수와 무관하게 실주문을 원천 차단한다.
+    #  이 게이트는 함수 최상단에 있어야 의미가 있다 — 아래 어떤 분기도 타지 않는다.
+    if _paper_active():
+        from modules import paper_broker
+        if market != "domestic":
+            return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
+                    "msg1": "[가상투자] 해외 주문은 지원하지 않습니다", "output": {}}
+        return paper_broker.place_order(action, code, qty, price)
     if config.session.is_toss:
         return _toss_place_order(market, action, code, qty, price, ord_dvsn)
     cano, acnt = _prepare_account_params(None, None)
@@ -6214,6 +6238,10 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     action: "modify" (정정) or "cancel" (취소)
     type_cd: "01"(정정), "02"(취소) - API 스펙상 구분 코드
     """
+    # [관찰 모드 하드 가드] 즉시 체결이라 정정/취소 대상이 없다. 실주문 경로로 새지 않게 차단한다.
+    if _paper_active():
+        return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
+                "msg1": "[가상투자] 즉시 체결되어 정정/취소할 주문이 없습니다", "output": {}}
     if config.session.is_toss:
         return _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn)
     cano, acnt = _prepare_account_params(None, None)
@@ -6268,7 +6296,11 @@ def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     return call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["DEPOSIT"], "domestic", "inquiry", "deposit", params=params, retries=retries)
 
 def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, retries=None):
-    """예수금 및 자산 현황 조회 (모의/실전/토스 자동 분기)"""
+    """예수금 및 자산 현황 조회 (모의/실전/토스/관찰 자동 분기)"""
+    # [관찰 모드] 가상 현금. 즉시 결제로 보므로 D+1/D+2 구분이 없다.
+    if _paper_active():
+        from modules import paper_broker
+        return paper_broker.get_deposit_balance()
     # [추가] 토스: 매수가능금액(현금)을 예수금으로 사용. D+1/D+2 구분은 제공되지 않음.
     if config.session.is_toss:
         dep = _toss_krw_deposit()

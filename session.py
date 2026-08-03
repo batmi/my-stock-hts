@@ -10,6 +10,10 @@ class SessionManager:
     def __init__(self):
         self.is_simulation = False
         self.is_toss = False  # [추가] 토스증권 모드 여부
+        # [추가] 관찰(페이퍼 트레이딩) 모드 여부. 시세·지표는 실제 소스(토스)를 그대로 쓰고
+        #  잔고·예수금·주문만 가상으로 처리한다(modules/paper_broker.py).
+        #  모의투자 계좌의 3개월 리셋 없이 장기 관찰하기 위한 모드이며, 실주문은 원천 차단된다.
+        self.is_paper = False
         self.url_base = ""
         
         # 현재 활성 계좌 정보 (모드에 따라 변경됨)
@@ -118,7 +122,8 @@ class SessionManager:
             config.console.print("[1] 모의투자 (Simulation)")
             config.console.print("[2] 한투증권 (KIS, 실전)")
             config.console.print("[3] 토스증권 (Toss, 실전)")
-            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "q"], default="1")
+            config.console.print("[4] 가상투자 (Paper Trading)")
+            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "4", "q"], default="1")
             if mode == 'q': sys.exit()
 
         if mode == '1':
@@ -147,14 +152,19 @@ class SessionManager:
             # [추가] 모의투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
                 config.console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
-        elif mode == '3':
+        elif mode in ('3', '4'):
             # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.
+            # mode 4(관찰)는 시세·차트·지표를 토스 실전과 완전히 동일하게 쓰되,
+            # 잔고·예수금·주문만 paper_broker의 가상 계좌로 대체한다.
             self.is_simulation = False
             self.is_toss = True
+            self.is_paper = (mode == '4')
             self.url_base = config.TOSS_URL
 
             # 화면 표시용 계좌번호 (accountSeq는 preflight에서 토큰 발급 후 /accounts로 해석)
-            self.cano = self.toss_acc_num
+            #  관찰 모드는 실제 계좌를 조회하지 않으므로 가상 계좌 라벨을 쓴다 —
+            #  화면·텔레그램·매매기록 어디서도 실계좌와 혼동되지 않게 하기 위함이다.
+            self.cano = "PAPER" if self.is_paper else self.toss_acc_num
             self.acnt_prdt_cd = ""
 
             # [중요] 토스는 단일 주식계좌만 제공한다. 시스템 트레이딩용 '자동' 계좌 개념이
@@ -167,7 +177,10 @@ class SessionManager:
             self.auto_app_key = ""
             self.auto_app_secret = ""
 
-            config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
+            if self.is_paper:
+                self._activate_paper_mode()
+            else:
+                config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
 
             if not self.toss_app_key or not self.toss_app_secret:
                 config.console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
@@ -195,7 +208,8 @@ class SessionManager:
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
             key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
-            config.console.print(f"\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
+            src_label = "가상투자 · 시세 소스 토스증권" if self.is_paper else "토스증권"
+            config.console.print(f"\n[dim magenta][{src_label}] 설정 로드 확인[/dim magenta]")
             config.console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
             config.console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
             return
@@ -216,6 +230,32 @@ class SessionManager:
         config.console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")
         if self.auto_cano:
             config.console.print(f"[dim]   - 자동매매 계좌: {self.auto_cano}-{self.auto_acnt_prdt_cd}[/dim]")
+
+    def _activate_paper_mode(self):
+        """관찰 모드 활성화 — DB 분리 · 가상 계좌 개설 · 외부 연동 차단.
+
+        모의투자 계좌(mode 1)의 3개월 리셋 없이 장기 관찰하기 위한 모드다.
+        시세·차트·지표·스코어링·필터·청산 판정은 토스 실전과 100% 동일하게 돌고,
+        잔고·예수금·주문만 paper_broker의 가상 계좌로 대체된다.
+        """
+        from modules import db_manager, paper_broker
+
+        # 1) 실계좌 DB와 파일 분리 (trailing_stops·half_tp_status 오염 방지)
+        db_manager.db.switch_path(config.PAPER_DB_FILE_PATH)
+        paper_broker.init_tables()
+
+        # 2) 매매일지 웹 연동 차단 — 가상 체결이 실제 매매 기록에 섞이면 안 된다.
+        config.settings.JOURNAL_SYNC_USE = False
+
+        seed = paper_broker.get_seed()
+        cash = paper_broker.get_cash()
+        started = paper_broker._get_state('started_at', '-')
+        config.console.print("\n[bold cyan]가상투자(Paper Trading) 환경을 로드했습니다.[/bold cyan]")
+        config.console.print("[dim]   - 시세·지표: 토스증권 실전과 동일[/dim]")
+        config.console.print("[dim]   - 주문: 가상 체결 (실주문 원천 차단)[/dim]")
+        config.console.print(f"[dim]   - 가상 시드: {seed:,.0f}원 / 현재 현금: {cash:,.0f}원 (개설 {started})[/dim]")
+        config.console.print(f"[dim]   - 데이터: {config.PAPER_DB_FILE_PATH} (실계좌 DB와 분리)[/dim]")
+        config.console.print("[dim]   - 매매일지 웹 연동: 자동 차단[/dim]")
 
     def load_stock_config(self):
         if os.path.exists(config.STOCK_DATA_FILE):

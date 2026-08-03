@@ -30,7 +30,10 @@ def _get_telegram_footer():
     cano = config.session.cano
     acnt = config.session.acnt_prdt_cd
     
-    if config.session.is_toss:
+    # 가상투자는 토스 시세를 쓰지만 계좌가 가상이므로 알림에서도 실전과 구분해야 한다
+    if getattr(config.session, 'is_paper', False):
+        acc_label = "가상"
+    elif config.session.is_toss:
         acc_label = "토스"
     else:
         acc_label = "모의" if config.session.is_simulation else "실전"

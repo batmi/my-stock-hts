@@ -25,6 +25,11 @@ class DBManager:
         #  (sqlite3.Connection은 weakref 불가하므로 thread_id 키의 일반 dict 사용)
         self._all_conns = {}
         self._all_conns_lock = threading.Lock()
+        # [추가] 연결 세대. close_all_connections/switch_path가 증가시키면 각 스레드는
+        #  다음 사용 시 자신의 캐시된 연결이 낡았음을 알고 새로 연다.
+        #  (이게 없으면 다른 스레드의 thread-local이 '이미 닫힌 연결'을 계속 들고 있다가
+        #   ProgrammingError: Cannot operate on a closed database 로 터진다)
+        self._generation = 0
         self._init_db()
 
     def __del__(self):
@@ -55,6 +60,7 @@ class DBManager:
         with self._all_conns_lock:
             conns = list(self._all_conns.values())
             self._all_conns.clear()
+        self._generation += 1   # 다른 스레드가 닫힌 연결을 재사용하지 않도록 무효화
         for c in conns:
             try:
                 c.close()
@@ -67,8 +73,16 @@ class DBManager:
             pass
 
     def _get_conn(self):
-        """스레드별 DB 연결 객체 반환 (없으면 생성)"""
-        if not hasattr(self.local, 'conn') or self.local.conn is None:
+        """스레드별 DB 연결 객체 반환 (없으면 생성)
+
+        세대(_generation)가 바뀌었으면 캐시된 연결이 닫혔거나 다른 DB 파일을 가리키므로
+        버리고 새로 연다. 이 검사가 없으면 close_all_connections/switch_path 이후
+        다른 스레드가 닫힌 연결을 계속 사용하게 된다.
+        """
+        gen = self._generation
+        if (not hasattr(self.local, 'conn') or self.local.conn is None
+                or getattr(self.local, 'gen', None) != gen):
+            self.local.gen = gen
             # [수정] check_same_thread=False: 스레드 로컬 구조상 연결은 한 스레드만
             #  사용하므로 동시성 위험은 없으며, 정리(close)를 메인/정리 스레드에서
             #  수행할 수 있도록 스레드 검사를 끈다.
@@ -82,6 +96,53 @@ class DBManager:
 
     def _is_screen_output_allowed(self):
         return threading.current_thread().name != "TelegramBot"
+
+    def switch_path(self, new_path):
+        """DB 파일을 통째로 교체한다 (관찰 모드 전용).
+
+        db 인스턴스는 모듈 import 시점에 생성되므로 세션 모드가 정해지기 전에
+        실계좌 경로로 고정된다. 관찰 모드는 실계좌와 **파일을 분리**해야 하므로
+        (trailing_stops·half_tp_status가 code를 PK로 써서 같은 파일을 공유하면
+         실계좌 포지션의 최고가가 페이퍼 포지션에 섞인다) 세션 초기화 시 이 함수로 갈아끼운다.
+        열려 있는 모든 스레드 연결을 닫고 새 경로로 테이블을 재생성한다.
+        """
+        if not new_path or new_path == self.db_path:
+            return
+        self.close_all_connections()
+        with self.lock:
+            self.db_path = new_path
+            self._generation += 1
+        self._init_db()
+        logger.info(f"[DB] 데이터베이스 경로 전환: {new_path}")
+
+    def get_connection(self):
+        """현재 스레드의 연결을 반환한다(외부 모듈이 직접 커서를 쓸 때)."""
+        return self._get_conn()
+
+    def execute_query(self, query, params=(), fetch=None):
+        """범용 쿼리 실행 헬퍼. fetch: None(쓰기) / 'one' / 'all'.
+
+        기존 메서드들과 동일하게 락 + 잠김 재시도를 적용한다.
+        """
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute(query, params)
+                    if fetch == 'one':
+                        return cursor.fetchone()
+                    if fetch == 'all':
+                        return cursor.fetchall()
+                    conn.commit()
+                    return None
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"[DB] execute_query 실패: {e} | {query[:80]}")
+                    raise
+        return None
 
     def _init_db(self):
         """DB 초기화 (테이블 생성 등) - 메인 스레드에서 한 번만 실행"""

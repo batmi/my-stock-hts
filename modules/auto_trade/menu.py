@@ -755,11 +755,12 @@ def system_trading_menu():
                 trader_status = " [bold yellow](WAITING"
         else:
             trader_status = " [bold red](STOPPED"
-            
+
         menu_items = [
             ("1", "트레이딩 실행", "Start"), ("2", "트레이딩 중단", "Stop"), ("3", "트레이딩 상태", f"Status){trader_status}"),
             ("4", "트레이딩 평가", "Report"), ("5", "트레이딩 로그", "Log Viewer"),
-            ("6", "종목별 트레이딩 룰", "Rule"), ("7", "트레이딩 제한 종목", "Restrict")
+            ("6", "종목별 트레이딩 룰", "Rule"), ("7", "트레이딩 제한 종목", "Restrict"),
+            ("8", "가상투자 관리", "Paper Account")
         ]
         
         try:
@@ -801,3 +802,6 @@ def system_trading_menu():
             if manage_stock_rules() is not False: utils.pause()
         elif choice == "7":
             if manage_restricted_stocks_menu() is not False: utils.pause()
+        elif choice == "8":
+            from modules import paper_report
+            paper_report.show_paper_menu()

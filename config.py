@@ -184,6 +184,10 @@ class GlobalSettings(BaseModel):
                                             #   80~160일 × 밴드 1~2% 구간이 MAR 0.26~0.34의 고원을 이룬다.
                                             #   단 짧은 기간에 확인을 과하게 얹으면 역효과다(SMA60±2%는 ΔCAGR +0.06%p로 무개선,
                                             #   SMA60±1%+2일확인은 오히려 악화). 80일 × 1%가 검증된 조합이다.
+    # [관찰 모드] 페이퍼 트레이딩 가상 시드(원). 실계좌 전환 예정 금액과 같게 두어야
+    #  드로다운 금액·1주 미달로 버려지는 진입 기회까지 실제와 같은 조건에서 관찰된다.
+    PAPER_SEED_CAPITAL: int = Field(default=5_000_000, gt=0)
+
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
     SYSTEM_DAILY_LOSS_LIMIT: float = Field(default=10.0, ge=0.0)   # [안전장치] 일일 손실률 도달 시 자동 중단(비상 정지). 0.0%면 비상 정지 OFF(미사용)
     SYSTEM_RISK_PER_TRADE: float = Field(default=4.0, ge=0.0)      # [안전장치] 1회 매매 시 계좌 대비 최대 허용 손실률 (%) (0.0이면 미사용)
@@ -967,6 +971,12 @@ PRESETS_FILE = os.path.join(JSON_DIR, "presets.json")
 # [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
 DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")
 
+# [관찰 모드] 페이퍼 트레이딩 전용 DB. 실계좌 DB와 **파일을 분리**한다 —
+#  trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 파일을 공유하면
+#  실계좌 포지션의 트레일링 최고가가 가상 포지션에 오염된다.
+#  초기화도 이 파일 하나만 지우면 끝난다. (세션 mode 4 진입 시 db.switch_path로 전환)
+PAPER_DB_FILE_PATH = os.path.join(DB_DIR, "paper_trading.db")
+
 # ==========================================================
 # [설정] 데이터 보존 및 관리 정책
 # ==========================================================
@@ -1521,6 +1531,7 @@ CONFIG_DESCRIPTIONS = {
     "RS_FILTER_LOOKBACK": "RS 필터 수익률 비교 기간 (거래일, 0=가격 모멘텀 룩백 연동)",
     "MARKET_FILTER_MA": "시장 추세 판단용 단순이동평균선 (일)",
     "MARKET_FILTER_BAND": "시장 필터 이탈 확인 밴드 (%, 0=단순 이탈)",
+    "PAPER_SEED_CAPITAL": "가상투자(페이퍼) 모드 가상 시드 (원)",
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
     "SYSTEM_DAILY_LOSS_LIMIT": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)",
     "SYSTEM_RISK_PER_TRADE": "1회 매매 시 계좌 대비 최대 허용 손실률",

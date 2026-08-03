@@ -1225,7 +1225,9 @@ class AutoTrader:
             warnings.append("실시간 피드 상태를 읽지 못했습니다")
 
         account = config.session.cano if config.session.is_simulation else config.session.auto_cano
-        if getattr(config.session, "is_toss", False):
+        if getattr(config.session, "is_paper", False):
+            mode = "가상투자"
+        elif getattr(config.session, "is_toss", False):
             mode = "토스 실전"
         elif config.session.is_simulation:
             mode = "KIS 모의"
@@ -3080,6 +3082,12 @@ class AutoTrader:
 
                         # [리스크 스케일링] 약세 국면·계좌 드로다운 반영 리스크 한도 배수 갱신 (주기당 1회)
                         self._update_risk_scale()
+
+                        # [관찰 모드] 가상 자산 일별 스냅샷 — 자산곡선·MDD 산출의 유일한 소스다.
+                        #  같은 날 재호출은 덮어쓰므로 주기마다 불러도 하루 1행만 남는다.
+                        if getattr(config.session, 'is_paper', False):
+                            from modules import paper_broker
+                            paper_broker.snapshot_equity()
 
                         # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
                         # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보

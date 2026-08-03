@@ -1,0 +1,358 @@
+"""관찰(페이퍼 트레이딩) 모드 가상 브로커.
+
+[왜 필요한가] 모의투자 계좌는 3개월마다 리셋되어 장기 관찰이 불가능하고, 그 이전에
+표본 자체가 부족하다(연 청산 30건 · 승률 18% → 3개월이면 7~8건으로 판별 불가).
+반면 검증이 실제로 필요한 것은 전략이 아니라 **배관**이다 — 시세 수신, 스코어링, 필터,
+청산 판정, 재기동 복원, 알림. 이 모듈은 주문 실행만 가상으로 돌려 그 전 과정을
+실계좌 환경에서 자본 노출 없이 검증하게 한다.
+
+[설계] api 층에서 잔고·예수금·주문을 가로채므로(api.get_domestic_balance 등),
+기존 25개 호출부와 모든 화면·텔레그램·스케줄러가 수정 없이 가상 포트폴리오를 본다.
+저장소는 실계좌 DB와 **파일 자체를 분리**한다(config.PAPER_DB_FILE_PATH) —
+trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 같은 파일을 공유하면
+실계좌 포지션의 트레일링 최고가가 페이퍼 포지션에 오염된다.
+
+[체결 모델] 트레이더가 실시간 호가로 정한 주문가에 **즉시 전량 체결**로 가정하고
+수수료·거래세만 차감한다. 미체결·부분체결은 재현하지 않는다(1단계 범위).
+백테스트가 종가 기준이라 청산일 하락갭(실측 평균 -1.44%)만큼 낙관 편향이 있는 반면,
+이 모드는 실제 장중 판단 시점 가격으로 체결되므로 그 편향이 없다.
+"""
+import json
+import logging
+import threading
+from datetime import datetime
+
+import config
+
+logger = logging.getLogger(__name__)
+
+_lock = threading.RLock()
+
+# 체결 비용. 매수는 위탁수수료만, 매도는 수수료 + 증권거래세.
+# (포트폴리오 백테스트 simulate와 동일 기준: 매도 0.23%)
+BUY_FEE_RATE = 0.00015
+SELL_FEE_RATE = 0.0023
+
+
+def is_active():
+    """현재 세션이 관찰 모드인가."""
+    return bool(getattr(config.session, 'is_paper', False))
+
+
+def _db():
+    from modules import db_manager
+    return db_manager.db
+
+
+def init_tables():
+    """가상 포트폴리오 테이블 생성. 세션이 페이퍼 DB로 전환된 뒤 호출한다."""
+    conn = _db().get_connection()
+    cur = conn.cursor()
+    cur.execute('''CREATE TABLE IF NOT EXISTS paper_state (
+                       key TEXT PRIMARY KEY, value TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS paper_positions (
+                       code TEXT PRIMARY KEY, name TEXT, qty INTEGER,
+                       avg_price REAL, first_buy_at TEXT, last_buy_at TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS paper_fills (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT, type TEXT,
+                       code TEXT, name TEXT, qty INTEGER, price REAL,
+                       amount REAL, fee REAL, profit_amt REAL, profit_rate REAL,
+                       odno TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS paper_equity (
+                       date TEXT PRIMARY KEY, cash REAL, stock_value REAL, total REAL)''')
+    conn.commit()
+
+    seed = int(getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000))
+    if _get_state('seed') is None:
+        _set_state('seed', seed)
+        _set_state('cash', seed)
+        _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        logger.info(f"[PAPER] 가상 계좌 개설: 시드 {seed:,}원")
+
+
+def _get_state(key, default=None):
+    try:
+        row = _db().execute_query("SELECT value FROM paper_state WHERE key=?", (key,), fetch='one')
+        return json.loads(row[0]) if row else default
+    except Exception:
+        return default
+
+
+def _set_state(key, value):
+    _db().execute_query("INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)",
+                        (key, json.dumps(value)))
+
+
+def get_cash():
+    return float(_get_state('cash', 0) or 0)
+
+
+def get_seed():
+    return float(_get_state('seed', getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000)))
+
+
+def get_positions():
+    """[{code, name, qty, avg_price, first_buy_at, last_buy_at}, ...]"""
+    rows = _db().execute_query(
+        "SELECT code, name, qty, avg_price, first_buy_at, last_buy_at "
+        "FROM paper_positions WHERE qty > 0 ORDER BY code", fetch='all') or []
+    return [{"code": r[0], "name": r[1], "qty": int(r[2]), "avg_price": float(r[3]),
+             "first_buy_at": r[4], "last_buy_at": r[5]} for r in rows]
+
+
+def _current_price(code, fallback=0.0):
+    """현재가 조회. 실패 시 fallback(보통 평단)을 써서 평가금이 0으로 무너지지 않게 한다."""
+    try:
+        import api
+        price = api.get_current_price(code, False)
+        if price and float(price) > 0:
+            return float(price)
+    except Exception as e:
+        logger.debug(f"[PAPER] 현재가 조회 실패({code}): {e}")
+    return float(fallback or 0.0)
+
+
+# ==========================================================
+# api 가로채기 대상 — KIS 응답과 같은 스키마로 반환한다
+# ==========================================================
+def get_domestic_balance():
+    """api.get_domestic_balance 대체. (output1 보유목록, output2 요약) 형태."""
+    with _lock:
+        positions = get_positions()
+        cash = get_cash()
+        output1, total_eval, total_pchs = [], 0.0, 0.0
+        for p in positions:
+            price = _current_price(p['code'], p['avg_price'])
+            evlu = price * p['qty']
+            pchs = p['avg_price'] * p['qty']
+            pfls = evlu - pchs
+            total_eval += evlu
+            total_pchs += pchs
+            output1.append({
+                'pdno': p['code'],
+                'prdt_name': p['name'] or p['code'],
+                'hldg_qty': str(p['qty']),
+                'ord_psbl_qty': str(p['qty']),
+                'pchs_avg_pric': f"{p['avg_price']:.4f}",
+                'pchs_amt': str(int(pchs)),
+                'prpr': str(int(price)),
+                'evlu_amt': str(int(evlu)),
+                'evlu_pfls_amt': str(int(pfls)),
+                'evlu_pfls_rt': f"{(pfls / pchs * 100) if pchs else 0:.2f}",
+                'fltt_rt': "0.00",
+                '_paper': True,
+            })
+        output2 = [{
+            'dnca_tot_amt': str(int(cash)),
+            'prvs_rcdl_excc_amt': str(int(cash)),
+            'scts_evlu_amt': str(int(total_eval)),
+            'tot_evlu_amt': str(int(cash + total_eval)),
+            'pchs_amt_smtl_amt': str(int(total_pchs)),
+            'pchs_amt_smtl': str(int(total_pchs)),
+            'evlu_pfls_smtl_amt': str(int(total_eval - total_pchs)),
+            'nass_amt': str(int(cash + total_eval)),
+        }]
+        return output1, output2
+
+
+def get_deposit_balance():
+    """api.get_deposit_balance 대체. 가상 현금은 즉시 결제로 본다(D+2 구분 없음)."""
+    cash = int(get_cash())
+    return {"deposit": cash, "foreign_deposit": 0, "withdraw": cash,
+            "d2_deposit": cash, "order_possible": cash, "d2_real": cash}
+
+
+def place_order(action, code, qty, price, name=None):
+    """api.place_order 대체. 즉시 전량 체결로 처리하고 KIS 형식 응답을 만든다."""
+    with _lock:
+        try:
+            qty = int(qty)
+            price = float(price)
+        except (TypeError, ValueError):
+            return _fail("주문 수량/가격이 올바르지 않습니다")
+        if qty <= 0:
+            return _fail("주문 수량이 0입니다")
+
+        if price <= 0:  # 시장가 주문 → 현재가로 체결
+            price = _current_price(code)
+            if price <= 0:
+                return _fail("현재가를 확인할 수 없어 체결 불가")
+
+        if name is None:
+            name = _lookup_name(code)
+
+        pos = _db().execute_query(
+            "SELECT name, qty, avg_price, first_buy_at FROM paper_positions WHERE code=?",
+            (code,), fetch='one')
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        odno = f"P{datetime.now().strftime('%y%m%d%H%M%S')}{code[-2:]}"
+
+        if action.lower() == 'buy':
+            amount = price * qty
+            fee = amount * BUY_FEE_RATE
+            cash = get_cash()
+            if cash < amount + fee:
+                return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
+            _set_state('cash', cash - amount - fee)
+            if pos and int(pos[1]) > 0:
+                new_qty = int(pos[1]) + qty
+                new_avg = (float(pos[2]) * int(pos[1]) + amount) / new_qty
+                _db().execute_query(
+                    "UPDATE paper_positions SET qty=?, avg_price=?, last_buy_at=?, name=? WHERE code=?",
+                    (new_qty, new_avg, now, name or pos[0], code))
+            else:
+                _db().execute_query(
+                    "INSERT OR REPLACE INTO paper_positions "
+                    "(code, name, qty, avg_price, first_buy_at, last_buy_at) VALUES (?,?,?,?,?,?)",
+                    (code, name, qty, price, now, now))
+            _record_fill(now, '매수', code, name, qty, price, amount, fee, 0.0, 0.0, odno)
+
+        elif action.lower() == 'sell':
+            if not pos or int(pos[1]) < qty:
+                return _fail(f"가상 보유수량 부족 (요청 {qty} / 보유 {int(pos[1]) if pos else 0})")
+            amount = price * qty
+            fee = amount * SELL_FEE_RATE
+            avg = float(pos[2])
+            profit_amt = (price - avg) * qty - fee
+            profit_rate = (profit_amt / (avg * qty) * 100) if avg else 0.0
+            _set_state('cash', get_cash() + amount - fee)
+            remain = int(pos[1]) - qty
+            if remain > 0:
+                _db().execute_query("UPDATE paper_positions SET qty=? WHERE code=?", (remain, code))
+            else:
+                _db().execute_query("DELETE FROM paper_positions WHERE code=?", (code,))
+            _record_fill(now, '매도', code, name or pos[0], qty, price, amount, fee,
+                         profit_amt, profit_rate, odno)
+        else:
+            return _fail(f"알 수 없는 주문 유형: {action}")
+
+        logger.info(f"[PAPER] {action.upper()} 체결 {code} {qty}주 @{price:,.0f} (No.{odno})")
+        return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자 체결",
+                "output": {"ODNO": odno, "ORD_TMD": datetime.now().strftime('%H%M%S')}}
+
+
+def _fail(msg):
+    logger.warning(f"[PAPER] 주문 거부: {msg}")
+    return {"rt_cd": "1", "msg_cd": "PAPER_REJECT", "msg1": f"[가상투자] {msg}", "output": {}}
+
+
+def _lookup_name(code):
+    try:
+        for key in ("stocks_kr", "etfs_kr"):
+            for item in config.session.stock_data.get(key, []):
+                if item.get('code') == code:
+                    return item.get('name', code)
+    except Exception:
+        pass
+    return code
+
+
+def _record_fill(time_str, type_str, code, name, qty, price, amount, fee, profit_amt, profit_rate, odno):
+    _db().execute_query(
+        "INSERT INTO paper_fills (time, type, code, name, qty, price, amount, fee, "
+        "profit_amt, profit_rate, odno) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (time_str, type_str, code, name, qty, price, amount, fee, profit_amt, profit_rate, odno))
+
+
+# ==========================================================
+# 스냅샷 / 리포트용 집계
+# ==========================================================
+def snapshot_equity():
+    """일별 자산 스냅샷 기록(자산곡선·MDD 산출용). 같은 날 재호출 시 덮어쓴다."""
+    try:
+        _, output2 = get_domestic_balance()
+        s = output2[0]
+        cash = float(s['dnca_tot_amt'])
+        stock = float(s['scts_evlu_amt'])
+        _db().execute_query(
+            "INSERT OR REPLACE INTO paper_equity (date, cash, stock_value, total) VALUES (?,?,?,?)",
+            (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock))
+    except Exception as e:
+        logger.debug(f"[PAPER] 자산 스냅샷 실패: {e}")
+
+
+def get_fills(limit=None):
+    q = "SELECT time, type, code, name, qty, price, amount, fee, profit_amt, profit_rate FROM paper_fills ORDER BY id"
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    rows = _db().execute_query(q, fetch='all') or []
+    return [{"time": r[0], "type": r[1], "code": r[2], "name": r[3], "qty": int(r[4]),
+             "price": float(r[5]), "amount": float(r[6]), "fee": float(r[7]),
+             "profit_amt": float(r[8]), "profit_rate": float(r[9])} for r in rows]
+
+
+def get_equity_curve():
+    rows = _db().execute_query(
+        "SELECT date, cash, stock_value, total FROM paper_equity ORDER BY date", fetch='all') or []
+    return [{"date": r[0], "cash": float(r[1]), "stock_value": float(r[2]), "total": float(r[3])}
+            for r in rows]
+
+
+def get_performance():
+    """누적 성과 지표. 백테스트 리포트와 같은 정의(PF·승률·MDD·연속손실)를 쓴다."""
+    seed = get_seed()
+    _, output2 = get_domestic_balance()
+    total = float(output2[0]['tot_evlu_amt'])
+    sells = [f for f in get_fills() if f['type'] == '매도']
+    wins = [f for f in sells if f['profit_amt'] > 0]
+    losses = [f for f in sells if f['profit_amt'] <= 0]
+    gross_profit = sum(f['profit_amt'] for f in wins)
+    gross_loss = abs(sum(f['profit_amt'] for f in losses))
+
+    curve = [e['total'] for e in get_equity_curve()] or [seed, total]
+    peak, mdd = curve[0], 0.0
+    for v in curve:
+        peak = max(peak, v)
+        if peak > 0:
+            mdd = min(mdd, (v - peak) / peak * 100)
+
+    streak = best_streak = 0
+    for f in sells:
+        streak = streak + 1 if f['profit_amt'] <= 0 else 0
+        best_streak = max(best_streak, streak)
+
+    return {
+        "seed": seed, "total": total,
+        "total_return": (total - seed) / seed * 100 if seed else 0.0,
+        "cash": get_cash(), "positions": len(get_positions()),
+        "sell_count": len(sells), "win": len(wins), "loss": len(losses),
+        "win_rate": len(wins) / len(sells) * 100 if sells else 0.0,
+        "pf": (gross_profit / gross_loss) if gross_loss else (float('inf') if gross_profit else 0.0),
+        "gross_profit": gross_profit, "gross_loss": gross_loss,
+        "mdd": mdd, "max_loss_streak": best_streak,
+        "started_at": _get_state('started_at', '-'),
+    }
+
+
+def adjust_seed(amount):
+    """가상 계좌 입출금. 실계좌에 돈을 넣고 빼는 것과 같게 다룬다.
+
+    시드(=누적 투입원금)와 현금을 함께 움직여야 수익률 분모가 맞는다.
+    초기화와 달리 포지션·체결 이력은 그대로 유지된다.
+    반환: (성공여부, 메시지)
+    """
+    with _lock:
+        amount = int(amount)
+        cash = get_cash()
+        if amount < 0 and cash + amount < 0:
+            return False, f"출금액이 가상 현금({int(cash):,}원)을 초과합니다"
+        new_seed = get_seed() + amount
+        if new_seed <= 0:
+            return False, "시드가 0 이하가 됩니다"
+        _set_state('cash', cash + amount)
+        _set_state('seed', new_seed)
+        logger.info(f"[PAPER] 가상 {'입금' if amount >= 0 else '출금'} {abs(amount):,}원 "
+                    f"(시드 {new_seed:,.0f} / 현금 {cash+amount:,.0f})")
+        return True, f"{'입금' if amount >= 0 else '출금'} {abs(amount):,}원 반영 완료"
+
+
+def reset(seed=None):
+    """가상 계좌 초기화. 포지션·체결·자산곡선을 모두 지우고 시드를 다시 넣는다."""
+    with _lock:
+        for tbl in ("paper_positions", "paper_fills", "paper_equity", "paper_state"):
+            _db().execute_query(f"DELETE FROM {tbl}")
+        seed = int(seed if seed is not None else getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000))
+        _set_state('seed', seed)
+        _set_state('cash', seed)
+        _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원)")

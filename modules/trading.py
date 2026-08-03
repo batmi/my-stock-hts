@@ -27,7 +27,9 @@ def select_account(title="주문을 수행할 계좌를 선택하세요"):
     """계좌를 선택합니다."""
     target_cano = config.session.cano
     target_acnt = config.session.acnt_prdt_cd
-    if config.session.is_toss:
+    if getattr(config.session, 'is_paper', False):
+        acc_label = "가상투자"
+    elif config.session.is_toss:
         acc_label = "토스증권"
     else:
         acc_label = "한투증권" if not config.session.is_simulation else "모의투자"
