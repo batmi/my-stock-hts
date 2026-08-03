@@ -1112,7 +1112,7 @@ def _fetch_domestic_index_data(market_type):
     ma_period = max(config.MARKET_REGIME_PARAMS.get("REGIME_EMA_SLOW", 41),
                     config.MARKET_REGIME_PARAMS.get("REGIME_MA_PERIOD", 5))
     if getattr(config, 'USE_MARKET_FILTER', True):
-        ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 60))
+        ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 80))
 
     def _insufficient(d):
         return d is None or d.empty or len(d) < ma_period

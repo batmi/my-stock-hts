@@ -156,6 +156,49 @@ def get_obv_full_series(df):
     obv = (np.sign(df['close'].diff()).fillna(0) * df['volume']).cumsum()
     return obv
 
+def get_market_filter_blocked(close, ma_period=None, band_pct=None):
+    """[시장 필터] 지수 종가 시계열 → 각 시점의 '신규 매수 차단' 여부 (bool Series).
+
+    판정은 SMA 이탈 + 히스테리시스(밴드) 상태 기계다.
+      · 종가 < SMA×(1-밴드)  → 차단(약세)으로 전환
+      · 종가 > SMA×(1+밴드)  → 해제(정상)로 전환
+      · 그 사이(밴드 안)     → 직전 상태 유지
+    밴드 0%면 종전과 같은 단순 이탈 판정이 된다. SMA 워밍업 구간은 미차단(판단 유보가 아니라
+    '필터 없음'과 동일 — 판단 불가 처리는 호출부의 데이터 부족 검사가 담당한다).
+
+    상태는 가격 이력만의 함수라 매 호출 전체 시계열에서 재계산해도 결과가 같다.
+    → 재기동/캐시 만료로 상태가 유실되지 않고, 실매매(trader)와 백테스트가 같은 값을 본다.
+
+    [검증 2026-08-03 / KOSPI·KOSDAQ 2005~2026 + 유니버스 59종목 포트폴리오 234경로]
+      단순 이탈(밴드 0%)의 SMA60은 국면 판단이 아니라 '3일짜리 눌림에 매수 중단'으로 동작했다
+      (KOSPI 차단 에피소드 연 7.6회·중앙 3.5일·59%가 5일 이하·82%가 지수 상승 중 헛경보).
+      밴드 1%를 얹으면 같은 기간에서도 SMA60 대비 CAGR 중앙 +2.78%p·MDD +3.45%p,
+      경로 승률 76.9%로 개선된다. 단 짧은 기간에 과한 확인은 역효과라(SMA60±2%는 무개선)
+      기간 80일 + 밴드 1% 조합을 기본값으로 쓴다. 상세는 MARKET_FILTER_MA 주석 참조.
+    """
+    if ma_period is None:
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+    if band_pct is None:
+        band_pct = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+
+    close = pd.Series(close, dtype='float64').reset_index(drop=True)
+    ma = close.rolling(window=int(ma_period)).mean()
+    band = max(0.0, float(band_pct)) / 100.0
+    lower = ma * (1 - band)
+    upper = ma * (1 + band)
+
+    blocked = np.zeros(len(close), dtype=bool)
+    state = False
+    for i in range(len(close)):
+        if np.isnan(ma.iat[i]):
+            continue
+        if close.iat[i] < lower.iat[i]:
+            state = True
+        elif close.iat[i] > upper.iat[i]:
+            state = False
+        blocked[i] = state
+    return pd.Series(blocked, index=range(len(close)))
+
 def get_macd_full_series(df, fast=None, slow=None, signal=None):
     if fast is None: fast = config.INDICATOR_PARAMS["MACD_FAST"]
     if slow is None: slow = config.INDICATOR_PARAMS["MACD_SLOW"]

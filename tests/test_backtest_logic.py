@@ -261,6 +261,7 @@ def test_prepare_market_filter_uses_settings(monkeypatch):
     '지수 종가 < SMA(설정 MA)' 날짜 집합을 만드는지 검증."""
     monkeypatch.setattr(config, 'USE_MARKET_FILTER', True, raising=False)
     monkeypatch.setattr(config, 'MARKET_FILTER_MA', 3, raising=False)
+    monkeypatch.setattr(config, 'MARKET_FILTER_BAND', 0.0, raising=False)  # 단순 이탈 판정
     monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE', {"dates": None, "desc": "", "key": None})
 
     idx = pd.DataFrame(
@@ -275,6 +276,46 @@ def test_prepare_market_filter_uses_settings(monkeypatch):
     assert 'SMA3' in desc and 'KOSPI' in desc
     assert cnt == 1  # 마지막 날(50 < SMA3)만 차단
     assert '20231005' in backtest._MARKET_FILTER_STATE['dates']
+
+
+def test_prepare_market_filter_band_hysteresis(monkeypatch):
+    """[이탈 확인 밴드] 밴드 안의 되돌림은 상태를 바꾸지 못한다.
+
+    지수가 SMA를 -밴드% 넘게 이탈하면 차단되고, 그 뒤 SMA를 살짝 웃도는 정도(밴드 안)로
+    회복해도 차단이 유지된다 — 이것이 '3일짜리 눌림에 매수중단' 휩소를 막는 장치다.
+    """
+    monkeypatch.setattr(config, 'USE_MARKET_FILTER', True, raising=False)
+    monkeypatch.setattr(config, 'MARKET_FILTER_MA', 3, raising=False)
+    monkeypatch.setattr(config, 'MARKET_FILTER_BAND', 2.0, raising=False)
+    monkeypatch.setattr(backtest, '_MARKET_FILTER_STATE', {"dates": None, "desc": "", "key": None})
+
+    # 100 유지 → 90(이탈, 차단) → 96(SMA 92.0보다 높지만 +2% 밴드 93.84 미만 → 차단 유지)
+    idx = pd.DataFrame(
+        {'Close': [100.0, 100.0, 100.0, 90.0, 96.0]},
+        index=pd.date_range('2023-10-01', periods=5, name='Date'),
+    )
+    with patch('api.fetch_yfinance_data', return_value=idx):
+        cnt, desc = backtest.prepare_market_filter('005930', is_overseas=False, days=30)
+
+    blocked = backtest._MARKET_FILTER_STATE['dates']
+    assert '-2%' in desc
+    assert '20231004' in blocked          # 이탈일
+    assert '20231005' in blocked          # 밴드 안 되돌림 → 차단 유지(히스테리시스)
+    assert cnt == 2
+
+
+def test_market_filter_band_zero_matches_legacy():
+    """밴드 0%면 종전 판정('지수 종가 < SMA')과 완전히 동일해야 한다(하위 호환)."""
+    import indicators
+    import numpy as np
+
+    rng = np.random.default_rng(11)
+    close = pd.Series(1000 * np.cumprod(1 + rng.normal(0.0002, 0.013, 400)))
+    blocked = indicators.get_market_filter_blocked(close, 60, 0.0)
+    legacy = (close < close.rolling(60).mean()).fillna(False)
+    assert (blocked.values == legacy.values).all()
+    # 워밍업(SMA 미산출) 구간은 차단하지 않는다
+    assert not blocked[:59].any()
 
 
 def test_prepare_market_filter_off(monkeypatch):

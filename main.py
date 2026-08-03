@@ -33,6 +33,7 @@ config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중..."
 import api
 import toss_api  # [추가] 토스증권 클라이언트 (mode 3)
 import utils
+import indicators
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
@@ -605,14 +606,15 @@ def show_help():
             # [추가] 실시간 필터링 상태 계산
             if getattr(config, 'USE_MARKET_FILTER', True):
                 filter_info = {}
-                ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 60)
+                ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 80)
+                band_filter = getattr(config, 'MARKET_FILTER_BAND', 1.0)
                 for m_type in ["KOSPI", "KOSDAQ"]:
                     try:
                         df = analysis.get_domestic_index_data(m_type)
                         if df is not None and not df.empty and len(df) >= ma_period_filter:
-                            ma_val = df['close'].rolling(window=ma_period_filter).mean().iloc[-1]
-                            current_idx = df['close'].iloc[-1]
-                            filter_info[m_type] = current_idx >= ma_val
+                            # 실매매와 같은 판정 함수(밴드 히스테리시스 포함)
+                            filter_info[m_type] = not bool(indicators.get_market_filter_blocked(
+                                df['close'], ma_period_filter, band_filter).iloc[-1])
                     except Exception:
                         pass
     except Exception:
@@ -730,8 +732,10 @@ def show_help():
     # [추가] 시장 필터링 섹션
     score_table.add_section()
     filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
-    ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
-    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
+    ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+    _band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+    _band_cond = f" -{_band:g}% 이탈 (회복은 +{_band:g}%)" if _band else ""
+    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선{_band_cond}", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
         score_table.add_row("현재 시장 필터링 상태", "확인 불가", "-", "-")

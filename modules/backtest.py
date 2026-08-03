@@ -328,14 +328,17 @@ _MARKET_FILTER_STATE = {"dates": None, "desc": "", "key": None}
 def prepare_market_filter(code, is_overseas, days):
     """설정값(USE_MARKET_FILTER, MARKET_FILTER_MA)을 읽어 백테스트용 '신규 매수 차단일' 집합을 준비.
 
-    실매매 필터(trader._update_market_indices_status)와 동일 기준: 지수 종가 < SMA(MARKET_FILTER_MA)
-    인 날짜에 신규 진입을 차단한다. 매도에는 영향이 없고, 피라미딩 증액은 실매매와 동일하게
+    실매매 필터(trader._update_market_indices_status)와 동일 기준: 지수 종가가
+    SMA(MARKET_FILTER_MA)를 MARKET_FILTER_BAND% 이탈한 날부터, 같은 폭을 회복할 때까지
+    신규 진입을 차단한다(판정식은 indicators.get_market_filter_blocked 하나를 공유).
+    매도에는 영향이 없고, 피라미딩 증액은 실매매와 동일하게
     PYRAMIDING_REQUIRE_HEALTHY_MARKET이 켜져 있으면 함께 보류된다.
     국내는 stock.json exchange로 KOSPI/KOSDAQ 지수를 구분하고, 해외는 S&P500을 사용한다.
     반환: (차단일수, 설명) 또는 None(미사용/실패 — 이때 필터 없이 시뮬레이션됨)
     """
     use_filter = getattr(config, 'USE_MARKET_FILTER', True)
-    ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+    ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
+    band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
 
     if is_overseas:
         idx_ticker, idx_name = "^GSPC", "S&P500"
@@ -351,7 +354,7 @@ def prepare_market_filter(code, is_overseas, days):
         else:
             idx_ticker, idx_name = "^KS11", "KOSPI"
 
-    cache_key = (idx_ticker, ma, days, use_filter)
+    cache_key = (idx_ticker, ma, band, days, use_filter)
     if _MARKET_FILTER_STATE["key"] == cache_key:
         dates = _MARKET_FILTER_STATE["dates"]
         return (len(dates), _MARKET_FILTER_STATE["desc"]) if dates is not None else None
@@ -377,10 +380,12 @@ def prepare_market_filter(code, is_overseas, days):
         idx_df.rename(columns={'Date': 'date', 'Close': 'close'}, inplace=True)
         idx_df['date'] = idx_df['date'].apply(lambda x: x.strftime('%Y%m%d') if isinstance(x, datetime) else str(x).replace('-', '')[:8])
 
-        sma = idx_df['close'].rolling(window=ma).mean()
-        blocked = set(idx_df.loc[idx_df['close'] < sma, 'date'].astype(str))
+        # 실매매와 같은 판정 함수를 쓴다(밴드 히스테리시스 포함). idx_df는 reset_index 상태라
+        #  반환 Series의 인덱스가 그대로 대응된다.
+        is_blocked = indicators.get_market_filter_blocked(idx_df['close'], ma, band)
+        blocked = set(idx_df.loc[is_blocked.values, 'date'].astype(str))
 
-        desc = f"{idx_name} < SMA{ma}"
+        desc = f"{idx_name} < SMA{ma}" + (f" -{band:g}%" if band else "")
         _MARKET_FILTER_STATE["dates"] = blocked
         _MARKET_FILTER_STATE["desc"] = desc
         return len(blocked), desc
@@ -1890,14 +1895,16 @@ def run_backtest():
                 locked_notes.append(f"손절 {stop_loss}%")
 
             # 시장 필터는 설정 메뉴에서 조정 가능한 항목이므로 백테스트에서도 묻는다.
-            #  지수 종가 < SMA(MARKET_FILTER_MA)인 날은 신규 진입을 차단하고,
+            #  지수가 SMA(MARKET_FILTER_MA)를 MARKET_FILTER_BAND% 이탈한 날은 신규 진입을 차단하고,
             #  PYRAMIDING_REQUIRE_HEALTHY_MARKET이 켜져 있으면 증액도 함께 보류된다.
             if "USE_MARKET_FILTER" not in locked:
                 curr_mf = "y" if use_market_filter else "n"
-                _ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+                _ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
+                _band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
+                _band_txt = f" -{_band:g}%" if _band else ""
                 val = Prompt.ask(
                     f"시장 필터 사용 (y: 사용 / n: 미사용) (기본: {curr_mf})\n"
-                    f"[dim]지수가 {_ma}일선 아래인 날은 신규 진입 보류 (증액도 함께 보류)[/dim]",
+                    f"[dim]지수가 {_ma}일선{_band_txt} 아래인 날은 신규 진입 보류 (증액도 함께 보류)[/dim]",
                     choices=["y", "n", "b", "q"], default=curr_mf)
                 if val.lower() in ['b', 'q']: continue
                 use_market_filter = (val.lower() == 'y')
@@ -1972,9 +1979,11 @@ def run_backtest():
         msg += f"   [cyan]익절 / 손절[/cyan]              +{take_profit}% (반익절: {'ON' if half_tp_use else 'OFF'}) / {f'{stop_loss}% (ATR x{atr_mult})' if use_atr_stop else f'{stop_loss}%'}\n"
         msg += f"   [cyan]트레일링 스탑[/cyan]            +{ts_activation}% 발동 후 -{ts_callback}%\n"
         msg += f"   [cyan]시간 청산[/cyan]                {time_stop_days}일 경과 시 강제 매도\n"
-        _mf_ma = int(getattr(config, 'MARKET_FILTER_MA', 60))
+        _mf_ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
+        _mf_band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
+        _mf_band_txt = f" -{_mf_band:g}%" if _mf_band else ""
         msg += (f"   [cyan]시장 필터[/cyan]                "
-                f"{f'ON — 지수 {_mf_ma}일선 아래면 신규 진입 보류' if use_market_filter else 'OFF'}\n")
+                f"{f'ON — 지수 {_mf_ma}일선{_mf_band_txt} 아래면 신규 진입 보류' if use_market_filter else 'OFF'}\n")
         if pyramiding_max is not None:
             pyr_disp = f"최대 {pyramiding_max}차" if pyramiding_max > 0 else "미사용"
         else:

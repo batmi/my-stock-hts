@@ -964,8 +964,10 @@ class AutoTrader:
         # [추가] 시장 지수 요약 정보 및 필터링 상태 (시장 상황 아래 배치)
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
         filter_str = "ON" if use_filter else "OFF"
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
-        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str}, SMA {filter_ma}일 기준)]\n"
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
+        filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+        band_txt = f" ±{filter_band:g}%" if filter_band else ""
+        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str}, SMA {filter_ma}일{band_txt} 기준)]\n"
         
         is_healthy_k = True
         is_healthy_q = True
@@ -992,10 +994,12 @@ class AutoTrader:
                             filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                         else:
                             # 대기 상태(WAITING) 등 캐시가 없을 때만 실시간 계산
-                            ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
+                            #  (밴드 히스테리시스 포함 — 시스템 루프와 같은 판정식을 써야 표시가 어긋나지 않는다)
+                            ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
                             if len(df) >= ma_period:
-                                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
-                                is_healthy = curr >= ma_val
+                                is_healthy = not bool(indicators.get_market_filter_blocked(
+                                    df['close'], ma_period,
+                                    getattr(config, 'MARKET_FILTER_BAND', 1.0)).iloc[-1])
                                 filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
                             else:
                                 is_healthy = False
@@ -1732,8 +1736,10 @@ class AutoTrader:
             if not is_healthy_q or skip_q > 0: skip_msg.append(f"KOSDAQ {skip_q}종목")
             
             if skip_msg:
-                filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
-                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일 이탈)[/]")
+                filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
+                filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+                band_txt = f" -{filter_band:g}%" if filter_band else ""
+                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일{band_txt} 이탈)[/]")
 
         table.add_section()
         
@@ -4801,7 +4807,8 @@ class AutoTrader:
         # [수정] analysis 모듈의 공통 함수 사용을 위해 리스트로 변경
         target_indices = ["KOSPI", "KOSDAQ"]
 
-        ma_period = getattr(config, 'MARKET_FILTER_MA', 60)
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+        band_pct = getattr(config, 'MARKET_FILTER_BAND', 1.0)
 
         for market_name in target_indices:
             try:
@@ -4814,9 +4821,11 @@ class AutoTrader:
                     self._notify_market_unknown(market_name, notify)
                     continue
 
-                ma_val = df['close'].rolling(window=ma_period).mean().iloc[-1]
+                # [이탈 확인 밴드] 상태 기계는 가격 이력만의 함수라 전 구간에서 재계산한다.
+                #  재기동해도 상태가 유실되지 않고, 백테스트(prepare_market_filter)와 같은 값을 본다.
                 current_idx = df['close'].iloc[-1]
-                is_healthy = current_idx >= ma_val
+                is_healthy = not bool(indicators.get_market_filter_blocked(
+                    df['close'], ma_period, band_pct).iloc[-1])
 
                 self.market_index_status[market_name] = {
                     "is_healthy": is_healthy,
@@ -4828,12 +4837,16 @@ class AutoTrader:
                 if not notify:
                     continue
 
+                # 밴드가 켜져 있으면 '이평선 아래'가 아니라 '이평선 -밴드% 이탈'이 실제 트리거이므로
+                #  문구에 밴드를 함께 실어 화면·알림과 판정식이 어긋나 보이지 않게 한다.
+                band_txt = f" -{band_pct:g}%" if band_pct else ""
                 notified = self.market_status_notified.get(market_name, False)
                 if not is_healthy and not notified:
-                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
+                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선{band_txt} 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
                     self.market_status_notified[market_name] = True
                 elif is_healthy and notified:
-                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선을 회복했습니다.\n매수를 재개합니다.")
+                    band_up = f" +{band_pct:g}%" if band_pct else ""
+                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선{band_up}을 회복했습니다.\n매수를 재개합니다.")
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e} → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")

@@ -2233,8 +2233,9 @@ class TelegramCommander:
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
         use_filter = getattr(config, 'USE_MARKET_FILTER', True)
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 60)
-        filter_str = f"ON (SMA {filter_ma}일선)" if use_filter else "OFF"
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
+        filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+        filter_str = (f"ON (SMA {filter_ma}일선" + (f" ±{filter_band:g}%)" if filter_band else ")")) if use_filter else "OFF"
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
 
         use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)

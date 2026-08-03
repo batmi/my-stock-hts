@@ -34,7 +34,8 @@ def _save_dynamic_config():
         "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
         "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', False),
         "RS_FILTER_LOOKBACK": getattr(config.settings, 'RS_FILTER_LOOKBACK', 0),
-        "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 60),
+        "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 80),
+        "MARKET_FILTER_BAND": getattr(config.settings, 'MARKET_FILTER_BAND', 1.0),
         "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
         "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
         "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60),
@@ -333,7 +334,8 @@ def view_system_config(group=None):
         subheader("3-2. 매수 필터")
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")
         if getattr(config.settings, 'USE_MARKET_FILTER', True):
-            row("시장 필터링 SMA (일)", "지수 추세 판단용 단순이동평균선", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 60)}", key="MARKET_FILTER_MA", indent=True)
+            row("시장 필터링 SMA (일)", "지수 추세 판단용 단순이동평균선", "MARKET_FILTER_MA", f"{getattr(config.settings, 'MARKET_FILTER_MA', 80)}", key="MARKET_FILTER_MA", indent=True)
+            row("시장 필터 이탈 밴드 (%)", "이 폭만큼 이탈해야 보류·회복해야 재개 (0=단순 이탈)", "MARKET_FILTER_BAND", f"{getattr(config.settings, 'MARKET_FILTER_BAND', 1.0)}", key="MARKET_FILTER_BAND", indent=True)
         # [추세추종 보호] 상대강도(RS) 필터는 기본 OFF + 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조).
         #  숨김 집합에서 키를 빼면 조회·편집·도움말에 자동으로 다시 나타난다.
         if "USE_RS_FILTER" not in ANTI_TREND_HIDDEN_KEYS:
@@ -752,7 +754,10 @@ _RANGE_RULES = {
     "SYSTEM_MAX_HOLDINGS":        (1, 20, None),
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": (1, 100, None),
     "CORRELATION_THRESHOLD":      (0.1, 1.0, None),
-    "MARKET_FILTER_MA":           (5, 250, None),
+    # [검증 2026-08-03] 상한 250→120. 150일 이상은 KOSPI -15% 이상 조정 9회 중 3회를 감지하지
+    #  못해 방어층으로 실격이고(80일은 1회), 하한 40일 미만은 휩소로 SMA60보다도 열위였다.
+    "MARKET_FILTER_MA":           (20, 120, None),
+    "MARKET_FILTER_BAND":         (0.0, 5.0, None),
     "SLIPPAGE_RATE":              (0.0, 0.05, None),
     # --- 지표 기간 (0·1봉은 계산 자체가 불가) ---
     "EMA_SHORT":                  (2, 250, None),
@@ -1286,8 +1291,10 @@ def _risk_portfolio_items():
     items.extend([
         {"desc": "시장 필터링 사용", "help": "지수 하락 시 신규 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'USE_MARKET_FILTER', True), "set": lambda v: setattr(config.settings, 'USE_MARKET_FILTER', v)},
-        {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선", "name": "MARKET_FILTER_MA", "type": "int", "section": "3-2. 매수 필터",
-         "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 60), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
+        {"desc": "시장 필터링 SMA (일)", "help": "지수 추세 판단용 단순이동평균선 (검증 최적 고원 80~120)", "name": "MARKET_FILTER_MA", "type": "int", "section": "3-2. 매수 필터",
+         "get": lambda: getattr(config.settings, 'MARKET_FILTER_MA', 80), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_MA', v)},
+        {"desc": "시장 필터 이탈 밴드 (%)", "help": "이 폭만큼 이탈해야 보류·회복해야 재개하는 히스테리시스 (0 = 단순 이탈 판정)", "name": "MARKET_FILTER_BAND", "type": "float", "section": "3-2. 매수 필터",
+         "get": lambda: getattr(config.settings, 'MARKET_FILTER_BAND', 1.0), "set": lambda v: setattr(config.settings, 'MARKET_FILTER_BAND', v), "validator": lambda v: v >= 0},
         {"desc": "상대강도(RS) 필터 사용", "help": "수익률이 소속 지수를 밑도는 종목 신규 매수 제외", "name": "USE_RS_FILTER", "type": "bool", "choices": ["y", "n"], "section": "3-2. 매수 필터",
          "get": lambda: getattr(config.settings, 'USE_RS_FILTER', False), "set": lambda v: setattr(config.settings, 'USE_RS_FILTER', v)},
         {"desc": "상대강도(RS) 필터 기간 (일)", "help": "지수 대비 수익률 비교 룩백 거래일 (0 = 가격 모멘텀 룩백 연동)", "name": "RS_FILTER_LOOKBACK", "type": "int", "section": "3-2. 매수 필터",
@@ -1458,7 +1465,9 @@ DEFAULT_PRESETS = {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
         "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.5,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
-        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 60
+        # [동기화 2026-08-03] 시장 필터 기간 검증 결과 60→80. 'default' 프리셋은 시스템 기본값과
+        #  같아야 check_and_update_active_preset이 기본 상태를 'custom'으로 오판하지 않는다.
+        "SYSTEM_INVEST_PER_STOCK": 0.0, "SYSTEM_DAILY_LOSS_LIMIT": 10.0, "USE_MARKET_FILTER": True, "MARKET_FILTER_MA": 80
     }
 }
 
@@ -1612,7 +1621,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 5.0)}%"),
         ("본전 청산 (방어)", f"수익 +{config.SELL_STRATEGY.get('BREAK_EVEN_PROFIT_RATE', 5.0)}% 도달 시 손절선 +{config.SELL_STRATEGY.get('BREAK_EVEN_STOP_RATE', 0.5)}%로 상향"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
-        ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 60))+'일선)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
+        ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 80))+'일선 ±'+f"{getattr(config, 'MARKET_FILTER_BAND', 1.0):g}"+'%)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
         ("스코어링 가중치", f"추세 {config.SCORING_WEIGHTS['TREND']} / 모멘텀 {config.SCORING_WEIGHTS['MOMENTUM']} / 강도 {config.SCORING_WEIGHTS['STRENGTH']} / 시너지 {config.SCORING_WEIGHTS['SYNERGY']}"),
         ("종목당 투자 비중", config.format_invest_ratio())
     ]
@@ -1697,6 +1706,7 @@ def _edit_single_preset(preset_type):
 
             {"desc": "시장 필터링 사용", "help": "지수 하락 시 매수 보류", "name": "USE_MARKET_FILTER", "type": "bool", "choices": ["y", "n"], "section": "Risk", "get": make_getter("USE_MARKET_FILTER"), "set": make_setter("USE_MARKET_FILTER", 'bool')},
             {"desc": "시장 필터 SMA(일)", "help": "필터 감지 이평선 주기", "name": "MARKET_FILTER_MA", "type": "int", "section": "Risk", "get": make_getter("MARKET_FILTER_MA"), "set": make_setter("MARKET_FILTER_MA", 'int')},
+            {"desc": "시장 필터 밴드(%)", "help": "이탈 확인 폭 (0 = 단순 이탈)", "name": "MARKET_FILTER_BAND", "type": "float", "section": "Risk", "get": make_getter("MARKET_FILTER_BAND"), "set": make_setter("MARKET_FILTER_BAND", 'float')},
             {"desc": "일일 손실 제한(%)", "help": "비상 정지 기준 (0%면 비상 정지 OFF)", "name": "SYSTEM_DAILY_LOSS_LIMIT", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_DAILY_LOSS_LIMIT"), "set": make_setter("SYSTEM_DAILY_LOSS_LIMIT", 'float')},
             {"desc": "종목당 투자 비중", "help": "0 = 자동(1/최대보유종목수), 0~1.0", "name": "SYSTEM_INVEST_PER_STOCK", "type": "float", "section": "Risk", "get": make_getter("SYSTEM_INVEST_PER_STOCK"), "set": make_setter("SYSTEM_INVEST_PER_STOCK", 'float'), "callback": _warn_nominal_exposure}
         ]
@@ -1883,6 +1893,7 @@ def manage_custom_settings():
             "VOLATILITY_SCALING_MIN": "스케일링 최소 배수",
             "USE_MARKET_FILTER": "시장 필터링 사용",
             "MARKET_FILTER_MA": "시장 필터링 SMA (일)",
+            "MARKET_FILTER_BAND": "시장 필터 이탈 밴드 (%)",
             "USE_RS_FILTER": "상대강도(RS) 필터 사용",
             "RS_FILTER_LOOKBACK": "상대강도(RS) 필터 기간",
             "SYSTEM_MAX_CONSECUTIVE_ERRORS": "연속 에러 허용",
@@ -2019,6 +2030,7 @@ def manage_custom_settings():
             "VOLATILITY_SCALING_MIN": (_CAT3, "3-1. 자산 배분/포지션"),
             "USE_MARKET_FILTER": (_CAT3, "3-2. 매수 필터"),
             "MARKET_FILTER_MA": (_CAT3, "3-2. 매수 필터"),
+            "MARKET_FILTER_BAND": (_CAT3, "3-2. 매수 필터"),
             "USE_RS_FILTER": (_CAT3, "3-2. 매수 필터"),
             "RS_FILTER_LOOKBACK": (_CAT3, "3-2. 매수 필터"),
             "USE_CORRELATION_FILTER": (_CAT3, "3-2. 매수 필터"),
