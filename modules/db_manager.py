@@ -538,8 +538,14 @@ class DBManager:
                 except Exception:
                     return False
     
-    def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None, order_status=None):
-        """주문번호(odno)를 기준으로 거래 내역 업데이트"""
+    def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None,
+                     order_status=None, where_status=None):
+        """주문번호(odno)를 기준으로 거래 내역 업데이트
+
+        where_status: 지정하면 그 상태의 행만 갱신한다. 같은 odno로 '접수'와 '체결' 행이
+          함께 존재하므로, 체결 수량 누적 갱신처럼 한쪽만 고쳐야 할 때 쓴다.
+          (지정하지 않으면 종전대로 해당 odno의 모든 행을 갱신한다)
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -557,7 +563,11 @@ class DBManager:
                     
                     if updates:
                         params.append(odno)
-                        cursor.execute(f"UPDATE trades SET {', '.join(updates)} WHERE odno = ?", params)
+                        where = "odno = ?"
+                        if where_status is not None:
+                            where += " AND order_status = ?"
+                            params.append(where_status)
+                        cursor.execute(f"UPDATE trades SET {', '.join(updates)} WHERE {where}", params)
                         conn.commit()
                     break
                 except sqlite3.OperationalError as e:

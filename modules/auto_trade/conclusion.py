@@ -720,8 +720,17 @@ class ConclusionMonitor:
                                     # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
                                     db_manager.db.update_trade(odno, price=avg_price)
                                 else:
-                                    logger.debug(f"[ORDER_DEBUG] DB 저장 스킵 (이미 존재): {odno}")
-                                    logger.debug(f"[AutoTrade] 이미 존재하는 체결 내역(체결)입니다. 저장 스킵 (ODNO: {odno})")
+                                    # [Fix] 부분체결이 여러 폴링 주기에 걸치면(30주 → 100주) 두 번째부터
+                                    #  '이미 체결 행이 있다'는 이유로 통째로 스킵되어, trades에는 첫 관측
+                                    #  수량만 남고 나머지 증분이 유실됐다. 성과 지표(PF·승률·누적손익),
+                                    #  손절률 수량가중평균, 매매일지 전송이 모두 그만큼 어긋난다.
+                                    #  tot_ccld_qty는 누적값이므로, 기존 체결 행의 수량·평균단가를 최신
+                                    #  누적으로 갱신한다(행을 늘리지 않아 odno 단위 조회는 그대로 동작).
+                                    #  '접수' 행은 주문 수량을 보존해야 하므로 where_status로 분리한다.
+                                    db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=avg_price,
+                                                               where_status="체결")
+                                    logger.debug(
+                                        f"[ORDER_DEBUG] 부분체결 누적 갱신: {odno} → {tot_ccld_qty}주 @ {avg_price}")
                 except Exception as e:
                     logger.error(f"계좌({cano}) 체결 확인 중 오류: {e}")
                     has_error = True
