@@ -1334,10 +1334,7 @@ def classify_regime_from_df(df, params=None):
     데이터프레임만 받는 순수 함수로 분리했다.
     """
     params = params or getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
-    fast = int(params.get("REGIME_EMA_FAST", 9))
     slow = int(params.get("REGIME_EMA_SLOW", 41))
-    confirm = float(params.get("REGIME_CONFIRM_PCT", 5.0))
-    lookback = int(params.get("REGIME_WHIPSAW_LOOKBACK", 8))
 
     blank = {'regime': "Sideways", 'moved_pct': 0.0, 'whipsaw_ratio': None, 'segments': 0}
     if df is None or df.empty or 'close' not in df.columns or len(df) < slow:
@@ -1347,45 +1344,13 @@ def classify_regime_from_df(df, params=None):
     if len(close) < slow:
         return blank
 
-    ema_f = close.ewm(span=fast, adjust=False).mean().values
-    ema_s = close.ewm(span=slow, adjust=False).mean().values
-    up = ema_f > ema_s
-    prices = close.values
-
-    # 교차 지점(방향이 바뀌는 인덱스)만 뽑아 구간 단위로 처리한다 — 전 구간 루프 불필요
-    starts = [0] + list(np.flatnonzero(up[1:] != up[:-1]) + 1)
-
-    # 완료된 구간(마지막 진행 중 구간 제외)의 확인 기준 달성 여부 → 휩소율
-    successes = []
-    for i in range(len(starts) - 1):
-        a, b = starts[i], starts[i + 1]
-        p0 = prices[a]
-        if p0 <= 0:
-            continue
-        seg = prices[a:b]
-        if up[a]:
-            ext = (seg.max() - p0) / p0 * 100.0
-            successes.append(ext >= confirm)
-        else:
-            ext = (seg.min() - p0) / p0 * 100.0
-            successes.append(ext <= -confirm)
-
-    whipsaw = None
-    if len(successes) >= lookback:
-        recent = successes[-lookback:]
-        whipsaw = 1.0 - (sum(1 for s in recent if s) / float(len(recent)))
-
-    # 현재(진행 중) 구간 판정
-    a = starts[-1]
-    p0 = prices[a]
-    moved = (prices[-1] - p0) / p0 * 100.0 if p0 > 0 else 0.0
-    if up[-1]:
-        regime = "Bull" if moved >= confirm else "PendUp"
-    else:
-        regime = "Bear" if moved <= -confirm else "PendDown"
-
-    return {'regime': regime, 'moved_pct': moved,
-            'whipsaw_ratio': whipsaw, 'segments': len(successes)}
+    # 판정식은 indicators.get_regime_series 하나만 둔다 — 시장 필터(국면 동시 확인)도 같은 함수를
+    # 쓰므로, 여기서 로직을 따로 들고 있으면 두 판정이 소리 없이 갈라진다.
+    ser = indicators.get_regime_series(close, params)
+    whipsaw = ser['whipsaw'][-1]
+    return {'regime': ser['regime'][-1], 'moved_pct': float(ser['moved_pct'][-1]),
+            'whipsaw_ratio': None if np.isnan(whipsaw) else float(whipsaw),
+            'segments': int(ser['segments'][-1])}
 
 
 def get_market_regime_detail(market_type="KOSPI"):

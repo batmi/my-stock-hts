@@ -1741,7 +1741,8 @@ class AutoTrader:
                 filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
                 filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
                 band_txt = f" -{filter_band:g}%" if filter_band else ""
-                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일{band_txt} 이탈)[/]")
+                bear_txt = ", 확정 Bear 해제" if getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False) else ""
+                table.add_row("시장 필터링", f"[bold blue]{', '.join(skip_msg)} 매수 보류[/] [dim](SMA {filter_ma}일{band_txt} 이탈{bear_txt})[/]")
 
         table.add_section()
         

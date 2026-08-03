@@ -156,7 +156,79 @@ def get_obv_full_series(df):
     obv = (np.sign(df['close'].diff()).fillna(0) * df['volume']).cumsum()
     return obv
 
-def get_market_filter_blocked(close, ma_period=None, band_pct=None):
+def get_regime_series(close, params=None):
+    """[국면 판정] 이중 EMA 교차 + 추종 확인 규칙을 **시계열 전체**에 대해 산출한다.
+
+    analysis.classify_regime_from_df 가 돌려주던 '마지막 시점 한 점'을 일반화한 것으로,
+    각 시점의 값은 그 시점까지의 정보만 사용한다(인과적). 판정식이 두 벌로 갈라지지 않도록
+    classify_regime_from_df 도 이 함수의 마지막 원소를 쓴다.
+
+    Returns:
+        dict: regime(object ndarray), moved_pct(float ndarray),
+              whipsaw(float ndarray, 산출 불가 구간은 NaN), segments(int ndarray)
+    """
+    params = params or getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
+    fast = int(params.get("REGIME_EMA_FAST", 9))
+    slow = int(params.get("REGIME_EMA_SLOW", 41))
+    confirm = float(params.get("REGIME_CONFIRM_PCT", 5.0))
+    lookback = int(params.get("REGIME_WHIPSAW_LOOKBACK", 8))
+
+    s = pd.Series(close, dtype='float64').reset_index(drop=True).dropna()
+    n = len(s)
+    if n == 0:
+        return {'regime': np.array([], dtype=object), 'moved_pct': np.array([]),
+                'whipsaw': np.array([]), 'segments': np.array([], dtype=int)}
+
+    prices = s.values
+    ema_f = s.ewm(span=fast, adjust=False).mean().values
+    ema_s = s.ewm(span=slow, adjust=False).mean().values
+    up = ema_f > ema_s
+
+    # 교차 지점만 뽑아 구간 단위로 처리 — 각 시점의 '현재 구간 시작가' 대비 진행률이 판정 기준
+    starts = np.concatenate(([0], np.flatnonzero(up[1:] != up[:-1]) + 1))
+    seg_id = np.searchsorted(starts, np.arange(n), side='right') - 1
+    p0 = prices[starts][seg_id]
+    moved = np.where(p0 > 0, (prices - p0) / np.where(p0 > 0, p0, 1.0) * 100.0, 0.0)
+
+    regime = np.where(up,
+                      np.where(moved >= confirm, "Bull", "PendUp"),
+                      np.where(moved <= -confirm, "Bear", "PendDown")).astype(object)
+
+    # 완료된 구간의 확인 기준 달성 여부 → 그 시점까지의 휩소율
+    done_seg, succ = [], []
+    for i in range(len(starts) - 1):
+        a, b = starts[i], starts[i + 1]
+        pa = prices[a]
+        if pa <= 0:
+            continue
+        seg = prices[a:b]
+        ext = ((seg.max() - pa) if up[a] else (seg.min() - pa)) / pa * 100.0
+        succ.append(ext >= confirm if up[a] else ext <= -confirm)
+        done_seg.append(i)
+
+    whipsaw = np.full(n, np.nan)
+    segments = np.zeros(n, dtype=int)
+    if done_seg:
+        done_seg = np.asarray(done_seg)
+        cum = np.concatenate(([0.0], np.cumsum(np.asarray(succ, dtype=float))))
+        # 시점 t에서 '완료된' 구간 = 현재 구간(seg_id[t])보다 앞선 구간들
+        k = np.searchsorted(done_seg, seg_id, side='left')
+        segments = k
+        ok = k >= lookback
+        if ok.any():
+            kk = k[ok]
+            whipsaw[ok] = 1.0 - (cum[kk] - cum[kk - lookback]) / float(lookback)
+
+    # 데이터가 EMA 기간에 못 미치는 구간은 판정 불가(호출부는 중립으로 취급)
+    if n < slow:
+        regime[:] = "Sideways"
+    else:
+        regime[:slow - 1] = "Sideways"
+
+    return {'regime': regime, 'moved_pct': moved, 'whipsaw': whipsaw, 'segments': segments}
+
+
+def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_bear=None):
     """[시장 필터] 지수 종가 시계열 → 각 시점의 '신규 매수 차단' 여부 (bool Series).
 
     판정은 SMA 이탈 + 히스테리시스(밴드) 상태 기계다.
@@ -175,11 +247,19 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None):
       밴드 1%를 얹으면 같은 기간에서도 SMA60 대비 CAGR 중앙 +2.78%p·MDD +3.45%p,
       경로 승률 76.9%로 개선된다. 단 짧은 기간에 과한 확인은 역효과라(SMA60±2%는 무개선)
       기간 80일 + 밴드 1% 조합을 기본값으로 쓴다. 상세는 MARKET_FILTER_MA 주석 참조.
+
+    [Bear 해제 / release_on_bear] MARKET_FILTER_RELEASE_ON_BEAR 이 켜져 있으면 국면(EMA9/41)이
+      **확정 하락(Bear)** 인 동안에는 밴드 이탈에 따른 차단을 해제한다. 확정 Bear는 이미 -5%
+      하락한 뒤라 반등 구간이고(향후 20일 +2.48%/+2.33%), 진짜 위험 구간은 PendDown·PendUp이다.
+      근거는 config.MARKET_FILTER_RELEASE_ON_BEAR 주석 참조.
+      Bull·Sideways(판정 불가)에서는 해제하지 않는다 — fail-closed.
     """
     if ma_period is None:
         ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
     if band_pct is None:
         band_pct = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+    if release_on_bear is None:
+        release_on_bear = getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False)
 
     close = pd.Series(close, dtype='float64').reset_index(drop=True)
     ma = close.rolling(window=int(ma_period)).mean()
@@ -197,6 +277,13 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None):
         elif close.iat[i] > upper.iat[i]:
             state = False
         blocked[i] = state
+
+    if release_on_bear:
+        regime = get_regime_series(close)['regime']
+        if len(regime) == len(blocked):
+            # 확정 Bear = 이미 -5% 하락을 소화한 반등 구간 → 밴드 이탈만으로 막지 않는다.
+            blocked &= regime != "Bear"
+
     return pd.Series(blocked, index=range(len(close)))
 
 def get_macd_full_series(df, fast=None, slow=None, signal=None):

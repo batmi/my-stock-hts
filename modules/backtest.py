@@ -339,6 +339,7 @@ def prepare_market_filter(code, is_overseas, days):
     use_filter = getattr(config, 'USE_MARKET_FILTER', True)
     ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
     band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
+    rel_bear = bool(getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False))
 
     if is_overseas:
         idx_ticker, idx_name = "^GSPC", "S&P500"
@@ -354,7 +355,7 @@ def prepare_market_filter(code, is_overseas, days):
         else:
             idx_ticker, idx_name = "^KS11", "KOSPI"
 
-    cache_key = (idx_ticker, ma, band, days, use_filter)
+    cache_key = (idx_ticker, ma, band, days, use_filter, rel_bear)
     if _MARKET_FILTER_STATE["key"] == cache_key:
         dates = _MARKET_FILTER_STATE["dates"]
         return (len(dates), _MARKET_FILTER_STATE["desc"]) if dates is not None else None
@@ -385,7 +386,8 @@ def prepare_market_filter(code, is_overseas, days):
         is_blocked = indicators.get_market_filter_blocked(idx_df['close'], ma, band)
         blocked = set(idx_df.loc[is_blocked.values, 'date'].astype(str))
 
-        desc = f"{idx_name} < SMA{ma}" + (f" -{band:g}%" if band else "")
+        desc = (f"{idx_name} < SMA{ma}" + (f" -{band:g}%" if band else "")
+                + (" (확정 Bear 구간 해제)" if rel_bear else ""))
         _MARKET_FILTER_STATE["dates"] = blocked
         _MARKET_FILTER_STATE["desc"] = desc
         return len(blocked), desc
