@@ -33,11 +33,31 @@ Outbox 패턴
 영업일마다 재사용되므로 주문번호만 쓰면 다른 날의 다른 체결이 중복으로 오인되어
 서버에서 조용히 버려진다. 계좌·일자를 반드시 포함해야 한다.
 
+매매 분류(tradeClass)
+---------------------
+HTS 는 자기 계좌에서 일어난 체결을 **전부** 보고한다 — 토스 앱이나 증권사 HTS 에서
+사람이 직접 낸 주문까지 포함해서다. 예전에는 그 전부를 '시스템'으로 못 박아 보내
+자동매매 성과와 수동 매매가 한 덩어리가 됐다. 지금은 `isSystem` 으로 구분한다:
+AutoTrader 가 낸 주문만 True, 예약·수동·외부는 False, 출처 불명은 필드를 싣지 않아
+서버가 같은 종목의 직전 분류를 물려받게 한다. (`_is_system` 참고)
+
+HTS 를 여러 대 돌릴 때
+----------------------
+서버의 하트비트·재동기화 명령 스코프는 API 키가 아니라 **사용자**다(키는 인증 직후
+username 으로 바뀐다). 그래서 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
+`JOURNAL_BOT_ID`(기본값 = JOURNAL_SOURCE)가 그 구분자다. 값이 겹치면
+  - 상태가 한 칸에 덮여 쓰여 실전봇이 죽어도 모의봇 Ping 이 '정상'으로 유지되고
+  - 웹에서 누른 재동기화를 엉뚱한 봇이 채가서 '완료'로 뜬다(조용한 실패)
+`JOURNAL_SOURCE` 도 인스턴스마다 달라야 한다 — 같으면 백필 기준점(last-sync)이
+남의 체결까지 포함해 앞당겨져, 뒤처진 인스턴스의 누락 구간이 스캔에서 통째로 빠진다.
+
 설정 (~/.htsrc 에 export 후 재시작)
 -----------------------------------
   export JOURNAL_API_URL="https://your-host"     # 필수 (미설정 시 연동 전체 비활성)
   export JOURNAL_API_KEY="skm_..."               # 필수 (웹 설정에서 발급)
   export JOURNAL_SOURCE="my-stock-hts"           # 선택 (last-sync 스코프 기준)
+  export JOURNAL_BOT_ID=""                       # 선택 (기본 JOURNAL_SOURCE)
+  export JOURNAL_BOT_LABEL=""                    # 선택 (웹 표시명, 기본 자동생성)
   export JOURNAL_SYNC_SIMULATION="0"             # 선택, 1이면 모의투자 체결도 전송
 """
 
@@ -132,6 +152,39 @@ def _sync_simulation():
     return bool(getattr(config, 'JOURNAL_SYNC_SIMULATION', False))
 
 
+def _bot_id():
+    """봇 인스턴스 식별자. HTS 를 여러 대 돌릴 때 서로를 구분하는 유일한 값이다.
+
+    서버의 하트비트·명령 스코프는 API 키가 아니라 **사용자**라(키는 인증 직후
+    username 으로 바뀐다), 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
+    기본값을 JOURNAL_SOURCE 로 두는 이유: 그 값은 백필 기준점이 섞이지 않도록
+    이미 인스턴스마다 달라야 하므로, 대개 따로 정해 줄 필요가 없다.
+    """
+    return (_cfg('JOURNAL_BOT_ID') or _source())[:64]
+
+
+def _bot_label():
+    """웹 화면에 뜰 표시명. 미설정 시 운용 계좌·환경으로 만든다.
+
+    botId 는 기계용 식별자라 화면에 그대로 띄우면 어느 계좌인지 알 수 없다.
+    목록에서 '어느 봇이 죽었나'를 판단하려면 사람이 읽는 이름이 필요하다.
+    """
+    label = _cfg('JOURNAL_BOT_LABEL')
+    if label:
+        return label[:60]
+    try:
+        if getattr(config.session, 'is_toss', False):
+            env = '토스'
+        elif getattr(config.session, 'is_simulation', False):
+            env = '모의'
+        else:
+            env = '실전'
+        account = (getattr(config.session, 'cano', '') or '').strip()
+        return (f'{env} {account}'.strip() or _bot_id())[:60]
+    except Exception:      # noqa: BLE001 - 표시명은 부가정보라 실패해도 Ping 을 막지 않는다
+        return _bot_id()[:60]
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 페이로드 변환
 # ══════════════════════════════════════════════════════════════════════
@@ -176,6 +229,27 @@ def _order_origin(type_str):
     if '(수동)' in t:
         return 'MANUAL'
     return ''
+
+
+def _is_system(type_str):
+    """이 체결이 **시스템 트레이딩이 낸 주문**인가. 모르면 None.
+
+    HTS 는 자기 계좌에서 일어난 체결을 전부 보고한다 — 토스 앱이나 증권사 HTS 에서
+    사람이 직접 낸 주문까지 포함해서다. 그것들을 자동매매와 한 덩어리로 묶으면
+    '시스템이 얼마나 벌었나'라는 질문에 답할 수 없게 된다.
+
+      AUTO     — AutoTrader 가 전략 판단으로 낸 주문. 이것만 시스템이다.
+      RESERVED — 예약주문 발동. 실행은 무인이지만 조건을 건 주체가 사람이다.
+      MANUAL   — 우리 HTS 메뉴에서 사람이 낸 주문.
+      EXTERNAL — 앱(MTS)/증권사 HTS 등 외부에서 낸 주문을 잔고 대조로 감지한 것.
+      (꼬리표 없음) — 출처를 알 수 없다. **단정하지 않고 None 을 돌려준다.**
+        서버는 이 경우 같은 종목의 직전 분류를 물려받는다. 여기서 False 로 눕히면
+        '사람이 냈다'고 확정한 셈이 되어 그 폴백이 동작하지 않는다.
+    """
+    origin = _order_origin(type_str)
+    if not origin:
+        return None
+    return origin == 'AUTO'
 
 
 def _side(type_str):
@@ -332,7 +406,6 @@ def build_payload(trade):
         'status': 'FILLED',
         'confidence': confidence,
         'source': _source(),
-        'tradeClass': '시스템',
         'currency': 'USD' if overseas else 'KRW',
         'exchange': _exchange_for(code, overseas),
         'assetType': 'STOCK',
@@ -344,6 +417,17 @@ def build_payload(trade):
     origin = _order_origin(trade.get('type'))
     if origin:
         payload['orderOrigin'] = origin
+
+    # ⭐️ 분류(tradeClass)를 '시스템'으로 못 박아 보내던 것을 걷어냈다. 외부 앱·HTS 에서
+    #    사람이 낸 주문까지 전부 시스템 트레이딩 성과로 뭉쳐졌기 때문이다.
+    #    시스템이 낸 주문일 때만 분류를 확정해 보내고, 아니거나 모르면 **필드를 아예
+    #    싣지 않는다** — 서버가 같은 종목의 직전 분류(장기투자 등)를 물려받는다.
+    system = _is_system(trade.get('type'))
+    if system is not None:
+        payload['isSystem'] = system
+        if system:
+            payload['tradeClass'] = '시스템'
+
     if trade.get('org_odno'):
         payload['originalOrderId'] = trade['org_odno']
 
@@ -821,7 +905,15 @@ def ping(status='running', message=None, timeout=None, force=False):
 
     if not (_has_credentials() if force else is_enabled()):
         return False
-    body = {'status': status, 'isSimulated': bool(getattr(config.session, 'is_simulation', False))}
+    body = {
+        'status': status,
+        'isSimulated': bool(getattr(config.session, 'is_simulation', False)),
+        # botId 가 없으면 서버가 사용자당 한 칸에 상태를 겹쳐 쓴다 — HTS 를 여러 대
+        # 돌릴 때 실전봇의 죽음이 모의봇 Ping 에 가려지고, 재동기화 명령도 아무
+        # 봇이나 채간다.
+        'botId': _bot_id(),
+        'label': _bot_label(),
+    }
     if message:
         body['message'] = message[:500]
     if _pending_ack:

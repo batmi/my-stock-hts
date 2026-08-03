@@ -260,6 +260,90 @@ def test_order_origin_extracted(db, type_str, expected):
     assert json.loads(_outbox(db)[0]['payload'])['orderOrigin'] == expected
 
 
+# ── 시스템/비시스템 분류 ──────────────────────────────────────────────
+#
+# HTS 는 자기 계좌에서 일어난 체결을 전부 보고한다 — 토스 앱이나 증권사 HTS 에서
+# 사람이 직접 낸 주문까지 포함해서다. 예전엔 그 전부에 tradeClass='시스템'을 못 박아
+# 보내 자동매매 성과와 수동 매매가 한 덩어리가 됐다.
+
+def test_auto_order_is_marked_system(db):
+    """AutoTrader 가 낸 주문만 '시스템'으로 확정해 보낸다."""
+    _fill(db, type_str='매수(AUTO)')
+    payload = json.loads(_outbox(db)[0]['payload'])
+    assert payload['isSystem'] is True
+    assert payload['tradeClass'] == '시스템'
+
+
+@pytest.mark.parametrize('type_str', ['매도(수동)', '매수(예약)', '매수(외부)'])
+def test_non_auto_order_is_not_system_and_sends_no_class(db, type_str):
+    """예약·수동·외부는 사람이 낸 주문이다 — 분류를 아예 싣지 않는다.
+
+    분류를 비워 보내야 서버가 같은 종목의 직전 분류(장기투자 등)를 물려받는다.
+    '시스템'을 실어 보내면 그 폴백이 영원히 동작하지 않는다.
+    """
+    _fill(db, type_str=type_str)
+    payload = json.loads(_outbox(db)[0]['payload'])
+    assert payload['isSystem'] is False
+    assert 'tradeClass' not in payload
+
+
+def test_unknown_origin_omits_is_system(db):
+    """출처를 모르면 단정하지 않는다 — isSystem 자체를 보내지 않는다.
+
+    False 로 눕히면 '사람이 냈다'고 확정한 셈이 되어, 서버의 분류 상속 폴백이
+    '모름'과 '사람이 냄'을 구분하지 못한다.
+    """
+    _fill(db, type_str='매수')
+    payload = json.loads(_outbox(db)[0]['payload'])
+    assert 'isSystem' not in payload
+    assert 'tradeClass' not in payload
+
+
+def test_is_system_helper_maps_every_origin():
+    assert journal_sync._is_system('매수(AUTO)') is True
+    assert journal_sync._is_system('매수(예약)') is False
+    assert journal_sync._is_system('매도(수동)') is False
+    assert journal_sync._is_system('매수(외부)') is False
+    assert journal_sync._is_system('매수') is None
+    assert journal_sync._is_system(None) is None
+
+
+# ── 봇 인스턴스 식별 ──────────────────────────────────────────────────
+
+def test_bot_id_defaults_to_source(db, monkeypatch):
+    """JOURNAL_SOURCE 는 이미 인스턴스마다 달라야 하므로 기본값으로 충분하다."""
+    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'hts-real', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', '', raising=False)
+    assert journal_sync._bot_id() == 'hts-real'
+
+
+def test_bot_id_override_wins(db, monkeypatch):
+    monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'hts-real', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi-sim', raising=False)
+    assert journal_sync._bot_id() == 'raspi-sim'
+
+
+def test_ping_carries_bot_identity(db, monkeypatch):
+    """botId 가 빠지면 서버가 사용자당 한 칸에 상태를 겹쳐 쓴다 — 여러 대를 돌릴 때
+    실전봇의 죽음이 모의봇 Ping 에 가려지고, 재동기화도 엉뚱한 봇이 채간다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi-real', raising=False)
+    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+
+    assert journal_sync.ping('running') is True
+    body = calls[0][2]
+    assert body['botId'] == 'raspi-real'
+    assert body['label']          # 표시명이 비면 웹 목록에서 어느 봇인지 알 수 없다
+
+
+def test_bot_label_falls_back_to_account(db, monkeypatch):
+    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', True)
+    monkeypatch.setattr(config.session, 'cano', '50196591')
+    assert journal_sync._bot_label() == '모의 50196591'
+
+
 # ── 장애 격리 ─────────────────────────────────────────────────────────
 
 def test_queue_failure_never_breaks_trade_recording(db, monkeypatch):
