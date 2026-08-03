@@ -209,14 +209,27 @@ def _bot_label():
         return label[:60]
     try:
         env = {'toss': '토스', 'sim': '모의', 'real': '실전'}.get(_bot_env(), '')
-        account = (getattr(config.session, 'cano', '') or '').strip()
-        auto = (getattr(config.session, 'auto_cano', '') or '').strip()
+        account = _account_text(config.session.cano, config.session.acnt_prdt_cd)
+        auto = _account_text(getattr(config.session, 'auto_cano', ''),
+                             getattr(config.session, 'auto_acnt_prdt_cd', ''))
         name = f'{env} {account}'.strip()
-        if auto and auto != (account or '').replace('-', '') and auto != account:
+        if auto and auto != account:
             name = f'{name}·자동 {auto}'
         return (name or _bot_id())[:60]
     except Exception:      # noqa: BLE001 - 표시명은 부가정보라 실패해도 Ping 을 막지 않는다
         return _bot_id()[:60]
+
+
+def _account_text(cano, product_code):
+    """계좌 표기 `12345678-01`. 상품코드는 별도 필드라 붙이지 않으면 화면에서 빠진다.
+
+    (토스는 상품코드 개념이 없어 cano 에 전체 번호가 들어 있다 — 그대로 둔다.)
+    """
+    cano = (cano or '').strip()
+    product_code = (product_code or '').strip()
+    if not cano:
+        return ''
+    return f'{cano}-{product_code}' if product_code else cano
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1364,8 +1377,11 @@ class JournalSyncWorker:
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="JournalSync")
         self.thread.start()
         buried = dead_count()
+        # botId 를 반드시 남긴다 — 웹 목록에 봇이 안 보일 때 '식별자가 겹쳤나'를
+        # 확인할 유일한 단서다. 겹치면 서로의 상태를 덮어써 한쪽이 통째로 사라진다.
         logger.info(f"[Journal] 매매일지 연동 시작 — {_base_url()} "
-                    f"(source={_source()}, 대기 잔량 {pending_count()}건"
+                    f"(botId={_bot_id()}, source={_source()}, "
+                    f"대기 잔량 {pending_count()}건"
                     f"{f', 전송포기 {buried}건' if buried else ''})")
 
     def stop(self, notify='stopped'):

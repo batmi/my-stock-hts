@@ -365,8 +365,25 @@ def test_bot_label_shows_the_auto_trading_account_too(db, monkeypatch):
     """한투 실전은 거래 계좌와 자동매매 계좌가 다르다 — 둘 다 보여야 한다."""
     monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
     _set_mode(monkeypatch, cano='68029263', auto='44048158')
+    monkeypatch.setattr(config.session, 'auto_acnt_prdt_cd', '01', raising=False)
     label = journal_sync._bot_label()
-    assert '68029263' in label and '44048158' in label
+    assert '68029263-01' in label and '44048158-01' in label
+
+
+def test_bot_label_keeps_the_account_product_code(db, monkeypatch):
+    """상품코드(-01)는 별도 필드라, 붙이지 않으면 화면 계좌번호가 잘려 보인다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    _set_mode(monkeypatch, simulation=True, cano='50196591', auto='50196591')
+    assert journal_sync._bot_label() == '모의 50196591-01'
+
+
+def test_bot_label_omits_auto_account_when_it_is_the_same(db, monkeypatch):
+    """모의·토스는 단일 계좌라 같은 번호를 두 번 적을 이유가 없다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
+    _set_mode(monkeypatch, toss=True, cano='189-01-501685', auto='189-01-501685')
+    monkeypatch.setattr(config.session, 'acnt_prdt_cd', '')
+    monkeypatch.setattr(config.session, 'auto_acnt_prdt_cd', '', raising=False)
+    assert journal_sync._bot_label() == '토스 189-01-501685'
 
 
 def test_ping_carries_bot_identity(db, monkeypatch):
@@ -381,14 +398,6 @@ def test_ping_carries_bot_identity(db, monkeypatch):
     body = calls[0][2]
     assert body['botId'] == 'raspi:real:68029263'
     assert body['label']          # 표시명이 비면 웹 목록에서 어느 봇인지 알 수 없다
-
-
-def test_bot_label_falls_back_to_account(db, monkeypatch):
-    monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
-    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', True)
-    monkeypatch.setattr(config.session, 'cano', '50196591')
-    assert journal_sync._bot_label() == '모의 50196591'
 
 
 # ── 장애 격리 ─────────────────────────────────────────────────────────
