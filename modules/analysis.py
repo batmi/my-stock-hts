@@ -429,19 +429,65 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         ent["fail"] = now
         return cached
 
+# [추가] FRED 계열(HY OAS 등) 캐시 — 국채 현물(_US_TREASURY_SPOT_CACHE)과 같은 구조.
+#  FRED는 일 1회 갱신되는 거시 시계열이라 장중 재조회 가치가 낮다 → TTL을 국채(120s)보다
+#  길게 잡아 tvDatafeed 전역 락 경합 자체를 줄인다.
+_FRED_CACHE = {}            # symbol -> {"df": DataFrame, "time": datetime, "fail": datetime|None}
+_FRED_TTL_SEC = 1800        # 30분 (일 1회 갱신 시계열)
+_FRED_NEG_TTL_SEC = 180     # 실패 음성 캐시 — 익명 웹소켓 다운 시 매 렌더 재시도로 UI가 지연되는 것 방지
+
+
+def reset_fred_failures():
+    """FRED 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
+    for ent in _FRED_CACHE.values():
+        ent["fail"] = None
+
+
 def get_fred_data(symbol, n_bars=300):
-    """FRED 일봉을 tvDatafeed로 조회한다."""
+    """FRED 일봉을 tvDatafeed로 조회한다(TTL 캐시 + 재시도).
+
+    [종전] 단 1회만 시도하고 캐시도 폴백도 없었다. 그런데 익명 웹소켓은 웜 인스턴스에서도
+     ~1/3 확률로 빈 응답을 주고 실패가 버스트로 몰린다(_fetch_index_via_tvdatafeed 주석).
+     같은 소스를 쓰는 국내 지수는 4회, 국채 현물은 최대 6회 재시도 + 성공값 폴백을 두었는데
+     이 경로만 무방비여서, tvDatafeed 호출이 많은 토스/가상투자 모드(코스피200·코스닥150이
+     tvDatafeed 1순위)에서 HY OAS만 상시 실패로 보였다. 재시도 정책을 지수 경로와 맞춘다.
+    """
+    now = datetime.now()
+    ent = _FRED_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
+    cached = ent["df"]
+    if cached is not None and ent["time"] and (now - ent["time"]).total_seconds() < _FRED_TTL_SEC:
+        return cached
+    if ent["fail"] and (now - ent["fail"]).total_seconds() < _FRED_NEG_TTL_SEC:
+        return cached  # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용(없으면 None)
+
     tv = _get_tvdatafeed()
     if tv is None:
-        return None
+        return cached
     try:
         from tvDatafeed import Interval
-        with _TVDATAFEED_LOCK:
-            df = tv.get_hist(symbol=symbol, exchange="FRED",
-                             interval=Interval.in_daily, n_bars=n_bars)
-        if df is None or df.empty:
-            return None
-            
+    except Exception:
+        return cached
+
+    df = None
+    for attempt in range(4):   # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
+        try:
+            with _TVDATAFEED_LOCK:
+                df = tv.get_hist(symbol=symbol, exchange="FRED",
+                                 interval=Interval.in_daily, n_bars=n_bars)
+            if df is not None and not df.empty:
+                break
+        except Exception as e:
+            logger.debug(f"[TVDATAFEED] FRED:{symbol} 조회 오류(attempt={attempt}): {e}")
+            df = None
+        if attempt < 3:
+            time.sleep(0.8 * (attempt + 1))   # 페이싱 후 재시도(점증 백오프)
+
+    if df is None or df.empty:
+        logger.debug(f"[TVDATAFEED] FRED:{symbol} 데이터 없음")
+        ent["fail"] = now
+        return cached
+
+    try:
         out = df.reset_index().rename(columns={'datetime': 'date'})
         for col in ['open', 'high', 'low', 'close', 'volume']:
             if col not in out.columns:
@@ -449,10 +495,14 @@ def get_fred_data(symbol, n_bars=300):
         out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
         out = out.sort_values('date', ascending=True).reset_index(drop=True)
         out.attrs['source'] = 'TVDATAFEED'
+        ent["df"] = out
+        ent["time"] = now
+        ent["fail"] = None
         return out
     except Exception as e:
-        logger.debug(f"[TVDATAFEED] FRED:{symbol} 조회 오류: {e}")
-        return None
+        logger.debug(f"[TVDATAFEED] FRED:{symbol} 스키마 변환 실패: {e}")
+        ent["fail"] = now
+        return cached
 
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
 #  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을

@@ -398,9 +398,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
         if name == "HY OAS (신용위험)":
+            got_fred = False
             try:
                 tv_df = analysis.get_fred_data("BAMLH0A0HYM2")
                 if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
+                    got_fred = True
                     df_daily = tv_df.copy()
                     df_daily['date'] = pd.to_datetime(df_daily['date'])
                     df_daily.set_index('date', inplace=True)
@@ -413,6 +415,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     is_treasury_spot = True  # 동일한 플래그로 yfinance 폴백 생략
             except Exception as e:
                 logger.debug(f"HY OAS 조회 실패: {e}")
+            # [Fix] 야후는 ^HYOAS를 제공하지 않는다. 종전에는 실패 시 아래 yfinance 분기로
+            #  흘러가 실패 소스가 'yfinance'로 잘못 안내됐다(실제 소스는 TradingView/FRED).
+            #  국채 현물은 같은 이유로 이미 early return 하는데 이 경로만 빠져 있었다.
+            if not got_fred:
+                return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
         if not is_domestic_index and not is_treasury_spot:
             try:
@@ -1376,6 +1383,9 @@ def show_market_indices(interval=0):
                                 #  음성 캐시(600s) 동안 재시도가 즉시 실패해 무의미하다.
                                 if any(n in config.US_TREASURY_SPOT_SYMBOLS for n in failed_list):
                                     analysis.reset_us_treasury_spot_failures()
+                                # HY OAS도 같은 이유로 음성 캐시(180s)를 풀어야 재시도가 의미를 갖는다.
+                                if "HY OAS (신용위험)" in failed_list:
+                                    analysis.reset_fred_failures()
                                 target_indices = failed_list
                                 continue
                         except StopIteration:
