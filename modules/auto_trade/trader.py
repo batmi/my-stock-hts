@@ -3714,6 +3714,26 @@ class AutoTrader:
         except Exception as e:
             logger.debug(f"[손절 보호] 미체결 매수 취소 처리 실패({code}): {e}")
 
+    def _clamp_order_price(self, code, order_price):
+        """지정가를 가격제한폭(상·하한가) 안으로 되돌린다.
+
+        판정은 utils.clamp_to_price_limit(순수 함수), 한도 조회는 api.get_price_limits가
+        맡는다. 한도를 구하지 못하면 원래 값을 그대로 쓴다(fail-open) — 잘못된 한도로
+        주문가를 흔드는 것이 제한폭 밖 주문보다 위험하기 때문이다.
+        """
+        try:
+            upper, lower = api.get_price_limits(code)
+            if not upper and not lower:
+                return order_price
+            clamped = utils.clamp_to_price_limit(order_price, upper, lower)
+            if clamped != order_price:
+                self.log(f"[제한폭 보정] {code} 주문가 {order_price:,}원 → {clamped:,}원 "
+                         f"(상한 {upper:,} / 하한 {lower:,})")
+            return clamped
+        except Exception as e:
+            logger.debug(f"[제한폭 보정] 실패({code}): {e}")
+            return order_price
+
     def _apply_corporate_action(self, code, name, item, buy_price, highest_price):
         """[안전장치] 액면분할·무상증자를 감지해 트레일링 최고가를 같은 배율로 보정한다.
 
@@ -4107,6 +4127,9 @@ class AutoTrader:
                 raw_order_price = current_price * (1 - config.SLIPPAGE_RATE)
                 order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
                 if order_price <= 0: order_price = int(current_price)
+                # [안전장치] 하한가에 락된 날 '현재가 - 슬리피지'는 제한폭 밖이라 주문이 거부된다.
+                #  손절이 가장 필요한 날 접수조차 되지 않으므로 제한폭 안으로 되돌린다.
+                order_price = int(self._clamp_order_price(code, order_price))
 
                 if not is_market_open:
                     self.log(f"[장마감] 매도 신호 감지 (주문 미전송): {name} - {reason}")
@@ -4220,6 +4243,8 @@ class AutoTrader:
             order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
             if order_price <= 0:
                 order_price = int(current_price)
+            # [안전장치] 상한가에 락되면 '현재가 + 슬리피지'가 제한폭을 넘어 거부된다.
+            order_price = int(self._clamp_order_price(code, order_price))
 
             max_qty = api.fetch_buyable_quantity(code, order_price)
             if max_qty < add_qty:
@@ -4875,6 +4900,8 @@ class AutoTrader:
             # [수정] 슬리피지 비율 적용 및 호가 정렬 (체결 확률 증대)
             raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
             order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+            # [안전장치] 상한가에 락되면 '현재가 + 슬리피지'가 제한폭을 넘어 거부된다.
+            order_price = int(self._clamp_order_price(cand['code'], order_price))
 
             # 최소 주문 금액 보정 (할당된 예산이 1주 가격보다 적을 때 가용 예수금 전체를 쓰는 버그 방지)
             if invest_amt < order_price: invest_amt = order_price

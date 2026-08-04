@@ -3821,6 +3821,28 @@ def get_current_price(code, is_overseas):
             return safe_int(output.get('stck_prpr'))
     return 0
 
+def get_price_limits(code):
+    """국내 종목의 (상한가, 하한가). 구하지 못하면 (0, 0).
+
+    주문가가 가격제한폭을 벗어나면 접수 자체가 거부되므로 지정가를 만들 때 클램프에 쓴다
+    (utils.clamp_to_price_limit). ±30%를 직접 계산하지 않고 **증권사 값을 그대로 쓴다** —
+    신규상장·정리매매 등 제한폭이 30%가 아닌 종목이 있고, 권리락이 있으면 기준가도 바뀐다.
+
+    get_current_price_data는 3초 마이크로 캐시를 쓰므로 주문 직전 시세 조회와 대개
+    같은 응답을 재사용한다(추가 TPS 부담 없음). 토스(관찰) 모드는 이 필드를 주지 않아
+    (0, 0)이 되고, 그러면 호출부가 클램프를 건너뛴다.
+    """
+    try:
+        data = get_current_price_data(code, False)
+        if data.get('rt_cd') != '0':
+            return 0, 0
+        out = data.get('output', {}) or {}
+        return safe_int(out.get('stck_mxpr')), safe_int(out.get('stck_llam'))
+    except Exception as e:
+        logger.debug(f"get_price_limits 실패({code}): {e}")
+        return 0, 0
+
+
 def get_order_book(code, is_overseas=False):
     """호가창 데이터 조회 (최대 10호가)"""
     if config.session.is_toss:

@@ -933,6 +933,12 @@ class OrderManager:
         #  로컬 폴백(ORDER_SENT 전용)도 건드리지 않는 상태(ACCEPTED·PARTIAL_FILLED)라
         #  어느 경로로도 pending이 풀리지 않는 주문이다. 주문 종결 시 항목을 지운다.
         self.orphan_alerted = set()
+        # [안전장치] 주문 실패 알림 억제 이력 {(code, 매매구분, 오류코드): 마지막 알림 시각}.
+        #  거부는 상태를 정리하고 끝나므로 다음 주기에 같은 값으로 재시도한다. 그 자체는
+        #  옳다(제한폭이 풀리면 체결돼야 한다). 다만 하한가에 하루 종일 락되면 3분마다
+        #  같은 실패가 반복되어 알림이 100건 넘게 쌓이고, 정작 중요한 경보가 묻힌다.
+        #  **같은 원인**의 반복만 억제한다 — 원인이 바뀌면 즉시 다시 알린다.
+        self.order_fail_alerted = {}
         # [최적화] 누적 주문 접수 카운터 — 루프에서 '이번 주기에 주문이 나갔는가'를 판단해
         #  주문이 없으면 루프 말미 잔고/예수금 재조회를 생략하기 위한 단조 증가 값
         self.orders_sent_count = 0
@@ -1013,6 +1019,26 @@ class OrderManager:
             if pre_qty is not None:
                 self.sell_pre_qty[str(odno)] = int(pre_qty)
 
+    #  같은 원인의 주문 실패를 다시 알리기까지의 간격(초). 주기가 180초이므로 30분이면
+    #  하루 종일 락된 종목의 알림이 6시간에 12건 수준으로 줄어든다(종전 120건).
+    ORDER_FAIL_ALERT_COOLDOWN = 1800.0
+
+    def _should_alert_order_fail(self, code, type_str, msg_cd):
+        """이번 주문 실패를 텔레그램으로 알릴 것인가.
+
+        억제하는 것은 **알림뿐이고 재시도가 아니다** — 제한폭이 풀리거나 예수금이 들어오면
+        다음 주기에 체결돼야 하므로 주문 시도 자체는 계속한다. 로그에도 항상 남긴다.
+        키에 오류코드를 넣어, 원인이 바뀌면(예: 제한폭 → 예수금 부족) 즉시 다시 알린다.
+        """
+        key = (str(code), str(type_str), str(msg_cd))
+        now = time.time()
+        with self._lock:
+            last = self.order_fail_alerted.get(key, 0.0)
+            if now - last < self.ORDER_FAIL_ALERT_COOLDOWN:
+                return False
+            self.order_fail_alerted[key] = now
+        return True
+
     def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
         """주문 전송 및 상태 등록"""
         ord_dvsn = "00" if price > 0 else "01"
@@ -1051,6 +1077,10 @@ class OrderManager:
                         del self.pending_orders[code][temp_id]
                     self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
                     self.orders_sent_count += 1
+                    # 한 번이라도 접수되면 그 종목의 억제 이력을 지운다 — 이후 다시 실패하면
+                    #  '새로 생긴 문제'이므로 쿨다운을 기다리지 않고 알려야 한다.
+                    for k in [k for k in self.order_fail_alerted if k[0] == str(code)]:
+                        del self.order_fail_alerted[k]
 
                 self.trader.trade_history.append(success_msg)
                 self.trader.log(f"결과: 성공 (주문번호: {utils.format_order_no(odno)})")
@@ -1110,12 +1140,14 @@ class OrderManager:
                 err_msg = res_json.get('msg1', 'Unknown Error')
                 msg_cd = res_json.get('msg_cd')
                 self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
-                
+
                 stock_display = f"{name}({code})" if name else code
                 t_type = "매수" if type_str == 'buy' else "매도"
                 fail_msg = f"🚫 [{t_type} 실패] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
-                api.send_telegram_message(fail_msg)
-                
+                # [안전장치] 같은 종목·같은 원인의 반복 실패는 알림을 억제한다. 로그는 항상 남긴다.
+                if self._should_alert_order_fail(code, type_str, msg_cd):
+                    api.send_telegram_message(fail_msg)
+
                 if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
                     raise Exception(f"주문 시스템 치명적 오류: {err_msg}")
 

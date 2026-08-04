@@ -12,11 +12,15 @@ def reset_autotrader():
     yield
     auto_trade.AutoTrader._instance = None
 
+# [추가] 주문가는 가격제한폭 안으로 클램프된다(utils.clamp_to_price_limit). 실제 한도를
+#  조회하면 이 테스트가 네트워크와 그날 시세에 의존하므로, 한도 없음(0,0)으로 고정해
+#  슬리피지 계산만 격리한다. 클램프 자체는 tests/test_price_limit_order.py에서 검증한다.
+@patch('modules.auto_trade.api.get_price_limits', return_value=(0, 0))
 @patch('modules.auto_trade.api.place_order')
 @patch('modules.auto_trade.api.fetch_buyable_quantity')
 @patch('modules.auto_trade.api.get_current_price')
 @patch('modules.auto_trade.utils.adjust_to_tick')
-def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, reset_autotrader):
+def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, mock_limits, reset_autotrader):
     """
     [매수 슬리피지 테스트]
     현재가 10,000원, 슬리피지 0.2% 설정 시
@@ -65,11 +69,12 @@ def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, r
     actual_price = int(args[4])
     assert actual_price == expected_price, f"매수 주문 가격이 슬리피지 적용가({expected_price})와 다릅니다: {actual_price}"
 
+@patch('modules.auto_trade.api.get_price_limits', return_value=(0, 0))
 @patch('modules.auto_trade.api.place_order')
 @patch('modules.auto_trade.api.fetch_sellable_quantity')
 @patch('modules.auto_trade.api.get_chart_data')
 @patch('modules.auto_trade.utils.adjust_to_tick')
-def test_sell_slippage(mock_adjust, mock_chart, mock_fetch_qty, mock_place, reset_autotrader):
+def test_sell_slippage(mock_adjust, mock_chart, mock_fetch_qty, mock_place, mock_limits, reset_autotrader):
     """
     [매도 슬리피지 테스트]
     현재가 10,000원, 슬리피지 0.2% 설정 시

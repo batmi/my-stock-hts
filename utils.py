@@ -579,6 +579,32 @@ def adjust_to_tick(price, is_overseas=False):
     return round(price / tick) * tick
 
 
+def clamp_to_price_limit(price, upper=0, lower=0):
+    """지정가를 가격제한폭(상한가~하한가) 안으로 되돌린다.
+
+    [왜 필요한가] 주문가는 현재가 ± 슬리피지로 만든다. 평소엔 문제없지만 종목이
+    상·하한가에 락되면 그 값이 제한폭 **밖**으로 나가 주문이 통째로 거부된다.
+      · 하한가 70,000원에 락 → 매도 지정가 69,900원 → 거부
+      · 상한가 130,000원에 락 → 매수 지정가 130,300원 → 거부
+    하필 손절이 가장 필요한 -30% 폭락일에 매도 주문이 접수조차 되지 않는다. 게다가
+    실패해도 상태가 정리되어 다음 주기에 같은 가격으로 재시도하므로, 하루 종일
+    거부만 반복하며 포지션이 방치된다.
+
+    체결을 보장하지는 않는다(하한가엔 매도 잔량이 쌓여 있다). 다만 **대기열에 들어가는
+    것과 접수조차 안 되는 것은 다르다** — 락이 풀리는 순간을 잡으려면 주문이 걸려 있어야 한다.
+
+    상·하한가를 못 구했으면(0) 클램프하지 않는다 — 잘못된 한도로 주문가를 흔드는 것이
+    제한폭 밖 주문보다 위험하다(fail-open).
+    """
+    if not isinstance(price, (int, float)) or price <= 0:
+        return price
+    if upper and upper > 0:
+        price = min(price, upper)
+    if lower and lower > 0:
+        price = max(price, lower)
+    return price
+
+
 def print_krx_fallback_warning(name_map=None):
     """KRX 공식 일봉 확보에 실패해 토스 캔들(NXT 포함)로 계산된 종목이 있으면 노란 경고를 띄운다.
 
