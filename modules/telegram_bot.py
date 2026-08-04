@@ -188,6 +188,12 @@ class TelegramCommander:
             args = [target] + args
             command = '/analyze'
 
+        # [추가] /news_종목코드 단축 명령어 지원
+        if command.startswith('/news_'):
+            target = command.replace('/news_', '')
+            args = [target] + args
+            command = '/news'
+
         # [추가] /chart_종목코드 단축 명령어 지원
         if command.startswith('/chart_'):
             target = command.replace('/chart_', '')
@@ -2092,7 +2098,8 @@ class TelegramCommander:
                         emoji = state_emoji_map.get(state_str, "❓")
                         state_display = f" {emoji} {state_str} {at}"
 
-                    msg += f"\n - {name} ({code}){state_display}\n   /signal_{code}  /analyze_{code}  /chart_{code}"
+                    msg += (f"\n - {name} ({code}){state_display}"
+                            f"\n   /signal_{code}  /chart_{code}  /analyze_{code}  /news_{code}")
                 msg += "\n"
 
         if not has_stock:
