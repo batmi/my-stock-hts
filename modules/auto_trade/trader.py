@@ -4541,12 +4541,28 @@ class AutoTrader:
             if getattr(self, 'buy_halted', False):
                 return
 
-            # 증액 횟수 판별: 최근 매수 사유의 '피라미딩 N차' 마커 (DB 기록이라 재시작에도 유지)
-            pyramid_count = 0
+            # [증액 횟수] 권위 소스는 trailing_stops.pyramid_count 다(재시작에도 유지되고,
+            #  신규 진입 시 delete_trailing_stop 으로 함께 지워져 자동으로 0이 된다).
+            #
+            #  종전에는 최근 매수 **사유 문자열**을 정규식으로 파싱했다. 그 기록이 유실되면
+            #  (DB 쓰기 실패·수동 정리) 횟수가 0으로 읽혀 상한을 넘겨 계속 증액된다.
+            #  증액은 보유수량의 50%씩이라 1 → 1.5 → 2.25 → 3.375 로 커지는데, 횟수가
+            #  계속 0이면 여기서 멈추지 않고 한 종목이 계좌를 삼킨다.
+            #
+            #  [모르면 보류] 조회 실패(-1)는 '0회'가 아니다. 리스크를 키우는 동작이므로
+            #  불확실하면 하지 않는다 — 증액을 거른 대가는 놓친 수익뿐이다.
+            db_count = db_manager.db.get_pyramid_count(code)
+            if db_count < 0:
+                self.log(f"피라미딩 보류: {name} - 증액 횟수를 확인할 수 없습니다(DB 조회 실패)")
+                return
+
+            #  구 버전 포지션 호환: 사유 마커가 더 크면 그쪽을 믿는다(보수적).
+            legacy_count = 0
             if last_buy:
                 m = re.search(r'피라미딩\s*(\d+)차', str(last_buy.get('reason', '')))
                 if m:
-                    pyramid_count = int(m.group(1))
+                    legacy_count = int(m.group(1))
+            pyramid_count = max(db_count, legacy_count)
 
             ok, reason = self.strategy.analyze_pyramid(profit_rate, result['state'], result['score'], pyramid_count)
             if not ok:
@@ -4623,6 +4639,17 @@ class AutoTrader:
                             return
                         self.portfolio_heat_amt += add_risk
                         reserved_heat = True
+
+            # [순서] 횟수를 **먼저** 올리고 주문한다. 반대면 '주문은 나갔는데 횟수는 그대로'가
+            #  되어 다음 주기에 같은 증액이 또 나간다. 기록만 되고 주문이 실패하면 증액
+            #  기회를 하나 잃을 뿐이므로, 이쪽이 안전한 방향이다.
+            if not db_manager.db.bump_pyramid_count(code, pyramid_count):
+                if reserved_heat:
+                    with self._lock:
+                        self.portfolio_heat_amt -= add_risk
+                self.log(f"피라미딩 보류: {name} - 증액 횟수를 기록하지 못했습니다(DB 쓰기 실패). "
+                         f"기록 없이 증액하면 상한을 넘겨 반복됩니다.")
+                return
 
             self.log(f"피라미딩 실행: {name} +{add_qty}주 - {reason}")
             odno = self.order_manager.send_order(code, add_qty, "buy", name=name, reason=reason, score=result['score'], price=order_price, stop_loss_rate=sl_rate)

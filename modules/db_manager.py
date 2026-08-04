@@ -227,7 +227,8 @@ class DBManager:
                         highest_price REAL,
                         update_time TEXT,
                         ref_avg_price REAL DEFAULT 0.0,
-                        ref_pchs_amt REAL DEFAULT 0.0
+                        ref_pchs_amt REAL DEFAULT 0.0,
+                        pyramid_count INTEGER DEFAULT 0
                     )
                 ''')
                 
@@ -412,6 +413,15 @@ class DBManager:
                 #  분할을 매수·매도와 구분할 수 있다(engine.detect_corporate_action 주석 참조).
                 cursor.execute("PRAGMA table_info(trailing_stops)")
                 ts_columns = [info[1] for info in cursor.fetchall()]
+                # [추가] pyramid_count — 증액 횟수를 자유 텍스트 사유가 아니라 여기 둔다.
+                #  (사유 파싱은 기록이 유실되면 0으로 읽혀 상한을 넘겨 증액된다)
+                if "pyramid_count" not in ts_columns:
+                    try:
+                        cursor.execute("ALTER TABLE trailing_stops ADD COLUMN pyramid_count INTEGER DEFAULT 0")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] trailing_stops 테이블에 pyramid_count 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패(pyramid_count): {e}[/red]")
                 for col in ("ref_avg_price", "ref_pchs_amt"):
                     if col not in ts_columns:
                         try:
@@ -1428,6 +1438,51 @@ class DBManager:
                 except Exception:
                     break
             return []
+
+    def get_pyramid_count(self, code):
+        """증액(피라미딩) 횟수. 조회 실패는 -1 — '0회'와 구분해야 한다.
+
+        [왜 구분하는가] 호출부는 횟수를 모를 때 증액을 **보류**해야 한다. 모르는 것을
+        0으로 읽으면 상한을 넘겨 계속 증액되고, 한 종목이 계좌를 삼킨다.
+        """
+        try:
+            cur = self._get_conn().cursor()
+            cur.execute("SELECT pyramid_count FROM trailing_stops WHERE code=?", (code,))
+            row = cur.fetchone()
+            return int(row["pyramid_count"] or 0) if row else 0
+        except Exception as e:
+            logger.error(f"[DB] 증액 횟수 조회 실패({code}): {e}")
+            return -1
+
+    def bump_pyramid_count(self, code, expected):
+        """증액 횟수를 expected+1로 올린다. 성공 여부를 돌려준다.
+
+        주문을 내기 **전에** 호출한다 — 기록이 안 되면 주문도 내지 않는다. 반대 순서면
+        '주문은 나갔는데 횟수는 그대로'가 되어 다음 주기에 같은 증액이 또 나간다.
+        기록만 되고 주문이 실패하면 증액 기회를 하나 잃을 뿐이라, 이쪽이 안전한 방향이다.
+        """
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    conn.execute(
+                        "INSERT INTO trailing_stops (code, highest_price, update_time, pyramid_count) "
+                        "VALUES (?, 0.0, ?, ?) "
+                        "ON CONFLICT(code) DO UPDATE SET pyramid_count=excluded.pyramid_count",
+                        (code, now_str, int(expected) + 1))
+                    conn.commit()
+                    return True
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    self._note_write_failure("증액 횟수", f"{code} → {int(expected) + 1}", e)
+                    return False
+                except Exception as e:
+                    self._note_write_failure("증액 횟수", f"{code} → {int(expected) + 1}", e)
+                    return False
+            return False
 
     def get_corp_action_ref(self, code):
         """(기준일, 기준종가, 출처). 기록이 없으면 ("", 0.0, "")."""
