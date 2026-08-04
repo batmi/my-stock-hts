@@ -204,3 +204,72 @@ def test_callable_scale_actually_constrains(universe):
     tight = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
                               risk_scale_by_date=lambda _d, _e: 0.3)
     assert tight["avg_cash_ratio"] > full["avg_cash_ratio"]
+
+
+# ---------------------------------------------------------------------------
+# 청산 판정 — 실매매(analyze_sell)와 같은 규칙인가
+# ---------------------------------------------------------------------------
+def _decide(**kw):
+    base = dict(price=110.0, high=120.0, avg=100.0, sl_rate=-7.0, atr_applied=True,
+                is_bep=False, holding_days=5, state="매수", state_reason="", raw_score=7.0,
+                sell_check=7.0, ema60=100.0, atr=2.0, roll_high_5=0.0, roll_high_10=0.0,
+                cfg={"use_atr": True, "use_time_stop": True, "time_stop_days": 20,
+                     "ts_act": 10.0, "ts_callback": 5.0, "ts_atr_mult": 3.5,
+                     "sell_score_limit": 4.0})
+    base.update(kw)
+    return pbt.decide_sell(**base)
+
+
+def test_trailing_applies_giveback_cap():
+    """트레일링 콜백에 반납 상한(TS_MAX_GIVEBACK_RATIO)이 걸려야 한다.
+
+    실매매(engine.compute_trailing_stop)와 단일종목 백테스트는 이미 이 캡을 쓴다.
+    포트폴리오 백테스트만 순수 샹들리에로 돌면 콜백이 더 커져 청산이 늦고, 백테스트가
+    실매매보다 낙관적으로 나온다 — 그 수치로 정한 파라미터의 근거가 통째로 흔들린다.
+    (실측: 캡을 빼면 3년 수익 중앙값이 +82.8%p 과대, 20회 중 18회)
+    """
+    saved = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO")
+    try:
+        # ATR 동적 콜백이 크게 나오는 상황: atr=6 → 6*3.5/120*100 = 17.5%
+        # 최고수익 +20%, 현재 -8.3% 하락. 캡(0.35)이면 상한 = 20*0.35/(100+20) = 5.83%
+        config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = 0.35
+        capped, reason = _decide(price=110.0, high=120.0, avg=100.0, atr=6.0)
+        assert capped and reason == "트레일링스탑", "반납 상한이 걸리면 이 하락에서 청산돼야 한다"
+
+        config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = 0.0
+        uncapped, _ = _decide(price=110.0, high=120.0, avg=100.0, atr=6.0)
+        assert not uncapped, "대조군 — 캡이 없으면 콜백 17.5%라 아직 버틴다"
+    finally:
+        config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = saved
+
+
+def test_trailing_keeps_callback_floor():
+    """ATR이 작아도 기본 콜백(5%) 아래로는 내려가지 않는다 — 조기 털림 방지."""
+    saved = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO")
+    try:
+        config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = 0.35
+        # 최고 +20%에서 3% 하락  (하한이 없으면 캡 5.83%보다 낮은 콜백이 나와 털린다) — 캡 산식만 보면 5.83%지만 하한 5%도 못 넘었다.
+        sell, _ = _decide(price=116.4, high=120.0, avg=100.0, atr=0.01)
+        assert not sell, "하락 3%에 청산되면 정상 눌림에서 털린다"
+    finally:
+        config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = saved
+
+
+def test_trailing_not_armed_below_activation():
+    """최고 수익이 발동 기준(10%) 미만이면 트레일링은 발동하지 않는다."""
+    sell, _ = _decide(price=100.0, high=105.0, avg=100.0, atr=6.0)
+    assert not sell
+
+
+def test_stop_loss_takes_priority_over_trailing():
+    """손절이 트레일링보다 우선한다 — 사유가 뒤바뀌면 통계가 어긋난다."""
+    sell, reason = _decide(price=92.0, high=120.0, avg=100.0, sl_rate=-7.0, atr=6.0)
+    assert sell and reason == "ATR손절"
+
+
+def test_score_sell_requires_structure_break():
+    """점수 미달만으로는 팔지 않는다 — 60일선 이탈을 동시에 요구한다."""
+    hold, _ = _decide(sell_check=1.0, price=110.0, ema60=100.0, high=110.0)
+    assert not hold, "정배열 유지 중 눌림에서 점수만 낮다고 팔면 fat-tail을 잘라낸다"
+    sell, reason = _decide(sell_check=1.0, price=95.0, ema60=100.0, high=100.0, avg=100.0)
+    assert sell and reason == "점수하락"

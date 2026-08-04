@@ -62,6 +62,67 @@ def _atr_stop_rate(atr, price, atr_mult):
     return rate
 
 
+def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
+                state, state_reason, raw_score, sell_check, ema60, atr,
+                roll_high_5=0.0, roll_high_10=0.0, cfg=None):
+    """백테스트의 청산 판정 — (sell: bool, reason: str).
+
+    [왜 함수로 빼두는가] 이 판정은 실매매의 engine.DefaultStrategy.analyze_sell 과
+    **별도 구현**이다. 두 구현이 어긋나면 백테스트 수치가 실매매를 설명하지 못하고,
+    그 수치로 정한 파라미터의 근거가 통째로 흔들린다. 호출 가능한 형태여야 두 구현을
+    같은 입력으로 나란히 돌려 대조할 수 있다(tools/audit_exit_parity.py).
+    """
+    c = cfg or {}
+    use_atr = c.get("use_atr", True)
+    use_time_stop = c.get("use_time_stop", True)
+    time_stop_days = c.get("time_stop_days", 20)
+    ts_act = c.get("ts_act", 10.0)
+    ts_callback = c.get("ts_callback", 5.0)
+    ts_atr_mult = c.get("ts_atr_mult", 3.0)
+    sell_score_limit = c.get("sell_score_limit", 4.0)
+
+    loss_rate = (price - avg) / avg * 100
+    max_profit = (high - avg) / avg * 100
+
+    sell, reason = False, ""
+    if sl_rate != 0 and loss_rate <= sl_rate:
+        sell = True
+        reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
+    elif use_time_stop and holding_days >= time_stop_days and loss_rate < 0:
+        # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
+        grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
+            roll_high_5 >= roll_high_10
+        if not grace:
+            sell, reason = True, "시간청산"
+    elif high > 0 and max_profit >= ts_act:
+        drop = (high - price) / high * 100
+        callback = ts_callback
+        if use_atr and atr and atr > 0:
+            dynamic = (atr * ts_atr_mult / high) * 100
+            # [SSOT] 반납 상한(TS_MAX_GIVEBACK_RATIO)은 engine.giveback_callback_cap이 단독
+            #  보유한다. 실매매(compute_trailing_stop)·단일종목 백테스트는 이미 이 캡을 쓰는데
+            #  포트폴리오 백테스트만 순수 샹들리에로 돌고 있었다. 캡이 없으면 콜백이 더 커져
+            #  청산이 늦고, 그만큼 백테스트가 실매매보다 낙관적으로 나온다
+            #  (실측 2026-08-04: 청산 판정 불일치의 96%가 이 한 가지 · 3년 수익 +82.8%p 과대).
+            from modules.auto_trade.engine import giveback_callback_cap
+            giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
+            if giveback_ratio > 0:
+                callback = min(max(ts_callback, dynamic),
+                               max(ts_callback, giveback_callback_cap(max_profit, giveback_ratio)))
+            else:
+                callback = max(ts_callback, dynamic)
+        if drop >= callback:
+            sell, reason = True, "트레일링스탑"
+
+    if not sell:
+        # 점수 매도는 추세 구조 훼손(주가<60일선 또는 '매도' 상태) 동시 충족 시에만
+        structure_broken = (state == "매도") or ema60 is None or price < ema60
+        if sell_check < sell_score_limit and structure_broken:
+            sell = True
+            reason = state_reason if (sell_check == 0 and raw_score > 0) else "점수하락"
+    return sell, reason
+
+
 def _weighted_sl(position, default_sl):
     """보유 lot들의 수량가중 평균 ATR 손절률. 실매매의 매수기록 가중평균과 같은 규칙."""
     total_qty = weighted = 0.0
@@ -203,32 +264,16 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             sl_rate, atr_applied, is_bep = _effective_sl(pos)
             holding_days = (parsed[day] - pos["buy_dt"]).days
 
-            sell, reason = False, ""
-            if sl_rate != 0 and loss_rate <= sl_rate:
-                sell = True
-                reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
-            elif use_time_stop and holding_days >= time_stop_days and loss_rate < 0:
-                # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
-                grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
-                    row.get("roll_high_5", 0) >= row.get("roll_high_10", 0)
-                if not grace:
-                    sell, reason = True, "시간청산"
-            elif pos["high"] > 0 and max_profit >= ts_act:
-                drop = (pos["high"] - price) / pos["high"] * 100
-                callback = ts_callback
-                atr_val = row.get("ATR", 0)
-                if use_atr and atr_val and atr_val > 0:
-                    callback = max(ts_callback, (atr_val * ts_atr_mult / pos["high"]) * 100)
-                if drop >= callback:
-                    sell, reason = True, "트레일링스탑"
-
-            if not sell:
-                # 점수 매도는 추세 구조 훼손(주가<60일선 또는 '매도' 상태) 동시 충족 시에만
-                ema60 = row.get("EMA60")
-                structure_broken = (state == "매도") or ema60 is None or price < ema60
-                if sell_check < sell_score_limit and structure_broken:
-                    sell = True
-                    reason = state_reason if (sell_check == 0 and raw_score > 0) else "점수하락"
+            sell, reason = decide_sell(
+                price=price, high=pos["high"], avg=pos["avg"], sl_rate=sl_rate,
+                atr_applied=atr_applied, is_bep=is_bep, holding_days=holding_days,
+                state=state, state_reason=state_reason, raw_score=raw_score,
+                sell_check=sell_check, ema60=row.get("EMA60"), atr=row.get("ATR", 0),
+                roll_high_5=row.get("roll_high_5", 0), roll_high_10=row.get("roll_high_10", 0),
+                cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
+                     "time_stop_days": time_stop_days, "ts_act": ts_act,
+                     "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
+                     "sell_score_limit": sell_score_limit})
 
             if sell:
                 sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price

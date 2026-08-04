@@ -89,13 +89,14 @@ def make_scale_fn(mkt_scale, dd_params, use_market=True):
 # 비교 대상
 # ---------------------------------------------------------------------------
 def variants():
-    p = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
-    cur = (int(p.get("DD_LOOKBACK_DAYS", 90)), float(p.get("DD_LEVEL_1", 5.0)),
-           float(p.get("DD_SCALE_1", 0.75)), float(p.get("DD_LEVEL_2", 10.0)),
-           float(p.get("DD_SCALE_2", 0.5)))
+    """비교 대상. **config 값을 그대로 한 행으로 쓰지 않는다** — 감사 결과에 따라 config를
+    바꾸면 다음 실행에서 그 행이 다른 설정을 가리켜, 비교하려던 후보가 조용히 사라진다
+    (2026-08-04에 실제로 겪었다: '현행'과 '약하게'가 같은 값이 되어 0.75/0.5가 누락됐다).
+    후보는 전부 명시하고, config 값은 어느 행에 해당하는지 표시만 한다.
+    """
     return [
         ("축 없음(대조군)",       None),
-        ("현행 5/10 .75/.5 L90",  cur),
+        ("구 5/10 .75/.5 L90",   (90, 5.0, 0.75, 10.0, 0.5)),
         ("얕게  3/6  .75/.5 L90", (90, 3.0, 0.75, 6.0, 0.5)),
         ("깊게  8/15 .75/.5 L90", (90, 8.0, 0.75, 15.0, 0.5)),
         ("약하게 5/10 .90/.80 L90", (90, 5.0, 0.90, 10.0, 0.80)),
@@ -173,6 +174,9 @@ def main():
     print(" " * 40, end="\r")
 
     # ---------------- 보고 ----------------
+    p = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+    print(f"\n[참고] 현재 config 값 = {p.get('DD_LEVEL_1')}/{p.get('DD_LEVEL_2')} "
+          f"{p.get('DD_SCALE_1')}/{p.get('DD_SCALE_2')} L{p.get('DD_LOOKBACK_DAYS')}")
     base = results["축 없음(대조군)"]
     print(f"\n{'=' * 92}")
     print(f"드로다운 축 감사 — {args.trials}회 × {args.sample}종목 무작위 짝비교"
