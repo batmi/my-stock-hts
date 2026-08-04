@@ -162,7 +162,7 @@ def allocate_amount(equity, cash, invest_ratio, sl_rate, atr, price):
 def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
-                  risk_scale_by_date=None):
+                  risk_scale_by_date=None, oversize_limit=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -188,6 +188,13 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     atr_mult = atr_mult if atr_mult is not None else sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0)
     if heat_cap_pct is None:
         heat_cap_pct = getattr(config, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0)
+
+    # [사이징 파리티] 1주 값이 배분액을 넘을 때 얼마까지 초과 집행을 허용하는가.
+    #  종전 백테스트는 무조건 건너뛰었는데(=1.0) 실매매는 무제한 허용이라 두 경로가
+    #  달랐다. 시드 500만·고가주에서 이 차이가 계좌 비중 3배까지 벌어진다.
+    if oversize_limit is None:
+        oversize_limit = getattr(config, "MAX_POSITION_OVERSHOOT", 1.0)
+    oversize_limit = float(oversize_limit or 1.0)
 
     pyr_max = pyramiding_max if pyramiding_max is not None else thr.get("PYRAMIDING_MAX_COUNT", 1)
     pyr_use = thr.get("PYRAMIDING_USE", True) and pyr_max > 0
@@ -224,8 +231,13 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     cash = float(initial_capital) - reserved_cash
     positions, trades, equity_curve, cash_ratios, full_slot_cash = {}, [], [], [], []
     peak, mdd, slot_usage = initial_capital, 0.0, 0
+    max_pos_weight = max_buy_weight = max_buy_risk = 0.0
+    risk_cap_breaches = 0
+    risk_per_trade_cap = getattr(config, "SYSTEM_RISK_PER_TRADE", 4.0) or float("inf")
     # [소액 시드 진단] 배분액이 1주 값에 못 미쳐 버려진 기회. 시드가 작을수록 급증한다.
     skipped_qty0, pyramid_blocked_qty0 = 0, 0
+    # 배분액을 넘겨(1주 강제) 집행한 매수 — 사이징 상한이 깨진 횟수.
+    oversized_buys = 0
 
     def _equity(day):
         return cash + reserved_cash + sum(
@@ -246,6 +258,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         equity_curve.append(_equity(day))
         if equity_curve[-1] > 0:
             cash_ratios.append(cash / equity_curve[-1] * 100)
+            # [집중도] 한 종목이 계좌에서 차지하는 최대 비중. 사이징 상한이 실제로
+            #  지켜지는지는 수익·MDD가 아니라 이 값에 먼저 드러난다.
+            for c, p in positions.items():
+                if day in rows[c]:
+                    w = p["qty"] * rows[c][day]["close"] / equity_curve[-1] * 100
+                    max_pos_weight = max(max_pos_weight, w)
         peak = max(peak, equity_curve[-1])
         if peak > 0:
             mdd = min(mdd, (equity_curve[-1] - peak) / peak * 100)
@@ -385,9 +403,29 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
                 qty = int(amount / buy_price)
                 if qty < 1:
-                    # 배분액 < 1주 값 → 매수 불가. 고가주는 소액 시드에서 아예 살 수 없다.
-                    skipped_qty0 += 1
-                    continue
+                    # 배분액 < 1주 값. 실매매는 여기서 배분액을 1주 값까지 끌어올린다
+                    #  (trader._execute_buy_orders의 '최소 주문 금액 보정'). 그 초과 허용
+                    #  배수를 oversize_limit로 재현한다 — 1.0이면 종전처럼 건너뛴다.
+                    if oversize_limit <= 1.0 or amount <= 0 or buy_price > amount * oversize_limit:
+                        skipped_qty0 += 1
+                        continue
+                    if buy_price > cash:
+                        skipped_qty0 += 1
+                        continue
+                    qty = 1
+                    oversized_buys += 1
+
+                # [진입 시점 계측] 최대 비중은 피라미딩이 지배하므로 사이징 상한이 지켜졌는지는
+                #  '진입 순간'을 봐야 드러난다. 1회 리스크가 SYSTEM_RISK_PER_TRADE를 넘는
+                #  매수 건수도 함께 센다 — 그것이 이 가드가 지키려는 바로 그 불변식이다.
+                eq_now = _equity(day) or 1
+                buy_w = qty * buy_price / eq_now * 100
+                max_buy_weight = max(max_buy_weight, buy_w)
+                if sl_rate:
+                    buy_risk = qty * buy_price * (abs(sl_rate) / 100.0) / eq_now * 100
+                    max_buy_risk = max(max_buy_risk, buy_risk)
+                    if buy_risk > risk_per_trade_cap:
+                        risk_cap_breaches += 1
 
                 cash -= qty * buy_price
                 if heat_budget is not None:
@@ -419,6 +457,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "full_slot_days": len(full_slot_cash),
         "skipped_qty0": skipped_qty0,                    # 1주도 못 사서 넘긴 진입 기회
         "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
+        "oversized_buys": oversized_buys,                # 배분액을 넘겨 집행한 매수(1주 강제)
+        "max_pos_weight": max_pos_weight,                # 한 종목의 최대 계좌 비중(%, 피라미딩 포함)
+        "max_buy_weight": max_buy_weight,                # 진입 순간의 최대 비중(%)
+        "max_buy_risk": max_buy_risk,                    # 진입 1회의 최대 리스크(계좌 대비 %)
+        "risk_cap_breaches": risk_cap_breaches,          # SYSTEM_RISK_PER_TRADE를 넘긴 매수 건수
         "equity": equity_curve,
     }
 

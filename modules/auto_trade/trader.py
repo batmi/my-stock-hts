@@ -5274,8 +5274,23 @@ class AutoTrader:
             # [안전장치] 상한가에 락되면 '현재가 + 슬리피지'가 제한폭을 넘어 거부된다.
             order_price = int(self._clamp_order_price(cand['code'], order_price))
 
-            # 최소 주문 금액 보정 (할당된 예산이 1주 가격보다 적을 때 가용 예수금 전체를 쓰는 버그 방지)
-            if invest_amt < order_price: invest_amt = order_price
+            # [사이징 상한] 배분액이 1주 값에 못 미칠 때의 처리.
+            #  종전에는 무조건 배분액을 1주 값까지 끌어올렸다(가용 예수금 전체를 쓰는 버그
+            #  방지). 그러나 그러면 기초비중·리스크 한도·변동성 타겟팅이 min 결합으로 합의한
+            #  상한이 1주 값 하나에 덮어써진다. 큰 계좌에서는 발동하지 않지만 시드 500만에서는
+            #  관심목록의 17%(고가주)가 이 경로를 타 목표의 3배까지 집행됐다.
+            #  → 초과 배수가 MAX_POSITION_OVERSHOOT 이내일 때만 1주를 허용하고, 넘으면
+            #    진입하지 않는다. 못 사는 종목이 생기는 건 시드의 한계이지 고쳐야 할 버그가
+            #    아니다 — 의도한 비중으로 담을 수 없는 종목을 억지로 담는 쪽이 위험하다.
+            if invest_amt < order_price:
+                overshoot_cap = float(getattr(config, 'MAX_POSITION_OVERSHOOT', 1.3) or 1.0)
+                if invest_amt <= 0 or order_price > invest_amt * overshoot_cap:
+                    ratio = f"{order_price / invest_amt:.1f}배" if invest_amt > 0 else "배분액 0원"
+                    self.log(f"매수 보류: {cand.get('name', '')}({cand.get('code', '')}) - "
+                             f"1주 {order_price:,}원이 배분액 {int(invest_amt):,}원의 {ratio} "
+                             f"(상한 {overshoot_cap:.1f}배). 의도한 비중으로 담을 수 없는 종목입니다.")
+                    continue
+                invest_amt = order_price
 
             # [추가] 포트폴리오 히트 캡: 보유 전체 오픈 리스크 + 신규 리스크가 한도를 넘으면 축소/보류.
             #  종목당 한도(SYSTEM_RISK_PER_TRADE)와 별개로 '동시 다발 손절' 합산 손실을 통제한다.
