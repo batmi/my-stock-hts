@@ -114,7 +114,12 @@ def test_wait_mode_entry_alert_cooldown(mock_tg):
             trader._run_loop()
 
         assert recovery_called  # 대기 모드에는 진입했지만
-        assert not mock_tg.called  # 쿨타임으로 텔레그램 알림은 생략
+        # [수정] '텔레그램 전무'로 단언하면 안 된다. 같은 주기에서 시장 필터 알림 등
+        #  무관한 알림이 정상적으로 나가면 쿨타임과 상관없이 실패한다(오탐).
+        #  검증 대상은 '대기 모드 진입 알림'이 생략됐는가 하나다.
+        wait_alerts = [c for c in mock_tg.call_args_list
+                       if "시스템 긴급 대기" in str(c)]
+        assert not wait_alerts, "쿨타임 내인데 대기 모드 진입 알림이 다시 발송됐다"
         assert trader._wait_alert_sent is False
     finally:
         trader.consecutive_errors = 0

@@ -90,6 +90,9 @@ class AutoTrader:
             cls._instance.trade_records = []
             cls._instance.start_time = None
             cls._instance.consecutive_errors = 0
+            # [안전장치] 직전 주기의 보유 종목 수. 잔고가 갑자기 0건이 되면
+            #  한 주기 재확인 후에만 수용한다 (_run_loop 참조).
+            cls._instance.last_holdings_count = 0
             # 운영 관제용 수명주기 정보. /health는 외부 API를 추가 호출하지 않고
             # 이 값을 읽어 현재 루프의 생존성·최근 장애를 보여준다.
             cls._instance.last_cycle_at = None
@@ -3108,7 +3111,27 @@ class AutoTrader:
                         # 계좌 상태를 모르는 상태에서 매매를 진행하는 것은 위험함
                         if holdings is None:
                             raise Exception("잔고 조회 실패 (API 응답 없음)")
-                        
+
+                        # [안전장치] '빈 잔고'는 조회 실패와 구분되지 않는다.
+                        #  rt_cd='0' + output1=[] 는 정상적인 '보유 없음'이기도 하지만, 토스가
+                        #  items를 비워 응답하거나 페이징이 어긋나면 같은 모양이 된다. 이때
+                        #  len(holding_codes)==0 이 되어 매수 슬롯이 전부 열리므로, 실제로는
+                        #  보유 중인데 SYSTEM_MAX_HOLDINGS 만큼 추가 매수가 나갈 수 있다.
+                        #  → 직전 주기에 보유가 있었는데 0건이 되면 이번 주기 매수를 보류하고
+                        #    다음 조회에서 다시 0건일 때만 진짜 청산으로 수용한다(1주기 지연).
+                        #  매도는 막지 않는다. 보유가 없으면 어차피 할 일이 없고, 실재한다면
+                        #  다음 주기에 다시 잡혀 손절 판정이 늦어질 이유가 없다.
+                        #  재확인은 last_holdings_count 만으로 성립한다. 보류한 주기에 이 값이
+                        #  0으로 내려가므로, 다음 주기가 또 0건이면 조건이 성립하지 않아 통과한다.
+                        balance_unconfirmed = False
+                        if not holdings and self.last_holdings_count > 0:
+                            balance_unconfirmed = True
+                            self.log(f"[잔고 확인] 보유 {self.last_holdings_count}건 → 0건. "
+                                     f"조회 이상 가능성으로 이번 주기 매수를 보류하고 재확인합니다.")
+                            logger.warning(f"[잔고 확인] 보유 종목이 {self.last_holdings_count}건에서 "
+                                           f"0건으로 바뀌어 매수를 1주기 보류")
+                        self.last_holdings_count = len(holdings)
+
                         # 2. 예수금 조회
                         # [최적화] 모의투자는 잔고 조회 결과(summary)에 예수금이 포함되어 있어 별도 호출 불필요
                         deposit_res = None
@@ -3141,8 +3164,9 @@ class AutoTrader:
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
                         # 1. 매도 조건 점검 (리스크 관리)
                         self._check_sell_conditions(holdings, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
-                        # 2. 매수 조건 점검
-                        self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
+                        # 2. 매수 조건 점검 ([안전장치] 잔고 0건 재확인 대기 중에는 건너뛴다)
+                        if not balance_unconfirmed:
+                            self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
 
