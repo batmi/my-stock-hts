@@ -112,6 +112,42 @@ def _current_price(code, fallback=0.0):
     return float(fallback or 0.0)
 
 
+# 마지막으로 조회에 성공한 현재가 {code: price}. 조회 실패 시 평단으로 되돌아가면
+# 하락분이 장부에서 사라져 자산곡선·MDD가 실제보다 좋아 보이므로, 직전 정상가를 쓴다.
+_last_prices = {}
+
+
+def reset_price_cache():
+    """테스트·계좌 전환용 — 마지막 정상가 캐시를 비운다."""
+    with _lock:
+        _last_prices.clear()
+
+
+def _price_with_status(code, cost=0.0):
+    """(가격, stale여부)를 돌려준다. stale이면 **매매 판정에 쓰면 안 되는 값**이다.
+
+    조회에 실패했을 때 평단으로 폴백하면 prpr == pchs_avg_pric 이 되어 수익률이
+    정확히 0.00%로 계산된다. 트레이더의 방어선은 `current_price <= 0` 하나뿐이라
+    이 값이 그대로 통과하고, 실제로는 크게 하락한 포지션이 '본전에서 쉬는 정상
+    포지션'으로 위장된다 — 손절도 트레일링도 발동하지 않고 로그에도 남지 않는다.
+    토스 401·레이트리밋 같은 일시적 실패는 실제로 관측된다.
+
+    폴백 순서: 직전 정상가 → 평단(직전 정상가가 없을 때만). 어느 쪽이든 stale로 표시해
+    판정에서 배제하되, 평가금이 0으로 무너지지는 않게 한다(자산 스냅샷 보존).
+    """
+    price = _current_price(code)
+    if price > 0:
+        with _lock:
+            _last_prices[code] = price
+        return price, False
+
+    with _lock:
+        last = _last_prices.get(code)
+    if last and last > 0:
+        return float(last), True
+    return float(cost or 0.0), True
+
+
 # ==========================================================
 # api 가로채기 대상 — KIS 응답과 같은 스키마로 반환한다
 # ==========================================================
@@ -122,7 +158,7 @@ def get_domestic_balance():
         cash = get_cash()
         output1, total_eval, total_pchs = [], 0.0, 0.0
         for p in positions:
-            price = _current_price(p['code'], p['avg_price'])
+            price, price_stale = _price_with_status(p['code'], p['avg_price'])
             evlu = price * p['qty']
             pchs = p['avg_price'] * p['qty']
             pfls = evlu - pchs
@@ -141,6 +177,8 @@ def get_domestic_balance():
                 'evlu_pfls_rt': f"{(pfls / pchs * 100) if pchs else 0:.2f}",
                 'fltt_rt': "0.00",
                 '_paper': True,
+                # 시세 조회 실패로 폴백한 값. 트레이더는 이 행을 '판정 불가'로 다룬다.
+                '_price_stale': price_stale,
             })
         output2 = [{
             'dnca_tot_amt': str(int(cash)),

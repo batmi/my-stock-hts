@@ -32,7 +32,8 @@ import re # [추가] 정규식 모듈
 import pandas as pd
 
 from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager,
-                                       UNMANAGED_BAD_PRICE, UNMANAGED_ETF, UNMANAGED_RESTRICTED)
+                                       UNMANAGED_BAD_PRICE, UNMANAGED_ETF, UNMANAGED_RESTRICTED,
+                                       UNMANAGED_STALE_PRICE)
 from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
@@ -3933,7 +3934,19 @@ class AutoTrader:
                 self._alert_unmanaged_stop(code, name, item, UNMANAGED_BAD_PRICE,
                                            buy_trades_map.get(code))
                 return
-            
+
+            # [안전장치] 시세 조회에 실패해 폴백한 값(_price_stale)은 판정 근거가 될 수 없다.
+            #  관찰 모드는 실패 시 직전 정상가로 폴백하는데, 그 값으로 손절을 판정하면
+            #  실제로는 이미 손절선을 넘겼는데도 옛 가격으로 '아직 괜찮다'는 답이 나온다.
+            #  실계좌(KIS)는 조회 실패 시 잔고 자체가 None이 되어 주기가 통째로 멈추므로,
+            #  같은 취급(판정 보류 + 경보)이 실거래 동작과도 일치한다.
+            if item.get('_price_stale'):
+                self.set_stock_state(code, None)
+                self.log(f"[분석스킵] {name}({code}): {UNMANAGED_STALE_PRICE}")
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_STALE_PRICE,
+                                           buy_trades_map.get(code))
+                return
+
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)

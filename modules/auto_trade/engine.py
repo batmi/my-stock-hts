@@ -54,6 +54,7 @@ def _pkg():
 UNMANAGED_RESTRICTED = "트레이딩 제한"
 UNMANAGED_ETF = "ETF 제외 설정"
 UNMANAGED_BAD_PRICE = "현재가 이상(판정 불가)"
+UNMANAGED_STALE_PRICE = "현재가 조회 실패(판정 불가)"
 UNMANAGED_OVERSEAS = "해외 미지원"
 
 
