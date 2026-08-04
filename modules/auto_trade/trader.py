@@ -49,6 +49,9 @@ DISK_FREE_WARN_MB = 200.0
 #  같은 DB 쓰기 실패를 다시 알리기까지의 간격(초). 디스크가 차면 매 주기 실패하므로
 #  억제하지 않으면 알림이 도배되어 정작 중요한 경보가 묻힌다.
 DB_WRITE_FAIL_ALERT_COOLDOWN = 1800.0
+#  계좌 차단기(일일 손실 한도) 점검이 이만큼 연속 실패하면 알린다. 한 번은 일시적
+#  데이터 결손일 수 있지만, 연속 실패는 '차단기가 꺼져 있다'는 뜻이다.
+CIRCUIT_BREAKER_ALERT_FAILS = 3
 
 
 def _pkg():
@@ -157,6 +160,10 @@ class AutoTrader:
             cls._instance.pending_restore_ok = True
             # [안전장치] 계좌 단위 자동매매 배타 잠금(같은 계좌 이중 실행 방지). start에서 획득.
             cls._instance.instance_lock = None
+            # [안전장치] 계좌 차단기(일일 손실 한도) 마지막 정상 수행 시각·연속 실패 횟수.
+            #  차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
+            cls._instance.circuit_breaker_ran_at = 0.0
+            cls._instance.circuit_breaker_fails = 0
 
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
@@ -1511,6 +1518,7 @@ class AutoTrader:
             f"• 시세 연결: {feed_text}",
             f"• 알림 발신: {self._health_telegram_text()}",
             f"• 저장 상태: {self._health_storage_text()}",
+            f"• 계좌 차단기: {self._health_circuit_breaker_text()}",
             "• 리스크: " + " · ".join(risk_parts),
             f"• 시스템 자원: {resource_text}",
         ]
@@ -1541,6 +1549,20 @@ class AutoTrader:
                 text += f" ({h['last_error'][:60]})"
         if h['lost']:
             text += f" · 미전달 {len(h['lost'])}건(최근: {h['lost'][-1][0]} {h['lost'][-1][1][:40]})"
+        return text
+
+    def _health_circuit_breaker_text(self):
+        """일일 손실 한도 감시가 살아 있는가. '조용함'이 '정상'과 구분되어야 한다."""
+        limit = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
+        if limit <= 0:
+            return "미사용 (SYSTEM_DAILY_LOSS_LIMIT=0)"
+        fails = getattr(self, 'circuit_breaker_fails', 0)
+        ran = getattr(self, 'circuit_breaker_ran_at', 0.0)
+        text = f"한도 -{limit}% · 최근 점검 {self._health_time(ran) if ran else '없음'}"
+        if getattr(self, 'buy_halted', False):
+            text += f" · [bold yellow]방어 모드 작동 중({self.buy_halt_reason or ''})[/bold yellow]"
+        if fails:
+            text += f" · [bold red]연속 실패 {fails}회 — 한도가 감시되지 않는다[/bold red]"
         return text
 
     def _health_storage_text(self):
@@ -3523,6 +3545,35 @@ class AutoTrader:
                 self.log(f"[장애 대기] 점검 중 오류: {e}")
 
 
+    def _run_account_circuit_breaker(self, current_total):
+        """계좌 차단기 — 일일 손실 한도 점검과 기준 평가자산 갱신.
+
+        [왜 따로 떼는가] 이 호출은 표시·로깅과 같은 try 블록에 있으면 안 된다. 감싸는
+        핸들러가 `except Exception: pass` 라서, 손익 표시나 입출금 감지가 던지는 순간
+        차단기가 **조용히** 건너뛰어진다. 게다가 그런 예외는 손실이 큰 날에 더 잘 난다
+        (다룰 값이 많아지므로) — 정확히 차단기가 필요한 날에 꺼지는 구조였다.
+
+        여기서도 예외를 잡되 **삼키지 않는다**. 실패를 세어 상태창에 드러내고, 반복되면
+        알린다. 차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
+        """
+        try:
+            # 비정상 급감(API 누락 의심) 데이터는 기준자산에 반영하지 않는다.
+            if current_total > 0 and not (self.initial_asset > 0
+                                          and current_total < self.initial_asset * 0.5):
+                self.current_total_asset = current_total
+            self.risk_manager.check_loss_limit(current_total)
+            self.circuit_breaker_ran_at = time.time()
+            self.circuit_breaker_fails = 0
+        except Exception as e:
+            self.circuit_breaker_fails = getattr(self, 'circuit_breaker_fails', 0) + 1
+            logger.error(f"[계좌 차단기] 일일 손실 한도 점검 실패({self.circuit_breaker_fails}회): {e}")
+            self.log(f"[계좌 차단기] 점검 실패 — 일일 손실 한도가 감시되지 않고 있습니다: {e}")
+            if self.circuit_breaker_fails == CIRCUIT_BREAKER_ALERT_FAILS:
+                api.send_telegram_message(
+                    f"⚠️ [계좌 차단기 이상] 일일 손실 한도 점검이 {self.circuit_breaker_fails}회 "
+                    f"연속 실패했습니다.\n손실이 한도를 넘어도 신규 매수가 차단되지 않습니다.\n"
+                    f"오류: {e}")
+
     def _monitor_account_status(self, holdings, summary, deposit_res):
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
         try:
@@ -3676,6 +3727,14 @@ class AutoTrader:
                                 db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
                             except Exception: pass
 
+                        # [안전장치] 계좌 차단기(일일 손실 한도)를 **표시 코드보다 먼저** 돌린다.
+                        #  종전에는 이 함수 맨 끝(265줄 아래)에 있었고 함수 전체가
+                        #  `except Exception: pass`로 묶여 있었다. 그래서 그 사이의 손익 표시·
+                        #  입출금 감지·문자열 포맷 중 **어느 하나라도 던지면 차단기가 조용히
+                        #  건너뛰어졌다** — 손실이 큰 날일수록 그 코드가 다룰 값이 많아진다.
+                        #  기준자산이 정해진 직후, 표시와 무관한 이 자리가 옳다.
+                        self._run_account_circuit_breaker(current_total)
+
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
                         realized_profit = 0
@@ -3785,12 +3844,8 @@ class AutoTrader:
                         self.log(f"[증권 자산 현황] 증권 매입 금액: {tot_pchs:,}원 | 증권 평가 금액: {total_eval:,}원 | 증권 평가 손익: {total_profit:+,}원 ({profit_rate:+.2f}%) | 주문 가능 금액: {order_possible:,}원")
                         self.log(f"[오늘 자산 현황] 오늘 시작 자산: {self.initial_asset:,}원 | 오늘 현재 자산: {current_total:,}원 | 오늘 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%) | 오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)")
 
-                        # [리스크 스케일링] 최근 평가자산 갱신 (히트 캡 기준자산·드로다운 산출용)
-                        # check_loss_limit과 동일하게 비정상 급감(API 누락 의심) 데이터는 반영하지 않는다.
-                        if current_total > 0 and not (self.initial_asset > 0 and current_total < self.initial_asset * 0.5):
-                            self.current_total_asset = current_total
-
-                        self.risk_manager.check_loss_limit(current_total)
+                        # (계좌 차단기·평가자산 갱신은 위 _run_account_circuit_breaker에서
+                        #  이미 수행했다 — 표시 코드가 던져도 건너뛰지 않도록 앞으로 옮겼다)
                     else:
                         self.log(f"   총 평가금액: {total_eval:,}원  |  총 평가손익: {total_profit:+,}원")
                     
