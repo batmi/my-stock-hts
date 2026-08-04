@@ -304,7 +304,22 @@ class DBManager:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
-                
+
+                # [추가] 권리 조정 감시 기준점.
+                #  예약 주문이 걸린 **미보유** 종목은 잔고가 없어 평단 비교(engine.detect_
+                #  corporate_action)를 쓸 수 없다. 대신 '우리가 기록해 둔 과거 종가'와
+                #  '오늘 조회한 같은 날짜의 종가'를 맞대 본다. 권리 조정이 나면 거래소가
+                #  과거 시세를 소급 수정하므로 그 차이가 곧 조정 배율이다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS corp_action_refs (
+                        code TEXT PRIMARY KEY,
+                        ref_date TEXT,
+                        ref_close REAL DEFAULT 0.0,
+                        source TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [info[1] for info in cursor.fetchall()]
@@ -1357,6 +1372,44 @@ class DBManager:
                 except Exception:
                     break
             return []
+
+    def get_corp_action_ref(self, code):
+        """(기준일, 기준종가, 출처). 기록이 없으면 ("", 0.0, "")."""
+        with self.lock:
+            try:
+                cur = self._get_conn().cursor()
+                cur.execute("SELECT ref_date, ref_close, source FROM corp_action_refs WHERE code=?",
+                            (code,))
+                row = cur.fetchone()
+                if not row:
+                    return "", 0.0, ""
+                return row['ref_date'] or "", float(row['ref_close'] or 0.0), row['source'] or ""
+            except Exception:
+                return "", 0.0, ""
+
+    def save_corp_action_ref(self, code, ref_date, ref_close, source):
+        """권리 조정 감시 기준점을 갱신한다(무조건 덮어쓴다)."""
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    conn.execute(
+                        "INSERT INTO corp_action_refs (code, ref_date, ref_close, source, updated_at) "
+                        "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
+                        "ON CONFLICT(code) DO UPDATE SET ref_date=excluded.ref_date, "
+                        "ref_close=excluded.ref_close, source=excluded.source, "
+                        "updated_at=CURRENT_TIMESTAMP",
+                        (code, ref_date, float(ref_close), source))
+                    conn.commit()
+                    return True
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+            return False
 
     def cancel_reserved_sell_orders(self, cano, acnt, code):
         """특정 계좌/종목의 대기 중인 예약 매도 주문을 일괄 취소 처리 (전량 매도 시)"""

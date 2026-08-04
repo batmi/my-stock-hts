@@ -139,6 +139,33 @@ def detect_corporate_action(ref_avg, ref_pchs_amt, cur_avg, cur_pchs_amt):
                    f"매입금액 {ref_pchs_amt:,.0f}원 유지)")
 
 
+def detect_retro_price_adjustment(ref_close, now_close_for_ref_date):
+    """같은 **과거 날짜**의 종가가 달라졌는가 — 미보유 종목의 권리 조정 판정.
+
+    [왜 별도인가] detect_corporate_action은 잔고의 평단·매입금액을 본다. 예약 주문만
+    걸어 둔 종목은 보유분이 없어 그 근거가 통째로 없다. 대신 거래소가 권리 조정 시
+    **과거 시세를 소급 수정**하는 성질을 쓴다. 어제 종가로 500,000원을 적어 뒀는데 오늘
+    같은 날짜를 조회하니 100,000원이면, 그 사이에 5:1 조정이 있었다는 뜻이다.
+
+    [왜 가격 점프가 아닌가] '전일 대비 ±30% 초과'로 잡는 방법도 있으나 두 가지가 걸린다.
+      · 거래소는 권리락일에 기준가를 미리 조정하므로 전일대비는 정상 범위로 보인다.
+      · 30% 무상증자는 -23% — 가격제한폭 안이라 정상 등락과 구분되지 않는다.
+    소급 수정 비교는 조정 폭과 무관하게 정확하다.
+
+    반환: (배율, 사유). 조정이 없으면 (1.0, ""). 배율은 옛 가격에 곱하면 새 가격이 된다.
+    """
+    if ref_close <= 0 or now_close_for_ref_date <= 0:
+        return 1.0, ""      # 기준이 없다(최초 관측) — 이번엔 기록만 한다
+
+    ratio = now_close_for_ref_date / ref_close
+    if abs(ratio - 1.0) <= CORP_ACTION_TOLERANCE:
+        return 1.0, ""
+
+    kind = "액면병합" if ratio > 1 else "액면분할·무상증자"
+    return ratio, (f"{kind} 추정 (과거 종가가 {ref_close:,.0f} → "
+                   f"{now_close_for_ref_date:,.0f}원으로 소급 수정, 배율 {ratio:.4g})")
+
+
 def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thresholds=None,
                           ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None):
     """샹들리에 트레일링 스탑 발동선을 계산한다. (순수 함수 · 부수효과 없음)

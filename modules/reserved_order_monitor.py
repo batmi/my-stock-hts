@@ -12,6 +12,13 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
+def _pkg_engine():
+    """auto_trade.engine 지연 임포트 — 모듈 최상단에서 받으면 순환 임포트가 된다."""
+    from modules.auto_trade import engine
+    return engine
+
+
 class ReservedOrderMonitor:
     """백그라운드 예약 주문(Stop, Limit, Breakout, Time) 감시 스레드"""
     _instance = None
@@ -22,6 +29,8 @@ class ReservedOrderMonitor:
             cls._instance.is_running = False
             cls._instance.monitor_thread = None
             cls._instance.chart_cache = {} # {code: {'df': df, 'time': timestamp}}
+            # [권리 조정 감시] 종목별 마지막 점검 시각 {code: timestamp}
+            cls._instance.corp_checked_at = {}
         return cls._instance
 
     def start(self):
@@ -42,6 +51,99 @@ class ReservedOrderMonitor:
                 logger.error(f"[Reserve] 예약 주문 감시 에러: {e}")
             time.sleep(10.0)  # 스윙 투자에 적합한 서버 최적화 주기 (10초)
             
+    # 종목별 권리 조정 점검 주기(초). 조정은 하루 한 번 있을까 말까 한 사건이라
+    #  자주 볼 이유가 없고, 점검마다 일봉 조회가 한 번 나간다.
+    CORP_ACTION_CHECK_INTERVAL = 3600.0
+
+    @staticmethod
+    def _daily_source_tag():
+        """일봉 출처 꼬리표. 출처가 바뀌면 수정주가 반영 방식이 달라 비교가 성립하지 않는다.
+
+        (토스·관찰 모드는 국내 일봉을 pykrx/FDR로, 그 외는 KIS로 받는다)
+        """
+        return "toss" if getattr(config.session, 'is_toss', False) else "kis"
+
+    def _guard_corporate_actions(self, pending_orders):
+        """예약 주문이 걸린 종목의 권리 조정을 감지해 주문을 취소하고 알린다.
+
+        [왜 따로 필요한가] 보유 종목의 권리 조정은 잔고의 평단·매입금액 변화로 잡는다
+        (auto_trade.engine.detect_corporate_action). 예약 주문만 걸어 둔 종목은 보유분이
+        없어 그 근거가 없다. 대신 거래소가 권리 조정 시 **과거 시세를 소급 수정**하는
+        성질을 쓴다 — 어제 종가로 적어 둔 값과 오늘 조회한 같은 날짜의 값을 맞대 본다.
+
+        [처리 방침] 환산하지 않고 취소한다. 목표가는 운영자가 조정 전 가격을 보고 정한
+        값이라 기계적으로 환산해도 의도한 자리가 아니다. 취소하고 알린 뒤, 다시 거는
+        것은 운영자의 판단에 맡긴다.
+
+        [한계] 국내 종목만 본다. 해외는 일봉 수정주가 반영 방식이 달라 같은 비교가
+        성립하지 않는다(미반영 시 오탐이 난다).
+        """
+        now_ts = time.time()
+        today = datetime.now().strftime("%Y%m%d")
+        source = self._daily_source_tag()
+
+        codes = {o['code'] for o in pending_orders if o.get('market') != 'US' and o.get('code')}
+        for code in sorted(codes):
+            if now_ts - self.corp_checked_at.get(code, 0.0) < self.CORP_ACTION_CHECK_INTERVAL:
+                continue
+            self.corp_checked_at[code] = now_ts
+            try:
+                self._check_one_corp_action(code, today, source)
+            except Exception as e:
+                logger.debug(f"[Reserve] 권리 조정 판정 실패({code}): {e}")
+            time.sleep(0.3)     # 일봉 조회가 몰리지 않게
+
+    def _check_one_corp_action(self, code, today, source):
+        df = api.get_chart_data(code, is_overseas=False)
+        if df is None or df.empty or 'date' not in df.columns or 'close' not in df.columns:
+            return
+        dates = df['date'].astype(str)
+
+        # 기준은 **완료된** 봉이어야 한다. 오늘 봉은 장중에 계속 변하므로 쓸 수 없다.
+        done = df[dates < today]
+        if done.empty:
+            return
+        new_date = str(done['date'].iloc[-1])
+        new_close = float(done['close'].iloc[-1])
+
+        old_date, old_close, old_source = db_manager.db.get_corp_action_ref(code)
+
+        # 출처가 바뀌었거나 기준이 없으면 판정하지 않는다 — 기록만 새로 잡는다.
+        #  (수정주가 반영이 다른 소스끼리 비교하면 조정이 없어도 어긋난다)
+        if old_date and old_source == source:
+            match = df[dates == str(old_date)]
+            if not match.empty:
+                ratio, reason = _pkg_engine().detect_retro_price_adjustment(
+                    old_close, float(match['close'].iloc[-1]))
+                if ratio != 1.0:
+                    self._cancel_on_corp_action(code, ratio, reason)
+
+        db_manager.db.save_corp_action_ref(code, new_date, new_close, source)
+
+    def _cancel_on_corp_action(self, code, ratio, reason):
+        canceled = db_manager.db.cancel_reserved_orders_on_corp_action(
+            code, f"권리 조정 감지({reason})로 자동 취소")
+        if not canceled:
+            return
+        name = canceled[0].get('name') or code
+        lines = [f"🔀 [권리 조정] {name}({code})", reason]
+        for o in canceled:
+            lines.append(f"· 예약 {'매수' if o.get('order_type') == 'buy' else '매도'} 취소: "
+                         f"{o.get('condition_type')} "
+                         f"{float(o.get('target_price') or 0):,.0f} / {o.get('qty')}주")
+            db_manager.db.insert_trade(
+                f"{'매수' if o.get('order_type') == 'buy' else '매도'}취소(예약)",
+                code, name, o.get('qty'), o.get('order_price', 0),
+                f"RES_CORP_{o.get('id')}", order_status="취소",
+                reason=f"권리 조정({reason})으로 예약 자동 취소")
+        lines.append("→ 조정 후 가격 기준으로 다시 설정해 주세요.")
+
+        logger.warning(f"[Reserve] 권리 조정 {code} ratio={ratio:.4f} 취소 {len(canceled)}건")
+        try:
+            api.send_telegram_message("\n".join(lines))
+        except Exception:
+            pass
+
     def _check_orders(self):
         try:
             pending_orders = db_manager.db.get_pending_reserved_orders()
@@ -49,7 +151,17 @@ class ReservedOrderMonitor:
             return # DB 미구현 상태이면 스킵
             
         if not pending_orders: return
-            
+
+        # [안전장치] 권리 조정으로 목표가가 무의미해진 예약 주문을 먼저 걷어낸다.
+        #  아래 발동 판정보다 앞서야 한다 — 조정 직후의 목표가는 이미 도달한 것처럼
+        #  보여서, 순서가 바뀌면 취소하기 전에 오발동이 먼저 나간다.
+        try:
+            self._guard_corporate_actions(pending_orders)
+            pending_orders = db_manager.db.get_pending_reserved_orders()
+            if not pending_orders: return
+        except Exception as e:
+            logger.error(f"[Reserve] 권리 조정 점검 실패: {e}")
+
         now = datetime.now()
         now_time_str_short = now.strftime("%H%M")
         now_time_str_full = now.strftime("%Y%m%d%H%M")
