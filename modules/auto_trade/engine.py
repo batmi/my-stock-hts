@@ -94,6 +94,44 @@ def giveback_callback_cap(max_profit_rate, giveback_ratio):
     return (max_profit_rate * giveback_ratio) / (100.0 + max_profit_rate) * 100.0
 
 
+#  평단·매입금액의 '변하지 않았다'를 판정하는 허용 오차. 분할 시 단주는 현금 정산되어
+#  매입금액이 아주 조금 줄고, 평단도 소수점에서 반올림되므로 정확히 같지는 않다.
+CORP_ACTION_TOLERANCE = 0.01   # 1%
+
+
+def detect_corporate_action(ref_avg, ref_pchs_amt, cur_avg, cur_pchs_amt):
+    """액면분할·무상증자로 평단이 재조정됐는지 판정하고, 최고가에 곱할 배율을 돌려준다.
+
+    [왜 필요한가] trailing_stops.highest_price는 원시 가격이고 갱신은 단조 증가라
+    (db_manager.update_highest_price의 `WHERE excluded.highest_price > ...`) 내려갈 수 없다.
+    5:1 분할이 나면 증권사는 매입평균단가를 1/5로 조정하지만 우리 고점만 분할 전 값으로
+    남아, compute_trailing_stop이 drop_rate 80%를 보고 즉시 청산을 때린다. 백테스트는
+    수정주가를 쓰므로 이 사고를 영원히 재현하지 못한다 — 실계좌에서만 터진다.
+
+    [판정 근거] **매입금액 = 수량 × 평단** 이 보존되는가로 매수·매도와 구분한다.
+      · 분할·무상증자 : 수량↑ 평단↓ , 매입금액 그대로   → 배율 = 새 평단 / 옛 평단
+      · 매수(피라미딩·HTS 수동) : 매입금액 증가          → 보정하지 않는다
+      · 부분 매도     : 매입금액 감소, 평단 불변          → 보정하지 않는다
+    평단만 보고 판정하면 'HTS에서 비싸게 추가 매수'가 분할로 오인되어 고점이 위로
+    조정되고, 오히려 없던 청산이 발생한다. 그래서 매입금액 불변이 필수 조건이다.
+
+    반환: (배율, 사유). 보정이 필요 없으면 (1.0, "").
+    """
+    if ref_avg <= 0 or cur_avg <= 0 or ref_pchs_amt <= 0 or cur_pchs_amt <= 0:
+        return 1.0, ""      # 기준이 없다(최초 관측·이관 직후) — 이번 주기는 기록만 한다
+
+    if abs(cur_avg - ref_avg) / ref_avg <= CORP_ACTION_TOLERANCE:
+        return 1.0, ""      # 평단이 그대로면 아무 일도 없었다
+
+    if abs(cur_pchs_amt - ref_pchs_amt) / ref_pchs_amt > CORP_ACTION_TOLERANCE:
+        return 1.0, ""      # 매입금액이 움직였다 = 매수·매도 → 정상 변경
+
+    ratio = cur_avg / ref_avg
+    kind = "액면병합" if ratio > 1 else "액면분할·무상증자"
+    return ratio, (f"{kind} 추정 (평단 {ref_avg:,.0f} → {cur_avg:,.0f}원, "
+                   f"매입금액 {ref_pchs_amt:,.0f}원 유지)")
+
+
 def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thresholds=None,
                           ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None):
     """샹들리에 트레일링 스탑 발동선을 계산한다. (순수 함수 · 부수효과 없음)

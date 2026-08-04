@@ -1,0 +1,224 @@
+"""액면분할·무상증자가 트레일링 스탑을 오발동시키지 않는가.
+
+[왜 실계좌에서만 터지는가] trailing_stops.highest_price 는 원시 가격이고, 갱신은
+'더 높을 때만'인 단조 증가다(db_manager.update_highest_price). 5:1 분할이 나면 증권사는
+매입평균단가를 1/5로 조정하는데 우리 고점만 분할 전 값으로 남는다. 그러면
+compute_trailing_stop 이 고점 대비 -80%를 보고 즉시 청산을 때린다.
+
+백테스트 데이터(yfinance·pykrx)는 수정주가라 이 경로가 아예 존재하지 않는다. 즉
+**백테스트를 아무리 돌려도 이 사고는 재현되지 않는다** — 코드로만 막을 수 있다.
+
+[오탐이 더 위험한 방향] 평단이 바뀌었다는 것만으로 보정하면, HTS 에서 비싸게 추가
+매수한 경우(평단↑)에 고점이 위로 조정되어 **없던 청산이 생긴다**. 그래서 판정은
+'매입금액(= 수량 × 평단)이 보존되는가'를 필수 조건으로 둔다. 이 파일의 절반은 그
+오탐을 막는 테스트다.
+"""
+from unittest.mock import patch
+
+import pytest
+
+from modules import db_manager
+from modules.auto_trade import AutoTrader
+from modules.auto_trade.engine import compute_trailing_stop, detect_corporate_action
+
+CODE, NAME = "005930", "삼성전자"
+
+
+# ===========================================================================
+# 1. 판정 순수 함수
+# ===========================================================================
+def test_no_reference_yet_does_nothing():
+    """기준값이 없으면(최초 관측·컬럼 이관 직후) 이번 주기는 기록만 한다."""
+    assert detect_corporate_action(0.0, 0.0, 100_000, 1_000_000) == (1.0, "")
+
+
+def test_unchanged_position_does_nothing():
+    assert detect_corporate_action(100_000, 1_000_000, 100_000, 1_000_000) == (1.0, "")
+
+
+def test_five_to_one_split_is_detected():
+    """5:1 분할 — 수량 10주→50주, 평단 100,000→20,000, 매입금액 그대로."""
+    ratio, reason = detect_corporate_action(100_000, 1_000_000, 20_000, 1_000_000)
+    assert ratio == pytest.approx(0.2)
+    assert "분할" in reason
+
+
+def test_bonus_issue_is_detected():
+    """무상증자 100% — 권리락으로 평단이 절반이 된다."""
+    ratio, _ = detect_corporate_action(100_000, 1_000_000, 50_000, 1_000_000)
+    assert ratio == pytest.approx(0.5)
+
+
+def test_reverse_split_is_detected():
+    """액면병합 1:5 — 평단이 5배가 된다. 방향만 반대일 뿐 같은 문제다."""
+    ratio, reason = detect_corporate_action(20_000, 1_000_000, 100_000, 1_000_000)
+    assert ratio == pytest.approx(5.0)
+    assert "병합" in reason
+
+
+def test_odd_lot_cash_settlement_still_detected():
+    """분할 단주는 현금 정산되어 매입금액이 아주 조금 준다. 허용 오차 안이면 잡아야 한다."""
+    ratio, _ = detect_corporate_action(100_000, 1_000_000, 20_000, 995_000)   # -0.5%
+    assert ratio == pytest.approx(0.2)
+
+
+# --- 오탐 방지 (이쪽이 더 위험하다) ---------------------------------------
+
+def test_pyramiding_buy_is_not_a_split():
+    """피라미딩 증액 — 평단도 매입금액도 오른다. 보정하면 안 된다."""
+    assert detect_corporate_action(100_000, 1_000_000, 110_000, 1_650_000)[0] == 1.0
+
+
+def test_manual_high_priced_buy_is_not_a_split():
+    """HTS 수동 추가 매수(더 비싸게) — 평단만 보고 판정하면 고점이 위로 조정돼
+    '없던 청산'이 생긴다. 매입금액이 늘었으므로 매수로 판정해야 한다."""
+    ratio, _ = detect_corporate_action(100_000, 1_000_000, 120_000, 2_400_000)
+    assert ratio == 1.0, "수동 매수가 분할로 오인되면 고점이 올라가 즉시 청산된다"
+
+
+def test_partial_sell_is_not_a_split():
+    """부분 매도 — 평단은 그대로고 매입금액만 준다."""
+    assert detect_corporate_action(100_000, 1_000_000, 100_000, 400_000)[0] == 1.0
+
+
+# ===========================================================================
+# 2. 실제로 강제 청산을 막는가 (이 수정의 존재 이유)
+# ===========================================================================
+def _ts(highest, buy, current):
+    """ATR 동적 콜백을 배제하고 기본 콜백만으로 판정한다(재현성 확보)."""
+    return compute_trailing_stop(highest, buy, current, ind=None,
+                                 ts_activation=10.0, ts_callback=5.0, use_atr_stop=False)
+
+
+def test_split_without_fix_forces_liquidation():
+    """[회귀 근거] 보정이 없으면 분할 다음 주기에 반드시 청산된다."""
+    #  분할 전: 평단 90,000 · 고점 105,000 · 현재가 100,000 → 아직 청산 아님
+    assert _ts(105_000, 90_000, 100_000)['triggered'] is False
+    #  5:1 분할 후: 평단·현재가만 1/5이 되고 고점은 그대로 남는다
+    stale = _ts(105_000, 18_000, 20_000)
+    assert stale['triggered'] is True, "이 테스트가 실패하면 사고 시나리오 자체가 바뀐 것이다"
+    assert stale['drop_rate'] > 75
+
+
+def test_split_with_fix_keeps_position():
+    """고점을 같은 배율로 보정하면 분할 전과 같은 판정이 나온다."""
+    fixed = _ts(105_000 * 0.2, 18_000, 20_000)
+    assert fixed['triggered'] is False
+    assert fixed['drop_rate'] == pytest.approx(_ts(105_000, 90_000, 100_000)['drop_rate'])
+
+
+# ===========================================================================
+# 3. 트레이더 통합 — DB 최고가가 실제로 내려가는가
+# ===========================================================================
+@pytest.fixture
+def trader():
+    AutoTrader._instance = None
+    t = AutoTrader()
+    db_manager.db.delete_trailing_stop(CODE)
+    yield t
+    db_manager.db.delete_trailing_stop(CODE)
+
+
+def _item(qty, avg, pchs_amt=None):
+    return {'pdno': CODE, 'hldg_qty': str(qty), 'pchs_avg_pric': str(avg),
+            'pchs_amt': str(pchs_amt if pchs_amt is not None else int(qty * avg))}
+
+
+def _apply(trader, qty, avg, highest, pchs_amt=None):
+    with patch('modules.auto_trade.api.send_telegram_message') as tg:
+        out = trader._apply_corporate_action(CODE, NAME, _item(qty, avg, pchs_amt),
+                                             float(avg), float(highest))
+    return out, tg
+
+
+def test_trader_rescales_stored_highest_on_split(trader):
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)              # 1주기: 기준값 기록만
+
+    out, tg = _apply(trader, 50, 18_000, 105_000)    # 2주기: 5:1 분할
+    assert out == pytest.approx(21_000)              # 105,000 × 0.2
+    assert db_manager.db.get_highest_price(CODE) == pytest.approx(21_000)
+    assert tg.called, "권리 조정은 사용자가 알아야 한다(수량·평단이 통째로 바뀐다)"
+    assert trader.trailing_stop_cache[CODE] == pytest.approx(21_000)
+
+
+def test_trader_ignores_normal_buy(trader):
+    """매수로 평단이 올라도 최고가는 건드리지 않는다."""
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    out, tg = _apply(trader, 15, 100_000, 105_000)   # 매입원가 90만 → 150만
+    assert out == pytest.approx(105_000)
+    assert db_manager.db.get_highest_price(CODE) == pytest.approx(105_000)
+    assert not tg.called
+
+
+def test_reference_tracks_latest_position(trader):
+    """기준값은 매 주기 최신으로 옮겨야 다음 비교가 성립한다.
+
+    옮기지 않으면 매수 다음 주기에 '평단은 바뀌었는데 매입금액은 그대로'가 되어
+    정상 매수가 뒤늦게 분할로 오인된다.
+    """
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+    _apply(trader, 15, 100_000, 105_000)             # 매수
+    out, tg = _apply(trader, 15, 100_000, 105_000)   # 그대로 유지된 다음 주기
+    assert out == pytest.approx(105_000)
+    assert not tg.called
+    assert db_manager.db.get_position_ref(CODE) == (pytest.approx(100_000),
+                                                    pytest.approx(1_500_000))
+
+
+def test_missing_pchs_amt_falls_back_to_qty_times_avg(trader):
+    """실전 잔고·토스 어댑터는 pchs_amt를 0으로 준다. 복원하지 못하면 판정이 죽는다."""
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000, pchs_amt=0)
+    out, tg = _apply(trader, 50, 18_000, 105_000, pchs_amt=0)
+    assert out == pytest.approx(21_000)
+    assert tg.called
+
+
+def test_failure_does_not_block_sell_analysis(trader):
+    """보정이 실패해도 매도 분석은 계속돼야 한다 — 손절이 막히는 쪽이 더 위험하다."""
+    with patch.object(db_manager.db, 'get_position_ref', side_effect=RuntimeError("DB down")):
+        out, _tg = _apply(trader, 50, 18_000, 105_000)
+    assert out == pytest.approx(105_000)
+
+
+# ===========================================================================
+# 4. 배선 — 실제 매도 경로가 보정된 값을 쓰는가
+# ===========================================================================
+#  [왜 따로 두는가] 위 3절은 _apply_corporate_action 을 직접 부른다. 그것만 있으면
+#  _check_sell_conditions 에서 호출을 빼먹어도 전부 통과한다 — 변이 검증에서 실제로
+#  그렇게 새어나갔다(호출부 삭제 시 16/16 통과). 판정에 넘어가는 값으로 확인한다.
+def test_sell_path_feeds_corrected_highest_into_analysis(trader):
+    import pandas as pd
+
+    db_manager.db.update_highest_price(CODE, 105_000)
+    db_manager.db.update_position_ref(CODE, 90_000, 900_000)     # 분할 전 기준값
+
+    #  5:1 분할 후 잔고: 수량 ×5, 평단 ÷5, 매입금액 유지
+    holdings = [{'pdno': CODE, 'prdt_name': NAME, 'hldg_qty': '50', 'ord_psbl_qty': '50',
+                 'pchs_avg_pric': '18000', 'pchs_amt': '900000', 'prpr': '20000',
+                 'evlu_amt': '1000000', 'evlu_pfls_amt': '100000', 'evlu_pfls_rt': '11.11'}]
+
+    trader.is_running = True
+    trader.market_index_status = {}
+    trader.market_status_notified = {}
+    df = pd.DataFrame({'close': [20000], 'high': [20000], 'low': [20000],
+                       'open': [20000], 'volume': [1000]})
+    with patch('modules.auto_trade.api.send_telegram_message'), \
+         patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
+         patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=50), \
+         patch('modules.auto_trade.api.get_chart_data', return_value=df), \
+         patch('modules.auto_trade.DefaultStrategy.analyze_sell') as mock_analyze, \
+         patch.object(trader.order_manager, 'is_pending', return_value=False), \
+         patch.object(trader.order_manager, 'send_order', return_value='1'):
+        mock_analyze.return_value = {'action': 'hold', 'reason': '', 'score': 5.0,
+                                     'state': '보유', 'ind': {'rsi': 50, 'adx': 20, 'cci': 0}}
+        trader._check_sell_conditions(holdings, is_market_open=True)
+
+    assert mock_analyze.called, "매도 판정 자체가 돌지 않았다 — 하네스 전제가 깨졌다"
+    passed = mock_analyze.call_args.kwargs.get('highest_price')
+    assert passed == pytest.approx(21_000), (
+        f"매도 판정에 분할 전 고점이 그대로 넘어갔다({passed}) — 즉시 강제 청산된다")

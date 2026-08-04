@@ -180,7 +180,9 @@ class DBManager:
                     CREATE TABLE IF NOT EXISTS trailing_stops (
                         code TEXT PRIMARY KEY,
                         highest_price REAL,
-                        update_time TEXT
+                        update_time TEXT,
+                        ref_avg_price REAL DEFAULT 0.0,
+                        ref_pchs_amt REAL DEFAULT 0.0
                     )
                 ''')
                 
@@ -343,6 +345,21 @@ class DBManager:
                                 config.console.print(f"[dim green][DB] stock_strategies 테이블에 {col} 컬럼 추가 완료[/dim green]")
                         except Exception as e:
                             config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패({col}): {e}[/red]")
+
+                # [추가] trailing_stops 컬럼 확장 — 코퍼레이트 액션(액면분할·무상증자) 탐지용.
+                #  최고가는 원시 가격이라 분할이 일어나면 조정 전 값으로 남는다. 직전 주기의
+                #  매입평균단가·매입금액을 함께 들고 있어야 '평단만 바뀌고 매입금액은 그대로'인
+                #  분할을 매수·매도와 구분할 수 있다(engine.detect_corporate_action 주석 참조).
+                cursor.execute("PRAGMA table_info(trailing_stops)")
+                ts_columns = [info[1] for info in cursor.fetchall()]
+                for col in ("ref_avg_price", "ref_pchs_amt"):
+                    if col not in ts_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE trailing_stops ADD COLUMN {col} REAL DEFAULT 0.0")
+                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                                config.console.print(f"[dim green][DB] trailing_stops 테이블에 {col} 컬럼 추가 완료[/dim green]")
+                        except Exception as e:
+                            config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패({col}): {e}[/red]")
 
                 # reserved_orders 테이블 컬럼 확장 (fail_reason 추가)
                 cursor.execute("PRAGMA table_info(reserved_orders)")
@@ -875,6 +892,80 @@ class DBManager:
             row = cursor.fetchone()
             return row[0] if row else None
         except Exception: return None
+
+    def get_position_ref(self, code):
+        """코퍼레이트 액션 판정용 기준값 조회 → (평단, 매입금액). 기록이 없으면 (0.0, 0.0)."""
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT ref_avg_price, ref_pchs_amt FROM trailing_stops WHERE code = ?",
+                           (code,))
+            row = cursor.fetchone()
+            return (float(row[0] or 0.0), float(row[1] or 0.0)) if row else (0.0, 0.0)
+        except Exception:
+            return (0.0, 0.0)
+
+    def update_position_ref(self, code, avg_price, pchs_amt):
+        """코퍼레이트 액션 판정용 기준값 갱신.
+
+        최고가와 달리 **단조 조건이 없다** — 평단은 매수로 오르고 매도·분할로 내리므로
+        직전 주기 값을 그대로 덮어써야 다음 주기의 비교 기준이 된다.
+        """
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute('''
+                        INSERT INTO trailing_stops (code, highest_price, update_time,
+                                                    ref_avg_price, ref_pchs_amt)
+                        VALUES (?, 0.0, ?, ?, ?)
+                        ON CONFLICT(code) DO UPDATE SET
+                        ref_avg_price = excluded.ref_avg_price,
+                        ref_pchs_amt = excluded.ref_pchs_amt
+                    ''', (code, now_str, float(avg_price), float(pchs_amt)))
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+
+    def rescale_highest_price(self, code, ratio):
+        """분할·무상증자 비율만큼 최고가를 재조정한다.
+
+        update_highest_price는 '더 높을 때만' 반영하는 단조 갱신이라 하향이 불가능하다.
+        분할은 정확히 그 하향이 필요한 유일한 경우이므로 별도 경로를 둔다.
+        """
+        if not ratio or ratio <= 0:
+            return None
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("SELECT highest_price FROM trailing_stops WHERE code = ?", (code,))
+                    row = cursor.fetchone()
+                    if not row or not row[0]:
+                        return None
+                    new_price = float(row[0]) * float(ratio)
+                    cursor.execute(
+                        "UPDATE trailing_stops SET highest_price = ?, update_time = ? WHERE code = ?",
+                        (new_price, now_str, code))
+                    conn.commit()
+                    return new_price
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    return None
+                except Exception:
+                    return None
 
     def get_all_trailing_stops(self):
         """모든 종목의 트레일링 스탑 기준가 조회 (시스템 시작 시 캐시 로드용)"""

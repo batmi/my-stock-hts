@@ -3714,6 +3714,53 @@ class AutoTrader:
         except Exception as e:
             logger.debug(f"[손절 보호] 미체결 매수 취소 처리 실패({code}): {e}")
 
+    def _apply_corporate_action(self, code, name, item, buy_price, highest_price):
+        """[안전장치] 액면분할·무상증자를 감지해 트레일링 최고가를 같은 배율로 보정한다.
+
+        판정은 engine.detect_corporate_action이 단독 보유한다(순수 함수). 여기서는 잔고
+        한 줄에서 평단·매입금액을 꺼내 직전 주기 값과 비교하고, 결과를 DB에 반영할 뿐이다.
+
+        보정하지 않으면 5:1 분할에서 고점만 분할 전 값으로 남아 트레일링 스탑이 즉시
+        발동하고 시장가로 강제 청산된다. 백테스트 데이터는 수정주가라 이 경로를 재현하지
+        못하므로, 실계좌 투입 전에 코드로 막아둔다.
+
+        반환: 보정된 최고가(보정이 없으면 받은 값 그대로).
+        """
+        try:
+            qty = api.safe_int(item.get('hldg_qty'))
+            if qty <= 0 or buy_price <= 0:
+                return highest_price
+            # 매입금액은 실전 잔고(INQR_DVSN=01)·토스 어댑터에서 0/누락으로 오므로
+            #  같은 정의(수량 × 평단)로 복원한다 — 잔고 표시부(_print_holdings)와 동일 규칙.
+            pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
+
+            ref_avg, ref_amt = db_manager.db.get_position_ref(code)
+            ratio, reason = _pkg().detect_corporate_action(ref_avg, ref_amt, buy_price, pchs_amt)
+
+            if ratio != 1.0 and highest_price > 0:
+                new_high = db_manager.db.rescale_highest_price(code, ratio)
+                if new_high:
+                    with self._lock:
+                        self.trailing_stop_cache[code] = new_high
+                    highest_price = new_high
+                    msg = (f"🔀 [권리 조정] {name}({code})\n{reason}\n"
+                           f"트레일링 최고가를 {ratio:.4f}배로 보정했습니다 "
+                           f"(→ {new_high:,.0f}원). 보정하지 않으면 즉시 청산됩니다.")
+                    self.log(f"[권리 조정] {name}({code}) {reason} · 최고가 ×{ratio:.4f}")
+                    logger.warning(f"[권리 조정] {code} {reason} ratio={ratio:.4f} high={new_high:.0f}")
+                    try:
+                        api.send_telegram_message(msg)
+                    except Exception:
+                        pass
+
+            # 배율이 1이어도 기준값은 항상 최신으로 옮겨야 다음 주기 비교가 성립한다.
+            if (ref_avg, ref_amt) != (float(buy_price), float(pchs_amt)):
+                db_manager.db.update_position_ref(code, buy_price, pchs_amt)
+        except Exception as e:
+            # 보정 실패가 매도 분석 자체를 막아서는 안 된다(원래 값으로 계속 진행).
+            logger.debug(f"[권리 조정] 판정 실패({code}): {e}")
+        return highest_price
+
     def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None):
         """[안전장치] 자동 매도 대상에서 제외된 보유 포지션의 손절선 이탈 경보
 
@@ -3967,7 +4014,12 @@ class AutoTrader:
                     self.trailing_stop_cache[code] = cached_highest
             
             highest_price = cached_highest
-            
+
+            # [안전장치] 액면분할·무상증자로 평단이 재조정되면 최고가만 조정 전 값으로 남아
+            #  트레일링 스탑이 즉시 오발동한다(5:1 분할 → drop_rate 80% → 시장가 강제 매도).
+            #  최고가 갱신은 단조 증가라 스스로 내려오지 못하므로 여기서 같은 배율로 보정한다.
+            highest_price = self._apply_corporate_action(code, name, item, buy_price, highest_price)
+
             if current_price > buy_price:
                 if highest_price == 0.0 or current_price > highest_price:
                     db_manager.db.update_highest_price(code, current_price)
