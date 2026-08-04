@@ -523,54 +523,111 @@ def detect_recent_box(df, window=None, value_area_pct=None):
     return {'high': box_high, 'low': box_low, 'start_idx': s, 'end_idx': end - 1,
             'last': last, 'status': status}
 
-# [추세선] 스윙 탐색 좌우 폭. 5는 지속 하락 구간에서 스윙점을 거의 만들지 못한다 —
-#  새 저점이 곧바로 더 낮은 저점에 깨져 저점이 성립하지 않고, 고점도 '앞 5봉보다 높아야'
-#  하는데 하락 중엔 앞이 더 높아 성립하지 않는다. 실측(KOSPI 2026-01~08, 최근 30봉 -24.6%)에서
-#  그 구간의 스윙 고점 0개·저점 1개가 나와, 몇 달 전 점으로 만든 상승선이 계속 그려졌다.
-TREND_SWING_ORDER = 3
-# [추세선] 마지막 스윙점이 이보다 오래되면 그리지 않는다. 낡은 앵커에서 현재까지 외삽하면
-#  현재가 6,600인 종목에 11,400짜리 '상승 저항선'이 나온다(정보가 없는 선).
-TREND_MAX_ANCHOR_AGE = 10
+# [추세 채널] 레그가 이보다 짧으면 채널을 만들지 않는다. 몇 봉짜리 회귀는 기울기가
+#  잡음에 좌우돼 방향 자체가 뒤집힌다.
+# [추세 채널] 회귀에 쓸 최소 봉 수. 이보다 짧으면 기울기가 잡음에 좌우된다.
+# [추세 채널] 회귀에 쓸 최소 봉 수. 이보다 짧으면 기울기가 잡음에 좌우된다.
+TREND_MIN_LEG_BARS = 10
+# [추세 채널] (기울기 × 레그 길이) / 채널 폭. 이 값 미만이면 '채널이 설명하는 움직임보다
+#  채널이 더 넓다' = 방향성이 없다는 뜻이므로 추세선 대신 수평 박스를 그린다.
+#  실측: 급등 후 재횡보한 종목에서 이 비율이 0.25까지 떨어지며, 그때 채널은 현재가에서
+#  완전히 떨어진 선(상단 322,000 / 하단 117,000 vs 현재가 200,000)이 됐다.
+TREND_MIN_MOVE_RATIO = 1.0
+# [추세 채널] 채널 폭을 정할 때 위·아래로 잘라낼 종가 비율. 급등·급락 당일 종가 한두 개가
+#  채널을 통째로 벌리는 것을 막는다(60봉 레그 기준 각 3봉). 실측 폭 20.0% → 14.5%,
+#  종가 포함률 100% → 88.2%. 0으로 두면 최고·최저 종가에 그대로 접한다.
+TREND_BAND_TRIM = 0.05
+
+
+def _trend_anchor(hi, lo, start, n):
+    """레그 시작점 — 구간 안 최고가·최저가 중 먼저 온 쪽.
+
+    하락 레그면 최고가가 앞서고 상승 레그면 최저가가 앞선다. 방향을 따로 추정하지
+    않아도 이 순서만으로 레그와 방향이 함께 정해진다.
+    """
+    i_hi = start + int(np.argmax(hi[start:]))
+    i_lo = start + int(np.argmin(lo[start:]))
+    anchor = min(i_hi, i_lo)
+    return start if (n - anchor) < TREND_MIN_LEG_BARS else anchor
+
+
+def _trend_fit(hi, lo, cl, anchor, n):
+    """(기울기, 상단절편, 하단절편, 산포폭, 이동폭).
+
+    기울기는 고가 회귀와 저가 회귀 기울기의 평균. 절편은 그 기울기를 고정한 채
+    **종가 분포의 상·하 분위수에 접하도록 평행이동**한 값이다. 최고·최저 종가에 그대로
+    접하면 급등 당일 종가 하나가 채널을 통째로 벌리므로 양끝 TREND_BAND_TRIM을 잘라낸다.
+
+    넷째 값은 그린 두 선의 간격이 아니라 **잘라내기 전 종가 산포폭**이다. 방향성 판정은
+    '추세가 흔들림보다 큰가'를 묻는 것이므로, 분모가 그리기 방식(절사율)에 따라 흔들리면
+    안 된다. 분모를 그린 간격으로 두면 절사율만 올려도 채널·박스 판정이 바뀐다.
+    """
+    xs = np.arange(anchor, n, dtype=float)
+    slope = float((np.polyfit(xs, hi[anchor:], 1)[0] + np.polyfit(xs, lo[anchor:], 1)[0]) / 2.0)
+    detrended = cl[anchor:] - slope * xs
+    up_b = float(np.quantile(detrended, 1.0 - TREND_BAND_TRIM))
+    lo_b = float(np.quantile(detrended, TREND_BAND_TRIM))
+    spread = float(np.max(detrended) - np.min(detrended))
+    return slope, up_b, lo_b, spread, abs(slope) * (n - 1 - anchor)
 
 
 def get_trend_lines(df, order=None, period=None):
-    """최근 스윙 저점들을 연결한 지지선, 고점들을 연결한 저항선을 회귀로 산출.
-    반환: {'support': (slope, intercept, x_start), 'resistance': (...)} (없으면 키 생략).
-    라인 y값은 slope * x + intercept (x는 df 인덱스), x_start부터 차트 끝까지 그리면 된다.
+    """최근 추세 레그의 **평행 회귀 채널**(저항선·지지선). 추세가 없으면 수평 박스.
 
-    [검증 2026-08-04 / tools/audit_trend_lines.py · 22종목 400일 · 지평 10/20/30봉]
-      종전에는 그려진 선의 **43.7%가 최근 실제 방향과 반대**였다(지평 20봉 기준).
-      원인은 셋이 겹쳤다.
-        ① 하락 구간에서 스윙점이 거의 생기지 않는다(TREND_SWING_ORDER 주석 참조).
-        ② 최근 order봉은 구조적으로 스윙점이 될 수 없다(range(order, n-order)).
-        ③ TREND_PERIOD가 '기간'이라는 이름과 달리 **개수(period//20)만** 정하고 탐색
-           범위를 자르지 않아, 몇 달 전 점으로 만든 선을 현재까지 외삽했다.
-      order 3 + 기간 제한 실제 적용 + 앵커 나이 상한(10봉)으로 오도율 43.7% → 25.5%.
-      기간 제한만 걸면 -1.5%p에 그치고 지평 10봉에서는 오히려 악화되어(+3.2%p) 기각했다.
-      채택안은 지평 10·20·30봉 3개 전부에서 개선된 4개 후보 중 평균 개선폭이 가장 컸다.
+    반환: {'support': (slope, intercept, x_start), 'resistance': (...)} (없으면 빈 dict).
+    두 선은 기울기가 같고 절편만 다르다. y = slope * x + intercept (x는 df 인덱스).
+    **기울기 0이면 '추세 없음(횡보)'을 뜻한다** — 호출부는 라벨을 그렇게 표기해야 한다.
 
-    조건을 만족하는 스윙점이 2개 미만이면 **선을 그리지 않는다** — 틀린 선보다 없는 선이
-    낫다. 방향을 잘못 표기하면 하락 추세를 상승으로 오독하게 된다.
+    [산출]
+      ① 레그 시작 = 창 안 최고가·최저가 중 먼저 온 쪽(_trend_anchor).
+      ② 기울기 = 레그 구간 고가 회귀와 저가 회귀 기울기의 **평균**.
+         고가만 쓰면 위꼬리에, 저가만 쓰면 아래꼬리에 끌린다. 포락선(모든 고가를 담는
+         가장 완만한 선)은 극단 꼬리 하나에 끌려 둔해지고 신호가 늦는다
+         (실측 KOSPI: 포락선 -85 vs 회귀 -100).
+      ③ 절편 = 그 기울기를 고정한 채 **종가**의 상·하 분위수에 접하도록 평행이동.
+
+    [왜 종가 기준인가] 고가·저가에 접하게 하면 장중 꼬리(헛신호) 하나가 채널을 통째로
+    벌린다. 종가는 그날 시장 참여자의 합의 가격이라 노이즈가 걸러진다.
+
+    [왜 최고·최저가 아니라 분위수인가] 꼬리를 걸러도 급등·급락 **당일 종가**는 남는다.
+    최고·최저 종가에 그대로 접하면 그 하루가 폭을 지배해(실측 가격의 20.0%) 채널이
+    '어디서 막히고 받치는가'를 말해 주지 못한다. 위·아래 5%를 잘라내면 폭 14.5%,
+    종가 포함률 88.2% — 몇 개는 밖으로 나가되 선이 실제 등락에 붙는다.
+
+    [평행이동 자체를 뺀 안은 기각] 회귀선 자리에 그대로 두면 폭이 4.4%로 좁아지지만
+    종가의 34.0%만 담겨 경계선이 아니라 중심선이 된다.
+
+    [레그 오인 방지 — 2단 탐색] 최저가가 창의 왼쪽 끝에 붙으면 레그가 창 전체가 되어
+    급등·급락·재횡보가 한 직선에 담긴다(실측: 상단 322,000 / 하단 117,000 vs 현재가
+    200,000). 그래서 채널이 방향성 검사(TREND_MIN_MOVE_RATIO)를 통과하지 못하면
+    **창 후반부에서 앵커를 다시 찾아** 한 번 더 시도한다.
+
+    [추세 없음 = 수평 박스] 두 번 다 실패하면 방향성이 없는 것이므로, 기울기 0의
+    수평선 두 개(직전 절반 구간의 종가 최고·최저)를 돌려준다. 침묵하지 않되 '추세가
+    있다'고 거짓말하지도 않는다.
     """
     if period is None: period = config.INDICATOR_PARAMS.get("TREND_PERIOD", 60)
-    if order is None: order = TREND_SWING_ORDER
-
-    # 60일 기준 3개(기본값)의 스윙 포인트를 사용하도록 비례식 적용 (20일당 1개 꼴)
-    n_recent = max(2, period // 20)
-
-    sh, sl = get_swing_points(df, order)
     n = len(df)
-    cutoff = n - period          # [Fix] 이름대로 '기간'을 실제로 자른다
-    result = {}
-    for key, pts in (('support', sl), ('resistance', sh)):
-        pts = [p for p in pts if p[0] >= cutoff]
-        if len(pts) < 2:
+    if n < TREND_MIN_LEG_BARS:
+        return {}
+
+    period = int(period)
+    hi = np.asarray(df['high'].values, dtype=float)
+    lo = np.asarray(df['low'].values, dtype=float)
+    cl = np.asarray(df['close'].values, dtype=float)
+
+    for win in (period, max(TREND_MIN_LEG_BARS, period // 2)):
+        start = max(0, n - win)
+        anchor = _trend_anchor(hi, lo, start, n)
+        if (n - anchor) < 2:
             continue
-        recent = pts[-n_recent:]
-        if (n - 1 - recent[-1][0]) > TREND_MAX_ANCHOR_AGE:
-            continue             # 앵커가 낡았다 = 현재 흐름을 설명하지 못한다
-        xs = np.array([i for i, _ in recent], dtype=float)
-        ys = np.array([p for _, p in recent], dtype=float)
-        slope, intercept = np.polyfit(xs, ys, 1)
-        result[key] = (float(slope), float(intercept), int(xs.min()))
-    return result
+        slope, up_b, lo_b, spread, move = _trend_fit(hi, lo, cl, anchor, n)
+        if spread > 0 and move / spread >= TREND_MIN_MOVE_RATIO:
+            return {'resistance': (slope, up_b, int(anchor)),
+                    'support': (slope, lo_b, int(anchor))}
+
+    # 추세 없음 — 직전 절반 구간의 종가 범위를 수평 박스로 보여 준다.
+    box_start = max(0, n - max(TREND_MIN_LEG_BARS, period // 2))
+    seg = cl[box_start:]
+    return {'resistance': (0.0, float(np.max(seg)), int(box_start)),
+            'support': (0.0, float(np.min(seg)), int(box_start))}

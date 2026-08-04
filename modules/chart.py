@@ -252,21 +252,30 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
                 ax1.text(0.99, 0.94, f"{box_period}{box_unit} / {box_va_pct:g}%", transform=ax1.transAxes,
                          fontsize=9.5, fontweight='bold', color='dimgray', va='top', ha='right', alpha=0.95)
 
-            # [추세선] 스윙 피봇 연결 (상승=저점, 하락=고점)
+            # [추세선] 추세 레그의 평행 회귀 채널
+            #  (기울기=고·저 회귀 평균, 절편=종가 상·하 5% 분위수에 평행이동)
             trend = indicators.get_trend_lines(df)
             for key, base_color in (('support', 'blue'), ('resistance', 'red')):
                 if key not in trend:
                     continue
                 slope, intercept, x_start = trend[key]
                 
-                # 기울기에 따라 실제 추세 방향 및 라벨 결정
-                trend_dir = "상승" if slope > 0 else "하락"
-                line_type = "지지선" if key == 'support' else "저항선"
-                label = f"{trend_dir} {line_type}"
+                # 기울기에 따라 실제 추세 방향 및 라벨 결정.
+                #  기울기 0은 indicators가 '추세 없음'으로 판정해 돌려준 수평 박스다.
+                #  이를 '하락'으로 표기하면 없는 추세를 있다고 읽게 되므로 따로 구분한다.
+                if slope == 0:
+                    label = f"횡보 {'하단' if key == 'support' else '상단'}"
+                else:
+                    trend_dir = "상승" if slope > 0 else "하락"
+                    line_type = "지지선" if key == 'support' else "저항선"
+                    label = f"{trend_dir} {line_type}"
                 
                 tx = np.array([x_start, x_end])
                 ty = slope * tx + intercept
-                ax1.plot(tx, ty, color=base_color, linestyle='-', linewidth=1.4, alpha=0.6, label=label)
+                # 굵기·불투명도는 EMA(1.2)보다 한 단계 위로 둔다 — 추세선은 판단의 기준선이라
+                #  이평선 다발에 묻히면 안 된다(alpha를 함께 올려야 실제로 굵어 보인다).
+                # 굵기 1.7 — 최초 1.4는 EMA에 묻히고 2.2는 캔들을 가린다.
+                ax1.plot(tx, ty, color=base_color, linestyle='-', linewidth=1.7, alpha=0.85, label=label)
         except Exception as e:
             if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                 config.console.print(f"[dim red][DEBUG] 박스권/추세선 산출 실패: {e}[/dim red]")
