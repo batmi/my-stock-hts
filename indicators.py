@@ -249,9 +249,12 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_b
       기간 80일 + 밴드 1% 조합을 기본값으로 쓴다. 상세는 MARKET_FILTER_MA 주석 참조.
 
     [Bear 해제 / release_on_bear] MARKET_FILTER_RELEASE_ON_BEAR 이 켜져 있으면 국면(EMA9/41)이
-      **확정 하락(Bear)** 인 동안에는 밴드 이탈에 따른 차단을 해제한다. 확정 Bear는 이미 -5%
-      하락한 뒤라 반등 구간이고(향후 20일 +2.48%/+2.33%), 진짜 위험 구간은 PendDown·PendUp이다.
-      근거는 config.MARKET_FILTER_RELEASE_ON_BEAR 주석 참조.
+      **확정 하락(Bear)** 인 동안에는 밴드 이탈에 따른 차단을 해제한다.
+      **기본 OFF이며 2026-08-04 확정 기각됐다** — 지수 기준으로는 Bear 구간의 향후 20일
+      수익이 +2.4%로 좋아 보였지만, 종목 단위 워크포워드(전 41종목·39창)에서는 정작 하락장
+      창 10개 중 9개에서 지고 MDD가 -9%→-29%로 세 배 깊어졌다. 지수는 평균회귀해도 개별
+      종목은 반등 전에 ATR 손절이 먼저 나가고, 그 포지션이 슬롯을 점유해 회복 진입까지 막는다.
+      켜지 말 것. 상세·재현 방법은 config.MARKET_FILTER_RELEASE_ON_BEAR 주석 참조.
       Bull·Sideways(판정 불가)에서는 해제하지 않는다 — fail-closed.
     """
     if ma_period is None:

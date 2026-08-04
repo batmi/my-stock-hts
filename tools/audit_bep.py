@@ -19,7 +19,6 @@
 [실행] python tools/audit_bep.py [--stocks 41] [--days 1095]
 """
 import argparse
-import json
 import os
 import sys
 from collections import Counter
@@ -107,8 +106,11 @@ def main():
     ap.add_argument("--days", type=int, default=1095)
     args = ap.parse_args()
 
-    data = json.load(open(config.STOCK_DATA_FILE))
-    targets = [(s["code"], s["name"]) for s in data.get("stocks_kr", [])][:args.stocks]
+    # [필수] 시장 필터의 지수 선택(KOSPI/KOSDAQ)은 config.session.stock_data 를 본다.
+    #  JSON 을 직접 읽어 targets 만 만들면 세션은 빈 채로 남아 전 종목이 KOSPI 로 취급된다.
+    config.session.load_stock_config()
+    targets = [(s["code"], s["name"])
+               for s in config.session.stock_data.get("stocks_kr", [])][:args.stocks]
     print(f"[준비] {len(targets)}종목 · {args.days}일")
 
     dfs, mf, dates, failed = pb.prepare_universe(targets, args.days)

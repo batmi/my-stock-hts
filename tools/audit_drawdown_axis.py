@@ -120,9 +120,11 @@ def main():
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 
-    import json
-    data = json.load(open(config.STOCK_DATA_FILE))
-    targets = [(s["code"], s["name"]) for s in data.get("stocks_kr", [])]
+    # [필수] 시장 필터의 지수 선택(KOSPI/KOSDAQ)은 config.session.stock_data 를 본다.
+    #  JSON 을 직접 읽어 targets 만 만들면 세션은 빈 채로 남아 전 종목이 KOSPI 로 취급된다.
+    config.session.load_stock_config()
+    targets = [(s["code"], s["name"])
+               for s in config.session.stock_data.get("stocks_kr", [])]
     print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {INITIAL_CAPITAL:,}원")
 
     dfs, mf_dates, dates, failed = pb.prepare_universe(targets, args.days)

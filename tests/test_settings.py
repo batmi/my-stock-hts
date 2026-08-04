@@ -104,19 +104,27 @@ def test_save_dynamic_config():
          patch('modules.settings.console.print'), \
          patch('modules.settings.check_and_update_active_preset'):
          
-         # 임의의 값 설정
-         config.settings.ACTIVE_PRESET = "test_preset"
-         config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 99.9
-         
-         settings._save_dynamic_config()
-         
-         m_open.assert_called_once()
-         # 쓰여진 데이터 검증
-         handle = m_open()
-         written_data = "".join([call[0][0] for call in handle.write.call_args_list])
-         data = json.loads(written_data)
-         assert data["ACTIVE_PRESET"] == "test_preset"
-         assert data["ANALYSIS_THRESHOLDS"]["BUY_SCORE"] == 99.9
+         # [주의] config.ANALYSIS_THRESHOLDS 는 프로세스 전역이라 반드시 되돌려야 한다.
+         #  복구하지 않으면 같은 프로세스의 뒤 테스트가 BUY_SCORE=99.9 를 보고 매수 0건이 되어
+         #  엉뚱한 곳(포트폴리오 백테스트 3건)이 실패한다 — 실제로 그렇게 새고 있었다.
+         orig_preset = config.settings.ACTIVE_PRESET
+         orig_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
+         try:
+             config.settings.ACTIVE_PRESET = "test_preset"
+             config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 99.9
+
+             settings._save_dynamic_config()
+
+             m_open.assert_called_once()
+             # 쓰여진 데이터 검증
+             handle = m_open()
+             written_data = "".join([call[0][0] for call in handle.write.call_args_list])
+             data = json.loads(written_data)
+             assert data["ACTIVE_PRESET"] == "test_preset"
+             assert data["ANALYSIS_THRESHOLDS"]["BUY_SCORE"] == 99.9
+         finally:
+             config.settings.ACTIVE_PRESET = orig_preset
+             config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = orig_score
 
 @patch('modules.settings.console.print')
 def test_view_system_config(mock_print):

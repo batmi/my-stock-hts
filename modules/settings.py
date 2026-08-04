@@ -251,11 +251,15 @@ def view_system_config(group=None):
         # [추세추종 보호] 본전 청산 다이얼은 숨기고 실제 동작만 읽기 전용으로 안내한다
         #  (ANTI_TREND_HIDDEN_KEYS 주석 참조). ATR 손절 사용 시 발동 기준은 설정된
         #  BREAK_EVEN_PROFIT_RATE가 아니라 '손절폭(1R)'이므로 그대로 표시하면 오해를 부른다.
+        _bep_on = sell.get('USE_BREAK_EVEN_STOP', False)
         _bep_trigger = ("손절폭(1R) 도달 시" if sell.get('USE_ATR_STOP', True)
                         else f"+{sell.get('BREAK_EVEN_PROFIT_RATE', 5.0)}% 도달 시")
+        _bep_desc = (f"{_bep_trigger} 손절선을 {sell.get('BREAK_EVEN_STOP_RATE', 0.5):+g}%로 상향"
+                     if _bep_on else
+                     "미사용 — 눌림에서 본전 청산하면 fat-tail이 잘린다(2026-08-04 실측)")
         table.add_row(
-            f"본전 청산\n[dim]{_bep_trigger} 손절선을 {sell.get('BREAK_EVEN_STOP_RATE', 0.5):+g}%로 상향[/dim]",
-            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "사용")
+            f"본전 청산\n[dim]{_bep_desc}[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "사용" if _bep_on else "미사용")
 
         row("시간 청산 사용", "장기 횡보 종목 강제 매도", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}", key="TIME_STOP_USE")
         if sell.get('TIME_STOP_USE', True):
