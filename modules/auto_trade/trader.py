@@ -43,6 +43,13 @@ console = config.console
 
 logger = logging.getLogger(__name__)
 
+#  디스크 여유가 이보다 적으면 경고한다. DB·백업·차트 캐시·로그가 같은 SD카드를 쓰므로
+#  여유가 이 정도로 줄면 곧 쓰기가 실패한다.
+DISK_FREE_WARN_MB = 200.0
+#  같은 DB 쓰기 실패를 다시 알리기까지의 간격(초). 디스크가 차면 매 주기 실패하므로
+#  억제하지 않으면 알림이 도배되어 정작 중요한 경보가 묻힌다.
+DB_WRITE_FAIL_ALERT_COOLDOWN = 1800.0
+
 
 def _pkg():
     """패키지(modules.auto_trade) 네임스페이스 접근자.
@@ -428,7 +435,45 @@ class AutoTrader:
         else:
             # 백업 실패로 매매를 막지는 않되, 조용히 넘기지도 않는다.
             self.log("[DB 백업] 실패 — 백업 없이 진행합니다(운영자 확인 필요)")
+
+        # [안전장치] 디스크가 차면 쓰기가 실패한다 — 트레일링 최고가·거래 기록이 사라진다.
+        #  **막지는 않는다.** 손상과 달리 지금 읽는 값은 옳고, 여기서 멈추면 보유 포지션의
+        #  손절 감시까지 함께 멈춘다. 대신 크게 알린다.
+        free_mb = db_manager.db.disk_free_mb()
+        if 0 <= free_mb < DISK_FREE_WARN_MB:
+            msg = (f"디스크 여유 공간 부족: {free_mb:,.0f}MB — DB 쓰기가 실패하면 "
+                   f"트레일링 최고가·거래 기록이 사라집니다(매매는 계속합니다).")
+            self.log(f"[디스크 경고] {msg}")
+            if api._is_screen_output_allowed():
+                console.print(f"\n[bold yellow]⚠ {msg}[/bold yellow]")
+            api.send_telegram_message(f"⚠️ [디스크 경고] {msg}")
         return True
+
+    def _check_db_write_failures(self):
+        """새 쓰기 실패가 생겼으면 알린다(같은 원인 반복은 억제).
+
+        DB 계층은 알림을 보내지 않는다(계층 분리). 대신 카운터를 여기서 읽어 올린다.
+        """
+        try:
+            h = db_manager.db.get_write_failures()
+        except Exception:
+            return
+        seen = getattr(self, '_db_write_fail_seen', 0)
+        if h['count'] <= seen:
+            return
+        self._db_write_fail_seen = h['count']
+
+        now = time.time()
+        if now - getattr(self, '_db_write_fail_alerted_at', 0.0) < DB_WRITE_FAIL_ALERT_COOLDOWN:
+            return
+        self._db_write_fail_alerted_at = now
+
+        free_mb = db_manager.db.disk_free_mb()
+        msg = (f"DB 쓰기 실패 누적 {h['count']}건 (최근: {h['last_op']} — {h['last_error']})\n"
+               f"디스크 여유 {free_mb:,.0f}MB\n"
+               f"트레일링 최고가가 저장되지 않으면 재기동 후 청산선이 어긋납니다.")
+        self.log(f"[DB 쓰기 실패] {msg}")
+        api.send_telegram_message(f"⚠️ [DB 쓰기 실패] {msg}")
 
     def start(self, interactive=True):
         if self.is_running:
@@ -1465,6 +1510,7 @@ class AutoTrader:
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
             f"• 시세 연결: {feed_text}",
             f"• 알림 발신: {self._health_telegram_text()}",
+            f"• 저장 상태: {self._health_storage_text()}",
             "• 리스크: " + " · ".join(risk_parts),
             f"• 시스템 자원: {resource_text}",
         ]
@@ -1495,6 +1541,26 @@ class AutoTrader:
                 text += f" ({h['last_error'][:60]})"
         if h['lost']:
             text += f" · 미전달 {len(h['lost'])}건(최근: {h['lost'][-1][0]} {h['lost'][-1][1][:40]})"
+        return text
+
+    def _health_storage_text(self):
+        """디스크 여유와 DB 쓰기 실패. 둘 다 조용히 진행되는 고장이라 눈에 띄어야 한다."""
+        try:
+            free_mb = db_manager.db.disk_free_mb()
+            h = db_manager.db.get_write_failures()
+        except Exception:
+            return "상태 확인 불가"
+
+        if free_mb < 0:
+            text = "디스크 여유 확인 불가"
+        elif free_mb < DISK_FREE_WARN_MB:
+            text = f"[bold red]디스크 여유 {free_mb:,.0f}MB — 쓰기 실패 임박[/bold red]"
+        else:
+            text = f"디스크 여유 {free_mb:,.0f}MB"
+
+        if h['count']:
+            text += (f" · [bold red]DB 쓰기 실패 {h['count']}건[/bold red]"
+                     f" (최근: {h['last_op']} — {h['last_error'][:60]})")
         return text
 
     def _add_health_rows(self, table, skip_labels=()):
@@ -3299,6 +3365,9 @@ class AutoTrader:
                             self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                         # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                         self.order_manager.manage_unfilled_orders()
+                        # 4. DB 쓰기 실패 확인 — 실패는 인메모리 캐시에 가려 세션 중엔
+                        #    안 보이고, 재기동해야 소실이 드러난다. 그 전에 알린다.
+                        self._check_db_write_failures()
 
                         # [수정] 루프 동안 매수/매도가 발생한 경우에만 최종 로깅 전 잔고와 예수금을 갱신.
                         #  주기 시작 시(직전) 조회한 스냅샷이 있고 주문 활동이 전혀 없었다면 계좌 상태가

@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import os
+import shutil
 import time
 from datetime import datetime
 import config
@@ -30,7 +31,51 @@ class DBManager:
         #  (이게 없으면 다른 스레드의 thread-local이 '이미 닫힌 연결'을 계속 들고 있다가
         #   ProgrammingError: Cannot operate on a closed database 로 터진다)
         self._generation = 0
+        # [안전장치] 쓰기 실패 이력. 종전에는 실패해도 console.print 한 줄이 전부였고
+        #  (그마저 SCREEN_DEBUG_LEVEL=OFF면 안 나온다) 호출부는 반환값이 없어 실패를
+        #  알 수 없었다. 인메모리 캐시는 갱신되므로 **그 세션 동안은 정상으로 보이고,
+        #  재기동해야 소실이 드러난다** — 트레일링 최고가가 그렇게 사라지면 청산선이
+        #  통째로 어긋난다. 라즈베리파이 SD카드 가득 참·I/O 오류가 실제 발생 조건이다.
+        self._write_failures = {'count': 0, 'last_op': '', 'last_error': '',
+                                'last_at': None, 'recent': []}
+        self._wf_lock = threading.Lock()
         self._init_db()
+
+    #  유실 이력 보관 상한(1GB 라즈베리파이 — 무한히 쌓으면 안 된다)
+    WRITE_FAILURE_KEEP = 20
+
+    def _note_write_failure(self, op, detail, error):
+        """쓰기 실패를 로그 파일과 카운터에 남긴다.
+
+        console.print 만으로는 안 된다 — 헤드리스 운영이라 보는 사람이 없고,
+        로그 파일에도 안 남아 사후 추적이 불가능하다.
+        """
+        logger.error(f"[DB] 쓰기 실패 {op}({detail}): {error}")
+        with self._wf_lock:
+            self._write_failures['count'] += 1
+            self._write_failures['last_op'] = op
+            self._write_failures['last_error'] = str(error)[:200]
+            self._write_failures['last_at'] = time.time()
+            self._write_failures['recent'].append(
+                (datetime.now().strftime("%H:%M:%S"), op, str(detail)))
+            del self._write_failures['recent'][:-self.WRITE_FAILURE_KEEP]
+
+    def get_write_failures(self):
+        with self._wf_lock:
+            return dict(self._write_failures, recent=list(self._write_failures['recent']))
+
+    def reset_write_failures(self):
+        with self._wf_lock:
+            self._write_failures.update({'count': 0, 'last_op': '', 'last_error': '',
+                                         'last_at': None, 'recent': []})
+
+    def disk_free_mb(self):
+        """DB가 있는 파티션의 남은 공간(MB). 알 수 없으면 -1."""
+        try:
+            usage = shutil.disk_usage(os.path.dirname(os.path.abspath(self.db_path)) or '.')
+            return usage.free / (1024 * 1024)
+        except Exception:
+            return -1.0
 
     def __del__(self):
         """객체 소멸 시 모든 연결 종료"""
@@ -485,19 +530,22 @@ class DBManager:
                     
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG":
                         config.console.print(f"[dim green][DB][{threading.get_ident()}] 거래 내역 저장 완료 (ODNO: {odno})[/dim green]")
-                    break
-                    
+                    return True
+
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
-                    break
+                    self._note_write_failure("거래 기록", f"{type_str} {code} No.{odno}", e)
+                    return False
                 except Exception as e:
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Insert Error: {e}[/red]")
-                    break
+                    self._note_write_failure("거래 기록", f"{type_str} {code} No.{odno}", e)
+                    return False
+            return False
 
     def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None):
         """거래 내역 조회"""
@@ -860,7 +908,12 @@ class DBManager:
         except Exception: return None
             
     def update_highest_price(self, code, price):
-        """트레일링 스탑용 최고가 갱신"""
+        """트레일링 스탑용 최고가 갱신. 성공 여부를 돌려준다.
+
+        [왜 반환값이 필요한가] 실패해도 호출부는 인메모리 캐시를 갱신하고 넘어간다.
+        그래서 그 세션 동안은 정상으로 보이고, **재기동해야 소실이 드러난다** —
+        그 시점엔 최고가가 옛 값이라 트레일링 청산선이 통째로 어긋나 있다.
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -882,21 +935,21 @@ class DBManager:
                     ''', (code, price, now_str))
                     
                     conn.commit()
-                    break
+                    return True
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if "locked" in str(e):
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print(f"[yellow][DB] Locked during update_highest_price ({attempt+1}/5). Retrying...[/yellow]")
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
-                    break
+                    self._note_write_failure("트레일링 최고가", f"{code} {price}", e)
+                    return False
                 except Exception as e:
                     if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                         config.console.print(f"[red][DB] Trailing Stop Update Error: {e}[/red]")
-                    break
+                    self._note_write_failure("트레일링 최고가", f"{code} {price}", e)
+                    return False
+            return False
 
     def get_highest_price(self, code):
         """종목의 기록된 최고가 조회"""
@@ -941,14 +994,17 @@ class DBManager:
                         ref_pchs_amt = excluded.ref_pchs_amt
                     ''', (code, now_str, float(avg_price), float(pchs_amt)))
                     conn.commit()
-                    break
+                    return True
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
+                    self._note_write_failure("권리조정 기준값", f"{code} {avg_price}", e)
+                    return False
+                except Exception as e:
+                    self._note_write_failure("권리조정 기준값", f"{code} {avg_price}", e)
+                    return False
+            return False
 
     def rescale_highest_price(self, code, ratio):
         """분할·무상증자 비율만큼 최고가를 재조정한다.
