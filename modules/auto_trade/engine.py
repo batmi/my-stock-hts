@@ -56,6 +56,13 @@ UNMANAGED_ETF = "ETF 제외 설정"
 UNMANAGED_BAD_PRICE = "현재가 이상(판정 불가)"
 UNMANAGED_STALE_PRICE = "현재가 조회 실패(판정 불가)"
 UNMANAGED_OVERSEAS = "해외 미지원"
+#  매도를 결정했는데 증권사가 매도가능수량 0을 준 상태. 시스템 자신의 미체결 주문은 그 앞의
+#  is_pending 검사에서 이미 걸러지므로, 여기까지 오면 거래정지·상장폐지·HTS에서 직접 낸
+#  매도 주문에 물량이 묶인 경우다 — 어느 쪽이든 시스템이 스스로 빠져나올 수 없다.
+UNMANAGED_NO_SELLABLE = "매도가능수량 0 (거래정지·외부주문 의심)"
+#  경보 전 연속 관측 횟수. 미체결 취소 직후 한 주기 정도는 일시적으로 0이 될 수 있어,
+#  즉시 알리면 정상 운영 중에도 오경보가 난다(입출금 감지의 '3회 연속'과 같은 방식).
+NO_SELLABLE_ALERT_CYCLES = 3
 
 
 def get_unmanaged_reason(code, name="", is_overseas=False, restricted_codes=None):

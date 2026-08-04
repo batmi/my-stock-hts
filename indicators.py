@@ -523,21 +523,52 @@ def detect_recent_box(df, window=None, value_area_pct=None):
     return {'high': box_high, 'low': box_low, 'start_idx': s, 'end_idx': end - 1,
             'last': last, 'status': status}
 
-def get_trend_lines(df, order=5, period=None):
-    """최근 스윙 저점들을 연결한 상승추세선, 고점들을 연결한 하락추세선을 회귀로 산출.
+# [추세선] 스윙 탐색 좌우 폭. 5는 지속 하락 구간에서 스윙점을 거의 만들지 못한다 —
+#  새 저점이 곧바로 더 낮은 저점에 깨져 저점이 성립하지 않고, 고점도 '앞 5봉보다 높아야'
+#  하는데 하락 중엔 앞이 더 높아 성립하지 않는다. 실측(KOSPI 2026-01~08, 최근 30봉 -24.6%)에서
+#  그 구간의 스윙 고점 0개·저점 1개가 나와, 몇 달 전 점으로 만든 상승선이 계속 그려졌다.
+TREND_SWING_ORDER = 3
+# [추세선] 마지막 스윙점이 이보다 오래되면 그리지 않는다. 낡은 앵커에서 현재까지 외삽하면
+#  현재가 6,600인 종목에 11,400짜리 '상승 저항선'이 나온다(정보가 없는 선).
+TREND_MAX_ANCHOR_AGE = 10
+
+
+def get_trend_lines(df, order=None, period=None):
+    """최근 스윙 저점들을 연결한 지지선, 고점들을 연결한 저항선을 회귀로 산출.
     반환: {'support': (slope, intercept, x_start), 'resistance': (...)} (없으면 키 생략).
-    라인 y값은 slope * x + intercept (x는 df 인덱스), x_start부터 차트 끝까지 그리면 된다."""
+    라인 y값은 slope * x + intercept (x는 df 인덱스), x_start부터 차트 끝까지 그리면 된다.
+
+    [검증 2026-08-04 / tools/audit_trend_lines.py · 22종목 400일 · 지평 10/20/30봉]
+      종전에는 그려진 선의 **43.7%가 최근 실제 방향과 반대**였다(지평 20봉 기준).
+      원인은 셋이 겹쳤다.
+        ① 하락 구간에서 스윙점이 거의 생기지 않는다(TREND_SWING_ORDER 주석 참조).
+        ② 최근 order봉은 구조적으로 스윙점이 될 수 없다(range(order, n-order)).
+        ③ TREND_PERIOD가 '기간'이라는 이름과 달리 **개수(period//20)만** 정하고 탐색
+           범위를 자르지 않아, 몇 달 전 점으로 만든 선을 현재까지 외삽했다.
+      order 3 + 기간 제한 실제 적용 + 앵커 나이 상한(10봉)으로 오도율 43.7% → 25.5%.
+      기간 제한만 걸면 -1.5%p에 그치고 지평 10봉에서는 오히려 악화되어(+3.2%p) 기각했다.
+      채택안은 지평 10·20·30봉 3개 전부에서 개선된 4개 후보 중 평균 개선폭이 가장 컸다.
+
+    조건을 만족하는 스윙점이 2개 미만이면 **선을 그리지 않는다** — 틀린 선보다 없는 선이
+    낫다. 방향을 잘못 표기하면 하락 추세를 상승으로 오독하게 된다.
+    """
     if period is None: period = config.INDICATOR_PARAMS.get("TREND_PERIOD", 60)
-    
+    if order is None: order = TREND_SWING_ORDER
+
     # 60일 기준 3개(기본값)의 스윙 포인트를 사용하도록 비례식 적용 (20일당 1개 꼴)
     n_recent = max(2, period // 20)
-    
+
     sh, sl = get_swing_points(df, order)
+    n = len(df)
+    cutoff = n - period          # [Fix] 이름대로 '기간'을 실제로 자른다
     result = {}
     for key, pts in (('support', sl), ('resistance', sh)):
+        pts = [p for p in pts if p[0] >= cutoff]
         if len(pts) < 2:
             continue
         recent = pts[-n_recent:]
+        if (n - 1 - recent[-1][0]) > TREND_MAX_ANCHOR_AGE:
+            continue             # 앵커가 낡았다 = 현재 흐름을 설명하지 못한다
         xs = np.array([i for i, _ in recent], dtype=float)
         ys = np.array([p for _, p in recent], dtype=float)
         slope, intercept = np.polyfit(xs, ys, 1)

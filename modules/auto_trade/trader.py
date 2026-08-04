@@ -31,8 +31,9 @@ from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
 
-from modules.auto_trade.engine import (DefaultStrategy, OrderManager, RiskManager,
-                                       UNMANAGED_BAD_PRICE, UNMANAGED_ETF, UNMANAGED_RESTRICTED,
+from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES, OrderManager,
+                                       RiskManager, UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
+                                       UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE)
 from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
@@ -139,6 +140,9 @@ class AutoTrader:
             cls._instance.buy_halt_reason = ""        # 방어 모드 사유 (상태 표시용)
             cls._instance.buy_halt_date = None        # 방어 모드 발동 일자 (날짜 변경 시 자동 해제)
             cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
+            # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
+            #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
+            cls._instance.no_sellable_streak = {}
             
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
@@ -3852,19 +3856,37 @@ class AutoTrader:
             eval_amt = api.safe_int(item.get('evlu_amt', 0))
             loss_amt = api.safe_int(item.get('evlu_pfls_amt', 0))
 
+            # 같은 '못 빠져나온다'라도 원인이 두 갈래다. 문구를 뭉뚱그리면 운영자가
+            #  할 수 있는 조치를 오판한다 — 제외는 설정 문제고, 매도 불가는 시장 문제다.
+            blocked = (kind == UNMANAGED_NO_SELLABLE)
+            title = "매도 실패" if blocked else "자동매도 제외 종목"
+            cause = (f"매도를 시도했으나 증권사 매도가능수량이 0입니다 ({kind}).\n"
+                     f"시스템이 스스로 청산할 수 없는 상태입니다."
+                     if blocked else
+                     f"{kind}으로 자동 매도 대상에서 제외되어 있어 시스템이 손절하지 않습니다.")
+
             self.log(f"⚠️ [손절선 이탈 경보] {name}({code}): 수익률 {profit_rate:.2f}% ≤ 손절 기준 {sl_rate:.2f}% "
-                     f"— {kind}이라 시스템이 자동 매도하지 않습니다.")
+                     f"— {kind}이라 시스템이 청산하지 못합니다.")
             api.send_telegram_message(
-                f"⚠️ [손절선 이탈 — 자동매도 제외 종목]\n\n"
+                f"⚠️ [손절선 이탈 — {title}]\n\n"
                 f"종목: {name}({code})\n"
                 f"수익률: {profit_rate:.2f}% (손절 기준: {sl_rate:.2f}%)\n"
                 f"보유: {qty:,}주 / 평가금 {eval_amt:,}원 / 평가손익 {loss_amt:,}원\n\n"
-                f"사유: {kind}으로 자동 매도 대상에서 제외되어 있어 시스템이 손절하지 않습니다.\n"
+                f"사유: {cause}\n"
                 f"직접 청산 여부를 판단해 주세요. (동일 종목 재알림은 24시간 후)")
         except Exception as e:
             logger.debug(f"[손절선 이탈 경보] {code} 처리 실패: {e}")
 
     def _check_sell_conditions(self, holdings, is_market_open=True, rules_map=None, restricted_stocks=None):
+        # [정리] 보유가 끝난 종목의 '매도 불가 연속 횟수'를 버린다. 남겨 두면 나중에 같은
+        #  종목을 재매수했을 때 옛 횟수에 이어붙어 첫 일시적 0에서 곧바로 오경보가 난다.
+        try:
+            held = {h['pdno'] for h in (holdings or []) if api.safe_int(h.get('hldg_qty')) > 0}
+            for gone in [c for c in self.no_sellable_streak if c not in held]:
+                del self.no_sellable_streak[gone]
+        except Exception:
+            pass
+
         # [WS] 시스템 트레이딩 종목을 실시간 피드에 최우선으로 등록한다.
         #  보유종목(포지션, 최우선) → 매수후보 순서로 priority. 매수후보는 국내주식 + (ETF 포함 설정 시)국내 ETF.
         #  ETF 미포함 설정이면 ETF는 시스템 대상이 아니므로 '그 외(other) 로테이션'으로 둔다.
@@ -4140,9 +4162,22 @@ class AutoTrader:
                     if real_qty > 0:
                         self.log(f"매도 수량 조정: {name} {target_sell_qty}주 -> {real_qty}주")
                         target_sell_qty = real_qty
+                        self.no_sellable_streak.pop(code, None)
                     else:
-                        self.log(f"매도 중단: {name} 주문 가능 수량 부족 (미체결 존재 가능성)")
+                        # [안전장치] 매도를 결정했는데 팔 수 없는 상태다. 종전에는 로그 한 줄만
+                        #  남기고 조용히 끝나, 거래정지·상장폐지처럼 시스템이 스스로 빠져나올 수
+                        #  없는 포지션이 운영자 모르게 방치됐다. 다만 미체결 취소 직후 한 주기
+                        #  정도는 정상적으로 0이 되므로, 연속 관측될 때만 경보한다.
+                        streak = self.no_sellable_streak.get(code, 0) + 1
+                        self.no_sellable_streak[code] = streak
+                        self.log(f"매도 중단: {name} 주문 가능 수량 부족 "
+                                 f"(미체결 존재 가능성 · {streak}회 연속)")
+                        if streak >= NO_SELLABLE_ALERT_CYCLES:
+                            self._alert_unmanaged_stop(code, name, item, UNMANAGED_NO_SELLABLE,
+                                                       buy_trades_map.get(code))
                         return
+                else:
+                    self.no_sellable_streak.pop(code, None)
 
                 self.log(f"매도 실행: {name} - {reason}")
                 odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
