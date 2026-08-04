@@ -52,15 +52,29 @@ except Exception:
 
 # [추가] 대체거래소(NXT) 관련 마스터 파일 캐시
 _NXT_TRADEABLE_CACHE = set()
+_NXT_REJECTED_CACHE = set()           # SOR 주문이 실제로 거부된 종목(증권사 응답으로 학습)
 _NXT_MASTER_LOADED = False
 _NXT_MASTER_LOCK = threading.RLock()
+_NXT_MASTER_RETRY_AT = 0.0            # 로드 실패 시 다음 재시도가 허용되는 시각(epoch)
+NXT_MASTER_RETRY_COOLDOWN = 300.0     # 실패 후 재시도 간격(초). 주문마다 5초씩 붙잡히지 않게 한다.
 
 def load_nxt_master():
-    """KIS API의 NXT 종목 마스터 파일을 다운로드하여 거래 가능 종목 코드를 추출합니다."""
-    global _NXT_MASTER_LOADED
+    """KIS API의 NXT 종목 마스터 파일을 다운로드하여 거래 가능 종목 코드를 추출합니다.
+
+    [실패 처리] 종전에는 실패해도 finally에서 _NXT_MASTER_LOADED를 True로 못 박아
+     프로세스 수명 내내 재시도하지 않았고, 실패 로그도 debug 레벨이라 기본 설정
+     (FILE_DEBUG_LEVEL=INFO)에서는 파일에 남지도 않았다. 캐시가 빈 상태에서
+     is_nxt_tradeable은 전 종목 True를 돌려주므로 NXT 미지원 종목(ETF 등)에도 SOR이
+     붙어 주문이 APBK3026으로 거부된다 — 매수뿐 아니라 **보유 종목의 매도까지** 같은
+     경로라 청산이 막힌다. 기동 시 5초 타임아웃 한 번으로 그 상태가 결정되는데 아무도
+     모른다는 것이 문제였다(라즈베리파이는 패키지 적용으로 수시로 재시작된다).
+     → 성공했을 때만 완료로 표시하고, 실패는 경고로 남긴 뒤 쿨다운 후 다시 시도한다.
+    """
+    global _NXT_MASTER_LOADED, _NXT_MASTER_RETRY_AT
     with _NXT_MASTER_LOCK:
         if _NXT_MASTER_LOADED: return
-        
+        if time.time() < _NXT_MASTER_RETRY_AT: return   # 쿨다운 중
+
         try:
             # NXT 마스터 파일 다운로드 및 파싱을 시도합니다.
             base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
@@ -88,22 +102,42 @@ def load_nxt_master():
                     if len(parts) > 0 and len(parts[0]) == 6 and parts[0][0].isdigit():
                         _NXT_TRADEABLE_CACHE.add(parts[0])
                 logger.info(f"NXT 거래 가능 종목 마스터 파일 로드 완료 ({len(_NXT_TRADEABLE_CACHE)}종목)")
+            else:
+                raise RuntimeError(f"HTTP {res.status_code}")
         except Exception as e:
-            logger.debug(f"NXT 마스터 파일 로드 실패 (Fallback 동적 조회 사용): {e}")
-        finally:
+            reason = e
+        else:
+            # 파싱까지 마쳤는데 캐시가 비었다면 성공으로 볼 수 없다(스펙 변경·빈 응답).
+            reason = None if _NXT_TRADEABLE_CACHE else "응답에 종목 코드가 없음"
+
+        if reason is None:
             _NXT_MASTER_LOADED = True
+            _NXT_MASTER_RETRY_AT = 0.0
+        else:
+            # [가시화] debug가 아니라 warning — 이 상태에서는 NXT 미지원 종목의 주문(매도 포함)이
+            #  거래소 코드 오배정으로 거부될 수 있으므로 운영자가 로그에서 볼 수 있어야 한다.
+            _NXT_MASTER_RETRY_AT = time.time() + NXT_MASTER_RETRY_COOLDOWN
+            logger.warning(
+                f"NXT 마스터 파일 로드 실패 ({reason}) — 거래소 코드를 SOR로 낙관 배정합니다. "
+                f"미지원 종목은 주문 거부 후 KRX로 자동 재시도됩니다. "
+                f"{int(NXT_MASTER_RETRY_COOLDOWN)}초 뒤 마스터를 다시 받습니다.")
 
 def is_nxt_tradeable(code):
     """NXT 거래 대상 종목 여부를 확인합니다."""
     if not _NXT_MASTER_LOADED:
         load_nxt_master()
-    
+
+    # 0. SOR 주문이 실제로 거부됐던 종목은 마스터보다 증권사 응답을 믿는다.
+    if code in _NXT_REJECTED_CACHE:
+        return False
+
     # 1. 마스터 파일이 정상 로드되어 캐시에 종목이 있는 경우
     if _NXT_TRADEABLE_CACHE:
         return code in _NXT_TRADEABLE_CACHE
         
-    # 2. 마스터 로드에 실패했거나 미지원 상태일 경우, 종목 그룹으로 확인 (ETF는 무조건 불가)
-    # 안전장치로 일단 일반 주식은 모두 통과시킵니다 (오류로 매매 못하는 것 방지)
+    # 2. 마스터 로드에 실패했거나 미지원 상태일 경우
+    # 안전장치로 일단 일반 주식은 모두 통과시킵니다 (오류로 매매 못하는 것 방지).
+    # 이 낙관 배정으로 NXT 미지원 종목이 거부되면 place_order가 KRX로 1회 재시도한다.
     return True
 
 # [추가] 국내 ETF/ETN 판정용 캐시 및 브랜드/키워드 목록
@@ -6208,6 +6242,52 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
                 all_orders.extend(orders)
     return all_orders
 
+# 거래소 코드 오배정으로 거부됐을 때만 나타나는 응답 코드/문구.
+#  주문이 '접수되기 전' 검증 단계에서 반려된 것이라 재시도해도 이중 주문이 되지 않는다.
+#  다른 실패(잔고 부족·시간 외·통신 오류 등)에는 절대 재시도하지 않는다 — 그쪽은
+#  주문이 이미 접수됐을 가능성이 있어 재시도가 곧 이중 주문이다.
+_EXCHANGE_REJECT_CODES = ("APBK3026",)
+_EXCHANGE_REJECT_HINTS = ("종목정보", "거래소구분", "EXCG")
+
+
+def _is_exchange_routing_reject(res):
+    """SOR 오배정으로 인한 반려인지 판정한다(보수적: 확실할 때만 True)."""
+    if not isinstance(res, dict) or str(res.get('rt_cd', '')) == '0':
+        return False
+    msg_cd = str(res.get('msg_cd', '') or '')
+    if msg_cd in _EXCHANGE_REJECT_CODES:
+        return True
+    # msg_cd가 비어 오는 경우를 대비해 문구도 본다. 단 '종목정보 없음' 계열로 한정한다.
+    msg1 = str(res.get('msg1', '') or '')
+    return any(h in msg1 for h in _EXCHANGE_REJECT_HINTS) and "없" in msg1
+
+
+def _order_with_exchange_fallback(url_path, market, category, action, data, code=""):
+    """SOR로 주문을 내고, 거래소 오배정 반려면 KRX로 1회만 재시도한다.
+
+    NXT 마스터 로드가 실패하면 is_nxt_tradeable이 전 종목 True를 돌려주므로 ETF 등
+    NXT 미지원 종목에도 SOR이 붙는다. 그 결과가 매수라면 기회 손실로 끝나지만
+    **매도라면 보유 포지션의 청산이 막힌다** — 추세추종에서 가장 비싼 실패다.
+    """
+    res = call_api(url_path, market, category, action, data=data, method="POST")
+    if not _is_exchange_routing_reject(res):
+        return res
+
+    code = code or data.get("PDNO", "")
+    logger.warning(f"주문 거부(거래소 코드 SOR): {code} {action} - "
+                   f"{res.get('msg_cd', '')} {res.get('msg1', '')} → KRX로 재시도합니다.")
+    # 증권사가 실제로 거부한 종목은 마스터보다 권위 있는 사실이다. 기록해 두면 다음
+    #  주문(특히 손절)이 왕복 없이 곧바로 KRX로 나간다 — 청산 지연을 1회로 끝낸다.
+    if code:
+        _NXT_REJECTED_CACHE.add(code)
+    retry_data = dict(data)
+    retry_data["EXCG_ID_DVSN_CD"] = "KRX"
+    retry = call_api(url_path, market, category, action, data=retry_data, method="POST")
+    if isinstance(retry, dict) and str(retry.get('rt_cd', '')) == '0':
+        logger.info(f"주문 재시도 성공(KRX): {code} {action}")
+    return retry
+
+
 def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     """
     주문 전송 통합 함수
@@ -6241,6 +6321,10 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
         # KRX로 지정한다. NXT 미지원 종목에 SOR을 쓰면 APBK3026(종목정보 없음) 오류가 발생한다.
         if not config.session.is_simulation:
             data["EXCG_ID_DVSN_CD"] = "SOR" if is_nxt_tradeable(code) else "KRX"
+            # 마스터 로드 실패로 낙관 배정한 SOR이 거부되면 KRX로 1회 재시도한다.
+            # (실계좌 전용 분기라 모의·가상투자 검증으로는 이 경로가 한 번도 실행되지 않는다)
+            if data["EXCG_ID_DVSN_CD"] == "SOR":
+                return _order_with_exchange_fallback(url_path, market, category, action, data)
     else: # overseas
         # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
         trade_excd = exchange_code
@@ -6283,6 +6367,9 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         # [추가] 모의투자가 아닐 경우 거래소 코드 적용 (NXT 미지원 종목은 KRX, place_order와 동일)
         if not config.session.is_simulation:
             data["EXCG_ID_DVSN_CD"] = "SOR" if is_nxt_tradeable(code) else "KRX"
+            # 주문과 같은 이유로 거부될 수 있다. 취소가 막히면 미체결이 계속 자리를 차지한다.
+            if data["EXCG_ID_DVSN_CD"] == "SOR":
+                return _order_with_exchange_fallback(url_path, market, category, action, data, code=code)
     else: # overseas
         # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
         trade_excd = exchange_code
