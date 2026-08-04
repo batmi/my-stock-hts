@@ -117,6 +117,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         risk_scale_by_date: {날짜: 배수} 일별 리스크 배수. **기초 비중과 히트 캡에 곱한다.**
             실매매의 현행 risk_scale은 리스크층에만 곱해 사실상 무력하므로(리스크층이 구속되지
             않음), '기초 비중에 적용하면 실제로 방어가 되는가'를 검증하기 위한 실험용 경로다.
+            콜러블 fn(day, equity) -> 배수 도 받는다 — 계좌 드로다운 축처럼 시뮬레이션 자신의
+            자산곡선에 의존하는 축은 사전 계산이 불가능하기 때문이다(tools/audit_drawdown_axis.py).
 
     하루 처리 순서는 실매매와 같다: 매도 → 피라미딩 → 신규 매수(점수 높은 순).
     """
@@ -241,7 +243,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 del positions[code]
 
         # ---------- 히트(총 오픈 리스크) 예산 ----------
-        day_scale = float((risk_scale_by_date or {}).get(day, 1.0) or 1.0)
+        # 계좌 드로다운 축은 시뮬레이션 자신의 자산곡선에 의존하는 피드백 루프라
+        #  사전 계산이 불가능하다 → 콜러블(day, equity)도 받는다.
+        if callable(risk_scale_by_date):
+            day_scale = float(risk_scale_by_date(day, _equity(day)) or 1.0)
+        else:
+            day_scale = float((risk_scale_by_date or {}).get(day, 1.0) or 1.0)
         day_scale = min(1.0, day_scale) if day_scale > 0 else 1.0
         heat_budget = None
         if heat_cap_pct and heat_cap_pct > 0:

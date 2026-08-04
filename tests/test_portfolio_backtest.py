@@ -159,3 +159,48 @@ def test_market_filter_also_gates_pyramiding(universe):
         open_gate = pbt.run_portfolio(dfs, status, dates, slots=3, pyramiding_max=3,
                                       market_filter_dates=block_all)
     assert open_gate["pyramid_count"] >= 0  # 신규 진입이 전면 차단이라 0일 수 있음
+
+
+# ---------------------------------------------------------------------------
+# 리스크 배수 콜러블 (계좌 드로다운 축 감사용 경로)
+# ---------------------------------------------------------------------------
+def test_risk_scale_accepts_callable(universe):
+    """risk_scale_by_date 는 dict 뿐 아니라 fn(day, equity) 콜러블도 받아야 한다.
+
+    계좌 드로다운 축은 시뮬레이션 자신의 자산곡선에 반응하는 피드백 루프라
+    사전 계산이 불가능하다. 콜러블 경로가 막히면 그 축은 검증할 방법이 없다.
+    """
+    dfs, status, dates = universe
+    seen = []
+
+    def fn(day, equity):
+        seen.append((day, equity))
+        return 1.0
+
+    res = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
+                            risk_scale_by_date=fn)
+    assert seen, "콜러블이 한 번도 호출되지 않았다"
+    assert len(seen) == len(dates)
+    assert all(e > 0 for _d, e in seen), "자산이 전달되지 않으면 드로다운을 계산할 수 없다"
+    assert res["final_asset"] > 0
+
+
+def test_callable_scale_matches_equivalent_dict(universe):
+    """같은 배수를 주면 dict 경로와 콜러블 경로의 결과가 같아야 한다."""
+    dfs, status, dates = universe
+    by_dict = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
+                                risk_scale_by_date={d: 0.5 for d in dates})
+    by_call = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
+                                risk_scale_by_date=lambda _d, _e: 0.5)
+    assert by_dict["final_asset"] == pytest.approx(by_call["final_asset"])
+    assert by_dict["mdd"] == pytest.approx(by_call["mdd"])
+
+
+def test_callable_scale_actually_constrains(universe):
+    """대조군 — 콜러블로 준 배수가 실제로 배분을 조인다(현금 비율 상승)."""
+    dfs, status, dates = universe
+    full = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
+                             risk_scale_by_date=lambda _d, _e: 1.0)
+    tight = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3,
+                              risk_scale_by_date=lambda _d, _e: 0.3)
+    assert tight["avg_cash_ratio"] > full["avg_cash_ratio"]
