@@ -1259,6 +1259,44 @@ class DBManager:
             conn.cursor().execute("UPDATE reserved_orders SET highest_price=? WHERE id=?", (price, order_id))
             conn.commit()
             
+    def cancel_reserved_orders_on_corp_action(self, code, reason):
+        """권리 조정(액면분할·무상증자)이 감지된 종목의 대기 예약 주문을 전부 취소한다.
+
+        예약 주문의 기준값은 전부 **조정 전 가격**이다 — 목표가(STOP·LIMIT·BREAKOUT)도,
+        추적 극값(TRAILING_*의 highest/lowest)도 그렇다. 분할이 나면 목표가는 즉시
+        도달한 것처럼 보이고 추적 극값은 폭락한 것처럼 보여, 어느 쪽이든 곧바로 오발동한다.
+        보정할 방법이 없지는 않으나 **운영자가 의도한 가격 자체가 무의미해진 상황**이므로,
+        시스템이 임의로 환산하지 않고 취소한 뒤 다시 걸도록 알린다.
+
+        계좌로 좁히지 않는다 — 권리 조정은 계좌가 아니라 종목의 사건이다.
+        반환: 취소된 주문 목록(알림 문구 구성용). 없으면 빈 리스트.
+        """
+        with self.lock:
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT id, name, order_type, qty, condition_type, target_price, "
+                        "order_price FROM reserved_orders WHERE code=? AND status='PENDING'",
+                        (code,))
+                    rows = [dict(r) for r in cursor.fetchall()]
+                    if not rows:
+                        return []
+                    cursor.execute(
+                        "UPDATE reserved_orders SET status='CANCELED', fail_reason=? "
+                        "WHERE code=? AND status='PENDING'", (reason, code))
+                    conn.commit()
+                    return rows
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    break
+                except Exception:
+                    break
+            return []
+
     def cancel_reserved_sell_orders(self, cano, acnt, code):
         """특정 계좌/종목의 대기 중인 예약 매도 주문을 일괄 취소 처리 (전량 매도 시)"""
         with self.lock:

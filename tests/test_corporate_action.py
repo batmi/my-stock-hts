@@ -186,7 +186,110 @@ def test_failure_does_not_block_sell_analysis(trader):
 
 
 # ===========================================================================
-# 4. 배선 — 실제 매도 경로가 보정된 값을 쓰는가
+# 4. 예약 주문 — 환산하지 않고 취소한다
+# ===========================================================================
+#  예약 주문의 목표가는 운영자가 조정 전 가격을 보고 직접 정한 값이라, 기계적으로
+#  환산해도 의도한 자리가 아니다. 그대로 두면 STOP·LIMIT은 이미 도달한 것처럼,
+#  TRAILING은 폭락한 것처럼 보여 어느 쪽이든 즉시 오발동한다. 취소하고 알린다.
+def _reserve(code=CODE, order_type='sell', condition='STOP', target=95_000, qty=10,
+             status='PENDING'):
+    db_manager.db.execute_query(
+        "INSERT INTO reserved_orders (cano, acnt, market, order_type, code, name, qty, "
+        "order_price, condition_type, target_price, status) "
+        "VALUES ('1','01','KR',?,?,?,?,0,?,?,?)",
+        (order_type, code, NAME, qty, condition, target, status))
+
+
+@pytest.fixture
+def clean_reserves():
+    db_manager.db.execute_query("DELETE FROM reserved_orders WHERE code IN (?, ?)",
+                                (CODE, "000660"))
+    yield
+    db_manager.db.execute_query("DELETE FROM reserved_orders WHERE code IN (?, ?)",
+                                (CODE, "000660"))
+
+
+def _statuses(code=CODE):
+    rows = db_manager.db.execute_query(
+        "SELECT status FROM reserved_orders WHERE code=?", (code,), fetch='all') or []
+    return sorted(r[0] for r in rows)
+
+
+def test_split_cancels_pending_reserved_orders(trader, clean_reserves):
+    """분할이 감지되면 그 종목의 대기 예약 주문을 전부 취소한다."""
+    _reserve(condition='STOP', target=95_000)
+    _reserve(condition='TRAILING_SELL', target=5)
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    _out, tg = _apply(trader, 50, 18_000, 105_000)
+    assert _statuses() == ['CANCELED', 'CANCELED'], (
+        "조정 전 목표가가 살아남으면 분할 직후 즉시 오발동한다")
+    body = str(tg.call_args)
+    assert "예약" in body and "다시 설정" in body, "무엇이 왜 취소됐는지 알려야 다시 걸 수 있다"
+
+
+def test_normal_buy_leaves_reserved_orders_alone(trader, clean_reserves):
+    """대조군 — 평범한 추가 매수는 예약 주문을 건드리지 않는다."""
+    _reserve(condition='STOP', target=95_000)
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    _apply(trader, 15, 100_000, 105_000)             # 매입금액 90만 → 150만
+    assert _statuses() == ['PENDING']
+
+
+def test_other_stocks_reserves_are_untouched(trader, clean_reserves):
+    """분할은 한 종목의 사건이다. 다른 종목 예약까지 취소하면 안 된다."""
+    _reserve(condition='STOP', target=95_000)
+    _reserve(code="000660", condition='STOP', target=200_000)
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    _apply(trader, 50, 18_000, 105_000)
+    assert _statuses(CODE) == ['CANCELED']
+    assert _statuses("000660") == ['PENDING']
+
+
+def test_already_triggered_reserve_is_not_touched(trader, clean_reserves):
+    """이미 발동된 주문은 대상이 아니다(PENDING만 취소).
+
+    [중요] 발동분만 단독으로 두면 조회 단계에서 걸러져 UPDATE 자체가 실행되지 않아,
+    'PENDING 조건 없이 전부 취소'하는 결함을 놓친다(변이 검증에서 실제로 통과했다).
+    대기 1건 + 발동 1건이 섞인 현실적인 상태로 확인한다.
+    """
+    _reserve(condition='STOP', target=95_000, status='TRIGGERED')
+    _reserve(condition='LIMIT', target=98_000, status='PENDING')
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    _apply(trader, 50, 18_000, 105_000)
+    assert _statuses() == ['CANCELED', 'TRIGGERED'], "발동이 끝난 주문의 이력까지 덮어썼다"
+
+
+def test_cancellation_is_recorded_in_trade_history(trader, clean_reserves):
+    """거래내역에도 남겨야 나중에 '왜 사라졌지'를 추적할 수 있다."""
+    _reserve(condition='STOP', target=95_000)
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    with patch.object(db_manager.db, 'insert_trade') as ins:
+        _apply(trader, 50, 18_000, 105_000)
+    assert ins.called
+    assert "권리 조정" in str(ins.call_args)
+
+
+def test_split_without_reserves_still_rescales(trader, clean_reserves):
+    """예약이 없어도 최고가 보정은 그대로 동작해야 한다."""
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+    out, tg = _apply(trader, 50, 18_000, 105_000)
+    assert out == pytest.approx(21_000)
+    assert tg.called
+
+
+# ===========================================================================
+# 5. 배선 — 실제 매도 경로가 보정된 값을 쓰는가
 # ===========================================================================
 #  [왜 따로 두는가] 위 3절은 _apply_corporate_action 을 직접 부른다. 그것만 있으면
 #  _check_sell_conditions 에서 호출을 빼먹어도 전부 통과한다 — 변이 검증에서 실제로

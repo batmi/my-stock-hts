@@ -3737,21 +3737,44 @@ class AutoTrader:
             ref_avg, ref_amt = db_manager.db.get_position_ref(code)
             ratio, reason = _pkg().detect_corporate_action(ref_avg, ref_amt, buy_price, pchs_amt)
 
-            if ratio != 1.0 and highest_price > 0:
-                new_high = db_manager.db.rescale_highest_price(code, ratio)
+            if ratio != 1.0:
+                lines = [f"🔀 [권리 조정] {name}({code})", reason]
+
+                #  ① 트레일링 최고가는 같은 배율로 환산한다 — 시스템이 만든 값이고,
+                #     환산하면 조정 전과 정확히 같은 판정이 나오기 때문이다.
+                new_high = db_manager.db.rescale_highest_price(code, ratio) if highest_price > 0 else None
                 if new_high:
                     with self._lock:
                         self.trailing_stop_cache[code] = new_high
                     highest_price = new_high
-                    msg = (f"🔀 [권리 조정] {name}({code})\n{reason}\n"
-                           f"트레일링 최고가를 {ratio:.4f}배로 보정했습니다 "
-                           f"(→ {new_high:,.0f}원). 보정하지 않으면 즉시 청산됩니다.")
-                    self.log(f"[권리 조정] {name}({code}) {reason} · 최고가 ×{ratio:.4f}")
-                    logger.warning(f"[권리 조정] {code} {reason} ratio={ratio:.4f} high={new_high:.0f}")
-                    try:
-                        api.send_telegram_message(msg)
-                    except Exception:
-                        pass
+                    lines.append(f"· 트레일링 최고가 {ratio:.4f}배 보정 (→ {new_high:,.0f}원)")
+
+                #  ② 예약 주문은 환산하지 않고 **취소**한다 — 목표가는 운영자가 조정 전
+                #     가격을 보고 직접 정한 값이라, 기계적으로 환산해도 의도한 자리가
+                #     아니다. 그대로 두면 목표가는 이미 도달한 것처럼, 추적 극값은 폭락한
+                #     것처럼 보여 어느 쪽이든 즉시 오발동한다.
+                canceled = db_manager.db.cancel_reserved_orders_on_corp_action(
+                    code, f"권리 조정 감지({reason})로 자동 취소")
+                for o in canceled:
+                    lines.append(f"· 예약 {'매수' if o.get('order_type') == 'buy' else '매도'} 취소: "
+                                 f"{o.get('condition_type')} "
+                                 f"{float(o.get('target_price') or 0):,.0f} / {o.get('qty')}주")
+                    db_manager.db.insert_trade(
+                        f"{'매수' if o.get('order_type') == 'buy' else '매도'}취소(예약)",
+                        code, name, o.get('qty'), o.get('order_price', 0),
+                        f"RES_CORP_{o.get('id')}", order_status="취소",
+                        reason=f"권리 조정({reason})으로 예약 자동 취소")
+                if canceled:
+                    lines.append("→ 조정 후 가격 기준으로 다시 설정해 주세요.")
+
+                self.log(f"[권리 조정] {name}({code}) {reason} · 배율 {ratio:.4f} "
+                         f"· 예약 취소 {len(canceled)}건")
+                logger.warning(f"[권리 조정] {code} {reason} ratio={ratio:.4f} "
+                               f"high={new_high} canceled={len(canceled)}")
+                try:
+                    api.send_telegram_message("\n".join(lines))
+                except Exception:
+                    pass
 
             # 배율이 1이어도 기준값은 항상 최신으로 옮겨야 다음 주기 비교가 성립한다.
             if (ref_avg, ref_amt) != (float(buy_price), float(pchs_amt)):
