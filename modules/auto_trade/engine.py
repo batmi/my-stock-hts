@@ -742,9 +742,13 @@ class DefaultStrategy:
         # [추가] 본전 청산(BEP) 임계값 재설정 로직
         is_bep_applied = False
         max_profit_rate = 0.0
+        # [2026-08-04] BEP는 기본 OFF (config.SELL_STRATEGY 주석의 반사실 실측 참조).
+        #  끄더라도 max_profit_rate는 트레일링·표시에 쓰이므로 계산은 유지한다.
+        use_bep = (thresholds.get("USE_BREAK_EVEN_STOP", config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False))
+                   if thresholds else config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False))
         if highest_price > 0 and buy_price > 0:
             max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
-            if max_profit_rate >= bep_activation:
+            if use_bep and max_profit_rate >= bep_activation:
                 if sl_rate < bep_stop:
                     sl_rate = bep_stop
                     is_bep_applied = True

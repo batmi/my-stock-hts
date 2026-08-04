@@ -144,20 +144,32 @@ def test_analyze_sell_time_stop(mock_ind, mock_cls, mock_score, mock_sm, strateg
 @patch('modules.auto_trade.analysis.classify_stock_state')
 @patch('modules.auto_trade.indicators.calculate_indicators')
 def test_analyze_sell_break_even(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
-    """고점에서 BEP 활성화 기준을 넘긴 뒤 본전 부근으로 밀리면 '본전청산'한다."""
+    """고점에서 BEP 활성화 기준을 넘긴 뒤 본전 부근으로 밀리면 '본전청산'한다.
+
+    [2026-08-04] BEP는 기본 OFF가 됐다(추세추종 원칙 — config.SELL_STRATEGY 주석 참조).
+    기능 자체는 남아 있으므로 토글을 명시적으로 켜서 검증한다.
+    """
     mock_ind.return_value = _ind()
     mock_cls.return_value = ("보유", "", "")
     mock_score.return_value = (9.0, [])
 
+    base = {"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0,
+            "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5}
+
     # 고점(highest)에서 +8% 도달(BEP 활성), 현재가는 본전(+0%) → 본전청산
     res = strategy.analyze_sell(
         "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
-        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0,
-                    "BREAK_EVEN_PROFIT_RATE": 7.0, "BREAK_EVEN_STOP_RATE": 0.5},
-        highest_price=10800,
+        thresholds={**base, "USE_BREAK_EVEN_STOP": True}, highest_price=10800,
     )
     assert res['action'] == 'sell'
     assert '본전청산' in res['reason']
+
+    # [대조군] 토글이 꺼져 있으면(기본값) 같은 입력에서 청산하지 않는다.
+    off = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={**base, "USE_BREAK_EVEN_STOP": False}, highest_price=10800,
+    )
+    assert '본전청산' not in off['reason'], "BEP를 껐는데 본전청산이 나왔다"
 
 
 @patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))

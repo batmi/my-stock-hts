@@ -273,3 +273,46 @@ def test_score_sell_requires_structure_break():
     assert not hold, "정배열 유지 중 눌림에서 점수만 낮다고 팔면 fat-tail을 잘라낸다"
     sell, reason = _decide(sell_check=1.0, price=95.0, ema60=100.0, high=100.0, avg=100.0)
     assert sell and reason == "점수하락"
+
+
+def test_bep_toggle_is_respected():
+    """USE_BREAK_EVEN_STOP=False 면 본전청산이 발동하지 않아야 한다.
+
+    실매매(engine.analyze_sell)·단일종목 백테스트와 같은 토글을 쓴다. 한 곳이라도
+    누락되면 백테스트와 실거래의 청산이 갈려 파라미터 근거가 무너진다
+    (tools/audit_exit_parity.py 가 이 정합을 상시 확인한다).
+    """
+    dfs = {"000001": _make_df(seed=11)}
+    th = {"BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+          "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+          "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+          "WEIGHTS": config.SCORING_WEIGHTS}
+    status = pbt.precompute_status(dfs, th)
+    dates = sorted(str(d) for d in dfs["000001"]["date"])
+
+    saved = config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP")
+    try:
+        config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = False
+        off = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=1)
+        config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = True
+        on = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=1)
+    finally:
+        config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = saved
+
+    off_reasons = [t["reason"] for t in off["trades"]]
+    assert "본전청산" not in off_reasons, "토글을 껐는데 본전청산이 나왔다"
+    # 대조군 — 켜면 판정 자체는 살아 있어야 한다(이 표본에 발동이 없으면 결과가 같을 수 있다)
+    assert on["final_asset"] > 0
+
+
+def test_bep_off_never_raises_stop_to_breakeven():
+    """decide_sell 수준에서도 확인 — 손절선이 +0.5%로 올라오면 안 된다."""
+    saved = config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP")
+    try:
+        config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = False
+        # 최고 +20% 찍고 +1%로 밀린 상태. BEP가 켜져 있으면 '본전청산'이 나온다.
+        sell, reason = _decide(price=101.0, high=120.0, avg=100.0, sl_rate=-9.0,
+                               is_bep=False, atr=0.01)
+        assert reason != "본전청산"
+    finally:
+        config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = saved

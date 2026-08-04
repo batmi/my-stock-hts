@@ -659,9 +659,12 @@ ANTI_TREND_HIDDEN_KEYS = {
     #   통상적 눌림목에서도 청산이 잦아져 샹들리에 TS의 fat-tail 추종을 무력화한다. 5.0→4.0 완화 확정.
     #  변동성 타겟팅: 추세추종 2원칙 "자본대비 변동성에 한도를 둔다"의 구현부. 끄면 전형 수익은
     #   오르지만(median 8.6→14.9%) MDD가 -20→-30%로 악화된다.
-    #  BREAK_EVEN_STOP_RATE: 30종목×3.8년 백테스트 스윕 결과, 현행 +0.5%는 fat-tail을 전혀
-    #   해치지 않는다(>30% 거래 29건·최고 220.6%가 BEP ON/OFF 동일, 종목별 승패도 14:16 무차이).
-    #   반면 +2.0%로 올리면 평균이익이 17.8%→9.9%로 반토막 나고 PF도 1.71→1.56으로 무너진다.
+    #  USE_BREAK_EVEN_STOP / BREAK_EVEN_STOP_RATE: [2026-08-04 재검증으로 BEP 자체를 OFF]
+    #   종전 근거는 '현행 +0.5%가 fat-tail을 전혀 해치지 않는다'였으나, 같은 진입 676건에
+    #   대한 반사실 비교(tools/audit_bep.py)에서 미세하지만 일관된 손해가 확인됐다 —
+    #   평균 3.82→3.77%, 상위10% 59.33→58.34%, >30% 거래 55→52건으로 전부 같은 방향이다.
+    #   BEP를 강하게 쓸수록(+2.0%) 단조적으로 더 나빠진다. 크기는 작지만(기대값 -0.05%p)
+    #   방향이 원칙과 반대라 껐다. 상세는 config.SELL_STRATEGY 주석.
     #   '수익을 일찍 확정하는' 방향으로만 위험한 다이얼이므로 잠근다.
     #  BREAK_EVEN_PROFIT_RATE: ATR 손절 사용 시(기본값) 발동 기준이 손절폭(1R)으로 덮어써져
     #   이 값 자체는 쓰이지 않는다(backtest.py bep_activation / trader.py thresholds 주입).
@@ -671,6 +674,7 @@ ANTI_TREND_HIDDEN_KEYS = {
     "SELL_SCORE",
     "BREAK_EVEN_PROFIT_RATE",
     "BREAK_EVEN_STOP_RATE",
+    "USE_BREAK_EVEN_STOP",
     "USE_VOLATILITY_TARGETING",
     "TARGET_VOLATILITY",
     "VOLATILITY_SCALING_MIN",

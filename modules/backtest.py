@@ -595,7 +595,8 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 bep_activation = abs(sl_rate_to_use)
             bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
             is_bep_applied = False
-            if max_profit_rate >= bep_activation:
+            # [2026-08-04] BEP 기본 OFF — 실매매(engine.analyze_sell)와 같은 토글을 쓴다.
+            if config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False) and max_profit_rate >= bep_activation:
                 if sl_rate_to_use < bep_stop:
                     sl_rate_to_use = bep_stop
                     is_bep_applied = True

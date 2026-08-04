@@ -66,8 +66,10 @@ def _cfg():
 
 
 def _effective_sl(sl_rate, high, avg, applied):
-    """백테스트 _effective_sl 과 같은 규칙 (BEP 상향)."""
+    """백테스트 _effective_sl 과 같은 규칙 (BEP 상향). BEP 토글도 함께 따른다."""
     s = config.SELL_STRATEGY
+    if not s.get("USE_BREAK_EVEN_STOP", False):
+        return sl_rate, False
     bep_stop = s.get("BREAK_EVEN_STOP_RATE", 0.5)
     bep_default = s.get("BREAK_EVEN_PROFIT_RATE", 5.0)
     max_profit = (high - avg) / avg * 100

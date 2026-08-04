@@ -207,6 +207,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     use_time_stop = sell_cfg.get("TIME_STOP_USE", True) and time_stop_days > 0
     bep_stop = sell_cfg.get("BREAK_EVEN_STOP_RATE", 0.5)
     bep_default = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
+    use_bep = sell_cfg.get("USE_BREAK_EVEN_STOP", False)
 
     buy_score = thr["BUY_SCORE"]
     buy_rsi = thr["BUY_RSI_MAX"]
@@ -231,8 +232,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             p["qty"] * rows[c][day]["close"] for c, p in positions.items() if day in rows[c])
 
     def _effective_sl(position):
-        """현재 유효 손절률(BEP 상향 반영)."""
+        """현재 유효 손절률(BEP 상향 반영). BEP는 실매매와 같은 토글을 따른다."""
         sl, applied = _weighted_sl(position, default_sl)
+        if not use_bep:
+            return sl, applied, False
         max_profit = (position["high"] - position["avg"]) / position["avg"] * 100
         activation = abs(sl) if (applied and sl < 0) else bep_default
         if max_profit >= activation and sl < bep_stop:
