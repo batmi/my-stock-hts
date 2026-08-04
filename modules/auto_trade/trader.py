@@ -3621,6 +3621,74 @@ class AutoTrader:
             except Exception: pass
         return None
 
+    def _effective_stop_loss_rate(self, buy_trades=None):
+        """포지션의 실효 손절률(%) — 매수 기록의 수량가중평균, 없으면 전역값. 미사용이면 None."""
+        tq, ws = 0, 0.0
+        for t in (buy_trades or []):
+            q = api.safe_int(t.get('qty', 0))
+            try:
+                s = float(t.get('stop_loss_rate') or 0.0)
+            except (TypeError, ValueError):
+                s = 0.0
+            if q > 0 and s != 0.0:
+                tq += q
+                ws += q * s
+        sl_rate = (ws / tq) if tq > 0 else None
+        if sl_rate is None or sl_rate >= 0:
+            sl_rate = config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)
+        return sl_rate if sl_rate < 0 else None
+
+    def _cancel_pending_buy_on_stop_loss(self, code, name, item, buy_trades=None):
+        """미체결 '매수'가 걸린 채 체결분이 손절선을 이탈하면 그 매수를 즉시 취소한다.
+
+        [왜 취소가 먼저인가] 매수 주문을 열어 둔 채 같은 종목을 팔면 서로 싸운다 —
+        손절로 턴 물량을 남은 매수가 다시 담을 수 있다. 그래서 이번 주기에는 매수만
+        거둬들이고, 주문이 종결되어 pending이 풀린 다음 주기에 정상 청산 경로를 태운다.
+        자동 취소 타임아웃(UNFILLED_ORDER_CANCEL_SECONDS)을 기다리지 않는 것이 요점이다.
+
+        [매도 주문은 건드리지 않는다] 취소 대상은 '매수'뿐이다. 청산 주문을 취소하면
+        포지션이 그대로 남아 손절이 되레 무산된다. 매수·매도가 함께 걸려 있으면 매수만
+        거둔다(청산 중인 종목에 추가로 담는 것을 막는 쪽이 항상 옳다).
+        """
+        try:
+            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+            sl_rate = self._effective_stop_loss_rate(buy_trades)
+            if sl_rate is None or profit_rate > sl_rate:
+                return
+
+            with self.order_manager._lock:
+                odnos = list((self.order_manager.pending_orders.get(code) or {}).keys())
+            if not odnos:
+                return
+
+            buy_odnos = []
+            for odno in odnos:
+                t_type = ""
+                try:
+                    tr = db_manager.db.get_trade_by_odno(odno)
+                    t_type = str((tr or {}).get('type', ''))
+                except Exception:
+                    pass
+                is_sell = "매도" in t_type or "sell" in t_type.lower()
+                if not is_sell and ("매수" in t_type or "buy" in t_type.lower()):
+                    buy_odnos.append(odno)
+
+            for odno in buy_odnos:
+                # qty=0 은 '잔량 전부 취소'(QTY_ALL_ORD_YN=Y) — 잔량을 몰라도 안전하다.
+                res = api.revise_cancel_order("domestic", "cancel", odno, code, 0, "0", "02", "00")
+                if isinstance(res, dict) and res.get('rt_cd') == '0':
+                    self.log(f"[손절 보호] {name}({code}) 수익률 {profit_rate:.2f}% ≤ 손절 {sl_rate:.2f}% "
+                             f"→ 미체결 매수(No.{odno})를 즉시 취소했습니다. 다음 주기에 청산합니다.")
+                    api.send_telegram_message(
+                        f"🛑 [손절 보호] {name}({code})\n"
+                        f"수익률 {profit_rate:.2f}% (손절 기준 {sl_rate:.2f}%)\n"
+                        f"미체결 매수를 취소해 체결분의 청산 경로를 확보했습니다.")
+                else:
+                    msg = (res or {}).get('msg1') if isinstance(res, dict) else res
+                    self.log(f"[손절 보호] {name}({code}) 미체결 매수 취소 실패: {msg}")
+        except Exception as e:
+            logger.debug(f"[손절 보호] 미체결 매수 취소 처리 실패({code}): {e}")
+
     def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None):
         """[안전장치] 자동 매도 대상에서 제외된 보유 포지션의 손절선 이탈 경보
 
@@ -3780,6 +3848,11 @@ class AutoTrader:
             
             if self.order_manager.is_pending(code):
                 self.set_stock_state(code, None)
+                # [보호 공백 해소] 주문이 걸려 있는 동안 이 종목은 매도 판정에서 통째로 빠진다.
+                #  부분체결로 이미 확보된 물량이 손절선을 이탈해도 주문이 종결될 때까지
+                #  청산되지 않는다("탈출 전략이 없다면 포지션을 잡지 마라"와 충돌).
+                #  손절 상황이면 미체결 '매수'를 즉시 취소해, 다음 주기에 정상 청산되게 한다.
+                self._cancel_pending_buy_on_stop_loss(code, name, item, buy_trades_map.get(code))
                 if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
                 return
 

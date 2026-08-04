@@ -882,6 +882,10 @@ class OrderManager:
         #  시점에 트레일링 최고가·반익절 기록을 정리한다. 접수 시점에 지우면 주문이 미체결
         #  취소될 때 포지션은 남는데 앵커만 리셋되어 샹들리에 TS가 느슨해지는 문제가 있었다.
         self.sell_cleanup_odnos = {}
+        # [안전장치] 미체결 취소 연속 실패 횟수 {odno: count}. 취소가 계속 실패하면 pending이
+        #  풀리지 않아 그 종목의 매도·손절 판정이 무기한 건너뛰어진다 — 자동 복구가 안 되는
+        #  상태라 한도를 넘기면 운영자에게 알린다. 취소 성공 시 항목을 지운다.
+        self.cancel_failures = {}
         # [최적화] 누적 주문 접수 카운터 — 루프에서 '이번 주기에 주문이 나갔는가'를 판단해
         #  주문이 없으면 루프 말미 잔고/예수금 재조회를 생략하기 위한 단조 증가 값
         self.orders_sent_count = 0
@@ -1083,6 +1087,35 @@ class OrderManager:
             self.trader.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return None
 
+    # 취소가 연속 이 횟수만큼 실패하면 운영자에게 알린다. 이 상태는 자동 복구되지 않는다 —
+    # pending이 유지되어 해당 종목의 매도·손절 판정이 계속 건너뛰어지기 때문이다.
+    CANCEL_FAILURE_ALERT_THRESHOLD = 3
+
+    def _note_cancel_failure(self, odno, code, name, res, elapsed):
+        """미체결 취소 실패를 누적하고, 한도를 넘으면 1회 경보한다."""
+        msg1 = (res or {}).get('msg1') if isinstance(res, dict) else str(res)
+        self.trader.log(f"취소 실패: {msg1}")
+
+        key = str(odno)
+        cnt = self.cancel_failures.get(key, 0) + 1
+        self.cancel_failures[key] = cnt
+        if cnt != self.CANCEL_FAILURE_ALERT_THRESHOLD:
+            return  # 한도 도달 시점에만 알린다(매 주기 스팸 방지)
+
+        self.trader.log(
+            f"⚠️ [미체결 취소 실패 누적] {name}({code}) 주문 {odno} — {cnt}회 연속 실패. "
+            f"주문이 열려 있는 동안 이 종목은 매도·손절 판정에서 제외됩니다.")
+        try:
+            api.send_telegram_message(
+                f"⚠️ [미체결 취소 실패] {name}({code})\n"
+                f"주문번호: {utils.format_order_no(odno)}\n"
+                f"{cnt}회 연속 취소에 실패했습니다 (경과 {int(elapsed)}초)\n"
+                f"사유: {msg1}\n\n"
+                f"주문이 열려 있는 동안 이 종목은 손절 판정에서 제외됩니다. "
+                f"HTS/MTS에서 직접 취소해 주세요.")
+        except Exception:
+            pass
+
     def manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""
         
@@ -1166,8 +1199,13 @@ class OrderManager:
                                 # [추가] DB에 취소 이력 남기기 (CANCELED 알림 중복 방지)
                                 cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
                                 db_manager.db.insert_trade(f"{t_type}취소(자동)", code, name, qty, 0, cancel_odno, org_odno=odno, reason=f"미체결 시간 초과 (자동 취소)", order_status="취소")
+                                self.cancel_failures.pop(str(odno), None)
                             else:
-                                self.trader.log(f"취소 실패: {res.get('msg1')}")
+                                # [Fix] 종전에는 실패를 로그 한 줄로 넘겨, 취소가 계속 실패하면
+                                #  pending이 영원히 안 풀렸다. 그 종목은 is_pending 때문에 매도
+                                #  판정에서 빠지므로 보호 공백이 무기한이 된다. 연속 실패를 세어
+                                #  한도를 넘으면 경보한다(운영자 개입 없이는 복구 불가한 상태다).
+                                self._note_cancel_failure(odno, code, name, res, elapsed)
                     except Exception: pass
 
             # 2. [추가] API에는 없지만 로컬에는 남아있는 주문 처리 (API 누락 대응)
