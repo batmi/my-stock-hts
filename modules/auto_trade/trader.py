@@ -28,6 +28,8 @@ from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
 from modules import chart # [추가] 차트 모듈
+from modules import instance_lock # [추가] 자동매매 단일 실행 보장
+from modules import telegram_notify # [추가] 알림 발신 상태 조회
 import re # [추가] 정규식 모듈
 import pandas as pd
 
@@ -146,6 +148,8 @@ class AutoTrader:
             # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
             #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
             cls._instance.pending_restore_ok = True
+            # [안전장치] 계좌 단위 자동매매 배타 잠금(같은 계좌 이중 실행 방지). start에서 획득.
+            cls._instance.instance_lock = None
 
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
@@ -355,6 +359,77 @@ class AutoTrader:
                 return True
         return False
 
+    def _trade_account_key(self):
+        cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        return f"{cano}-{acnt}"
+
+    def _acquire_instance_lock(self):
+        """이 계좌의 자동매매 배타 잠금을 잡는다. 실패하면 시작하지 않는다.
+
+        선점자가 있다는 것은 '다른 프로세스가 이미 이 계좌로 매매 중'이라는 뜻이다.
+        그대로 시작하면 서로의 미체결을 모른 채 같은 종목에 각자 주문을 낸다.
+        """
+        try:
+            lock = instance_lock.InstanceLock(self._trade_account_key())
+            if lock.acquire():
+                self.instance_lock = lock
+                return True
+        except Exception as e:
+            # 잠금 장치 자체가 고장 났다고 매매를 막지는 않는다(잠금은 보조 안전장치다).
+            self.log(f"[중복 실행 검사] 잠금 처리 실패 — 검사를 건너뜁니다: {e}")
+            return True
+
+        holder = f" ({lock.holder})" if lock.holder else ""
+        msg = (f"자동매매를 시작할 수 없습니다 — 같은 계좌({self._trade_account_key()})로 "
+               f"이미 다른 프로세스가 매매 중입니다{holder}.")
+        self.log(f"[중복 실행 차단] {msg}")
+        if api._is_screen_output_allowed():
+            console.print(f"\n[bold red]{msg}[/bold red]")
+            console.print("[dim]두 인스턴스가 동시에 돌면 서로의 미체결 주문을 몰라 "
+                          "같은 종목에 중복 주문이 나갑니다.[/dim]")
+        api.send_telegram_message(f"⛔ [중복 실행 차단] {msg}")
+        return False
+
+    def _release_instance_lock(self):
+        lock = getattr(self, 'instance_lock', None)
+        if lock is not None:
+            self.instance_lock = None
+            try:
+                lock.release()
+            except Exception as e:
+                logger.debug(f"[InstanceLock] 해제 실패: {e}")
+
+    def _check_db_health(self):
+        """DB 무결성 확인 + 당일 백업. 무결성이 깨졌으면 매매를 시작하지 않는다.
+
+        [왜 fail-closed 인가] 이 DB에는 평단·트레일링 최고가·손절 기준이 들어 있다.
+        잔고는 증권사에 있으니 '무엇을 들고 있는지'는 복구되지만, '어디서 자를지'는
+        여기에만 있다. 손상된 채로 돌리면 트레일링 최고가가 사라져 청산이 어긋나고,
+        그 오류는 조용히 손실로만 나타난다. 멈추는 쪽이 낫다.
+
+        백업은 실패해도 막지 않는다 — 백업이 없다고 지금 매매가 틀리지는 않는다.
+        """
+        ok, detail = db_manager.db.check_integrity()
+        if not ok:
+            msg = (f"DB 무결성 검사 실패 — 자동매매를 시작하지 않습니다.\n"
+                   f"경로: {db_manager.db.db_path}\n결과: {detail}")
+            self.log(f"[DB 이상] {msg}")
+            if api._is_screen_output_allowed():
+                console.print(f"\n[bold red]{msg}[/bold red]")
+                console.print("[dim]db/backups 의 최근 백업으로 복구한 뒤 다시 시작하세요. "
+                              "(평단·트레일링 최고가·손절 기준이 이 파일에만 있습니다)[/dim]")
+            api.send_telegram_message(f"⛔ [DB 이상] {msg}")
+            return False
+
+        path = db_manager.db.backup()
+        if path:
+            self.log(f"[DB 백업] {os.path.basename(path)}")
+        else:
+            # 백업 실패로 매매를 막지는 않되, 조용히 넘기지도 않는다.
+            self.log("[DB 백업] 실패 — 백업 없이 진행합니다(운영자 확인 필요)")
+        return True
+
     def start(self, interactive=True):
         if self.is_running:
             if interactive:
@@ -404,10 +479,22 @@ class AutoTrader:
                 if api._is_screen_output_allowed():
                     console.print("[bold cyan][시스템 명령] 실전 투자 자동매매를 시작합니다.[/bold cyan]")
 
+        # [안전장치] 같은 계좌로 엔진이 두 개 뜨면 서로의 미체결 주문을 모른다 —
+        #  각자 같은 종목에 매수를 내고, 재기동 복구도 이걸 못 막는다(둘 다 거래소
+        #  미체결을 자기 주문으로 읽는다). 매매를 시작하기 전에 잠근다.
+        if not self._acquire_instance_lock():
+            return
+
+        # [안전장치] 손절 기준이 든 DB가 깨졌으면 매매하지 않는다(잠금은 되돌린다).
+        if not self._check_db_health():
+            self._release_instance_lock()
+            return
+
         try:
             # [수정] 초기화 로직 분리
             if not self.initialized:
                 if not self.initialize():
+                    self._release_instance_lock()
                     self.log("초기화 실패로 자동매매를 시작할 수 없습니다.")
                     if api._is_screen_output_allowed():
                         console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
@@ -543,6 +630,10 @@ class AutoTrader:
             self.initialized = False
 
         except Exception as e:
+            # 매매 루프가 뜨지 못했으면 잠금을 붙들고 있을 이유가 없다.
+            # (붙들면 다음 실행 시도가 '이미 실행 중'으로 거부된다)
+            if not self.is_running:
+                self._release_instance_lock()
             logger.error(f"자동매매 시작 실패: {e}")
             if api._is_screen_output_allowed():
                 console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
@@ -567,6 +658,8 @@ class AutoTrader:
             _pkg().ConclusionMonitor().stop() # [추가] 체결 감시 모니터 종료
             if self.thread and self.thread is not threading.current_thread():
                 self.thread.join(timeout=15) # [수정] 타임아웃 연장 (종목 분석 등 백그라운드 스레드 정상 종료 대기)
+            # 루프가 멈춘 뒤에 잠금을 푼다 — 먼저 풀면 정지 중에 다른 인스턴스가 끼어든다.
+            self._release_instance_lock()
 
         if use_status:
             with Progress(
@@ -1371,6 +1464,7 @@ class AutoTrader:
             f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
             f"• 시세 연결: {feed_text}",
+            f"• 알림 발신: {self._health_telegram_text()}",
             "• 리스크: " + " · ".join(risk_parts),
             f"• 시스템 자원: {resource_text}",
         ]
@@ -1381,6 +1475,27 @@ class AutoTrader:
         if not risks and not warnings:
             lines.append("\n✅ 관제상 즉시 조치가 필요한 신호가 없습니다.")
         return "\n".join(lines)
+
+    def _health_telegram_text(self):
+        """알림 발신 상태. 전송은 비동기라 호출부가 성공 여부를 모르므로 여기서 드러낸다.
+
+        '알림이 조용하다'가 '이상 없음'인지 '경로가 죽었다'인지 구분되어야 한다.
+        """
+        try:
+            h = telegram_notify.get_delivery_health()
+        except Exception:
+            return "상태 확인 불가"
+        if not h['sent'] and not h['failed']:
+            return "발신 이력 없음"
+        text = f"성공 {h['sent']}건 · 실패 {h['failed']}건"
+        if h['consecutive_failed'] > 0:
+            text += (f" · [bold red]연속 실패 {h['consecutive_failed']}건 — 알림이 도착하지 "
+                     f"않고 있습니다[/bold red]")
+            if h['last_error']:
+                text += f" ({h['last_error'][:60]})"
+        if h['lost']:
+            text += f" · 미전달 {len(h['lost'])}건(최근: {h['lost'][-1][0]} {h['lost'][-1][1][:40]})"
+        return text
 
     def _add_health_rows(self, table, skip_labels=()):
         """기존 CLI 테이블 끝에 운영 관제 행을 추가한다.

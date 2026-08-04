@@ -21,6 +21,50 @@ from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
 
+# [안전장치] 발신 상태. 전송은 비동기(스레드 풀)라 호출부가 성공 여부를 알 수 없다.
+#  그래서 종전에는 손절 경보가 안 갔는데도 간 줄 알고 넘어갔다 — 텔레그램이 죽었다는
+#  사실을 텔레그램으로 알릴 수는 없으므로, 실패를 여기 모아 화면·로그·상태창에 드러낸다.
+_delivery = {
+    'sent': 0, 'failed': 0, 'consecutive_failed': 0,
+    'last_error': '', 'last_failure_at': None, 'last_success_at': None,
+    'lost': [],          # 끝내 못 보낸 메시지 요약(최근 것부터, 상한 아래 참조)
+}
+_delivery_lock = threading.Lock()
+#  연속 실패가 이 수를 넘으면 화면에 크게 띄운다. 한두 번은 네트워크 순간 단절이지만
+#  연속 실패는 '알림 경로가 죽었다'는 뜻이고, 운영자가 이걸 모르면 경보를 못 받는다.
+DELIVERY_ALERT_THRESHOLD = 3
+LOST_MESSAGE_KEEP = 20
+
+
+def _record_delivery(ok, summary="", error=""):
+    with _delivery_lock:
+        if ok:
+            _delivery['sent'] += 1
+            _delivery['consecutive_failed'] = 0
+            _delivery['last_success_at'] = time.time()
+            return 0
+        _delivery['failed'] += 1
+        _delivery['consecutive_failed'] += 1
+        _delivery['last_error'] = error
+        _delivery['last_failure_at'] = time.time()
+        _delivery['lost'].append((time.strftime("%H:%M:%S"), summary))
+        del _delivery['lost'][:-LOST_MESSAGE_KEEP]
+        return _delivery['consecutive_failed']
+
+
+def get_delivery_health():
+    """발신 상태 스냅샷 — 상태창(print_health)이 읽는다."""
+    with _delivery_lock:
+        return dict(_delivery, lost=list(_delivery['lost']))
+
+
+def reset_delivery_health():
+    """테스트·운영자 확인 후 초기화용."""
+    with _delivery_lock:
+        _delivery.update({'sent': 0, 'failed': 0, 'consecutive_failed': 0,
+                          'last_error': '', 'last_failure_at': None,
+                          'last_success_at': None, 'lost': []})
+
 
 def _get_telegram_footer():
     """텔레그램 메시지용 계좌 정보 꼬리말 생성"""
@@ -160,6 +204,8 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
 
         # [수정] 재시도 로직 추가 (최대 3회)
         max_retries = 3
+        sent_all = True         # 청크가 하나라도 못 가면 그 메시지는 전달 실패다
+        last_error = ""
         for i, chunk in enumerate(msg_chunks):
             data = {"chat_id": config.TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}
             
@@ -182,6 +228,7 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
                         success_chunk = True
                         break
                     else:
+                        last_error = f"HTTP {res.status_code}: {str(res.text)[:100]}"
                         logger.error(f"[Telegram] 전송 실패 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}) Status: {res.status_code}, Msg: {res.text}")
                 except Exception as e:
                     # [추가] 네트워크 오류 등 긴 에러 메시지 축약
@@ -193,6 +240,7 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
 
                     if context.is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                         config.console.print(f"[dim red][TRACE] ERR (TELEGRAM) {error_msg} ({attempt+1}/{max_retries})[/dim red]")
+                    last_error = error_msg
                     logger.error(f"[Telegram] 전송 중 오류 발생 (Chunk {i+1}/{len(msg_chunks)}, {attempt+1}/{max_retries}): {error_msg}")
                 
                 if attempt < max_retries - 1:
@@ -201,6 +249,22 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
                     
             if not success_chunk:
                 logger.error(f"[Telegram] 최종 전송 실패 (Chunk {i+1}/{len(msg_chunks)})")
+                sent_all = False
+
+        # [안전장치] 못 간 메시지를 로그·화면에 남긴다. 알림 경로가 죽은 상태에서
+        #  '알림이 조용하다'를 '이상 없음'으로 읽으면 손절 경보를 통째로 놓친다.
+        summary = " ".join(str(message).split())[:120]
+        if sent_all:
+            _record_delivery(True)
+            return
+        streak = _record_delivery(False, summary=summary, error=last_error)
+        logger.error(f"[Telegram] 미전달 메시지(연속 {streak}건째): {summary}")
+        if streak >= DELIVERY_ALERT_THRESHOLD and context.is_screen_output_allowed():
+            config.console.print(
+                f"[bold red]⚠ 텔레그램 전송이 연속 {streak}건 실패했습니다 — "
+                f"알림이 도착하지 않고 있습니다.[/bold red]")
+            config.console.print(f"[dim red]  마지막 오류: {last_error or '알 수 없음'}[/dim red]")
+            config.console.print(f"[dim red]  미전달: {summary}[/dim red]")
 
     # [수정] 긴급 발송 여부에 따라 큐(Queue) 대기열 우회 처리
     if sync:

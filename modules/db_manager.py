@@ -1155,6 +1155,67 @@ class DBManager:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] VACUUM Error: {e}[/red]")
 
+    def check_integrity(self):
+        """(정상여부, 메시지). 자동매매 시작 전 DB가 성한지 확인한다.
+
+        [왜] 이 파일에는 평단·트레일링 최고가·손절 기준이 들어 있다. 잔고는 증권사에
+        있지만 '어디서 자를지'는 여기에만 있다 — 깨지면 보유 포지션의 청산 기준을 잃는다.
+        운영이 라즈베리파이 SD카드라 전원 차단으로 인한 손상이 실제 위험이다.
+
+        integrity_check는 전체 페이지를 훑으므로 시작 시 1회만 부른다.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=60)
+            try:
+                row = conn.execute("PRAGMA integrity_check;").fetchone()
+            finally:
+                conn.close()
+            result = (row[0] if row else "").strip()
+            if result.lower() == "ok":
+                return True, "ok"
+            return False, result or "빈 응답"
+        except Exception as e:
+            # 열지도 못했다 = 파일이 없거나 손상됐다. 정상으로 볼 수 없다.
+            return False, f"검사 실패: {e}"
+
+    def backup(self, keep=7):
+        """DB를 백업 디렉터리에 하루 1회 복제하고 오래된 것을 지운다. (백업 경로 또는 None)
+
+        [왜 sqlite3 backup API인가] 파일 복사(cp)는 WAL 모드에서 안전하지 않다 —
+        -wal 파일에만 있는 최신 커밋을 놓치거나, 복사 도중의 쓰기가 섞여 깨진 사본이
+        나온다. conn.backup()은 SQLite가 페이지 단위로 일관된 스냅샷을 뜬다.
+        """
+        try:
+            src_dir = os.path.dirname(os.path.abspath(self.db_path))
+            bdir = os.path.join(src_dir, "backups")
+            os.makedirs(bdir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(self.db_path))[0]
+            dest = os.path.join(bdir, f"{base}_{datetime.now().strftime('%Y%m%d')}.db")
+            if os.path.exists(dest):
+                return dest         # 오늘 것은 이미 떴다
+
+            src = sqlite3.connect(self.db_path, timeout=60)
+            dst = sqlite3.connect(dest)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
+
+            # 회전: 최신 keep개만 남긴다(SD카드 용량이 넉넉하지 않다).
+            olds = sorted(f for f in os.listdir(bdir)
+                          if f.startswith(base + "_") and f.endswith(".db"))
+            for f in olds[:-keep] if keep > 0 else []:
+                try:
+                    os.remove(os.path.join(bdir, f))
+                except OSError:
+                    pass
+            logger.info(f"[DB] 백업 완료: {dest}")
+            return dest
+        except Exception as e:
+            logger.error(f"[DB] 백업 실패: {e}")
+            return None
+
     def save_daily_asset(self, date_str, account, asset_value):
         """일일 총 자산 스냅샷 저장"""
         with self.lock:
