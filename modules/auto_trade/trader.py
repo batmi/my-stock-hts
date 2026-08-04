@@ -143,7 +143,10 @@ class AutoTrader:
             # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
             #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
             cls._instance.no_sellable_streak = {}
-            
+            # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
+            #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
+            cls._instance.pending_restore_ok = True
+
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
             # [추가] 로그 디렉토리 확인 및 생성
@@ -283,8 +286,12 @@ class AutoTrader:
                     progress.update(task, description="[cyan]DB 캐시 로드...[/cyan]")
                     ts_cache = db_manager.db.get_all_trailing_stops()
                     half_cache = db_manager.db.get_all_half_tp()
+                    # [재기동 복구] 거래소에 살아 있는 미체결 주문을 메모리 추적에 되살린다.
+                    #  이걸 안 하면 첫 주기에 같은 종목으로 두 번째 주문이 나간다.
+                    #  DB 캐시 작업에 얹어 시작 시 API 호출이 몰리지 않게 한다(라즈베리파이 OOM).
+                    ok = self.order_manager.restore_pending_orders(target_cano, acnt)
                     progress.advance(task)
-                    return "caches", (ts_cache, half_cache)
+                    return "caches", (ts_cache, half_cache, ok)
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                     # [수정] 모의투자는 잔고 summary에 예수금이 포함되어 있어 별도 예수금 API 호출이 불필요.
@@ -299,7 +306,10 @@ class AutoTrader:
 
                 # 결과 처리
                 holdings, summary = results.get("balance", (None, None))
-                ts_cache, half_cache = results.get("caches", ({}, set()))
+                ts_cache, half_cache, pending_restored = results.get("caches", ({}, set(), False))
+                # 조회 실패는 '미체결 없음'과 다르다 — 모르는 상태에서 신규 매수를 더 내지
+                # 않는다. 매도는 막지 않는다(청산 경로는 어떤 경우에도 열려 있어야 한다).
+                self.pending_restore_ok = bool(pending_restored)
 
                 if config.session.is_simulation:
                     # [수정] 모의투자: 잔고 summary에서 예수금 유도 (_run_loop와 동일 방식)
@@ -4345,6 +4355,14 @@ class AutoTrader:
         if getattr(self, 'buy_halted', False):
             if self.consecutive_errors == 0:  # 로그 도배 방지
                 self.log(f"매수 스킵: 방어 모드 — {self.buy_halt_reason or '신규 매수 중단'}")
+            return
+
+        # [안전장치] 미체결 주문 현황을 모르면 신규 매수를 보류한다. 재기동 직후 복구
+        #  조회가 실패한 상태로 매수하면, 이미 거래소에 걸린 주문을 못 보고 같은 종목에
+        #  두 번째 주문을 낸다. manage_unfilled_orders가 성공하면 자동 해제된다.
+        if not getattr(self, 'pending_restore_ok', True):
+            if self.consecutive_errors == 0:
+                self.log("매수 스킵: 미체결 주문 현황 미확인 — 중복 주문 방지를 위해 보류")
             return
 
         # [수정] 매수 대상 확장을 위해 국내 주식 및 국내 ETF 리스트 병합 (그룹 정보 추가)

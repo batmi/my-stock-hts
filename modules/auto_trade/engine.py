@@ -1026,6 +1026,57 @@ class OrderManager:
             if pre_qty is not None:
                 self.sell_pre_qty[str(odno)] = int(pre_qty)
 
+    def _track_open_order(self, code, odno):
+        """거래소에 살아 있는 주문을 메모리 추적에 올린다(이미 있으면 상태 유지).
+
+        이미 추적 중인 주문의 상태(ACCEPTED·PARTIAL_FILLED)를 ORDER_SENT로 되돌리면
+        안 된다 — 로컬 폴백 취소가 ORDER_SENT만 보므로 진행된 주문이 다시 취소 대상이 된다.
+        """
+        with self._lock:
+            if self.pending_orders.get(code, {}).get(odno) is not None:
+                return False
+            self.pending_orders.setdefault(code, {})[odno] = OrderStatus.ORDER_SENT
+            return True
+
+    def restore_pending_orders(self, cano=None, acnt=None):
+        """[재기동 복구] 거래소의 미체결 주문을 메모리 추적에 되살린다.
+
+        pending_orders는 메모리에만 있어서 재기동하면 비고, is_pending(code)가 False가
+        되는 순간 그 종목은 '주문 없음'으로 보인다. 그러면
+          · 매수: 후보 필터를 그대로 통과해 **두 번째 매수 주문**이 나간다(중복 진입,
+            의도한 리스크의 2배). 잔고에도 안 잡히므로 보유 종목 수 게이트도 못 막는다.
+          · 매도: 이미 매도 주문이 걸려 매도가능수량이 0인데 거래정지로 오인해
+            '매도 실패' 경보를 낸다.
+        manage_unfilled_orders도 같은 복구를 하지만 매수·매도 검사 **뒤에** 돌기 때문에,
+        첫 주기의 노출을 막으려면 시작 시점에 한 번 더 채워야 한다.
+
+        반환: 조회 성공 여부. 실패는 '미체결이 없다'와 구분해야 한다 — 호출부는 실패 시
+        신규 매수를 보류한다(모르는 상태로 주문을 더 내는 것이 가장 나쁘다).
+        """
+        try:
+            open_orders = api.get_domestic_open_orders(cano, acnt)
+        except Exception as e:
+            self.trader.log(f"[재기동 복구] 미체결 주문 조회 실패: {e}")
+            return False
+        if open_orders is None:
+            self.trader.log("[재기동 복구] 미체결 주문 조회 실패 (응답 없음)")
+            return False
+
+        restored = []
+        for item in open_orders:
+            odno, code = item.get('odno'), item.get('pdno')
+            if not odno or not code:
+                continue
+            if api.safe_int(item.get('rmn_qty', 0)) <= 0:
+                continue
+            if self._track_open_order(code, odno):
+                restored.append(f"{item.get('prdt_name') or code}({code}) No.{odno}")
+
+        if restored:
+            self.trader.log(f"[재기동 복구] 미체결 주문 {len(restored)}건을 추적에 복원: "
+                            + ", ".join(restored))
+        return True
+
     #  같은 원인의 주문 실패를 다시 알리기까지의 간격(초). 주기가 180초이므로 30분이면
     #  하루 종일 락된 종목의 알림이 6시간에 12건 수준으로 줄어든다(종전 120건).
     ORDER_FAIL_ALERT_COOLDOWN = 1800.0
@@ -1215,7 +1266,11 @@ class OrderManager:
         try:
             # 1. API를 통한 미체결 내역 조회
             unfilled_list = api.get_unfilled_orders()
-            
+            if unfilled_list is not None:
+                # 조회가 됐다 = 미체결 현황을 안다. 시작 시 복구가 실패해 보류됐던
+                # 신규 매수를 여기서 푼다(운영자 개입 없이 자동 복구되어야 한다).
+                self.trader.pending_restore_ok = True
+
             api_checked_odnos = set()
             cancel_seconds = getattr(config, 'UNFILLED_ORDER_CANCEL_SECONDS', 120)
             now = datetime.now()
@@ -1249,17 +1304,18 @@ class OrderManager:
                             order_status="접수", reason="앱(MTS)/HTS 외부 주문 감지"
                         )
                         
-                        # 내부 트래킹(메모리)에 등록
-                        with self._lock:
-                            if code not in self.pending_orders:
-                                self.pending_orders[code] = {}
-                            self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
-                            
                         self.trader.log(f"[외부 주문 감지] {name}({code}) {sll_buy_name} {qty}주 (No.{odno})")
                         msg = f"📡 [{sll_buy_name} 외부접수] {name}({code})\n수량: {qty}주\n단가: {int(price):,}원\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 등 외부 주문 감지"
                         api.send_telegram_message(msg)
-                        
+
                         trade = db_manager.db.get_trade_by_odno(odno)
+
+                    # [안전장치] 거래소에 살아 있는 주문은 **DB에 기록이 있든 없든** 메모리
+                    #  추적에 올린다. 종전에는 이 등록이 '외부 주문'(DB에 없는 주문) 분기
+                    #  안에만 있어서, 재기동 후에는 자기가 낸 주문이 DB에 있다는 이유로
+                    #  건너뛰어졌다. pending_orders는 메모리라 재기동하면 비는데, is_pending이
+                    #  False가 되면 같은 종목에 **두 번째 주문**이 나간다(중복 진입).
+                    self._track_open_order(code, odno)
 
                     try:
                         ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
