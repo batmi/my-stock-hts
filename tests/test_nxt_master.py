@@ -19,14 +19,29 @@ class FixedDatetime(_real_datetime):
     def now(cls, tz=None):
         return cls._FIXED
 
+@pytest.fixture(autouse=True)
+def clean_nxt_state():
+    """NXT 전역 상태를 매 테스트마다 초기화한다.
+
+    [필수] 로드 실패 시 재시도 쿨다운(_NXT_MASTER_RETRY_AT)이 남으면, 뒤이은 테스트에서
+    load_nxt_master()가 쿨다운에 걸려 **조회 자체를 하지 않는다**. 그러면 '마스터를 못
+    받았다'가 아니라 '아예 시도하지 않았다'인데 증상이 같아 보인다. 실제로 파일 순서가
+    바뀌자 test_load_nxt_master_success가 이 이유로 깨졌다.
+    """
+    api._NXT_MASTER_LOADED = False
+    api._NXT_MASTER_RETRY_AT = 0.0
+    api._NXT_TRADEABLE_CACHE.clear()
+    api._NXT_REJECTED_CACHE.clear()
+    yield
+    api._NXT_MASTER_RETRY_AT = 0.0
+    api._NXT_REJECTED_CACHE.clear()
+
+
 # --- NXT Master Tests ---
 @patch('api.requests.get')
 def test_load_nxt_master_success(mock_get):
     """NXT 마스터 파일 정상 로드 및 파싱 테스트"""
-    # 캐시 및 플래그 초기화
-    api._NXT_MASTER_LOADED = False
-    api._NXT_TRADEABLE_CACHE.clear()
-    
+
     mock_res = MagicMock()
     mock_res.status_code = 200
     # 정상적인 NXT 마스터 파일 응답 (파이프 구분자)

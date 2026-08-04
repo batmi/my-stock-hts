@@ -242,9 +242,16 @@ class ConclusionMonitor:
 
     def _check_conclusions(self, initial=False):
         """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
+        # [관찰 모드] 가상 주문은 paper_broker가 즉시 전량 체결로 처리하므로 대사할 대상이 없다.
+        #  아래 계좌 목록 구성이 cano="PAPER"·acnt_prdt_cd="" 조건에서 어차피 비지만,
+        #  '조건이 우연히 False라서 안 돈다'와 '의도적으로 돌지 않는다'는 구분되어야 한다
+        #  (mode 4가 토스에서 KIS로 바뀌며 그 우연이 한 번 뒤집혔다).
+        if getattr(config.session, 'is_paper', False):
+            return
+
         rate_limit_hit = False
         has_error = False # [추가]
-        
+
         # [추가] 개별 룰 로드 (체결 알림 시 정보 표시용)
         custom_rules = db_manager.db.get_all_stock_strategies()
         custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강

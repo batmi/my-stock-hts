@@ -42,6 +42,10 @@ class SessionManager:
         self.toss_acc_num = ""
         self.toss_account_seq = None  # /accounts 조회로 해석되는 accountSeq
 
+        # [추가] 가상투자(mode 4) 전용 KIS 앱키. 실전 인스턴스와 앱키를 분리하기 위한 것.
+        self.virt_app_key = ""
+        self.virt_app_secret = ""
+
         # [추가] 실시간 체결통보(WebSocket H0STCNI0/H0STCNI9) 구독키 = HTS 로그인 ID.
         #   환경변수 우선순위: 모드별(REAL_HTS_ID/SIM_HTS_ID) → 공통(KIS_HTS_ID/HTS_ID).
         #   미설정 시 체결통보 WS는 구독하지 않고 기존 REST 폴링(ConclusionMonitor)으로 폴백한다.
@@ -81,6 +85,13 @@ class SessionManager:
         self.toss_app_key = os.environ.get("TOSS_APP_KEY", "")
         self.toss_app_secret = os.environ.get("TOSS_APP_SECRET", "")
         self.toss_acc_num = os.environ.get("TOSS_ACC_NUM", "").strip()
+
+        # [추가] 가상투자 전용 KIS 앱키 (VIRT_). mode 4가 KIS 실전 서버에서 '시세만' 받을 때 쓴다.
+        #  실전 운용 인스턴스와 앱키를 나누는 것이 핵심이다 — KIS의 TPS(20)·웹소켓 동시 연결(1)·
+        #  토큰 발급(1분 1회) 제약이 모두 앱키 단위라, 같은 키를 두 프로세스가 쓰면 가상투자가
+        #  실계좌의 주문 경로를 갉아먹는다(양쪽 모두 EGW00201에 갇히고 웹소켓은 서로 끊는다).
+        self.virt_app_key = os.environ.get("VIRT_APP_KEY", "")
+        self.virt_app_secret = os.environ.get("VIRT_APP_SECRET", "")
 
         # [추가] 체결통보 WebSocket 구독키(HTS ID). 모드별 우선 → 공통 폴백.
         sim_hts = os.environ.get("SIM_HTS_ID", "")
@@ -152,19 +163,68 @@ class SessionManager:
             # [추가] 모의투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
                 config.console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
-        elif mode in ('3', '4'):
+        elif mode == '4':
+            # [가상투자] KIS 실전 서버에서 '시세만' 받고, 잔고·예수금·주문은 paper_broker의
+            #  가상 계좌로 대체한다. 실주문은 api.place_order 최상단 하드 가드가 원천 차단한다.
+            #
+            #  [왜 KIS인가] 종전에는 토스를 썼는데, 그러면 mode 2(실전)와 판단 근거가 달라진다 —
+            #  체결강도 미제공(매도잔량비로 대체)·지수는 tvDatafeed·일봉은 pykrx/FDR·웹소켓 없음.
+            #  검증 조건이 운용 조건과 다르면 검증 결과가 이전되지 않는다. KIS로 붙이면
+            #  mode 2와 완전히 같은 데이터 경로를 탄다.
+            #
+            #  [왜 별도 앱키인가] KIS의 TPS(20)·웹소켓 동시 연결(1)·토큰 발급(1분 1회) 제약이
+            #  전부 앱키 단위다. 실전 인스턴스와 키를 공유하면 두 프로세스가 서로를 모른 채
+            #  각자 18TPS로 밀어(합계 36) 양쪽 다 EGW00201에 갇히고, 웹소켓은 서로 끊는다.
+            #  즉 가상투자가 실계좌의 주문 경로를 갉아먹는다. VIRT_APP_KEY로 분리한다.
+            self.is_simulation = False
+            self.is_toss = False
+            self.is_paper = True
+            self.url_base = config.REAL_URL
+
+            # 시세 조회용 키 = VIRT_. 토큰 종류는 'REAL'을 쓰므로 real_* 슬롯에도 넣는다
+            #  (get_current_token → get_real_access_token → real_app_key 경로).
+            self.app_key = self.virt_app_key
+            self.app_secret = self.virt_app_secret
+            self.real_app_key = self.virt_app_key
+            self.real_app_secret = self.virt_app_secret
+            self.auto_app_key = self.virt_app_key
+            self.auto_app_secret = self.virt_app_secret
+
+            # [중요] 계좌번호는 실계좌를 쓰지 않는다. VIRT 앱키에도 실제 계좌가 매여 있으므로
+            #  실 계좌번호를 넣으면 '가상투자'인데 실 잔고를 읽게 된다. 'PAPER'로 두면 혹시
+            #  가로채기를 빠져나간 계좌성 호출이 있어도 조용히 성공하지 않고 실패한다(fail-safe).
+            self.cano = "PAPER"
+            self.acnt_prdt_cd = ""
+            self.auto_cano = self.cano
+            self.auto_acnt_prdt_cd = self.acnt_prdt_cd
+            self.hts_id = ""          # 체결통보 WS 구독 안 함(가상 체결이라 통보 대상이 없다)
+
+            self._activate_paper_mode()
+
+            if not self.virt_app_key or not self.virt_app_secret:
+                config.console.print(
+                    "[bold red]⚠️ 경고: 가상투자용 API Key(VIRT_APP_KEY/VIRT_APP_SECRET)가 "
+                    "환경변수에 설정되지 않았습니다. 시세 조회가 실패합니다.[/bold red]")
+            elif self.real_app_key and self.virt_app_key == os.environ.get("REAL_APP_KEY", ""):
+                # 분리의 목적이 사라지는 설정이라 조용히 넘기지 않는다.
+                config.console.print(
+                    "[bold yellow]⚠️ 경고: VIRT_APP_KEY가 REAL_APP_KEY와 같습니다. "
+                    "실전 인스턴스와 TPS·웹소켓·토큰을 공유하게 되어 양쪽 모두 불안정해집니다.[/bold yellow]")
+
+            key_status = "OK" if self.virt_app_key and self.virt_app_secret else "MISSING"
+            config.console.print("\n[dim cyan][가상투자 · 시세 소스 한국투자증권(실전)] 설정 로드 확인[/dim cyan]")
+            config.console.print(f"[dim]   - VIRT_APP_KEY 상태: {key_status}[/dim]")
+            config.console.print("[dim]   - 계좌: 가상(PAPER) — 실계좌 조회·주문 없음[/dim]")
+            return
+        elif mode == '3':
             # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.
-            # mode 4(관찰)는 시세·차트·지표를 토스 실전과 완전히 동일하게 쓰되,
-            # 잔고·예수금·주문만 paper_broker의 가상 계좌로 대체한다.
             self.is_simulation = False
             self.is_toss = True
-            self.is_paper = (mode == '4')
+            self.is_paper = False
             self.url_base = config.TOSS_URL
 
             # 화면 표시용 계좌번호 (accountSeq는 preflight에서 토큰 발급 후 /accounts로 해석)
-            #  관찰 모드는 실제 계좌를 조회하지 않으므로 가상 계좌 라벨을 쓴다 —
-            #  화면·텔레그램·매매기록 어디서도 실계좌와 혼동되지 않게 하기 위함이다.
-            self.cano = "PAPER" if self.is_paper else self.toss_acc_num
+            self.cano = self.toss_acc_num
             self.acnt_prdt_cd = ""
 
             # [중요] 토스는 단일 주식계좌만 제공한다. 시스템 트레이딩용 '자동' 계좌 개념이
@@ -177,10 +237,7 @@ class SessionManager:
             self.auto_app_key = ""
             self.auto_app_secret = ""
 
-            if self.is_paper:
-                self._activate_paper_mode()
-            else:
-                config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
+            config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
 
             if not self.toss_app_key or not self.toss_app_secret:
                 config.console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")

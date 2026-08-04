@@ -5941,6 +5941,9 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
 
 def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     """해외 주식 잔고 조회"""
+    # [관찰 모드] 가상 계좌는 국내 전용이다(place_order가 해외를 거부). 실계좌를 읽지 않는다.
+    if _paper_active():
+        return []
     if config.session.is_toss:
         return _toss_overseas_balance()
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
@@ -5966,6 +5969,9 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
 
 def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
     """금일 투자 손익 요약 조회"""
+    # [관찰 모드] 실계좌 손익이 아니다. 가상 손익은 paper_broker/DB가 갖고 있다.
+    if _paper_active():
+        return {'rt_cd': '0', 'output2': []}
     # [추가] 토스: 금일 손익 요약 미제공 → 빈 값
     if config.session.is_toss:
         return {'rt_cd': '0', 'output2': []}
@@ -5989,6 +5995,11 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
 
 def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 체결 내역 조회"""
+    # [관찰 모드] 실계좌 체결 내역을 조회하지 않는다. 가상 주문은 즉시 체결되어
+    #  대사(reconcile)할 미체결이 없고, 체결 기록은 paper DB가 갖고 있다.
+    #  (mode 4가 KIS 시세를 쓰게 되면서 is_toss 분기가 더 이상 막아주지 않는다)
+    if _paper_active():
+        return {'rt_cd': '0', 'output1': [], 'output2': {}}
     # [추가] 토스: CLOSED 주문 이력에서 당일 국내 체결을 KIS 형태로 변환
     if config.session.is_toss:
         return _toss_today_history(overseas=False)
@@ -6032,6 +6043,9 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
 
     실패는 조용히 빈 dict로 흘려보낸다(보유일수는 부가 정보이므로 잔고 조회를 막아선 안 된다).
     """
+    # [관찰 모드] 증권사 체결 이력이 존재하지 않는다(가상 체결). 매수일은 paper DB가 갖고 있다.
+    if _paper_active():
+        return {}
     if not codes:
         return {}
 
@@ -6097,6 +6111,9 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 해외주식 체결 내역 조회"""
+    # [관찰 모드] 가상 계좌는 국내 전용이라 해외 체결이 존재하지 않는다.
+    if _paper_active():
+        return {'rt_cd': '0', 'output1': [], 'output2': {}}
     # [추가] 토스: CLOSED 주문 이력에서 당일 해외 체결을 KIS 형태로 변환
     if config.session.is_toss:
         return _toss_today_history(overseas=True)
@@ -6216,6 +6233,9 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
 
 def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     """해외주식 미체결 내역 조회"""
+    # [관찰 모드] 가상 주문은 즉시 체결되어 미체결이 존재하지 않는다.
+    if _paper_active():
+        return []
     if config.session.is_toss:
         return _toss_open_orders('overseas')
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
@@ -6386,6 +6406,10 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
 
 def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """예수금(주문가능현금) 조회 (국내/모의)"""
+    # [관찰 모드] 가상 예수금으로 대체(get_deposit_balance와 동일 기조).
+    if _paper_active():
+        from modules import paper_broker
+        return paper_broker.get_deposit_balance()
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {
         "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
@@ -6398,6 +6422,9 @@ def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
 
 def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """외화 예수금 등 실전투자 계좌 잔고 상세 조회"""
+    # [관찰 모드] 실계좌 외화 예수금을 읽지 않는다.
+    if _paper_active():
+        return {}
     cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
     params = {
         "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
