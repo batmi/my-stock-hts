@@ -206,8 +206,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         ax1.bar(down.index, down['open'] - down['close'], bottom=down['close'], color='blue', edgecolor='blue', width=0.6, alpha=0.8)
         ax1.vlines(down.index, down['low'], down['high'], color='blue', linewidth=1)
         
-        # 종가선(선택적 희미한 표시)
-        ax1.plot(df.index, df['close'], label='종가', color='black', linewidth=1.0, alpha=0.3)
+        # [제거] 종가 연결 실선 — 캔들이 이미 종가를 담고 있어 정보가 겹치고,
+        #  EMA5(green)와 거의 같은 자리를 지나 선이 늘어나기만 한다(운영자 요청).
         ax1.plot(df.index, df['EMA5'], label='EMA 5', color='green', linewidth=1.2)
         # [색] 10일선은 saddlebrown — 음봉·지지선·SAR·박스하단이 모두 blue라 파랑 계열을 쓰면
         #  하락 구간에서 선이 캔들에 묻힌다. 5일선(green)과도 확실히 분리되고, 갈색은 기존
@@ -292,9 +292,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             period_str = "분봉 (1분, 당일)"
         ax1.set_title(f"차트 분석 [{period_str}]: {name}", fontsize=16, pad=20)
         ax1.set_ylabel("지수" if is_index else "가격")
-        # [범례] 3열 고정 — 항목이 7~9개(종가·EMA 5종·SAR + 추세선 0~2개)라 4열이면
+        # [범례] 3열 고정 — 항목이 6~8개(EMA 5종·SAR + 추세선 0~2개)라 4열이면
         #  마지막 줄에 1개만 남아 들쭉날쭉해진다. 3열이면 열 단위로 성격이 묶인다
-        #  (1열: 종가·단기 EMA / 2열: 중장기 EMA / 3열: SAR·추세선).
+        #  (1열: 단기 EMA / 2열: 중장기 EMA / 3열: SAR·추세선).
         ax1.legend(loc='upper left', ncol=3, fontsize=9)
         ax1.grid(True, alpha=0.2)
         try: ax1.yaxis.set_major_locator(MaxNLocator(nbins=30, prune='both'))

@@ -52,6 +52,9 @@ DB_WRITE_FAIL_ALERT_COOLDOWN = 1800.0
 #  계좌 차단기(일일 손실 한도) 점검이 이만큼 연속 실패하면 알린다. 한 번은 일시적
 #  데이터 결손일 수 있지만, 연속 실패는 '차단기가 꺼져 있다'는 뜻이다.
 CIRCUIT_BREAKER_ALERT_FAILS = 3
+#  '서버는 정상인데 코드가 터진다'를 다시 알리기까지의 간격(초). 이 상태는 대기로
+#  숨겨지지 않고 매 주기 반복되므로, 억제하지 않으면 알림이 도배된다.
+CODE_ERROR_ALERT_COOLDOWN = 1800.0
 
 
 def _pkg():
@@ -164,6 +167,10 @@ class AutoTrader:
             #  차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
             cls._instance.circuit_breaker_ran_at = 0.0
             cls._instance.circuit_breaker_fails = 0
+            # [안전장치] 서버는 정상인데 루프가 터진 횟수. 킬스위치가 '서버 장애 대기'로
+            #  오판해 매도 감시까지 멈추는 것을 막은 횟수이기도 하다.
+            cls._instance.code_error_streaks = 0
+            cls._instance._code_error_alerted_at = 0.0
 
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
@@ -1513,7 +1520,9 @@ class AutoTrader:
             f"• 자동매매 루프: 최근 시작 {self._health_time(self.last_cycle_at)} · 정상 완료 {self._health_time(self.last_success_at)}",
             f"• 주기 소요: {cycle_text}",
             f"• 최근 오류: {self._health_time(self.last_error_at)}" + (f" — {self.last_error_message[:160]}" if self.last_error_message else ""),
-            f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}",
+            f"• Kill Switch: 자동매매 {errors}/{max_err} · 체결 감시 {monitor_errors}/{max_err}"
+            + (f" · [bold red]서버 정상인데 루프 오류 {self.code_error_streaks}회 "
+               f"— 원인 확인 필요[/bold red]" if getattr(self, 'code_error_streaks', 0) else ""),
             f"• 주문 감시: 미체결 {pending_orders}건 · 예약 대기 {reserved_orders}건 · 오늘 주문/체결/취소 {today_order_count}/{today_fill_count}/{today_cancel_count}건",
             f"• 시세 연결: {feed_text}",
             f"• 알림 발신: {self._health_telegram_text()}",
@@ -3485,9 +3494,20 @@ class AutoTrader:
                     console.print(f"[bold red][ERROR] 시스템 트레이딩 루프 예외 발생 ({self.consecutive_errors}/{max_err}): {str(e)}[/bold red]")
                 
                 if self.consecutive_errors >= max_err:
+                    # [안전장치] 대기에 들어가기 전에 **정말 서버가 죽었는지** 먼저 확인한다.
+                    #  consecutive_errors는 API 오류만이 아니라 루프의 모든 예외에 오른다.
+                    #  코드 쪽 예외로 한도가 차면 서버가 멀쩡한데도 아래 대기 루프가 주기를
+                    #  통째로 붙잡고, 그 동안 매도 검사가 돌지 않아 손절·트레일링이 무감시가
+                    #  된다. 일일 손실 한도에서 이미 같은 결함을 고쳤다(engine.check_loss_limit
+                    #  주석: "정지는 매도 감시까지 꺼서 무방비 상태를 만든다").
+                    if self._errors_are_not_the_server(str(e)):
+                        self.consecutive_errors = 0
+                        time.sleep(10)
+                        continue        # 대기하지 않는다 — 다음 주기에 매도 검사를 다시 돈다
+
                     # [수정] 중단 대신 대기 모드로 전환
                     self.log(f"[장애 감지] 연속 에러 {max_err}회 발생. 서버 장애로 판단하여 대기 모드로 전환합니다.")
-                    
+
                     # [개선] 상세 알림 메시지 구성
                     err_reason = str(e)
                     if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
@@ -3515,6 +3535,38 @@ class AutoTrader:
                     continue
                 
                 time.sleep(10)
+
+    def _errors_are_not_the_server(self, err_reason):
+        """서버는 멀쩡한데 우리 쪽에서 터지고 있는가.
+
+        [왜 구분하는가] 서버 장애라면 대기가 옳다 — 주문 자체가 나갈 수 없으니 붙잡고
+        있어도 잃을 게 없다. 그러나 코드 쪽 예외라면 대기는 최악이다. 주문은 나갈 수
+        있는데 매도 검사를 멈춰 손절·트레일링만 꺼진다.
+
+        참이면 대기하지 않고 다음 주기로 넘어간다. 버그가 계속되면 에러가 다시 쌓여
+        여기로 돌아오지만, 그 사이 **매 주기 매도 검사는 돈다**. 진동하더라도 무감시보다
+        낫다(루프 말미 sleep이 하한을 잡아 준다).
+        """
+        try:
+            healthy = api.check_server_health()
+        except Exception:
+            return False        # 확인조차 안 되면 서버 문제로 보고 대기한다(보수적)
+        if not healthy:
+            return False
+
+        self.code_error_streaks = getattr(self, 'code_error_streaks', 0) + 1
+        self.log(f"[장애 판정 정정] 연속 에러가 쌓였지만 서버는 정상입니다 — 코드 쪽 오류로 "
+                 f"보고 대기하지 않습니다(매도 감시 유지). 원인: {err_reason}")
+        logger.error(f"[킬스위치] 서버 정상 · 코드 오류 추정({self.code_error_streaks}회): {err_reason}")
+
+        now = time.time()
+        if now - getattr(self, '_code_error_alerted_at', 0.0) > CODE_ERROR_ALERT_COOLDOWN:
+            self._code_error_alerted_at = now
+            api.send_telegram_message(
+                f"⚠️ [반복 오류] 연속 에러가 한도에 닿았으나 증권사 서버는 정상입니다.\n"
+                f"코드 쪽 오류로 보고 **대기하지 않습니다**(매도·손절 감시 유지).\n"
+                f"신규 매수는 계속되므로 원인 확인이 필요합니다.\n\n원인: {err_reason}")
+        return True
 
     def _wait_for_server_recovery(self):
         """서버가 정상화될 때까지 대기"""
