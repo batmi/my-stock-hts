@@ -246,8 +246,9 @@ class ConclusionMonitor:
         #  아래 계좌 목록 구성이 cano="PAPER"·acnt_prdt_cd="" 조건에서 어차피 비지만,
         #  '조건이 우연히 False라서 안 돈다'와 '의도적으로 돌지 않는다'는 구분되어야 한다
         #  (mode 4가 토스에서 KIS로 바뀌며 그 우연이 한 번 뒤집혔다).
+        #  [반환 규약] 호출부가 (rate_limit_hit, has_error)로 언패킹한다. 맨 반환은 안 된다.
         if getattr(config.session, 'is_paper', False):
-            return
+            return False, False
 
         rate_limit_hit = False
         has_error = False # [추가]
