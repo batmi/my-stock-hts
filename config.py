@@ -174,6 +174,21 @@ class GlobalSettings(BaseModel):
     JOURNAL_SYNC_USE: bool = False
 
     USE_MARKET_FILTER: bool = True          # 장세 판단 필터 사용 여부 (코스피 지수 추세 확인)
+                                            # [주의] 이 토글은 신규 매수 게이트 하나만 끄는 것이 아니다.
+                                            #   피라미딩의 시장 게이트도 함께 풀린다 — trader._try_pyramid_buy의
+                                            #   조건이 `USE_MARKET_FILTER and PYRAMIDING_REQUIRE_HEALTHY_MARKET`
+                                            #   이라 앞이 False면 뒤는 평가되지 않는다. 설정 화면에는
+                                            #   PYRAMIDING_REQUIRE_HEALTHY_MARKET이 true로 보이는데 실제로는
+                                            #   작동하지 않아 눈에 띄지 않는다. 즉 필터 OFF는 '약세장에 진입한다'가
+                                            #   아니라 '약세장에서 진 포지션에 50%씩 3차까지 더 넣는다'가 된다.
+                                            #   [실측 2026-08-05] 727거래일·30회 짝비교(시드 500만·슬롯4):
+                                            #     증액 54회 → 72.5회(+34%), MDD 중앙 -26.8% → -32.1%,
+                                            #     MAR 5.59 → 4.64, 평균 현금 47.9% → 32.6%.
+                                            #     (수익은 오히려 +3.1%p — 필터는 수익이 아니라 손실 폭을 자르는 장치다.
+                                            #      MARKET_FILTER_MA의 2026-08-03 검증 ①과 같은 결론을 독립 재현한 것)
+                                            #   반면 국면·휩소율·드로다운 리스크 배수는 영향받지 않는다 —
+                                            #   _update_risk_scale은 market_index_status가 아니라
+                                            #   analysis.get_market_regime_detail()을 따로 부르기 때문이다.
     # [추세추종 검증] 상대강도(RS) 필터 — 기본 OFF. 실증 결과 추세 초입 진입을 막는 역효과가 확인되었다.
     #   운영 유니버스 37종목×9년(2016~2026)의 실제 매수 신호 10,307건 검증:
     #   RS>0 게이트는 신호의 28.6%를 차단하면서 대박(120일 +30%↑) 비율 26.6%→25.4%,
@@ -1676,8 +1691,11 @@ def reset_all_settings():
             "USE_REGIME_RISK_SCALING": True, "PENDING_DOWN_RISK_SCALE": 0.6, "BEAR_RISK_SCALE": 1.0,
             "USE_WHIPSAW_RISK_SCALING": True, "WHIPSAW_LO": 0.40, "WHIPSAW_HI": 0.75,
             "WHIPSAW_MIN_SCALE": 0.85,
-            "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.75,
-            "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.5, "DD_LOOKBACK_DAYS": 90,
+            # [Fix 2026-08-05] 0.75/0.5는 2026-08-04 실증으로 0.90/0.80에 밀려난 구 값인데
+            #  이 초기화 경로에만 남아 있었다. '전체 설정 초기화'를 누르면 기각된 값으로
+            #  되돌아갔다(위 [동기화] 주석이 요구하는 불변식 위반).
+            "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.90,
+            "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.80, "DD_LOOKBACK_DAYS": 90,
             "GAP_RISK_BUFFER": 1.2
         }
         settings.INDICATOR_PARAMS = {

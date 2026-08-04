@@ -39,6 +39,31 @@ def test_custom_settings_detection(setup_temp_config):
     assert "ANALYSIS_THRESHOLDS.BUY_SCORE" in customs
     assert customs["ANALYSIS_THRESHOLDS.BUY_SCORE"]["current"] == 8.0
 
+def test_reset_matches_the_class_defaults(setup_temp_config):
+    """[불변식] '전체 초기화'가 되돌리는 값 = GlobalSettings 클래스 기본값.
+
+    reset_all_settings()는 딕셔너리 참조 오염을 막으려고 기본값을 **하드코딩으로 한 번 더**
+    적는다(config.py의 [동기화] 주석). 두 벌이라 한쪽만 고치면 조용히 어긋나고, 그때
+    '초기화'는 기본값이 아니라 **옛 값**으로 되돌리는 버튼이 된다.
+
+    [실제 사고 2026-08-05] DD_SCALE_1/2가 2026-08-04 실증으로 0.75/0.5 → 0.90/0.80으로
+    바뀌었는데 초기화 경로에만 구 값이 남아, 초기화하면 기각된 설정으로 되돌아갔다.
+    주석으로만 요구하던 불변식을 여기서 강제한다.
+    """
+    cls_defaults = config.GlobalSettings()
+    for key in ("ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS",
+                "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS", "RISK_SCALING_PARAMS"):
+        expected = getattr(cls_defaults, key)
+        actual = getattr(config.settings, key)
+        assert isinstance(expected, dict), f"{key}가 딕셔너리가 아니다"
+        diff = {k: (expected.get(k, "<없음>"), actual.get(k, "<없음>"))
+                for k in set(expected) | set(actual)
+                if expected.get(k, "<없음>") != actual.get(k, "<없음>")}
+        assert not diff, (
+            f"{key}: 초기화 결과가 클래스 기본값과 다르다 "
+            f"(항목별 (클래스, 초기화후)): {diff}")
+
+
 def test_reset_custom_settings(setup_temp_config):
     """특정 커스텀 설정(부분 초기화) 복원 기능 검증"""
     # 설정 변경 후 동적 설정 파일(JSON) 저장 시뮬레이션
