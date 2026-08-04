@@ -887,6 +887,10 @@ class OrderManager:
         #  풀리지 않아 그 종목의 매도·손절 판정이 무기한 건너뛰어진다 — 자동 복구가 안 되는
         #  상태라 한도를 넘기면 운영자에게 알린다. 취소 성공 시 항목을 지운다.
         self.cancel_failures = {}
+        # [안전장치] '고아 주문' 경보를 이미 보낸 주문번호. API 미체결 목록에서 사라졌는데
+        #  로컬 폴백(ORDER_SENT 전용)도 건드리지 않는 상태(ACCEPTED·PARTIAL_FILLED)라
+        #  어느 경로로도 pending이 풀리지 않는 주문이다. 주문 종결 시 항목을 지운다.
+        self.orphan_alerted = set()
         # [최적화] 누적 주문 접수 카운터 — 루프에서 '이번 주기에 주문이 나갔는가'를 판단해
         #  주문이 없으면 루프 말미 잔고/예수금 재조회를 생략하기 위한 단조 증가 값
         self.orders_sent_count = 0
@@ -909,6 +913,7 @@ class OrderManager:
                         if not self.pending_orders[code]:
                             del self.pending_orders[code]
                         self.sell_pre_qty.pop(str(odno), None)
+                        self.orphan_alerted.discard(str(odno))
                         self.trader.log(f"[OrderState] 주문 종결({status}): {code} (No.{odno})")
 
                         # [Fix] 전량 매도 앵커 정리는 체결 확정 시에만 수행 (취소/거부 시 앵커 보존)
@@ -1373,8 +1378,72 @@ class OrderManager:
                                                     self.trader.log(f"-> 취소 실패: {res.get('msg1')}")
                                     except Exception as e:
                                         self.trader.log(f"로컬 미체결 처리 중 오류: {e}")
+
+            # 3. [안전장치] 어느 경로로도 풀리지 않는 '고아' 주문 경보
+            self._alert_orphan_pending(api_checked_odnos, cancel_seconds, now)
         except Exception as e:
             self.trader.log(f"미체결 관리 중 오류: {e}")
+
+    # 고아 판정 유예 배수 — 취소 타임아웃의 몇 배가 지나야 '비정상'으로 볼 것인가.
+    #  ACCEPTED(정상 접수 대기)를 곧바로 경보하면 평범한 지정가 대기가 전부 알림이 된다.
+    ORPHAN_ALERT_GRACE = 2.0
+
+    def _alert_orphan_pending(self, api_checked_odnos, cancel_seconds, now):
+        """API에서 사라졌는데 로컬 폴백도 건드리지 않는 주문을 운영자에게 알린다.
+
+        pending에서 빠지는 경로는 두 갈래뿐이다.
+          ① update_order_status 가 FILLED/CANCELED/REJECTED 를 받는다 (체결 이력 API가 알려줘야 한다)
+          ② 로컬 폴백이 강제 취소한다 — 단 `status == ORDER_SENT` 인 주문만 본다
+
+        따라서 API가 상태를 한 번 진행시킨 뒤(ACCEPTED·PARTIAL_FILLED) 목록에서
+        사라지면 ①도 ②도 걸리지 않아 pending이 세션 내내 유지된다. is_pending(code)가
+        True인 동안 그 종목은 매도 워커에서 통째로 빠지므로, 손절 판정이 함께 멈춘다.
+
+        자동 정리는 하지 않는다. 주문이 실제로 살아 있는데 pending을 풀면 매수를 열어 둔
+        채 같은 종목에 매도가 나가 서로 싸운다. 취소 실패 경보와 같은 취급으로,
+        운영자가 HTS에서 확인·정리하도록 알리기만 한다(주문당 1회).
+        """
+        try:
+            with self._lock:
+                snapshot = {c: dict(o) for c, o in self.pending_orders.items()}
+
+            for code, orders in snapshot.items():
+                for odno, status in orders.items():
+                    if odno in api_checked_odnos:
+                        continue
+                    # 로컬 폴백은 모의투자에서만, 그것도 ORDER_SENT만 강제 취소한다.
+                    #  그 조합에 해당할 때만 경보를 미룬다 — 실계좌는 폴백 자체가 돌지
+                    #  않으므로 ORDER_SENT 고아도 똑같이 갇힌다.
+                    if config.session.is_simulation and status == OrderStatus.ORDER_SENT:
+                        continue
+                    if str(odno) in self.orphan_alerted:
+                        continue
+
+                    trade = db_manager.db.get_trade_by_odno(odno)
+                    if not trade or not trade.get('time'):
+                        continue
+                    try:
+                        ord_time = datetime.strptime(trade['time'], "%Y-%m-%d %H:%M:%S")
+                    except (ValueError, TypeError):
+                        continue
+                    elapsed = (now - ord_time).total_seconds()
+                    if elapsed < cancel_seconds * self.ORPHAN_ALERT_GRACE:
+                        continue
+
+                    self.orphan_alerted.add(str(odno))
+                    name = trade.get('name', code)
+                    self.trader.log(
+                        f"[고아 주문] {name}({code}) No.{odno} 상태={status} · 경과 {int(elapsed)}초 — "
+                        f"API 미체결 목록에 없어 자동으로 풀리지 않습니다. 손절 판정이 멈춥니다.")
+                    api.send_telegram_message(
+                        f"⚠️ [주문 상태 불일치] {name}({code})\n"
+                        f"주문번호: {utils.format_order_no(odno)}\n"
+                        f"상태: {status} · 경과 {int(elapsed)}초\n\n"
+                        f"증권사 미체결 목록에서는 사라졌는데 시스템에는 진행 중으로 남아 있습니다. "
+                        f"이 상태가 유지되는 동안 이 종목은 손절 판정에서 제외됩니다. "
+                        f"HTS/MTS에서 주문 상태를 확인해 주세요.")
+        except Exception as e:
+            self.trader.log(f"고아 주문 점검 실패: {e}")
 
 class RiskManager:
     """리스크 관리 및 자산 배분 전담 클래스"""
