@@ -4340,6 +4340,10 @@ def fetch_sellable_quantity(stock_code):
     return 0
 
 def fetch_overseas_buyable_quantity(stock_code, price, excd):
+    # [관찰 모드] 해외 주문은 지원하지 않는다(place_order가 거부). 실계좌를 조회할 이유가
+    #  없으므로 0으로 답한다 — 호출부는 예수금 폴백을 타고, 주문은 발주 단계에서 막힌다.
+    if _paper_active():
+        return 0
     if config.session.is_toss:
         return _toss_buyable_qty(stock_code, price, "USD")
     trade_excd = excd
@@ -4362,6 +4366,9 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
     return 0
 
 def fetch_overseas_sellable_quantity(stock_code, excd):
+    # [관찰 모드] 가상 계좌에는 해외 포지션이 없다(get_overseas_balance가 빈 목록).
+    if _paper_active():
+        return 0
     if config.session.is_toss:
         return _toss_sellable_qty(stock_code)
     trade_excds = []
