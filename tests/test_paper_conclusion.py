@@ -154,6 +154,32 @@ def test_paper_restart_backfills_today_ledger(paper, monitor, monkeypatch):
     assert len(inserted) == 1
 
 
+def test_reset_clears_only_paper_daily_baseline(paper, monkeypatch, tmp_path):
+    """초기화는 가상 계좌의 일일 기준선만 지우고 실계좌 기준선은 보존한다.
+
+    daily_asset_state.json은 실계좌와 한 파일을 공유한다. 통째로 지우면 실전
+    인스턴스가 같은 날 재기동할 때 당일 손실 기준을 잃는다.
+    """
+    import jsonio
+    from modules.auto_trade import common as at_common
+
+    state = tmp_path / "daily_asset_state.json"
+    # 실제 관찰 모드 세션과 동일하게 둔다(cano=PAPER, 상품코드 없음).
+    for attr, val in (('cano', 'PAPER'), ('acnt_prdt_cd', ''),
+                      ('auto_cano', 'PAPER'), ('auto_acnt_prdt_cd', '')):
+        monkeypatch.setattr(config.session, attr, val, raising=False)
+    monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(state))
+    jsonio.save_json(str(state), {"date": "2026-08-05",
+                                  "accounts": {"PAPER-": 5_000_000, "44048158-01": 10027}})
+
+    paper.reset(1_000_000)
+
+    left = (jsonio.load_json(str(state), default={}) or {}).get("accounts", {})
+    assert "PAPER-" not in left, "가상 계좌 기준선이 남았다"
+    assert left.get("44048158-01") == 10027, "실계좌 기준선을 지웠다"
+    assert paper.get_seed() == 1_000_000
+
+
 def test_get_fill_by_odno(paper):
     """주문번호 대사는 해당 주문의 체결만 정확히 집어낸다."""
     res = api.place_order("domestic", "buy", "005930", 3, 70000, "00")

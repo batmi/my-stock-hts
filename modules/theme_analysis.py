@@ -1506,31 +1506,26 @@ def _run_tradingview_screener():
         target_choices = [str(i) for i in range(1, 10)] if preset_choice == "0" else [preset_choice]
         # 메뉴 순번 -> 실행할 프리셋 ID들로 전개 (메뉴 1번은 급상승+급하락 2개 프리셋)
         target_ids = [pid for mk in target_choices for pid in SCREENER_MENU_TO_ID[mk]]
-        results = []
         stock_map = {}
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=config.console,
-            transient=True
-        ) as progress:
-            is_single = len(target_ids) == 1
-            if is_single:
-                task_main = progress.add_task("[cyan]TradingView 스크리너 검색 중...[/cyan]", total=None)
-            else:
-                task_main = progress.add_task("[cyan]프리셋 스캔 진행률[/cyan]", total=len(target_ids))
+        # [진행 표시] 프리셋마다 진행바를 따로 열고 닫는다 — 하나의 전체 진행바로 묶으면
+        #  9개 프리셋이 다 끝날 때까지 아무것도 볼 수 없다. 먼저 조회된 프리셋 결과를
+        #  먼저 읽고 다음 조회를 기다릴 수 있도록, 진행바 종료 직후 그 자리에서 출력한다.
+        total_presets = len(target_ids)
+        for seq, pid in enumerate(target_ids, 1):
+            p_name = SCREENER_PRESETS[pid]["name"]
+            label = p_name if total_presets == 1 else f"[{seq}/{total_presets}] {p_name}"
 
-            presets_done = 0  # [추가] 전체 진행률을 진행 중 프리셋의 소진행률까지 반영하기 위한 완료 카운터
-            for pid in target_ids:
-                p_name = SCREENER_PRESETS[pid]["name"]
-                if is_single:
-                    progress.update(task_main, description=f"[cyan]{p_name} 검색 중...[/cyan]", total=None, completed=0)
-                else:
-                    task_sub = progress.add_task(f"[cyan]  └ {p_name} 검색 중...[/cyan]", total=None)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=config.console,
+                transient=True
+            ) as progress:
+                task = progress.add_task(f"[cyan]{label} 검색 중...[/cyan]", total=None)
 
                 # [단일 관리 지점] 프리셋 쿼리/후처리는 build_screener_query()에서 생성 (telegram봇과 공유)
                 query, post_fn = build_screener_query(market, pid)
@@ -1552,14 +1547,11 @@ def _run_tradingview_screener():
                 if df is not None and not df.empty and post_fn is not None:
                     df = post_fn(df)
 
+                table = None
                 if df is not None and not df.empty:
-                    if is_single:
-                        progress.update(task_main, description=f"[cyan]{p_name} 결과 정리 중...[/cyan]", total=len(df), completed=0)
-                        active_task = task_main
-                    else:
-                        progress.update(task_sub, description=f"[cyan]  └ {p_name} 결과 정리 중...[/cyan]", total=len(df), completed=0)
-                        active_task = task_sub
-                
+                    progress.update(task, description=f"[cyan]{label} 결과 정리 중...[/cyan]",
+                                    total=len(df), completed=0)
+
                     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
                     table.add_column("티커/코드", justify="left", style="cyan")
                     table.add_column("종목명", justify="left")
@@ -1600,8 +1592,6 @@ def _run_tradingview_screener():
                         "Miscellaneous": "기타"
                     }
                     
-                    total_rows = len(df)  # [추가] 메인 진행률에 프리셋 내부 소진행률을 반영하기 위한 총 행 수
-                    row_done = 0
                     for idx, row in df.iterrows():
                         ticker = str(row.get('name', '')).strip()
                         name = str(row.get('description', ticker)).strip()
@@ -1712,28 +1702,11 @@ def _run_tradingview_screener():
                             ticker, name, sector, close_str, change_str, w52_pos_str, sma20_str,
                             macd_str, adx_str, rsi_str, per_str, roe_str, div_str, vol_str, avg_vol_str
                         )
-                        progress.advance(active_task)
-                        # [추가] 진행 중 프리셋의 행 처리 비율을 메인 진행률에 실시간 반영
-                        if not is_single and total_rows:
-                            row_done += 1
-                            progress.update(task_main, completed=presets_done + row_done / total_rows)
+                        progress.advance(task)
 
-                    if not is_single:
-                        progress.remove_task(task_sub)
-                    results.append((pid, p_name, table))
-                else:
-                    if not is_single:
-                        progress.remove_task(task_sub)
-                    results.append((pid, p_name, None))
-
-                if not is_single:
-                    # 소진행률 반영으로 completed가 부동소수 오차/미달일 수 있어 정수 완료값으로 정합
-                    presets_done += 1
-                    progress.update(task_main, completed=presets_done)
-
-        for pid, p_full_name, table in results:
+            # 진행바(transient)가 닫힌 뒤 이 프리셋 결과를 즉시 출력한다.
             cond_str = f" {preset_conditions[pid]}" if preset_conditions.get(pid) else ""
-            config.console.print(f"\n[bold cyan]▶ {p_full_name}{cond_str}[/bold cyan]")
+            config.console.print(f"\n[bold cyan]▶ {p_name}{cond_str}[/bold cyan]")
             if pid in preset_desc:
                 config.console.print(f"   [dim]: {preset_desc[pid]}[/dim]")
 
@@ -1741,7 +1714,8 @@ def _run_tradingview_screener():
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
             else:
                 config.console.print(table)
-        
+
+
         # 개별 종목 상세 분석 연동
         config.console.print()
         ans = Prompt.ask("개별 종목 상세 분석을 진행하시겠습니까?", choices=["y", "n"], default="n")

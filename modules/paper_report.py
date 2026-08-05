@@ -65,11 +65,11 @@ def show_paper_menu():
         return True
 
     menu_items = [
-        ("1", "가상계좌 입금", "시드 추가 — 투입원금 증가"),
-        ("2", "가상계좌 출금", "시드 인출 — 투입원금 감소"),
-        ("3", "페이퍼 트레이딩 초기화", "포지션·체결·자산곡선 전체 삭제"),
-        ("4", "자산 곡선", "일별 가상 자산 추이"),
-        ("5", "성과 현황", "시드 대비 성과 · 백테스트 분포 대비"),
+        ("1", "가상계좌 입금", "Deposit"),
+        ("2", "가상계좌 출금", "Withdraw"),
+        ("3", "페이퍼 트레이딩 초기화", "Reset Account"),
+        ("4", "자산 곡선", "Equity Curve"),
+        ("5", "성과 현황", "Performance"),
     ]
     menu_map = {key: name for key, name, _ in menu_items}
     base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
@@ -77,8 +77,8 @@ def show_paper_menu():
 
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
-        choice = utils.show_menu(None, menu_items, default_choice=last_choice,
-                                 text_before=_account_line())
+        # 계좌 개설·시세 소스 정보는 [5] 성과 현황에서 보여준다(메뉴 화면은 짧게 유지).
+        choice = utils.show_menu(None, menu_items, default_choice=last_choice)
         if choice.lower() == "q":
             return False
         if choice.lower() == "b":
@@ -102,17 +102,11 @@ def show_paper_menu():
             utils.pause()
 
 
-def _account_line():
-    """계좌 개설 시각·시세 소스 한 줄. 메뉴와 성과 화면이 함께 쓴다."""
-    perf = paper_broker.get_performance()
-    return (f"[dim]개설 {perf['started_at']} · 시세 소스: 한국투자증권(실전) · "
-            f"실주문 차단[/dim]\n")
-
-
 def _print_status():
     perf = paper_broker.get_performance()
-    config.console.print(f"[bold cyan]성과 현황 (Paper Trading)[/bold cyan]")
-    config.console.print(_account_line())
+    config.console.print("[bold cyan]성과 현황 (Paper Trading)[/bold cyan]")
+    config.console.print(f"[dim]개설 {perf['started_at']} · 시세 소스: 한국투자증권(실전) · "
+                         f"실주문 차단[/dim]\n")
 
     ret_color = "red" if perf["total_return"] > 0 else ("blue" if perf["total_return"] < 0 else "white")
     t = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim", show_header=False)
@@ -207,6 +201,7 @@ def _reset_account():
         f"[dim]현재 시드 {current_seed:,}원 · 총자산 {perf['total']:,.0f}원 "
         f"({perf['total_return']:+.2f}%) · 청산 {perf['sell_count']}건[/dim]\n"
         f"[dim]보유 포지션·체결 내역·자산 곡선이 모두 삭제되며 되돌릴 수 없습니다.[/dim]\n"
+        f"[dim]※ 오늘 시작 자산 기준선(일일 손실 한도·드로다운 판정 기준)도 함께 초기화됩니다.[/dim]\n"
         f"[dim]※ 5-4 트레이딩 평가에 쓰이는 매매 기록(trades)은 남습니다 — "
         f"완전히 지우려면 가상투자 DB 파일을 삭제하세요.[/dim]")
     if Prompt.ask("정말 초기화할까요?", choices=["y", "n"], default="n") != "y":

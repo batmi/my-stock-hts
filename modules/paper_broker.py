@@ -405,6 +405,60 @@ def adjust_seed(amount):
         return True, f"{'입금' if amount >= 0 else '출금'} {abs(amount):,}원 반영 완료"
 
 
+def _account_key():
+    """일일 자산 기준선이 쓰는 계좌 키. common._get_trade_account()와 같은 규칙."""
+    s = config.session
+    cano = getattr(s, 'auto_cano', None) or getattr(s, 'cano', '') or ''
+    acnt = getattr(s, 'auto_acnt_prdt_cd', None) or getattr(s, 'acnt_prdt_cd', '') or ''
+    return f"{cano}-{acnt}"
+
+
+def _clear_daily_baseline():
+    """초기화 후 남는 '오늘 시작 자산' 기준선을 지운다.
+
+    일일 손실 한도(check_loss_limit)와 드로다운 기반 리스크 스케일링(HWM)이 이
+    기준선을 본다. 시드를 바꿔 초기화했는데 기준선이 남아 있으면 500만 → 100만
+    축소가 -80% 손실로 읽혀 방어 모드가 즉시 걸리고, 반대로 키우면 드로다운이
+    과소평가된다.
+
+    [주의] daily_asset_state.json은 실계좌 기준선과 **한 파일을 공유**한다. 파일을
+    통째로 지우면 실전 인스턴스가 같은 날 재기동할 때 당일 손실 기준을 잃고 현재
+    자산으로 다시 잡는다(그날의 낙폭이 조용히 사라진다). 가상 계좌 키만 지운다.
+    daily_asset_history는 페이퍼 DB에 따로 있지만 대칭성을 위해 같은 키로 지운다.
+    """
+    key = _account_key()
+
+    try:
+        import jsonio
+        from modules.auto_trade.common import DAILY_STATE_FILE
+        data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
+        accounts = data.get("accounts") or {}
+        if key in accounts:
+            accounts.pop(key, None)
+            data["accounts"] = accounts
+            jsonio.save_json(DAILY_STATE_FILE, data)
+            logger.info(f"[PAPER] 일일 시작 자산 기준선 삭제: {key}")
+    except Exception as e:
+        logger.warning(f"[PAPER] 일일 자산 기준선 정리 실패(무시): {e}")
+
+    try:
+        _db().execute_query("DELETE FROM daily_asset_history WHERE account=?", (key,))
+    except Exception as e:
+        logger.warning(f"[PAPER] 일일 자산 이력 정리 실패(무시): {e}")
+
+    # 실행 중인 트레이더의 메모리 기준선도 함께 내린다(재기동 없이 반영).
+    #  0은 '미설정'이라 손실 한도 판정이 건너뛰어지고, 다음 초기화 때 새 시드로 다시 잡힌다.
+    try:
+        import modules.auto_trade as _at
+        inst = getattr(_at.AutoTrader, "_instance", None)
+        if inst is not None:
+            inst.initial_asset = 0
+            inst._hwm_cache = 0.0
+            inst._hwm_cache_date = None
+    except Exception as e:
+        logger.warning(f"[PAPER] 트레이더 기준선 초기화 실패(무시): {e}")
+
+
 def reset(seed=None):
     """가상 계좌 초기화. 포지션·체결·자산곡선을 모두 지우고 시드를 다시 넣는다."""
     with _lock:
@@ -415,3 +469,4 @@ def reset(seed=None):
         _set_state('cash', seed)
         _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원)")
+    _clear_daily_baseline()
