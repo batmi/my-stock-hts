@@ -34,9 +34,10 @@ import re # [추가] 정규식 모듈
 import pandas as pd
 
 from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES, OrderManager,
-                                       RiskManager, UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
+                                       RiskManager, STUCK_PENDING_ALERT_CYCLES,
+                                       UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
-                                       UNMANAGED_STALE_PRICE)
+                                       UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
 from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
@@ -158,6 +159,8 @@ class AutoTrader:
             # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
             #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
             cls._instance.no_sellable_streak = {}
+            # 대기 주문에 묶여 매도 판정에서 빠진 연속 주기 수 {code: n}
+            cls._instance.stuck_pending_streak = {}
             # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
             #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
             cls._instance.pending_restore_ok = True
@@ -4185,6 +4188,8 @@ class AutoTrader:
             held = {h['pdno'] for h in (holdings or []) if api.safe_int(h.get('hldg_qty')) > 0}
             for gone in [c for c in self.no_sellable_streak if c not in held]:
                 del self.no_sellable_streak[gone]
+            for gone in [c for c in self.stuck_pending_streak if c not in held]:
+                del self.stuck_pending_streak[gone]
         except Exception:
             pass
 
@@ -4291,8 +4296,20 @@ class AutoTrader:
                 #  청산되지 않는다("탈출 전략이 없다면 포지션을 잡지 마라"와 충돌).
                 #  손절 상황이면 미체결 '매수'를 즉시 취소해, 다음 주기에 정상 청산되게 한다.
                 self._cancel_pending_buy_on_stop_loss(code, name, item, buy_trades_map.get(code))
-                if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 진행 중인 주문 존재")
+                # [관측성] 종전에는 DEBUG 로그라 화면·파일 어디에도 남지 않았다. 이 스킵은
+                #  손절·트레일링을 통째로 끄는 경로이므로 **항상** 남긴다 — 매도가 안 나가는데
+                #  이유를 알 수 없던 원인이 이것이었다(2026-08-05).
+                odnos = self.order_manager.pending_odnos(code)
+                streak = self.stuck_pending_streak.get(code, 0) + 1
+                self.stuck_pending_streak[code] = streak
+                self.log(f"[분석스킵] {name}({code}): 진행 중인 주문 존재 "
+                         f"({', '.join(str(o) for o in odnos) or '?'} · {streak}회 연속) "
+                         f"— 이 동안 손절·트레일링 판정이 건너뛰어집니다")
+                if streak >= STUCK_PENDING_ALERT_CYCLES:
+                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_STUCK_PENDING,
+                                               buy_trades_map.get(code))
                 return
+            self.stuck_pending_streak.pop(code, None)
 
             # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 매도 스킵
             now_time = datetime.now().strftime("%H%M")
@@ -4329,8 +4346,11 @@ class AutoTrader:
             if not self.is_running: return # 대기 후 재확인
             
             if qty <= 0:
+                # [관측성] 위 대기 주문 스킵과 같은 이유로 항상 남긴다. 잔고에는 보이는데
+                #  주문 가능 수량만 0이면 시스템은 그 포지션을 지켜주지 못한다.
                 self.set_stock_state(code, None)
-                if config.FILE_DEBUG_LEVEL == "DEBUG": self.log(f"[분석스킵] {name}: 주문 가능 수량 0")
+                self.log(f"[분석스킵] {name}({code}): 주문 가능 수량 0 "
+                         f"— 손절·트레일링 판정이 건너뛰어집니다")
                 return
 
             # [안전장치] 현재가가 0/음수면 판정 자체가 불가능하다. 잔고 응답의 prpr은 거래정지·

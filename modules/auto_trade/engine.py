@@ -60,9 +60,17 @@ UNMANAGED_OVERSEAS = "해외 미지원"
 #  is_pending 검사에서 이미 걸러지므로, 여기까지 오면 거래정지·상장폐지·HTS에서 직접 낸
 #  매도 주문에 물량이 묶인 경우다 — 어느 쪽이든 시스템이 스스로 빠져나올 수 없다.
 UNMANAGED_NO_SELLABLE = "매도가능수량 0 (거래정지·외부주문 의심)"
+#  주문 상태기계에 대기 주문이 남아 그 종목의 매도 판정이 통째로 건너뛰어지는 상태.
+#  정상 주문은 몇 주기 안에 체결·취소로 종결되지만, 상태기계에 유령 항목이 남으면
+#  **손절·트레일링이 조용히 영구 정지**한다(2026-08-05 관측: 손절 기준을 넘겼는데도
+#  매도 판정 로그 자체가 나오지 않음). 종전에는 이 스킵이 DEBUG 로그라 보이지 않았다.
+UNMANAGED_STUCK_PENDING = "대기 주문에 묶임 (주문 상태기계 확인 필요)"
 #  경보 전 연속 관측 횟수. 미체결 취소 직후 한 주기 정도는 일시적으로 0이 될 수 있어,
 #  즉시 알리면 정상 운영 중에도 오경보가 난다(입출금 감지의 '3회 연속'과 같은 방식).
 NO_SELLABLE_ALERT_CYCLES = 3
+#  대기 주문 스킵은 정상 흐름에서도 몇 주기 이어질 수 있으므로 더 여유를 둔다.
+#  (미체결 자동 취소 타임아웃보다 길게 잡아야 정상 취소 흐름을 오경보로 만들지 않는다)
+STUCK_PENDING_ALERT_CYCLES = 10
 
 
 def get_unmanaged_reason(code, name="", is_overseas=False, restricted_codes=None):
@@ -979,9 +987,18 @@ class OrderManager:
         self._lock = threading.RLock()
 
     def is_pending(self, code):
-        """특정 종목의 진행 중인 주문 존재 여부 확인"""
+        """특정 종목의 진행 중인 주문 존재 여부 확인.
+
+        [주의] 빈 dict는 '대기 없음'이다. 키 존재만 보면 주문이 모두 종결됐는데도
+        True가 되어 그 종목이 매도 판정에서 영구히 빠진다 — 손절이 조용히 꺼진다.
+        """
         with self._lock:
-            return code in self.pending_orders
+            return bool(self.pending_orders.get(code))
+
+    def pending_odnos(self, code):
+        """해당 종목의 대기 주문번호 목록(진단용)."""
+        with self._lock:
+            return list((self.pending_orders.get(code) or {}).keys())
 
     def update_order_status(self, code, odno, status):
         """주문 상태 업데이트"""
