@@ -3055,14 +3055,17 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         weights = None
         
         if rule:
+            # [SSOT] 매매 경로와 같은 규약 — 룰의 NULL 컬럼은 전역 기본값으로 되돌리고
+            #  가중치는 dict로 확정한다. (지연 import: engine이 analysis를 import한다)
+            from modules.auto_trade.engine import normalize_weights, rule_value
             thresholds = {
-                "BUY_SCORE": rule['buy_score'],
-                "BUY_RSI_MAX": rule['buy_rsi'],
-                "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                "WEIGHTS": rule.get('weights'),
+                "BUY_SCORE": rule_value(rule, 'buy_score', config.ANALYSIS_THRESHOLDS["BUY_SCORE"]),
+                "BUY_RSI_MAX": rule_value(rule, 'buy_rsi', config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]),
+                "BUY_VOL_STRENGTH": rule_value(rule, 'buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                "WEIGHTS": normalize_weights(rule.get('weights')),
                 "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
             }
-            weights = rule.get('weights')
+            weights = thresholds["WEIGHTS"]
 
         state, state_color, state_reason = classify_stock_state(
             df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
@@ -4605,11 +4608,13 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             rule = rules_map.get(code)
             if rule:
                 # 개별 룰이 존재하는 경우 개별 룰의 임계값을 최우선 적용
+                # [SSOT] NULL 컬럼은 전역 기본값으로, 가중치는 dict로 확정한다.
+                from modules.auto_trade.engine import normalize_weights, rule_value
                 thresholds = {
-                    "BUY_SCORE": rule['buy_score'],
-                    "BUY_RSI_MAX": rule['buy_rsi'],
-                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                    "WEIGHTS": rule.get('weights'),
+                    "BUY_SCORE": rule_value(rule, 'buy_score', config.ANALYSIS_THRESHOLDS["BUY_SCORE"]),
+                    "BUY_RSI_MAX": rule_value(rule, 'buy_rsi', config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]),
+                    "BUY_VOL_STRENGTH": rule_value(rule, 'buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                    "WEIGHTS": normalize_weights(rule.get('weights')),
                     "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"]
                 }
             elif market_regime_adj and not is_overseas:

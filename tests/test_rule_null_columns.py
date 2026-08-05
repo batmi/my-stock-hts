@@ -37,6 +37,19 @@ _RULE_ONLY_STOP_LOSS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """스마트머니 판정은 실제 API를 호출한다.
+
+    이 테스트의 관심사가 아닐 뿐 아니라, 실패하더라도 전역 API 스로틀의 토큰을 소모해
+    같은 워커에 배정된 다른 테스트가 대기(time.sleep)에 걸린다. time.sleep을 전역
+    패치하는 UI 테스트와 만나면 그쪽이 엉뚱하게 실패한다 — 병렬 실행 불안정의 원인이다.
+    """
+    from modules import analysis
+    monkeypatch.setattr(analysis, 'check_smart_money_turnaround',
+                        lambda code, is_overseas=False: (False, ""))
+
+
 @pytest.fixture
 def df():
     n = 300

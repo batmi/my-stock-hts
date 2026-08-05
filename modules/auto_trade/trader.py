@@ -4829,8 +4829,17 @@ class AutoTrader:
                 else:
                     reentry_hurdles[scode] = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
 
+        # [추세추종] 손절로 잘린 종목을 그 손절가보다 **비싸게** 되사지 않는다.
+        #  체결강도 허들만으로는 못 막는다 — 재진입할 때마다 그 값이 갱신되어 스스로 세운
+        #  허들을 스스로 넘는다(2026-08-05 실측: 103.1% → 127.3% → 127.5%로 통과하며
+        #  매 주기 손절·재매수를 반복, 왕복 스프레드만큼 실현 손실이 누적됐다).
+        #  추세가 진짜로 돌아섰다면 눌림에서 다시 잡히므로, 이 게이트는 '더 비싸게 되사기'만
+        #  정확히 막는다. 익절·트레일링 청산은 대상이 아니다(상승 추세의 정상 재진입까지
+        #  막으면 추세추종에 역행한다).
+        stop_exit_prices = self._collect_stop_exit_prices(today_trades)
+
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=restricted_stocks)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=restricted_stocks, stop_exit_prices=stop_exit_prices)
         
         # 2. 매수 집행
         if candidates:
@@ -4842,7 +4851,33 @@ class AutoTrader:
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=None):
+    #  손실 청산 계열의 사유 접두어. 이 사유로 나간 종목은 같은 날 그 가격 위에서 되사지 않는다.
+    #  (익절·반익절·트레일링·시간청산은 제외 — 추세가 살아 있는 상태의 청산이라 재진입이 정당하다)
+    _STOP_EXIT_PREFIXES = ("손절", "본전청산")
+
+    @staticmethod
+    def _collect_stop_exit_prices(today_trades):
+        """당일 손절 청산의 체결가를 종목별로 모은다. {code: 가장 최근 손절가}
+
+        같은 날 여러 번 손절됐다면 가장 최근 값을 쓴다 — 직전 손절가가 지금 유효한 기준이다.
+        """
+        out = {}
+        for t in sorted(today_trades or [], key=lambda x: str(x.get('time') or '')):
+            type_str = str(t.get('type') or '')
+            if "sell" not in type_str.lower() and "매도" not in type_str:
+                continue
+            reason = str(t.get('reason') or '')
+            if not reason.startswith(AutoTrader._STOP_EXIT_PREFIXES):
+                continue
+            try:
+                price = float(str(t.get('price') or '0').replace(',', ''))
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                out[t['code']] = price   # 시간순이므로 마지막 것이 남는다
+        return out
+
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=None, stop_exit_prices=None):
         """(내부함수) 매수 후보 분석용 단일 워커
 
         io_pool: 차트/체결강도/호가 동시 조회용 공유 스레드풀 (None이면 자체 생성 — 하위 호환)
@@ -4878,10 +4913,16 @@ class AutoTrader:
             
             # 2. 진행 중인 주문 체크
             if self.order_manager.is_pending(code):
+                # [관측성] 종전에는 조용히 빠졌다. 그러면 그 종목은 [분석] 줄도 [분석스킵] 줄도
+                #  없이 화면에서 사라져, 왜 후보에서 빠졌는지 운영자가 알 수 없다
+                #  (2026-08-05: 손절 직후 NAVER가 종목분석에서 통째로 사라졌다).
                 self.set_stock_state(code, None)
-                return None
+                odnos = self.order_manager.pending_odnos(code)
+                return {'type': 'log_only',
+                        'log': f"[분석스킵] {name}({code}): 진행 중인 주문 존재 "
+                               f"({', '.join(str(o) for o in odnos) or '?'}) — 매수 판정을 건너뜁니다"}
 
-            # 3. 보유 종목 체크
+            # 3. 보유 종목 체크 (보유분석에서 다루므로 후보 분석에서는 조용히 제외한다)
             if code in holding_codes: return None
             
             # 4. 시장 지수 필터링 (종목별 적용)
@@ -4931,9 +4972,12 @@ class AutoTrader:
                     _local_pool.shutdown(wait=False)
 
             if df is None or df.empty:
+                # [관측성] 차트가 없으면 판정 자체가 불가능하다. 조용히 빠지면 그 종목이
+                #  왜 후보에서 사라졌는지 알 수 없다.
                 self.set_stock_state(code, None)
-                return None
-            
+                return {'type': 'log_only',
+                        'log': f"[분석스킵] {name}({code}): 차트 데이터 없음 — 매수 판정 불가"}
+
             # [수정] 캐시된 차트 데이터의 당일 미확정 종가를 실시간 최신 현재가로 업데이트
             # (종목 분석 메뉴와 시스템 트레이딩 간의 지표 및 점수 불일치 원천 차단)
             realtime_price = 0.0
@@ -5047,6 +5091,20 @@ class AutoTrader:
             
             if result['action'] == "buy":
                 reentry_msg = ""
+
+                # [추세추종] 당일 손절로 잘린 종목을 그 손절가 이상에서 되사지 않는다.
+                #  체결강도 허들은 재진입마다 갱신되어 스스로 넘어가므로 이 경로를 못 막는다
+                #  (2026-08-05 실측: 손절 → 10초 뒤 1,000원 비싸게 재매수를 매 주기 반복,
+                #   왕복 스프레드만큼 실현 손실만 쌓였다). 추세가 진짜로 살아 있다면 눌림에서
+                #  다시 잡히므로, '판 값보다 비싸게 되사기'만 정확히 막는다.
+                stop_px = (stop_exit_prices or {}).get(code)
+                if (stop_px and current_price >= stop_px
+                        and getattr(config, 'REENTRY_BLOCK_ABOVE_STOP_PRICE', True)):
+                    return {'type': 'log_only',
+                            'log': f"[분석스킵] {name}({code}): 당일 손절가 재진입 불가 "
+                                   f"(현재가 {current_price:,.0f} >= 손절가 {stop_px:,.0f}) "
+                                   f"— 더 비싸게 되사지 않습니다"}
+
                 if code in reentry_hurdles:
                     req_vol = reentry_hurdles[code]
                     vol_strength_val = result.get('vol_strength')
@@ -5082,7 +5140,7 @@ class AutoTrader:
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None):
         candidates = []
         skipped_stocks = []
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
@@ -5155,11 +5213,19 @@ class AutoTrader:
         io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 3, thread_name_prefix="cand_io")
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_cand") as executor:
-                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool) for item in targets]
+                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool, stop_exit_prices=stop_exit_prices) for item in targets]
 
                 for future in concurrent.futures.as_completed(futures):
                     if not self.is_running: break
-                    res = future.result()
+                    # [관측성] 한 종목의 예외가 나머지 후보 분석을 통째로 중단시키면 안 된다.
+                    #  종전에는 result()의 예외가 그대로 올라와 남은 종목이 조용히 분석되지
+                    #  않았다. 실패한 종목만 로그로 남기고 나머지는 계속 본다.
+                    try:
+                        res = future.result()
+                    except Exception as e:
+                        self.log(f"[분석실패] 매수 후보 판정 중 오류 — {type(e).__name__}: {e}")
+                        logger.exception("[매수분석] 후보 판정 실패")
+                        continue
                     if res:
                         if res['type'] == 'candidate':
                             self.log(res['log'])

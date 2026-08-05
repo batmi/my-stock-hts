@@ -224,4 +224,9 @@ def test_a_restored_order_keeps_the_candidate_out(trader):
             item, holding_codes=set(), rules_map={}, restricted_stocks=set(),
             market_regime_adj=0, safe_delay=0, reentry_hurdles={},
             holdings_dfs={}, holding_groups_map={})
-    assert result is None, "이미 주문이 걸린 종목이 매수 후보로 올라왔다"
+    # 계약은 '후보로 올라오지 않는다'이다. 스킵 사유는 로그로 남는다 —
+    #  조용히 빠지면 왜 후보에서 사라졌는지 알 수 없어 진단이 불가능하다(2026-08-05).
+    assert (result or {}).get('type') != 'candidate', "이미 주문이 걸린 종목이 매수 후보로 올라왔다"
+    assert result and result['type'] == 'log_only', "대기 주문 스킵이 조용히 지나갔다"
+    assert "진행 중인 주문" in result['log']
+    assert _open_order()['odno'] in result['log'], "어느 주문에 묶였는지 로그에 남아야 한다"

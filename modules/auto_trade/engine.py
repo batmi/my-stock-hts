@@ -1635,6 +1635,31 @@ class OrderManager:
     #  ACCEPTED(정상 접수 대기)를 곧바로 경보하면 평범한 지정가 대기가 전부 알림이 된다.
     ORPHAN_ALERT_GRACE = 2.0
 
+    def _resolve_paper_orphan(self, code, odno):
+        """가상투자에서 체결이 확인된 고아 주문을 FILLED로 정리한다. (정리했으면 True)
+
+        실계좌에서는 하지 않는다 — 살아 있는 주문을 임의로 풀면 매수를 열어 둔 채 매도가
+        나가 서로 싸운다. 가상투자는 즉시 전량 체결 모델이라 그 모호성이 없고, 체결
+        기록(paper_fills)으로 사실을 확인할 수 있다.
+        """
+        try:
+            from modules import paper_broker
+            if not paper_broker.is_active():
+                return False
+            fill = paper_broker.get_fill_by_odno(odno)
+        except Exception as e:
+            logger.debug(f"[PAPER] 고아 주문 체결 확인 실패({odno}): {e}")
+            return False
+
+        if not fill:
+            return False   # 체결 기록이 없으면 추측하지 않는다 — 기존 경보 경로로 넘긴다
+
+        self.trader.log(f"[가상체결 복구] {fill.get('name') or code}({code}) No.{odno} — "
+                        f"체결 기록 확인({fill.get('type')} {fill.get('qty')}주 "
+                        f"@{fill.get('price', 0):,.0f}) → 주문 상태를 체결로 정리합니다")
+        self.update_order_status(code, odno, OrderStatus.FILLED)
+        return True
+
     def _alert_orphan_pending(self, api_checked_odnos, cancel_seconds, now):
         """API에서 사라졌는데 로컬 폴백도 건드리지 않는 주문을 운영자에게 알린다.
 
@@ -1663,6 +1688,16 @@ class OrderManager:
                     #  않으므로 ORDER_SENT 고아도 똑같이 갇힌다.
                     if config.session.is_simulation and status == OrderStatus.ORDER_SENT:
                         continue
+                    # [관찰 모드] 가상투자는 '살아 있는 주문'이라는 상태가 존재하지 않는다.
+                    #  paper_broker는 즉시 전량 체결로 모델링하고 get_domestic_open_orders는
+                    #  계약상 항상 []다. 따라서 여기 남은 주문은 체결이 상태기계에 반영되지
+                    #  못한 누수일 뿐이라, 실계좌와 달리 '풀면 주문끼리 싸운다'는 위험이 없다.
+                    #  체결 기록으로 실제 체결을 확인한 뒤에만 정리한다(추측으로 풀지 않는다).
+                    #  방치하면 그 종목이 매수·매도 판정에서 통째로 빠진다 — 2026-08-05 실측:
+                    #  손절 체결 후에도 ORDER_SENT가 남아 NAVER가 분석 화면에서 사라졌다.
+                    if self._resolve_paper_orphan(code, odno):
+                        continue
+
                     if str(odno) in self.orphan_alerted:
                         continue
 
