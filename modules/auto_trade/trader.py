@@ -534,6 +534,18 @@ class AutoTrader:
             else:
                 if api._is_screen_output_allowed():
                     console.print("[bold cyan][시스템 명령] 가상 투자 자동매매를 시작합니다.[/bold cyan]")
+        elif config.session.is_paper:
+            if interactive:
+                virt_acc_str = os.environ.get("VIRT_ACC_NUM", "")
+                display_acc = virt_acc_str.replace("PAPER-", "") if virt_acc_str.startswith("PAPER-") else virt_acc_str
+                console.print(f"\n운용 계좌: [bold yellow]PAPER | {display_acc}[/bold yellow]")
+                utils.print_breadcrumb()
+                if Prompt.ask("위 계좌로 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                    console.print("[yellow]시작을 취소했습니다.[/yellow]")
+                    return
+            else:
+                if api._is_screen_output_allowed():
+                    console.print("[bold cyan][시스템 명령] 가상 투자 자동매매를 시작합니다.[/bold cyan]")
         else:
             if not config.session.auto_app_key or not config.session.auto_cano:
                 if api._is_screen_output_allowed():
