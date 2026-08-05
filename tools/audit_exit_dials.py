@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-INITIAL_CAPITAL = 5_000_000
+INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 BEP_OFF = -999.0   # sl < bep_stop 이 성립할 수 없게 만들어 BEP를 무력화한다
 
 
@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--sample", type=int, default=25)
     ap.add_argument("--days", type=int, default=1095)
     ap.add_argument("--slots", type=int, default=None)
+    ap.add_argument("--seed-capital", type=int, default=INITIAL_CAPITAL,
+                    help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--only", default=None, help="그룹 접두사만 실행 (예: A)")
     ap.add_argument("--subperiods", type=int, default=1,
                     help="거래일을 N등분해 구간별로 따로 잰다(과최적화 점검)")
@@ -90,7 +92,7 @@ def main():
     config.session.load_stock_config()
     targets = [(s["code"], s["name"])
                for s in config.session.stock_data.get("stocks_kr", [])]
-    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {INITIAL_CAPITAL:,}원")
+    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {args.seed_capital:,}원")
 
     dfs, mf, dates, failed = pb.prepare_universe(targets, args.days)
     thresholds = {
@@ -139,7 +141,7 @@ def main():
                 for g, label, overrides in sets:
                     config.SELL_STRATEGY.update(saved)  # 매번 현행으로 되돌린 뒤 한 다이얼만 바꾼다
                     config.SELL_STRATEGY.update(overrides)
-                    r = pb.run_portfolio(sd, ss, wdates, initial_capital=INITIAL_CAPITAL,
+                    r = pb.run_portfolio(sd, ss, wdates, initial_capital=args.seed_capital,
                                          slots=slots, market_filter_dates=sm,
                                          risk_scale_by_date=make_scale_fn(mkt, dd))
                     results[(g, label)].append(metrics(r))

@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-INITIAL_CAPITAL = 5_000_000   # 실거래 시드와 같게 둔다(seed-slot-sizing)
+INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
 
 def variants():
@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--sample", type=int, default=20)
     ap.add_argument("--slots", type=int, default=None)
+    ap.add_argument("--seed-capital", type=int, default=INITIAL_CAPITAL,
+                    help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--split", type=int, default=0,
                     help="거래일을 N등분해 하위기간별로 따로 본다(견고성 확인)")
     args = ap.parse_args()
@@ -91,7 +93,7 @@ def main():
     targets = [(s["code"], s["name"])
                for s in config.session.stock_data.get("stocks_kr", [])]
     print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} "
-          f"· 시드 {INITIAL_CAPITAL:,}원")
+          f"· 시드 {args.seed_capital:,}원")
 
     dfs, mf_dates, dates, failed = pb.prepare_universe(targets, args.days)
     print(f"[준비] 사용 가능 {len(dfs)}종목 / 거래일 {len(dates)}일"
@@ -134,7 +136,7 @@ def main():
                 saved = apply_variant(tv, smin)
                 try:
                     r = pb.run_portfolio(sub_dfs, sub_status, pdates,
-                                         initial_capital=INITIAL_CAPITAL, slots=slots,
+                                         initial_capital=args.seed_capital, slots=slots,
                                          market_filter_dates=sub_mf)
                 finally:
                     restore(saved)      # 원복을 빠뜨리면 다음 후보가 오염된다

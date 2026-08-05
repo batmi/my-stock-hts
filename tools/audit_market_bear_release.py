@@ -31,7 +31,7 @@ import config  # noqa: E402
 from modules import backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-INITIAL_CAPITAL = 5_000_000   # 실거래 시드와 같게 둔다(seed-slot-sizing)
+INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
 
 def _ticker_of(code):
@@ -85,11 +85,11 @@ def metrics(r):
     }
 
 
-def run_set(dfs, status, dates, mf, slots, codes):
+def run_set(dfs, status, dates, mf, slots, codes, seed_capital=INITIAL_CAPITAL):
     sub_dfs = {c: dfs[c] for c in codes}
     sub_status = {c: status[c] for c in codes}
     sub_mf = {c: mf.get(c, set()) for c in codes}
-    return pb.run_portfolio(sub_dfs, sub_status, dates, initial_capital=INITIAL_CAPITAL,
+    return pb.run_portfolio(sub_dfs, sub_status, dates, initial_capital=seed_capital,
                             slots=slots, market_filter_dates=sub_mf)
 
 
@@ -116,7 +116,8 @@ def report(title, off, on):
     return {"ret": w_ret, "mar": w_mar, "mdd": w_mdd, "top10": w_t10, "n": len(off)}
 
 
-def walk(dfs, status, dates, mf_off, mf_on, per_off, per_on, slots, codes, win, step):
+def walk(dfs, status, dates, mf_off, mf_on, per_off, per_on, slots, codes, win, step,
+         seed_capital=INITIAL_CAPITAL):
     """전 종목 고정 · 창을 굴리며 비교. 관측이 '기간'이라 유니버스를 좁히지 않아도 된다.
 
     창끼리는 시간이 겹치지만 종목 표본 추출과 달리 **실거래와 같은 후보 풀**을 쓴다.
@@ -135,8 +136,8 @@ def walk(dfs, status, dates, mf_off, mf_on, per_off, per_on, slots, codes, win, 
         wd = dates[s:s + win]
         seg = set(wd)
         rel = max(len(per_off[tk] & seg) - len(per_on[tk] & seg) for tk in per_off)
-        a = metrics(run_set(dfs, status, wd, mf_off, slots, codes))
-        b = metrics(run_set(dfs, status, wd, mf_on, slots, codes))
+        a = metrics(run_set(dfs, status, wd, mf_off, slots, codes, seed_capital))
+        b = metrics(run_set(dfs, status, wd, mf_on, slots, codes, seed_capital))
         rows.append((wd[0], rel, a, b))
         print(f"{wd[0]:<10}{rel:>7}{a['ret']:>10.1f}{b['ret']:>9.1f}"
               f"{a['mdd']:>10.1f}{b['mdd']:>9.1f}{a['mar']:>10.2f}{b['mar']:>9.2f}"
@@ -181,6 +182,8 @@ def main():
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--sample", type=int, default=30)
     ap.add_argument("--slots", type=int, default=None)
+    ap.add_argument("--seed-capital", type=int, default=INITIAL_CAPITAL,
+                    help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--include-etf", action="store_true")
     # 표본이 유니버스에 가까우면 시행끼리 겹쳐 짝비교 승수가 과장된다. 작은 표본 + 다른
     #  시드로 재확인해야 '30/30 승'이 독립 근거인지 겹침의 산물인지 갈린다.
@@ -201,7 +204,7 @@ def main():
     targets = [(s["code"], s["name"]) for s in config.session.stock_data.get("stocks_kr", [])]
     if args.include_etf:
         targets += [(s["code"], s["name"]) for s in config.session.stock_data.get("etfs_kr", [])]
-    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {INITIAL_CAPITAL:,}원")
+    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {args.seed_capital:,}원")
 
     dfs, _mf_ignored, dates, failed = pb.prepare_universe(targets, args.days)
     print(f"[준비] 사용 가능 {len(dfs)}종목 / 거래일 {len(dates)}일"
@@ -244,7 +247,7 @@ def main():
 
     if args.walk:
         walk(dfs, status, dates, mf_off, mf_on, per_off, per_on, slots, codes,
-             args.walk, args.step)
+             args.walk, args.step, args.seed_capital)
         return
 
     rng = random.Random(args.seed)
@@ -264,8 +267,8 @@ def main():
                              for tk, v in rel.items())
         off, on = [], []
         for i, pick in enumerate(samples):
-            off.append(metrics(run_set(dfs, status, pdates, mf_off, slots, pick)))
-            on.append(metrics(run_set(dfs, status, pdates, mf_on, slots, pick)))
+            off.append(metrics(run_set(dfs, status, pdates, mf_off, slots, pick, args.seed_capital)))
+            on.append(metrics(run_set(dfs, status, pdates, mf_on, slots, pick, args.seed_capital)))
             print(f"  [{pname}] 시행 {i + 1}/{len(samples)}", end="\r", flush=True)
         print(" " * 40, end="\r")
         w = report(pname, off, on)

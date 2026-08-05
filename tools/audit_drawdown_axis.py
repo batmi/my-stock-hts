@@ -31,7 +31,7 @@ from tools.audit_market_axes import (  # noqa: E402
     load_index, regime_scale, regime_series, whipsaw_scale,
 )
 
-INITIAL_CAPITAL = 5_000_000   # 실거래 시드와 같게 둔다(seed-slot-sizing)
+INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +114,8 @@ def main():
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--sample", type=int, default=30)
     ap.add_argument("--slots", type=int, default=None)
+    ap.add_argument("--seed-capital", type=int, default=INITIAL_CAPITAL,
+                    help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--no-market", action="store_true",
                     help="국면·휩소율 축을 끄고 드로다운 축만 단독으로 본다")
     args = ap.parse_args()
@@ -125,7 +127,7 @@ def main():
     config.session.load_stock_config()
     targets = [(s["code"], s["name"])
                for s in config.session.stock_data.get("stocks_kr", [])]
-    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {INITIAL_CAPITAL:,}원")
+    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {args.seed_capital:,}원")
 
     dfs, mf_dates, dates, failed = pb.prepare_universe(targets, args.days)
     print(f"[준비] 사용 가능 {len(dfs)}종목 / 거래일 {len(dates)}일" +
@@ -161,7 +163,7 @@ def main():
         for name, dd in vs:
             fn = make_scale_fn(mkt, dd, use_market=not args.no_market)
             r = pb.run_portfolio(sub_dfs, sub_status, dates,
-                                 initial_capital=INITIAL_CAPITAL, slots=slots,
+                                 initial_capital=args.seed_capital, slots=slots,
                                  market_filter_dates=sub_mf, risk_scale_by_date=fn)
             mdd = r["mdd"]
             results[name].append({

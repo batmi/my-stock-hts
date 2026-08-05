@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-INITIAL_CAPITAL = 5_000_000
+INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
 RATIOS = [
     ("상한 없음(순수 샹들리에)", 0.0),
@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--sample", type=int, default=25)
     ap.add_argument("--days", type=int, default=1095)
     ap.add_argument("--slots", type=int, default=None)
+    ap.add_argument("--seed-capital", type=int, default=INITIAL_CAPITAL,
+                    help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--with-risk-scaling", action="store_true",
                     help="국면×휩소율×드로다운 배수를 함께 적용한다(실제 운용 스택). "
                          "상한 없이 돌렸을 때의 꼬리가 이 층들로 얼마나 눌리는지 본다.")
@@ -73,7 +75,7 @@ def main():
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     data = json.load(open(config.STOCK_DATA_FILE))
     targets = [(s["code"], s["name"]) for s in data.get("stocks_kr", [])]
-    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {INITIAL_CAPITAL:,}원")
+    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · 시드 {args.seed_capital:,}원")
 
     dfs, mf, dates, failed = pb.prepare_universe(targets, args.days)
     thresholds = {
@@ -115,7 +117,7 @@ def main():
                 config.SELL_STRATEGY["TS_MAX_GIVEBACK_RATIO"] = ratio
                 # 배수 콜러블은 시행마다 새로 만든다(자산곡선 이력을 누적하므로 재사용 금지).
                 scale_fn = globals()["_make_fn"]() if args.with_risk_scaling else None
-                r = pb.run_portfolio(sd, ss, dates, initial_capital=INITIAL_CAPITAL,
+                r = pb.run_portfolio(sd, ss, dates, initial_capital=args.seed_capital,
                                      slots=slots, market_filter_dates=sm,
                                      risk_scale_by_date=scale_fn)
                 results[name].append(metrics(r))
