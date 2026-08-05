@@ -4282,6 +4282,16 @@ def fetch_overseas_period_price(code, excd):
     return None
 
 def fetch_buyable_quantity(stock_code, price):
+    # [관찰 모드] 가상 현금 기준으로 답한다. 가로채지 않으면 CANO="PAPER"로 실계좌
+    #  API를 때려 INVALID_CHECK_ACNO(rt_cd=2)가 나고 0을 돌려준다. 신규 매수는
+    #  예수금 폴백이 있어 살아남지만 **피라미딩은 폴백이 없어 '예수금 부족'으로
+    #  영구히 보류된다** — 관찰 모드에서 증액이 한 번도 발동하지 못한다.
+    #  (2026-08-05 실측: 라즈베리파이 로그의 inquire-psbl-order INVALID_CHECK_ACNO)
+    if _paper_active():
+        from modules import paper_broker
+        if not price or float(price) <= 0:
+            return 0
+        return int(paper_broker.get_cash() * 0.998 / float(price))
     if config.session.is_toss:
         return _toss_buyable_qty(stock_code, price, "KRW")
     # [수정] 컨텍스트에 따른 계좌번호 선택
@@ -4303,6 +4313,16 @@ def fetch_buyable_quantity(stock_code, price):
     return 0
 
 def fetch_sellable_quantity(stock_code):
+    # [관찰 모드] 가상 보유 수량으로 답한다. **가로채지 않으면 매도가 원천 차단된다** —
+    #  실계좌 API가 INVALID_CHECK_ACNO로 0을 돌려주고, 트레이더는 그것을 '팔 수 없는
+    #  상태'로 읽어 매도를 중단한 뒤 미관리 포지션 경보까지 띄운다.
+    #  손절·트레일링·점수매도가 전부 죽으므로 청산 검증 자체가 성립하지 않는다.
+    if _paper_active():
+        from modules import paper_broker
+        for p in paper_broker.get_positions():
+            if p["code"] == stock_code:
+                return int(p["qty"])
+        return 0
     if config.session.is_toss:
         return _toss_sellable_qty(stock_code)
     # [수정] 컨텍스트에 따른 계좌번호 선택

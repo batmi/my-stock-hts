@@ -73,26 +73,33 @@ def _get_telegram_footer():
 
     cano = config.session.cano
     acnt = config.session.acnt_prdt_cd
-    
-    # 가상투자는 KIS 실전 시세를 쓰지만 계좌가 가상이므로 알림에서도 실전과 구분해야 한다
+
     if getattr(config.session, 'is_paper', False):
-        acc_label = "가상"
+        # 가상투자는 KIS 실전 시세를 쓰지만 계좌가 가상이므로 알림에서도 실전과 구분한다.
+        #  session.cano 에는 안전장치로 문자열 'PAPER'가 박혀 있어(가로채기를 빠져나간
+        #  계좌성 호출이 조용히 성공하지 않게 한다) 계좌번호로 쓸 수 없다. VIRT_ACC_NUM 을
+        #  표시 전용으로 따로 읽어, 어느 계좌 앞으로 도는 인스턴스인지 식별되게 한다.
+        #  (미설정이면 번호 없이 'PAPER'만 남는다 — 종전 표기와 같다)
+        acc_label = "PAPER"
+        cano = getattr(config.session, 'virt_cano', '') or ''
+        acnt = getattr(config.session, 'virt_acnt_prdt_cd', '') or ''
     elif config.session.is_toss:
         acc_label = "토스"
     else:
         acc_label = "모의" if config.session.is_simulation else "실전"
-
-    # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인
-    if not config.session.is_simulation and not config.session.is_toss and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
-        cano = config.session.auto_cano
-        acnt = config.session.auto_acnt_prdt_cd
-        acc_label = "자동"
+        # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인.
+        #  실전만 수동/자동 계좌가 나뉘므로 라벨이 계좌를 가리키는 이름이 된다.
+        if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+            cano = config.session.auto_cano
+            acnt = config.session.auto_acnt_prdt_cd
+            acc_label = "자동"
 
     # 계좌번호 뒤에 상품코드(01, 22 등)를 붙여 사용자가 정확한 계좌를 식별할 수 있도록 함
     full_acc = f"{cano}-{acnt}" if acnt else cano
     instance_name = config.TELEGRAM_INSTANCE_NAME
-    
-    return f"[{instance_name} | {acc_label} {full_acc}]"
+
+    return f"[{instance_name} | {acc_label} {full_acc}]" if full_acc \
+        else f"[{instance_name} | {acc_label}]"
 
 def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=False):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""

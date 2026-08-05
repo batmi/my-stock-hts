@@ -440,6 +440,8 @@ Register sensitive information like API Keys as **environment variables**:
 *   `SIM_APP_KEY`, `SIM_APP_SECRET`, `SIM_ACC_NUM`: KIS Mock Investment
 *   `REAL_APP_KEY`, `REAL_APP_SECRET`, `REAL_ACC_NUM`: KIS Real Investment
 *   `AUTO_APP_KEY`, `AUTO_APP_SECRET`, `AUTO_ACC_NUM`: KIS Auto Trading Only (Optional)
+*   `VIRT_APP_KEY`, `VIRT_APP_SECRET`: API key dedicated to **paper trading (mode 4)** (Optional). KIS enforces TPS, concurrent WebSocket, and token-issuance limits per app key, so a separate key keeps paper trading from eating into the live instance's order path.
+*   `VIRT_ACC_NUM`: **Display-only** account number for the paper-trading instance (Optional). It appears in alert footers as `[RasPi3B | PAPER 43486025-01]`, identifying which account the instance runs on behalf of. **It is never used for trading or lookups** — the paper session's internal account number is always the literal `PAPER` as a fail-safe. If unset, the footer shows just `PAPER` as before.
 *   `REAL_HTS_ID`, `SIM_HTS_ID`: Subscription key (KIS HTS login ID) for real-time **execution-notice WebSocket** (Optional). Set per real/mock; if identical, a single `KIS_HTS_ID` (or `HTS_ID`) suffices. **If unset, fill detection falls back to REST polling.**
 *   `TOSS_APP_KEY`, `TOSS_APP_SECRET`, `TOSS_ACC_NUM`: Toss Securities
 *   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: Telegram Bot (Optional)

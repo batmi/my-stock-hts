@@ -45,6 +45,12 @@ class SessionManager:
         # [추가] 가상투자(mode 4) 전용 KIS 앱키. 실전 인스턴스와 앱키를 분리하기 위한 것.
         self.virt_app_key = ""
         self.virt_app_secret = ""
+        # [표시 전용] VIRT 앱키에 매인 실제 계좌번호. **매매·조회에 쓰지 않는다** —
+        #  가상투자의 cano 는 안전장치로 'PAPER'를 유지해야 하고(가로채기를 빠져나간
+        #  계좌성 호출이 조용히 실계좌를 건드리지 않도록), 이 값은 알림 꼬리말처럼
+        #  '어느 계좌 앞으로 도는 인스턴스인가'를 밝히는 표시에만 쓴다.
+        self.virt_cano = ""
+        self.virt_acnt_prdt_cd = ""
 
         # [추가] 실시간 체결통보(WebSocket H0STCNI0/H0STCNI9) 구독키 = HTS 로그인 ID.
         #   환경변수 우선순위: 모드별(REAL_HTS_ID/SIM_HTS_ID) → 공통(KIS_HTS_ID/HTS_ID).
@@ -102,11 +108,15 @@ class SessionManager:
         sim_acc_str = os.environ.get("SIM_ACC_NUM", "")
         real_acc_str = os.environ.get("REAL_ACC_NUM", "")
         auto_acc_str = os.environ.get("AUTO_ACC_NUM", "")
-        
+        # VIRT_ACC_NUM 은 **표시 전용**이다(self.virt_cano 주석 참조). 매매·조회 경로는
+        #  가상투자에서 cano='PAPER'를 그대로 쓴다.
+        virt_acc_str = os.environ.get("VIRT_ACC_NUM", "")
+
         # 계좌번호 파싱
         sim_cano, sim_acnt = parse_acc(sim_acc_str)
         real_cano, real_acnt = parse_acc(real_acc_str)
         auto_cano, auto_acnt = parse_acc(auto_acc_str)
+        self.virt_cano, self.virt_acnt_prdt_cd = parse_acc(virt_acc_str)
         
         # 자동매매 계좌 설정
         self.auto_cano = auto_cano
@@ -214,7 +224,10 @@ class SessionManager:
             key_status = "OK" if self.virt_app_key and self.virt_app_secret else "MISSING"
             config.console.print("\n[dim cyan][가상투자 · 시세 소스 한국투자증권(실전)] 설정 로드 확인[/dim cyan]")
             config.console.print(f"[dim]   - VIRT_APP_KEY 상태: {key_status}[/dim]")
+            acc_disp = (f"{self.virt_cano}-{self.virt_acnt_prdt_cd}" if self.virt_acnt_prdt_cd
+                        else self.virt_cano) if self.virt_cano else "미설정(VIRT_ACC_NUM)"
             config.console.print("[dim]   - 계좌: 가상(PAPER) — 실계좌 조회·주문 없음[/dim]")
+            config.console.print(f"[dim]   - 표시용 계좌번호: {acc_disp} (알림 꼬리말 식별용)[/dim]")
             return
         elif mode == '3':
             # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.

@@ -468,6 +468,8 @@ pip install -r requirements.txt
 *   `SIM_ACC_NUM`: 한국투자증권 모의투자 계좌번호 (예: 12345678-01)
 *   `REAL_ACC_NUM`: 한국투자증권 실전투자 계좌번호
 *   `AUTO_ACC_NUM`: (선택) 한국투자증권 자동매매 전용 계좌번호
+*   `VIRT_APP_KEY`, `VIRT_APP_SECRET`: (선택) **가상투자(mode 4)** 전용 API Key. KIS의 TPS·웹소켓 동시 연결·토큰 발급 제약이 모두 앱키 단위라, 실전 인스턴스와 키를 나눠야 가상투자가 실계좌의 주문 경로를 갉아먹지 않습니다.
+*   `VIRT_ACC_NUM`: (선택) 가상투자 인스턴스의 **표시용** 계좌번호. 알림 꼬리말에 `[RasPi3B | PAPER 43486025-01]`처럼 찍혀 어느 계좌 앞으로 도는 인스턴스인지 식별시켜 줍니다. **매매·조회에는 쓰이지 않습니다** — 가상투자의 내부 계좌번호는 안전장치로 항상 `PAPER`입니다. 미설정이면 종전처럼 `PAPER`만 표시됩니다.
 *   `REAL_HTS_ID`, `SIM_HTS_ID`: (선택) 실시간 **체결통보 WebSocket** 구독키(KIS HTS 로그인 ID). 실전/모의 각각 지정하며, 동일 ID면 `KIS_HTS_ID`(또는 `HTS_ID`) 하나로 갈음할 수 있습니다. **미설정 시 체결 감지는 REST 폴링으로 폴백**됩니다.
 *   `TOSS_APP_KEY`, `TOSS_APP_SECRET`: 토스증권 API Key
 *   `TOSS_ACC_NUM`: 토스증권 계좌번호 (미입력 시 첫 번째 계좌 자동 선택)

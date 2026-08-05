@@ -232,6 +232,69 @@ def test_reset_never_touches_real_db(paper, monkeypatch):
     assert paper.get_cash() == 3_000_000      # 가상 계좌 자체는 정상 초기화
 
 
+def test_sellable_quantity_uses_virtual_position(paper, monkeypatch):
+    """[회귀 방지] 매도 가능 수량은 가상 보유분으로 답한다 — 실계좌 API를 부르면 안 된다.
+
+    가로채지 않으면 CANO='PAPER'로 실계좌를 조회해 INVALID_CHECK_ACNO가 나고 0을
+    돌려준다. 트레이더는 그것을 '팔 수 없는 상태'로 읽어 매도를 중단하므로
+    손절·트레일링·점수매도가 전부 죽는다(청산 검증 자체가 성립하지 않는다).
+    """
+    def _boom(*a, **k):
+        raise AssertionError("관찰 모드에서 실계좌 API를 호출했다")
+    monkeypatch.setattr(api, 'call_api', _boom)
+
+    api.place_order("domestic", "buy", "005930", 7, 70000, "00")
+    assert api.fetch_sellable_quantity("005930") == 7
+    assert api.fetch_sellable_quantity("000660") == 0   # 미보유
+
+
+def test_buyable_quantity_uses_virtual_cash(paper, monkeypatch):
+    """[회귀 방지] 매수 가능 수량은 가상 현금으로 답한다.
+
+    신규 매수는 예수금 폴백이 있어 살아남지만 피라미딩 경로에는 폴백이 없어
+    0을 받으면 '예수금 부족'으로 영구히 보류된다 — 증액이 한 번도 발동하지 못한다.
+    """
+    def _boom(*a, **k):
+        raise AssertionError("관찰 모드에서 실계좌 API를 호출했다")
+    monkeypatch.setattr(api, 'call_api', _boom)
+
+    qty = api.fetch_buyable_quantity("005930", 70000)
+    assert qty == int(paper.get_cash() * 0.998 / 70000) > 0
+    assert api.fetch_buyable_quantity("005930", 0) == 0   # 가격 0은 계산 불가
+
+
+def test_paper_footer_shows_virt_account(paper, monkeypatch):
+    """가상투자 꼬리말은 'PAPER + 실제 계좌번호'로 어느 계좌 앞 인스턴스인지 밝힌다.
+
+    session.cano 는 안전장치로 'PAPER' 문자열이라 계좌번호로 쓸 수 없다. 표시 전용
+    VIRT_ACC_NUM 을 따로 읽으며, 스레드(자동/수동)에 따라 달라지지 않아야 한다 —
+    꼬리말은 주문 출처가 아니라 계좌를 가리키는 자리다.
+    """
+    import context
+    from modules import telegram_notify
+
+    monkeypatch.setattr(config, 'TELEGRAM_BOT_TOKEN', "test_token", raising=False)
+    monkeypatch.setattr(config, 'TELEGRAM_INSTANCE_NAME', "TEST", raising=False)
+    for attr, val in (('cano', 'PAPER'), ('acnt_prdt_cd', ''),
+                      ('auto_cano', 'PAPER'), ('auto_acnt_prdt_cd', ''),
+                      ('is_simulation', False), ('is_toss', False),
+                      ('virt_cano', '43486025'), ('virt_acnt_prdt_cd', '01')):
+        monkeypatch.setattr(config.session, attr, val, raising=False)
+
+    _prev = getattr(context.trade_context, 'use_auto_account', False)
+    try:
+        for auto in (True, False):
+            context.trade_context.use_auto_account = auto
+            assert telegram_notify._get_telegram_footer() == "[TEST | PAPER 43486025-01]"
+
+        # VIRT_ACC_NUM 미설정이면 번호 없이 라벨만 남는다(종전 표기와 같다).
+        monkeypatch.setattr(config.session, 'virt_cano', '', raising=False)
+        monkeypatch.setattr(config.session, 'virt_acnt_prdt_cd', '', raising=False)
+        assert telegram_notify._get_telegram_footer() == "[TEST | PAPER]"
+    finally:
+        context.trade_context.use_auto_account = _prev
+
+
 def test_equity_snapshot_is_one_row_per_day(paper):
     """같은 날 여러 번 스냅샷해도 하루 1행만 남는다(주기마다 호출되므로)."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
