@@ -110,28 +110,31 @@ def test_rate_limit_logs_observed_send_rate(sess, caplog):
     assert "TPS" in msg
 
 
-def test_floor_can_go_below_observed_reject_rate(sess):
-    """[핵심] 하한은 실측 거부 지점 아래여야 한다 — 아니면 AIMD가 수렴하지 못한다.
+def test_floor_protects_throughput(sess):
+    """[실측 근거] 하한을 내려도 거부는 줄지 않고 처리량만 깎인다.
 
-    [실측 2026-08-05] 클라이언트 전송률 8~9건/초에서도 EGW00201이 났다(단일 프로세스 확인).
-    하한이 17 TPS면 컨트롤러가 그 아래로 내려갈 수 없어 거부가 영구 지속된다.
+    2026-08-05 실측: 첫 거부 시점의 전송률은 9건/초였고 그때 실효 한도는 18.2였다 —
+    **우리 한도에 닿기도 전에 거부당한다.** 한도를 5.69까지 내려도 거부 지점은 그대로
+    7~10건/초였고, 종목분석만 눈에 띄게 느려졌다. 그래서 하한은 처리량을 지키는 값으로
+    되돌렸다. 부하는 한도가 아니라 호출 수(후보당 호가 REST)로 줄여야 한다.
     """
     lo, _hi, _start = sess._real_tps_bounds()
-    assert lo <= 8.0, (
-        f"하한 {lo:.1f} TPS — 실측 거부 지점(8건/초)보다 높으면 백오프가 무의미하다")
+    assert lo >= 12.0, (
+        f"하한 {lo:.1f} TPS — 너무 낮으면 거부는 그대로인데 후보 분석만 느려진다")
 
 
-def test_backoff_actually_descends_from_start(sess):
-    """반복 거부 시 실효 한도가 실제로 내려간다(하한에 즉시 붙어 멈추지 않는다)."""
-    sess.adaptive_limit_real = None
+def test_backoff_descends_then_holds_at_floor(sess):
+    """거부가 반복되면 하한까지 내려가고 거기서 멈춘다(그 아래로는 가지 않는다)."""
+    lo, _hi, _start = sess._real_tps_bounds()
+    sess.adaptive_limit_real = _hi          # 천장에서 시작
     seen = []
-    for _ in range(6):
+    for _ in range(20):
         sess._tps_on_rate_limit_real()
         seen.append(sess.adaptive_limit_real)
 
-    assert seen[0] > seen[1] > seen[2], f"연속 백오프가 단조 감소하지 않는다: {seen}"
-    lo, _hi, _start = sess._real_tps_bounds()
-    assert seen[-1] >= lo, "하한 아래로 내려갔다"
+    assert seen[0] > seen[1], f"연속 백오프가 감소하지 않는다: {seen[:3]}"
+    assert seen[-1] == pytest.approx(lo), f"하한({lo})에 수렴하지 않았다: {seen[-1]}"
+    assert all(v >= lo - 1e-9 for v in seen), "하한 아래로 내려갔다"
 
 
 def test_single_reject_backs_off_once(sess):
