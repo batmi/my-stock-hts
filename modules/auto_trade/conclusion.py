@@ -61,6 +61,7 @@ class ConclusionMonitor:
             cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
             cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
             cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
+            cls._instance.paper_backfill_done = False # [추가] 가상투자 당일 원장 1회 복구 여부
             cls._instance.ws_confirmed_fills = {}     # [추가] WS 체결통보로 '실제 체결'이 확인된 주문 {odno: {price,qty,ts}}
                                                        #  → 체결 알림에서 '(추정)' 문구 제거 및 실제 체결가 사용에 이용
             
@@ -242,12 +243,13 @@ class ConclusionMonitor:
 
     def _check_conclusions(self, initial=False):
         """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
-        # [관찰 모드] 가상 주문은 paper_broker가 즉시 전량 체결로 처리하므로 대사할 대상이 없다.
-        #  아래 계좌 목록 구성이 cano="PAPER"·acnt_prdt_cd="" 조건에서 어차피 비지만,
-        #  '조건이 우연히 False라서 안 돈다'와 '의도적으로 돌지 않는다'는 구분되어야 한다
-        #  (mode 4가 토스에서 KIS로 바뀌며 그 우연이 한 번 뒤집혔다).
+        # [관찰 모드] 가상 주문은 증권사에 나가지 않으므로 KIS 체결내역 API로 대사할 수 없다.
+        #  대신 paper_broker의 체결 원장을 대사해 주문 상태기계를 닫는다.
+        #  (아래 계좌 목록 구성은 cano="PAPER"·acnt_prdt_cd="" 조건에서 어차피 비지만,
+        #   '조건이 우연히 False라서 안 돈다'와 '의도적으로 돌지 않는다'는 구분되어야 한다.)
         #  [반환 규약] 호출부가 (rate_limit_hit, has_error)로 언패킹한다. 맨 반환은 안 된다.
         if getattr(config.session, 'is_paper', False):
+            self._check_paper_conclusions()
             return False, False
 
         rate_limit_hit = False
@@ -747,6 +749,59 @@ class ConclusionMonitor:
             has_error = True
         return rate_limit_hit, has_error
 
+    def _check_paper_conclusions(self):
+        """가상투자: paper_broker 체결 원장을 대사해 대기 주문을 체결로 확정한다.
+
+        가상 주문은 place_order 시점에 이미 전량 체결되지만, 그 사실을 아는 것은
+        paper_broker의 원장뿐이다. 트레이더의 주문 상태기계(pending_orders)와 거래
+        히스토리는 '접수'에 멈춰 있어 ① 히스토리에 체결이 남지 않고 ② is_pending이
+        True로 굳어 그 종목이 매도·손절 판정에서 통째로 빠지며 ③ 결국 고아 주문
+        경보까지 뜬다(2026-08-05 실제 관측: 018260·035420).
+
+        원장 대사이므로 '추정'이 아니라 확정 체결이다 — 수량·체결가를 그대로 쓴다.
+        """
+        trader = _pkg().AutoTrader()
+        try:
+            from modules import paper_broker
+            with trader.order_manager._lock:
+                snapshot = {c: dict(o) for c, o in trader.order_manager.pending_orders.items()}
+
+            for code, orders in snapshot.items():
+                for odno, status in orders.items():
+                    if status != OrderStatus.ORDER_SENT:
+                        continue
+                    # 발주 직후 선점용 임시 ID(PRE_*)는 원장에 없다 — 조회 자체를 건너뛴다.
+                    if str(odno).startswith("PRE_"):
+                        continue
+                    self._apply_paper_fill(trader, code, odno, paper_broker.get_fill_by_odno(odno))
+
+            # [재기동 복구] pending_orders는 메모리라 재시작하면 비고, 가상 주문은 미체결
+            #  목록으로 복원할 수도 없다(관찰 모드의 미체결은 항상 빈 리스트). 그대로 두면
+            #  이미 체결된 주문의 히스토리가 '접수'에 영구히 멈춘다. 프로세스당 1회만
+            #  당일 원장을 훑는다(매 주기 훑으면 라즈베리파이에서 순수 낭비).
+            #  이미 체결 이력이 있는 주문은 _handle_simulation_fill이 알림 없이 건너뛴다.
+            if not self.paper_backfill_done:
+                self.paper_backfill_done = True
+                today = datetime.now().strftime('%Y-%m-%d')
+                for fill in paper_broker.get_fills():
+                    if not str(fill.get('time') or '').startswith(today):
+                        continue
+                    self._apply_paper_fill(trader, fill['code'], fill.get('odno'), fill)
+        except Exception as e:
+            logger.error(f"[Monitor] 가상투자 체결 대사 중 오류: {e}", exc_info=True)
+
+    def _apply_paper_fill(self, trader, code, odno, fill):
+        """가상 체결 1건을 주문 상태기계·히스토리에 반영한다."""
+        if not odno or not fill:
+            return
+        trade = db_manager.db.get_trade_by_odno(odno)
+        if not trade:
+            # 주문 기록 INSERT가 DB 큐에 아직 남아 있는 경우. 다음 주기에 다시 본다.
+            return
+        self._handle_simulation_fill(
+            trader, trade, odno, code, int(fill['qty']), "가상 체결 원장 확인",
+            confirmed_fill={'price': fill['price'], 'qty': fill['qty']})
+
     def _check_simulation_conclusions_by_balance(self, cano, acnt):
         """모의투자: 잔고 변동을 확인하여 체결 처리 (API 누락 대응)"""
         trader = _pkg().AutoTrader()
@@ -817,8 +872,12 @@ class ConclusionMonitor:
         except Exception as e:
             logger.error(f"[Monitor] 모의투자 잔고 기반 체결 확인 중 오류: {e}")
 
-    def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason):
-        """모의투자 체결 처리 핸들러"""
+    def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason, confirmed_fill=None):
+        """모의투자·가상투자 체결 처리 핸들러.
+
+        confirmed_fill: 체결이 확정적으로 확인된 경우의 {'price':...} (가상투자 원장 대사).
+                        주어지면 WS 체결통보와 동일하게 취급해 '(추정)' 라벨을 붙이지 않는다.
+        """
         # [추가] Race Condition 방지용 메모리 락 검증
         with self._lock:
             if odno in self.processed_sim_fills:
@@ -851,9 +910,10 @@ class ConclusionMonitor:
 
             # [추가] WS 체결통보로 '실제 체결'이 확인된 주문인지 판정.
             #  확인되면 (추정)이 아닌 확정 체결로 라벨링하고, 실시간 체결가(있으면)를 사용한다.
-            ws_fill = None
-            with self._lock:
-                ws_fill = self.ws_confirmed_fills.get(_norm_odno(odno))
+            ws_fill = confirmed_fill
+            if ws_fill is None:
+                with self._lock:
+                    ws_fill = self.ws_confirmed_fills.get(_norm_odno(odno))
             ws_confirmed = bool(ws_fill)
             if ws_fill and float(ws_fill.get('price') or 0) > 0:
                 price = float(ws_fill['price'])  # 추정가 → 실시간 체결통보의 실제 체결가로 대체
@@ -977,7 +1037,8 @@ class ConclusionMonitor:
                             
                     msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}{price_suffix}\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
                     api.send_telegram_message(msg)
-                    logger.info(f"[Monitor] 모의투자 체결 확인{'(WS 확정)' if ws_confirmed else '(추정)'}: {name} {qty}주 ({reason})")
+                    mode_label = "가상투자" if getattr(config.session, 'is_paper', False) else "모의투자"
+                    logger.info(f"[Monitor] {mode_label} 체결 확인{'(확정)' if ws_confirmed else '(추정)'}: {name} {qty}주 ({reason})")
 
                     # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
                     #  트레이딩 RUNNING 중 사용자가 수동 매수하면 이 백그라운드

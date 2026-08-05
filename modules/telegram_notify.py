@@ -74,7 +74,7 @@ def _get_telegram_footer():
     cano = config.session.cano
     acnt = config.session.acnt_prdt_cd
     
-    # 가상투자는 토스 시세를 쓰지만 계좌가 가상이므로 알림에서도 실전과 구분해야 한다
+    # 가상투자는 KIS 실전 시세를 쓰지만 계좌가 가상이므로 알림에서도 실전과 구분해야 한다
     if getattr(config.session, 'is_paper', False):
         acc_label = "가상"
     elif config.session.is_toss:

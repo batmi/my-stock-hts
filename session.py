@@ -10,7 +10,7 @@ class SessionManager:
     def __init__(self):
         self.is_simulation = False
         self.is_toss = False  # [추가] 토스증권 모드 여부
-        # [추가] 관찰(페이퍼 트레이딩) 모드 여부. 시세·지표는 실제 소스(토스)를 그대로 쓰고
+        # [추가] 관찰(페이퍼 트레이딩) 모드 여부. 시세·지표는 실제 소스(KIS 실전)를 그대로 쓰고
         #  잔고·예수금·주문만 가상으로 처리한다(modules/paper_broker.py).
         #  모의투자 계좌의 3개월 리셋 없이 장기 관찰하기 위한 모드이며, 실주문은 원천 차단된다.
         self.is_paper = False
@@ -265,8 +265,8 @@ class SessionManager:
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
             key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
-            src_label = "가상투자 · 시세 소스 토스증권" if self.is_paper else "토스증권"
-            config.console.print(f"\n[dim magenta][{src_label}] 설정 로드 확인[/dim magenta]")
+            # mode 4(가상투자)는 KIS 실전 시세를 쓰므로 이 분기에 들어오지 않는다(is_toss=False).
+            config.console.print("\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
             config.console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
             config.console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
             return

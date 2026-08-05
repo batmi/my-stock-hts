@@ -130,7 +130,7 @@ def _price_with_status(code, cost=0.0):
     정확히 0.00%로 계산된다. 트레이더의 방어선은 `current_price <= 0` 하나뿐이라
     이 값이 그대로 통과하고, 실제로는 크게 하락한 포지션이 '본전에서 쉬는 정상
     포지션'으로 위장된다 — 손절도 트레일링도 발동하지 않고 로그에도 남지 않는다.
-    토스 401·레이트리밋 같은 일시적 실패는 실제로 관측된다.
+    KIS 레이트리밋(EGW00201)·토큰 만료 같은 일시적 실패는 실제로 관측된다.
 
     폴백 순서: 직전 정상가 → 평단(직전 정상가가 없을 때만). 어느 쪽이든 stale로 표시해
     판정에서 배제하되, 평가금이 0으로 무너지지는 않게 한다(자산 스냅샷 보존).
@@ -309,14 +309,35 @@ def snapshot_equity():
         logger.debug(f"[PAPER] 자산 스냅샷 실패: {e}")
 
 
+_FILL_COLS = ("time, type, code, name, qty, price, amount, fee, profit_amt, profit_rate, odno")
+
+
+def _fill_row(r):
+    return {"time": r[0], "type": r[1], "code": r[2], "name": r[3], "qty": int(r[4]),
+            "price": float(r[5]), "amount": float(r[6]), "fee": float(r[7]),
+            "profit_amt": float(r[8]), "profit_rate": float(r[9]), "odno": r[10]}
+
+
 def get_fills(limit=None):
-    q = "SELECT time, type, code, name, qty, price, amount, fee, profit_amt, profit_rate FROM paper_fills ORDER BY id"
+    q = f"SELECT {_FILL_COLS} FROM paper_fills ORDER BY id"
     if limit:
         q += f" LIMIT {int(limit)}"
     rows = _db().execute_query(q, fetch='all') or []
-    return [{"time": r[0], "type": r[1], "code": r[2], "name": r[3], "qty": int(r[4]),
-             "price": float(r[5]), "amount": float(r[6]), "fee": float(r[7]),
-             "profit_amt": float(r[8]), "profit_rate": float(r[9])} for r in rows]
+    return [_fill_row(r) for r in rows]
+
+
+def get_fill_by_odno(odno):
+    """주문번호로 가상 체결 1건을 찾는다(없으면 None).
+
+    체결 감시가 '이 주문이 실제로 체결됐는가'를 확인하는 유일한 근거다 —
+    가상 주문은 증권사 미체결 목록에 뜨지 않으므로 원장 대사 말고는 확인 경로가 없다.
+    """
+    if not odno:
+        return None
+    row = _db().execute_query(
+        f"SELECT {_FILL_COLS} FROM paper_fills WHERE odno=? ORDER BY id DESC",
+        (str(odno),), fetch='one')
+    return _fill_row(row) if row else None
 
 
 def get_equity_curve():

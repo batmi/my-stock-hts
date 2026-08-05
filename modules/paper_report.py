@@ -15,6 +15,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 import config
+import context
 import utils
 from modules import paper_broker
 
@@ -47,30 +48,47 @@ def _percentile_label(value, dist):
 
 
 def show_paper_menu():
-    """가상투자 관리 (메뉴 9-6)."""
+    """가상투자 관리 (메뉴 9-6).
+
+    다른 메뉴와 동일하게 utils.show_menu로 그린다 — 그래야 시스템 시간·경로 헤더가
+    서브메뉴에서도 유지된다. 성과 현황은 진입 즉시 쏟아내지 않고 [5] 항목으로 두어
+    메뉴 화면 자체는 짧게 유지한다.
+
+    반환값: 'q'(메인 메뉴 점프)면 False, 그 외에는 True.
+    """
     if not paper_broker.is_active():
         config.console.print(
             "\n[yellow]가상투자 모드에서만 사용할 수 있습니다.[/yellow]\n"
             "[dim]프로그램을 다시 시작하고 접속 서버에서 [4] 가상투자를 선택하세요.[/dim]\n"
             "[dim]현재 모드에서는 5-4(트레이딩 평가)·9-1(자산 조회)·9-2(보유 잔고)를 그대로 쓰시면 됩니다.[/dim]")
         utils.pause()
-        return
+        return True
+
+    menu_items = [
+        ("1", "가상계좌 입금", "시드 추가 — 투입원금 증가"),
+        ("2", "가상계좌 출금", "시드 인출 — 투입원금 감소"),
+        ("3", "페이퍼 트레이딩 초기화", "포지션·체결·자산곡선 전체 삭제"),
+        ("4", "자산 곡선", "일별 가상 자산 추이"),
+        ("5", "성과 현황", "시드 대비 성과 · 백테스트 분포 대비"),
+    ]
+    menu_map = {key: name for key, name, _ in menu_items}
+    base_breadcrumb_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "5"
 
     while True:
-        utils.clear_screen()
-        _print_status()
-        menu = Table.grid(padding=(0, 2))
-        menu.add_column(style="cyan"); menu.add_column(style="dim")
-        menu.add_row("[1] 가상계좌 입금", "(시드 추가 — 투입원금 증가)")
-        menu.add_row("[2] 가상계좌 출금", "(시드 인출 — 투입원금 감소)")
-        menu.add_row("[3] 페이퍼 트레이딩 초기화", "(포지션·체결·자산곡선 전체 삭제)")
-        menu.add_row("[4] 자산 곡선", "(일별 가상 자산 추이)")
-        config.console.print()
-        config.console.print(menu)
-        config.console.print("[dim][B] 뒤로[/dim]")
-        choice = Prompt.ask("선택", choices=["1", "2", "3", "4", "b", "B"], default="b")
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_breadcrumb_len]
+        choice = utils.show_menu(None, menu_items, default_choice=last_choice,
+                                 text_before=_account_line())
+        if choice.lower() == "q":
+            return False
         if choice.lower() == "b":
-            return
+            return True
+
+        last_choice = choice
+        context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
+        utils.clear_screen()
+        utils.print_breadcrumb()
+
         if choice == "1":
             _adjust_seed(deposit=True)
         elif choice == "2":
@@ -79,13 +97,22 @@ def show_paper_menu():
             _reset_account()
         elif choice == "4":
             _show_equity_curve()
+        elif choice == "5":
+            _print_status()
+            utils.pause()
+
+
+def _account_line():
+    """계좌 개설 시각·시세 소스 한 줄. 메뉴와 성과 화면이 함께 쓴다."""
+    perf = paper_broker.get_performance()
+    return (f"[dim]개설 {perf['started_at']} · 시세 소스: 한국투자증권(실전) · "
+            f"실주문 차단[/dim]\n")
 
 
 def _print_status():
     perf = paper_broker.get_performance()
-    config.console.print(
-        f"\n[bold cyan]가상투자 관리 (Paper Trading)[/bold cyan]  "
-        f"[dim]개설 {perf['started_at']} · 시세 소스: 토스증권 · 실주문 차단[/dim]\n")
+    config.console.print(f"[bold cyan]성과 현황 (Paper Trading)[/bold cyan]")
+    config.console.print(_account_line())
 
     ret_color = "red" if perf["total_return"] > 0 else ("blue" if perf["total_return"] < 0 else "white")
     t = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim", show_header=False)

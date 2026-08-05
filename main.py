@@ -171,7 +171,7 @@ def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if getattr(config.session, 'is_paper', False):
-        # 가상투자는 토스 시세를 쓰지만 계좌가 가상이므로 토스와 구분해 표시한다(실전 오인 방지)
+        # 가상투자는 KIS 실전 시세를 쓰지만 계좌가 가상이므로 실전과 구분해 표시한다(오인 방지)
         env_str = "[가상투자]"; env_color = "bold cyan"
     elif config.session.is_toss:
         env_str = "[토스증권]"; env_color = "bold magenta"
@@ -945,7 +945,7 @@ def main():
 
   5. 가상투자(페이퍼 트레이딩) 모드로 자동매매 바로 시작:
      ./run.sh --mode 4 --auto
-     (토스 시세 + 가상 계좌. 실주문이 나가지 않으므로 장기 관찰에 사용)
+     (KIS 실전 시세 + 가상 계좌. 실주문이 나가지 않으므로 장기 관찰에 사용)
 """
     )
     parser.add_argument('--mode', choices=['1', '2', '3', '4'], help='투자 모드 선택 (1: 모의투자, 2: 한투증권, 3: 토스증권, 4: 가상투자)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')

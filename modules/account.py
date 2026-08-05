@@ -2081,4 +2081,6 @@ def asset_management_menu():
             # 가상투자 계좌 관리(입출금·초기화·자산곡선). 계좌 성격의 기능이라 자산 관리에 둔다.
             logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
             from modules import paper_report
-            paper_report.show_paper_menu()
+            # 서브메뉴에서 q를 누르면 메인 메뉴로 빠져나가야 한다(다른 메뉴와 동일).
+            if paper_report.show_paper_menu() is False:
+                return False
