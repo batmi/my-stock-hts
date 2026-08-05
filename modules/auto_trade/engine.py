@@ -65,6 +65,11 @@ UNMANAGED_NO_SELLABLE = "매도가능수량 0 (거래정지·외부주문 의심
 #  **손절·트레일링이 조용히 영구 정지**한다(2026-08-05 관측: 손절 기준을 넘겼는데도
 #  매도 판정 로그 자체가 나오지 않음). 종전에는 이 스킵이 DEBUG 로그라 보이지 않았다.
 UNMANAGED_STUCK_PENDING = "대기 주문에 묶임 (주문 상태기계 확인 필요)"
+#  매도 판정 자체가 예외로 죽은 상태. 종전에는 _sell_worker의 예외를 아무도 회수하지 않아
+#  (concurrent.futures.wait은 예외를 되살리지 않는다) 그 종목만 [보유분석] 줄 없이 사라지고
+#  손절·트레일링이 조용히 정지했다. 실제로 개별 룰의 NULL 컬럼 하나가 analyze_sell을
+#  TypeError로 죽였고, 원인을 찾는 데 로그가 전혀 도움이 되지 않았다(2026-08-05 NAVER).
+UNMANAGED_ANALYSIS_ERROR = "매도 판정 오류 (분석 실패)"
 #  경보 전 연속 관측 횟수. 미체결 취소 직후 한 주기 정도는 일시적으로 0이 될 수 있어,
 #  즉시 알리면 정상 운영 중에도 오경보가 난다(입출금 감지의 '3회 연속'과 같은 방식).
 NO_SELLABLE_ALERT_CYCLES = 3
@@ -301,6 +306,59 @@ def entry_atr_stop_rate(df, entry_date=None, atr_mult=None):
         return None
 
 
+def rule_value(rule, key, default):
+    """개별 룰의 값을 읽되, NULL이면 전역 기본값으로 되돌린다.
+
+    [중요] rule.get(key, default)를 쓰면 안 된다. dict.get은 **키가 존재하되 값이 None이면
+    default가 아니라 None을 돌려준다.** stock_strategies는 SELECT * 로 모든 컬럼을 싣고
+    오므로, 사용자가 지정하지 않은 항목이 정확히 그 상태다. 그 None이 판정의 비교식으로
+    들어가면 TypeError가 나고, 예외를 회수하지 않는 루프에서는 그 종목만 조용히 사라진다.
+    """
+    v = (rule or {}).get(key)
+    return default if v is None else v
+
+
+def normalize_weights(w):
+    """스코어링 가중치를 dict로 확정한다.
+
+    DB에는 JSON 문자열로 저장되고 _enrich_rules_with_weights가 dict로 바꿔 준다. 그 보강이
+    실패하면(가상투자에서 실계좌 DB를 열던 문제 등) 문자열이 그대로 흘러 calculate_score의
+    weights.get()에서 AttributeError가 난다 — 점수 계산은 매수·매도 판정 양쪽의 심장이라
+    여기서 죽으면 그 종목이 판정에서 통째로 빠진다(2026-08-05 NAVER).
+    """
+    if isinstance(w, str):
+        try:
+            w = json.loads(w)
+        except Exception as e:
+            logger.warning(f"개별 룰 가중치 파싱 실패 — 전역 가중치로 판정한다: {e}")
+            return config.SCORING_WEIGHTS
+    return w if isinstance(w, dict) else config.SCORING_WEIGHTS
+
+
+def build_buy_thresholds(rule=None, score_adj=0.0):
+    """매수 판단(analyze_buy)에 넘길 임계값을 조립한다. (부수효과 없음)
+
+    매도 경로의 build_sell_thresholds와 같은 규약을 쓴다 — 룰의 NULL 컬럼은 전역 기본값으로
+    되돌리고, 가중치는 dict로 확정한다. 개별 룰이 걸렸다는 이유로 종목이 분석 결과 없이
+    사라지는 일이 없어야 한다.
+    """
+    at = config.ANALYSIS_THRESHOLDS
+    if not rule:
+        return {"BUY_SCORE": at["BUY_SCORE"] + score_adj, "WEIGHTS": config.SCORING_WEIGHTS}
+
+    return {
+        # 개별 룰의 매수 기준은 시장 국면 보정을 대체한다(사용자가 못 박은 절대값).
+        # 다만 룰에 값이 없으면 룰 없는 종목과 같은 기준으로 돌아가야 한다.
+        "BUY_SCORE": rule_value(rule, 'buy_score', at["BUY_SCORE"] + score_adj),
+        "BUY_RSI_MAX": rule_value(rule, 'buy_rsi', at["BUY_RSI_MAX"]),
+        "BUY_VOL_STRENGTH": rule_value(rule, 'buy_vol_strength', at.get("BUY_VOL_STRENGTH", 100.0)),
+        "BUY_ASK_BID_RATIO": rule_value(rule, 'buy_ask_bid_ratio', at.get("BUY_ASK_BID_RATIO", 1.0)),
+        "AUTO_ADJUST_ASK_BID_RATIO": bool(rule_value(rule, 'auto_adjust_ask_bid_ratio',
+                                                     at.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
+        "WEIGHTS": normalize_weights(rule_value(rule, 'weights', config.SCORING_WEIGHTS)),
+    }
+
+
 def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_atr_rate=None):
     """보유 종목의 매도 판단(analyze_sell)에 넘길 임계값을 조립한다. (부수효과 없음)
 
@@ -310,24 +368,30 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_at
     fallback_atr_rate: 매수 기록이 없어 ATR 손절률을 못 구할 때 쓸 복원값
                        (entry_atr_stop_rate). 기록에서 구한 값이 항상 우선한다.
     """
+    def _rv(key, default):
+        return rule_value(rule, key, default)
+
     if rule:
         thresholds = {
-            "TAKE_PROFIT_RATE": rule['take_profit'],
-            "STOP_LOSS_RATE": rule['stop_loss'],
-            "TAKE_PROFIT_RSI": rule['take_profit_rsi'],
-            "SELL_SCORE": rule['sell_score'],
-            "WEIGHTS": rule.get('weights'),
-            "BUY_SCORE": rule['buy_score'],
+            "TAKE_PROFIT_RATE": _rv('take_profit', config.SELL_STRATEGY["TAKE_PROFIT_RATE"]),
+            "STOP_LOSS_RATE": _rv('stop_loss', config.SELL_STRATEGY["STOP_LOSS_RATE"]),
+            "TAKE_PROFIT_RSI": _rv('take_profit_rsi', config.SELL_STRATEGY["TAKE_PROFIT_RSI"]),
+            "SELL_SCORE": _rv('sell_score', config.SELL_STRATEGY["SELL_SCORE"]),
+            "WEIGHTS": normalize_weights(_rv('weights', config.SCORING_WEIGHTS)),
+            # 룰의 매수 기준은 시장 국면 보정을 대체한다(사용자가 못 박은 값). 다만 룰에
+            # 값이 없으면 룰 없는 종목과 같은 기준(전역 + 국면 보정)으로 돌아가야 한다.
+            "BUY_SCORE": _rv('buy_score', config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj),
             # [Fix] 개별 룰의 RSI 상한을 매도 경로에도 전달한다.
             #  analyze_sell도 classify_stock_state로 상태를 재판정하는데,
             #  이 키가 없으면 전역 BUY_RSI_MAX로 폴백해, 같은 종목·같은 시각인데도
             #  매수 경로/메뉴 2 화면과 상태가 갈렸다(룰 RSI ≠ 전역 RSI인 보유 종목).
-            "BUY_RSI_MAX": rule['buy_rsi'],
-            "TIME_STOP_DAYS": rule.get('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
-            "HALF_TAKE_PROFIT_USE": bool(rule.get('half_take_profit_use', config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
+            "BUY_RSI_MAX": _rv('buy_rsi', config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]),
+            "TIME_STOP_DAYS": _rv('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
+            "HALF_TAKE_PROFIT_USE": bool(_rv('half_take_profit_use',
+                                             config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
             # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
-            "ts_activation": rule['ts_activation'] if rule.get('ts_activation') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
-            "ts_callback": rule['ts_callback'] if rule.get('ts_callback') is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+            "ts_activation": _rv('ts_activation', config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)),
+            "ts_callback": _rv('ts_callback', config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)),
         }
         # [Fix] 룰의 ATR 손절 사용 여부를 TS 동적 콜백(샹들리에) 판정에도 일관 적용
         if rule.get('use_atr_stop') is not None:
@@ -600,7 +664,9 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                                                     restricted_codes=restricted_codes)
             return code, res
         except Exception as e:
-            logger.debug(f"보유분석 실패 {code}: {e}")
+            # [관측성] DEBUG로 두면 잔고 화면에서 그 종목만 '-'로 비고 이유가 어디에도
+            #  남지 않는다. 보유 종목의 판정 실패는 보호 공백이므로 항상 남긴다.
+            logger.warning(f"보유분석 실패 {code}: {type(e).__name__}: {e}", exc_info=True)
             return code, None
 
     if max_workers is None:

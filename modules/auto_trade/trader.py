@@ -35,6 +35,7 @@ import pandas as pd
 
 from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES, OrderManager,
                                        RiskManager, STUCK_PENDING_ALERT_CYCLES,
+                                       UNMANAGED_ANALYSIS_ERROR,
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
@@ -4541,8 +4542,34 @@ class AutoTrader:
         # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
         #  REST 대기 구간이 겹쳐져 주기당 소요 시간이 단축됨)
         max_workers = 5 if not config.session.is_simulation else 2
+
+        def _sell_worker_guarded(item):
+            """[관측성] 매도 판정의 예외를 반드시 회수해 로그·경보로 남긴다.
+
+            종전에는 executor.submit 결과를 wait만 하고 result()를 부르지 않아, 워커에서
+            난 예외가 어디에도 남지 않았다. 그러면 그 종목은 [보유분석] 줄도 [분석스킵]
+            줄도 없이 화면에서 사라지고, 손절·트레일링이 매 주기 조용히 건너뛰어진다
+            (2026-08-05: 개별 룰의 NULL 컬럼 하나로 analyze_sell이 TypeError로 죽었는데
+            로그에 아무 흔적이 없었다). 판정 못 한 포지션은 '보호되지 않는 포지션'이므로
+            트레이딩 제한·ETF 제외와 같은 취급으로 손절선 이탈 경보까지 보낸다.
+            """
+            try:
+                return _sell_worker(item)
+            except Exception as e:
+                code = item.get('pdno')
+                name = item.get('prdt_name') or code
+                try:
+                    self.set_stock_state(code, None)
+                    self.log(f"[분석실패] {name}({code}): 매도 판정 중 오류 — "
+                             f"{type(e).__name__}: {e} — 이번 주기에 손절·트레일링 판정을 받지 못했습니다")
+                    logger.exception(f"[매도분석] {code} 판정 실패")
+                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_ANALYSIS_ERROR,
+                                               buy_trades_map.get(code))
+                except Exception:
+                    logger.exception(f"[매도분석] {code} 실패 처리 중 2차 오류")
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_sell") as executor:
-            futures = [executor.submit(_sell_worker, item) for item in holdings]
+            futures = [executor.submit(_sell_worker_guarded, item) for item in holdings]
             concurrent.futures.wait(futures)
 
     def _try_pyramid_buy(self, code, name, held_qty, current_price, profit_rate, result, last_buy, is_market_open, rule=None):
@@ -4977,23 +5004,11 @@ class AutoTrader:
             rule = rules_map.get(code)
             market_type = self._get_stock_market_type(code)
             score_adj = market_regime_adj.get(market_type, 0.0)
-            base_buy_score = config.ANALYSIS_THRESHOLDS["BUY_SCORE"]
-            
-            thresholds = None
-            if rule:
-                thresholds = {
-                    "BUY_SCORE": rule['buy_score'], # [수정] 개별 룰은 시장 보정 무시 (절대값)
-                    "BUY_RSI_MAX": rule['buy_rsi'],
-                    "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                    "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
-                    "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
-                    "WEIGHTS": rule.get('weights')
-                }
-            else:
-                thresholds = {
-                    "BUY_SCORE": base_buy_score + score_adj,
-                    "WEIGHTS": config.SCORING_WEIGHTS
-                }
+
+            # [SSOT] 매도 경로(build_sell_thresholds)와 같은 규약으로 조립한다 —
+            #  룰의 NULL 컬럼은 전역 기본값으로 되돌리고 가중치는 dict로 확정한다.
+            #  개별 룰이 걸렸다는 이유로 종목이 분석 결과 없이 사라지면 안 된다.
+            thresholds = _pkg().build_buy_thresholds(rule=rule, score_adj=score_adj)
             
             # 전략 실행
             result = self.strategy.analyze_buy(code, name, df, current_price, vol_strength=vol_strength, thresholds=thresholds, ask_bid_ratio=ask_bid_ratio)

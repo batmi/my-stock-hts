@@ -453,11 +453,32 @@ class OrderStatus:
     REJECTED = "REJECTED"           # 거부/에러
 
 # [추가] DB 스키마 보정 및 가중치 관리 헬퍼 함수
+def _active_db_path():
+    """지금 열려 있는 DB 파일 경로.
+
+    [중요] config.DB_FILE_PATH를 직접 쓰면 안 된다. 가상투자(mode 4)는
+    db_manager.db.switch_path(config.PAPER_DB_FILE_PATH)로 **파일만** 갈아끼우고
+    config.DB_FILE_PATH는 실계좌 경로 그대로다. 그래서 아래 함수들이 실계좌 DB를 열어
+      · 조회: 가상투자 룰의 가중치를 찾지 못해 JSON 문자열이 dict로 바뀌지 않은 채
+        남고, 그 문자열이 calculate_score의 weights.get()에서 AttributeError를 냈다.
+        매도 루프가 그 예외를 삼켜, 개별 룰이 걸린 보유 종목이 [보유분석]에서 통째로
+        사라졌다(2026-08-05 NAVER).
+      · 저장: 가상투자에서 만든 가중치를 실계좌 DB에 썼다(분리 원칙 위반).
+    """
+    try:
+        path = getattr(db_manager.db, 'db_path', None)
+        if path:
+            return path
+    except Exception as e:
+        logger.debug(f"활성 DB 경로 확인 실패: {e}")
+    return config.DB_FILE_PATH
+
+
 def _ensure_db_weights_column_logic():
     """stock_strategies 테이블에 weights 컬럼이 없으면 추가"""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_FILE_PATH)
+        conn = sqlite3.connect(_active_db_path())
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
         if not cursor.fetchone(): return
@@ -479,7 +500,7 @@ def _save_rule_weights_logic(code, weights):
     try:
         _ensure_db_weights_column()
         weights_json = json.dumps(weights) if weights else None
-        conn = sqlite3.connect(config.DB_FILE_PATH)
+        conn = sqlite3.connect(_active_db_path())
         cursor = conn.cursor()
         cursor.execute("UPDATE stock_strategies SET weights = ? WHERE code = ?", (weights_json, code))
         conn.commit()
@@ -495,7 +516,7 @@ def _enrich_rules_with_weights_logic(rules):
     conn = None
     try:
         _ensure_db_weights_column()
-        conn = sqlite3.connect(config.DB_FILE_PATH)
+        conn = sqlite3.connect(_active_db_path())
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT code, weights FROM stock_strategies")

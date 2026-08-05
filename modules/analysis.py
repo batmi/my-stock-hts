@@ -6,6 +6,7 @@ from rich import box
 import config
 import context
 import api
+import json
 import logging
 import contextlib
 import indicators
@@ -673,6 +674,15 @@ def check_smart_money_turnaround(code, is_overseas=False):
 def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, w52_pos=None, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
     """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
     if weights is None: weights = config.SCORING_WEIGHTS
+    # [안전장치] 개별 룰의 가중치는 DB에 JSON 문자열로 저장된다. 보강 단계가 실패하면
+    #  문자열이 그대로 들어와 아래 weights.get()이 AttributeError를 낸다. 점수 계산은
+    #  매수·매도 판정 양쪽의 심장이라, 여기서 죽으면 그 종목이 판정에서 통째로 빠진다.
+    if isinstance(weights, str):
+        try:
+            weights = json.loads(weights)
+        except Exception:
+            weights = config.SCORING_WEIGHTS
+    if not isinstance(weights, dict): weights = config.SCORING_WEIGHTS
 
     # r_* 는 '각 팩터의 세부 항목 기본배점 합(=설계상 만점)' 대비 사용자 가중치의 스케일 배수다.
     # 분모는 세부항목 기본배점 합(고정값)이며 분자만 가중치로 바뀐다.
