@@ -318,7 +318,7 @@ class AutoTrader:
                     progress.advance(task)
                     return "caches", (ts_cache, half_cache, ok)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_init") as executor:
                     # [수정] 모의투자는 잔고 summary에 예수금이 포함되어 있어 별도 예수금 API 호출이 불필요.
                     # 초기화 시 중복 잔고조회(get_domestic_balance)+예수금조회가 2-TPS 경합으로 재시도
                     # 폭주를 일으켜 메모리가 폭증하던 문제를 제거한다. (실전만 별도 예수금 조회 수행)
@@ -1869,7 +1869,7 @@ class AutoTrader:
                         except Exception: pass
 
                 summary = []
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_status") as executor:
                     fut_asset = executor.submit(_fetch_asset)
                     fut_regime = executor.submit(_fetch_regimes)
                     fut_indices = executor.submit(_update_indices)
@@ -4521,7 +4521,7 @@ class AutoTrader:
         # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
         #  REST 대기 구간이 겹쳐져 주기당 소요 시간이 단축됨)
         max_workers = 5 if not config.session.is_simulation else 2
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_sell") as executor:
             futures = [executor.submit(_sell_worker, item) for item in holdings]
             concurrent.futures.wait(futures)
 
@@ -4867,7 +4867,7 @@ class AutoTrader:
             _local_pool = None
             ex = io_pool
             if ex is None:
-                _local_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+                _local_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_cand_io")
                 ex = _local_pool
             try:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
@@ -5119,7 +5119,7 @@ class AutoTrader:
         #  (기존에는 후보 종목마다 ThreadPoolExecutor(3)를 생성/파괴 — 저사양 환경에서 오버헤드)
         io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 3, thread_name_prefix="cand_io")
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_cand") as executor:
                 futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool) for item in targets]
 
                 for future in concurrent.futures.as_completed(futures):

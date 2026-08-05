@@ -1789,6 +1789,29 @@ def _retry_wait_seconds(attempt, reason):
     return (base_delay * (2 ** attempt)) + jitter
 
 
+# [TPS 우선순위] 시스템 트레이딩이 쓰는 스레드 이름. 접두어로 판정한다.
+#  매매 판단·주문은 시각(時刻)이 곧 가격이라 미룰 수 없는 반면, 조회 메뉴는 몇 초 늦어도
+#  사용자가 기다리면 그만이다. 그런데 종전에는 모든 스레드가 같은 토큰 버킷을 동등하게
+#  다퉈, 메뉴 1·2를 여는 동안 정작 후보 분석(cand_io_*)이 EGW00201로 최종 실패했다
+#  (2026-08-05 관측). 실패한 조회는 그 종목의 판정을 통째로 건너뛰게 만든다.
+_SYSTEM_THREAD_PREFIXES = (
+    "AutoTrader",          # 매매 메인 루프
+    "ConclusionMonitor",   # 체결 감시
+    "ReservedOrderMonitor",  # 예약 주문 감시(발주 경로)
+    "cand_io",             # 후보 분석 I/O 풀
+    "at_",                 # 자동매매가 띄우는 작업 풀(at_cand·at_sell·at_engine·at_init…)
+)
+
+
+def _is_system_priority():
+    """현재 스레드가 시스템 트레이딩 경로인가. 아니면 조회성 호출로 보고 양보시킨다."""
+    try:
+        name = threading.current_thread().name or ""
+    except Exception:
+        return True   # 알 수 없으면 양보시키지 않는다(매매를 늦추는 쪽이 더 위험하다)
+    return name.startswith(_SYSTEM_THREAD_PREFIXES)
+
+
 class ThrottledSession(requests.Session):
     def __init__(self):
         super().__init__()
@@ -1835,7 +1858,9 @@ class ThrottledSession(requests.Session):
             max_retries += 1
         
         response = None
-        
+        # [TPS 우선순위] 스레드 단위로 한 번만 판정한다(재시도 중에 바뀌지 않는다).
+        is_priority = _is_system_priority()
+
         for attempt in range(max_retries + 1):
             target_limit = 0
             server_type = "EXTERNAL"
@@ -1877,13 +1902,22 @@ class ThrottledSession(requests.Session):
                             # 2. 최소 간격 체크 (고르게 분산)
                             time_since_last = now - history[-1] if history else float('inf')
 
-                            if len(history) < effective_limit and time_since_last >= min_interval:
+                            # [TPS 우선순위] 조회성 호출은 한도의 일부만 쓰고 간격도 더 벌린다.
+                            #  매매 스레드가 바쁘면 자연히 뒤로 밀리고, 한가하면 그대로 다 쓴다.
+                            #  (한도를 통째로 나누지 않고 '문턱만 낮추는' 방식이라 유휴 시 손해가 없다)
+                            share = 1.0
+                            if not is_priority:
+                                share = float(getattr(config, 'LOW_PRIORITY_TPS_SHARE', 0.5) or 1.0)
+                            gate_limit = max(1.0, effective_limit * share)
+                            gate_interval = min_interval / share if share > 0 else min_interval
+
+                            if len(history) < gate_limit and time_since_last >= gate_interval:
                                 history.append(now)
                                 current_tps = len(history)
                                 break # 락 해제 후 전송 진행
                             else:
-                                wait_from_window = (history[0] + window_size) - now if len(history) >= effective_limit else 0
-                                wait_from_interval = min_interval - time_since_last
+                                wait_from_window = (history[0] + window_size) - now if len(history) >= gate_limit else 0
+                                wait_from_interval = gate_interval - time_since_last
                                 wait_time = max(wait_from_window, wait_from_interval)
                                 if wait_time <= 0: wait_time = 0.05
                         else:

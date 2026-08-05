@@ -599,7 +599,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
         max_workers = 2 if config.session.is_simulation else 4
     max_workers = max(1, min(max_workers, len(entries)))
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_engine") as executor:
         for code, res in executor.map(_worker, entries):
             if res:
                 results[code] = res
