@@ -1855,13 +1855,35 @@ class ThrottledSession(requests.Session):
             self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
 
     def _tps_on_rate_limit_real(self):
-        """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소(마진 확대)시킨다."""
+        """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소(마진 확대)시킨다.
+
+        [진단] 게이트는 1.1초 창 한도와 최소 간격을 동시에 걸어, 한 프로세스가 실효
+        한도를 넘길 수 없다. 그런데도 서버가 거부한다면 원인은 게이트 밖이다 —
+        같은 앱키를 쓰는 다른 프로세스이거나, 계정의 실제 한도가 명목(20 TPS)보다
+        낮거나, 우리 창 계산이 서버의 1초 카운터와 어긋난 것이다. 셋은 '거부 시점의
+        클라이언트 실제 전송률'로 갈린다. 추측하지 않도록 그 값을 남긴다.
+        """
         with self.lock:
             lo, hi, start = self._real_tps_bounds()
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
             self.adaptive_limit_real = max(lo, cur * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
             # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
-            self._last_tps_raise = time.time()
+            now = time.time()
+            self._last_tps_raise = now
+            sent_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
+            sent_window = len(self.request_history_real)
+            at_floor = self.adaptive_limit_real <= lo + 1e-9
+
+        try:
+            th = threading.current_thread().name
+        except Exception:
+            th = "?"
+        logger.warning(
+            f"[TPS] EGW00201 — 직전 1초 전송 {sent_1s}건 / 1.1초 창 {sent_window}건, "
+            f"실효 한도 {cur:.2f} → {self.adaptive_limit_real:.2f} TPS"
+            f"{' (하한 도달)' if at_floor else ''}, 스레드={th}. "
+            f"전송률이 한도보다 낮은데 거부되면 원인은 게이트 밖이다 "
+            f"(같은 앱키를 쓰는 다른 프로세스 · 명목보다 낮은 계정 한도).")
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url

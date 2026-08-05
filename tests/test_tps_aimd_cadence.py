@@ -19,11 +19,14 @@ import config
 
 @pytest.fixture
 def sess():
+    from collections import deque
     s = api.ThrottledSession.__new__(api.ThrottledSession)
     import threading
     s.lock = threading.Lock()
     s.adaptive_limit_real = None
     s._last_tps_raise = 0.0
+    s.request_history_real = deque()
+    s.request_history_sim = deque()
     return s
 
 
@@ -83,3 +86,25 @@ def test_bounds_stay_below_nominal_limit(sess):
     """실효 한도는 명목 한도(20 TPS)를 넘지 않는다."""
     lo, hi, start = sess._real_tps_bounds()
     assert lo < start <= hi < config.REAL_TX_PER_SECOND
+
+
+def test_rate_limit_logs_observed_send_rate(sess, caplog):
+    """[진단] 거부 시점의 클라이언트 실제 전송률을 남긴다.
+
+    게이트는 한 프로세스가 실효 한도를 넘길 수 없게 만든다. 그런데도 서버가 거부하면
+    원인은 게이트 밖(다른 프로세스·낮은 계정 한도)이며, 둘은 '그 순간 우리가 실제로
+    몇 건을 보냈는가'로만 갈린다. 추측하지 않으려면 그 값이 로그에 있어야 한다.
+    """
+    import logging
+    now = time.time()
+    sess.request_history_real = [now - 0.1, now - 0.2, now - 0.3, now - 1.05]
+    sess.adaptive_limit_real = 18.0
+
+    with caplog.at_level(logging.WARNING, logger="api"):
+        sess._tps_on_rate_limit_real()
+
+    msg = "\n".join(r.message for r in caplog.records)
+    assert "EGW00201" in msg
+    assert "직전 1초 전송 3건" in msg, f"1초 내 전송 건수가 없거나 틀리다: {msg}"
+    assert "1.1초 창 4건" in msg
+    assert "TPS" in msg
