@@ -1823,6 +1823,9 @@ class ThrottledSession(requests.Session):
         #    실효 TPS를 점진 상향하고, EGW00201(초당 거래건수 초과)이 나면 곱셈 감소로 즉시 물러난다.
         #  - [REAL_TPS_SAFETY_MIN, REAL_TPS_SAFETY_MAX] 범위 내에서 적정 TPS로 자가 수렴한다.
         self.adaptive_limit_real = None
+        # [Fix] 가산 증가를 마지막으로 적용한 시각. AIMD의 '증가'는 요청당이 아니라
+        #  윈도우(1초)당 한 번이어야 한다 — 아래 _tps_on_success_real 주석 참조.
+        self._last_tps_raise = 0.0
 
     def _real_tps_bounds(self):
         nominal = config.REAL_TX_PER_SECOND
@@ -1832,8 +1835,21 @@ class ThrottledSession(requests.Session):
         return lo, hi, start
 
     def _tps_on_success_real(self):
-        """실전 성공(레이트리밋 아님) 시 실효 TPS를 가산 증가(마진 축소)시킨다."""
+        """실전 성공(레이트리밋 아님) 시 실효 TPS를 가산 증가(마진 축소)시킨다.
+
+        [Fix 2026-08-05] 증가는 **윈도우(1초)당 한 번**이다. 종전에는 성공 1건마다
+        올렸는데, 그러면 실효 상승률이 윈도우 크기(초당 ~18건)배로 뻥튀기된다.
+        바닥(17)에서 천장(19.6)까지 2.6 TPS = 성공 52건 = 약 3초. 즉 EGW00201로
+        물러나도 3초면 천장에 다시 붙고 또 걸린다 — **평형점이 천장이고 서버 한도는
+        20이라, 레이트리밋이 상시 발생하는 정상 상태가 된다**(실측: 30분간 100건 이상).
+        AIMD의 증가는 원래 RTT(윈도우)당 1단위이지 패킷당이 아니다. 주기를 바로잡아야
+        컨트롤러가 천장이 아니라 실제 한도 아래에서 수렴한다.
+        """
         with self.lock:
+            now = time.time()
+            if now - self._last_tps_raise < 1.0:
+                return
+            self._last_tps_raise = now
             lo, hi, start = self._real_tps_bounds()
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
             self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
@@ -1844,6 +1860,8 @@ class ThrottledSession(requests.Session):
             lo, hi, start = self._real_tps_bounds()
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
             self.adaptive_limit_real = max(lo, cur * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
+            # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
+            self._last_tps_raise = time.time()
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
