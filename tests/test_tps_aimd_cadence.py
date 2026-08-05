@@ -108,3 +108,40 @@ def test_rate_limit_logs_observed_send_rate(sess, caplog):
     assert "직전 1초 전송 3건" in msg, f"1초 내 전송 건수가 없거나 틀리다: {msg}"
     assert "1.1초 창 4건" in msg
     assert "TPS" in msg
+
+
+def test_floor_can_go_below_observed_reject_rate(sess):
+    """[핵심] 하한은 실측 거부 지점 아래여야 한다 — 아니면 AIMD가 수렴하지 못한다.
+
+    [실측 2026-08-05] 클라이언트 전송률 8~9건/초에서도 EGW00201이 났다(단일 프로세스 확인).
+    하한이 17 TPS면 컨트롤러가 그 아래로 내려갈 수 없어 거부가 영구 지속된다.
+    """
+    lo, _hi, _start = sess._real_tps_bounds()
+    assert lo <= 8.0, (
+        f"하한 {lo:.1f} TPS — 실측 거부 지점(8건/초)보다 높으면 백오프가 무의미하다")
+
+
+def test_backoff_actually_descends_from_start(sess):
+    """반복 거부 시 실효 한도가 실제로 내려간다(하한에 즉시 붙어 멈추지 않는다)."""
+    sess.adaptive_limit_real = None
+    seen = []
+    for _ in range(6):
+        sess._tps_on_rate_limit_real()
+        seen.append(sess.adaptive_limit_real)
+
+    assert seen[0] > seen[1] > seen[2], f"연속 백오프가 단조 감소하지 않는다: {seen}"
+    lo, _hi, _start = sess._real_tps_bounds()
+    assert seen[-1] >= lo, "하한 아래로 내려갔다"
+
+
+def test_single_reject_backs_off_once(sess):
+    """[회귀 방지] 한 응답에 백오프가 두 번 걸리지 않는다.
+
+    HTTP 500 본문 검사와 msg_cd 검사가 같은 응답을 각각 처리하면 실효 한도가 실제보다
+    두 배 빠르게 내려간다(2026-08-05 로그: 같은 스레드가 1ms 간격으로 두 줄).
+    """
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "api.py"), encoding="utf-8").read()
+    assert "rate_limited_handled = False" in src, "중복 백오프 방지 플래그가 없다"
+    assert "not rate_limited_handled" in src, "msg_cd 분기가 플래그를 확인하지 않는다"

@@ -2002,6 +2002,8 @@ class ThrottledSession(requests.Session):
 
                 # [수정] 통합 재시도 로직 (모든 에러 상황 처리)
                 should_retry = False
+                # 이 응답에 대해 레이트리밋 백오프를 이미 적용했는가(중복 적용 방지).
+                rate_limited_handled = False
                 retry_reason = ""
 
                 # 1. HTTP Status 확인
@@ -2016,6 +2018,10 @@ class ThrottledSession(requests.Session):
                             logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
                             if is_real_server:
                                 self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
+                                # [Fix] 아래 msg_cd 분기가 같은 응답을 한 번 더 처리한다.
+                                #  한 번의 거부에 백오프가 두 번 걸려 실효 한도가 실제보다
+                                #  두 배 빠르게 내려가고, 진단 로그도 매번 두 줄씩 남았다.
+                                rate_limited_handled = True
                         else:
                             logger.error(f"⚠️ [HTTP Error] URL: {url} | Status: {response.status_code} | Body: {body_preview}")
                     except Exception: pass
@@ -2059,7 +2065,7 @@ class ThrottledSession(requests.Session):
                                 if msg_cd == 'EGW00201' or (msg_cd == 'EGW00215' and 'inquire' in url):
                                     should_retry = True
                                     retry_reason = f"Rate Limit Exceeded ({msg_cd}): {msg1_disp}"
-                                    if is_real_server:
+                                    if is_real_server and not rate_limited_handled:
                                         self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
                                 elif msg_cd == 'EGW00215' and 'inquire' not in url:
                                     # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
