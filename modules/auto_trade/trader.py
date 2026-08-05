@@ -524,7 +524,17 @@ class AutoTrader:
             else:
                 if api._is_screen_output_allowed():
                     console.print("[bold cyan][시스템 명령] 토스증권 자동매매를 시작합니다.[/bold cyan]")
-        elif not config.session.is_simulation:
+        elif config.session.is_simulation:
+            if interactive:
+                console.print(f"\n운용 계좌: [bold yellow]PAPER-{config.session.cano}-{config.session.acnt_prdt_cd}[/bold yellow]")
+                utils.print_breadcrumb()
+                if Prompt.ask("위 계좌로 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                    console.print("[yellow]시작을 취소했습니다.[/yellow]")
+                    return
+            else:
+                if api._is_screen_output_allowed():
+                    console.print("[bold cyan][시스템 명령] 가상 투자 자동매매를 시작합니다.[/bold cyan]")
+        else:
             if not config.session.auto_app_key or not config.session.auto_cano:
                 if api._is_screen_output_allowed():
                     console.print("[bold red]오류: 실전 투자 모드에서 시스템 트레이딩을 실행하려면 별도의 자동매매 계좌 설정이 필요합니다.[/bold red]")
