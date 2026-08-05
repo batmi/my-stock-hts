@@ -183,6 +183,55 @@ def test_reset_clears_everything(paper):
     assert paper.get_equity_curve() == []
 
 
+def _count(table):
+    row = db_manager.db.execute_query(f"SELECT COUNT(*) FROM {table}", fetch='one')
+    return int(row[0]) if row else 0
+
+
+def _seed_trade_history():
+    """매매 기록·포지션 파생 상태를 페이퍼 DB에 심는다."""
+    db_manager.db.execute_query(
+        "INSERT INTO trades (time, type, code, name, qty, price, odno, account, is_sim) "
+        "VALUES ('2026-08-05 09:00:00','매수','005930','삼성전자','10','70000','X1','PAPER-',0)")
+    db_manager.db.execute_query(
+        "INSERT OR REPLACE INTO trailing_stops (code, highest_price, update_time) "
+        "VALUES ('005930', 88000, '2026-08-05')")
+    db_manager.db.execute_query(
+        "INSERT OR REPLACE INTO half_tp_status (code, update_time) VALUES ('005930','2026-08-05')")
+
+
+def test_reset_clears_trade_history(paper):
+    """초기화하면 매매 기록(trades)과 포지션 파생 상태까지 함께 지워진다.
+
+    남겨 두면 5-4 트레이딩 평가가 지워진 계좌의 과거 청산을 계속 집계하고,
+    트레일링 최고가는 같은 종목 재진입 시 그대로 되살아난다.
+    """
+    _seed_trade_history()
+    assert _count("trades") == 1
+
+    paper.reset(3_000_000)
+
+    assert _count("trades") == 0
+    assert _count("trailing_stops") == 0
+    assert _count("half_tp_status") == 0
+
+
+def test_reset_never_touches_real_db(paper, monkeypatch):
+    """[안전장치] 열려 있는 DB가 가상투자 파일이 아니면 매매 기록에 손대지 않는다.
+
+    trades·trailing_stops는 실계좌 DB에도 같은 이름으로 있다. 경로 확인 없이 지우면
+    초기화 한 번이 실계좌 매매 기록을 통째로 날린다.
+    """
+    _seed_trade_history()
+    monkeypatch.setattr(config, 'PAPER_DB_FILE_PATH', "/nonexistent/real.db", raising=False)
+
+    assert paper.reset(3_000_000) is False
+
+    assert _count("trades") == 1              # 실계좌 기록이라 가정 — 보존
+    assert _count("trailing_stops") == 1
+    assert paper.get_cash() == 3_000_000      # 가상 계좌 자체는 정상 초기화
+
+
 def test_equity_snapshot_is_one_row_per_day(paper):
     """같은 날 여러 번 스냅샷해도 하루 1행만 남는다(주기마다 호출되므로)."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")

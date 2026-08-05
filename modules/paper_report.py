@@ -202,8 +202,9 @@ def _reset_account():
         f"({perf['total_return']:+.2f}%) · 청산 {perf['sell_count']}건[/dim]\n"
         f"[dim]보유 포지션·체결 내역·자산 곡선이 모두 삭제되며 되돌릴 수 없습니다.[/dim]\n"
         f"[dim]※ 오늘 시작 자산 기준선(일일 손실 한도·드로다운 판정 기준)도 함께 초기화됩니다.[/dim]\n"
-        f"[dim]※ 5-4 트레이딩 평가에 쓰이는 매매 기록(trades)은 남습니다 — "
-        f"완전히 지우려면 가상투자 DB 파일을 삭제하세요.[/dim]")
+        f"[dim]※ 5-4 트레이딩 평가가 보는 매매 기록(trades)·트레일링 최고가·반익절 이력·"
+        f"예약 주문·매매일지 전송 대기열도 함께 삭제됩니다. 실계좌 DB는 파일이 달라 영향 없습니다.[/dim]\n"
+        f"[dim]※ 이미 매매일지 웹서버로 전송된 기록은 그대로 남습니다(웹에서 직접 삭제).[/dim]")
     if Prompt.ask("정말 초기화할까요?", choices=["y", "n"], default="n") != "y":
         config.console.print("[dim]취소했습니다.[/dim]")
         utils.pause()

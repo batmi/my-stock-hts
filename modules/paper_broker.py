@@ -459,14 +459,77 @@ def _clear_daily_baseline():
         logger.warning(f"[PAPER] 트레이더 기준선 초기화 실패(무시): {e}")
 
 
+# 실계좌 DB와 **이름·스키마가 같은** 공용 테이블. 페이퍼 DB 파일에서만 지운다.
+#  trades       : 5-4 트레이딩 평가·보유 분석이 보는 매매 기록. 남겨 두면 초기화 후
+#                 성과 화면이 지워진 계좌의 과거 청산을 계속 집계한다.
+#  journal_outbox: 매매일지 전송 대기열. 지운 매매가 뒤늦게 웹서버로 나가지 않게 한다.
+#  trailing_stops / half_tp_status : code가 PK인 포지션 파생 상태. 포지션만 지우고
+#                 남기면 같은 종목 재진입 시 옛 최고가·반익절 이력이 그대로 붙는다.
+#  reserved_orders: 초기화 뒤에도 살아남아 발동하는 가상 예약 주문을 없앤다.
+_SHARED_TABLES = ("trades", "journal_outbox", "trailing_stops",
+                  "half_tp_status", "reserved_orders")
+
+
+def _is_paper_db():
+    """현재 열려 있는 DB가 가상투자 전용 파일인가.
+
+    _SHARED_TABLES는 실계좌 DB에도 같은 이름으로 있다. 세션이 페이퍼 DB로 전환되지
+    않은 상태에서 초기화가 불리면 **실계좌 매매 기록을 통째로 지우게 되므로**,
+    파일 경로를 확인한 뒤에만 손댄다(fail-closed: 확인 못 하면 지우지 않는다).
+    """
+    import os
+    try:
+        return os.path.abspath(_db().db_path) == os.path.abspath(config.PAPER_DB_FILE_PATH)
+    except Exception as e:
+        logger.warning(f"[PAPER] DB 경로 확인 실패 — 공용 테이블은 건드리지 않는다: {e}")
+        return False
+
+
+def _clear_trade_history():
+    """가상 계좌의 매매 기록·포지션 파생 상태를 지운다. 실계좌 DB면 아무것도 안 한다."""
+    if not _is_paper_db():
+        logger.warning("[PAPER] 가상투자 DB가 아니어서 매매 기록 삭제를 건너뛴다 "
+                       f"(현재 DB: {getattr(_db(), 'db_path', '?')})")
+        return False
+
+    for tbl in _SHARED_TABLES:
+        try:
+            _db().execute_query(f"DELETE FROM {tbl}")
+        except Exception as e:
+            # 테이블이 아직 없을 수 있다(구버전 페이퍼 DB). 초기화 자체는 계속 진행한다.
+            logger.warning(f"[PAPER] {tbl} 정리 실패(무시): {e}")
+
+    # 실행 중인 트레이더의 메모리 캐시도 함께 내린다(재기동 없이 반영).
+    #  DB만 지우면 트레일링 최고가·반익절 이력이 메모리에 살아남아 다음 주기에 다시 쓰인다.
+    try:
+        import modules.auto_trade as _at
+        inst = getattr(_at.AutoTrader, "_instance", None)
+        if inst is not None:
+            if isinstance(getattr(inst, 'trailing_stop_cache', None), dict):
+                inst.trailing_stop_cache.clear()
+            half = getattr(inst, 'half_tp_cache', None)
+            if isinstance(half, (set, dict)):
+                half.clear()
+            om = getattr(inst, 'order_manager', None)
+            if om is not None:
+                with om._lock:
+                    om.pending_orders.clear()
+    except Exception as e:
+        logger.warning(f"[PAPER] 트레이더 메모리 캐시 정리 실패(무시): {e}")
+    return True
+
+
 def reset(seed=None):
-    """가상 계좌 초기화. 포지션·체결·자산곡선을 모두 지우고 시드를 다시 넣는다."""
+    """가상 계좌 초기화. 포지션·체결·자산곡선·매매 기록을 모두 지우고 시드를 다시 넣는다."""
     with _lock:
         for tbl in ("paper_positions", "paper_fills", "paper_equity", "paper_state"):
             _db().execute_query(f"DELETE FROM {tbl}")
+        cleared = _clear_trade_history()
         seed = int(seed if seed is not None else getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000))
         _set_state('seed', seed)
         _set_state('cash', seed)
         _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원)")
+        logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원, 매매 기록 삭제 "
+                    f"{'완료' if cleared else '건너뜀'})")
     _clear_daily_baseline()
+    return cleared
