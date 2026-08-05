@@ -62,7 +62,7 @@ def init_tables():
                        date TEXT PRIMARY KEY, cash REAL, stock_value REAL, total REAL)''')
     conn.commit()
 
-    seed = int(getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000))
+    seed = int(getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000))
     if _get_state('seed') is None:
         _set_state('seed', seed)
         _set_state('cash', seed)
@@ -88,7 +88,7 @@ def get_cash():
 
 
 def get_seed():
-    return float(_get_state('seed', getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000)))
+    return float(_get_state('seed', getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000)))
 
 
 def get_positions():
@@ -554,7 +554,7 @@ def reset(seed=None):
         for tbl in ("paper_positions", "paper_fills", "paper_equity", "paper_state"):
             _db().execute_query(f"DELETE FROM {tbl}")
         cleared = _clear_trade_history()
-        seed = int(seed if seed is not None else getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000))
+        seed = int(seed if seed is not None else getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000))
         _set_state('seed', seed)
         _set_state('cash', seed)
         _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))

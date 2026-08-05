@@ -213,7 +213,7 @@ def _reset_account():
 
     config.console.print(
         f"\n[dim]새로 시작할 가상 시드를 입력하세요. "
-        f"(설정 기본값 {int(getattr(config, 'PAPER_SEED_CAPITAL', 5_000_000)):,}원)[/dim]")
+        f"(설정 기본값 {int(getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000)):,}원)[/dim]")
     val = Prompt.ask("가상 시드(원)", default=str(current_seed))
     try:
         seed = max(1, int(str(val).replace(",", "").strip()))

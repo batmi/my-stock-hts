@@ -286,7 +286,7 @@ class GlobalSettings(BaseModel):
                                             #   SMA60±1%+2일확인은 오히려 악화). 80일 × 1%가 검증된 조합이다.
     # [관찰 모드] 페이퍼 트레이딩 가상 시드(원). 실계좌 전환 예정 금액과 같게 두어야
     #  드로다운 금액·1주 미달로 버려지는 진입 기회까지 실제와 같은 조건에서 관찰된다.
-    PAPER_SEED_CAPITAL: int = Field(default=5_000_000, gt=0)
+    PAPER_SEED_CAPITAL: int = Field(default=10_000_000, gt=0)
 
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
     SYSTEM_DAILY_LOSS_LIMIT: float = Field(default=10.0, ge=0.0)   # [안전장치] 일일 손실률 도달 시 자동 중단(비상 정지). 0.0%면 비상 정지 OFF(미사용)
