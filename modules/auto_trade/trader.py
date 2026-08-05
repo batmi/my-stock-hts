@@ -4972,13 +4972,13 @@ class AutoTrader:
             try:
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
                 fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
-                fut_ab = ex.submit(api.get_ask_bid_ratio, code, is_overseas_stock) if _need_ob else None
 
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result() if fut_vol else None
                 except Exception: vol_strength = None
-                try: ask_bid_ratio = fut_ab.result() if fut_ab else None
-                except Exception: ask_bid_ratio = None
+                # [최적화] 호가는 여기서 당기지 않는다 — 점수·상태·체결강도 게이트를 모두
+                #  통과한 종목에만 아래에서 조회한다(지연 조회). 판정 결과는 동일하다.
+                ask_bid_ratio = None
             finally:
                 if _local_pool is not None:
                     _local_pool.shutdown(wait=False)
@@ -5071,7 +5071,29 @@ class AutoTrader:
             if not result:
                 self.set_stock_state(code, None)
                 return None
-                
+
+            # [최적화] 호가(매도잔량비) 지연 조회.
+            #  종전에는 **모든 후보**의 호가를 점수 계산 전에 미리 당겼다. 그런데 호가비는
+            #  analyze_buy의 마지막 수급 게이트에만 쓰이고, 거기까지 도달하는 종목은 주기당
+            #  0~3개다. WS 등록 한도(41건)가 현재가로 다 차서 호가 구독은 0개라, 이 조회는
+            #  전부 REST로 나간다 — 관심종목 40개면 매 주기 40콜이 호가에만 소모됐다.
+            #  (2026-08-05: 계정 실제 유량이 명목보다 낮아 EGW00201이 상시 발생했고, 한도를
+            #   낮추는 것으로는 해결되지 않았다. 부하는 호출 수로 줄여야 한다.)
+            #  판정 결과는 동일하다 — 여기서 쓰는 min_ask_bid_ratio는 analyze_buy가 이미
+            #  자동보정까지 마쳐 돌려준 값이고, 원래 게이트와 같은 비교를 그대로 한다.
+            #  호가 조회 실패(None)도 종전과 같이 '통과'로 다룬다(fail-open 동작 유지).
+            if result['action'] == "buy" and _need_ob:
+                min_abr = result.get('min_ask_bid_ratio') or 0
+                if min_abr > 0:
+                    try:
+                        ask_bid_ratio = api.get_ask_bid_ratio(code, is_overseas_stock)
+                    except Exception:
+                        ask_bid_ratio = None
+                    result['ask_bid_ratio'] = ask_bid_ratio
+                    if ask_bid_ratio is not None and ask_bid_ratio < min_abr:
+                        result['action'] = 'wait'
+                        result['vol_reject_reason'] = f"매도비:{ask_bid_ratio:.2f}<{min_abr}"
+
             # [추가] 분석 성공 시 상태 업데이트
             self.set_stock_state(code, result['state'])
             
