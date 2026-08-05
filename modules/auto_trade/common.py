@@ -118,6 +118,22 @@ def is_system_odno(odno):
     with _SYSTEM_ODNOS_LOCK:
         return str(odno) in _SYSTEM_ODNOS
 
+def is_system_trade(trade_type, odno=None):
+    """이 체결이 **시스템(자동매매)이 낸 주문**인가. 거래 기록의 주문 종류로 판정한다.
+
+    [왜 ODNO만으로는 안 되나] _SYSTEM_ODNOS는 프로세스 메모리라 재기동하면 비어 버린다.
+    가상투자 체결 백필(ConclusionMonitor._check_paper_conclusions)처럼 재기동 뒤 당일
+    원장을 다시 훑는 경로에서는 자동매매 주문이 전부 '수동 매수'로 오판돼, 시스템이
+    자기가 산 종목을 트레이딩 제한에 등록하고 그 뒤로 매수를 스킵한다
+    (2026-08-05 관측: 삼성SDS·NAVER).
+
+    engine.send_order가 붙이는 '(AUTO)' 표기는 trades 테이블에 남으므로 재기동에도
+    살아남는다. 수동('(수동)')·예약('(예약)') 주문은 사용자가 낸 것이므로 제한 대상이다.
+    """
+    if "(AUTO)" in str(trade_type or "").upper():
+        return True
+    return is_system_odno(odno) if odno else False
+
 def _norm_odno(odno):
     """주문번호 정규화(매칭용). 발주 API의 ODNO와 WS 체결통보의 주문번호는 앞자리 0 패딩이
     다를 수 있으므로, 숫자형이면 선행 0을 제거해 동일 주문을 안정적으로 매칭한다.

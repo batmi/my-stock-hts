@@ -154,6 +154,74 @@ def test_paper_restart_backfills_today_ledger(paper, monitor, monkeypatch):
     assert len(inserted) == 1
 
 
+def _run_backfill_with_trade_type(paper, monitor, monkeypatch, trade_type):
+    """재기동 직후(_SYSTEM_ODNOS 비어 있음) 원장 백필을 한 번 돌리고 제한 등록을 수집한다."""
+    api.place_order("domestic", "buy", "005930", 2, 70000, "00")
+
+    trader = _FakeTrader()  # pending 비어 있음 = 재기동 직후
+    monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
+    monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
+                        lambda o: {'type': trade_type, 'name': '삼성전자', 'qty': 2,
+                                   'price': 70000, 'reason': '조건 만족'})
+    monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
+    monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)
+    monkeypatch.setattr(api, 'send_telegram_message', lambda msg, **k: None)
+    # 재기동하면 시스템 ODNO 메모리 세트는 비어 있다 — 그 상태를 그대로 재현한다.
+    monkeypatch.setattr('modules.auto_trade.common.is_system_odno', lambda odno: False)
+    monkeypatch.setattr('modules.auto_trade.conclusion.is_system_odno', lambda odno: False)
+
+    restricted = []
+    monkeypatch.setattr('modules.auto_trade.conclusion.add_restricted_stock',
+                        lambda code, name, memo, **k: restricted.append((code, memo)))
+
+    monitor._check_conclusions()
+    return restricted
+
+
+def test_system_buy_is_not_restricted_after_restart(paper, monitor, monkeypatch):
+    """[회귀 방지] 자동매매가 산 종목은 재기동 후 백필에서도 제한 종목이 되지 않는다.
+
+    _SYSTEM_ODNOS는 프로세스 메모리라 재기동하면 비고, 가상투자는 그때 당일 원장을
+    다시 훑는다. ODNO만으로 판정하면 자동매매가 자기 보유 종목을 '수동매매'로 제한해
+    이후 매수를 통째로 스킵한다(관측: 삼성SDS·NAVER).
+    """
+    assert _run_backfill_with_trade_type(paper, monitor, monkeypatch, 'buy(AUTO)') == []
+
+
+def test_manual_buy_is_still_restricted_after_restart(paper, monitor, monkeypatch):
+    """대조군 — 사용자가 낸 수동 매수는 재기동 후에도 제한 종목으로 등록된다."""
+    assert _run_backfill_with_trade_type(
+        paper, monitor, monkeypatch, '매수(수동)') == [('005930', '수동매매')]
+
+
+def test_reset_frees_paper_account_restrictions(paper, monkeypatch, tmp_path):
+    """초기화는 가상 계좌 제한만 풀고 실계좌·전체 계좌 제한은 보존한다.
+
+    restricted_stocks.json은 실계좌와 한 파일을 공유하므로 통째로 비우면 실계좌의
+    수동매매 보호가 사라진다.
+    """
+    from modules.auto_trade import common as at_common
+
+    monkeypatch.setattr(at_common, 'RESTRICTED_FILE', str(tmp_path / "restricted.json"))
+    for attr, val in (('cano', 'PAPER'), ('acnt_prdt_cd', ''),
+                      ('auto_cano', 'PAPER'), ('auto_acnt_prdt_cd', '')):
+        monkeypatch.setattr(config.session, attr, val, raising=False)
+    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+
+    auto_trade.add_restricted_stock('018260', '삼성SDS', '수동매매', cano='PAPER', acnt='')
+    auto_trade.add_restricted_stock('005930', '삼성전자', '수동매매', cano='44048158', acnt='01')
+    auto_trade.add_restricted_stock('042660', '한화오션', '수동매매')  # 전 계좌 공통
+
+    paper.reset(1_000_000)
+
+    data = auto_trade.load_restricted_stocks()
+    assert '018260' not in data, "가상 계좌 제한이 남았다"
+    assert 'PAPER-' not in str(data)
+    assert '44048158-01' in data['005930']['accounts'], "실계좌 제한을 지웠다"
+    assert data['042660']['memo'] == '수동매매', "전 계좌 공통 제한을 지웠다"
+
+
 def test_reset_clears_only_paper_daily_baseline(paper, monkeypatch, tmp_path):
     """초기화는 가상 계좌의 일일 기준선만 지우고 실계좌 기준선은 보존한다.
 

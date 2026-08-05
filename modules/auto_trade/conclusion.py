@@ -31,7 +31,7 @@ from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
 
-from modules.auto_trade.common import (OrderStatus, _current_account_type, _enrich_rules_with_weights, _get_trade_account, _norm_odno, add_restricted_stock, is_system_market_open, is_system_odno, remove_restricted_stock)
+from modules.auto_trade.common import (OrderStatus, _current_account_type, _enrich_rules_with_weights, _get_trade_account, _norm_odno, add_restricted_stock, is_system_market_open, is_system_odno, is_system_trade, remove_restricted_stock)
 
 console = config.console
 
@@ -1043,8 +1043,10 @@ class ConclusionMonitor:
                     # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
                     #  트레이딩 RUNNING 중 사용자가 수동 매수하면 이 백그라운드
                     #  모니터가 체결을 먼저 잡으므로 여기서도 등록해야 한다.
-                    #  시스템(자동매매) 주문은 register_system_odno로 표시되므로 제외.
-                    if type_name == "매수" and not is_system_odno(odno):
+                    #  [중요] 시스템 주문 판정은 거래 기록의 '(AUTO)' 표기로 한다 —
+                    #  ODNO 세트는 메모리라 재기동 후 백필 경로에서 전부 '수동'으로
+                    #  오판되고, 자동매매가 자기가 산 종목을 스스로 제한해 버린다.
+                    if type_name == "매수" and not is_system_trade(type_str, odno):
                         try:
                             r_cano, r_acnt = _get_trade_account()
                             add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=r_cano, acnt=r_acnt, account_type=_current_account_type(r_cano, r_acnt))

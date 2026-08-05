@@ -519,6 +519,35 @@ def _clear_trade_history():
     return True
 
 
+def _clear_restricted_stocks():
+    """가상 계좌 앞으로 걸린 트레이딩 제한 종목을 푼다.
+
+    [주의] restricted_stocks.json은 실계좌와 **한 파일을 공유**한다(계좌별 키로 구분).
+    통째로 지우면 실계좌의 수동매매 보호가 사라지므로 가상 계좌 키만 제거하고,
+    전 계좌 공통(global memo) 항목은 사용자가 직접 건 것이므로 손대지 않는다.
+    """
+    if not is_active():
+        # 관찰 모드가 아니면 _get_trade_account()가 실계좌를 가리킨다 — 손대지 않는다.
+        logger.warning("[PAPER] 관찰 모드가 아니어서 제한 종목 해제를 건너뛴다")
+        return []
+    try:
+        import modules.auto_trade as _at
+        # 등록 경로(add_restricted_stock)와 같은 계좌를 써야 키가 어긋나지 않는다.
+        cano, acnt = _at._get_trade_account()
+        key = f"{cano}-{acnt or ''}"
+        data = _at.load_restricted_stocks()
+        targets = [c for c, info in data.items() if key in (info.get('accounts') or {})]
+        freed = [data[c].get('name', c) for c in targets]
+        for code in targets:
+            _at.remove_restricted_stock(code, cano=cano, acnt=acnt)
+        if freed:
+            logger.info(f"[PAPER] 가상 계좌 트레이딩 제한 해제 ({len(freed)}종목): {', '.join(freed)}")
+        return freed
+    except Exception as e:
+        logger.warning(f"[PAPER] 제한 종목 정리 실패(무시): {e}")
+        return []
+
+
 def reset(seed=None):
     """가상 계좌 초기화. 포지션·체결·자산곡선·매매 기록을 모두 지우고 시드를 다시 넣는다."""
     with _lock:
@@ -532,4 +561,5 @@ def reset(seed=None):
         logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원, 매매 기록 삭제 "
                     f"{'완료' if cleared else '건너뜀'})")
     _clear_daily_baseline()
+    _clear_restricted_stocks()
     return cleared

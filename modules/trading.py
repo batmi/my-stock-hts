@@ -562,7 +562,9 @@ def show_open_orders():
                                 #  프로그램 수동 주문은 시스템 ODNO로 등록되어 auto_trade의
                                 #  외부주문 감지 경로(앱/HTS)를 타지 않으므로 여기서 직접 등록한다.
                                 #  (자동매매가 해당 종목을 건드리지 않도록 보호)
-                                if type_name == "매수" and not auto_trade.is_system_odno(db_odno):
+                                #  판정은 거래 기록의 '(AUTO)' 표기 기준 — ODNO 세트는 메모리라
+                                #  재기동 후에는 자동매매 주문까지 수동으로 오판한다.
+                                if type_name == "매수" and not auto_trade.is_system_trade(db_order.get('type'), db_odno):
                                     try:
                                         auto_trade.add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=cano, acnt=acnt, account_type=auto_trade._current_account_type())
                                     except Exception as e:
