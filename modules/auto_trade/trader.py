@@ -3198,13 +3198,25 @@ class AutoTrader:
                     if target_cano and is_log_needed:
                         # [수정] 토스/모의는 단일계좌라 시스템 트레이딩 계좌 = 기본 계좌.
                         #        is_simulation만 보면 토스가 '한투증권(자동)'으로 오표시되므로 is_toss도 분기.
-                        if config.session.is_toss:
+                        # [Fix] 가상투자(mode 4)도 자기 분기가 없어 '한투증권(자동)'으로 떨어졌다.
+                        #  실전 시세를 쓸 뿐 계좌는 가상이므로 실전 자동매매 계좌로 읽히면 위험하다.
+                        #  라벨은 trading.py의 표기와 같은 '가상투자'로 맞춘다.
+                        display_cano = target_cano
+                        if getattr(config.session, 'is_paper', False):
+                            acc_type = "가상투자"
+                            # CANO는 fail-safe 센티널('PAPER')이라 계좌 식별에 쓸 수 없다.
+                            #  VIRT_ACC_NUM을 표시 전용으로 읽어 어느 계좌 앞으로 도는지 남긴다.
+                            _vc = getattr(config.session, 'virt_cano', '') or ''
+                            _va = getattr(config.session, 'virt_acnt_prdt_cd', '') or ''
+                            if _vc:
+                                display_cano = f"{_vc}-{_va}" if _va else _vc
+                        elif config.session.is_toss:
                             acc_type = "토스증권"
                         elif config.session.is_simulation:
                             acc_type = "모의투자"
                         else:
                             acc_type = "한투증권(자동)"
-                        self.log(f"운용 계좌: {target_cano} [{acc_type}]")
+                        self.log(f"운용 계좌: {display_cano} [{acc_type}]")
                     
                     
                     # [추가] 날짜 변경 감지 및 당일 기준 자산 재설정 (무중단 24시간 운용 지원)

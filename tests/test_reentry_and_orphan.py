@@ -169,3 +169,32 @@ def test_buy_candidate_skips_are_logged():
 
     for marker in ("진행 중인 주문 존재", "차트 데이터 없음"):
         assert marker in worker, f"매수 후보 스킵 로그가 사라졌다: {marker}"
+
+
+# ==========================================================
+# 가상투자 계좌 라벨
+# ==========================================================
+def test_paper_mode_has_its_own_account_label():
+    """[회귀 방지] mode 4가 라벨 분기에서 실전으로 떨어지지 않는다.
+
+    is_toss → is_simulation → else 순서로만 분기하면 가상투자가 '한투증권(자동)'으로
+    표시된다. 실전 시세를 쓸 뿐 계좌는 가상이라, 실전 자동매매 계좌로 읽히면 위험하다
+    (같은 누락이 텔레그램 꼬리말에서도 있었다).
+    """
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
+
+    idx = src.find('acc_type = "한투증권(자동)"')
+    assert idx > 0, "운용 계좌 라벨 분기를 찾지 못했다"
+    block = src[max(0, idx - 1600):idx]
+    assert "is_paper" in block, "가상투자 분기가 없어 실전 라벨로 떨어진다"
+    assert '"가상투자"' in block, "라벨은 trading.py와 같은 '가상투자'로 맞춘다"
+
+
+def test_paper_label_matches_manual_trading_menu():
+    """수동 거래 메뉴와 같은 문구를 쓴다 — 화면마다 다른 이름으로 부르지 않는다."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    manual = open(os.path.join(root, "modules/trading.py"), encoding="utf-8").read()
+    assert 'acc_label = "가상투자"' in manual
