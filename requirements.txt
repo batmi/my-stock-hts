@@ -173,3 +173,4 @@ zstandard
 tradingview-screener
 # 토스 모드 국내지수(코스피200·코스닥150) TradingView 보강용. PyPI 미배포 → git 설치 필요.
 tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
+google-generativeai

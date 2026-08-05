@@ -542,7 +542,9 @@ def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
                 logger.warning(f"Gemini unavailable (503) on {model_name}; falling back to {next_model}. {e}")
                 continue
             raise
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("No generative models available or unknown error occurred.")
 
 
 def _gemini_text(res, default="분석 결과를 생성하지 못했습니다."):
