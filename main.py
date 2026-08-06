@@ -721,7 +721,7 @@ def show_help():
                         f"[dim]EMA {ema_f}/{ema_s} 교차 후 {confirm_p:g}% 진행해야 '확정 추세'[/dim]", "", "")
     score_table.add_row("", f"강세장: EMA{ema_f} > EMA{ema_s} & 교차 후 {confirm_p:+g}% 달성", "[red]완화[/]", f"매수 기준 {regime['BULL_SCORE_ADJ']:+.1f}점 적용")
     score_table.add_row("", f"상승 미확정: EMA{ema_f} > EMA{ema_s} & {confirm_p:g}% 미달", "[orange3]유지[/]", f"매수 기준 {regime.get('PENDING_UP_SCORE_ADJ', 0.0):+.1f}점 적용")
-    score_table.add_row("", f"하락 미확정: EMA{ema_f} < EMA{ema_s} & {confirm_p:g}% 미달", "[magenta]강화[/]", f"매수 기준 {regime.get('PENDING_DOWN_SCORE_ADJ', 0.5):+.1f}점 적용 [dim](판별력상 최다 위험구간)[/dim]")
+    score_table.add_row("", f"하락 미확정: EMA{ema_f} < EMA{ema_s} & {confirm_p:g}% 미달", "[sky_blue3]강화[/]", f"매수 기준 {regime.get('PENDING_DOWN_SCORE_ADJ', 0.5):+.1f}점 적용 [dim](판별력상 최다 위험구간)[/dim]")
     score_table.add_row("", f"약세장: EMA{ema_f} < EMA{ema_s} & 교차 후 {-confirm_p:+g}% 달성", "[blue]강화[/]", f"매수 기준 {regime['BEAR_SCORE_ADJ']:+.1f}점 적용")
     
     if market_status_info:
