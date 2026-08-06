@@ -79,8 +79,8 @@ def _drive(trader, balance_returns, max_cycles=None):
         trader.is_running = False
 
     # 주기 말미 대기 루프는 time.sleep이 아니라 실제 시각(time.time)으로 간격을 재므로,
-    # 간격을 0으로 두지 않으면 테스트가 SYSTEM_TRADING_INTERVAL(기본 180초) 동안 스핀한다.
-    saved_interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+    # 간격을 0으로 두지 않으면 테스트가 SYSTEM_TRADING_INTERVAL(기본 60초) 동안 스핀한다.
+    saved_interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
     config.SYSTEM_TRADING_INTERVAL = 0
     try:
         return _drive_inner(trader, fake_balance, fake_recovery)

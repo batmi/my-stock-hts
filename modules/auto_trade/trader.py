@@ -1279,7 +1279,7 @@ class AutoTrader:
         if secs > getattr(self, 'cycle_secs_peak', 0.0):
             self.cycle_secs_peak = secs
         if log:
-            interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+            interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
             self.log(f"모니터링 완료 (소요 {secs:.1f}초 · 다음 주기까지 {interval}초 대기 "
                      f"→ 청산 감시 간격 {secs + interval:.0f}초). 대기 중...")
 
@@ -1293,7 +1293,7 @@ class AutoTrader:
             return "미측정 (루프 1회 실행 후 표시)", None
         hist = getattr(self, 'cycle_secs_history', None) or [last]
         avg = sum(hist) / len(hist)
-        interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+        interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
         gap = avg + interval
         peak = getattr(self, 'cycle_secs_peak', 0.0) or last
         return (f"분석 {avg:.1f}초 (최근 {len(hist)}회 평균, 최대 {peak:.1f}초) + 대기 {interval}초 "
@@ -3496,7 +3496,7 @@ class AutoTrader:
                     self._record_cycle_duration((datetime.now() - self.last_cycle_at).total_seconds(),
                                                 log=is_log_needed)
 
-                interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 180)
+                interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
                 
                 # [수정] 미체결 주문 확인 시 발생하는 API 호출 지연(Delay)이 누적되어
                 # 모니터링 주기가 설정값(180초)을 크게 초과하는 문제를 해결하기 위해 절대 시간 기반 대기 적용

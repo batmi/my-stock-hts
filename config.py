@@ -102,7 +102,7 @@ class GlobalSettings(BaseModel):
     # 자동매매 모니터링 주기 (초)
     # - 너무 짧으면(예: 10초) API 호출 제한(Rate Limit)에 걸릴 수 있습니다.
     # - 너무 길면(예: 300초) 급변하는 시세에 대응하기 어렵습니다.
-    SYSTEM_TRADING_INTERVAL: int = Field(default=180, gt=0)
+    SYSTEM_TRADING_INTERVAL: int = Field(default=60, gt=0)
 
     # [종목당 최대 투자 비중]
     # 전체 자산 대비 한 종목에 투자할 최대 비중입니다. (기본값: 0.0 = 자동)
