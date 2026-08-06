@@ -64,6 +64,7 @@ class TelegramCommander:
             # [PRESET_RETIRED] /preset 제거 — 전략 프리셋 폐지 (settings.py PRESET_RETIRED 주석 참조)
             "/balance": self._cmd_balance,
             "/holdings": self._cmd_holdings,
+            "/position": self._cmd_position,
             "/closing": self._cmd_closing, # [추가] AI 장 마감 종합 브리핑
             "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
             "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
@@ -578,6 +579,7 @@ class TelegramCommander:
             "💰 [계좌 및 자산]\n"
             "• /balance : 자산 및 예수금 조회\n"
             "• /holdings : 보유 종목 및 수익률 조회\n"
+            "• /position : 수동 포지션 분석 조회\n"
             "• /pending : 미체결 주문 내역 조회\n"
             "• /reserves  : 예약매매 현황 및 취소 (d)\n"
             "• /profit [기간] : 실현 손익 (d/w/m/n)\n"
@@ -1542,6 +1544,81 @@ class TelegramCommander:
             return msg
         except Exception as e:
             return f"⚠️ 보유 종목 조회 중 오류 발생: {str(e)}"
+
+    def _cmd_position(self, args):
+        try:
+            from modules import account, auto_trade, api, db_manager
+            positions = account.load_manual_positions()
+            if not positions:
+                return "📋 [포지션 분석] 저장된 수동 포지션이 없습니다."
+            
+            priced = []
+            for pos in positions:
+                cur_price = api.get_current_price(pos['code'], pos['is_overseas'])
+                if not cur_price or cur_price <= 0:
+                    continue
+                pos['current_price'] = float(cur_price)
+                pos['profit_rate'] = ((pos['current_price'] - pos['buy_price']) / pos['buy_price']) * 100
+                priced.append(pos)
+                
+            if not priced:
+                return "📋 [포지션 분석] 현재가를 조회할 수 있는 종목이 없습니다."
+                
+            holding_analysis = account._analyze_manual_positions(priced)
+            
+            valid_holdings = []
+            for p in priced:
+                valid_holdings.append({
+                    'pdno': p['code'],
+                    'prdt_name': p['name'],
+                    'hldg_qty': p['qty'],
+                    'prpr': p['current_price'],
+                    'pchs_avg_pric': p['buy_price'],
+                    'evlu_amt': p['current_price'] * p['qty'],
+                    'evlu_pfls_amt': (p['current_price'] - p['buy_price']) * p['qty'],
+                    'evlu_pfls_rt': p['profit_rate']
+                })
+                
+            restricted_stocks = auto_trade.get_restricted_stocks()
+            custom_rules = db_manager.db.get_all_stock_strategies()
+            rules_map = {r['code']: True for r in custom_rules}
+            
+            def _decorate(code, name):
+                if code in restricted_stocks: name += "-"
+                if code in rules_map: name += "+"
+                return name
+                
+            msg = auto_trade.format_holdings_block(
+                valid_holdings, 
+                title="포지션 분석", 
+                name_decorator=_decorate, 
+                analysis_results=holding_analysis
+            )
+            
+            # 총합 계산
+            calc_total_pchs = sum(p['buy_price'] * p['qty'] for p in priced)
+            calc_total_eval = sum(p['current_price'] * p['qty'] for p in priced)
+            calc_total_profit = calc_total_eval - calc_total_pchs
+            calc_total_rate = (calc_total_profit / calc_total_pchs) * 100 if calc_total_pchs > 0 else 0.0
+            
+            msg += f"\n\n 총 평가금액: {int(calc_total_eval):,}원"
+            msg += f"\n 총 평가손익: {int(calc_total_profit):+,}원 ({calc_total_rate:+.2f}%)"
+            
+            # 청산 신호 요약
+            signals = []
+            for p in priced:
+                res = holding_analysis.get(p['code'])
+                if res and res.get('action') == 'sell':
+                    signals.append((p['name'], p['code'], res.get('reason', '알 수 없음')))
+                    
+            if signals:
+                msg += f"\n\n⚠️ 청산 신호 {len(signals)}건 (시스템 트레이딩 매도 기준)"
+                for name, code, reason in signals:
+                    msg += f"\n · {name}({code}): {reason}"
+                    
+            return msg
+        except Exception as e:
+            return f"⚠️ 포지션 분석 조회 중 오류 발생: {str(e)}"
 
     # --- 내부 로직 메서드 ---
     def _get_refined_trades_cached(self, target_account=None):
