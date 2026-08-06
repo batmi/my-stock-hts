@@ -1505,7 +1505,9 @@ class TelegramCommander:
                 return name
 
             # [수정] 표기는 공용 포매터로 통일 (/status·시작/종료 알림과 동일 형식)
-            msg = auto_trade.format_holdings_block(valid_holdings, name_decorator=_decorate)
+            from modules import account
+            analysis_results = account.run_holding_analysis(valid_holdings, [], restricted_stocks)
+            msg = auto_trade.format_holdings_block(valid_holdings, name_decorator=_decorate, analysis_results=analysis_results)
 
             # [추가] 총 매입금액 직접 계산용 (API 0일 경우 대비)
             calc_total_pchs = sum(

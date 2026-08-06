@@ -48,7 +48,7 @@ def _pkg():
     return _at
 
 
-def format_holdings_block(valid_holdings, title="보유 종목 현황", name_decorator=None):
+def format_holdings_block(valid_holdings, title="보유 종목 현황", name_decorator=None, analysis_results=None):
     """보유 종목 목록 블록(헤더 + 종목별 4줄) 생성.
 
     /status·/holdings·시스템 시작/종료 알림·장 시작/마감 알림이 모두 이 함수를 쓰도록 해
@@ -68,10 +68,46 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
 
         name_display = name_decorator(item.get('pdno'), name) if name_decorator else name
 
+        state_str = ""
+        atr_str = ""
+        ts_str = ""
+        if analysis_results and item.get('pdno') in analysis_results:
+            res = analysis_results[item['pdno']]
+            
+            # 상태
+            state_val = res.get('state') or "-"
+            if res.get('action') == 'sell':
+                state_val = "청산"
+            score = res.get('score')
+            score_str = f" {score:.1f}" if isinstance(score, (int, float)) else ""
+            auto_str = " 수동" if res.get('unmanaged') else " 자동"
+            state_str = f"\n   상태: {state_val}{score_str}{auto_str}"
+            
+            # 손절가
+            sl_rate = res.get('applied_sl_rate')
+            if sl_rate is not None and sl_rate != 0 and buy_price > 0:
+                if res.get('is_bep_applied'):
+                    label = "BEP"
+                elif res.get('is_atr_stop'):
+                    label = "ATR"
+                else:
+                    label = "고정"
+                stop_price = buy_price * (1 + sl_rate / 100)
+                atr_str = f"\n   {label}: {round(stop_price):,} (-{abs(sl_rate):.1f}%)" if sl_rate < 0 else f"\n   {label}: {round(stop_price):,} (+{abs(sl_rate):.1f}%)"
+            
+            # TS
+            ts = res.get('ts')
+            if ts:
+                if not ts.get('armed'):
+                    ts_str = f"\n   TS: +{ts['activation']:.0f}% 도달 시 "
+                else:
+                    ts_str = f"\n   TS: {round(ts['stop_price']):,} (-{ts['callback']:.1f}%)"
+
         msg += (
-            f"\n• {name_display} ({qty}주)"
+            f"\n\n• {name_display} ({qty}주)"
             f"\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원"
             f"\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
+            f"{state_str}{atr_str}{ts_str}"
         )
     return msg
 
