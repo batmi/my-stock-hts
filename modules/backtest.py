@@ -2035,7 +2035,7 @@ def run_backtest():
             console=config.console,
             transient=True
         ) as progress:
-            progress.add_task(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]", total=None)
+            task_id = progress.add_task(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]", total=None)
             # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
             original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
             needed_days = days + 400 # 52주 윈도우 충족 위해 약 1년 워밍업 확보
@@ -2049,10 +2049,12 @@ def run_backtest():
                 config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = original_lookback
 
             if df is None or df.empty:
+                progress.stop()
                 config.console.print("[red]데이터를 불러올 수 없습니다.[/red]")
                 utils.pause()
                 continue
                 
+            progress.update(task_id, description=f"[cyan]{name} ({code}) 기술적 지표 계산 중...[/cyan]")
             # [추가] 스마트머니(수급) 시그널 사전 병합
             df = _append_smart_money_signal(df, code, is_overseas)
 
@@ -2072,22 +2074,35 @@ def run_backtest():
             sim_df = df.iloc[start_idx:].copy()
             prev_row_init = df.iloc[start_idx-1] if start_idx > 0 else None
             
-            # [수정] 경고 로직: 실제 기간(일수)과 요청 기간 비교
-            if not sim_df.empty:
-                actual_days = (datetime.strptime(str(sim_df.iloc[-1]['date']), "%Y%m%d") - datetime.strptime(str(sim_df.iloc[0]['date']), "%Y%m%d")).days
-                if actual_days < days * 0.9: # 90% 미만일 때만 경고
-                    config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
+            progress.update(task_id, description=f"[cyan]{name} ({code}) 시장 필터 확인 중...[/cyan]")
+            # [동기화] 실매매 시장 필터를 백테스트에 반영 (MARKET_FILTER_MA는 설정값 그대로 사용)
+            #  모든 모드(단일/몬테카를로/워크포워드/최적화)가 이 차단일 집합을 공유한다.
+            #  ON/OFF만 조건 변경에서 고른 값(use_market_filter)으로 덮어쓴다 — prepare_market_filter가
+            #  config를 직접 읽으므로 호출 동안만 바꾸고 곧바로 되돌린다(전역 설정 오염 방지).
+            _mf_saved = getattr(config, 'USE_MARKET_FILTER', True)
+            try:
+                config.USE_MARKET_FILTER = use_market_filter
+                mf_result = prepare_market_filter(code, is_overseas, days)
+            finally:
+                config.USE_MARKET_FILTER = _mf_saved
 
-        # [동기화] 실매매 시장 필터를 백테스트에 반영 (MARKET_FILTER_MA는 설정값 그대로 사용)
-        #  모든 모드(단일/몬테카를로/워크포워드/최적화)가 이 차단일 집합을 공유한다.
-        #  ON/OFF만 조건 변경에서 고른 값(use_market_filter)으로 덮어쓴다 — prepare_market_filter가
-        #  config를 직접 읽으므로 호출 동안만 바꾸고 곧바로 되돌린다(전역 설정 오염 방지).
-        _mf_saved = getattr(config, 'USE_MARKET_FILTER', True)
-        try:
-            config.USE_MARKET_FILTER = use_market_filter
-            mf_result = prepare_market_filter(code, is_overseas, days)
-        finally:
-            config.USE_MARKET_FILTER = _mf_saved
+            if mode_choice == "1":
+                progress.update(task_id, description=f"[cyan]{name} ({code}) 단일 백테스팅 시뮬레이션 진행 중...[/cyan]")
+                # === 단일 실행 모드 (기존 로직) ===
+                res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
+                                        stop_loss_rate=stop_loss, take_profit_rate=take_profit,
+                                        take_profit_rsi=take_profit_rsi, sell_score=sell_score,
+                                        ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
+                                        time_stop_days_limit=time_stop_days,
+                                        use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
+                                        weights=weights, pyramiding_max_count_limit=pyramiding_max) # [수정] 가중치·피라미딩 차수 전달
+
+        # [수정] 경고 로직: 실제 기간(일수)과 요청 기간 비교
+        if not sim_df.empty:
+            actual_days = (datetime.strptime(str(sim_df.iloc[-1]['date']), "%Y%m%d") - datetime.strptime(str(sim_df.iloc[0]['date']), "%Y%m%d")).days
+            if actual_days < days * 0.9: # 90% 미만일 때만 경고
+                config.console.print(f"[dim yellow]주의: 요청 기간({days}일)보다 실제 분석 기간({actual_days}일)이 짧습니다.[/dim yellow]")
+
         if mf_result:
             mf_cnt, mf_desc = mf_result
             config.console.print(f"[dim]🛡 시장 필터 반영: {mf_desc} 인 날짜 신규 진입 차단 (기간 내 차단 후보일 {mf_cnt}일, 실매매와 동일 기준)[/dim]")
@@ -2118,15 +2133,6 @@ def run_backtest():
             last_choice = sub_choice
             utils.pause()
             continue
-
-        # === 단일 실행 모드 (기존 로직) ===
-        res = simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score, buy_rsi, is_overseas, 
-                                stop_loss_rate=stop_loss, take_profit_rate=take_profit,
-                                take_profit_rsi=take_profit_rsi, sell_score=sell_score,
-                                ts_activation_rate=ts_activation, ts_callback_rate=ts_callback,
-                                time_stop_days_limit=time_stop_days,
-                                use_atr_stop_limit=use_atr_stop, atr_stop_multiplier_limit=atr_mult, half_tp_use_limit=half_tp_use,
-                                weights=weights, pyramiding_max_count_limit=pyramiding_max) # [수정] 가중치·피라미딩 차수 전달
         
         # 결과 변수 매핑 (기존 출력 로직 호환)
         final_asset = res['final_asset']
