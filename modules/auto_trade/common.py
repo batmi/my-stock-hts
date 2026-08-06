@@ -69,6 +69,7 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
         name_display = name_decorator(item.get('pdno'), name) if name_decorator else name
 
         state_str = ""
+        mfe_str = ""
         atr_str = ""
         ts_str = ""
         if analysis_results and item.get('pdno') in analysis_results:
@@ -111,11 +112,17 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
                 else:
                     ts_str = f"\n   TS: {round(ts['stop_price']):,} (-{ts['callback']:.1f}%)"
 
+            # 최고가(MFE)
+            highest = res.get('highest_price') or 0
+            if highest > 0:
+                mfe = res.get('max_profit_rate') or 0.0
+                mfe_str = f"\n   최고가: {round(highest):,} ({mfe:+.1f}%)"
+
         msg += (
             f"\n\n• {name_display} ({qty}주)"
             f"\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원"
             f"\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
-            f"{state_str}{atr_str}{ts_str}"
+            f"{state_str}{mfe_str}{atr_str}{ts_str}"
         )
     return msg
 
