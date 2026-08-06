@@ -842,7 +842,9 @@ def show_help():
     # [수정] ATR 손절 사용 시 BEP 발동 기준은 BREAK_EVEN_PROFIT_RATE가 아니라 손절폭(1R)이다
     #  (trader/backtest가 그렇게 주입). 설정값을 그대로 쓰면 실제 동작과 달라 오해를 부른다.
     _bep_cond = ("손절폭(1R) 도달 후 하락 시" if use_atr else f"수익 +{bep_activation}% 달성 후 하락 시")
-    score_table.add_row("매도 - 본전청산", _bep_cond, "[blue]본전청산[/]", f"손실 방지 (손절선을 {bep_stop:+g}%로 끌어올림)")
+    use_bep = config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False)
+    bep_status = "[green]ON[/green]" if use_bep else "[red]OFF[/red]"
+    score_table.add_row(f"매도 - 본전청산 ({bep_status})", _bep_cond, "[blue]본전청산[/]", f"손실 방지 (손절선을 {bep_stop:+g}%로 끌어올림)")
     
     time_stop_status = "[green]ON[/green]" if time_stop_use else "[red]OFF[/red]"
     score_table.add_row(f"매도 - 시간청산 ({time_stop_status})", f"보유 {time_stop_days}일 경과 & 수익 < {time_stop_min_profit}% (최근 5일 고점 갱신 부재)", "[blue]시간청산[/]", "장기 횡보 종목 기회비용 보전")
