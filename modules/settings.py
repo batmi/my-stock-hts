@@ -1078,7 +1078,7 @@ def _indicator_items():
         {"desc": "ATR 계산 기간", "help": "평균 진폭 (변동성)", "name": "ATR_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("ATR_PERIOD", 14), "set": lambda v: config.INDICATOR_PARAMS.update({"ATR_PERIOD": v})},
 
-        {"desc": "박스권 탐지 기간", "help": "매물대 기반 박스권 룩백 봉 수 (기본 20봉, 일봉=일/분봉=분)", "name": "BOX_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
+        {"desc": "박스권 탐지 기간", "help": "매물대 기반 박스권 룩백 봉 수 (기본 30봉, 일봉=일/분봉=분)", "name": "BOX_PERIOD", "type": "int", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("BOX_PERIOD", 30), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_PERIOD": v})},
         {"desc": "박스권 매물대 %", "help": "핵심 매물대 집중도 (기본 50.0)", "name": "BOX_VALUE_AREA_PCT", "type": "float", "section": "4-3. 강도·수급·가격구조",
          "get": lambda: config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0), "set": lambda v: config.INDICATOR_PARAMS.update({"BOX_VALUE_AREA_PCT": v})}

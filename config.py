@@ -862,7 +862,7 @@ class GlobalSettings(BaseModel):
         "RSI_LOWER": 30,               # RSI 과매도 기준선
         "ATR_PERIOD": 14,              # ATR 계산 기간
         "TREND_PERIOD": 60,            # [추가] 상승/하락 추세선 기간 일수
-        "BOX_PERIOD": 20,              # [추가] 박스권 설정 기간 봉 수 (일봉=일, 분봉=분)
+        "BOX_PERIOD": 30,              # [추가] 박스권 설정 기간 봉 수 (일봉=일, 분봉=분)
         "BOX_VALUE_AREA_PCT": 50.0,    # [추가] 박스권 매물대 %
         "MOMENTUM_LOOKBACK": 126,      # 가격 모멘텀(절대 모멘텀) 산정 룩백 기간 (약 6개월=126거래일) - 스코어링 '가격 모멘텀' 항목에 사용
         "MOMENTUM_W52_NEAR": 80,       # 가격 모멘텀 가점 기준 52주 위치(%) (신고가 근접도) - 스코어링 '가격 모멘텀' 항목에 사용
@@ -1767,7 +1767,7 @@ def reset_all_settings():
             "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
             "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 5,
             "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 20, "BOX_VALUE_AREA_PCT": 50.0,
+            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 30, "BOX_VALUE_AREA_PCT": 50.0,
             "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80, "TREND_QUALITY_LOOKBACK": 90,
             "MOMENTUM_LOOKBACK_1M": 21, "MOMENTUM_LOOKBACK_3M": 63, "TREND_PERSIST_LOOKBACK": 120, "TREND_PERSIST_MIN": 70,
             "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
