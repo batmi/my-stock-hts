@@ -163,7 +163,7 @@ class TelegramCommander:
             "📅 일간 손익": "/profit d",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
-            "⏳ 예약 현황": "/reserves",
+            "🎯 포지션": "/position",
             "🛑 거래 정지": "/stop",
             "▶️ 거래 시작": "/start"
         }
@@ -1688,7 +1688,7 @@ class TelegramCommander:
         return {
             "keyboard": [
                 [{"text": "❓ 도움말"}, {"text": "📈 시장 지수"}, {"text": "💰 계좌 잔고"}],
-                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "⏳ 예약 현황"}],
+                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "🎯 포지션"}],
                 [{"text": "📅 일간 손익"}, {"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}],
                 [{"text": f"{emoji} 상태 요약"}, toggle_btn]
             ],
