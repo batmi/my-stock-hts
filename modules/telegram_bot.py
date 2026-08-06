@@ -1547,7 +1547,7 @@ class TelegramCommander:
 
     def _cmd_position(self, args):
         try:
-            from modules import account, auto_trade, api, db_manager
+            from modules import account, auto_trade
             positions = account.load_manual_positions()
             if not positions:
                 return "📋 [포지션 분석] 저장된 수동 포지션이 없습니다."
