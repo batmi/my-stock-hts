@@ -268,7 +268,7 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
         logger.warning(f"보유 분석 실패: {e}")
         return {}
 
-def _fmt_state_cell(res):
+def _fmt_state_cell(res, show_auto_status=True):
     """보유분석 결과를 잔고 테이블의 '상태' 셀로 변환. (상태/점수, 청산 신호는 강조)
 
     시스템 자동 매도 대상이 아닌 포지션은 둘째 줄에 '수동'을 붙인다.
@@ -287,7 +287,7 @@ def _fmt_state_cell(res):
         color = (res.get('state_color') or "[white]").strip('[]') or "white"
         cell = f"[{color}]{state}[/]{score_str}"
 
-    if res.get('unmanaged'):
+    if show_auto_status and res.get('unmanaged'):
         cell += "\n[yellow]수동[/]"
     return cell
 
@@ -379,7 +379,7 @@ def _decorate_name(name, code, marks_ctx):
     mark_str = "".join(marks)
     return f"{name}[dim]{mark_str}[/dim]".strip() if mark_str else name
 
-def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황"):
+def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황", show_auto_status=True):
     """국내 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 포지션 분석이 공유)
 
     items: KIS 국내 잔고 output1 형식 (pdno/prdt_name/hldg_qty/pchs_avg_pric/prpr/...)
@@ -431,7 +431,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
         table.add_row(
             _decorate_name(raw_name, code, marks_ctx),
             code,
-            _fmt_state_cell(res),
+            _fmt_state_cell(res, show_auto_status=show_auto_status),
             f"{qty:,}주",
             f"{buy_price:,.0f}원",
             f"{cur_price:,}원",
@@ -446,7 +446,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
 
     return table, totals, sell_signals
 
-def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[해외] 계좌 잔고 현황"):
+def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[해외] 계좌 잔고 현황", show_auto_status=True):
     """해외 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 포지션 분석이 공유)
 
     items: KIS 해외 잔고 형식 (ovrs_pdno/ovrs_item_name/ovrs_cblc_qty/pchs_avg_pric/...)
@@ -504,7 +504,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
         table.add_row(
             _decorate_name(raw_name, code, marks_ctx),
             code,
-            _fmt_state_cell(res),
+            _fmt_state_cell(res, show_auto_status=show_auto_status),
             exc_name,
             f"{qty:,.0f}",
             f"{pchs_avg:,.2f}",
@@ -920,7 +920,7 @@ def _print_manual_positions(positions, holding_analysis):
 
     if domestic_items:
         table, totals, signals = build_domestic_holdings_table(
-            domestic_items, holding_analysis, title="\n[국내] 포지션 분석")
+            domestic_items, holding_analysis, title="\n[국내] 포지션 분석", show_auto_status=False)
         config.console.print(table)
 
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
@@ -932,7 +932,7 @@ def _print_manual_positions(positions, holding_analysis):
         if domestic_items:
             config.console.print()
         table, totals, signals = build_overseas_holdings_table(
-            overseas_items, holding_analysis, title="\n[해외] 포지션 분석")
+            overseas_items, holding_analysis, title="\n[해외] 포지션 분석", show_auto_status=False)
         config.console.print(table)
 
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
