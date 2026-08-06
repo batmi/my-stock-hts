@@ -697,7 +697,9 @@ class AutoTrader:
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
             if valid_holdings:
-                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings)
+                from modules import account
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
                 if stock_eval_amt > 0:
@@ -885,7 +887,9 @@ class AutoTrader:
                     valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
                     if valid_holdings:
-                        msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, title="최종 보유 종목 현황")
+                        from modules import account
+                        analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                        msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, title="최종 보유 종목 현황", analysis_results=analysis_results)
                     else:
                         msg += "\n\n📋 [최종 보유 종목] 없음"
                         if not is_data_valid:
@@ -1232,7 +1236,9 @@ class AutoTrader:
         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
         if valid_holdings:
-            msg += "\n" + _pkg().format_holdings_block(valid_holdings)
+            from modules import account
+            analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+            msg += "\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
         else:
             msg += "\n📋 [보유 종목] 없음"
             
@@ -3180,7 +3186,9 @@ class AutoTrader:
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
 
             if valid_holdings:
-                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings)
+                from modules import account
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
         except Exception as e:
