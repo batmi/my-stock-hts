@@ -699,7 +699,7 @@ def show_help():
     _super = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
     _sell = config.SELL_STRATEGY.get("SELL_SCORE", 4.0)
     score_table.add_section()
-    score_table.add_row("점수대별 의미", f"{_super}점 이상 & 52주 고점 90%↑", "[red]강매수[/]", "슈퍼 모멘텀 — 주도주 랠리 추종 (매수 RSI 상향 허용)")
+    score_table.add_row("점수대별 의미", f"{_super}점 이상 & 52주 고점 90%↑", "[magenta]강매수[/]", "슈퍼 모멘텀 — 주도주 랠리 추종 (매수 RSI 상향 허용)")
     score_table.add_row("", f"{_buy}점 이상", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     score_table.add_row("", f"{_buy}점 이상 & RSI 과열", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
     score_table.add_row("", f"{_rise} ~ {_buy}점", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기 또는 소량)")
