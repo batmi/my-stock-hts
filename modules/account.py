@@ -316,7 +316,7 @@ def _fmt_mfe_cell(res, is_overseas=False):
 
     price_str = f"${highest:,.2f}" if is_overseas else f"{int(highest):,}"
     mfe = res.get('max_profit_rate') or 0.0
-    return f"{price_str}[dim]({mfe:+.1f}%)[/dim]"
+    return f"{price_str}\n[dim]({mfe:+.1f}%)[/dim]"
 
 def _fmt_ts_stop(res, is_overseas=False):
     """샹들리에 TS 청산선. 고정/ATR 손절과 달리 실제 주청산선이라 별도 줄로 표시한다."""
