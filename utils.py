@@ -444,7 +444,7 @@ def select_stock_for_chart():
     if group_choice == "6":
         indices_list = market.ALL_INDICES
         dict_list = [{'name': n, 'code': c} for n, c in indices_list]
-        idx, item = search_stock_in_list(dict_list, title="시장 지수 목록")
+        idx, item = search_stock_in_list(dict_list, title="시장 지수 목록", display_func=lambda i, s: f"[{i+1}] {s.get('name', 'Unknown')}")
         if item:
             context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {item['name']}")
             return item['code'], item['name'], True

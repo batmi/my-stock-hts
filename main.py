@@ -1214,7 +1214,7 @@ def main():
                         elif sub_choice == '5':
                             indices_list = market.ALL_INDICES
                             dict_list = [{'name': n, 'code': c} for n, c in indices_list]
-                            idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록")
+                            idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록", display_func=lambda i, s: f"[{i+1}] {s.get('name', 'Unknown')}")
                             if item:
                                 target_name, target_code = item['name'], item['code']
                                 target_ovs = True
