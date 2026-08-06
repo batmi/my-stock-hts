@@ -1592,7 +1592,8 @@ class TelegramCommander:
                 valid_holdings, 
                 title="포지션 분석", 
                 name_decorator=_decorate, 
-                analysis_results=holding_analysis
+                analysis_results=holding_analysis,
+                show_auto_status=False
             )
             
             # 총합 계산

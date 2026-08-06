@@ -48,7 +48,7 @@ def _pkg():
     return _at
 
 
-def format_holdings_block(valid_holdings, title="보유 종목 현황", name_decorator=None, analysis_results=None):
+def format_holdings_block(valid_holdings, title="보유 종목 현황", name_decorator=None, analysis_results=None, show_auto_status=True):
     """보유 종목 목록 블록(헤더 + 종목별 4줄) 생성.
 
     /status·/holdings·시스템 시작/종료 알림·장 시작/마감 알림이 모두 이 함수를 쓰도록 해
@@ -86,7 +86,9 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
             
             score = res.get('score')
             score_str = f" {score:.1f}" if isinstance(score, (int, float)) else ""
-            auto_str = " 수동" if res.get('unmanaged') else " 자동"
+            auto_str = ""
+            if show_auto_status:
+                auto_str = " 수동" if res.get('unmanaged') else " 자동"
             state_str = f"\n   상태: {emoji} {state_val}{score_str}{auto_str}"
             
             # 손절가
