@@ -76,12 +76,18 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
             
             # 상태
             state_val = res.get('state') or "-"
+            emoji_key = state_val.split('(')[0]
             if res.get('action') == 'sell':
                 state_val = "청산"
+                emoji_key = "청산"
+                
+            state_emoji_map = {"매수": "🔴", "강매수": "🟣", "역매수": "🟤", "상승": "🟠", "대기": "🟠", "관심": "🟢", "관망": "⚪", "주의": "🟡", "매도": "🔵", "청산": "🔵"}
+            emoji = state_emoji_map.get(emoji_key, "❓")
+            
             score = res.get('score')
             score_str = f" {score:.1f}" if isinstance(score, (int, float)) else ""
             auto_str = " 수동" if res.get('unmanaged') else " 자동"
-            state_str = f"\n   상태: {state_val}{score_str}{auto_str}"
+            state_str = f"\n   상태: {emoji} {state_val}{score_str}{auto_str}"
             
             # 손절가
             sl_rate = res.get('applied_sl_rate')
