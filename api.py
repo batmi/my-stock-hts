@@ -2823,6 +2823,26 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     
     is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X') or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if is_index:
+        # [수정] yfinance에서 조회가 불가능한 국내 핵심 지수(코스피200, 코스닥150)는 
+        # analysis 모듈을 통해 모드별(KIS/Toss/tvDatafeed) 적합한 소스에서 우회 조회한다.
+        if code in ['^KS200', '^KQ150']:
+            if period_type != 'daily':
+                # 일봉 외(분봉 등)는 현재 지원하지 않으므로 빈 데이터프레임 반환
+                return pd.DataFrame()
+            from modules import analysis
+            m_type = "KOSPI200" if code == '^KS200' else "KOSDAQ150"
+            df = analysis.get_domestic_index_data(m_type)
+            if df is not None and not df.empty:
+                df = df.copy() # 공유 캐시 원본 보호
+                if 'date' in df.columns:
+                    df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+                    df = df[df['date'] >= start_date_origin]
+                    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+                else:
+                    df.reset_index(inplace=True)
+                    return df.tail(250)
+            return pd.DataFrame()
+
         def _fetch_yf_index_daily():
             try:
                 df = fetch_yfinance_data(code, period="2y")

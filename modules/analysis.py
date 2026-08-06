@@ -1219,9 +1219,9 @@ def _fetch_domestic_index_data(market_type):
         if tv_df is not None and not tv_df.empty:
             df = tv_df  # attrs['source']='TVDATAFEED' (fetch 함수가 설정)
 
-    # 3) yfinance (최후 폴백) — ^KQ150은 실측 데이터가 거의 없어 보통 빈 응답('-')
+    # 3) yfinance (최후 폴백) — ^KS200, ^KQ150은 야후 미제공이므로 무한 루프 방지를 위해 제외
     #    (VKOSPI는 yfinance 미제공 → yf_ticker=None이면 건너뜀)
-    if _insufficient(df) and yf_ticker:
+    if _insufficient(df) and yf_ticker and yf_ticker not in ['^KS200', '^KQ150']:
         logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} → yfinance({yf_ticker}) 폴백 시도")
         try:
             yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
