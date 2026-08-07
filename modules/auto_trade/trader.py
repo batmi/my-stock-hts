@@ -4816,24 +4816,29 @@ class AutoTrader:
         invest_ratio = config.resolve_invest_ratio()
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
 
+        can_buy = True
+
         if len(holding_codes) >= max_holdings:
             if self.consecutive_errors == 0: # 로그 도배 방지
-                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준)")
-            return
+                self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준) - 종목분석은 계속 진행합니다.")
+            can_buy = False
 
         # 예수금 확인 (API 직접 호출)
         avail_cash = 0
         if deposit_res:
             avail_cash = deposit_res['d2_deposit'] # 주문 가능 금액은 D+2 예수금 기준
         else:
-            return # 조회 실패 시 매수 중단
+            if not can_buy:
+                avail_cash = 0
+            else:
+                return # 조회 실패 시 매수 중단
 
         # [수정] 최소 주문 가능 금액 하향 조정 (50,000 -> 1,000) 및 로그 추가
         min_cash = 1000
-        if avail_cash < min_cash:
+        if can_buy and avail_cash < min_cash:
             if self.consecutive_errors == 0: # 로그 도배 방지
-                 self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원)")
-            return 
+                 self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원) - 종목분석은 계속 진행합니다.")
+            can_buy = False
             
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
         if rules_map is None:
@@ -4887,6 +4892,12 @@ class AutoTrader:
         if candidates:
             if not is_market_open:
                 self.log(f"[장마감] 매수 후보 감지 (주문 미전송): {len(candidates)}종목")
+                for cand in candidates:
+                     self.log(f"   - {cand['name']} ({cand['score']}점)")
+                return
+
+            if not can_buy:
+                self.log(f"[매수스킵] 매수 후보 감지 (매수 스킵 상태 - 조건 미달): {len(candidates)}종목")
                 for cand in candidates:
                      self.log(f"   - {cand['name']} ({cand['score']}점)")
                 return
