@@ -5074,7 +5074,7 @@ class AutoTrader:
                     if len(combined) > 30:
                         corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
                         if corr >= corr_threshold:
-                            correlation_skip_msg = f"[상관관계 보류] {name}({code}): 보유 종목 '{hold_name}'과 높은 상관관계 (상관계수: {corr:.2f} >= {corr_threshold})"
+                            correlation_skip_msg = f"[상관관계 보류] (보유종목 {hold_name} 상관계수: {corr:.2f} >= {corr_threshold})"
                             break
 
             # [추세추종] 상대강도(RS) 게이트: 소속 지수(KOSPI/KOSDAQ)보다 약한 종목의 신규 진입 차단.
@@ -5094,7 +5094,7 @@ class AutoTrader:
                         stock_mom = (current_price / past_close - 1) * 100
                         idx_mom = analysis.get_index_momentum(self._get_stock_market_type(code), lookback=mom_lb)
                         if idx_mom is not None and stock_mom <= idx_mom:
-                            rs_skip_msg = f"[RS필터 보류] {name}({code}): {mom_lb}일 수익률 {stock_mom:+.1f}% ≤ 지수 {idx_mom:+.1f}% (지수 대비 약세)"
+                            rs_skip_msg = f"[RS필터 보류] ({mom_lb}일 수익률 {stock_mom:+.1f}% ≤ 지수 {idx_mom:+.1f}%)"
 
             # 룰 및 임계값 설정
             rule = rules_map.get(code)
