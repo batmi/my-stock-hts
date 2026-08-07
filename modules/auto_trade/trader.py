@@ -5222,13 +5222,14 @@ class AutoTrader:
                 
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
-                if is_buy_state:
-                    if correlation_skip_msg:
+                if correlation_skip_msg:
+                    if is_buy_state:
                         log_msg += f" {correlation_skip_msg}"
-                        return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
-                    elif rs_skip_msg:
+                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                elif rs_skip_msg:
+                    if is_buy_state:
                         log_msg += f" {rs_skip_msg}"
-                        return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
                     
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
