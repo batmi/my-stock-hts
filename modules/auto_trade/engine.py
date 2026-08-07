@@ -746,19 +746,19 @@ class DefaultStrategy:
         if vol_strength is not None:
             if vol_strength < min_vol:
                 is_vol_ok = False
-                vol_reject_reason = f"체결:{vol_strength:.1f}%<{min_vol}%"
+                vol_reject_reason = "체결강도 미달"
             elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
                 # [핵심] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성 확인)
                 # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
                 if ask_bid_ratio < min_ask_bid_ratio:
                     is_vol_ok = False
-                    vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
+                    vol_reject_reason = "매도비 미달"
         elif config.session.is_toss:
             # [추가] 토스: 체결강도 미제공 → 호가창 매도잔량비(ask_bid_ratio)만으로 수급 게이트 대체
             #   호가 조회가 실패해 ratio가 없으면 상태(state) 게이트만으로 진입(거래 중단 방지)
             if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
                 is_vol_ok = False
-                vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
+                vol_reject_reason = "매도비 미달"
         elif min_vol > 0 and not is_overseas:
             # [Fix 2026-07-27 / fail-closed] KIS 국내 종목에서 체결강도를 못 구한 경우(정규장
             #  J 무효·EGW00201 스로틀 실패 등)는 수급 게이트를 '통과'시키던 종전 동작이 fail-open이었다.

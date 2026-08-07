@@ -5132,7 +5132,7 @@ class AutoTrader:
                     result['ask_bid_ratio'] = ask_bid_ratio
                     if ask_bid_ratio is not None and ask_bid_ratio < min_abr:
                         result['action'] = 'wait'
-                        result['vol_reject_reason'] = f"매도비:{ask_bid_ratio:.2f}<{min_abr}"
+                        result['vol_reject_reason'] = "매도비 미달"
 
             # [추가] 분석 성공 시 상태 업데이트
             self.set_stock_state(code, result['state'])
