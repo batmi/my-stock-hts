@@ -5046,6 +5046,7 @@ class AutoTrader:
             current_price = float(realtime_price) if realtime_price and realtime_price > 0 else float(df.iloc[-1]['close'])
 
             # [추가] 상관계수 필터링
+            correlation_skip_msg = None
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
                 corr_threshold = getattr(config, 'CORRELATION_THRESHOLD', 0.7)
                 cand_ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
@@ -5073,15 +5074,15 @@ class AutoTrader:
                     if len(combined) > 30:
                         corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
                         if corr >= corr_threshold:
-                            log_msg = f"[상관관계 보류] {name}({code}): 보유 종목 '{hold_name}'과 높은 상관관계 (상관계수: {corr:.2f} >= {corr_threshold})"
-                            self.set_stock_state(code, None)
-                            return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                            correlation_skip_msg = f"[상관관계 보류] {name}({code}): 보유 종목 '{hold_name}'과 높은 상관관계 (상관계수: {corr:.2f} >= {corr_threshold})"
+                            break
 
             # [추세추종] 상대강도(RS) 게이트: 소속 지수(KOSPI/KOSDAQ)보다 약한 종목의 신규 진입 차단.
             #   같은 +15%라도 지수가 +20%인 장에서는 열등주 — 지수 대비 초과수익이 없는 종목은
             #   '확실한 추세'가 아니라고 보고 게이트에서 제외한다 (약추세 진입 = 큰 손실의 원천).
             #   룩백은 RS_FILTER_LOOKBACK(>0) 우선, 0이면 스코어링 '가격 모멘텀'과 동일(MOMENTUM_LOOKBACK).
             #   종목 이력 부족·지수 조회 실패 시에는 통과(fail-open — 데이터 장애가 매수 전면 중단으로 번지지 않게).
+            rs_skip_msg = None
             if getattr(config, 'USE_RS_FILTER', False) and not is_overseas_stock:
                 mom_lb = getattr(config, 'RS_FILTER_LOOKBACK', 0) or config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
                 if len(df) > mom_lb:
@@ -5093,9 +5094,7 @@ class AutoTrader:
                         stock_mom = (current_price / past_close - 1) * 100
                         idx_mom = analysis.get_index_momentum(self._get_stock_market_type(code), lookback=mom_lb)
                         if idx_mom is not None and stock_mom <= idx_mom:
-                            self.set_stock_state(code, None)
-                            return {'type': 'rs_skip', 'name': name,
-                                    'log': f"[RS필터] {name}({code}): {mom_lb}일 수익률 {stock_mom:+.1f}% ≤ 지수 {idx_mom:+.1f}% (지수 대비 약세)"}
+                            rs_skip_msg = f"[RS필터 보류] {name}({code}): {mom_lb}일 수익률 {stock_mom:+.1f}% ≤ 지수 {idx_mom:+.1f}% (지수 대비 약세)"
 
             # 룰 및 임계값 설정
             rule = rules_map.get(code)
@@ -5210,8 +5209,23 @@ class AutoTrader:
                 }
                 reentry_log = f" [{reentry_msg}]" if reentry_msg else ""
                 log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}{reentry_log}"
+                
+                if correlation_skip_msg:
+                    log_msg += f" {correlation_skip_msg}"
+                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                elif rs_skip_msg:
+                    log_msg += f" {rs_skip_msg}"
+                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
+                if correlation_skip_msg:
+                    log_msg += f" {correlation_skip_msg}"
+                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                elif rs_skip_msg:
+                    log_msg += f" {rs_skip_msg}"
+                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                    
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 
