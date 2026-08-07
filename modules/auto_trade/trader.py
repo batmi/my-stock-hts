@@ -5154,12 +5154,15 @@ class AutoTrader:
             vol_val = f"{result['vol_strength']:.1f}%" if result.get('vol_strength') else "-"
             rule_msg = " [개별 룰 적용]" if rule else ""
             
-            # [추가] 가짜 체결강도로 걸러진 경우 사유 표시
+            is_buy_state = result['state'] in ["매수", "강매수", "역매수"]
+            
+            # [추가] 가짜 체결강도로 걸러진 경우 사유 표시 (매수 시그널일 때만)
             vol_reject_msg = ""
-            if result.get('vol_reject_reason'):
-                vol_reject_msg = f" [{result['vol_reject_reason']}]"
-            elif result.get('ask_bid_ratio') is not None:
-                vol_reject_msg = f" [매도비:{result['ask_bid_ratio']:.2f}]"
+            if is_buy_state:
+                if result.get('vol_reject_reason'):
+                    vol_reject_msg = f" [{result['vol_reject_reason']}]"
+                elif result.get('ask_bid_ratio') is not None:
+                    vol_reject_msg = f" [매도비:{result['ask_bid_ratio']:.2f}]"
             
             log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}"
             
@@ -5219,12 +5222,13 @@ class AutoTrader:
                 
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
-                if correlation_skip_msg:
-                    log_msg += f" {correlation_skip_msg}"
-                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
-                elif rs_skip_msg:
-                    log_msg += f" {rs_skip_msg}"
-                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                if is_buy_state:
+                    if correlation_skip_msg:
+                        log_msg += f" {correlation_skip_msg}"
+                        return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                    elif rs_skip_msg:
+                        log_msg += f" {rs_skip_msg}"
+                        return {'type': 'rs_skip', 'name': name, 'log': log_msg}
                     
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
