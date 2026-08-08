@@ -2748,9 +2748,102 @@ def _fetch_kis_weekly_overseas(code, lookback_days=1100):
             return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
     return pd.DataFrame()
 
+# ==========================================================
+# [추가] 지수 전용 소스 라우팅 (지수 화면 ↔ 차트 분석 공유)
+# ==========================================================
+#  지수 화면(메뉴 1)은 국내 지수를 모드별 소스 체인(KIS/토스/tvDatafeed/yfinance)으로,
+#  미국채 현물·HY OAS를 tvDatafeed 전용 소스로 조회한다. 차트 분석(메뉴 3-5)이 목록의
+#  yfinance 티커를 그대로 쓰면 같은 지수인데 다른 값이 나오거나(코스피200·코스닥150),
+#  자리표시자 티커(^VKOSPI·^K200FUT·^US02Y·^HYOAS)는 아예 조회가 실패한다.
+#  → get_chart_data가 코드만 보고 같은 소스를 고르도록 여기서 한 번에 판정한다.
+
+# 국내 지수 내부 코드 (market.resolve_index_source가 돌려주는 값) → get_domestic_index_data
+DOMESTIC_INDEX_SOURCE_CODES = (
+    "KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI", "K200FUT_F", "K200FUT_CM",
+)
+
+
+def index_source_kind(code):
+    """지수 전용 소스가 필요한 코드인지 판정한다.
+
+    Returns: 'domestic'(국내 지수 소스 체인) | 'tv_spot'(미국채 현물) | 'fred' | None(일반 경로)
+    """
+    if not code:
+        return None
+    if code in DOMESTIC_INDEX_SOURCE_CODES:
+        return 'domestic'
+    if code in config.US_TREASURY_SPOT_TICKERS:
+        return 'tv_spot'
+    if code in config.FRED_INDEX_TICKERS:
+        return 'fred'
+    return None
+
+
+def _to_chart_schema(df, start_date=None, max_rows=250):
+    """지수 소스(analysis 계열) DataFrame을 차트 스키마로 변환한다.
+
+    date는 datetime(tvDatafeed·토스)일 수도 YYYYMMDD 문자열(KIS)일 수도 있어 문자열로 통일한다.
+    호출부가 공유 캐시 객체를 그대로 넘기므로 반드시 복사본을 만든다(원본 오염 방지).
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    d = df.copy()
+    if 'date' not in d.columns:
+        d = d.reset_index()
+        d.columns = [str(c).lower() for c in d.columns]
+        if 'date' not in d.columns:
+            for cand in ('index', 'datetime', 'stck_bsop_date'):
+                if cand in d.columns:
+                    d = d.rename(columns={cand: 'date'})
+                    break
+    if 'date' not in d.columns:
+        return pd.DataFrame()
+
+    d['date'] = d['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
+    for c in ['open', 'high', 'low', 'close', 'volume']:
+        if c not in d.columns:
+            d[c] = 0.0
+    d = d[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+    if start_date:
+        d = d[d['date'] >= start_date]
+    return d.sort_values('date', ascending=True).reset_index(drop=True).tail(max_rows)
+
+
+def _index_source_chart_data(code, kind, period_type='daily'):
+    """지수 전용 소스에서 차트 데이터를 조회한다(일봉 / 주봉=일봉 리샘플링).
+
+    세 소스 모두 일봉만 제공하므로 시봉·분봉은 빈 DataFrame을 돌려준다
+    (호출부 chart.generate_visual_chart가 사전에 안내하고 차단한다).
+    """
+    if period_type in ('hourly', 'intraday'):
+        return pd.DataFrame()
+
+    from modules import analysis
+    if kind == 'domestic':
+        src = analysis.get_domestic_index_data(code)
+    elif kind == 'tv_spot':
+        src = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_TICKERS[code])
+    else:
+        src = analysis.get_fred_data(config.FRED_INDEX_TICKERS[code])
+
+    if period_type == 'weekly':
+        # 지수 소스는 네이티브 주봉이 없다 → 확보된 일봉(최대 ~300봉)을 주 단위로 리샘플링한다.
+        #  (토스 개별종목 주봉과 동일한 방식. 기간은 야후 주봉 5년보다 짧다)
+        return _resample_weekly(_to_chart_schema(src, max_rows=400))
+
+    now = datetime.now()
+    start_date = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
+    return _to_chart_schema(src, start_date=start_date)
+
+
 def _get_weekly_chart_data(code, is_overseas):
     """주봉 차트 데이터. KIS 네이티브 주봉(국내 W / 해외 GUBN=1)으로 ~3년치를 조회하고,
     KIS 주봉이 없는 경로(지수·환율·원자재는 yfinance 1wk, 토스 개별종목은 일봉 리샘플링)로 보강한다."""
+    # [추가] 국내 지수·미국채 현물·HY OAS는 지수 화면과 동일한 전용 소스(일봉 리샘플링)를 쓴다.
+    kind = index_source_kind(code)
+    if kind:
+        return _index_source_chart_data(code, kind, 'weekly')
+
     is_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
                 or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
     if is_index:
@@ -2796,6 +2889,13 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     if period_type == 'weekly':
         return _get_weekly_chart_data(code, is_overseas)
 
+    # [추가] 지수 전용 소스(국내 지수·미국채 현물·HY OAS)는 모드/티커와 무관하게 지수 화면과
+    #  같은 소스로 조회한다. 일반 경로로 흘리면 KIS 종목 차트 TR·yfinance 자리표시자로 넘어가
+    #  조회가 실패하거나 표와 다른 값이 나온다.
+    _idx_kind = index_source_kind(code)
+    if _idx_kind:
+        return _index_source_chart_data(code, _idx_kind, period_type)
+
     # [추가] 토스: yfinance 대상(지수/원자재/환율 등)이 아닌 개별 종목은 토스 캔들로 조회
     _yf_index = (code.startswith('^') or code.endswith('=F') or code.endswith('=X')
                  or code == 'DX-Y.NYB' or '-USD' in code or code.endswith('.SS') or code.endswith('.IL'))
@@ -2826,22 +2926,10 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
         # [수정] yfinance에서 조회가 불가능한 국내 핵심 지수(코스피200, 코스닥150)는 
         # analysis 모듈을 통해 모드별(KIS/Toss/tvDatafeed) 적합한 소스에서 우회 조회한다.
         if code in ['^KS200', '^KQ150']:
-            if period_type != 'daily':
-                # 일봉 외(분봉 등)는 현재 지원하지 않으므로 빈 데이터프레임 반환
-                return pd.DataFrame()
-            from modules import analysis
+            # 야후 티커로 들어와도 내부 코드와 같은 소스를 타게 한다(차트 분석은 이미
+            #  market.resolve_index_source가 'KOSPI200'/'KOSDAQ150'으로 바꿔 넘긴다).
             m_type = "KOSPI200" if code == '^KS200' else "KOSDAQ150"
-            df = analysis.get_domestic_index_data(m_type)
-            if df is not None and not df.empty:
-                df = df.copy() # 공유 캐시 원본 보호
-                if 'date' in df.columns:
-                    df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if hasattr(x, 'strftime') else str(x).replace('-', '')[:8])
-                    df = df[df['date'] >= start_date_origin]
-                    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
-                else:
-                    df.reset_index(inplace=True)
-                    return df.tail(250)
-            return pd.DataFrame()
+            return _index_source_chart_data(m_type, 'domestic', period_type)
 
         def _fetch_yf_index_daily():
             try:

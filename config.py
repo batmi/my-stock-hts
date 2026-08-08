@@ -1054,6 +1054,19 @@ US_TREASURY_SPOT_SYMBOLS = {
     "미국채 10년물 금리": "US10Y", "미국채 30년물 금리": "US30Y",
 }
 
+# 지수 목록 티커 → 현물 심볼. 차트 분석(메인 3-5)은 지수명이 아니라 티커로 넘어오므로
+#  지수 화면(메뉴 1)과 같은 소스(tvDatafeed 현물)를 고르려면 이 매핑이 필요하다.
+#  ^US02Y는 야후 미제공 자리표시자라 이 경로가 유일한 소스다.
+#  (US_TREASURY_SPOT_SYMBOLS와의 정합성은 tests/test_index_source_sync.py가 검증)
+US_TREASURY_SPOT_TICKERS = {
+    "^US02Y": "US02Y", "^FVX": "US05Y", "^TNX": "US10Y", "^TYX": "US30Y",
+}
+
+# FRED 계열 지수 티커 → FRED 심볼 (tvDatafeed FRED 거래소 전용, 야후 미제공)
+FRED_INDEX_TICKERS = {
+    "^HYOAS": "BAMLH0A0HYM2",  # HY OAS (신용위험)
+}
+
 # 금리 밴드 단일 소스 — 지수명 색상(market)·상태 문구(theme_analysis)·도움말(main) 공용.
 # bands: (하한 임계값, rich 색상, 상태 문구, 도움말 문구) 내림차순.
 #  값 >= 임계값이면 해당 밴드, 임계값 None은 그 미만 전체(최하단).

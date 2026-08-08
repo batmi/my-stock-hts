@@ -177,6 +177,47 @@ ALL_INDICES = [
 # 이름 -> 티커 매핑 (기존 호환성 유지)
 INDICES_MAP = dict(ALL_INDICES)
 
+# ==========================================================
+# [추가] 지수 소스 선정 규칙 (단일 소스)
+# ==========================================================
+#  같은 지수를 화면마다 다른 소스로 조회하면 표(메뉴 1)와 차트(메뉴 3)의 값·성공 여부가
+#  어긋난다. 실제로 차트 분석은 목록의 yfinance 티커를 그대로 넘겨 코스피200(^KS200)·
+#  코스닥150(^KQ150)은 모드별 소스(KIS/토스/tvDatafeed)를 타지 못하고, 자리표시자
+#  티커(^VKOSPI·^K200FUT·^US02Y)는 조회 자체가 실패했다.
+#  → 이름/티커 → (조회용 코드, is_overseas) 변환을 여기 한 곳에 두고 양쪽이 공유한다.
+
+# 국내 지수명 → analysis.get_domestic_index_data의 market_type
+DOMESTIC_INDEX_SOURCE_MAP = {
+    "코스피": "KOSPI", "코스피200": "KOSPI200",
+    "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150", "V코스피200": "VKOSPI",
+}
+
+# KIS '실전' 서버 전용 지수 — 모의서버는 해당 TR 미지원/불안정하고 모의 모드에서 실전
+#  서버는 사용하지 않으며 토스는 대체 소스가 없다 → 토스(3)·모의(1)에서는 목록에서 제외.
+KIS_LIVE_ONLY_INDICES = ("V코스피200", "코스피200선물")
+
+
+def selectable_indices():
+    """현재 모드에서 선택 가능한 지수 목록 [(이름, 티커)] — 지수 화면 정책과 동일."""
+    if config.session.is_toss or config.session.is_simulation:
+        return [(n, c) for n, c in ALL_INDICES if n not in KIS_LIVE_ONLY_INDICES]
+    return list(ALL_INDICES)
+
+
+def resolve_index_source(name, code):
+    """지수 (이름, 목록 티커) → (조회용 코드, is_overseas).
+
+    국내 지수는 yfinance 티커 대신 모드별 소스 체인(KIS/토스/tvDatafeed/yfinance)을 타는
+    내부 코드로 바꾸고, 코스피200선물은 표시 세션(주간 F/야간 CM)에 맞는 KIS 선물 코드로
+    바꾼다. 그 외(해외 지수·원자재·환율·미국채)는 목록 티커를 그대로 쓴다
+    (미국채 현물·HY OAS는 티커 기준으로 api.get_chart_data가 tvDatafeed 소스를 선택).
+    """
+    if name == "코스피200선물":
+        return f"K200FUT_{'CM' if _k200_night_session() else 'F'}", False
+    if name in DOMESTIC_INDEX_SOURCE_MAP:
+        return DOMESTIC_INDEX_SOURCE_MAP[name], False
+    return code, True
+
 # [추가] 그룹 구분선을 시작하는 지수명 — 지수 화면(메뉴 1)과 텔레그램 시장지수가 공유한다
 #  (양쪽에 따로 하드코딩되어 국채 2년물 신설 시 텔레그램만 누락됐던 문제 재발 방지)
 SECTION_START_INDICES = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 금리", "금", "비트코인"]
@@ -191,10 +232,7 @@ def fetch_index_quote(name, code):
     """
     display_name = name
     current = prev = None
-    domestic_map = {
-        "코스피": "KOSPI", "코스피200": "KOSPI200",
-        "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150", "V코스피200": "VKOSPI"
-    }
+    domestic_map = DOMESTIC_INDEX_SOURCE_MAP  # 소스 선정은 단일 규칙을 공유한다
     try:
         if name == "코스피200선물":
             fut_div = "CM" if _k200_night_session() else "F"
@@ -400,7 +438,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if name == "HY OAS (신용위험)":
             got_fred = False
             try:
-                tv_df = analysis.get_fred_data("BAMLH0A0HYM2")
+                tv_df = analysis.get_fred_data(config.FRED_INDEX_TICKERS["^HYOAS"])
                 if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
                     got_fred = True
                     df_daily = tv_df.copy()
@@ -1300,30 +1338,17 @@ def show_market_indices(interval=0):
                         keys.append(k)
                 
                 if '8' in keys:
-                    indices_list = ALL_INDICES
                     # [추가] KIS 실전 전용 지수는 토스·모의 모드 목록에서 제외 (지수 화면과 동일 정책)
-                    if config.session.is_toss or config.session.is_simulation:
-                        indices_list = [(n, c) for n, c in indices_list if n not in ("V코스피200", "코스피200선물")]
+                    indices_list = selectable_indices()
                     dict_list = [{'name': n, 'code': c} for n, c in indices_list]
                     idx, item = utils.search_stock_in_list(dict_list, title="개별 지수 분석 대상 선택")
                     if item:
                         target_name, target_code = item['name'], item['code']
 
-                        is_overseas = True
-                        domestic_map = {
-                            "코스피": "KOSPI", "코스피200": "KOSPI200",
-                            "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150",
-                            "V코스피200": "VKOSPI"
-                        }
-                        if target_name == "코스피200선물":
-                            # [Fix] 자리표시자(^K200FUT)가 yfinance로 넘어가 분석이 실패하던 문제 —
-                            #  지수 화면과 동일하게 세션(주간 F/야간 CM)별 KIS 선물 차트로 분석한다.
-                            target_code = f"K200FUT_{'CM' if _k200_night_session() else 'F'}"
-                            is_overseas = False
-                        elif target_name in domestic_map:
-                            target_code = domestic_map[target_name]
-                            is_overseas = False
-                            
+                        # [Fix] 자리표시자(^K200FUT·^VKOSPI 등)가 yfinance로 넘어가 분석이 실패하던
+                        #  문제 — 소스 선정은 차트 분석(메인 3-5)과 공유하는 규칙을 사용한다.
+                        target_code, is_overseas = resolve_index_source(target_name, target_code)
+
                         context.USER_ACTION_BREADCRUMB.append(f"[개별분석] {target_name}")
                         config.console.print(f"\n[bold green]>> {target_name}({target_code}) 개별 지수 심층 분석 실행[/bold green]")
                         # [Fix] 분석 중 예외가 바깥 입력 파싱 except에 잡혀 '잘못된 입력입니다.'로

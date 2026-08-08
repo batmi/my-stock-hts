@@ -1212,12 +1212,16 @@ def main():
                                 if not utils.validate_and_confirm_stock(target_code, target_name, target_ovs, "이 종목으로 차트 분석을 진행하시겠습니까?"):
                                     target_code = None
                         elif sub_choice == '5':
-                            indices_list = market.ALL_INDICES
+                            # [수정] 지수 목록·소스 선정은 지수 화면(메인 1)과 동일한 규칙을 공유한다.
+                            #  종전에는 목록의 yfinance 티커를 그대로 넘겨 코스피200·코스닥150이
+                            #  모드별 소스(KIS/토스/tvDatafeed)를 타지 못했고, 자리표시자 티커
+                            #  (^VKOSPI·^K200FUT·^US02Y)는 조회 자체가 실패했다.
+                            indices_list = market.selectable_indices()
                             dict_list = [{'name': n, 'code': c} for n, c in indices_list]
                             idx, item = utils.search_stock_in_list(dict_list, title="시장 지수 목록", display_func=lambda i, s: f"[{i+1}] {s.get('name', 'Unknown')}")
                             if item:
-                                target_name, target_code = item['name'], item['code']
-                                target_ovs = True
+                                target_name = item['name']
+                                target_code, target_ovs = market.resolve_index_source(target_name, item['code'])
                                 context.USER_ACTION_BREADCRUMB.append(f"[지수선택] {target_name}")
                         elif sub_choice in ["1", "2", "3", "4"]:
                             key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}
