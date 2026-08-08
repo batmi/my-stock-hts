@@ -62,6 +62,12 @@ def _cfg():
         "ts_callback": s.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "ts_atr_mult": s.get("TRAILING_ATR_MULTIPLIER", 3.0),
         "sell_score_limit": s.get("SELL_SCORE", 4.0),
+        # [주의] 여기 키가 빠지면 백테스트만 옛 규칙으로 돌아 전부 거짓 불일치가 난다.
+        #  청산 규칙에 스위치를 추가할 때는 이 dict도 함께 갱신할 것.
+        "ts_breakeven": str(s.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven",
+        "profit_lock_use": s.get("PROFIT_LOCK_USE", False),
+        "profit_lock_min_mfe": s.get("PROFIT_LOCK_MIN_MFE", 25.0),
+        "profit_lock_giveback": s.get("PROFIT_LOCK_GIVEBACK", 0.5),
     }
 
 
