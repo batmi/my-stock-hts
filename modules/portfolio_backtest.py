@@ -528,8 +528,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 # ==========================================================
 # 데이터 준비
 # ==========================================================
-def prepare_universe(targets, days, progress_cb=None):
+def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     """대상 종목의 일봉·지표·시장필터 차단일을 준비한다.
+
+    is_overseas: 해외 종목 프레임을 준비한다. 포트폴리오 백테스트 자체는 국내 전용이지만,
+     청산 패리티 감사(tools/audit_exit_parity.py)가 해외 일봉으로도 두 구현을 대조할 수
+     있어야 해서 통로만 열어둔다. 기본값은 종전과 같다.
 
     Returns: (dfs, market_filter_dates, dates, failed)
     """
@@ -539,11 +543,11 @@ def prepare_universe(targets, days, progress_cb=None):
     dfs, mf_dates, failed = {}, {}, []
     for code, name in targets:
         try:
-            df = backtest.get_backtest_data(code, False, days)
+            df = backtest.get_backtest_data(code, is_overseas, days)
             if df is None or df.empty:
                 failed.append(name)
                 continue
-            df = backtest._append_smart_money_signal(df, code, False)
+            df = backtest._append_smart_money_signal(df, code, is_overseas)
             df = backtest.compute_price_indicators(df)
             df["roll_high_5"] = df["high"].rolling(5, min_periods=1).max()
             df["roll_high_10"] = df["high"].rolling(10, min_periods=1).max()
@@ -555,7 +559,7 @@ def prepare_universe(targets, days, progress_cb=None):
                 continue
             dfs[code] = df.iloc[start_idx:].reset_index(drop=True)
 
-            backtest.prepare_market_filter(code, False, days)
+            backtest.prepare_market_filter(code, is_overseas, days)
             mf_dates[code] = set(backtest._MARKET_FILTER_STATE.get("dates") or set())
         except Exception:
             failed.append(name)

@@ -122,7 +122,10 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
                         if cb > 0 and highest > 0:
                             cb = max(config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
                                      cb * highest / arm_price)
-                            ts_str += f" → 청산선 {round(arm_price * (1 - cb / 100)):,} (-{cb:.1f}%)"
+                            # 한 줄에 이어 붙이면 모바일에서 임의로 접혀 '→' 앞뒤가 끊긴다.
+                            #  줄을 나누고 들여써서 발동가에 딸린 값임을 눈으로 묶는다.
+                            ts_str += (f"\n          → 청산선 "
+                                       f"{round(arm_price * (1 - cb / 100)):,} (-{cb:.1f}%)")
                     else:
                         ts_str = f"\n   TS: {tag} 도달 시 "
                 else:

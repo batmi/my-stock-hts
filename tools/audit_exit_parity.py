@@ -176,6 +176,9 @@ def main():
     ap.add_argument("--step", type=int, default=10)
     ap.add_argument("--min-history", type=int, default=400,
                     help="실매매가 받는 봉수(≈494)에 맞춰 이 인덱스 이후부터만 비교한다")
+    ap.add_argument("--overseas", action="store_true",
+                    help="해외 일봉으로 대조한다(stocks_us + etfs_us). 청산 로직은 국내와 "
+                         "같은 analyze_sell을 타지만 데이터 소스가 다르다")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="SELL_STRATEGY 값을 덮어쓰고 잰다. 기본 OFF인 청산 스위치는 "
                          "그냥 돌리면 두 구현 모두 그 분기를 타지 않아 '불일치 0'이 "
@@ -197,10 +200,14 @@ def main():
         print(f"[오버라이드] SELL_STRATEGY[{key!r}] = {val!r}")
 
     data = json.load(open(config.STOCK_DATA_FILE))
-    targets = [(s["code"], s["name"]) for s in data.get("stocks_kr", [])][:args.stocks]
-    print(f"[준비] {len(targets)}종목 · {args.days}일 · 진입간격 {args.step}일 · 최소이력 {args.min_history}봉")
+    keys = ("stocks_us", "etfs_us") if args.overseas else ("stocks_kr",)
+    pool = [s for k in keys for s in data.get(k, [])]
+    targets = [(s["code"], s["name"]) for s in pool][:args.stocks]
+    print(f"[준비] {'해외' if args.overseas else '국내'} {len(targets)}종목 · {args.days}일 "
+          f"· 진입간격 {args.step}일 · 최소이력 {args.min_history}봉")
 
-    dfs, _mf, _dates, failed = pbt.prepare_universe(targets, args.days)
+    dfs, _mf, _dates, failed = pbt.prepare_universe(targets, args.days,
+                                                    is_overseas=args.overseas)
     thresholds = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
