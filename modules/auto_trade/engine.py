@@ -488,15 +488,17 @@ def resolve_entry_date(entry_date=None, last_buy=None, fallback_buy_date=None):
     [중요] 진입일은 '최근 매수일'이 아니라 '보유수량이 0에서 1 이상으로 바뀐 시점'이다.
     분할 매수·피라미딩으로 1주만 더 담아도 최근 매수 기준이면 보유일수가 0으로 리셋되어
     시간청산 시계가 무한히 미뤄진다. 시간청산의 취지는 '자본이 얼마나 오래 묶였나'이므로
-    수량 흐름으로 잰다(db_manager.get_position_entry_dates).
+    수량 흐름으로 잰다.
 
-    우선순위: 수량 재생으로 구한 진입일 → 최근 매수 기록 → 증권사 체결 내역(HTS 직접 매수분).
+    우선순위:
+      1) 수량 재생으로 구한 진입일 — 시스템 DB와 증권사 체결 내역 중 더 이른 쪽
+         (analyze_holdings가 두 소스를 합쳐 넘긴다)
+      2) 증권사 체결 재생 결과 — 1)이 비어 있을 때 (형식 변환 포함)
+      3) 최근 매수 기록 — 위가 모두 없을 때의 마지막 근사치
+    3)을 마지막에 두는 이유: 분할 매수 때마다 보유일수를 리셋시켜 시간청산이 걸리지 않는다.
     """
     if entry_date:
         return str(entry_date)[:10]
-
-    if last_buy and last_buy.get('time'):
-        return str(last_buy['time'])[:10]
 
     if fallback_buy_date:
         try:
@@ -506,6 +508,9 @@ def resolve_entry_date(entry_date=None, last_buy=None, fallback_buy_date=None):
                 return f"{s[:4]}-{s[4:6]}-{s[6:]}"
         except Exception:
             pass
+
+    if last_buy and last_buy.get('time'):
+        return str(last_buy['time'])[:10]
 
     return None
 
@@ -565,16 +570,45 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
     buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes), {})
     highest_map = _safe(lambda: db_manager.db.get_all_trailing_stops(), {})
     half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), set())
-    # 진입일(보유수량이 0 → 1 이상이 된 시점). 분할 매수·부분 매도가 섞여도 정확하다.
-    entry_date_map = _safe(lambda: db_manager.db.get_position_entry_dates(codes), {})
+    # ------------------------------------------------------------------ 진입일
+    # 진입일 = 누적 보유수량이 0에서 1 이상으로 바뀐 시점. 분할 매수·부분 매도가 섞여도
+    #  정확하다. 두 소스를 모두 재생하고 '더 이른 쪽'을 쓴다.
+    #
+    #  [왜 둘 다 보나] 시스템 DB는 증권사 이력의 '부분 사본'이다. HTS·MTS로 직접 매매한
+    #   포지션은 시스템을 쓰기 시작한 뒤부터만 기록되므로 DB의 첫 기록이 '0 → 1 이상'처럼
+    #   보여 진입일이 그 날짜로 굳는다(실측: 228주 보유인데 DB엔 2주만 기록 → 37일 vs 실제 107일).
+    #   증권사 체결 내역은 계좌의 원본이라 DB보다 과거까지 닿는다.
+    #  [왜 더 이른 쪽인가] 두 소스 모두 수량 흐름으로 판정하므로 서로 어긋나면 이력이 더
+    #   많은 쪽이 이긴다. 보유일수는 '자본이 얼마나 오래 묶였나'이므로 과소평가(시간청산
+    #   지연·TS 앵커 오차)가 과대평가보다 위험하다.
+    entry_info_map = _safe(lambda: db_manager.db.get_position_entry_info(codes), {})
 
-    # [추가] HTS·MTS 직접 매수분은 시스템 DB에 매수 기록이 없다. 증권사 체결 내역에서
-    #  실제 매수일을 복원해 보유일수·시간청산 판정이 '오늘 매수'로 굳는 것을 막는다.
-    #  (기간 단위 조회라 보유 종목 수와 무관하게 호출 수가 고정된다)
-    missing = [e['code'] for e in entries
-               if not e.get('is_overseas') and e['code'] not in entry_date_map
-               and e['code'] not in latest_buy_map and e.get('holding_days') is None]
-    broker_buy_dates = _safe(lambda: api.get_period_buy_dates(missing), {}) if missing else {}
+    # 진입이 조회 구간보다 과거인지 판별하려면 현재 보유수량이 필요하다.
+    qty_map = {e['code']: e['qty'] for e in entries if e.get('qty') is not None}
+    # 국내 보유분만 대상 (해외는 이 TR이 없다). 수동 분석은 입력한 보유일수를 그대로 쓴다.
+    broker_targets = [e['code'] for e in entries
+                      if not e.get('is_overseas') and e.get('holding_days') is None]
+    broker_entry_dates = _safe(
+        lambda: api.get_period_entry_dates(broker_targets, qty_map=qty_map), {}
+    ) if broker_targets else {}
+
+    def _norm_date(v):
+        """'YYYYMMDD' / 'YYYY-MM-DD ...' → 'YYYY-MM-DD'. 판독 불가면 None."""
+        if not v:
+            return None
+        d = str(v).replace('-', '').strip()[:8]
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 and d.isdigit() else None
+
+    entry_date_map = {}
+    for e in entries:
+        code = e['code']
+        db_date = _norm_date((entry_info_map.get(code) or {}).get('date'))
+        broker_date = _norm_date(broker_entry_dates.get(code))
+        picked = min([d for d in (db_date, broker_date) if d], default=None)
+        if picked:
+            entry_date_map[code] = picked
+        if db_date and broker_date and db_date != broker_date:
+            logger.debug(f"[진입일] {code} DB {db_date} vs 증권사 {broker_date} → {picked} 채택")
 
     # 시장 국면 보정 (매수 임계값 → 상태 분류에 반영). 매도 분석 경로와 동일하게 적용한다.
     market_regime_adj = {}
@@ -606,7 +640,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                 score_adj = market_regime_adj.get(m_type, 0.0)
 
             last_buy = latest_buy_map.get(code)
-            broker_date = broker_buy_dates.get(code)
+            broker_date = broker_entry_dates.get(code)
             entry_date = resolve_entry_date(entry_date_map.get(code), last_buy, broker_date)
             holding_days, is_mr_holding = resolve_holding_context(
                 last_buy, fallback_buy_date=broker_date, entry_date=entry_date_map.get(code))

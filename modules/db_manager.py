@@ -796,12 +796,25 @@ class DBManager:
     def get_position_entry_dates(self, codes):
         """[배치] 현재 보유 포지션의 진입일을 일괄 조회합니다. {code: 'YYYY-MM-DD'}
 
+        get_position_entry_info의 진입일만 추린 편의 함수.
+        """
+        return {c: v['date'] for c, v in self.get_position_entry_info(codes).items() if v.get('date')}
+
+    def get_position_entry_info(self, codes):
+        """[배치] 진입일과 재생 결과 수량을 함께 돌려줍니다.
+        {code: {'date': 'YYYY-MM-DD'|None, 'qty': int}}
+
         진입일 = 누적 보유수량이 0에서 1 이상으로 바뀐 '마지막' 시점.
         부분 매도(반익절)는 포지션을 끊지 않으므로 '마지막 매도 이후 첫 매수'로는 진입일을
         구할 수 없고, 분할 매수·피라미딩의 '최근 매수'를 쓰면 1주만 더 담아도 보유일수가
         0으로 리셋된다. 그래서 체결 내역을 시간순으로 재생해 수량 흐름으로 판정한다.
 
         trades에는 접수·정정·취소 행이 섞여 있어 체결(order_status='체결') 행만 집계한다.
+
+        [중요] qty(재생 수량)를 함께 주는 이유 — 이 DB는 증권사 이력의 부분 사본이다.
+        시스템을 쓰기 전부터 들고 있던 포지션은 첫 기록이 '0 → 1 이상'처럼 보여 진입일이
+        DB 최초 기록일로 굳는다(실측: 228주 보유인데 DB엔 2주만 기록 → 진입일 오판).
+        호출부가 재생 수량과 실제 잔고 수량을 비교해 이력 절단을 판별할 수 있게 한다.
         """
         codes = [c for c in dict.fromkeys(codes or []) if c]
         if not codes:
@@ -822,8 +835,11 @@ class DBManager:
                 t = dict(row)
                 code = t['code']
                 type_str = str(t.get('type') or '')
-                # 취소·정정 행이 체결로 기록된 경우가 있어 한 번 더 걸러낸다
-                if '취소' in type_str or '정정' in type_str:
+                # [Fix] 정정 주문의 '체결' 행은 진짜 체결이다(접수 → 정정 → 체결로 기록된다).
+                #  종전에는 이 행까지 버려서 정정된 매도가 수량 흐름에서 빠졌고, 전량 청산한
+                #  포지션이 계속 보유 중으로 남아 진입일이 옛 날짜로 굳었다.
+                #  order_status='체결'로 이미 걸렀으므로 취소 행만 방어적으로 제외한다.
+                if '취소' in type_str:
                     continue
 
                 try:
@@ -849,10 +865,11 @@ class DBManager:
                     if running[code] == 0:
                         result.pop(code, None)   # 전량 청산 — 다음 매수가 새 진입
 
-            return {c: d for c, d in result.items() if d}
+            return {c: {'date': result.get(c), 'qty': q}
+                    for c, q in running.items() if q > 0}
         except Exception as e:
             logger.debug(f"진입일 조회 실패: {e}")
-            return result
+            return {}
 
     def get_latest_buy_trades(self, codes):
         """[배치] 여러 종목의 최근 매수 내역을 일괄 조회합니다. {code: trade|None 미포함}

@@ -105,7 +105,7 @@ def test_missing_virt_key_is_warned(monkeypatch, capsys):
 
 ACCOUNT_FUNCS = [
     "get_domestic_balance", "get_overseas_balance", "get_today_profit_summary",
-    "get_today_history", "get_period_buy_dates", "get_overseas_today_history",
+    "get_today_history", "get_period_entry_dates", "get_overseas_today_history",
     "get_domestic_open_orders", "get_overseas_open_orders", "place_order",
     "revise_cancel_order", "get_deposit", "get_foreign_deposit", "get_deposit_balance",
 ]
@@ -154,5 +154,5 @@ def test_paper_holding_days_do_not_query_the_broker():
     """보유일수는 가상 DB가 안다 — 증권사 체결 이력을 뒤지면 실계좌 조회다."""
     with patch.object(api, '_paper_active', return_value=True), \
          patch.object(api, 'call_api') as called:
-        assert api.get_period_buy_dates(["005930"]) == {}
+        assert api.get_period_entry_dates(["005930"]) == {}
     assert not called.called, "관찰 모드인데 증권사 체결 이력을 조회했다"

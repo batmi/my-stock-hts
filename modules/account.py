@@ -231,6 +231,10 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
     """
     entries = []
     for item in domestic_items:
+        try:
+            qty = int(float(item.get('hldg_qty') or 0))
+        except (TypeError, ValueError):
+            qty = None
         entries.append({
             'code': item['pdno'],
             'name': item.get('prdt_name', ''),
@@ -238,6 +242,8 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
             'current_price': float(item.get('prpr') or 0),
             'profit_rate': float(item.get('evlu_pfls_rt') or 0),
             'is_overseas': False,
+            # 진입일 복원(증권사 체결 재생)에서 '조회 구간보다 오래된 포지션' 판별에 쓴다.
+            'qty': qty if qty and qty > 0 else None,
         })
 
     for item in overseas_items:

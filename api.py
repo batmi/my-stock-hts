@@ -5924,14 +5924,14 @@ def _toss_today_closed_orders():
     return todays
 
 
-def _toss_period_buy_dates(codes, months=12):
-    """토스 CLOSED 주문 이력에서 최근 매수 체결일을 찾는다. {code: 'YYYYMMDD'}
+def _toss_period_entry_dates(codes, qty_map=None, months=12):
+    """토스 CLOSED 주문 이력에서 현 포지션의 진입일을 찾는다. {code: 'YYYYMMDD'}
 
-    KIS의 get_period_buy_dates와 같은 역할. 토스는 기간(from/to) 조회를 한 번에
-    받으므로 3개월씩 끊을 필요가 없다.
+    KIS의 get_period_entry_dates와 같은 역할(수량 흐름 재생). 토스는 기간(from/to)
+    조회를 한 번에 받으므로 3개월씩 끊을 필요가 없다.
     """
-    remaining = set(codes)
-    found = {}
+    wanted = set(codes)
+    rows = {c: [] for c in wanted}
 
     today = datetime.now()
     start = today - timedelta(days=int(months * 30.5))
@@ -5946,18 +5946,20 @@ def _toss_period_buy_dates(codes, months=12):
 
         res = toss_api.get_orders(**kwargs)
         for o in ((res or {}).get('orders') or []):
-            if o.get('side') != 'BUY':
+            side = str(o.get('side') or '').upper()
+            if side not in ('BUY', 'SELL'):
                 continue
             code = str(o.get('symbol') or '').strip()
-            if code not in remaining:
+            if code not in wanted:
                 continue
             ex = o.get('execution') or {}
-            if _toss_int(ex.get('filledQuantity')) <= 0:
-                continue  # 취소·미체결 주문은 매수일 근거가 못 된다
+            qty = _toss_int(ex.get('filledQuantity'))
+            if qty <= 0:
+                continue  # 취소·미체결 주문은 수량 흐름에 영향이 없다
             ts = str(ex.get('filledAt') or o.get('orderedAt') or '')
             date = ts[:10].replace('-', '')
-            if len(date) == 8 and date > found.get(code, ''):
-                found[code] = date
+            if len(date) == 8:
+                rows[code].append((date, side == 'BUY', qty))
 
         if not (res or {}).get('hasNext'):
             break
@@ -5965,6 +5967,12 @@ def _toss_period_buy_dates(codes, months=12):
         if not cursor:
             break
 
+    window_start = start.strftime("%Y%m%d")
+    found = {}
+    for code, r in rows.items():
+        d = _replay_entry_date(r, (qty_map or {}).get(code), window_start)
+        if d:
+            found[code] = d
     return found
 
 
@@ -6245,16 +6253,69 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     
     return call_api(url, "domestic", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
 
-def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
-    """보유 종목의 '최근 매수 체결일'을 증권사 체결 내역에서 찾는다. {code: 'YYYYMMDD'}
+# 진입일 캐시 TTL — 체결이 나면 보유수량이 바뀌어 캐시 키가 무효화되므로 길게 잡아도 안전하다.
+_ENTRY_DATE_CACHE_TTL = 900.0   # 15분
+
+
+def _replay_entry_date(rows, current_qty=None, window_start=None):
+    """체결 내역을 시간순으로 재생해 '현 포지션의 진입일'을 구한다. 'YYYYMMDD' 또는 None.
+
+    진입일 = 누적 보유수량이 0에서 1 이상으로 바뀐 마지막 시점. 최근 매수일을 쓰면
+    분할 매수·피라미딩으로 1주만 더 담아도 보유일수가 리셋되고, 첫 매수일을 쓰면 그 사이
+    전량 청산 후 재진입한 이력이 지워진다. 그래서 매수·매도를 모두 재생한다.
+
+    rows: [(date 'YYYYMMDD', is_buy, qty)] — 순서 무관(내부에서 정렬)
+    current_qty: 현재 보유수량. 조회 구간보다 오래된 포지션을 판별하는 데 쓴다.
+      구간 시작 시점의 보유수량 = 현재수량 - 구간 내 순증감. 이 값이 0보다 크면
+      진입이 조회 구간 밖이라는 뜻이므로, 확인 가능한 하한(window_start)을 돌려준다.
+      None이면 구간 시작을 0으로 가정한다(DB 재생과 동일).
+    """
+    rows = sorted([r for r in (rows or []) if r and len(r) == 3], key=lambda r: r[0])
+    if not rows:
+        return None
+
+    net = sum(q if is_buy else -q for _, is_buy, q in rows)
+    try:
+        base = 0 if current_qty is None else max(0, int(current_qty) - net)
+    except (TypeError, ValueError):
+        base = 0
+
+    running = base
+    entry = None
+    for date, is_buy, qty in rows:
+        if is_buy:
+            if running <= 0:
+                entry = date          # 0 → 1 이상: 이번 포지션의 진입
+            running += qty
+        else:
+            running = max(0, running - qty)
+            if running == 0:
+                entry = None          # 전량 청산 — 다음 매수가 새 진입
+
+    if entry is None:
+        # 구간 시작 시점에 이미 보유 중이었다(진입이 조회 범위보다 과거).
+        #  최근 매수일로 되돌아가면 보유일수가 크게 짧아지므로, 확인 가능한 가장 이른
+        #  시점을 하한으로 쓴다.
+        entry = window_start if base > 0 and window_start else None
+    return entry
+
+
+def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, months=12):
+    """보유 종목의 '진입일'을 증권사 체결 내역에서 복원한다. {code: 'YYYYMMDD'}
 
     HTS·MTS로 직접 매수한 포지션은 시스템 DB에 매수 기록이 없어 보유일수를 알 수 없다.
-    주식일별주문체결조회(inquire-daily-ccld)를 기간으로 훑어 실제 체결일을 복원한다.
+    주식일별주문체결조회(inquire-daily-ccld)를 기간으로 훑어 매수·매도 체결을 모두 모은 뒤
+    수량 흐름을 재생해, 누적 보유수량이 0에서 1 이상으로 바뀐 시점을 진입일로 삼는다.
+    (종전에는 '최근 매수 체결일'을 썼다 — 분할 매수·피라미딩으로 1주만 더 담아도 보유일수가
+    리셋되어 시간청산 시계가 무한히 미뤄졌다.)
     종목별이 아니라 기간 단위 조회이므로 보유 종목 수와 무관하게 호출 수가 고정된다.
+
+    qty_map: {code: 현재 보유수량}. 진입이 조회 구간보다 과거인지 판별하는 데 쓴다.
 
     [중요] KIS는 3개월 경계로 TR이 갈린다 — 최근 3개월은 TTTC8001R, 그 이전은 CTSC9115R.
     한 TR로 계속 거슬러 올라가면 3개월 이전 구간이 통째로 빈다. 3개월씩 끊어 최신 구간부터
-    조회하되 두 번째 구간부터 과거용 TR로 바꾸고, 찾는 종목을 모두 채우면 조기 종료한다.
+    조회하되 두 번째 구간부터 과거용 TR로 바꾼다. 수량 재생은 구간 전체가 있어야 정확하므로
+    '찾으면 조기 종료'는 하지 않고, 모든 종목의 보유수량이 0까지 역산되면 그때 멈춘다.
 
     실패는 조용히 빈 dict로 흘려보낸다(보유일수는 부가 정보이므로 잔고 조회를 막아선 안 된다).
     """
@@ -6264,14 +6325,31 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
     if not codes:
         return {}
 
+    qty_map = qty_map or {}
+
+    # [최적화] 진입일은 새 체결이 있어야만 바뀐다. 잔고 화면·자동매매 리포트가 같은 종목을
+    #  반복 조회하므로 (종목, 보유수량) 조합을 키로 캐시한다 — 체결이 나면 수량이 바뀌어
+    #  키가 자동으로 무효화되므로 오래된 값을 붙들 위험이 없다.
+    cache_key = ("period_entry_dates", tuple(sorted(set(codes))),
+                 tuple(sorted((c, qty_map.get(c)) for c in set(codes))), int(months))
+    cached = _get_micro_cache(cache_key, ttl=_ENTRY_DATE_CACHE_TTL)
+    if cached is not None:
+        return dict(cached)
+
     # 토스 모드는 KIS TR이 없다. 주문 이력 API(기간 조회)로 같은 값을 만든다.
     #  (이 분기가 없던 동안 토스 모드는 HTS 매수분 보유일수가 전부 0일로 굳었다)
     if config.session.is_toss:
         try:
-            return _toss_period_buy_dates(codes, months=months)
+            found = _toss_period_entry_dates(codes, qty_map=qty_map, months=months)
+            _set_micro_cache(cache_key, found)
+            return found
         except Exception as e:
-            logger.debug(f"[Toss] 기간 매수 체결일 조회 실패: {e}")
+            logger.debug(f"[Toss] 기간 진입일 조회 실패: {e}")
             return {}
+
+    wanted = set(codes)
+    rows = {c: [] for c in wanted}
+    window_start = None
 
     try:
         cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
@@ -6280,19 +6358,15 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
         tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]["sim" if is_sim else "real"]
         tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]["sim" if is_sim else "real"]
 
-        remaining = set(codes)
-        found = {}
         end = datetime.now()
 
         for chunk in range(max(1, int(math.ceil(months / 3.0)))):
-            if not remaining:
-                break
             start = end - timedelta(days=90)
             params = {
                 "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
                 "INQR_STRT_DT": start.strftime("%Y%m%d"),
                 "INQR_END_DT": end.strftime("%Y%m%d"),
-                "SLL_BUY_DVSN_CD": "02",   # 02: 매수만
+                "SLL_BUY_DVSN_CD": "00",   # 00: 전체 (수량 흐름을 재생하려면 매도도 필요)
                 "INQR_DVSN": "00",
                 "PDNO": "",
                 "CCLD_DVSN": "01",         # 01: 체결분만 (미체결·취소 제외)
@@ -6304,24 +6378,46 @@ def get_period_buy_dates(codes, cano=None, acnt_prdt_cd=None, months=12):
             res = call_api(url, "domestic", "inquiry", "history", params=params,
                            tr_id=(tr_recent if chunk == 0 else tr_old))
             if not res or res.get('rt_cd') != '0':
-                # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(찾은 것까지 반환).
+                # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(모은 것까지 재생).
                 break
 
+            window_start = start.strftime("%Y%m%d")
             for row in (res.get('output1') or []):
                 code = str(row.get('pdno') or '').strip()
                 date = str(row.get('ord_dt') or '').strip()
-                if code not in remaining or len(date) != 8:
+                if code not in wanted or len(date) != 8:
                     continue
-                # 같은 구간 내 여러 체결이면 가장 최근 것을 취한다
-                if date > found.get(code, ''):
-                    found[code] = date
+                try:
+                    qty = int(float(row.get('tot_ccld_qty') or 0))
+                except (TypeError, ValueError):
+                    continue
+                if qty <= 0:
+                    continue
+                # 02=매수 / 01=매도. 구분값이 없으면 이름으로 판정한다.
+                dvsn = str(row.get('sll_buy_dvsn_cd') or '').strip()
+                if dvsn == '02':
+                    is_buy = True
+                elif dvsn == '01':
+                    is_buy = False
+                else:
+                    is_buy = '매수' in str(row.get('sll_buy_dvsn_cd_name') or '')
+                rows[code].append((date, is_buy, qty))
 
-            remaining -= set(found)
+            # 모든 종목이 '보유수량 0'까지 역산됐으면 더 과거를 볼 필요가 없다.
+            if all(_replay_entry_date(rows[c], qty_map.get(c)) for c in wanted):
+                break
+
             end = start - timedelta(days=1)
 
+        found = {}
+        for code in wanted:
+            d = _replay_entry_date(rows[code], qty_map.get(code), window_start)
+            if d:
+                found[code] = d
+        _set_micro_cache(cache_key, found)
         return found
     except Exception as e:
-        logger.debug(f"기간 매수 체결일 조회 실패: {e}")
+        logger.debug(f"기간 진입일 조회 실패: {e}")
         return {}
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):

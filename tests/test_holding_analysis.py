@@ -93,12 +93,17 @@ def test_holding_days_use_entry_date_not_latest_buy():
 
 
 def test_entry_date_priority_order():
-    """진입일 우선순위: 수량 재생 진입일 → 최근 매수 → 증권사 체결 내역."""
+    """진입일 우선순위: DB 수량 재생 → 증권사 체결 재생 → 최근 매수(최후 근사).
+
+    증권사 재생을 최근 매수보다 앞에 둔다 — 최근 매수일은 분할 매수·피라미딩 때마다
+    보유일수를 0으로 리셋해 시간청산 시계를 무한히 미룬다.
+    """
     from modules.auto_trade import resolve_entry_date
 
     latest = {"time": "2026-07-29 14:00:00"}
     assert resolve_entry_date("2026-03-31", latest, "20250101") == "2026-03-31"
-    assert resolve_entry_date(None, latest, "20250101") == "2026-07-29"
+    assert resolve_entry_date(None, latest, "20250101") == "2025-01-01"
+    assert resolve_entry_date(None, latest, None) == "2026-07-29"
     assert resolve_entry_date(None, None, "20250101") == "2025-01-01"
     assert resolve_entry_date(None, None, None) is None
     assert resolve_entry_date(None, None, "깨짐") is None
@@ -144,6 +149,39 @@ def test_position_entry_date_replays_quantity(tmp_path):
     assert "없음" not in res
 
 
+def test_position_entry_date_counts_amended_fills(tmp_path):
+    """정정 주문의 '체결' 행은 진짜 체결이다 — 수량 흐름에서 빠지면 안 된다.
+
+    실 DB에는 매도가 접수 → 정정 → 체결로 기록된다. 종전에는 type에 '정정'이 들어간
+    행을 통째로 버려서 전량 청산이 반영되지 않았고, 이미 판 종목이 계속 보유 중으로
+    남아 진입일이 옛 날짜로 굳었다.
+    """
+    import sqlite3
+    from modules import db_manager
+
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE trades (code TEXT, time TEXT, type TEXT, qty TEXT, order_status TEXT)")
+    conn.executemany("INSERT INTO trades VALUES (?,?,?,?,?)", [
+        ("027740", "2026-06-23 12:04:58", "매수(수동)", "1", "체결"),
+        ("027740", "2026-06-23 12:05:22", "매도(수동)", "1", "접수"),
+        ("027740", "2026-06-23 12:05:58", "매도정정(수동)", "1", "정정"),
+        ("027740", "2026-06-23 12:05:58", "매도정정(수동)", "1", "체결"),   # 실제 체결
+    ])
+    conn.commit()
+    conn.close()
+
+    mgr = db_manager.DBManager.__new__(db_manager.DBManager)
+
+    def _conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    mgr._get_conn = _conn
+    assert mgr.get_position_entry_dates(["027740"]) == {}   # 전량 청산 → 진입일 없음
+
+
 def test_position_entry_date_drops_fully_closed(tmp_path):
     """전량 청산된 종목은 진입일이 없다."""
     import sqlite3
@@ -170,17 +208,21 @@ def test_position_entry_date_drops_fully_closed(tmp_path):
     assert mgr.get_position_entry_dates(["042660"]) == {}
 
 
-def test_holding_context_falls_back_to_broker_buy_date():
-    """DB 매수 기록이 없으면 증권사 체결일로 보유일수를 계산한다 (HTS 직접 매수분)."""
+def test_holding_context_falls_back_to_broker_entry_date():
+    """DB 수량 재생이 없으면 증권사 체결 재생으로 보유일수를 계산한다 (HTS 직접 매수분)."""
     from datetime import datetime, timedelta
 
     d = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
     days, is_mr = resolve_holding_context(None, fallback_buy_date=d)
     assert days == 45 and is_mr is False
 
-    # DB 기록이 있으면 그쪽이 우선한다
+    # 최근 매수 기록이 함께 있어도 증권사 재생(진입일)이 우선한다
     db_time = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
     days, _ = resolve_holding_context({"time": db_time, "reason": "매수"}, fallback_buy_date=d)
+    assert days == 45
+
+    # 증권사 재생이 없으면 최근 매수 기록으로 근사한다
+    days, _ = resolve_holding_context({"time": db_time, "reason": "매수"})
     assert days == 3
 
     # 둘 다 없으면 오늘 매수(0일)로 본다
@@ -189,7 +231,49 @@ def test_holding_context_falls_back_to_broker_buy_date():
     assert resolve_holding_context(None, fallback_buy_date="깨짐") == (0, False)
 
 
-def test_period_buy_dates_switches_tr_past_three_months():
+def _ccld(code, date, qty, buy=True):
+    """주식일별주문체결조회(inquire-daily-ccld) 응답 한 행."""
+    return {"pdno": code, "ord_dt": date, "tot_ccld_qty": str(qty),
+            "sll_buy_dvsn_cd": "02" if buy else "01",
+            "sll_buy_dvsn_cd_name": "현금매수" if buy else "현금매도"}
+
+
+def test_entry_date_replay_uses_zero_to_one_crossing():
+    """진입일 = 누적 보유수량이 0 → 1 이상이 된 날. 분할 매수는 리셋시키지 않는다."""
+    import api
+
+    rows = [("20260102", True, 10), ("20260210", True, 5), ("20260315", True, 3)]
+    assert api._replay_entry_date(rows, current_qty=18) == "20260102"
+
+
+def test_entry_date_replay_restarts_after_full_exit():
+    """전량 청산 후 재진입하면 새 진입일을 쓴다 (첫 매수일 고정 금지)."""
+    import api
+
+    rows = [("20260102", True, 10), ("20260220", False, 10), ("20260405", True, 7)]
+    assert api._replay_entry_date(rows, current_qty=7) == "20260405"
+
+
+def test_entry_date_replay_ignores_partial_exit():
+    """부분 매도(반익절)는 포지션을 끊지 않는다."""
+    import api
+
+    rows = [("20260102", True, 10), ("20260220", False, 5), ("20260405", True, 2)]
+    assert api._replay_entry_date(rows, current_qty=7) == "20260102"
+
+
+def test_entry_date_replay_flags_position_older_than_window():
+    """구간 시작 시점에 이미 보유 중이었다면(현재수량 > 구간 내 순증감) 확인 가능한
+    가장 이른 시점을 하한으로 돌려준다 — 최근 매수일로 되돌아가면 보유일수가 급감한다."""
+    import api
+
+    rows = [("20260701", True, 1)]     # 구간 안엔 1주 추가 매수뿐인데 실제 보유는 100주
+    assert api._replay_entry_date(rows, current_qty=100, window_start="20260101") == "20260101"
+    # 하한을 모르면(창 시작 미상) 억지로 만들지 않는다
+    assert api._replay_entry_date(rows, current_qty=100) is None
+
+
+def test_period_entry_dates_switches_tr_past_three_months():
     """3개월 경계에서 과거 조회 TR로 전환한다 (한 TR로 계속 훑으면 과거 구간이 통째로 빈다)."""
     import api
 
@@ -199,44 +283,89 @@ def test_period_buy_dates_switches_tr_past_three_months():
         calls.append((tr_id, params["INQR_STRT_DT"], params["INQR_END_DT"]))
         if len(calls) < 3:                       # 처음 두 구간은 해당 종목 체결 없음
             return {"rt_cd": "0", "output1": []}
-        return {"rt_cd": "0", "output1": [{"pdno": "950160", "ord_dt": "20250910"}]}
+        return {"rt_cd": "0", "output1": [_ccld("950160", "20250910", 10)]}
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
          patch.object(config.session, "is_toss", False, create=True), \
          patch.object(config.session, "is_simulation", False, create=True):
-        found = api.get_period_buy_dates(["950160"], months=12)
+        found = api.get_period_entry_dates(["950160"], qty_map={"950160": 10}, months=12)
 
     assert found == {"950160": "20250910"}
     assert calls[0][0] == "TTTC8001R"             # 최근 3개월
     assert all(c[0] == "CTSC9115R" for c in calls[1:])   # 그 이전
     assert calls[0][1] > calls[1][1]              # 구간이 과거로 이동
+    assert calls[0][0] and all(p is not None for p in calls[0])
 
 
-def test_period_buy_dates_stops_on_unsupported_tr():
-    """과거 조회 TR을 지원하지 않으면 찾은 것까지만 반환하고 멈춘다."""
+def test_period_entry_dates_queries_sells_too():
+    """수량 흐름을 재생하려면 매도 체결도 받아야 한다 (매수만 조회하면 재진입을 놓친다)."""
+    import api
+
+    seen = {}
+
+    def _fake(url, market, category, action, params=None, tr_id=None, **kw):
+        seen.update(params)
+        return {"rt_cd": "0", "output1": [
+            _ccld("005930", "20260210", 10),
+            _ccld("005930", "20260320", 10, buy=False),   # 전량 청산
+            _ccld("005930", "20260505", 4),               # 재진입
+        ]}
+
+    with patch("api.call_api", side_effect=_fake), \
+         patch("api._prepare_account_params", return_value=("12345678", "01")), \
+         patch.object(config.session, "is_toss", False, create=True), \
+         patch.object(config.session, "is_simulation", False, create=True):
+        found = api.get_period_entry_dates(["005930"], qty_map={"005930": 4}, months=3)
+
+    assert seen["SLL_BUY_DVSN_CD"] == "00"        # 전체(매수+매도)
+    assert seen["CCLD_DVSN"] == "01"              # 체결분만
+    assert found == {"005930": "20260505"}        # 최근 매수일이자 '재진입일'
+
+
+def test_period_entry_dates_ignores_pyramiding_buy():
+    """피라미딩(추가 매수)이 있어도 진입일은 최초 0 → 1 시점 그대로다."""
+    import api
+
+    def _fake(url, market, category, action, params=None, tr_id=None, **kw):
+        return {"rt_cd": "0", "output1": [
+            _ccld("005930", "20260210", 10),
+            _ccld("005930", "20260610", 1),       # 1주만 더 담아도 리셋되면 안 된다
+        ]}
+
+    with patch("api.call_api", side_effect=_fake), \
+         patch("api._prepare_account_params", return_value=("12345678", "01")), \
+         patch.object(config.session, "is_toss", False, create=True), \
+         patch.object(config.session, "is_simulation", False, create=True):
+        found = api.get_period_entry_dates(["005930"], qty_map={"005930": 11}, months=3)
+
+    assert found == {"005930": "20260210"}
+
+
+def test_period_entry_dates_stops_on_unsupported_tr():
+    """과거 조회 TR을 지원하지 않으면 모은 것까지 재생하고 멈춘다."""
     import api
 
     def _fake(url, market, category, action, params=None, tr_id=None, **kw):
         if tr_id == "TTTC8001R":
-            return {"rt_cd": "0", "output1": [{"pdno": "005930", "ord_dt": "20260701"}]}
+            return {"rt_cd": "0", "output1": [_ccld("005930", "20260701", 5)]}
         return {"rt_cd": "1", "msg1": "지원하지 않는 TR"}
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
          patch.object(config.session, "is_toss", False, create=True), \
          patch.object(config.session, "is_simulation", False, create=True):
-        found = api.get_period_buy_dates(["005930", "950160"], months=12)
+        found = api.get_period_entry_dates(["005930", "950160"], qty_map={"005930": 5}, months=12)
 
     assert found == {"005930": "20260701"}        # 950160은 못 찾아도 예외 없이 진행
 
 
-def test_period_buy_dates_empty_codes_short_circuits():
+def test_period_entry_dates_empty_codes_short_circuits():
     import api
-    assert api.get_period_buy_dates([]) == {}
+    assert api.get_period_entry_dates([]) == {}
 
 
-def test_period_buy_dates_uses_toss_order_history():
+def test_period_entry_dates_uses_toss_order_history():
     """토스 모드는 KIS TR 대신 주문 이력(기간 조회)에서 같은 값을 만든다.
 
     이 분기가 없던 동안 토스 모드는 HTS 직접 매수분 보유일수가 전부 0일로 굳었다.
@@ -244,35 +373,37 @@ def test_period_buy_dates_uses_toss_order_history():
     import api
 
     with patch.object(config.session, "is_toss", True, create=True), \
-         patch("api._toss_period_buy_dates", return_value={"005930": "20260310"}) as spy:
-        assert api.get_period_buy_dates(["005930"], months=6) == {"005930": "20260310"}
+         patch("api._toss_period_entry_dates", return_value={"005930": "20260310"}) as spy:
+        assert api.get_period_entry_dates(["005930"], months=6) == {"005930": "20260310"}
 
     assert spy.call_args.kwargs["months"] == 6
 
     # 조회가 깨져도 잔고 표시를 막지 않는다 (보유일수는 부가 정보)
     with patch.object(config.session, "is_toss", True, create=True), \
-         patch("api._toss_period_buy_dates", side_effect=RuntimeError("토스 응답 없음")):
-        assert api.get_period_buy_dates(["005930"]) == {}
+         patch("api._toss_period_entry_dates", side_effect=RuntimeError("토스 응답 없음")):
+        assert api.get_period_entry_dates(["005930"]) == {}
 
 
-def test_toss_period_buy_dates_picks_latest_filled_buy():
-    """매수·체결된 주문만 세고, 같은 종목이 여러 번이면 가장 최근 체결일을 쓴다."""
+def test_toss_period_entry_dates_replays_quantity_flow():
+    """토스도 매수·매도를 모두 재생해 '0 → 1 이상'이 된 날을 쓴다 (최근 매수일 아님)."""
     import api
 
     pages = [
         {"orders": [
             {"symbol": "005930", "side": "BUY",
              "execution": {"filledQuantity": 10, "filledAt": "2026-03-10T09:31:00"}},
-            {"symbol": "005930", "side": "SELL",       # 매도는 매수일 근거가 못 된다
+            {"symbol": "005930", "side": "SELL",       # 전량 청산 → 이후 매수가 새 진입
              "execution": {"filledQuantity": 10, "filledAt": "2026-05-20T10:00:00"}},
-            {"symbol": "000660", "side": "BUY",        # 취소·미체결도 제외
+            {"symbol": "000660", "side": "BUY",        # 취소·미체결은 수량 흐름에 무관
              "execution": {"filledQuantity": 0, "filledAt": "2026-04-01T09:00:00"}},
             {"symbol": "035720", "side": "BUY",        # 찾는 종목이 아니면 무시
              "execution": {"filledQuantity": 5, "filledAt": "2026-06-01T09:00:00"}},
         ], "hasNext": True, "nextCursor": "c2"},
         {"orders": [
-            {"symbol": "005930", "side": "BUY",        # 더 최근 매수가 있으면 갱신
-             "execution": {"filledQuantity": 3, "filledAt": "2026-04-15T13:20:00"}},
+            {"symbol": "005930", "side": "BUY",        # 재진입
+             "execution": {"filledQuantity": 3, "filledAt": "2026-06-15T13:20:00"}},
+            {"symbol": "005930", "side": "BUY",        # 추가 매수는 진입일을 밀지 않는다
+             "execution": {"filledQuantity": 2, "filledAt": "2026-07-01T13:20:00"}},
         ], "hasNext": False},
     ]
     calls = []
@@ -282,9 +413,10 @@ def test_toss_period_buy_dates_picks_latest_filled_buy():
         return pages[len(calls) - 1]
 
     with patch("api.toss_api.get_orders", side_effect=_fake):
-        found = api._toss_period_buy_dates(["005930", "000660"], months=6)
+        found = api._toss_period_entry_dates(["005930", "000660"],
+                                             qty_map={"005930": 5}, months=6)
 
-    assert found == {"005930": "20260415"}
+    assert found == {"005930": "20260615"}
     assert len(calls) == 2
     assert "cursor" not in calls[0] and calls[1]["cursor"] == "c2"
 
@@ -298,7 +430,7 @@ def test_analyze_holdings_uses_broker_history_for_hts_positions(_no_db):
     entries = [{"code": "950160", "name": "코오롱티슈진", "buy_price": 107833,
                 "current_price": 13200, "profit_rate": -87.75, "is_overseas": False}]
 
-    with patch("api.get_period_buy_dates", return_value={"950160": d}) as spy, \
+    with patch("api.get_period_entry_dates", return_value={"950160": d}) as spy, \
          patch("api.get_chart_data", return_value=_make_df()), \
          patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
          patch("api.is_domestic_etf_etn", return_value=False), \
@@ -306,29 +438,29 @@ def test_analyze_holdings_uses_broker_history_for_hts_positions(_no_db):
          patch("modules.analysis.get_market_regime", return_value=("하락", 0.0)):
         res = auto_trade.analyze_holdings(entries)["950160"]
 
-    spy.assert_called_once_with(["950160"])
+    assert spy.call_args.args[0] == ["950160"]
     assert res["holding_days"] == 120
     assert res["has_buy_record"] is True
 
 
-def test_analyze_holdings_skips_history_lookup_when_db_has_record(_no_db):
-    """DB 기록이 있으면 불필요한 체결 내역 조회를 하지 않는다 (API 호출 절감)."""
+def test_analyze_holdings_skips_broker_lookup_for_manual_entries(_no_db):
+    """보유일수를 직접 입력한 포지션([9]-5 수동 분석)은 증권사 이력을 조회하지 않는다."""
     from modules import auto_trade
 
-    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000,
-                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False}]
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000, "qty": 10,
+                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False,
+                "holding_days": 58}]
 
-    with patch("modules.db_manager.db.get_latest_buy_trades",
-               return_value={"005930": {"time": "2026-07-01 09:00:00", "reason": "매수"}}), \
-         patch("api.get_period_buy_dates") as spy, \
+    with patch("api.get_period_entry_dates") as spy, \
          patch("api.get_chart_data", return_value=_make_df()), \
          patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
          patch("api.is_domestic_etf_etn", return_value=False), \
          patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
          patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
-        auto_trade.analyze_holdings(entries)
+        res = auto_trade.analyze_holdings(entries)["005930"]
 
     spy.assert_not_called()
+    assert res["holding_days"] == 58
 
 
 # ------------------------------------------------------------ trailing stop
@@ -445,6 +577,9 @@ def _no_db():
         "get_all_half_tp": set(),
     }
     patchers = [patch(f"modules.db_manager.db.{k}", return_value=v) for k, v in targets.items()]
+    # 진입일 복원은 증권사 TR을 부른다 — 개별 테스트가 명시적으로 patch하지 않으면
+    #  실 계좌 조회가 나가므로 기본값을 빈 결과로 막는다(개별 patch가 우선한다).
+    patchers.append(patch("api.get_period_entry_dates", return_value={}))
     for p in patchers:
         p.start()
     yield
@@ -798,6 +933,167 @@ def test_analyze_manual_positions_derives_entry_fields():
     entry = captured["entries"][0]
     assert entry["holding_days"] == 30
     assert entry["highest_since"] == buy_date
+
+
+def test_run_holding_analysis_passes_holding_quantity():
+    """잔고 수량을 함께 넘겨야 '진입이 조회 구간보다 과거인지'를 판별할 수 있다."""
+    captured = {}
+
+    def _fake(entries, **kw):
+        captured["entries"] = entries
+        return {}
+
+    domestic = [{"pdno": "005930", "prdt_name": "삼성전자", "hldg_qty": "42",
+                 "pchs_avg_pric": "10000", "prpr": "12000", "evlu_pfls_rt": "20.0"}]
+
+    with patch("modules.auto_trade.analyze_holdings", side_effect=_fake):
+        account.run_holding_analysis(domestic, [])
+
+    assert captured["entries"][0]["qty"] == 42
+
+
+def test_analyze_holdings_sends_quantity_to_broker_lookup(_no_db):
+    """DB에 진입일이 없으면 잔고 수량과 함께 증권사 체결 이력을 재생한다."""
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    d = (datetime.now() - timedelta(days=200)).strftime("%Y%m%d")
+    entries = [{"code": "950160", "name": "코오롱티슈진", "buy_price": 107833, "qty": 30,
+                "current_price": 13200, "profit_rate": -87.75, "is_overseas": False}]
+
+    with patch("api.get_period_entry_dates", return_value={"950160": d}) as spy, \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("하락", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["950160"]
+
+    assert spy.call_args.kwargs["qty_map"] == {"950160": 30}
+    assert res["holding_days"] == 200
+
+
+def test_entry_info_reports_replayed_quantity(tmp_path):
+    """진입일과 함께 재생 수량을 돌려준다 — 호출부가 DB 이력 절단을 판별할 수 있어야 한다."""
+    import sqlite3
+    from modules import db_manager
+
+    path = tmp_path / "t.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE trades (code TEXT, time TEXT, type TEXT, qty TEXT, order_status TEXT)")
+    conn.executemany("INSERT INTO trades VALUES (?,?,?,?,?)", [
+        ("102780", "2026-07-02 09:59:19", "현금매수(외부)", "1", "체결"),
+        ("102780", "2026-07-16 09:16:29", "현금매수(외부)", "1", "체결"),
+    ])
+    conn.commit()
+    conn.close()
+
+    mgr = db_manager.DBManager.__new__(db_manager.DBManager)
+
+    def _conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    mgr._get_conn = _conn
+    assert mgr.get_position_entry_info(["102780"]) == {"102780": {"date": "2026-07-02", "qty": 2}}
+
+
+def test_analyze_holdings_keeps_db_date_when_broker_agrees(_no_db):
+    """증권사 이력이 DB와 같으면 그대로 쓴다 (실측: 395160은 DB 재생 373주 = 잔고 373주)."""
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    d = datetime.now() - timedelta(days=37)
+    entries = [{"code": "395160", "name": "KODEX AI반도체TOP2플러스", "buy_price": 41936,
+                "qty": 373, "current_price": 34470, "profit_rate": -17.8, "is_overseas": False}]
+
+    with patch("modules.db_manager.db.get_position_entry_info",
+               return_value={"395160": {"date": d.strftime("%Y-%m-%d"), "qty": 373}}), \
+         patch("api.get_period_entry_dates", return_value={"395160": d.strftime("%Y%m%d")}), \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("하락", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["395160"]
+
+    assert res["holding_days"] == 37
+
+
+def test_analyze_holdings_never_shorter_than_broker_history(_no_db):
+    """DB가 증권사 이력보다 늦은 진입일을 주면 더 이른 쪽(증권사)을 쓴다.
+
+    [불변식] 보유일수는 확인된 이력보다 짧아지면 안 된다. DB는 증권사 이력의 부분 사본이라
+    외부(HTS·MTS) 매매분은 시스템 사용 시작일이 진입일처럼 보인다.
+    """
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    db_date = (datetime.now() - timedelta(days=37)).strftime("%Y-%m-%d")
+    broker_date = (datetime.now() - timedelta(days=107)).strftime("%Y%m%d")
+    entries = [{"code": "102780", "name": "KODEX 삼성그룹", "buy_price": 20402, "qty": 228,
+                "current_price": 24315, "profit_rate": 19.17, "is_overseas": False}]
+
+    with patch("modules.db_manager.db.get_position_entry_info",
+               return_value={"102780": {"date": db_date, "qty": 2}}), \
+         patch("api.get_period_entry_dates", return_value={"102780": broker_date}), \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["102780"]
+
+    assert res["holding_days"] == 107      # DB만 믿었다면 37일
+
+
+def test_analyze_holdings_keeps_db_date_when_broker_is_later(_no_db):
+    """반대로 증권사 이력이 더 늦으면(조회 구간 절단 등) DB 진입일을 지킨다."""
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    db_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    broker_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+    entries = [{"code": "005930", "name": "삼성전자", "buy_price": 10000, "qty": 10,
+                "current_price": 12000, "profit_rate": 20.0, "is_overseas": False}]
+
+    with patch("modules.db_manager.db.get_position_entry_info",
+               return_value={"005930": {"date": db_date, "qty": 10}}), \
+         patch("api.get_period_entry_dates", return_value={"005930": broker_date}), \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["005930"]
+
+    assert res["holding_days"] == 200
+
+
+def test_db_date_beats_latest_buy_when_broker_fails(_no_db):
+    """증권사 조회가 실패해도 최근 매수일로 되돌아가지 않는다 (DB 재생일이 하한)."""
+    from datetime import datetime, timedelta
+    from modules import auto_trade
+
+    db_first = (datetime.now() - timedelta(days=37)).strftime("%Y-%m-%d")
+    latest_buy = (datetime.now() - timedelta(days=23)).strftime("%Y-%m-%d %H:%M:%S")
+    entries = [{"code": "102780", "name": "KODEX 삼성그룹", "buy_price": 20402, "qty": 228,
+                "current_price": 24315, "profit_rate": 19.17, "is_overseas": False}]
+
+    with patch("modules.db_manager.db.get_position_entry_info",
+               return_value={"102780": {"date": db_first, "qty": 2}}), \
+         patch("modules.db_manager.db.get_latest_buy_trades",
+               return_value={"102780": {"time": latest_buy, "reason": "매수"}}), \
+         patch("api.get_period_entry_dates", return_value={}), \
+         patch("api.get_chart_data", return_value=_make_df()), \
+         patch("api.chart_overlay_price", side_effect=lambda p, o=False: p), \
+         patch("api.is_domestic_etf_etn", return_value=False), \
+         patch("modules.analysis.check_smart_money_turnaround", return_value=(False, "")), \
+         patch("modules.analysis.get_market_regime", return_value=("상승", 0.0)):
+        res = auto_trade.analyze_holdings(entries)["102780"]
+
+    assert res["holding_days"] == 37       # 최근 매수 기준이었다면 23일
 
 
 def test_manual_positions_render_into_shared_tables():
