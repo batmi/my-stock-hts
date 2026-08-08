@@ -39,7 +39,9 @@ from modules.auto_trade import DefaultStrategy  # noqa: E402
 def categorize(reason):
     if not reason:
         return "보유"
-    for key in ("본전청산", "시간청산", "트레일링스탑"):
+    # '이익보호'가 빠지면 어느 분기에도 안 걸려 양쪽 다 '점수하락'으로 접히고,
+    #  이익보호 ↔ 점수하락 불일치가 통째로 가려진다.
+    for key in ("본전청산", "시간청산", "트레일링스탑", "이익보호"):
         if reason.startswith(key):
             return key
     # 'ATR손절'과 '손절'은 같은 판정이다. analyze_sell은 항상 '손절'을 내고,
@@ -174,7 +176,25 @@ def main():
     ap.add_argument("--step", type=int, default=10)
     ap.add_argument("--min-history", type=int, default=400,
                     help="실매매가 받는 봉수(≈494)에 맞춰 이 인덱스 이후부터만 비교한다")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="SELL_STRATEGY 값을 덮어쓰고 잰다. 기본 OFF인 청산 스위치는 "
+                         "그냥 돌리면 두 구현 모두 그 분기를 타지 않아 '불일치 0'이 "
+                         "무의미해진다 (예: --set PROFIT_LOCK_USE=true)")
     args = ap.parse_args()
+
+    for kv in args.set:
+        key, _, raw = kv.partition("=")
+        key = key.strip()
+        v = raw.strip()
+        if v.lower() in ("true", "false"):
+            val = v.lower() == "true"
+        else:
+            try:
+                val = float(v) if "." in v else int(v)
+            except ValueError:
+                val = v
+        config.SELL_STRATEGY[key] = val
+        print(f"[오버라이드] SELL_STRATEGY[{key!r}] = {val!r}")
 
     data = json.load(open(config.STOCK_DATA_FILE))
     targets = [(s["code"], s["name"]) for s in data.get("stocks_kr", [])][:args.stocks]
