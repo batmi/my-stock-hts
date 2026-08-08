@@ -650,7 +650,15 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 if time_stop_triggered:
                     sell_signal = True; reason = "시간청산"
             elif ts_highest_price > 0:
-                if max_profit_rate >= ts_activation:
+                # [SSOT] 발동 기준은 실매매(engine.compute_trailing_stop)와 같은 모드를 따른다.
+                #  두 경로가 다른 식을 쓰면 백테스트 수치가 실매매를 설명하지 못한다.
+                if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+                    from modules.auto_trade.engine import breakeven_activation_rate
+                    ts_act_eff = breakeven_activation_rate(row.get('ATR', 0), position['avg_price'],
+                                                           ts_callback, ts_atr_mult, use_atr_stop)
+                else:
+                    ts_act_eff = ts_activation
+                if max_profit_rate >= ts_act_eff:
                     drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
                     
                     actual_ts_callback = ts_callback

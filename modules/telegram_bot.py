@@ -2239,7 +2239,8 @@ class TelegramCommander:
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score = config.SELL_STRATEGY["SELL_SCORE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        from modules.auto_trade.engine import ts_activation_label
+        ts_act = ts_activation_label()
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
@@ -2266,7 +2267,7 @@ class TelegramCommander:
         time_stop_str = f"ON ({time_stop_days}일 경과 & 수익 < {time_stop_min}%)" if use_time_stop else "OFF"
         msg += f"• 시간 청산: {time_stop_str}\n"
 
-        msg += f"• 트레일링 스탑: +{ts_act}% 도달 후 -{ts_call}% 하락 시 (샹들리에 ATR 동적 확대)\n"
+        msg += f"• 트레일링 스탑: {ts_act} 도달 후 -{ts_call}% 하락 시 (샹들리에 ATR 동적 확대)\n"
         if tp_rsi > 0:
             msg += f"• 과열 매도: RSI {tp_rsi} 초과 ⚠️ (추세추종 기조는 미사용 권장)\n"
         msg += f"• 추세 이탈: 점수 {sell_score}점 미만 + 60일선 이탈\n"

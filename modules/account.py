@@ -324,18 +324,51 @@ def _fmt_mfe_cell(res, is_overseas=False):
     mfe = res.get('max_profit_rate') or 0.0
     return f"{price_str}\n[dim]({mfe:+.1f}%)[/dim]"
 
-def _fmt_ts_stop(res, is_overseas=False):
-    """샹들리에 TS 청산선. 고정/ATR 손절과 달리 실제 주청산선이라 별도 줄로 표시한다."""
+def _fmt_ts_stop(res, is_overseas=False, buy_price=0):
+    """샹들리에 TS 청산선. 고정/ATR 손절과 달리 실제 주청산선이라 별도 줄로 표시한다.
+
+    발동선(activation)은 breakeven 모드에서 종목 변동성에 따라 20%~90%까지 벌어지므로
+    무장 전후 모두 병기한다 — 고정 %일 때는 전 종목 공통 상수라 생략해도 무방했지만,
+    이제는 그 값이 없으면 화면만 보고 무장 여부를 설명할 수 없다. 무장 전에는 발동
+    '가격'도 함께 보여준다(같은 열의 손절선·청산선이 모두 가격이라 %만으로는 비교 불가).
+    """
+    from modules.auto_trade.engine import ts_activation_dynamic
+
     ts = (res or {}).get('ts')
     if not ts:
         return None
 
-    if not ts.get('armed'):
-        return f"[dim]TS: +{ts['activation']:.0f}% 도달 시[/dim]"
+    def _p(v):
+        return f"${v:,.2f}" if is_overseas else f"{round(v):,}"
 
-    price = ts['stop_price']
-    price_str = f"${price:,.2f}" if is_overseas else f"{round(price):,}"
-    return f"[dim]TS:[/dim][cyan]{price_str}[/][dim](-{ts['callback']:.1f}%)[/dim]"
+    # 표기는 한 줄로 묶는다. 셀이 세 줄이 되면 표 전체가 종목당 3행으로 늘어난다.
+    #  ↑ = 이 가격에 닿으면 무장, ≥ = 무장에 필요한 MFE. 범례는 표 캡션에 한 번만 단다.
+    act = ts.get('activation') or 0
+    dynamic = ts_activation_dynamic()
+
+    if not ts.get('armed'):
+        if not (buy_price and buy_price > 0 and act > 0):
+            return f"[dim]TS: {act:+.1f}% 도달 시[/dim]"
+        arm_price = buy_price * (1 + act / 100)
+        # 발동가만 보여주면 '그래서 어디서 잘리나'가 빠진다. 발동 시점의 청산선까지 같이
+        #  준다 — 고점이 발동가일 때의 콜백으로 환산한다(ATR×배수는 고점에 비례해 콜백을
+        #  좁히므로, 지금 콜백을 그대로 쓰면 청산선이 실제보다 낮게 나온다).
+        cb = ts.get('callback') or 0
+        highest = (res or {}).get('highest_price') or 0
+        if cb > 0 and highest > 0:
+            cb = max(config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+                     cb * highest / arm_price)
+            # 두 가격이 다 들어가야 하므로 %는 정수로 줄인다. 여기서 행동을 정하는 값은
+            #  '얼마에 켜지나'(가격)이고 %는 맥락일 뿐이다.
+            return (f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑{act:.0f}%→[/dim]"
+                    f"{_p(arm_price * (1 - cb / 100))}")
+        return f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑({act:+.1f}%)[/dim]"
+
+    line = f"[dim]TS:[/dim][cyan]{_p(ts['stop_price'])}[/][dim](-{ts['callback']:.1f}%)[/dim]"
+    if dynamic and act > 0:
+        # 무장 후에는 이미 넘어선 문턱이라 정수로 줄여 열 폭을 아낀다(미무장은 .1f 유지).
+        line += f"[dim]≥{act:.0f}%[/dim]"
+    return line
 
 def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
     """손절가 셀 — 손절선과 TS 청산선을 항상 두 줄로 표시한다.
@@ -365,7 +398,7 @@ def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
         stop_price = buy_price * (1 + sl_rate / 100)
         parts.append(f"[dim]{label}:[/dim][blue]{_p(stop_price)}[/][dim]({sl_rate:+.1f}%)[/dim]")
 
-    ts_line = _fmt_ts_stop(res, is_overseas=is_overseas)
+    ts_line = _fmt_ts_stop(res, is_overseas=is_overseas, buy_price=buy_price)
     if ts_line:
         parts.append(ts_line)
 
@@ -385,6 +418,15 @@ def _decorate_name(name, code, marks_ctx):
     mark_str = "".join(marks)
     return f"{name}[dim]{mark_str}[/dim]".strip() if mark_str else name
 
+def _ts_caption():
+    """TS 발동 표기 범례. 발동선이 종목마다 다른 체제에서만 필요하다."""
+    from modules.auto_trade.engine import ts_activation_dynamic
+    if not ts_activation_dynamic():
+        return None
+    return ("[dim]TS 발동: 손익분기 연동(종목 변동성이 결정) · "
+            "↑=TS가 켜지는 가격(매수가 대비 %) · →=그때 생기는 청산선 · ≥=TS가 켜진 MFE[/dim]")
+
+
 def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황", show_auto_status=True):
     """국내 보유 종목 표를 만든다. ([9]-2 잔고와 [9]-5 포지션 분석이 공유)
 
@@ -394,7 +436,8 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
     #  행 사이 흐린 실선으로 구분한다.
     table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
-                  border_style="dim", show_lines=True)
+                  border_style="dim", show_lines=True, caption=_ts_caption(),
+                  caption_justify="left")
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
     table.add_column("상태", justify="center")            # [추가] 보유 분석 결과
@@ -461,7 +504,8 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
     #  행 사이 흐린 실선으로 구분한다.
     table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
-                  border_style="dim", show_lines=True)
+                  border_style="dim", show_lines=True, caption=_ts_caption(),
+                  caption_justify="left")
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
     table.add_column("상태", justify="center")            # [추가] 보유 분석 결과

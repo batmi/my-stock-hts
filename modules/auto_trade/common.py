@@ -107,10 +107,28 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
             # TS
             ts = res.get('ts')
             if ts:
+                # 발동선은 breakeven 모드에서 종목마다 다르므로 무장 전후 모두 병기한다.
+                act = ts.get('activation') or 0
+                dynamic = _pkg().ts_activation_dynamic()
                 if not ts.get('armed'):
-                    ts_str = f"\n   TS: +{ts['activation']:.0f}% 도달 시 "
+                    tag = f"손익분기 +{act:.1f}%" if dynamic else f"+{act:.1f}%"
+                    if buy_price > 0 and act > 0:
+                        arm_price = buy_price * (1 + act / 100)
+                        ts_str = f"\n   TS: {round(arm_price):,} 도달 시 ({tag})"
+                        # 발동가만으로는 '어디서 잘리나'를 알 수 없다. 고점이 발동가일 때의
+                        #  콜백으로 환산해 그때 생길 청산선까지 붙인다.
+                        cb = ts.get('callback') or 0
+                        highest = res.get('highest_price') or 0
+                        if cb > 0 and highest > 0:
+                            cb = max(config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+                                     cb * highest / arm_price)
+                            ts_str += f" → 청산선 {round(arm_price * (1 - cb / 100)):,} (-{cb:.1f}%)"
+                    else:
+                        ts_str = f"\n   TS: {tag} 도달 시 "
                 else:
                     ts_str = f"\n   TS: {round(ts['stop_price']):,} (-{ts['callback']:.1f}%)"
+                    if dynamic and act > 0:
+                        ts_str += f" [발동 +{act:.1f}%]"
 
             # 최고가(MFE)
             highest = res.get('highest_price') or 0

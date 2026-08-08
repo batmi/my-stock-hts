@@ -704,10 +704,10 @@ def test_stop_cell_always_shows_both_stop_and_ts():
     cell = account._fmt_stop_cell(res, 179694)
     assert "ATR:" in cell and "286,632" in cell and "\n" in cell
 
-    # TS 미발동이어도 발동 조건을 남긴다
+    # TS 미발동이어도 발동 조건을 남긴다 — 매수가를 알면 발동 '가격'으로 보여준다
     res["ts"] = {"armed": False, "stop_price": 0, "callback": 5.0, "activation": 10.0}
     cell = account._fmt_stop_cell(res, 179694)
-    assert "ATR:" in cell and "도달 시" in cell
+    assert "ATR:" in cell and "197,663" in cell and "+10.0%" in cell
 
 
 def test_mfe_cell_and_ts_line():
@@ -718,11 +718,52 @@ def test_mfe_cell_and_ts_line():
                                          "callback": 13.7, "activation": 10.0}})
     assert "11,221" in armed and "13.7" in armed
 
+    # 매수가를 모르면 %만, 알면 발동 가격까지 (열 폭 때문에 항상 한 줄로 묶는다)
     pending = account._fmt_ts_stop({"ts": {"armed": False, "stop_price": 0,
                                            "callback": 5.0, "activation": 10.0}})
-    assert "도달 시" in pending
+    assert "도달 시" in pending and "\n" not in pending
+
+    pending = account._fmt_ts_stop({"ts": {"armed": False, "stop_price": 0,
+                                           "callback": 5.0, "activation": 53.5}},
+                                   buy_price=41936)
+    assert "64,372" in pending and "+53.5%" in pending and "\n" not in pending
+
+
+def test_pending_ts_cell_shows_stop_line_that_would_appear():
+    """미무장 행은 '어디서 켜지나'(↑)와 '그때 어디서 잘리나'(→)를 함께 준다.
+
+    발동가 기준 청산선은 매수가보다 낮을 수 없다 — 손익분기 연동의 정의가
+    '되돌림 한 번을 맞아도 본전 이상'이기 때문이다. 이게 깨지면 산식이 틀린 것이다.
+    """
+    buy, highest = 41936.0, 54558.0
+    res = {"highest_price": highest,
+           "ts": {"armed": False, "stop_price": 0, "callback": 26.8, "activation": 53.5}}
+    cell = account._fmt_ts_stop(res, buy_price=buy)
+
+    assert "64,372" in cell and "↑54%" in cell and "→" in cell
+    stop = int(cell.rsplit("→", 1)[1].replace("[/dim]", "").replace(",", ""))
+    assert stop >= buy, f"발동 시 청산선({stop})이 매수가({buy}) 아래다"
+
+    # 최고가·콜백을 모르면 발동 조건만 (있는 정보로만 그린다)
+    plain = account._fmt_ts_stop({"ts": {"armed": False, "stop_price": 0,
+                                         "callback": 0, "activation": 53.5}}, buy_price=buy)
+    assert "64,372" in plain and "→" not in plain
 
     assert account._fmt_ts_stop(None) is None
+
+
+def test_ts_cell_shows_activation_threshold_when_dynamic(monkeypatch):
+    """손익분기 연동에서는 발동선이 종목마다 달라 무장 후에도 병기한다.
+
+    고정 %일 때는 전 종목 공통 상수라 행마다 찍으면 잡음이므로 생략한다.
+    """
+    ts = {"armed": True, "stop_price": 290224.0, "callback": 22.5, "activation": 88.3}
+
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MODE", "breakeven")
+    assert "≥88%" in account._fmt_ts_stop({"ts": ts}, buy_price=179694)
+
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MODE", "fixed")
+    assert "≥" not in account._fmt_ts_stop({"ts": ts}, buy_price=179694)
 
 
 # ------------------------------------------------- [9]-5 포지션 분석

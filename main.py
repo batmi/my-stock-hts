@@ -810,7 +810,8 @@ def show_help():
     stop_loss = config.SELL_STRATEGY["STOP_LOSS_RATE"]
     take_profit = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
     take_profit_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
-    ts_activation = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    from modules.auto_trade.engine import ts_activation_label
+    ts_activation = ts_activation_label()
     ts_callback = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
@@ -854,7 +855,7 @@ def show_help():
     if _help_show("DEFENSIVE_HALF_SELL_USE", use_def_half):
         score_table.add_row(f"매도 - 방어적 반매도 ({def_half_status})", f"주가 < SAR & 주가 < 5일선 동시 이탈 시", "[blue]반매도[/]", "하락 반전 신호 감지 시 50% 덜어내기 (리스크 방어)")
 
-    score_table.add_row("매도 - 트레일링", f"수익 {ts_activation}% 도달 후 고점 대비 하락 시", "[blue]매도[/]", "수익 보전 (ATR 사용 시 동적 변동폭 적용)")
+    score_table.add_row("매도 - 트레일링", f"수익 {ts_activation} 도달 후 고점 대비 하락 시", "[blue]매도[/]", "수익 보전 (ATR 사용 시 동적 변동폭 적용)")
     overheat_status = "[green]ON[/green]" if take_profit_rsi > 0 else "[red]OFF[/red]"
     overheat_cond = f"RSI > {take_profit_rsi}" if take_profit_rsi > 0 else "미사용 (0 = OFF, 강추세는 과매수 지속 허용)"
     if _help_show("TAKE_PROFIT_RSI", take_profit_rsi > 0):

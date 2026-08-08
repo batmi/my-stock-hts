@@ -17,10 +17,11 @@ def test_view_system_config(mock_ask):
 def test_modify_sell_strategy_ui(mock_ask):
     """매도 전략 수정 UI 테스트
 
-    반추세성 청산 설정(고정 익절 등)은 메뉴에서 숨겨져 1번 항목이 TS 발동 수익률이다.
+    반추세성 청산 설정(고정 익절 등)은 메뉴에서 숨겨져 1번이 TS 발동 방식,
+    2번이 TS 발동 수익률이다.
     """
-    # 1번 선택 -> 값 입력 -> 종료
-    mock_ask.side_effect = ["1", "20.0", "q"]
+    # 2번 선택 -> 값 입력 -> 종료
+    mock_ask.side_effect = ["2", "20.0", "q"]
 
     original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
     try:
@@ -36,7 +37,7 @@ def test_modify_sell_strategy_ui_rejects_out_of_range(mock_ask):
 
     TS 발동률 50%는 트레일링 스탑을 사실상 비활성화한다 — 주청산 수단이 사라지는 값이다.
     """
-    mock_ask.side_effect = ["1", "50.0", "q", "q"]
+    mock_ask.side_effect = ["2", "50.0", "q", "q"]
 
     original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
     try:

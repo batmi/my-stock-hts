@@ -79,6 +79,7 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
     ts_act = c.get("ts_act", 10.0)
     ts_callback = c.get("ts_callback", 5.0)
     ts_atr_mult = c.get("ts_atr_mult", 3.0)
+    ts_breakeven = c.get("ts_breakeven", False)
     sell_score_limit = c.get("sell_score_limit", 4.0)
 
     loss_rate = (price - avg) / avg * 100
@@ -94,7 +95,7 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             roll_high_5 >= roll_high_10
         if not grace:
             sell, reason = True, "시간청산"
-    elif high > 0 and max_profit >= ts_act:
+    elif high > 0 and (ts_breakeven or max_profit >= ts_act):
         drop = (high - price) / high * 100
         callback = ts_callback
         if use_atr and atr and atr > 0:
@@ -111,7 +112,16 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
                                max(ts_callback, giveback_callback_cap(max_profit, giveback_ratio)))
             else:
                 callback = max(ts_callback, dynamic)
-        if drop >= callback:
+        # [손익분기 연동] 되돌림 한 번(3.5 ATR)을 맞고도 본전 이상인 지점부터 무장한다.
+        #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
+        #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
+        if ts_breakeven:
+            from modules.auto_trade.engine import breakeven_activation_rate
+            armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
+                                                            ts_atr_mult, use_atr)
+        else:
+            armed = max_profit >= ts_act
+        if armed and drop >= callback:
             sell, reason = True, "트레일링스탑"
 
     if not sell:
@@ -162,7 +172,8 @@ def allocate_amount(equity, cash, invest_ratio, sl_rate, atr, price):
 def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
-                  risk_scale_by_date=None, oversize_limit=None):
+                  risk_scale_by_date=None, oversize_limit=None,
+                  ts_act_fn=None, pyr_trigger_fn=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -180,6 +191,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             않음), '기초 비중에 적용하면 실제로 방어가 되는가'를 검증하기 위한 실험용 경로다.
             콜러블 fn(day, equity) -> 배수 도 받는다 — 계좌 드로다운 축처럼 시뮬레이션 자신의
             자산곡선에 의존하는 축은 사전 계산이 불가능하기 때문이다(tools/audit_drawdown_axis.py).
+        ts_act_fn / pyr_trigger_fn: fn(atr, price) -> 발동 기준(%). **실험용 경로**로,
+            TS 감시 시작·피라미딩 증액의 고정 임계(+10%)를 종목 변동성에 맞춰 동적으로
+            바꿨을 때의 효과를 재기 위한 훅이다(tools/audit_trigger_dials.py).
+            None이면 config의 고정값을 그대로 쓴다(기본 동작 불변).
 
     하루 처리 순서는 실매매와 같다: 매도 → 피라미딩 → 신규 매수(점수 높은 순).
     """
@@ -208,6 +223,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     default_sl = sell_cfg["STOP_LOSS_RATE"]
     sell_score_limit = sell_cfg["SELL_SCORE"]
     ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    ts_breakeven = str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
     ts_callback = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.0)
     time_stop_days = sell_cfg.get("TIME_STOP_DAYS", 20)
@@ -236,6 +252,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     risk_per_trade_cap = getattr(config, "SYSTEM_RISK_PER_TRADE", 4.0) or float("inf")
     # [소액 시드 진단] 배분액이 1주 값에 못 미쳐 버려진 기회. 시드가 작을수록 급증한다.
     skipped_qty0, pyramid_blocked_qty0 = 0, 0
+    # [진단] TS 발동 기준이 실제로 구속한 일수 — 콜백은 충족했는데 MFE가 기준 미달이라
+    #  청산이 보류된 날. 이 값이 0이면 발동 기준을 올려도 내려도 결과가 같다는 뜻이다.
+    ts_gated_days = 0
     # 배분액을 넘겨(1주 강제) 집행한 매수 — 사이징 상한이 깨진 횟수.
     oversized_buys = 0
 
@@ -285,6 +304,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             sl_rate, atr_applied, is_bep = _effective_sl(pos)
             holding_days = (parsed[day] - pos["buy_dt"]).days
 
+            ts_act_eff = ts_act
+            if ts_act_fn is not None:
+                ts_act_eff = float(ts_act_fn(row.get("ATR", 0), pos["avg"]))
+            elif ts_breakeven:
+                from modules.auto_trade.engine import breakeven_activation_rate
+                ts_act_eff = breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
+                                                       ts_callback, ts_atr_mult, use_atr)
+
             sell, reason = decide_sell(
                 price=price, high=pos["high"], avg=pos["avg"], sl_rate=sl_rate,
                 atr_applied=atr_applied, is_bep=is_bep, holding_days=holding_days,
@@ -292,9 +319,19 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 sell_check=sell_check, ema60=row.get("EMA60"), atr=row.get("ATR", 0),
                 roll_high_5=row.get("roll_high_5", 0), roll_high_10=row.get("roll_high_10", 0),
                 cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
-                     "time_stop_days": time_stop_days, "ts_act": ts_act,
+                     "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
                      "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
+                     "ts_breakeven": ts_breakeven and ts_act_fn is None,
                      "sell_score_limit": sell_score_limit})
+
+            # [진단] 발동 기준만 없었다면 TS로 팔렸을 날 (기준이 실제로 구속하는가)
+            if not sell and pos["high"] > 0 and max_profit < ts_act_eff:
+                _cb = ts_callback
+                _atr = row.get("ATR", 0) or 0
+                if use_atr and _atr > 0:
+                    _cb = max(ts_callback, (_atr * ts_atr_mult / pos["high"]) * 100)
+                if (pos["high"] - price) / pos["high"] * 100 >= _cb:
+                    ts_gated_days += 1
 
             if sell:
                 sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
@@ -338,7 +375,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 _raw, _chk, _can, state, _reason = status[code][day]
                 price = row["close"]
-                if (price - pos["avg"]) / pos["avg"] * 100 < pyr_trigger or state not in ("매수", "강매수"):
+                trigger = pyr_trigger
+                if pyr_trigger_fn is not None:
+                    trigger = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
+                if (price - pos["avg"]) / pos["avg"] * 100 < trigger or state not in ("매수", "강매수"):
                     continue
 
                 add_qty = int(pos["qty"] * pyr_ratio)
@@ -457,6 +497,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "full_slot_days": len(full_slot_cash),
         "skipped_qty0": skipped_qty0,                    # 1주도 못 사서 넘긴 진입 기회
         "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
+        "ts_gated_days": ts_gated_days,                  # TS 발동 기준이 청산을 막은 일수
         "oversized_buys": oversized_buys,                # 배분액을 넘겨 집행한 매수(1주 강제)
         "max_pos_weight": max_pos_weight,                # 한 종목의 최대 계좌 비중(%, 피라미딩 포함)
         "max_buy_weight": max_buy_weight,                # 진입 순간의 최대 비중(%)

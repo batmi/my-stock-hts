@@ -223,16 +223,88 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
         else:
             actual_callback = max(ts_callback, dynamic_callback)
 
-    armed = max_profit_rate >= ts_activation
+    # [발동] breakeven 모드 = '한 번의 정상 되돌림(3.5 ATR)을 맞아도 본전 이상'인 지점부터 무장.
+    #  손실 구간에서 트레일링으로 털리는 것을 막고, 무장 시점을 종목 변동성이 자동으로 정한다
+    #  (고변동주는 늦게, 저변동주는 일찍). 고정 %는 41종목 중 40개에서 청산선이 아직 매수가
+    #  아래인 상태로 무장했다(config.TRAILING_STOP_ACTIVATION_RATE 주석의 10년 실측 참조).
+    #
+    #  [중요] 되돌림 폭은 '고점'이 아니라 '매수가' 기준으로 환산한다. 고점 기준으로 잡으면
+    #   고점이 오를수록 문턱이 따라 낮아져(자기참조) 사실상 현행과 같아진다 — 실측에서
+    #   구간5 수익승이 23/30 → 14/30으로 무너졌다. 매수가 기준이라야 문턱이 진입 시점에
+    #   고정되고, 검증된 결과가 재현된다.
+    stop_price = highest_price * (1 - actual_callback / 100)
+    if str(ss.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+        ts_activation = breakeven_activation_rate(atr_val, buy_price, ts_callback, ts_atr_mult,
+                                                  use_atr_stop)
+        armed = max_profit_rate >= ts_activation
+    else:
+        armed = max_profit_rate >= ts_activation
     return {
         'armed': armed,
         'triggered': bool(armed and drop_rate >= actual_callback),
-        'stop_price': highest_price * (1 - actual_callback / 100),
+        'stop_price': stop_price,
         'callback': actual_callback,
         'drop_rate': drop_rate,
         'max_profit_rate': max_profit_rate,
         'activation': ts_activation,
     }
+
+
+def breakeven_activation_rate(atr, buy_price, ts_callback=None, ts_atr_mult=None, use_atr=True):
+    """손익분기 연동 TS 발동선(%)을 구한다. 매수가 기준의 되돌림 폭으로 환산한다.
+
+    되돌림 폭 cb(매수가 대비 %)를 한 번 맞고도 본전이 되려면 MFE가 cb/(1-cb) 이상이어야 한다
+    (고점×(1-cb) ≥ 매수가). cb는 실효 콜백과 같은 재료(max(하한, ATR×배수))를 쓰되 **매수가**로
+    정규화한다 — 고점으로 정규화하면 고점이 오를수록 문턱이 낮아져 무장이 사실상 즉시 이뤄진다.
+
+    ATR을 못 구하면 콜백 하한만으로 계산한다(그래도 고정 %보다 일관된다).
+    산출 불가하면 config의 고정 발동률로 되돌린다.
+    """
+    ss = config.SELL_STRATEGY
+    if ts_callback is None:
+        ts_callback = ss.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+    if ts_atr_mult is None:
+        ts_atr_mult = ss.get("TRAILING_ATR_MULTIPLIER", 3.5)
+    try:
+        buy_price = float(buy_price or 0)
+        atr = float(atr or 0)
+    except (TypeError, ValueError):
+        return ss.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    if buy_price <= 0:
+        return ss.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+
+    cb = float(ts_callback)
+    if use_atr and atr > 0:
+        cb = max(cb, atr * ts_atr_mult / buy_price * 100)
+    cb = min(cb, 60.0)          # 초고변동 종목에서 문턱이 발산하지 않게 상한을 둔다
+    return cb / (100 - cb) * 100
+
+
+def ts_activation_label(ts_activation=None):
+    """TS 발동 기준을 화면·로그용 문구로. 표시부가 설정값을 각자 해석하지 않게 모은다.
+
+    breakeven 모드에서는 발동 시점이 종목 변동성에 따라 달라져 하나의 %로 적을 수 없다
+    (콜백이 넓을수록 늦게 무장). 고정 수치를 그대로 찍으면 실제 동작과 어긋나므로
+    '손익분기'로 표기한다. compute_trailing_stop이 돌려주는 activation은 그 종목의
+    환산값이므로, 개별 포지션 화면은 그 값을 넘겨 구체적인 %를 보여줄 수 있다.
+    """
+    ss = config.SELL_STRATEGY
+    if str(ss.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+        if ts_activation is None:
+            return "손익분기"
+        return f"손익분기(≈+{ts_activation:.1f}%)"
+    rate = ts_activation if ts_activation is not None else ss.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+    return f"+{rate}%"
+
+
+def ts_activation_dynamic():
+    """발동선이 종목마다 달라지는 체제인가. (화면이 개별 %를 병기할지 판단)
+
+    고정 모드에서는 전 종목 같은 상수라 행마다 찍으면 잡음일 뿐이지만, breakeven
+    모드에서는 종목 변동성에 따라 20%~90%까지 벌어져 그 값이 없으면 화면만 보고
+    무장 여부를 설명할 수 없다. 표시부가 모드 문자열을 각자 해석하지 않게 모은다.
+    """
+    return str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
 
 
 def atr_stop_rate(atr, price, atr_mult=None, max_cap=None):
@@ -1835,7 +1907,18 @@ class RiskManager:
                     bep_threshold = abs(sl_rate) if use_atr_stop else bep_rate_cfg
                     if bep_threshold > 0 and max_profit >= bep_threshold:
                         stop_price = max(stop_price, buy_price)
-                    if ts_act > 0 and ts_cb > 0 and max_profit >= ts_act:
+                    # 발동 기준은 설정 모드를 따른다(고정 % / 손익분기 연동).
+                    #  여기엔 ATR 시계열이 없지만 sl_rate가 매수 시점 ATR 손절률이므로
+                    #  ATR/매수가 = |sl_rate| / ATR_STOP_MULTIPLIER 로 역산할 수 있다.
+                    #  하한(콜백)만으로 근사하면 실제보다 훨씬 일찍 무장한 것으로 보여
+                    #  손절선을 과대 상향 → 오픈 리스크를 과소평가한다(반대 방향 위험).
+                    act = ts_act
+                    if str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+                        atr_mult = sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0) or 2.0
+                        est_atr = abs(sl_rate) / 100.0 * buy_price / atr_mult if use_atr_stop else 0
+                        act = breakeven_activation_rate(est_atr, buy_price, ts_cb,
+                                                        use_atr=bool(use_atr_stop))
+                    if act > 0 and ts_cb > 0 and max_profit >= act:
                         stop_price = max(stop_price, highest * (1 - ts_cb / 100.0))
 
                 total_risk += qty * max(0.0, cur - stop_price)

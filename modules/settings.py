@@ -7,6 +7,13 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 import config
+
+
+def _ts_act_label():
+    """TS 발동 기준 표기 — engine.ts_activation_label의 얇은 래퍼(순환 import 회피용 지연 로드)."""
+    from modules.auto_trade.engine import ts_activation_label
+    return ts_activation_label()
+
 import utils # [추가]
 import context # [추가]
 
@@ -225,7 +232,8 @@ def view_system_config(group=None):
 
         subheader("1-3. 청산 — 손절·트레일링·시간")
         # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
-        row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
+        row("TS 발동 방식", "손익분기 연동(breakeven) / 고정 수익률(fixed)", "SELL_STRATEGY['TS_ACTIVATION_MODE']", f"{sell.get('TS_ACTIVATION_MODE', 'breakeven')}", key="TS_ACTIVATION_MODE")
+        row("TS 발동 수익률", "트레일링 스탑 감시 시작점 (fixed 방식일 때만)", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
         # [추세추종 보호] TS 하락 감지율은 실효 콜백의 '하한'일 뿐이고 동적 콜백(ATR×배수)이
         #  사실상 항상 이를 넘어서 조정해도 결과가 바뀌지 않는다(실측: 5→2%에서 거래 486건 불변).
         #  편집 가능한 것처럼 보이면 오해를 부르므로 실제 규칙을 그대로 적어 읽기 전용으로 둔다.
@@ -752,6 +760,7 @@ _RANGE_RULES = {
     # --- 청산 ---
     #  TS 발동률 상한 30: 실측상 999로 올리면 트레일링 스탑이 사실상 꺼져 주청산 수단이 사라진다
     #   (수익은 표본에 따라 올라 보이지만 MDD가 -22.51→-26.29%로 악화).
+    #  ※ TS_ACTIVATION_MODE가 breakeven이면 이 값은 쓰이지 않는다(발동선을 ATR로 산출).
     "TRAILING_STOP_ACTIVATION_RATE": (1.0, 30.0, "30% 초과는 트레일링 스탑을 사실상 비활성화합니다"),
     # --- 리스크 ---
     #  SYSTEM_RISK_PER_TRADE 상한 10: drawdown-lever 실측에서 MDD 통제의 핵심 레버였다
@@ -994,7 +1003,9 @@ def _sell_strategy_items():
          "get": lambda: config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"HALF_TAKE_PROFIT_USE": v})},
         {"desc": "과열 매도 RSI", "help": "RSI 과열 시 선제 매도", "name": "TAKE_PROFIT_RSI", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY["TAKE_PROFIT_RSI"], "set": lambda v: config.SELL_STRATEGY.update({"TAKE_PROFIT_RSI": v})},
-        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
+        {"desc": "TS 발동 방식", "help": "breakeven=손익분기 연동(종목 변동성이 시점 결정) / fixed=아래 고정 수익률", "name": "TS_ACTIVATION_MODE", "type": "str", "choices": ["breakeven", "fixed"], "section": "1-3. 청산 — 손절·트레일링·시간",
+         "get": lambda: config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven"), "set": lambda v: config.SELL_STRATEGY.update({"TS_ACTIVATION_MODE": v})},
+        {"desc": "TS 발동 수익률(%)", "help": "트레일링 스탑 감시 시작점 (TS 발동 방식이 fixed일 때만 적용)", "name": "TRAILING_STOP_ACTIVATION_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_ACTIVATION_RATE": v})},
         {"desc": "TS 하락 감지율(%)", "help": "최고가 대비 하락 시 매도", "name": "TRAILING_STOP_CALLBACK_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0), "set": lambda v: config.SELL_STRATEGY.update({"TRAILING_STOP_CALLBACK_RATE": v})},
@@ -1626,7 +1637,7 @@ def apply_strategy_preset(preset_type="bull", interactive=True):
         ("슈퍼 모멘텀 (돌파매수)", f"{'ON' if config.ANALYSIS_THRESHOLDS['SUPER_MOMENTUM_USE'] else 'OFF'}"),
         ("매도 허들 (추세이탈)", f"점수 {config.SELL_STRATEGY.get('SELL_SCORE', 4.0)} 미만+60일선 이탈"),
         ("손절", f"{config.SELL_STRATEGY['STOP_LOSS_RATE']}% (ATR x{config.SELL_STRATEGY.get('ATR_STOP_MULTIPLIER', 2.0)})"),
-        ("트레일링 스탑", f"+{config.SELL_STRATEGY.get('TRAILING_STOP_ACTIVATION_RATE', 10.0)}% 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 5.0)}%"),
+        ("트레일링 스탑", f"{_ts_act_label()} 발동 후 -{config.SELL_STRATEGY.get('TRAILING_STOP_CALLBACK_RATE', 5.0)}%"),
         ("본전 청산 (방어)", f"수익 +{config.SELL_STRATEGY.get('BREAK_EVEN_PROFIT_RATE', 5.0)}% 도달 시 손절선 +{config.SELL_STRATEGY.get('BREAK_EVEN_STOP_RATE', 0.5)}%로 상향"),
         ("시간 청산", f"{config.SELL_STRATEGY['TIME_STOP_DAYS']}일 경과 시 강제 매도"),
         ("안전 장치 (비상정지/필터)", f"일일손실 -{getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)}% 제한 / 시장필터 {'ON ('+str(getattr(config, 'MARKET_FILTER_MA', 80))+'일선 ±'+f"{getattr(config, 'MARKET_FILTER_BAND', 1.0):g}"+'%)' if getattr(config, 'USE_MARKET_FILTER', True) else 'OFF (무조건 진입)'}"),
@@ -1874,6 +1885,7 @@ def manage_custom_settings():
             "TAKE_PROFIT_RSI": "과열 매도 RSI",
             "SUPER_TAKE_PROFIT_RSI": "슈퍼 모멘텀 과열 매도 RSI",
             "TRAILING_STOP_ACTIVATION_RATE": "TS 발동 수익률",
+            "TS_ACTIVATION_MODE": "TS 발동 방식",
             "TRAILING_STOP_CALLBACK_RATE": "TS 하락 감지율",
             "TREND": "추세 팩터",
             "MOMENTUM": "모멘텀 팩터",
@@ -2000,6 +2012,7 @@ def manage_custom_settings():
             "HALF_TAKE_PROFIT_USE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "TAKE_PROFIT_RSI": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "TRAILING_STOP_ACTIVATION_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
+        "TS_ACTIVATION_MODE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "TRAILING_STOP_CALLBACK_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "STOP_LOSS_RATE": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),
             "USE_ATR_STOP": (_CAT1, "1-3. 청산 — 손절·트레일링·시간"),

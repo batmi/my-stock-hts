@@ -648,7 +648,7 @@ class AutoTrader:
             buy_vol = config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"]
             sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
             tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
-            ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+            ts_act = _pkg().ts_activation_label()
             ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
             sell_score = config.SELL_STRATEGY["SELL_SCORE"]
             tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
@@ -688,7 +688,7 @@ class AutoTrader:
             
             msg += f"\n• 익절: {tp_str}"
             msg += f"\n• 손절: {sl_str}"
-            msg += f"\n• 트레일링: +{ts_act}% 도달 후 -{ts_call}%"
+            msg += f"\n• 트레일링: {ts_act} 도달 후 -{ts_call}%"
             if use_time_stop:
                 msg += f"\n• 시간청산: {time_stop_days}일 경과"
             msg += f"\n• 비중: 종목당 {invest_ratio_str}"
@@ -2190,7 +2190,7 @@ class AutoTrader:
         tp_rsi = config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         tp = config.SELL_STRATEGY["TAKE_PROFIT_RATE"]
         sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-        ts_act = config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
+        ts_act = _pkg().ts_activation_label()
         ts_call = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         
         use_half_tp = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
@@ -2222,7 +2222,7 @@ class AutoTrader:
         time_stop_status = "[green]ON[/]" if use_time_stop else "[red]OFF[/]"
         table.add_row("", f"시간청산 ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만) {time_stop_status}")
         
-        table.add_row("", f"트레일링스탑 (+{ts_act}%/-{ts_call}%)")
+        table.add_row("", f"트레일링스탑 ({ts_act}/-{ts_call}%)")
 
         # 투자 설정
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
