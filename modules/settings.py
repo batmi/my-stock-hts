@@ -232,8 +232,30 @@ def view_system_config(group=None):
 
         subheader("1-3. 청산 — 손절·트레일링·시간")
         # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
-        row("TS 발동 방식", "손익분기 연동(breakeven) / 고정 수익률(fixed)", "SELL_STRATEGY['TS_ACTIVATION_MODE']", f"{sell.get('TS_ACTIVATION_MODE', 'breakeven')}", key="TS_ACTIVATION_MODE")
-        row("TS 발동 수익률", "트레일링 스탑 감시 시작점 (fixed 방식일 때만)", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
+        # [추세추종 보호] TS 발동 방식은 잠금 (ANTI_TREND_HIDDEN_KEYS 주석 참조).
+        #  무엇으로 도는지는 계속 보여준다 — 발동선이 종목마다 달라 값 하나로 적을 수 없으므로
+        #  산식을 그대로 띄운다.
+        _ts_breakeven = str(sell.get('TS_ACTIVATION_MODE', 'breakeven')).lower() == "breakeven"
+        if _ts_breakeven:
+            _ts_rule = (f"발동선 = cb/(1-cb), cb = max({sell.get('TRAILING_STOP_CALLBACK_RATE')}%, "
+                        f"ATR×{sell.get('TRAILING_ATR_MULTIPLIER', 3.5)}/매수가)\n"
+                        f"    종목 변동성이 시점을 정한다 (통상 +5~+90%, 중앙값 약 +19%)")
+        else:
+            _ts_rule = (f"발동선 = 고정 {sell.get('TRAILING_STOP_ACTIVATION_RATE')}% "
+                        f"(전 종목 공통)")
+        table.add_row(
+            f"TS 발동 방식\n[dim]{_ts_rule}[/dim]",
+            "[dim](추세추종 검증값 — 조정 잠금)[/dim]",
+            "손익분기 연동" if _ts_breakeven else "고정 수익률")
+        # TS 발동 수익률: breakeven에서는 ATR 산출 실패·매수가 이상 시의 폴백으로만 쓰인다.
+        #  실제로 지배하지 않는 값을 편집 가능한 것처럼 띄우면 STOP_LOSS_RATE와 같은 오해를 부른다.
+        if _ts_breakeven:
+            table.add_row(
+                f"TS 발동 수익률\n[dim]위 산식이 지배 — ATR 산출 실패 시의 폴백으로만 사용[/dim]",
+                "[dim](추세추종 검증값 — 조정 잠금)[/dim]",
+                f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%")
+        else:
+            row("TS 발동 수익률", "트레일링 스탑 감시 시작점", "SELL_STRATEGY['TRAILING_STOP_ACTIVATION_RATE']", f"{sell.get('TRAILING_STOP_ACTIVATION_RATE')}%", key="TRAILING_STOP_ACTIVATION_RATE")
         # [추세추종 보호] TS 하락 감지율은 실효 콜백의 '하한'일 뿐이고 동적 콜백(ATR×배수)이
         #  사실상 항상 이를 넘어서 조정해도 결과가 바뀌지 않는다(실측: 5→2%에서 거래 486건 불변).
         #  편집 가능한 것처럼 보이면 오해를 부르므로 실제 규칙을 그대로 적어 읽기 전용으로 둔다.
@@ -637,6 +659,19 @@ def _edit_section(title, items_source, prefix):
 #
 #  단, 기능 자체를 끄는 킬 스위치 MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD']는 노출한다 —
 #  운영 중 국면 판정이 이상하게 동작할 때 코드 수정 없이 중단할 수단은 남겨야 한다.
+def anti_trend_hidden_keys():
+    """봉인 키 집합 — 모드에 따라 달라지는 항목까지 반영한다.
+
+    TRAILING_STOP_ACTIVATION_RATE는 breakeven에서는 폴백 값일 뿐이라 편집 대상이 아니지만,
+    fixed로 되돌린 경우에는 이 값이 실제로 발동선을 지배하므로 다시 편집 가능해야 한다.
+    (TS_ACTIVATION_MODE 자체는 잠겨 있어 메뉴로는 fixed로 갈 수 없다 — json 직접 편집 전용)
+    """
+    keys = set(ANTI_TREND_HIDDEN_KEYS)
+    if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+        keys.add("TRAILING_STOP_ACTIVATION_RATE")
+    return keys
+
+
 BACKTESTED_HIDDEN_KEYS = {
     # 2-2. 적응형 임계값 — 국면별 점수 보정 및 판정 파라미터
     "BULL_SCORE_ADJ", "PENDING_UP_SCORE_ADJ", "PENDING_DOWN_SCORE_ADJ",
@@ -699,6 +734,16 @@ ANTI_TREND_HIDDEN_KEYS = {
     #   기본 OFF로 전환하고, 다시 켜는 다이얼 자체를 숨긴다.
     "USE_RS_FILTER",
     "RS_FILTER_LOOKBACK",
+    #  TS_ACTIVATION_MODE: 트레일링 스탑의 무장 시점을 정하는 스위치. 10년(2450거래일, 41종목)을
+    #   2년씩 5구간·2표본으로 잰 결과 고정값은 어느 값도 일관되지 않았다 — 20%·40%는 구간3·4에서
+    #   반복 열위이고, 40%는 약세 구간에서 TS 이익비중이 0%가 되어 주청산 설계 자체가 무너진다.
+    #   손익분기 연동만 모든 구간에서 지지 않았다(최저 55%). fixed로 되돌리면 청산선이 아직 매수가
+    #   아래인 상태로 무장해(41종목 중 40개) 손실 구간에서 트레일링에 털린다. 되돌릴 이유가 없는
+    #   방향성 스위치라 잠근다. 상세는 config.SELL_STRATEGY의 TS_ACTIVATION_MODE 주석.
+    #  TRAILING_STOP_ACTIVATION_RATE: 위를 잠근 뒤에는 ATR 산출 실패·매수가 이상 시의 폴백으로만
+    #   쓰인다. STOP_LOSS_RATE와 같은 이유로, 실제로 지배하지 않는 값을 편집 목록에 두지 않는다.
+    #   (fixed로 되돌린 경우에만 편집 목록에 다시 나타난다 — 그때는 이 값이 실제로 지배한다)
+    "TS_ACTIVATION_MODE",
     # --- 2026-07-26 설정 감사: 편집 가능 71개를 30종목×3년으로 다이얼별 실측한 결과 ---
     #  기준값: 평균수익 +21.02% / MDD -22.51% / PF 1.74 / 거래 486건 / >50% 대박 12건 / 평균이익 +19.85%
     #
@@ -984,7 +1029,7 @@ def _entry_strategy_items():
         _toss_hidden = {"BUY_VOL_STRENGTH", "AUTO_ADJUST_ASK_BID_RATIO", "MR_VOL_STRENGTH"}
         items = [it for it in items if it["name"] not in _toss_hidden]
     # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
-    items = [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
+    items = [it for it in items if it["name"] not in anti_trend_hidden_keys()]
     return items
 
 def modify_analysis_thresholds():
@@ -1033,7 +1078,7 @@ def _sell_strategy_items():
          "get": lambda: config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False), "set": lambda v: config.SELL_STRATEGY.update({"DEFENSIVE_HALF_SELL_USE": v})},
     ]
     # [추세추종 보호] 반추세성 청산 설정은 편집 목록에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
-    return [it for it in items if it["name"] not in ANTI_TREND_HIDDEN_KEYS]
+    return [it for it in items if it["name"] not in anti_trend_hidden_keys()]
 
 def modify_sell_strategy():
     return _edit_config_table("매도/청산 전략 설정 (SELL_STRATEGY)", _sell_strategy_items)
@@ -1366,7 +1411,7 @@ def _risk_portfolio_items():
     # [추세추종 보호] 변동성 타겟팅(자본대비 변동성 한도)도 동일하게 제외.
     return [it for it in items
             if it["name"] not in BACKTESTED_HIDDEN_KEYS
-            and it["name"] not in ANTI_TREND_HIDDEN_KEYS]
+            and it["name"] not in anti_trend_hidden_keys()]
 
 def modify_risk_portfolio_settings():
     return _edit_config_table("리스크 및 자산 배분 설정 (Risk & Portfolio)", _risk_portfolio_items)
@@ -1738,7 +1783,7 @@ def _edit_single_preset(preset_type):
         # [추세추종 보호] 커스텀 프리셋 경로로도 반추세성 청산 설정이 켜지지 않도록 동일하게 숨김
         # [백테스트 보호] 국면 판정·리스크 스케일링 파라미터도 프리셋 경로로 우회 변경되지 않도록 제외
         items = [it for it in items
-                 if it["name"] not in ANTI_TREND_HIDDEN_KEYS
+                 if it["name"] not in anti_trend_hidden_keys()
                  and it["name"] not in BACKTESTED_HIDDEN_KEYS]
 
         acted = _edit_config_table(title, items, check_preset=False)

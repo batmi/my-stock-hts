@@ -27,6 +27,7 @@ NEWLY_SEALED = [
     "STOP_LOSS_RATE",               # ATR 잠금 후엔 폴백 전용 (부호 오입력 통로)
     "TRAILING_STOP_CALLBACK_RATE",  # 죽은 다이얼 — 5→2%로 낮춰도 거래 486건 불변
     "SUPER_MOMENTUM_USE",           # BUY_RSI_MAX와 조합 시 매매 0건
+    "TS_ACTIVATION_MODE",           # fixed로 되돌리면 41종목 중 40개가 매수가 아래에서 무장
 ]
 
 
@@ -52,6 +53,22 @@ def test_sealed_values_remain_at_verified_defaults():
     assert config.SELL_STRATEGY["ATR_STOP_MULTIPLIER"] == 2.0
     assert config.SELL_STRATEGY["MAX_ATR_STOP_LOSS_RATE"] == -15.0
     assert config.ANALYSIS_THRESHOLDS["SUPER_MOMENTUM_USE"] is True
+    assert config.SELL_STRATEGY["TS_ACTIVATION_MODE"] == "breakeven"
+
+
+def test_ts_activation_rate_editable_only_when_it_governs(monkeypatch):
+    """TS 발동 수익률은 fixed일 때만 편집 목록에 있다.
+
+    breakeven에서는 ATR 산출 실패 시의 폴백일 뿐인데 편집 가능하게 두면 화면의 값과
+    실제 발동선이 어긋난다(STOP_LOSS_RATE가 같은 이유로 봉인됐다).
+    """
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MODE", "breakeven")
+    assert "TRAILING_STOP_ACTIVATION_RATE" in S.anti_trend_hidden_keys()
+    assert "TRAILING_STOP_ACTIVATION_RATE" not in _editable()
+
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MODE", "fixed")
+    assert "TRAILING_STOP_ACTIVATION_RATE" not in S.anti_trend_hidden_keys()
+    assert "TRAILING_STOP_ACTIVATION_RATE" in _editable()
 
 
 # ==========================================================

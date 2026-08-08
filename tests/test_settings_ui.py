@@ -17,34 +17,28 @@ def test_view_system_config(mock_ask):
 def test_modify_sell_strategy_ui(mock_ask):
     """매도 전략 수정 UI 테스트
 
-    반추세성 청산 설정(고정 익절 등)은 메뉴에서 숨겨져 1번이 TS 발동 방식,
-    2번이 TS 발동 수익률이다.
+    청산 체계는 대부분 봉인돼 있어 이 메뉴에 남는 편집 항목은 시간 청산 사용뿐이다
+    (TS 발동 방식은 잠금, TS 발동 수익률은 breakeven에서 폴백 전용이라 함께 숨김).
     """
-    # 2번 선택 -> 값 입력 -> 종료
-    mock_ask.side_effect = ["2", "20.0", "q"]
+    # 1번 선택 -> 값 입력 -> 종료 ('n'은 '현재 유지'라 토글되지 않는다)
+    mock_ask.side_effect = ["1", "false", "q"]
 
-    original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
+    original = config.SELL_STRATEGY["TIME_STOP_USE"]
     try:
         settings.modify_sell_strategy()
-        assert config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] == 20.0
+        assert config.SELL_STRATEGY["TIME_STOP_USE"] is False
     finally:
-        config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = original
+        config.SELL_STRATEGY["TIME_STOP_USE"] = original
 
 
-@patch('rich.prompt.Prompt.ask')
-def test_modify_sell_strategy_ui_rejects_out_of_range(mock_ask):
-    """범위를 벗어난 입력은 저장되지 않아야 한다 (_RANGE_RULES).
+def test_ts_activation_rate_range_rule_still_guards():
+    """TS 발동률 50%는 트레일링 스탑을 사실상 비활성화한다 — 주청산 수단이 사라진다.
 
-    TS 발동률 50%는 트레일링 스탑을 사실상 비활성화한다 — 주청산 수단이 사라지는 값이다.
+    breakeven에서 이 항목은 메뉴에서 숨겨졌지만, fixed로 되돌리면 다시 편집 대상이
+    되므로 범위 규칙 자체는 살아 있어야 한다.
     """
-    mock_ask.side_effect = ["2", "50.0", "q", "q"]
-
-    original = config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"]
-    try:
-        settings.modify_sell_strategy()
-        assert config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] == original
-    finally:
-        config.SELL_STRATEGY["TRAILING_STOP_ACTIVATION_RATE"] = original
+    assert settings._range_error("TRAILING_STOP_ACTIVATION_RATE", 50.0)
+    assert settings._range_error("TRAILING_STOP_ACTIVATION_RATE", 20.0) is None
 
 
 def test_anti_trend_keys_hidden_from_menus():

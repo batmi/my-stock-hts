@@ -446,8 +446,9 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     table.add_column("현재가", justify="right")
     table.add_column("매입금액", justify="right")
     table.add_column("평가금액", justify="right")
-    table.add_column("평가손익", justify="right")
-    table.add_column("수익률", justify="right")
+    # 평가손익과 수익률은 한 칸에 두 줄로 묶는다. 어차피 행이 2줄이라 세로 공간은 공짜인
+    #  반면, 열을 하나 줄이면 그만큼이 손절가 칸으로 간다(TS 표기가 잘리던 자리).
+    table.add_column("평가손익(원/%)", justify="right")
     table.add_column("보유일", justify="right", style="dim")
     table.add_column("최고가(MFE)", justify="right", style="dim")
     table.add_column("손절가", justify="right", style="dim")
@@ -486,8 +487,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{cur_price:,}원",
             f"{pchs_amt:,}원",
             f"{eval_amt:,}원",
-            f"{p_color}{profit:+,}원[/]",
-            f"{p_color}{rate:.2f}%[/]",
+            f"{p_color}{profit:+,}원[/]\n{p_color}{rate:.2f}%[/]",
             _fmt_holding_days_cell(res),
             _fmt_mfe_cell(res, is_overseas=False),
             _fmt_stop_cell(res, buy_price, is_overseas=False, code=code)
@@ -515,8 +515,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     table.add_column("현재가($)", justify="right")
     table.add_column("매입금액($)", justify="right")
     table.add_column("평가금액($)", justify="right")
-    table.add_column("평가손익($)", justify="right")
-    table.add_column("수익률(%)", justify="right")
+    table.add_column("평가손익($/%)", justify="right")   # 국내 표와 같은 이유로 두 줄 묶음
     table.add_column("보유일", justify="right", style="dim")
     table.add_column("최고가(MFE)", justify="right", style="dim")
     table.add_column("손절가", justify="right", style="dim")
@@ -561,8 +560,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{cur_price:,.2f}",
             f"{item_pchs:,.2f}",
             f"{item_eval:,.2f}",
-            f"{color}{profit:+,.2f}[/]",
-            f"{color}{rate:+.2f}[/]",
+            f"{color}{profit:+,.2f}[/]\n{color}{rate:+.2f}%[/]",
             _fmt_holding_days_cell(res),
             _fmt_mfe_cell(res, is_overseas=True),
             _fmt_stop_cell(res, pchs_avg, is_overseas=True, code=code)
