@@ -179,6 +179,35 @@ def detect_retro_price_adjustment(ref_close, now_close_for_ref_date):
                    f"{now_close_for_ref_date:,.0f}원으로 소급 수정, 배율 {ratio:.4g})")
 
 
+def profit_lock_stop_rate(max_profit_rate, min_mfe=None, giveback=None):
+    """무장 전 구간의 이익 보호선(매수가 대비 %). 조건 미달이면 None. (부수효과 없음)
+
+    [왜 필요한가] TS가 무장하기 전까지 포지션을 지키는 건 ATR 손절선뿐인데, 이 선은 매수가
+    기준으로 고정돼 있다(캡 -15%). 이미 +40% 오른 포지션에게 '매수가 -15%'는 방어가 아니다.
+    무장을 앞당기는 해법은 2026-08-09 실측에서 기각됐으므로(위 '정확식' 참조), 무장 전
+    구간에만 걸리는 별도의 선을 둔다.
+
+    선 = 매수가 + (고점 - 매수가) × (1 - giveback)
+       = 매수가 × (1 + MFE(1-giveback)/100)     → 반환값은 MFE×(1-giveback)
+
+    [BEP와 다른 점] 본전 청산은 낮은 MFE에서 손절선을 본전으로 끌어올려 눌림에 털린다
+    (2026-08-04 실측으로 OFF). 이 선은 min_mfe 위에서만 켜지고, 켜진 뒤에도 이익의
+    giveback 비율만큼은 계속 내줘 추세에 여유를 남긴다.
+    """
+    ss = config.SELL_STRATEGY
+    if min_mfe is None:
+        min_mfe = ss.get("PROFIT_LOCK_MIN_MFE", 25.0)
+    if giveback is None:
+        giveback = ss.get("PROFIT_LOCK_GIVEBACK", 0.5)
+    try:
+        mfe = float(max_profit_rate or 0)
+    except (TypeError, ValueError):
+        return None
+    if mfe <= 0 or mfe < float(min_mfe) or not (0 < float(giveback) < 1):
+        return None
+    return mfe * (1 - float(giveback))
+
+
 def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thresholds=None,
                           ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None):
     """샹들리에 트레일링 스탑 발동선을 계산한다. (순수 함수 · 부수효과 없음)
@@ -1004,7 +1033,21 @@ class DefaultStrategy:
                 if sl_rate < bep_stop:
                     sl_rate = bep_stop
                     is_bep_applied = True
-                    
+
+        # [이익 보호선] 무장 전 구간의 공백을 메운다. TS가 켜지면 그쪽이 더 높아 자연히 무의미해진다.
+        is_lock_applied = False
+        use_lock = (thresholds.get("PROFIT_LOCK_USE", config.SELL_STRATEGY.get("PROFIT_LOCK_USE", False))
+                    if thresholds else config.SELL_STRATEGY.get("PROFIT_LOCK_USE", False))
+        if use_lock and buy_price > 0:
+            lock_rate = profit_lock_stop_rate(
+                max_profit_rate,
+                (thresholds or {}).get("PROFIT_LOCK_MIN_MFE"),
+                (thresholds or {}).get("PROFIT_LOCK_GIVEBACK"))
+            if lock_rate is not None and lock_rate > sl_rate:
+                sl_rate = lock_rate
+                is_lock_applied = True
+                is_bep_applied = False   # 표시·사유가 겹치지 않게 더 높은 쪽만 남긴다
+
         # [추가] 트레일링 스탑 동적 콜백 계산 및 판별
         # [SSOT] 콜백 산식은 compute_trailing_stop()이 단독 보유한다. 잔고 화면(메뉴 9-2)의
         #  'TS 청산가' 표시도 같은 함수를 호출해, 표시된 선과 실제 청산선이 어긋나지 않게 한다.
@@ -1036,7 +1079,9 @@ class DefaultStrategy:
               and max_profit_rate >= tp_rate and profit_rate <= max(tp_rate - 3.0, 0.5)):
             reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
         elif sl_rate != 0 and profit_rate <= sl_rate:
-            if is_bep_applied:
+            if is_lock_applied:
+                reason = f"이익보호({profit_rate:.1f}%, 고점 {max_profit_rate:.1f}%)"
+            elif is_bep_applied:
                 reason = f"본전청산({profit_rate:.1f}%)"
             else:
                 reason = f"손절({profit_rate:.1f}%)"
@@ -1123,6 +1168,7 @@ class DefaultStrategy:
             'applied_sl_rate': sl_rate,
             'is_atr_stop': bool(thresholds and thresholds.get("ATR_APPLIED_SL_RATE") is not None),
             'is_bep_applied': is_bep_applied,
+            'is_lock_applied': is_lock_applied,
             'max_profit_rate': max_profit_rate,
         }
 

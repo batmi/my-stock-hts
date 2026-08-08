@@ -85,10 +85,23 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
     loss_rate = (price - avg) / avg * 100
     max_profit = (high - avg) / avg * 100
 
+    # [이익 보호선] 무장 전 구간 전용. 실매매(analyze_sell)와 같은 식을 써야 이 백테스트로
+    #  정한 파라미터가 의미를 갖는다 — 산식은 engine.profit_lock_stop_rate가 단독 보유한다.
+    is_lock = False
+    if c.get("profit_lock_use", False):
+        from modules.auto_trade.engine import profit_lock_stop_rate
+        lock = profit_lock_stop_rate(max_profit, c.get("profit_lock_min_mfe"),
+                                     c.get("profit_lock_giveback"))
+        if lock is not None and lock > sl_rate:
+            sl_rate, is_lock = lock, True
+
     sell, reason = False, ""
     if sl_rate != 0 and loss_rate <= sl_rate:
         sell = True
-        reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
+        if is_lock:
+            reason = "이익보호"
+        else:
+            reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
     elif use_time_stop and holding_days >= time_stop_days and loss_rate < 0:
         # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
         grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
@@ -224,6 +237,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     sell_score_limit = sell_cfg["SELL_SCORE"]
     ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_breakeven = str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
+    lock_use = sell_cfg.get("PROFIT_LOCK_USE", False)
+    lock_min_mfe = sell_cfg.get("PROFIT_LOCK_MIN_MFE", 25.0)
+    lock_giveback = sell_cfg.get("PROFIT_LOCK_GIVEBACK", 0.5)
     ts_callback = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.0)
     time_stop_days = sell_cfg.get("TIME_STOP_DAYS", 20)
@@ -322,7 +338,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                      "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
                      "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
                      "ts_breakeven": ts_breakeven and ts_act_fn is None,
-                     "sell_score_limit": sell_score_limit})
+                     "sell_score_limit": sell_score_limit,
+                     "profit_lock_use": lock_use, "profit_lock_min_mfe": lock_min_mfe,
+                     "profit_lock_giveback": lock_giveback})
 
             # [진단] 발동 기준만 없었다면 TS로 팔렸을 날 (기준이 실제로 구속하는가)
             if not sell and pos["high"] > 0 and max_profit < ts_act_eff:

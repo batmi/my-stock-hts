@@ -71,6 +71,23 @@ def breakeven_fn(atr, price):
     return cb / (1 - cb) * 100
 
 
+def breakeven_exact_fn(atr, price):
+    """청산선이 매수가에 '정확히' 닿는 지점에서 무장한다. (운용식보다 이른 시점)
+
+    운용식은 되돌림 폭 cb를 매수가로 재놓고 고점 기준 공식 cb/(1-cb)를 쓴다. 두 정규화가
+    섞여 있어, 실제 청산선(= 고점 − ATR×배수)이 매수가에 닿는 시점보다 늦게 무장한다.
+      · 실제 조건:  고점 − ATR×배수 ≥ 매수가  ⟺  MFE ≥ ATR×배수/매수가        (= cb)
+      · 운용식:     MFE ≥ cb/(1-cb)                                          (> cb)
+    cb가 작을 때는 차이가 미미하지만(8%→8.7%) 크면 발산한다(47%→88%). 고변동·대박
+    종목에서 무장이 필요 이상으로 늦어지는지 확인하기 위한 대조군.
+    콜백 하한이 지배하는 구간은 고점 기준이 맞으므로 5/(1-5%)=5.26%를 하한으로 둔다.
+    """
+    ss = config.SELL_STRATEGY
+    a = _atr_pct(atr, price) or 0
+    floor = ss.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+    return max(floor / (1 - floor / 100), a * ss.get("TRAILING_ATR_MULTIPLIER", 3.5))
+
+
 def dial_sets():
     """(그룹, 라벨, {SELL_STRATEGY/ANALYSIS_THRESHOLDS 오버라이드}, {run_portfolio 인자})."""
     A = "TRAILING_STOP_ACTIVATION_RATE"
@@ -89,6 +106,15 @@ def dial_sets():
         ("A. TS 발동 기준", "동적 손익분기",   {}, {"ts_act_fn": breakeven_fn}),
         # 위는 감사용 근사식(ATR/매수가). 아래는 실제 운용 산식(청산선 ≥ 매수가)을 그대로 탄다.
         ("A. TS 발동 기준", "손익분기(운용식)", {"TS_ACTIVATION_MODE": "breakeven"}, {}),
+        ("A. TS 발동 기준", "손익분기(정확식)", {}, {"ts_act_fn": breakeven_exact_fn}),
+        # C) 이익 보호선 — 무장 전 구간 전용. TS 발동을 앞당기는 해법이 기각된 뒤 남은 축이다.
+        #    (MIN_MFE, GIVEBACK): 이 MFE 위에서만 켜고, 최고 이익의 GIVEBACK만큼은 계속 내준다.
+        ("C. 이익 보호선", "OFF (현행)",       {"PROFIT_LOCK_USE": False}, {}),
+        ("C. 이익 보호선", "MFE15·반납0.5",    {"PROFIT_LOCK_USE": True, "PROFIT_LOCK_MIN_MFE": 15.0, "PROFIT_LOCK_GIVEBACK": 0.5}, {}),
+        ("C. 이익 보호선", "MFE25·반납0.5",    {"PROFIT_LOCK_USE": True, "PROFIT_LOCK_MIN_MFE": 25.0, "PROFIT_LOCK_GIVEBACK": 0.5}, {}),
+        ("C. 이익 보호선", "MFE25·반납0.35",   {"PROFIT_LOCK_USE": True, "PROFIT_LOCK_MIN_MFE": 25.0, "PROFIT_LOCK_GIVEBACK": 0.35}, {}),
+        ("C. 이익 보호선", "MFE25·반납0.65",   {"PROFIT_LOCK_USE": True, "PROFIT_LOCK_MIN_MFE": 25.0, "PROFIT_LOCK_GIVEBACK": 0.65}, {}),
+        ("C. 이익 보호선", "MFE40·반납0.5",    {"PROFIT_LOCK_USE": True, "PROFIT_LOCK_MIN_MFE": 40.0, "PROFIT_LOCK_GIVEBACK": 0.5}, {}),
         ("B. 피라미딩 발동", "5%",            {P: 5.0}, {}),
         ("B. 피라미딩 발동", "10% (현행)",    {P: 10.0}, {}),
         ("B. 피라미딩 발동", "15%",           {P: 15.0}, {}),
@@ -169,7 +195,7 @@ def main():
 
     sets = dial_sets()
     if args.confirm:
-        keep = ("10% (현행)", "20%", "동적 손익분기", "손익분기(운용식)")
+        keep = ("10% (현행)", "20%", "동적 손익분기", "손익분기(운용식)", "손익분기(정확식)")
         sets = [x for x in sets if x[1] in keep]
     if args.only:
         sets = [x for x in sets if x[0].startswith(args.only)]

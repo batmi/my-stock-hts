@@ -741,7 +741,8 @@ def test_pending_ts_cell_shows_stop_line_that_would_appear():
     cell = account._fmt_ts_stop(res, buy_price=buy)
 
     assert "64,372" in cell and "↑54%" in cell and "→" in cell
-    stop = int(cell.rsplit("→", 1)[1].replace("[/dim]", "").replace(",", ""))
+    import re
+    stop = int(re.sub(r"\[[^\]]*\]|,", "", cell.rsplit("→", 1)[1]))
     assert stop >= buy, f"발동 시 청산선({stop})이 매수가({buy}) 아래다"
 
     # 최고가·콜백을 모르면 발동 조건만 (있는 정보로만 그린다)

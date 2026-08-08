@@ -203,3 +203,55 @@ def test_기본값은_손익분기_연동이다():
     """
     defaults = config.GlobalSettings().SELL_STRATEGY
     assert defaults.get("TS_ACTIVATION_MODE") == "breakeven"
+
+
+# ------------------------------------------------- 이익 보호선 (기본 OFF)
+
+def test_profit_lock_only_above_min_mfe():
+    """MIN_MFE 아래에서는 아예 선이 생기지 않는다 — BEP와 갈리는 지점이다.
+
+    본전 청산은 낮은 MFE에서 손절선을 끌어올려 눌림에 털렸다(2026-08-04 실측으로 OFF).
+    이 선이 같은 실수를 반복하지 않으려면 문턱 아래에서 None이어야 한다.
+    """
+    from modules.auto_trade.engine import profit_lock_stop_rate
+
+    assert profit_lock_stop_rate(24.9, 25.0, 0.5) is None
+    assert profit_lock_stop_rate(0, 25.0, 0.5) is None
+    assert profit_lock_stop_rate(-10, 25.0, 0.5) is None
+    assert profit_lock_stop_rate(25.0, 25.0, 0.5) == pytest.approx(12.5)
+
+
+def test_profit_lock_always_leaves_room_to_run():
+    """켜진 뒤에도 최고 이익의 giveback만큼은 계속 내준다 (추세에 남기는 여유)."""
+    from modules.auto_trade.engine import profit_lock_stop_rate
+
+    for mfe in (30.0, 50.0, 108.0):
+        rate = profit_lock_stop_rate(mfe, 25.0, 0.5)
+        assert rate == pytest.approx(mfe * 0.5)
+        assert 0 < rate < mfe, "보호선이 고점에 붙으면 추세를 끊는다"
+
+    # 반납 비율이 클수록 선이 낮다 = 더 많이 내준다
+    assert (profit_lock_stop_rate(50.0, 25.0, 0.65)
+            < profit_lock_stop_rate(50.0, 25.0, 0.35))
+
+
+def test_profit_lock_is_off_by_default():
+    """실측에서 전 조합이 열위였다 (config.SELL_STRATEGY 주석 참조). 기본은 OFF여야 한다."""
+    assert config.SELL_STRATEGY.get("PROFIT_LOCK_USE") is False
+
+
+def test_backtest_and_live_share_the_profit_lock_formula():
+    """백테스트가 실매매와 다른 식을 쓰면 이 축으로 정한 파라미터의 근거가 무너진다."""
+    from modules.auto_trade.engine import profit_lock_stop_rate
+    from modules.portfolio_backtest import decide_sell
+
+    cfg = {"profit_lock_use": True, "profit_lock_min_mfe": 25.0,
+           "profit_lock_giveback": 0.5, "ts_act": 999.0}   # TS는 무장 못 하게 막아둔다
+    avg, high = 100.0, 160.0
+    lock = profit_lock_stop_rate((high - avg) / avg * 100, 25.0, 0.5)   # +30%
+
+    kw = dict(high=high, avg=avg, sl_rate=-15.0, atr_applied=True, is_bep=False,
+              holding_days=5, state="상승", state_reason="", raw_score=6.0,
+              sell_check=False, ema60=90.0, atr=3.0, cfg=cfg)
+    assert decide_sell(price=avg * (1 + lock / 100) + 0.5, **kw) == (False, "")
+    assert decide_sell(price=avg * (1 + lock / 100) - 0.5, **kw) == (True, "이익보호")

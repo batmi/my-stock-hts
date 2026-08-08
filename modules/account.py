@@ -311,6 +311,22 @@ def _fmt_holding_days_cell(res):
         return f"[yellow]{days}일[/]"
     return f"{days}일"
 
+def _fmt_profit_cell(amount_str, rate_str, color=""):
+    """평가손익 = 금액 + 그 아래 괄호친 수익률. 최고가(MFE) 칸과 같은 모양으로 맞춘다.
+
+    금액은 다른 금액 열들과 자릿수가 맞아야 하므로 우측 정렬, 수익률만 가운데 정렬이다.
+    한 셀 안에서 줄마다 정렬이 다르므로 문자열이 아니라 Group으로 돌려준다 — 공백을
+    채워 밀어내는 방식은 통하지 않는다(렌더러가 줄 끝 공백을 잘라내며, NBSP도 파이썬
+    rstrip 대상이라 살아남지 못한다).
+    """
+    from rich.console import Group
+    from rich.text import Text
+
+    amount = f"{color}{amount_str}[/]" if color else amount_str
+    return Group(Text.from_markup(amount, justify="right"),
+                 Text.from_markup(f"[dim]({rate_str})[/dim]", justify="center"))
+
+
 def _fmt_mfe_cell(res, is_overseas=False):
     """최고가와 그 시점의 최대 평가수익(MFE) — 수익 반납폭 확인용."""
     if not res:
@@ -361,17 +377,22 @@ def _fmt_ts_stop(res, is_overseas=False, buy_price=0):
             # 두 가격이 다 들어가야 하므로 %는 정수로 줄인다. 여기서 행동을 정하는 값은
             #  '얼마에 켜지나'(가격)이고 %는 맥락일 뿐이다.
             return (f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑{act:.0f}%→[/dim]"
-                    f"{_p(arm_price * (1 - cb / 100))}")
+                    f"[bold magenta not dim]{_p(arm_price * (1 - cb / 100))}[/]")
         return f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑({act:+.1f}%)[/dim]"
 
-    line = f"[dim]TS:[/dim][cyan]{_p(ts['stop_price'])}[/][dim](-{ts['callback']:.1f}%)[/dim]"
+    # 청산선은 이 칸에서 유일하게 '실제로 포지션을 끝내는' 가격이다. ATR 손절선(파랑)과
+    #  구분되게 굵은 보라로 띄운다 — 미무장 행의 → 뒤 예상 청산선도 같은 색을 쓴다.
+    line = f"[dim]TS:[/dim][bold magenta not dim]{_p(ts['stop_price'])}[/][dim](-{ts['callback']:.1f}%)[/dim]"
     if dynamic and act > 0:
         # 무장 후에는 이미 넘어선 문턱이라 정수로 줄여 열 폭을 아낀다(미무장은 .1f 유지).
         line += f"[dim]≥{act:.0f}%[/dim]"
     return line
 
 def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
-    """손절가 셀 — 손절선과 TS 청산선을 항상 두 줄로 표시한다.
+    """청산선 셀 — 손절선(ATR/고정/BEP)과 TS 청산선을 항상 두 줄로 표시한다.
+
+    열 이름이 '손절가'였을 때는 TS 줄이 이름과 맞지 않았다. 두 줄 다 '포지션이 끝나는
+    가격'이라는 공통점으로 묶고, 어느 선인지는 각 줄의 접두어(ATR/BEP/고정/TS)가 말한다.
 
     [중요] 표시값은 보유 분석(analyze_sell)이 실제로 적용한 손절률(applied_sl_rate)에서
     유도한다. 예전에는 이 셀이 DB의 매수 기록을 따로 읽어 손절선을 재구성했는데, 기록이
@@ -396,7 +417,10 @@ def _fmt_stop_cell(res, buy_price, is_overseas=False, code=None):
         else:
             label = "고정"
         stop_price = buy_price * (1 + sl_rate / 100)
-        parts.append(f"[dim]{label}:[/dim][blue]{_p(stop_price)}[/][dim]({sl_rate:+.1f}%)[/dim]")
+        # 손절가도 TS 청산선과 같이 굵게 띄운다 — 열 스타일이 dim이라 not dim으로 끊어야
+        #  실제로 강조된다(bold만 주면 dim과 겹쳐 오히려 흐려진다).
+        parts.append(f"[dim]{label}:[/dim][bold blue not dim]{_p(stop_price)}[/]"
+                     f"[dim]({sl_rate:+.1f}%)[/dim]")
 
     ts_line = _fmt_ts_stop(res, is_overseas=is_overseas, buy_price=buy_price)
     if ts_line:
@@ -418,13 +442,19 @@ def _decorate_name(name, code, marks_ctx):
     mark_str = "".join(marks)
     return f"{name}[dim]{mark_str}[/dim]".strip() if mark_str else name
 
-def _ts_caption():
-    """TS 발동 표기 범례. 발동선이 종목마다 다른 체제에서만 필요하다."""
+def _print_ts_legend():
+    """TS 발동 표기 범례. 발동선이 종목마다 다른 체제에서만 필요하다.
+
+    표 캡션(표 바로 아래)이 아니라 합계 줄 다음에 한 줄 띄우고 낸다 — 표에 바로 붙으면
+    마지막 종목의 행처럼 읽힌다.
+    """
     from modules.auto_trade.engine import ts_activation_dynamic
     if not ts_activation_dynamic():
-        return None
-    return ("[dim]TS 발동: 손익분기 연동(종목 변동성이 결정) · "
-            "↑=TS가 켜지는 가격(매수가 대비 %) · →=그때 생기는 청산선 · ≥=TS가 켜진 MFE[/dim]")
+        return
+    config.console.print()
+    config.console.print(
+        "[dim]  ※ TS 발동: 손익분기 연동(종목 변동성이 결정) · "
+        "↑=TS가 켜지는 가격(매수가 대비 %) · →=그때 생기는 청산선 · ≥=TS가 켜진 MFE[/dim]")
 
 
 def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title="\n[국내] 계좌 잔고 현황", show_auto_status=True):
@@ -436,8 +466,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
     #  행 사이 흐린 실선으로 구분한다.
     table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
-                  border_style="dim", show_lines=True, caption=_ts_caption(),
-                  caption_justify="left")
+                  border_style="dim", show_lines=True)
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
     table.add_column("상태", justify="center")            # [추가] 보유 분석 결과
@@ -451,7 +480,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     table.add_column("평가손익(원/%)", justify="right")
     table.add_column("보유일", justify="right", style="dim")
     table.add_column("최고가(MFE)", justify="right", style="dim")
-    table.add_column("손절가", justify="right", style="dim")
+    table.add_column("청산선", justify="right", style="dim")
 
     totals = {'pchs': 0, 'eval': 0, 'profit': 0, 'count': 0}
     sell_signals = []
@@ -487,7 +516,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{cur_price:,}원",
             f"{pchs_amt:,}원",
             f"{eval_amt:,}원",
-            f"{p_color}{profit:+,}원[/]\n{p_color}{rate:.2f}%[/]",
+            _fmt_profit_cell(f"{profit:+,}원", f"{rate:.2f}%", p_color),
             _fmt_holding_days_cell(res),
             _fmt_mfe_cell(res, is_overseas=False),
             _fmt_stop_cell(res, buy_price, is_overseas=False, code=code)
@@ -504,8 +533,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     # show_lines: 상태 칸의 '수동'·손절가의 TS 등 셀이 여러 줄이라 종목 경계가 흐려진다.
     #  행 사이 흐린 실선으로 구분한다.
     table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim",
-                  border_style="dim", show_lines=True, caption=_ts_caption(),
-                  caption_justify="left")
+                  border_style="dim", show_lines=True)
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
     table.add_column("상태", justify="center")            # [추가] 보유 분석 결과
@@ -518,7 +546,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     table.add_column("평가손익($/%)", justify="right")   # 국내 표와 같은 이유로 두 줄 묶음
     table.add_column("보유일", justify="right", style="dim")
     table.add_column("최고가(MFE)", justify="right", style="dim")
-    table.add_column("손절가", justify="right", style="dim")
+    table.add_column("청산선", justify="right", style="dim")
 
     totals = {'pchs': 0.0, 'eval': 0.0, 'profit': 0.0, 'count': 0}
     sell_signals = []
@@ -560,7 +588,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{cur_price:,.2f}",
             f"{item_pchs:,.2f}",
             f"{item_eval:,.2f}",
-            f"{color}{profit:+,.2f}[/]\n{color}{rate:+.2f}%[/]",
+            _fmt_profit_cell(f"{profit:+,.2f}", f"{rate:+.2f}%", color),
             _fmt_holding_days_cell(res),
             _fmt_mfe_cell(res, is_overseas=True),
             _fmt_stop_cell(res, pchs_avg, is_overseas=True, code=code)
@@ -974,6 +1002,7 @@ def _print_manual_positions(positions, holding_analysis):
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
         p_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
         config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {totals['pchs']:,}원  |  [bold dim]총 평가금액:[/bold dim] {totals['eval']:,}원  |  [bold dim]총 평가손익:[/bold dim] {p_color}{totals['profit']:+,}원 ({total_rate:+.2f}%)[/]")
+        _print_ts_legend()
         _print_sell_signals(signals)
 
     if overseas_items:
@@ -986,6 +1015,7 @@ def _print_manual_positions(positions, holding_analysis):
         total_rate = (totals['profit'] / totals['pchs'] * 100) if totals['pchs'] > 0 else 0.0
         p_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
         config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${totals['pchs']:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${totals['eval']:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {p_color}${totals['profit']:+,.2f} ({total_rate:+.2f}%)[/]")
+        _print_ts_legend()
         _print_sell_signals(signals)
 
 def _display_balance_details(cano, acnt_prdt_cd):
@@ -1061,6 +1091,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
 
             profit_color = "[red]" if totals['profit'] > 0 else ("[blue]" if totals['profit'] < 0 else "[white]")
             config.console.print(f"[bold dim]  국내 총 매입금액:[/bold dim] {totals['pchs']:,}원  |  [bold dim]총 평가금액:[/bold dim] {totals['eval']:,}원  |  [bold dim]총 평가손익:[/bold dim] {profit_color}{totals['profit']:+,}원 ({total_rate:+.2f}%)[/]")
+            _print_ts_legend()
 
         _print_sell_signals(sell_signals)
     else:
@@ -1085,6 +1116,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
 
             profit_color = "[red]" if totals_ovrs['profit'] > 0 else ("[blue]" if totals_ovrs['profit'] < 0 else "[white]")
             config.console.print(f"[bold dim]  해외 총 매입금액:[/bold dim] ${totals_ovrs['pchs']:,.2f}  |  [bold dim]총 평가금액:[/bold dim] ${totals_ovrs['eval']:,.2f}  |  [bold dim]총 평가손익:[/bold dim] {profit_color}${totals_ovrs['profit']:+,.2f} ({total_ovrs_rate:+.2f}%)[/]")
+            _print_ts_legend()
 
             _print_sell_signals(ovrs_sell_signals)
 

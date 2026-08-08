@@ -820,8 +820,44 @@ class GlobalSettings(BaseModel):
         #   문턱이 따라 내려가(자기참조) 무장이 사실상 즉시 이뤄져 고정 10%와 같아진다 —
         #   실측에서 구간5 수익승이 23/30 → 14/30으로 무너졌다. 반드시 매수가로 정규화할 것.
         #
+        #  [기각됨 · '정확식'으로 고치지 말 것] 위 산식은 cb를 매수가로 재놓고 고점 기준
+        #   공식 cb/(1-cb)를 쓴다. 두 정규화가 섞여 있어, 청산선(= 고점 − ATR×배수)이 실제로
+        #   매수가에 닿는 시점(MFE ≥ cb)보다 늦게 무장한다. cb가 작으면 차이가 미미하지만
+        #   (8%→8.7%) 크면 발산한다(47%→88%). 코드를 읽으면 '버그처럼' 보이는 자리라 고치자는
+        #   결론에 반복해서 도달하기 쉬우나, 2026-08-09 실측에서 정확식이 일관되게 열위였다.
+        #     · 10년·5구간·2표본 수익승(현행 10% 대비): 운용식 167/300 vs 정확식 127/300
+        #     · 정확식이 이긴 구간-표본은 10개 중 1개(16 vs 15)로 오차 범위
+        #     · 기제는 fat-tail 파괴가 아니라 '중간 추세의 조기 절단'이다. 두 표본에서 일관되게
+        #       재현되는 건 TS게이트로, 운용식이 2~3배 많은 날을 막는다(구간5 27일 vs 8~9일).
+        #       fat-tail 지표(최대·>30%)는 사실상 무승부였다.
+        #   즉 섞인 정규화가 만드는 여유분이 '추세가 성숙할 때까지 트레일링을 켜지 않는' 역할을
+        #   하고 있다. 재측정은 tools/audit_trigger_dials.py의 '손익분기(정확식)' 대조군으로.
+        #
         #  "fixed" = 종전 방식. TRAILING_STOP_ACTIVATION_RATE(%)를 그대로 쓴다.
         "TS_ACTIVATION_MODE": "breakeven",
+        # [이익 보호선] 무장 전 구간 전용. TS가 무장하기 전까지 포지션을 지키는 건 ATR 손절선뿐인데
+        #  그 선은 매수가 기준 고정(캡 -15%)이라, 이미 크게 오른 포지션에는 방어가 되지 못한다.
+        #  선 = 매수가 + (고점 - 매수가) × (1 - GIVEBACK).  MIN_MFE 위에서만 켜진다.
+        #  BEP와 달리 낮은 MFE에서는 아예 작동하지 않고, 켜진 뒤에도 이익의 GIVEBACK만큼은
+        #  계속 내줘 추세에 여유를 남긴다. 무장 후에는 TS 청산선이 더 높아 자연히 무의미해진다.
+        #  [기각 · OFF 유지] 2026-08-09 신설과 동시에 10년·5구간·2표본으로 쟀고, 5개 조합
+        #   (MFE15/25/40 × 반납 0.35/0.5/0.65) 중 무승부선(75/150)을 넘은 것이 하나도 없다.
+        #     · 수익승 합계(seed1): 55 / 51 / 62 / 41 / 45  — 전부 열위
+        #     · 구간4 파괴가 두 표본에서 재현된다: 수익 52.3→10.3~17.3(seed1),
+        #       56.9→7.8~22.0(seed2). 최대 수익 164.0 → 27.3~45.9로 대박이 끊긴다
+        #     · TS이익%가 100 → 3.3~10.6%로 무너진다. 성능 저하가 아니라 '주청산은 샹들리에
+        #       TS'라는 설계 자체의 붕괴다(TS 발동 40%를 기각한 것과 같은 실패 유형)
+        #   기각 이유는 BEP와 같다 — '이익은 지켜야 한다'는 직관은 맞아 보이지만, 선을 그으면
+        #   그 선이 추세를 끊는다. 무장 전 구간의 무방비함은 결함이 아니라 추세추종의 대가다.
+        #
+        #  [단, 재현되는 예외] 구간5(강세)에서는 5개 조합 전부가 두 표본 모두에서 이긴다
+        #   (수익승 17~24/30, MDD도 -24.6→-19.7로 개선). 표본 노이즈가 아니다. 위험조정(MAR)
+        #   기준으로는 MFE15·반납0.5가 거의 무승부까지 온다(seed2 60/120). 즉 이 축은
+        #   '국면 조건부'로만 의미가 있을 수 있는데, 국면 판정을 청산에 물리는 건 측정한 적이
+        #   없는 별개 축이라 손대지 않았다. 재측정은 audit_trigger_dials.py의 C 그룹으로.
+        "PROFIT_LOCK_USE": False,
+        "PROFIT_LOCK_MIN_MFE": 25.0,           # 이 MFE 위에서만 보호선을 건다
+        "PROFIT_LOCK_GIVEBACK": 0.5,           # 최고 이익 중 내줘도 되는 비율 (0.5 = 절반까지)
         "TRAILING_STOP_CALLBACK_RATE": 5.0,    # [트레일링 스탑] 최고가 대비 최소 이탈률(매도 조건). ATR 동적 콜백의 하한
         # [샹들리에 엑시트] TS 전용 ATR 배수. 손절용 ATR_STOP_MULTIPLIER(2.0)와 분리하여,
         # 급등주는 변동성(ATR)에 비례해 콜백이 자동으로 넓어져 추세를 끝까지 추종한다.
@@ -1827,7 +1863,8 @@ def reset_all_settings():
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
-            "TRAILING_ATR_MULTIPLIER": 3.5, "TS_MAX_GIVEBACK_RATIO": 0.0, "TS_ACTIVATION_MODE": "breakeven"
+            "TRAILING_ATR_MULTIPLIER": 3.5, "TS_MAX_GIVEBACK_RATIO": 0.0, "TS_ACTIVATION_MODE": "breakeven",
+            "PROFIT_LOCK_USE": False, "PROFIT_LOCK_MIN_MFE": 25.0, "PROFIT_LOCK_GIVEBACK": 0.5
         }
         settings.SCORING_WEIGHTS = {
             "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
