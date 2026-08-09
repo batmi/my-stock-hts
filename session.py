@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import hashlib
 import jsonio
 from datetime import datetime, timedelta
 from rich.prompt import Prompt
@@ -373,11 +374,40 @@ class SessionManager:
     def _save_token_cache(self, cache_data):
         jsonio.save_json(config.TOKEN_CACHE_FILE, cache_data, indent=2)
 
-    def _check_token_validity(self, token_info):
+    def _token_app_key(self, key):
+        """토큰 슬롯을 발급한 앱키. 앱키 개념이 없는 슬롯(TOSS)은 None."""
+        if key == "SIMULATION": return self.app_key
+        if key == "REAL": return self.real_app_key
+        if key == "AUTO": return self.auto_app_key
+        return None
+
+    @staticmethod
+    def _app_key_fingerprint(app_key):
+        """앱키를 캐시에 남길 수 있는 형태로 축약한다. 키 자체는 절대 파일에 쓰지 않는다."""
+        if not app_key: return None
+        return hashlib.sha256(app_key.encode('utf-8')).hexdigest()[:16]
+
+    def _check_token_validity(self, token_info, key=None):
+        """만료 시각과 **발급 앱키**가 모두 맞아야 유효하다.
+
+        [중요] 만료만 보면 안 된다. token_cache.json은 파일 하나이고 슬롯 이름이
+          REAL/AUTO/SIMULATION 뿐인데, 관찰모드(mode 4)는 real_app_key·auto_app_key를
+          VIRT_APP_KEY로 덮어쓴다(아래 load 로직). 즉 mode 4가 VIRT 키로 받은 토큰이
+          'REAL' 슬롯에 남는다. 만료 전(최대 24시간)에 mode 2로 바꾸면 그 토큰을
+          '아직 유효함'으로 판정해 남의 앱키 토큰을 그대로 쓰고, KIS는 이를 거부한다.
+          앱키 지문을 함께 검사하면 슬롯이 겹쳐도 서로의 토큰을 집지 않는다.
+          (앱키를 교체했을 때 캐시가 조용히 낡는 문제도 같은 검사로 함께 막힌다)
+        """
         if not token_info: return False
         expired_str = token_info.get('token_expired')
         access_token = token_info.get('access_token')
         if not expired_str or not access_token: return False
+
+        if key is not None:
+            expected_fp = self._app_key_fingerprint(self._token_app_key(key))
+            if expected_fp and token_info.get('app_key_fp') != expected_fp:
+                # 지문이 없거나(구버전 캐시) 다르면 남의 토큰으로 보고 재발급시킨다.
+                return False
         
         try:
             expired_dt = datetime.strptime(expired_str, "%Y-%m-%d %H:%M:%S")
@@ -398,7 +428,7 @@ class SessionManager:
         # 2. 파일 캐시 확인
         cache = self._load_token_cache()
         token_info = cache.get(key)
-        if self._check_token_validity(token_info):
+        if self._check_token_validity(token_info, key):
             token = token_info['access_token']
             self._update_memory_token(key, token)
             return token
@@ -412,15 +442,24 @@ class SessionManager:
         cache[key] = {
             "access_token": token,
             "token_expired": expired,
-            "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "app_key_fp": self._app_key_fingerprint(self._token_app_key(key)),
         }
         self._save_token_cache(cache)
 
     def is_token_recently_issued(self, key, seconds=60):
-        """토큰이 지정된 시간(초) 이내에 발급되었는지 확인"""
+        """토큰이 지정된 시간(초) 이내에 발급되었는지 확인.
+
+        KIS의 발급 빈도 제한(EGW00133)은 **앱키 단위**다. 다른 앱키가 남긴 발급 시각을
+        보고 재발급을 미루면, 정작 이 앱키로는 토큰이 없는 채로 대기하게 된다.
+        """
         cache = self._load_token_cache()
         token_info = cache.get(key)
         if not token_info: return False
+
+        expected_fp = self._app_key_fingerprint(self._token_app_key(key))
+        if expected_fp and token_info.get('app_key_fp') != expected_fp:
+            return False
         
         issued_at_str = token_info.get('issued_at')
         if not issued_at_str: return False
