@@ -109,16 +109,28 @@ def run_worker(trader, mock_chart, df):
 @patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
 @patch('modules.auto_trade.api.get_chart_data')
 def test_rs_skip_when_weaker_than_index(mock_chart, mock_vol, mock_market, mock_idx):
-    """1. 종목 126일 수익률 ≤ 지수 수익률이면 rs_skip으로 차단되는가?"""
+    """1. 매수 신호가 난 종목이 지수보다 약하면 rs_skip으로 차단되는가?
+
+    [중요] 후보가 **매수 상태여야** 이 게이트가 의미를 갖는다. '보류' 집계는 '살 수
+    있었는데 막았다'는 뜻이어야 하기 때문이다(trader._analyze_candidate_worker 주석).
+    종전 이 테스트는 목 데이터가 '주의' 상태를 만들어, 매수 대상도 아닌 종목이
+    rs_skip으로 반환되던 옛 동작에 기대고 있었다(2026-08-09 수정).
+    """
     trader = AutoTrader()
     trader.is_running = True
     df = make_df(8.0)  # 전체 +8% → 126일 수익률 < 지수 +15%
 
-    result = run_worker(trader, mock_chart, df)
+    with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
+        mock_analyze.return_value = {
+            'action': 'buy', 'state': '매수', 'score': 8.0, 'rsi': 55, 'adx': 30, 'cci': 50,
+            'atr': 1000.0, 'psar': 0, 'macd': 1.0, 'macd_signal': 0.5, 'w52_pos': 80.0,
+        }
+        result = run_worker(trader, mock_chart, df)
 
     assert result is not None
-    assert result['type'] == 'rs_skip'
-    assert "지수 대비 약세" in result['log']
+    assert result['type'] == 'rs_skip', f"RS 게이트가 걸리지 않았다: {result}"
+    assert "RS필터 보류" in result['log'], f"보류 사유가 로그에 없다: {result['log']}"
+    assert "≤ 지수" in result['log']
 
 
 @patch('modules.analysis.get_index_momentum', return_value=5.0)

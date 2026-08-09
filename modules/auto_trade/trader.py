@@ -5346,15 +5346,19 @@ class AutoTrader:
                 
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
-                if correlation_skip_msg:
-                    if is_buy_state:
-                        log_msg += f" {correlation_skip_msg}"
+                # [보류 집계의 의미] '보류'는 **살 수 있었는데 게이트가 막았다**는 뜻이어야 한다.
+                #  애초에 매수 상태가 아니었던 종목까지 보류로 세면, 주기 말미 요약
+                #  ("유사 테마로 매수 보류 N종목")이 실제 기회비용을 부풀린다. 운용자가
+                #  그 숫자를 보고 상관 임계값이나 RS 설정을 조정하면 틀린 근거로 판단하게 된다.
+                #  종전에는 사유 문구만 is_buy_state로 걸러내고 반환 타입은 그대로 두어,
+                #  집계에는 들어가는데 로그엔 이유가 없는 상태였다.
+                if correlation_skip_msg and is_buy_state:
+                    log_msg += f" {correlation_skip_msg}"
                     return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
-                elif rs_skip_msg:
-                    if is_buy_state:
-                        log_msg += f" {rs_skip_msg}"
+                elif rs_skip_msg and is_buy_state:
+                    log_msg += f" {rs_skip_msg}"
                     return {'type': 'rs_skip', 'name': name, 'log': log_msg}
-                    
+
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
 

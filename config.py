@@ -1947,7 +1947,18 @@ def reset_all_settings():
         settings.SELL_STRATEGY = {
             "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False,
             "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
-            "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
+            "MAX_ATR_STOP_LOSS_RATE": -15.0,
+            # [Fix 2026-08-09] 동적 ATR 캡 8키가 이 초기화 경로에만 빠져 있었다. 키를
+            #  추가할 때 위 [동기화] 주석이 요구하는 불변식을 지키지 못한 것으로,
+            #  2026-08-05 RISK_SCALING_PARAMS와 같은 계열의 누락이다.
+            #  '전체 설정 초기화'를 누르면 이 키들이 SELL_STRATEGY에서 사라지고
+            #  _save_dynamic_config()가 그대로 파일에 써서 dynamic_config.json이 조용히
+            #  퇴화한다(읽는 쪽 폴백이 맞아 동작은 유지되지만, 폴백이 한 번이라도
+            #  어긋나면 그때부터 설정과 실제 동작이 갈린다).
+            "ATR_CAP_DYNAMIC": True, "ATR_CAP_VOL_WINDOW": 60, "ATR_CAP_VOL_REF_MIN": 250,
+            "ATR_CAP_VOL_POWER": 0.5, "ATR_CAP_RATIO_MIN": 0.4, "ATR_CAP_RATIO_MAX": 3.0,
+            "ATR_CAP_FLOOR": -35.0, "ATR_CAP_CEIL": -6.0,
+            "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
             "USE_BREAK_EVEN_STOP": False,
             "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,

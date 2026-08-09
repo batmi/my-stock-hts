@@ -82,28 +82,68 @@ def create_mock_df(pattern_type='same', length=150):
 @patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
 @patch('modules.auto_trade.api.get_chart_data')
 def test_correlation_skip_high_correlation(mock_chart, mock_vol, mock_market):
-    """1. 상관계수가 임계값(0.7) 이상일 때 매수가 정상적으로 보류(Skip)되는가?"""
+    """1. 매수 신호가 난 종목이 보유분과 고상관이면 보류(Skip)되는가?
+
+    [중요] 후보가 **매수 상태여야** 이 게이트가 의미를 갖는다. 종전 이 테스트는 목 데이터가
+    '주의' 상태를 만들어 게이트에 닿지 못한 채, 매수 대상도 아닌 종목이 correlation_skip으로
+    반환되던 옛 동작에 기대고 있었다(2026-08-09 수정). analyze_buy를 고정해 실제 진입
+    후보를 만든 뒤 상관 게이트만 검증한다.
+    """
     trader = AutoTrader()
     trader.is_running = True
-    
+
     # 후보 종목과 보유 종목이 완벽히 동일한 패턴으로 움직임 (상관계수 1.0)
     df_cand = create_mock_df('same', 150)
     df_hold = create_mock_df('same', 150)
-    
+
     mock_chart.return_value = df_cand
     holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': df_hold}}
     item = {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}
-    
-    result = trader._analyze_candidate_worker(
-        item, holding_codes={'000660'}, rules_map={}, restricted_stocks={}, 
-        market_regime_adj={'KOSPI': 0.0}, safe_delay=0, reentry_hurdles={}, holdings_dfs=holdings_dfs, holding_groups_map={'000660': 'stocks_kr'}
-    )
-    
-    # 검증: 상관관계 스킵 타입으로 반환되어야 함
+
+    with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
+        mock_analyze.return_value = {
+            'action': 'buy', 'state': '매수', 'score': 8.0, 'rsi': 55, 'adx': 30, 'cci': 50,
+            'atr': 1000.0, 'psar': 0, 'macd': 1.0, 'macd_signal': 0.5, 'w52_pos': 80.0,
+        }
+        result = trader._analyze_candidate_worker(
+            item, holding_codes={'000660'}, rules_map={}, restricted_stocks={},
+            market_regime_adj={'KOSPI': 0.0}, safe_delay=0, reentry_hurdles={},
+            holdings_dfs=holdings_dfs, holding_groups_map={'000660': 'stocks_kr'}
+        )
+
     assert result is not None
-    assert result['type'] == 'correlation_skip'
-    assert "높은 상관관계" in result['log']
+    assert result['type'] == 'correlation_skip', f"상관 게이트가 걸리지 않았다: {result}"
+    assert "상관관계 보류" in result['log'], f"보류 사유가 로그에 없다: {result['log']}"
     assert ">= 0.7" in result['log']
+
+
+@patch('modules.auto_trade.AutoTrader._get_stock_market_type', return_value='KOSPI')
+@patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
+@patch('modules.auto_trade.api.get_chart_data')
+def test_non_buy_candidate_is_not_counted_as_a_correlation_skip(mock_chart, mock_vol, mock_market):
+    """매수 상태가 아니었던 종목은 '보류'로 집계하지 않는다.
+
+    주기 말미 요약은 "유사 테마로 매수 보류 N종목"이라고 보고한다. 살 수 있었던 것이
+    아니면 그 숫자는 기회비용이 아니다 — 부풀린 숫자를 근거로 상관 임계값을 조정하면
+    엉뚱한 방향으로 튜닝하게 된다.
+    """
+    trader = AutoTrader()
+    trader.is_running = True
+
+    mock_chart.return_value = create_mock_df('same', 150)
+    holdings_dfs = {'000660': {'name': 'SK하이닉스', 'df': create_mock_df('same', 150)}}
+
+    with patch.object(trader.strategy, 'analyze_buy') as mock_analyze:
+        mock_analyze.return_value = {
+            'action': 'wait', 'state': '주의', 'score': 3.0, 'rsi': 53, 'adx': 69, 'cci': -125,
+        }
+        result = trader._analyze_candidate_worker(
+            {'code': '005930', 'name': '삼성전자', 'group': 'stocks_kr'}, {'000660'}, {}, {},
+            {'KOSPI': 0.0}, 0, {}, holdings_dfs, {'000660': 'stocks_kr'}
+        )
+
+    assert result['type'] == 'log_only', (
+        f"매수 후보가 아닌 종목이 '{result['type']}'으로 집계됐다 — 보류 통계가 부풀려진다")
 
 @patch('modules.auto_trade.AutoTrader._get_stock_market_type', return_value='KOSPI')
 @patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)
