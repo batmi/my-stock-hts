@@ -531,7 +531,20 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_at
     """보유 종목의 매도 판단(analyze_sell)에 넘길 임계값을 조립한다. (부수효과 없음)
 
     시스템 트레이딩 루프(_check_sell_conditions)와 잔고 화면의 보유 분석이 같은
-    임계값을 쓰도록 SSOT로 둔다. 개별 룰 > ATR 수량가중 손절 > 전역 설정 순으로 덮어쓴다.
+    임계값을 쓰도록 SSOT로 둔다.
+
+    [손절률 우선순위] 진입 시 기록된 ATR 손절률(수량가중) > 전역 설정. 개별 룰의
+    stop_loss는 **기록값보다 타이트할 때만** 이를 덮는다.
+
+      · 조이는 방향은 받는다 — 운용자가 그 종목만 빨리 자르겠다는 명시적 지시이고,
+        손실 상한이 줄어들 뿐이라 리스크 한도를 깨지 않는다.
+      · 넓히는 방향은 거부한다 — 포지션 크기는 진입 시점의 손절폭을 전제로 계산됐다.
+        사후에 손절을 넓히면 그 포지션의 실제 손실이 사이징이 가정한 상한을 넘는다
+        (자본대비 리스크 한도가 명목만 남는다).
+
+    종전에는 ATR 기록값이 룰을 무조건 덮어써서, 운용자가 룰로 손절을 조여도 **조용히
+    무시**됐다(룰에서 use_atr_stop=False까지 함께 꺼야만 반영 — 발견하기 어렵다).
+    docstring은 '개별 룰 최우선'이라 적혀 있어 코드와 반대였다.
 
     fallback_atr_rate: 매수 기록이 없어 ATR 손절률을 못 구할 때 쓸 복원값
                        (entry_atr_stop_rate). 기록에서 구한 값이 항상 우선한다.
@@ -605,6 +618,29 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_at
             applied_sl_rate = fb
 
     if applied_sl_rate is not None:
+        # 룰이 더 타이트하면 룰을 살린다(위 우선순위 주석 참조). 손절률은 음수이므로
+        #  '더 타이트' = 0에 더 가까움 = 더 큼.
+        rule_sl = None
+        if rule:
+            try:
+                rv = float(rule_value(rule, 'stop_loss', 0) or 0)
+                if rv < 0:
+                    rule_sl = rv
+            except (TypeError, ValueError):
+                rule_sl = None
+
+        if rule_sl is not None and rule_sl > applied_sl_rate:
+            thresholds["STOP_LOSS_RATE"] = rule_sl
+            thresholds["ATR_APPLIED_SL_RATE"] = rule_sl
+            return thresholds
+
+        if rule_sl is not None and rule_sl < applied_sl_rate:
+            logger.info(
+                f"[손절 우선순위] 개별 룰의 손절({rule_sl:.2f}%)이 진입 시 기록된 "
+                f"ATR 손절({applied_sl_rate:.2f}%)보다 넓어 적용하지 않습니다 — "
+                f"포지션 크기가 기록값을 전제로 계산되어 있어, 넓히면 실제 손실이 "
+                f"사이징이 가정한 상한을 넘습니다.")
+
         thresholds["STOP_LOSS_RATE"] = applied_sl_rate
         # 손절 사유 표기('ATR손절')·화면 표시용 마커. analyze_sell은 이 키를 읽지 않는다.
         thresholds["ATR_APPLIED_SL_RATE"] = applied_sl_rate
