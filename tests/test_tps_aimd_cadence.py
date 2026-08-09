@@ -77,47 +77,76 @@ def test_recovery_to_ceiling_takes_realistic_time(sess):
         f"바닥에서 천장까지 {windows_needed:.0f}초 — 너무 빨라 천장에 상시 붙는다")
 
 
-def test_bounds_stay_below_nominal_limit(sess):
-    """실효 한도는 명목 한도(20 TPS)를 넘지 않는다."""
+def test_bounds_stay_within_nominal_limit(sess):
+    """실효 한도는 명목 한도(20 TPS)를 넘지 않는다.
+
+    [변경 2026-08-09] 종전에는 천장을 명목보다 낮게(0.98) 두었으나, 실측 무릎이 6 TPS라
+    천장이 어디든 도달할 일이 없었다. 시작·천장을 명목에 맞추고 컨트롤러가 내려오게 한다.
+    """
     lo, hi, start = sess._real_tps_bounds()
-    assert lo < start <= hi < config.REAL_TX_PER_SECOND
+    assert lo < start <= hi <= config.REAL_TX_PER_SECOND
 
 
-def test_rate_limit_logs_observed_send_rate(sess, caplog):
-    """[진단] 거부 시점의 클라이언트 실제 전송률을 남긴다.
+def test_rate_limit_log_is_aggregated_and_diagnostic(sess, caplog):
+    """[핵심] 거부 로그는 집계 한 줄이되, 원인 후보를 가르는 값은 전부 담는다.
 
-    게이트는 한 프로세스가 실효 한도를 넘길 수 없게 만든다. 그런데도 서버가 거부하면
-    원인은 게이트 밖(다른 프로세스·낮은 계정 한도)이며, 둘은 '그 순간 우리가 실제로
-    몇 건을 보냈는가'로만 갈린다. 추측하지 않으려면 그 값이 로그에 있어야 한다.
+    거부는 초당 수 건까지 나므로 건건이 WARNING을 남기면 로그가 그것만으로 찬다.
+    그렇다고 값을 빼면 사후 분석이 다시 추측으로 돌아간다 — 실제로 그래서 운영 로그
+    495건을 재분석해야 했다. 첫 거부는 즉시, 이후는 주기마다 한 줄로 묶는다.
     """
     import logging
-    now = time.time()
-    sess.request_history_real = [now - 0.1, now - 0.2, now - 0.3, now - 1.05]
+
     sess.adaptive_limit_real = 18.0
+    sess.gate_grants_real = 500
 
     with caplog.at_level(logging.WARNING, logger="api"):
-        sess._tps_on_rate_limit_real()
+        sess._tps_on_rate_limit_real(
+            url="https://x/uapi/domestic-stock/v1/quotations/inquire-price?a=1",
+            tr_id="FHKST01010100")
 
     msg = "\n".join(r.message for r in caplog.records)
     assert "EGW00201" in msg
-    # 종전 문구는 '직전 1초 전송'이었는데, 실제로는 응답 수신 시각 기준이라 RTT만큼
-    #  밀린 창을 재고 있었다. 어느 시각 기준인지 이름으로 드러낸다.
-    assert "수신시각 기준 1초 3건" in msg, f"1초 내 전송 건수가 없거나 틀리다: {msg}"
-    assert "1.1초 창 4건" in msg
-    assert "TPS" in msg
+    assert "첫 거부" in msg, f"첫 거부는 즉시 남아야 한다: {msg}"
+    assert "TR FHKST01010100" in msg, f"거부된 요청을 특정할 수 없다: {msg}"
+    assert "스레드" in msg and "실효 한도 18.00" in msg
+    assert "미경유 재전송" in msg, "게이트 아래 누출 여부가 빠졌다"
+    assert "중복 프로세스" in msg, "다른 프로세스 여부가 빠졌다"
 
 
-def test_floor_protects_throughput(sess):
-    """[실측 근거] 하한을 내려도 거부는 줄지 않고 처리량만 깎인다.
+def test_rate_limit_log_does_not_spam(sess, caplog):
+    """주기 안에서는 한 줄만 남기고 나머지는 묶는다(백오프는 매번 적용된다)."""
+    import logging
 
-    2026-08-05 실측: 첫 거부 시점의 전송률은 9건/초였고 그때 실효 한도는 18.2였다 —
-    **우리 한도에 닿기도 전에 거부당한다.** 한도를 5.69까지 내려도 거부 지점은 그대로
-    7~10건/초였고, 종목분석만 눈에 띄게 느려졌다. 그래서 하한은 처리량을 지키는 값으로
-    되돌렸다. 부하는 한도가 아니라 호출 수(후보당 호가 REST)로 줄여야 한다.
+    sess.adaptive_limit_real = 18.0
+    with caplog.at_level(logging.WARNING, logger="api"):
+        for _ in range(30):
+            sess._tps_on_rate_limit_real(tr_id="FHKST01010100")
+
+    lines = [r for r in caplog.records if "EGW00201" in r.message]
+    assert len(lines) == 1, f"거부 30건에 로그가 {len(lines)}줄 나왔다 — 집계가 안 된다"
+    assert sess.adaptive_limit_real < 18.0 * 0.9, "로그를 묶느라 백오프까지 건너뛰었다"
+
+
+def test_band_can_reach_the_measured_knee(sess):
+    """[핵심] AIMD 밴드는 실측 무릎을 품어야 한다 — 그러지 못하면 컨트롤러가 정지한다.
+
+    [실측 2026-08-09 · tools/probe_kis_tps.py 고정 속도 스윕]
+      앱키 2개(REAL·VIRT) × 기기 2대에서 같은 무릎이 나왔다.
+        ~5 TPS 거부 0% · 6 TPS 1.7% · 7 TPS 12.9% · 8 TPS 14.4%
+
+    종전 밴드는 [17.0, 19.6]으로, 무릎(6)보다 **통째로 위**에 있었다. 그래서 어떤 입력을
+    줘도 하한에 눌린 채 움직일 수 없었고, 운영 로그 495건(08-06~08-08)의 100%가
+    '하한 도달'이었다 — AIMD가 4일 내내 정지 상태였다는 뜻이다.
+
+    (종전 이 자리에는 '하한을 내려도 거부는 그대로고 처리량만 깎인다'는 2026-08-05
+     관측이 근거로 박혀 있었다. 그 관측은 지금 고친 잘못된 지표(수신 시각 기준 전송률)로
+     읽은 것이라 기각한다. 통제된 속도로 다시 재니 무릎은 분명히 존재했다.)
     """
-    lo, _hi, _start = sess._real_tps_bounds()
-    assert lo >= 12.0, (
-        f"하한 {lo:.1f} TPS — 너무 낮으면 거부는 그대로인데 후보 분석만 느려진다")
+    lo, hi, _start = sess._real_tps_bounds()
+    knee = 6.0
+    assert lo < knee < hi, (
+        f"밴드 [{lo:.2f}, {hi:.2f}]가 실측 무릎 {knee} TPS를 품지 못한다 — "
+        f"컨트롤러가 한쪽 끝에 눌려 적응이 멈춘다")
 
 
 def test_backoff_descends_then_holds_at_floor(sess):
@@ -125,7 +154,7 @@ def test_backoff_descends_then_holds_at_floor(sess):
     lo, _hi, _start = sess._real_tps_bounds()
     sess.adaptive_limit_real = _hi          # 천장에서 시작
     seen = []
-    for _ in range(20):
+    for _ in range(40):   # 명목 20 → 하한 1까지 ×0.9 로 약 29회 필요
         sess._tps_on_rate_limit_real()
         seen.append(sess.adaptive_limit_real)
 
@@ -150,44 +179,6 @@ def test_single_reject_backs_off_once(sess):
 # ==========================================================
 # [추가 2026-08-09] 거부 원인을 가르는 계측
 # ==========================================================
-def test_rate_limit_log_carries_cause_discriminators(sess, caplog):
-    """[핵심] 거부 로그만 보고 원인 후보를 가를 수 있어야 한다.
-
-    후보는 셋이다 — (a) 같은 앱키를 쓰는 다른 프로세스, (b) 명목보다 낮은 계정 한도,
-    (c) 게이트를 안 거친 재전송. 종전 로그에는 셋 중 어느 것도 판정할 값이 없어서
-    분석이 매번 추측에서 멈췄다. 실측 495건을 다시 뜯어야 했던 이유가 이것이다.
-    """
-    import logging
-    now = time.time()
-    sent_at = now - 0.4                     # 응답이 0.4초 뒤에 돌아온 상황
-    sess._send_log_real.extend([sent_at - 0.1, sent_at - 0.2, sent_at - 0.3,
-                                sent_at - 0.9, sent_at - 1.4])   # 마지막 1건은 창 밖
-    sess.request_history_real.append(now - 0.05)
-    sess.gate_grants_real = 1234
-    sess.adaptive_limit_real = 18.0
-
-    with caplog.at_level(logging.WARNING, logger="api"):
-        sess._tps_on_rate_limit_real(url="https://x/uapi/domestic-stock/v1/quotations/inquire-price?a=1",
-                                     tr_id="FHKST01010100", sent_at=sent_at)
-
-    msg = "\n".join(r.message for r in caplog.records)
-    assert "전송시각 기준 1초 4건" in msg, f"전송 시각 기준 전송률이 없다: {msg}"
-    assert "RTT 0.4" in msg, f"전송→응답 지연이 없다: {msg}"
-    assert "TR=FHKST01010100" in msg and "URL=inquire-price" in msg, f"거부된 요청을 특정할 수 없다: {msg}"
-    assert "게이트 통과 1,234건" in msg
-    assert "게이트 미경유 재전송" in msg
-    assert "중복 프로세스" in msg
-
-
-def test_send_log_survives_history_pruning(sess):
-    """전송 시각 링버퍼는 1.1초 창(히스토리)이 잘려도 남는다.
-
-    응답이 돌아왔을 때 '보낼 때 몇 건이었나'를 되짚으려면, 게이트가 이미 지워 버린
-    구간까지 남아 있어야 한다. 둘을 같은 자료구조로 쓰면 이 진단은 불가능하다.
-    """
-    assert sess._send_log_real is not sess.request_history_real
-
-
 def test_adapter_retries_are_sealed():
     """[회귀 방지] 어댑터 레벨 재시도는 0이어야 한다.
 

@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
-from collections import deque
+from collections import Counter, deque
 import config
 # yfinance는 import 시 'default::DeprecationWarning:^yfinance' 필터를 등록해 자기 경고를 강제 노출한다.
 # warnings 필터는 나중 등록분이 앞서므로, yfinance import '뒤'에 다시 걸어야 억제가 유효하다.
@@ -1845,12 +1845,17 @@ class ThrottledSession(requests.Session):
         # [Fix] 가산 증가를 마지막으로 적용한 시각. AIMD의 '증가'는 요청당이 아니라
         #  윈도우(1초)당 한 번이어야 한다 — 아래 _tps_on_success_real 주석 참조.
         self._last_tps_raise = 0.0
-        # [진단 2026-08-09] 전송 시각 링버퍼(최근 5초). request_history_real 은 게이트가
-        #  1.1초로 잘라내므로, 응답이 돌아온 뒤에는 '보낼 때 몇 건이었나'를 되짚을 수 없다.
-        #  거부 원인을 가르려면 수신 시각이 아니라 전송 시각 기준 전송률이 필요하다.
-        #  (항목 수는 5초 × 20 TPS ≈ 100개 — 라즈베리파이에서도 무시할 수 있는 크기다)
-        self._send_log_real = deque()
         self.gate_grants_real = 0      # 게이트를 통과한 누적 전송 건수(실전)
+        # [로그 집계] 거부는 초당 수 건까지 나므로 건건이 WARNING을 남기면 로그가 그것만으로
+        #  찬다. TPS_LOG_INTERVAL_SEC 마다 한 줄로 묶되(첫 거부는 즉시), 사후에 상황을
+        #  재구성할 값은 그 한 줄에 모두 담는다.
+        self._rl_count = 0
+        self._rl_window_start = 0.0
+        self._rl_limit_from = 0.0
+        self._rl_grants_from = 0
+        self._rl_trs = Counter()
+        self._rl_threads = Counter()
+        self._rl_last_emit = 0.0
 
     def _real_tps_bounds(self):
         nominal = config.REAL_TX_PER_SECOND
@@ -1879,25 +1884,25 @@ class ThrottledSession(requests.Session):
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
             self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
 
-    def _tps_on_rate_limit_real(self, url=None, tr_id=None, sent_at=None):
-        """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소(마진 확대)시킨다.
+    def _tps_on_rate_limit_real(self, url=None, tr_id=None):
+        """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소시키고, 거부를 집계한다.
 
-        [진단] 게이트는 1.1초 창 한도와 최소 간격을 동시에 걸어, 한 프로세스가 실효
-        한도를 넘길 수 없다. 그런데도 서버가 거부한다면 원인은 게이트 밖이다 —
-        같은 앱키를 쓰는 다른 프로세스이거나, 계정의 실제 한도가 명목(20 TPS)보다
-        낮거나, 우리 창 계산이 서버의 1초 카운터와 어긋난 것이다.
+        [설계] 실효 한도를 설정으로 못 박지 않는다. 명목(20)에서 출발해 거부가 나면 물러나고
+        멎으면 되올린다 — 그날의 무릎을 서버가 알려주게 한다. 이게 성립하려면 밴드가 실제
+        한도를 걸쳐야 하는데, 종전 밴드 [17, 19.6]은 실측 무릎(6)보다 통째로 위에 있어
+        컨트롤러가 하한에 눌린 채 4일을 보냈다(운영 로그 495건 중 100%가 '하한 도달').
 
-        [Fix 2026-08-09] 종전 로그는 그 셋을 가르지 못했다. 실측(08-06~08-08, 495건)에서
-        거부 시점의 전송률은 8~9건/초에 고정돼 있었는데, 이는 저우선순위 캡(17×0.5=8.5)에
-        **정확히 붙은 값**이다. 즉 '한도보다 낮은데 거부됐다'가 아니라 '자기 캡을 포화시킨
-        상태에서 거부됐다'였고, 종전 문구는 근거보다 한 칸 앞서 단정하고 있었다.
-        원인을 가르려면 세 가지가 더 필요하다.
-         1) 전송 '시각' 기준 전송률. 종전 값은 응답 수신 시각 기준이라 RTT만큼 밀린 창을
-            재고 있었다 — 낮은 전송률이 측정 아티팩트인지 실제인지 구분할 수 없었다.
-         2) 거부된 요청의 TR/URL. 특정 TR에 몰리면 엔드포인트 하위 한도, 고르게 퍼지면
-            앱키 단위 문제다.
-         3) 게이트를 안 거친 재전송 누적. 0이 아니면 원인은 게이트 '밖'이 아니라 '아래'다.
+        [로그] 건건이 남기지 않는다. 거부는 초당 수 건까지 나므로 그것만으로 로그가 찬다.
+        TPS_LOG_INTERVAL_SEC 마다 한 줄로 묶되 첫 거부는 즉시 남기고, 사후에 상황을
+        재구성할 값은 그 한 줄에 모두 담는다 — 전송률·한도 궤적·최다 TR·스레드·게이트
+        미경유 재전송·중복 프로세스. 원인 후보를 가르는 값들이라 하나도 빼지 않는다.
         """
+        try:
+            th = threading.current_thread().name
+        except Exception:
+            th = "?"
+
+        emit = None
         with self.lock:
             lo, hi, start = self._real_tps_bounds()
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
@@ -1905,37 +1910,51 @@ class ThrottledSession(requests.Session):
             # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
             now = time.time()
             self._last_tps_raise = now
-            recv_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
-            sent_window = len(self.request_history_real)
-            at_floor = self.adaptive_limit_real <= lo + 1e-9
-            grants = self.gate_grants_real
-            # 전송 시각 창은 게이트 히스토리가 아니라 진단 링버퍼에서 센다
-            #  (히스토리는 1.1초로 잘려 이미 지워졌을 수 있다).
-            send_1s = (sum(1 for t in self._send_log_real if sent_at - 1.0 < t <= sent_at)
-                       if sent_at else None)
 
-        try:
-            th = threading.current_thread().name
-        except Exception:
-            th = "?"
+            if self._rl_count == 0:                 # 집계 창 시작
+                self._rl_window_start = now
+                self._rl_limit_from = cur
+                self._rl_grants_from = self.gate_grants_real
+            self._rl_count += 1
+            self._rl_trs[tr_id or (str(url or '-').split('?')[0].rstrip('/').split('/')[-1] or '-')] += 1
+            self._rl_threads[th] += 1
 
-        head = ""
-        if send_1s is not None:
-            head = f"전송시각 기준 1초 {send_1s}건 / "
-        rtt = f", RTT {max(0.0, now - sent_at):.2f}s" if sent_at else ""
-        where = ""
-        if tr_id or url:
-            tail = str(url or "").split('?')[0].rstrip('/').split('/')[-1]
-            where = f", TR={tr_id or '-'}, URL={tail or '-'}"
+            interval = float(getattr(config, 'TPS_LOG_INTERVAL_SEC', 60) or 0)
+            if now - self._rl_last_emit >= interval:
+                span = max(1e-3, now - self._rl_window_start)
+                emit = {
+                    'n': self._rl_count,
+                    'span': span,
+                    'rate': (self.gate_grants_real - self._rl_grants_from) / span,
+                    'from': self._rl_limit_from,
+                    'to': self.adaptive_limit_real,
+                    'floor': self.adaptive_limit_real <= lo + 1e-9,
+                    'trs': self._rl_trs.most_common(2),
+                    'tr_kinds': len(self._rl_trs),
+                    'threads': self._rl_threads.most_common(1),
+                    'th_kinds': len(self._rl_threads),
+                }
+                self._rl_last_emit = now
+                self._rl_count = 0
+                self._rl_trs = Counter()
+                self._rl_threads = Counter()
+
+        if not emit:
+            return
+
+        def _top(pairs, kinds):
+            body = "·".join(f"{k}×{v}" for k, v in pairs)
+            return f"{body} 외 {kinds - len(pairs)}종" if kinds > len(pairs) else body
+
+        head = (f"{emit['n']}건(첫 거부)" if emit['span'] < 1.0 and emit['n'] == 1
+                else f"{emit['n']}건/{emit['span']:.0f}s")
         logger.warning(
-            f"[TPS] EGW00201 — {head}수신시각 기준 1초 {recv_1s}건 / 1.1초 창 {sent_window}건"
-            f"{rtt}, 실효 한도 {cur:.2f} → {self.adaptive_limit_real:.2f} TPS"
-            f"{' (하한 도달)' if at_floor else ''}, 스레드={th}{where} | "
-            f"게이트 통과 {grants:,}건 · 게이트 미경유 재전송 {GatedRetry.ungated_resends:,}건 · "
-            f"{instance_lock.appkey_duplicate_note()}. "
-            f"자기 캡을 포화시키지 않았는데 거부되면 원인은 게이트 밖이고"
-            f"(같은 앱키를 쓰는 다른 프로세스 · 명목보다 낮은 계정 한도), "
-            f"'게이트 미경유 재전송'이 0이 아니면 원인은 게이트 아래다.")
+            f"[TPS] EGW00201 {head} — 전송 {emit['rate']:.1f}/s, "
+            f"실효 한도 {emit['from']:.2f}→{emit['to']:.2f} TPS{' (하한)' if emit['floor'] else ''}, "
+            f"TR {_top(emit['trs'], emit['tr_kinds'])}, "
+            f"스레드 {_top(emit['threads'], emit['th_kinds'])}, "
+            f"미경유 재전송 {GatedRetry.ungated_resends}, "
+            f"{instance_lock.appkey_duplicate_note()}")
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
@@ -1950,7 +1969,6 @@ class ThrottledSession(requests.Session):
             max_retries += 1
         
         response = None
-        sent_at = None
         # 거부 진단용. 어느 TR이 거부되는지가 '엔드포인트 하위 한도 vs 앱키 단위 한도'를 가른다.
         try:
             req_tr_id = (kwargs.get('headers') or {}).get('tr_id')
@@ -2000,26 +2018,25 @@ class ThrottledSession(requests.Session):
                             # 2. 최소 간격 체크 (고르게 분산)
                             time_since_last = now - history[-1] if history else float('inf')
 
-                            # [TPS 우선순위] 조회성 호출은 한도의 일부만 쓰고 간격도 더 벌린다.
-                            #  매매 스레드가 바쁘면 자연히 뒤로 밀리고, 한가하면 그대로 다 쓴다.
-                            #  (한도를 통째로 나누지 않고 '문턱만 낮추는' 방식이라 유휴 시 손해가 없다)
-                            share = 1.0
+                            # [TPS 우선순위] 조회성 호출은 매매용 예약분을 뺀 나머지만 쓴다.
+                            #  매매 판단·주문은 시각이 곧 가격이라 미룰 수 없고, 조회 메뉴는 몇 초
+                            #  늦어도 무방하다. 종전에는 비율(×0.5)로 쪼갰는데, 실효 한도가 AIMD로
+                            #  움직이면 비율은 틀린 도구다 — 한도 20에서 조회 10은 넉넉하지만 한도
+                            #  6에서 조회 3은 메뉴가 못 쓸 만큼 느리면서 매매 몫도 3뿐이다.
+                            #  절대량 예약은 한도가 어디로 가든 매매 헤드룸을 그대로 지킨다.
+                            gate_limit = effective_limit
+                            gate_interval = min_interval
                             if not is_priority:
-                                share = float(getattr(config, 'LOW_PRIORITY_TPS_SHARE', 0.5) or 1.0)
-                            gate_limit = max(1.0, effective_limit * share)
-                            gate_interval = min_interval / share if share > 0 else min_interval
+                                reserve = float(getattr(config, 'PRIORITY_RESERVE_TPS', 2.0) or 0.0)
+                                gate_limit = max(1.0, effective_limit - reserve)
+                                # 창 한도만 낮추고 간격을 그대로 두면 순간 버스트가 남는다.
+                                gate_interval = max(min_interval, 1.0 / gate_limit)
 
                             if len(history) < gate_limit and time_since_last >= gate_interval:
                                 history.append(now)
                                 current_tps = len(history)
                                 if is_real_server:
-                                    # [진단] 게이트 통과 누적 + 전송 시각 링버퍼(최근 5초).
-                                    #  히스토리(1.1초)와 달리 응답이 돌아온 뒤에도 '보낼 때'를
-                                    #  되짚을 수 있어야 거부 원인을 가른다.
-                                    self.gate_grants_real += 1
-                                    self._send_log_real.append(now)
-                                    while self._send_log_real and self._send_log_real[0] <= now - 5.0:
-                                        self._send_log_real.popleft()
+                                    self.gate_grants_real += 1   # [진단] 집계 로그의 전송률 산출용
                                 break # 락 해제 후 전송 진행
                             else:
                                 wait_from_window = (history[0] + window_size) - now if len(history) >= gate_limit else 0
@@ -2043,9 +2060,6 @@ class ThrottledSession(requests.Session):
                 if 'timeout' not in kwargs:
                     kwargs['timeout'] = config.DEFAULT_TIMEOUT
 
-                # [진단] 전송 시각. 레이트리밋 로그가 '수신 시각'이 아니라 이 시각을 기준으로
-                #  전송률을 계산한다(RTT만큼 밀린 창을 재던 문제 — _tps_on_rate_limit_real 참조).
-                sent_at = time.time()
                 response = super().request(method, url, *args, **kwargs)
 
                 if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
@@ -2087,7 +2101,7 @@ class ThrottledSession(requests.Session):
                             logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
                             if is_real_server:
                                 # [#7] 실효 TPS 곱셈 감소 (+ 거부된 요청의 TR·URL·전송시각 기록)
-                                self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id, sent_at=sent_at)
+                                self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id)
                                 # [Fix] 아래 msg_cd 분기가 같은 응답을 한 번 더 처리한다.
                                 #  한 번의 거부에 백오프가 두 번 걸려 실효 한도가 실제보다
                                 #  두 배 빠르게 내려가고, 진단 로그도 매번 두 줄씩 남았다.
@@ -2136,7 +2150,7 @@ class ThrottledSession(requests.Session):
                                     should_retry = True
                                     retry_reason = f"Rate Limit Exceeded ({msg_cd}): {msg1_disp}"
                                     if is_real_server and not rate_limited_handled:
-                                        self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id, sent_at=sent_at)
+                                        self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id)
                                 elif msg_cd == 'EGW00215' and 'inquire' not in url:
                                     # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
                                     req_body = kwargs.get('data', '')
