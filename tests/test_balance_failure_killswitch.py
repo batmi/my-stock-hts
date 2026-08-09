@@ -55,8 +55,16 @@ def trader():
     monitor.consecutive_errors = saved_monitor_errors
 
 
-def _drive(trader, balance_returns, max_cycles=None):
+def _drive(trader, balance_returns, max_cycles=None, server_healthy=False):
     """balance_returns 를 한 주기에 하나씩 흘려보내며 루프를 돌린다.
+
+    server_healthy: 연속 에러가 한도에 닿았을 때 증권사 서버가 살아 있는가.
+      _errors_are_not_the_server()가 api.check_server_health()로 이를 확인하고,
+      '서버는 멀쩡한데 우리 코드가 터지는' 경우에는 **일부러 대기하지 않는다**
+      (대기하면 매도 감시가 꺼져 손절·트레일링이 무방비가 되므로).
+      반드시 고정해야 한다 — 종전에는 패치하지 않아 테스트가 실제 KIS 서버로
+      네트워크를 쐈고, 응답 여부에 따라 결과가 뒤집혀 40% 확률로 실패했다.
+      (그 사이 실 API 유량까지 소모했다)
 
     반환: (sell_mock, buy_mock, recovery_mock)
     """
@@ -83,19 +91,21 @@ def _drive(trader, balance_returns, max_cycles=None):
     saved_interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
     config.SYSTEM_TRADING_INTERVAL = 0
     try:
-        return _drive_inner(trader, fake_balance, fake_recovery)
+        return _drive_inner(trader, fake_balance, fake_recovery, server_healthy)
     finally:
         config.SYSTEM_TRADING_INTERVAL = saved_interval
 
 
-def _drive_inner(trader, fake_balance, fake_recovery):
+def _drive_inner(trader, fake_balance, fake_recovery, server_healthy=False):
     with patch.object(trader, 'is_market_open', return_value=True), \
+         patch('modules.auto_trade.api.check_server_health', return_value=server_healthy), \
          patch.object(trader, '_check_sell_conditions') as sell_mock, \
          patch.object(trader, '_check_buy_conditions') as buy_mock, \
          patch.object(trader, '_wait_for_server_recovery', side_effect=fake_recovery) as rec_mock, \
          patch.object(trader.order_manager, 'manage_unfilled_orders'), \
          patch.object(trader, '_monitor_account_status'), \
          patch.object(trader, '_update_risk_scale'), \
+         patch.object(trader, '_update_market_indices_status'), \
          patch('modules.auto_trade.api.get_domestic_balance', side_effect=fake_balance), \
          patch('modules.auto_trade.api.get_deposit_balance',
                return_value={'deposit': 5000000, 'foreign_deposit': 0, 'd2_deposit': 5000000}), \
@@ -118,14 +128,32 @@ def test_balance_none_stops_trading_this_cycle(trader):
 
 
 def test_repeated_balance_failure_enters_wait_mode(trader):
-    """연속 실패가 임계에 닿으면 대기 모드(_wait_for_server_recovery)로 전환된다."""
+    """서버가 죽어 있고 연속 실패가 임계에 닿으면 대기 모드로 전환된다."""
     saved = config.SYSTEM_MAX_CONSECUTIVE_ERRORS
     config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 3
     try:
-        _, _, rec_mock = _drive(trader, [(None, None)] * 3)
+        _, _, rec_mock = _drive(trader, [(None, None)] * 3, server_healthy=False)
         assert rec_mock.called, (
             "잔고 조회가 연속 실패했는데 대기 모드로 넘어가지 않았다 — "
             "계좌 상태를 모르는 채 루프가 계속 돈다")
+    finally:
+        config.SYSTEM_MAX_CONSECUTIVE_ERRORS = saved
+
+
+def test_repeated_failure_does_not_wait_when_the_server_is_alive(trader):
+    """서버가 멀쩡하면 한도에 닿아도 대기하지 않는다 — 매도 감시를 끄지 않기 위해서다.
+
+    대기 모드는 주기를 통째로 붙잡는다. 서버 장애라면 주문 자체가 못 나가니 잃을 게
+    없지만, 코드 쪽 예외로 한도가 찬 것이라면 주문 경로는 살아 있는데 손절·트레일링만
+    꺼진다. 무방비 상태를 만드느니 진동하는 편이 낫다는 것이 이 분기의 취지다.
+    """
+    saved = config.SYSTEM_MAX_CONSECUTIVE_ERRORS
+    config.SYSTEM_MAX_CONSECUTIVE_ERRORS = 3
+    try:
+        _, _, rec_mock = _drive(trader, [(None, None)] * 3, server_healthy=True)
+        assert not rec_mock.called, (
+            "서버가 정상인데 대기 모드로 들어갔다 — 그 사이 매도 검사가 돌지 않아 "
+            "손절·트레일링이 무감시가 된다")
     finally:
         config.SYSTEM_MAX_CONSECUTIVE_ERRORS = saved
 

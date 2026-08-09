@@ -57,9 +57,35 @@ def block_side_effects_for_whole_session():
 
     _orig_request = _requests.Session.request
 
+    # [격리] 실 증권사 접속 차단. 테스트가 KIS로 나가면 세 가지가 동시에 나빠진다.
+    #  ① 결과가 서버 상태에 좌우돼 플래키해진다(실측: 킬스위치 테스트가 40% 확률로 실패했고,
+    #     원인은 _errors_are_not_the_server()의 check_server_health가 진짜로 나간 것이었다).
+    #  ② 운영 인스턴스의 유량(20 TPS)을 갉아먹는다.
+    #  ③ 토큰 발급은 앱키당 1분 1회다. 테스트 한 번이 실 운용 토큰 발급을 막을 수 있다.
+    #  차단은 예외가 아니라 **KIS 오류 응답 형태**로 돌려준다. 예외로 막으면
+    #  ThrottledSession.request의 재시도 루프가 백오프와 함께 MAX_RETRIES만큼 돌아
+    #  테스트 한 건이 100초까지 늘어난다(실측). rt_cd='1' 응답이면 재시도 없이
+    #  호출부가 '조회 실패' 경로를 그대로 타므로 빠르고 결정적이다.
+    #  '조용히 가짜 성공'이 되지 않는 것이 핵심이다 — 성공을 흉내 내지 않는다.
+    #  실 서버가 필요한 진단은 tools/ 에서 pytest 밖으로 돌린다.
+    _LIVE_HOSTS = ("koreainvestment.com", "tradingview.com", "finance.yahoo.com")
+
+    class _BlockedLiveResponse:
+        status_code = 200
+        text = '{"rt_cd": "1", "msg_cd": "TEST_BLOCKED"}'
+
+        @staticmethod
+        def json():
+            return {"rt_cd": "1", "msg_cd": "TEST_BLOCKED",
+                    "msg1": "[테스트 격리] 실 서버 접속이 차단되었습니다",
+                    "output": {}, "output1": [], "output2": []}
+
     def _guarded_request(self, method, url, *args, **kwargs):
-        if "api.telegram.org" in str(url):
+        u = str(url)
+        if "api.telegram.org" in u:
             return _FakeTelegramResponse()
+        if any(h in u for h in _LIVE_HOSTS):
+            return _BlockedLiveResponse()
         return _orig_request(self, method, url, *args, **kwargs)
 
     mp.setattr(_requests.Session, "request", _guarded_request)
