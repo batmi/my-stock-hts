@@ -1009,12 +1009,27 @@ class TelegramCommander:
             return f"⚠️ '{keyword}' 종목을 찾을 수 없습니다."
             
         data = auto_trade.load_restricted_stocks()
-        if code in data:
-            del data[code]
-            auto_trade.save_restricted_stocks(data)
-            return f"✅ [제한 종목 해제 완료]\n• 종목: {name}({code})\n\n자동매매 제한이 정상적으로 해제되었습니다."
-        else:
+        if code not in data:
             return f"⚠️ '{name}({code})' 종목은 현재 제한 목록에 없습니다."
+
+        # [계좌 스코프 보존] 항목을 통째로 지우면 안 된다. /addrestrict가 넣는 것은
+        #  전역 차단뿐인데, 같은 종목에 '계좌별 수동매매 보호'(운용자가 그 계좌에서 직접
+        #  매수해 시스템 자동매도에서 제외된 상태)가 함께 붙어 있을 수 있다. 통째 삭제는
+        #  운용자가 무관한 전역 차단을 푸는 순간 그 보호까지 조용히 걷어내고, 시스템이
+        #  운용자의 수동 매수분을 제 손절 기준으로 청산하게 만든다.
+        #  remove_restricted_stock(cano 미지정)은 전역 사유만 비우고 계좌 스코프는 남기며,
+        #  남은 사유가 하나도 없을 때만 항목을 삭제한다.
+        auto_trade.remove_restricted_stock(code)
+
+        remaining = auto_trade.load_restricted_stocks().get(code, {})
+        accounts = remaining.get('accounts', {}) if remaining else {}
+        msg = f"✅ [제한 종목 해제 완료]\n• 종목: {name}({code})\n\n전역 자동매매 제한이 해제되었습니다."
+        if accounts:
+            acc_list = ", ".join(accounts.keys())
+            msg += (f"\n\n⚠️ 계좌별 제한은 그대로 남아 있습니다: {acc_list}\n"
+                    f"(운용자가 해당 계좌에서 직접 매수한 종목이라 시스템 자동매도에서 제외된 상태입니다. "
+                    f"해제하려면 메뉴에서 계좌를 지정해 푸십시오.)")
+        return msg
 
     def _cmd_pending(self, args):
         self._send_reply("⏳ [미체결 주문 내역] 데이터를 조회 중입니다. 잠시만 기다려주세요...", sync=True)

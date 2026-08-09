@@ -906,7 +906,29 @@ class AutoTrader:
         else:
             msg += "\n(시스템 응답 지연으로 최종 자산 정보 생략)"
             self.log("스레드 종료 지연으로 최종 자산/잔고 조회 생략")
-            
+
+        # [운영 안전] 미체결 주문은 시스템을 꺼도 거래소에 살아 있다. 정지 뒤에 체결되면
+        #  손절·트레일링 감시가 전혀 없는 포지션이 된다. 위 '최종 보유 종목'은 정지 시점의
+        #  잔고라 그 주문을 보여주지 못하고 "보유 없음"으로 끝나므로, 운용자는 무감시
+        #  포지션이 생겼다는 것을 알 방법이 없다. 정지 시점에 명시적으로 알린다.
+        try:
+            pending = []
+            om = getattr(self, 'order_manager', None)
+            if om is not None:
+                with om._lock:
+                    for _code, _orders in (om.pending_orders or {}).items():
+                        if _orders:
+                            pending.append((_code, len(_orders)))
+            if pending:
+                total = sum(n for _, n in pending)
+                detail = ", ".join(f"{c}({n}건)" for c, n in pending)
+                msg += (f"\n\n⚠️ [미체결 주문 {total}건 잔존] {detail}\n"
+                        f"시스템을 꺼도 거래소의 주문은 살아 있습니다. 정지 후 체결되면 "
+                        f"손절·트레일링 감시가 없는 포지션이 됩니다 — 증권사 앱에서 "
+                        f"취소하거나 시스템을 다시 켜 주십시오.")
+        except Exception as e:
+            self.log(f"종료 시 미체결 주문 확인 실패: {e}")
+
         target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
         with utils.AccountContext(target_cano):
             from modules.telegram_bot import TelegramCommander
