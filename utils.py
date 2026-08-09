@@ -9,6 +9,7 @@ import api
 import constants
 from modules import market # [추가] 통합 지수 리스트 참조용
 import math
+import functools
 from contextlib import closing
 from rich.table import Table
 from rich import box
@@ -553,6 +554,51 @@ class AccountContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         context.trade_context.use_auto_account = self.original_state
+
+
+def system_trading_account():
+    """시스템 트레이딩이 쓰는 계좌 (cano, acnt_prdt_cd).
+
+    실전(mode 2)에서만 수동 계좌와 갈라지고, 모의·토스·가상투자는 세션 로드 시
+    auto_cano = cano로 동기화되므로 어느 모드에서든 이 함수 하나로 답이 나온다.
+    종전에는 이 삼항식이 trader.py에만 19곳 흩어져 있어, 한 곳이라도 빠뜨리면
+    주문이 조용히 수동 계좌로 새는 구조였다.
+    """
+    s = config.session
+    if s.is_simulation:
+        return s.cano, s.acnt_prdt_cd
+    return (s.auto_cano or s.cano), (s.auto_acnt_prdt_cd if s.auto_cano else s.acnt_prdt_cd)
+
+
+def inherit_account_context(fn):
+    """제출 스레드의 계좌 컨텍스트를 워커 스레드로 전파하는 래퍼.
+
+    [왜 필요한가] context.trade_context는 threading.local()이라 **스레드 간 상속되지
+    않는다**. 부모가 AccountContext(자동계좌) 안에서 ThreadPoolExecutor에 작업을
+    제출해도, 워커 스레드에서는 use_auto_account가 아예 미설정 상태이고 읽는 쪽이
+    모두 getattr(..., False) 폴백이라 **수동 계좌로 판정된다**.
+
+    그 결과 매도 워커(at_sell)에서 나가는 손절·트레일링 매도 주문과 매도가능수량
+    조회가 자동 계좌가 아니라 수동 계좌를 향했다. 자동 계좌로 사고 수동 계좌에서
+    파는 꼴이라, 손절이 '수량 0'으로 조용히 취소되거나 같은 종목의 수동 보유분이
+    대신 팔린다.
+
+    반드시 **제출 스레드에서** 호출해야 한다(그 시점 값을 캡처한다).
+        executor.submit(utils.inherit_account_context(worker), item)
+    """
+    captured = getattr(context.trade_context, 'use_auto_account', False)
+
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        prev = getattr(context.trade_context, 'use_auto_account', False)
+        context.trade_context.use_auto_account = captured
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            context.trade_context.use_auto_account = prev
+
+    return _wrapped
+
 
 def get_tick_size(price, is_overseas=False):
     """호가 단위(Tick Size) 반환"""

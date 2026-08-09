@@ -4709,8 +4709,13 @@ class AutoTrader:
                 except Exception:
                     logger.exception(f"[매도분석] {code} 실패 처리 중 2차 오류")
 
+        # [계좌 라우팅] 워커 스레드는 제출 스레드의 계좌 컨텍스트를 상속하지 않는다
+        #  (threading.local). 감싸지 않으면 이 안에서 나가는 손절·트레일링 매도 주문과
+        #  매도가능수량 조회가 자동매매 계좌가 아닌 수동 계좌로 향한다. 반드시 제출
+        #  스레드에서 래핑한다 — utils.inherit_account_context 주석 참조.
+        _sell_task = utils.inherit_account_context(_sell_worker_guarded)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_sell") as executor:
-            futures = [executor.submit(_sell_worker_guarded, item) for item in holdings]
+            futures = [executor.submit(_sell_task, item) for item in holdings]
             concurrent.futures.wait(futures)
 
     def _try_pyramid_buy(self, code, name, held_qty, current_price, profit_rate, result, last_buy, is_market_open, rule=None):

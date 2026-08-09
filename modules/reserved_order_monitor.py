@@ -504,7 +504,12 @@ class ReservedOrderMonitor:
             ord_dvsn = "00"
             price_str = str(int(order_price)) if order['market'] == 'KR' else str(order_price)
         
-        res = api.place_order(market_str, order['order_type'], order['code'], order['qty'], price_str, ord_dvsn)
+        # [계좌 라우팅] 예약주문은 등록 시점의 계좌(order['cano'])에 매여 있다. 이 감시 루프는
+        #  전용 스레드(ReservedOrderMonitor)에서 돌고, 계좌 컨텍스트는 threading.local이라
+        #  상속되지 않는다 — 명시하지 않으면 자동매매 계좌에 걸어 둔 예약이 수동 계좌에서
+        #  발주된다.
+        with utils.AccountContext(order.get('cano')):
+            res = api.place_order(market_str, order['order_type'], order['code'], order['qty'], price_str, ord_dvsn)
         if res.get('rt_cd') == '0':
             odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
             db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)

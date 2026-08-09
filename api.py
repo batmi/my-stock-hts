@@ -1839,36 +1839,132 @@ def _is_system_priority():
     return name.startswith(_SYSTEM_THREAD_PREFIXES)
 
 
-class ThrottledSession(requests.Session):
+class _RealTpsBucket:
+    """실전 서버 TPS 상태 한 벌.
+
+    [왜 나누나] KIS의 유량 한도(REAL_TX_PER_SECOND=20)는 **앱키 단위**다. 수동 계좌와
+    자동매매 계좌에 서로 다른 앱키를 쓰면 각각 20 TPS를 따로 받는데, 한 카운터로 묶어
+    세면 둘이 합쳐 20으로 눌려 실제 가용 용량의 절반을 스스로 버린다. 특히 운용자가
+    메뉴에서 조회를 돌리는 동안 시스템 트레이딩의 주문·판정이 그 조회와 같은 예산을
+    다투게 되는데, 이건 시각이 곧 가격인 쪽이 손해를 보는 구조다.
+
+    반대로 앱키가 실제로는 같은데 나눠 세면 합계 40 TPS가 되어 EGW00201을 자초한다.
+    그래서 버킷 배정은 '앱키가 실제로 다를 때만' 갈라진다(_real_bucket_key 참조).
+
+    AIMD 상태(적응 한도·백오프 시각)도 버킷마다 독립이어야 한다. 거부는 키 단위로
+    오므로, 한쪽 키가 물러난 것을 근거로 다른 키까지 낮추면 멀쩡한 예산을 버린다.
+    """
+    __slots__ = ("history", "adaptive_limit", "last_raise", "last_drop",
+                 "last_priority_grant", "grants",
+                 "rl_count", "rl_window_start", "rl_limit_from", "rl_grants_from",
+                 "rl_trs", "rl_threads", "rl_last_emit")
+
     def __init__(self):
-        super().__init__()
-        self.request_history_sim = deque()
-        self.request_history_real = deque()
-        self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
+        self.history = deque()
         # [#7] 실전 실효 TPS를 적응형으로 운행한다(AIMD).
         #  - 시작값: 명목 한도 × REAL_TPS_SAFETY(=0.9 마진). 성공이 누적되면 마진을 조금씩 줄여(가산 증가)
         #    실효 TPS를 점진 상향하고, EGW00201(초당 거래건수 초과)이 나면 곱셈 감소로 즉시 물러난다.
         #  - [REAL_TPS_SAFETY_MIN, REAL_TPS_SAFETY_MAX] 범위 내에서 적정 TPS로 자가 수렴한다.
-        self.adaptive_limit_real = None
+        self.adaptive_limit = None
         # [Fix] 가산 증가를 마지막으로 적용한 시각. AIMD의 '증가'는 요청당이 아니라
         #  윈도우(1초)당 한 번이어야 한다 — 아래 _tps_on_success_real 주석 참조.
-        self._last_tps_raise = 0.0
+        self.last_raise = 0.0
         # 곱셈 감소도 윈도우당 한 번이다(config.TPS_BACKOFF_WINDOW_SEC 주석 참조).
-        self._last_tps_drop = 0.0
+        self.last_drop = 0.0
         # 우선순위(매매) 스레드가 마지막으로 전송을 얻은 시각. 매매가 놀 때는 조회에게
         #  예약분을 돌려주기 위한 값이다.
-        self._last_priority_grant = 0.0
-        self.gate_grants_real = 0      # 게이트를 통과한 누적 전송 건수(실전)
+        self.last_priority_grant = 0.0
+        self.grants = 0                # 게이트를 통과한 누적 전송 건수(실전)
         # [로그 집계] 거부는 초당 수 건까지 나므로 건건이 WARNING을 남기면 로그가 그것만으로
         #  찬다. TPS_LOG_INTERVAL_SEC 마다 한 줄로 묶되(첫 거부는 즉시), 사후에 상황을
         #  재구성할 값은 그 한 줄에 모두 담는다.
-        self._rl_count = 0
-        self._rl_window_start = 0.0
-        self._rl_limit_from = 0.0
-        self._rl_grants_from = 0
-        self._rl_trs = Counter()
-        self._rl_threads = Counter()
-        self._rl_last_emit = 0.0
+        self.rl_count = 0
+        self.rl_window_start = 0.0
+        self.rl_limit_from = 0.0
+        self.rl_grants_from = 0
+        self.rl_trs = Counter()
+        self.rl_threads = Counter()
+        self.rl_last_emit = 0.0
+
+
+class ThrottledSession(requests.Session):
+    #  '수동(운용자)' 버킷은 기존 동작과 이름을 그대로 유지한다 — 아래 프로퍼티 참조.
+    BUCKET_MANUAL = "manual"
+    BUCKET_AUTO = "auto"
+
+    def __init__(self):
+        super().__init__()
+        self.request_history_sim = deque()
+        self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
+        self._real_buckets = {self.BUCKET_MANUAL: _RealTpsBucket(),
+                              self.BUCKET_AUTO: _RealTpsBucket()}
+
+    # ---- 앱키별 버킷 배정 -------------------------------------------------
+    def _real_bucket_key(self):
+        """이 스레드의 요청이 어느 앱키로 나가는지 판정한다.
+
+        판정 근거는 실제로 헤더에 실리는 키와 같아야 한다(utils.get_common_headers,
+        api.call_api의 키 선택 분기). 그쪽은 auto_app_key가 비면 real_app_key로
+        폴백하므로, 여기서도 '자동 키가 있고 수동 키와 다를 때'만 auto로 가른다.
+        """
+        s = config.session
+        if s.is_simulation:
+            return self.BUCKET_MANUAL
+        if getattr(context.trade_context, 'use_auto_account', False):
+            auto = getattr(s, 'auto_app_key', '')
+            if auto and auto != s.real_app_key:
+                return self.BUCKET_AUTO
+        return self.BUCKET_MANUAL
+
+    def _real_bucket(self):
+        return self._real_buckets[self._real_bucket_key()]
+
+    # ---- 하위 호환 별칭 ---------------------------------------------------
+    #  기존 코드·테스트가 쓰던 평면 속성은 '수동' 버킷을 가리킨다. 계좌를 분리하지
+    #  않은 환경에서는 버킷이 하나뿐이라 종전과 완전히 동일하게 동작한다.
+    @property
+    def request_history_real(self):
+        return self._real_buckets[self.BUCKET_MANUAL].history
+
+    @property
+    def adaptive_limit_real(self):
+        return self._real_buckets[self.BUCKET_MANUAL].adaptive_limit
+
+    @adaptive_limit_real.setter
+    def adaptive_limit_real(self, v):
+        self._real_buckets[self.BUCKET_MANUAL].adaptive_limit = v
+
+    @property
+    def _last_tps_raise(self):
+        return self._real_buckets[self.BUCKET_MANUAL].last_raise
+
+    @_last_tps_raise.setter
+    def _last_tps_raise(self, v):
+        self._real_buckets[self.BUCKET_MANUAL].last_raise = v
+
+    @property
+    def _last_tps_drop(self):
+        return self._real_buckets[self.BUCKET_MANUAL].last_drop
+
+    @_last_tps_drop.setter
+    def _last_tps_drop(self, v):
+        self._real_buckets[self.BUCKET_MANUAL].last_drop = v
+
+    @property
+    def _last_priority_grant(self):
+        return self._real_buckets[self.BUCKET_MANUAL].last_priority_grant
+
+    @_last_priority_grant.setter
+    def _last_priority_grant(self, v):
+        self._real_buckets[self.BUCKET_MANUAL].last_priority_grant = v
+
+    @property
+    def gate_grants_real(self):
+        return self._real_buckets[self.BUCKET_MANUAL].grants
+
+    @gate_grants_real.setter
+    def gate_grants_real(self, v):
+        self._real_buckets[self.BUCKET_MANUAL].grants = v
 
     def _real_tps_bounds(self):
         nominal = config.REAL_TX_PER_SECOND
@@ -1889,13 +1985,14 @@ class ThrottledSession(requests.Session):
         컨트롤러가 천장이 아니라 실제 한도 아래에서 수렴한다.
         """
         with self.lock:
+            b = self._real_bucket()          # 앱키별로 따로 수렴시킨다
             now = time.time()
-            if now - self._last_tps_raise < 1.0:
+            if now - b.last_raise < 1.0:
                 return
-            self._last_tps_raise = now
+            b.last_raise = now
             lo, hi, start = self._real_tps_bounds()
-            cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
-            self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
+            cur = b.adaptive_limit if b.adaptive_limit is not None else start
+            b.adaptive_limit = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
 
     def _tps_on_rate_limit_real(self, url=None, tr_id=None):
         """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소시키고, 거부를 집계한다.
@@ -1917,8 +2014,12 @@ class ThrottledSession(requests.Session):
 
         emit = None
         with self.lock:
+            # 거부는 앱키 단위로 온다. 한쪽 키가 물러난 것을 근거로 다른 키까지 낮추면
+            #  멀쩡한 예산을 버린다 — 백오프도 버킷별로 적용한다.
+            b = self._real_bucket()
+            bucket_key = self._real_bucket_key()
             lo, hi, start = self._real_tps_bounds()
-            cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
+            cur = b.adaptive_limit if b.adaptive_limit is not None else start
             now = time.time()
 
             # [1] 곱셈 감소는 윈도우당 한 번. 한 번의 초과에는 여러 스레드가 동시에 거부되는데
@@ -1926,43 +2027,44 @@ class ThrottledSession(requests.Session):
             # [2] 기준은 설정 한도가 아니라 **직전 1초에 실제로 보낸 건수**다. 한도가 20인데
             #  실제로는 8/s를 보내는 중이면 20×0.9=18은 아무것도 바꾸지 못하는 헛걸음이고,
             #  그 헛걸음이 쌓여 [1]의 붕괴를 만든다. 실측 전송률에서 물러나야 한 번에 맞는다.
-            if now - self._last_tps_drop >= float(getattr(config, 'TPS_BACKOFF_WINDOW_SEC', 1.0) or 0):
-                sent_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
+            if now - b.last_drop >= float(getattr(config, 'TPS_BACKOFF_WINDOW_SEC', 1.0) or 0):
+                sent_1s = sum(1 for t in b.history if t > now - 1.0)
                 ref = min(cur, float(sent_1s)) if sent_1s > 0 else cur
-                self.adaptive_limit_real = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
-                self._last_tps_drop = now
+                b.adaptive_limit = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
+                b.last_drop = now
                 # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
-                self._last_tps_raise = now
-            elif self.adaptive_limit_real is None:
-                self.adaptive_limit_real = cur   # 창 안이라 안 내리더라도 값은 확정해 둔다
+                b.last_raise = now
+            elif b.adaptive_limit is None:
+                b.adaptive_limit = cur   # 창 안이라 안 내리더라도 값은 확정해 둔다
 
-            if self._rl_count == 0:                 # 집계 창 시작
-                self._rl_window_start = now
-                self._rl_limit_from = cur
-                self._rl_grants_from = self.gate_grants_real
-            self._rl_count += 1
-            self._rl_trs[tr_id or (str(url or '-').split('?')[0].rstrip('/').split('/')[-1] or '-')] += 1
-            self._rl_threads[th] += 1
+            if b.rl_count == 0:                 # 집계 창 시작
+                b.rl_window_start = now
+                b.rl_limit_from = cur
+                b.rl_grants_from = b.grants
+            b.rl_count += 1
+            b.rl_trs[tr_id or (str(url or '-').split('?')[0].rstrip('/').split('/')[-1] or '-')] += 1
+            b.rl_threads[th] += 1
 
             interval = float(getattr(config, 'TPS_LOG_INTERVAL_SEC', 60) or 0)
-            if now - self._rl_last_emit >= interval:
-                span = max(1e-3, now - self._rl_window_start)
+            if now - b.rl_last_emit >= interval:
+                span = max(1e-3, now - b.rl_window_start)
                 emit = {
-                    'n': self._rl_count,
+                    'bucket': bucket_key,
+                    'n': b.rl_count,
                     'span': span,
-                    'rate': (self.gate_grants_real - self._rl_grants_from) / span,
-                    'from': self._rl_limit_from,
-                    'to': self.adaptive_limit_real,
-                    'floor': self.adaptive_limit_real <= lo + 1e-9,
-                    'trs': self._rl_trs.most_common(2),
-                    'tr_kinds': len(self._rl_trs),
-                    'threads': self._rl_threads.most_common(1),
-                    'th_kinds': len(self._rl_threads),
+                    'rate': (b.grants - b.rl_grants_from) / span,
+                    'from': b.rl_limit_from,
+                    'to': b.adaptive_limit,
+                    'floor': b.adaptive_limit <= lo + 1e-9,
+                    'trs': b.rl_trs.most_common(2),
+                    'tr_kinds': len(b.rl_trs),
+                    'threads': b.rl_threads.most_common(1),
+                    'th_kinds': len(b.rl_threads),
                 }
-                self._rl_last_emit = now
-                self._rl_count = 0
-                self._rl_trs = Counter()
-                self._rl_threads = Counter()
+                b.rl_last_emit = now
+                b.rl_count = 0
+                b.rl_trs = Counter()
+                b.rl_threads = Counter()
 
         if not emit:
             return
@@ -1973,8 +2075,9 @@ class ThrottledSession(requests.Session):
 
         head = (f"{emit['n']}건(첫 거부)" if emit['span'] < 1.0 and emit['n'] == 1
                 else f"{emit['n']}건/{emit['span']:.0f}s")
+        bucket_tag = "자동매매키" if emit['bucket'] == self.BUCKET_AUTO else "수동키"
         logger.warning(
-            f"[TPS] EGW00201 {head} — 전송 {emit['rate']:.1f}/s, "
+            f"[TPS/{bucket_tag}] EGW00201 {head} — 전송 {emit['rate']:.1f}/s, "
             f"실효 한도 {emit['from']:.2f}→{emit['to']:.2f} TPS{' (하한)' if emit['floor'] else ''}, "
             f"TR {_top(emit['trs'], emit['tr_kinds'])}, "
             f"스레드 {_top(emit['threads'], emit['th_kinds'])}, "
@@ -2016,7 +2119,13 @@ class ThrottledSession(requests.Session):
                     with self.lock:
                         now = time.time()
                         target_limit = config.REAL_TX_PER_SECOND if is_real_server else config.SIM_TX_PER_SECOND
-                        history = self.request_history_real if is_real_server else self.request_history_sim
+                        # [앱키별 예산] KIS 유량 한도는 앱키 단위다. 수동 계좌와 자동매매
+                        #  계좌의 앱키가 다르면 각자 20 TPS를 따로 받으므로 카운터도 갈라야
+                        #  한다. 같은 키면 같은 버킷으로 모여 종전과 동일하게 동작한다.
+                        #  모의 서버도 우선순위 예약분 해제 판정에 last_priority_grant를
+                        #  읽으므로 버킷 자체는 항상 잡는다(모의는 항상 manual 버킷).
+                        bucket = self._real_bucket()
+                        history = bucket.history if is_real_server else self.request_history_sim
                         server_type = "REAL" if is_real_server else "SIMULATION"
                         
                         if target_limit > 0:
@@ -2029,9 +2138,9 @@ class ThrottledSession(requests.Session):
                                 min_interval = (1.0 / target_limit) * 1.2
                             else:
                                 # [#7] 적응형 실효 한도(AIMD). 미초기화 시 시작 마진(REAL_TPS_SAFETY)으로 출발.
-                                if self.adaptive_limit_real is None:
-                                    self.adaptive_limit_real = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
-                                effective_limit = max(1.0, self.adaptive_limit_real)
+                                if bucket.adaptive_limit is None:
+                                    bucket.adaptive_limit = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+                                effective_limit = max(1.0, bucket.adaptive_limit)
                                 min_interval = 1.0 / effective_limit
 
                             # 1. 윈도우 기반 한도 체크 (Burst 방어)
@@ -2064,7 +2173,7 @@ class ThrottledSession(requests.Session):
                                 # 매매가 지금 돌고 있지 않으면 예약분을 풀어 준다. 떼어 두기만
                                 #  하고 아무도 안 쓰면 그냥 버려지는 몫이다(주말·자동매매 미가동).
                                 idle = float(getattr(config, 'PRIORITY_RESERVE_IDLE_SEC', 10.0) or 0.0)
-                                if idle > 0 and (now - self._last_priority_grant) > idle:
+                                if idle > 0 and (now - bucket.last_priority_grant) > idle:
                                     reserve = 0.0
                                 if reserve > 0:
                                     gate_limit = max(1.0, effective_limit - reserve)
@@ -2076,9 +2185,9 @@ class ThrottledSession(requests.Session):
                                 history.append(now)
                                 current_tps = len(history)
                                 if is_real_server:
-                                    self.gate_grants_real += 1   # [진단] 집계 로그의 전송률 산출용
+                                    bucket.grants += 1   # [진단] 집계 로그의 전송률 산출용
                                 if is_priority:
-                                    self._last_priority_grant = now
+                                    bucket.last_priority_grant = now
                                 break # 락 해제 후 전송 진행
                             else:
                                 wait_from_window = (history[0] + window_size) - now if len(history) >= gate_limit else 0

@@ -1450,7 +1450,12 @@ class OrderManager:
             self.pending_orders[code][temp_id] = OrderStatus.ORDER_SENT
 
         try:
-            res_json = api.place_order("domestic", type_str, code, qty, price, ord_dvsn)
+            # [계좌 라우팅 방어선] 시스템 트레이딩의 모든 주문은 이 함수 하나를 지난다
+            #  (신규 매수·피라미딩·손절/트레일링 매도). 호출 스레드가 무엇이든 여기서
+            #  자동매매 계좌를 명시 고정한다 — 워커 스레드는 계좌 컨텍스트를 상속하지
+            #  않으므로(threading.local) 이 가드가 없으면 수동 계좌로 주문이 샌다.
+            with utils.AccountContext(utils.system_trading_account()[0]):
+                res_json = api.place_order("domestic", type_str, code, qty, price, ord_dvsn)
             
             if res_json['rt_cd'] == '0':
                 odno = res_json['output']['ODNO']
