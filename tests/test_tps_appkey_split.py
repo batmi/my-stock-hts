@@ -67,6 +67,33 @@ def test_simulation_never_splits(sess, separated, monkeypatch):
     assert sess._real_bucket_key() == sess.BUCKET_MANUAL
 
 
+def test_paper_mode_never_splits(sess, separated, monkeypatch):
+    """관찰모드(mode 4)는 앱키가 VIRT 하나뿐이다 — 나누면 한 키에 40 TPS를 쏜다.
+
+    mode 4는 KIS 실전 시세를 쓰므로 is_simulation이 False다. 즉 모의투자 분기로
+    걸러지지 않고, 오직 'real_app_key == auto_app_key'라는 사실에 기대어 한 버킷으로
+    모인다(session.load_config가 둘 다 virt_app_key로 덮어쓴다). 그 동기화가 깨지면
+    버킷이 갈려 각각 20 TPS를 허용하고, 실제로는 같은 키라 EGW00201이 쏟아진다.
+    라즈베리파이에서 상시 돌고 있는 모드라 회귀를 여기서 잡는다.
+    """
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'real_app_key', 'VIRT_KEY', raising=False)
+    monkeypatch.setattr(config.session, 'auto_app_key', 'VIRT_KEY', raising=False)
+    assert sess._real_bucket_key() == sess.BUCKET_MANUAL
+    _as_auto()
+    assert sess._real_bucket_key() == sess.BUCKET_MANUAL
+
+
+def test_toss_mode_never_splits(sess, separated, monkeypatch):
+    """토스(mode 3)는 KIS 앱키를 쓰지 않는다 — 빈 키로 버킷을 가르면 안 된다."""
+    monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
+    monkeypatch.setattr(config.session, 'real_app_key', '', raising=False)
+    monkeypatch.setattr(config.session, 'auto_app_key', '', raising=False)
+    assert sess._real_bucket_key() == sess.BUCKET_MANUAL
+    _as_auto()
+    assert sess._real_bucket_key() == sess.BUCKET_MANUAL
+
+
 def test_backoff_on_one_key_does_not_punish_the_other(sess, separated):
     """한쪽 앱키의 EGW00201이 다른 키의 예산을 깎으면 안 된다."""
     manual = sess._real_buckets[sess.BUCKET_MANUAL]
