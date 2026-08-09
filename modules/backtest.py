@@ -778,10 +778,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         atr_sl_rate = 0.0
                         atr_val = row.get('ATR', 0)
                         if use_atr_stop and atr_val and atr_val > 0:
-                            atr_sl_rate = -((atr_val * atr_mult / add_price) * 100)
-                            max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
-                            if max_atr_sl != 0 and atr_sl_rate < max_atr_sl:
-                                atr_sl_rate = max_atr_sl
+                            # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
+                            from modules.auto_trade import engine as _eng
+                            atr_sl_rate = _eng.atr_stop_rate(atr_val, add_price, atr_mult=atr_mult) or 0.0
 
                         cost = add_qty * add_price
                         balance -= cost
@@ -828,13 +827,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             atr_sl_rate = 0.0
             atr_val = row.get('ATR', 0)
             if use_atr_stop and atr_val > 0:
-                stop_distance = atr_val * atr_mult
-                atr_sl_rate = -((stop_distance / buy_price) * 100)
-                
-                # [추가] ATR 손절 최대 한도 적용
-                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
-                if max_atr_sl != 0 and atr_sl_rate < max_atr_sl:
-                    atr_sl_rate = max_atr_sl
+                # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
+                from modules.auto_trade import engine as _eng
+                atr_sl_rate = _eng.atr_stop_rate(atr_val, buy_price, atr_mult=atr_mult) or 0.0
             
             # [수정] 리스크 기반 포지션 사이징 적용 (백테스팅)
             invest_amt = balance

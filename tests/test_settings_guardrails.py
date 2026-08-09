@@ -228,3 +228,48 @@ def test_atr_stop_display_survives_sealing():
     src = inspect.getsource(S.view_system_config)
     assert "ATR 손절 (변동성 기반)" in src
     assert "조정 잠금" in src
+
+
+# ==========================================================
+# [추가 2026-08-09] ATR 손절 산식·캡의 단일 소스(SSOT)
+# ==========================================================
+def test_atr_stop_formula_has_a_single_source():
+    """[핵심] 손절 산식과 캡은 한 곳에서만 정의된다.
+
+    engine.atr_stop_rate 의 docstring 은 '각자 복제하고 있어 캡 적용 여부가 갈릴 위험이
+    있어 SSOT로 모은다'고 선언해 두었는데, 실제로는 실매매 신규매수·피라미딩과 백테스트
+    두 곳이 여전히 인라인으로 계산하고 있었다(산식+캡이 6벌). 캡을 조정하면 실매매와
+    백테스트가 다른 손절선으로 도는 구조였고, 하필 그 캡의 타당성을 백테스트로 검증하려던
+    참이었다 — 전제가 깨지면 결과를 실매매로 옮길 수 없다.
+
+    캡을 바꿔 보면 모든 경로가 같이 움직이는지 한 번에 드러난다.
+    """
+    from unittest.mock import patch
+    from modules.auto_trade import engine
+    from modules import portfolio_backtest as pbt
+
+    atr, price, mult = 1000.0, 10000.0, 2.0      # 무캡이면 -20%
+    for cap in (-15.0, -25.0, -8.0):
+        with patch.dict(config.SELL_STRATEGY, {"MAX_ATR_STOP_LOSS_RATE": cap}):
+            expected = max(-20.0, cap)           # 캡이 더 좁으면 캡, 넓으면 산식값
+            assert engine.atr_stop_rate(atr, price, atr_mult=mult) == pytest.approx(expected)
+            assert pbt._atr_stop_rate(atr, price, mult) == pytest.approx(expected), (
+                f"포트폴리오 백테스트가 캡 {cap}을 따라오지 않는다 — 실매매와 갈라진다")
+
+
+def test_no_inline_atr_stop_formula_remains():
+    """[회귀 방지] 산식을 다시 인라인으로 복제하지 못하게 막는다.
+
+    캡 상수를 직접 읽어 비교하는 코드가 매매·백테스트 경로에 다시 생기면, 이 테스트가
+    그 파일을 지목한다. (설정 UI·프리셋은 값을 다루는 곳이라 대상이 아니다)
+    """
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    targets = ["modules/auto_trade/trader.py", "modules/backtest.py",
+               "modules/portfolio_backtest.py"]
+    offenders = []
+    for rel in targets:
+        for i, line in enumerate(( root / rel).read_text(encoding="utf-8").splitlines(), 1):
+            if "MAX_ATR_STOP_LOSS_RATE" in line and line.lstrip().startswith(("max_atr_sl", "cap")):
+                offenders.append(f"{rel}:{i}")
+    assert not offenders, f"ATR 캡을 인라인으로 다시 읽는 코드가 생겼다: {offenders}"

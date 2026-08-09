@@ -498,6 +498,13 @@ class GlobalSettings(BaseModel):
     SYSTEM_TRADING_START_TIME: str = "0900" # 거래 시작 시간 (HHMM) - KRX 정규장 개장
     SYSTEM_TRADING_END_TIME: str = "1530"   # 거래 종료 시간 (HHMM) - KRX 정규장 마감
 
+    # [관측성] 장 마감 후 청산 신호 1회 스캔 · 텔레그램 알림 (주문은 내지 않는다).
+    #  마감과 함께 분석이 통째로 멈추므로, 종가 확정 뒤 손절·트레일링선을 이탈해도
+    #  다음 개장까지 아무도 모른다. 갭이 그대로 손실이 되는 구간이라 사실만 알린다.
+    #  시각은 종가 단일가(15:20~15:30)가 끝나 일봉이 확정된 뒤로 잡는다.
+    AFTER_HOURS_SELL_ALERT: bool = True
+    AFTER_HOURS_SELL_ALERT_TIME: str = "1535"
+
     # [추가] 체결 감시 모니터링 주기 (초)
     # 1. 집중 감시 주기: 주문 발생 직후 체결 확인 주기 (기본값: 5초)
     CONCLUSION_CHECK_INTERVAL: int = Field(default=5, gt=0)

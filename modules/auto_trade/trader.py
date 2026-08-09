@@ -162,6 +162,12 @@ class AutoTrader:
             cls._instance.no_sellable_streak = {}
             # 대기 주문에 묶여 매도 판정에서 빠진 연속 주기 수 {code: n}
             cls._instance.stuck_pending_streak = {}
+            # [관측성] 장 마감 후 감지된 매도 신호의 알림 스로틀 {code: 사유}.
+            #  마감 뒤에는 주문을 낼 수 없어 로그 한 줄만 남았다 — 청산이 하루 밀리는데
+            #  운영자가 그 사실을 모른다. 장이 열리면 비워서 다음 마감 때 다시 알린다.
+            cls._instance.after_hours_sell_notified = {}
+            # 마감 후 청산 신호 스캔을 수행한 날짜(YYYYMMDD). 거래일당 1회로 묶는다.
+            cls._instance.after_hours_scan_date = None
             # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
             #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
             cls._instance.pending_restore_ok = True
@@ -3349,6 +3355,11 @@ class AutoTrader:
                             else:
                                 self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
                         self.was_market_open = current_market_status
+                        # [관측성] 마감 후 청산 신호 1회 스캔. 분석을 통째로 멈추면 트래픽은
+                        #  아끼지만, 종가가 확정된 뒤 손절·트레일링선을 이탈한 사실을 아무도
+                        #  모르는 채로 다음 개장까지 간다 — 갭이 그대로 손실이 되는 구간이다.
+                        #  주문은 내지 않는다(낼 수 없다). 알림만 보낸다.
+                        self._scan_after_hours_sell_signals(target_cano)
                     else:
                         status_msg = "RUNNING"
                         self.log(f"시스템 상태: {status_msg}")
@@ -4224,6 +4235,85 @@ class AutoTrader:
         except Exception as e:
             logger.debug(f"[손절선 이탈 경보] {code} 처리 실패: {e}")
 
+    def _scan_after_hours_sell_signals(self, target_cano):
+        """[관측성] 장 마감 후 청산 신호를 하루 한 번 스캔해 알린다. (주문 없음)
+
+        메인 루프는 마감과 함께 분석을 통째로 멈춘다(트래픽 절감). 그래서 종가가
+        확정된 뒤 손절선·트레일링선을 이탈해도 다음 개장까지 아무도 모른다 —
+        추세추종에서 가장 비싼 공백이다("탈출 전략이 없다면 포지션을 잡지 마라").
+
+        주문은 내지 않는다. 마감 뒤에는 낼 수 없고, 다음 개장 때 그 시점 가격으로
+        정식 판정이 다시 돈다. 여기서 하는 일은 사실을 알리는 것뿐이다.
+
+        [시각] 종가 단일가(15:20~15:30)가 끝나 일봉이 확정된 뒤에 돈다. 그 전에 돌면
+        접속매매 마지막 가격으로 판정해 종가와 어긋난다.
+        [빈도] 거래일당 1회. 휴장일에는 돌지 않는다(판정할 새 봉이 없다).
+        """
+        try:
+            if not getattr(config, 'AFTER_HOURS_SELL_ALERT', True):
+                return
+            if api.is_holiday_today():
+                return
+            now = datetime.now()
+            after = getattr(config, 'AFTER_HOURS_SELL_ALERT_TIME', "1535")
+            if now.strftime("%H%M") < after:
+                return
+            today = now.strftime("%Y%m%d")
+            if self.after_hours_scan_date == today:
+                return
+            self.after_hours_scan_date = today
+
+            acnt = (config.session.auto_acnt_prdt_cd if not config.session.is_simulation
+                    else config.session.acnt_prdt_cd)
+            holdings, _summary = api.get_domestic_balance(target_cano, acnt)
+            if not holdings:
+                return
+
+            self.log("[장마감] 청산 신호 점검 (주문 없음 · 알림 전용)")
+            rules = _enrich_rules_with_weights(db_manager.db.get_all_stock_strategies())
+            self._check_sell_conditions(
+                holdings, is_market_open=False,
+                rules_map={r['code']: r for r in rules},
+                restricted_stocks=get_restricted_stocks(*_get_trade_account()))
+        except Exception as e:
+            # 알림 전용 경로다. 실패해도 매매 루프를 흔들면 안 된다.
+            logger.debug(f"[장마감 청산 신호 스캔] 실패: {e}")
+
+    def _alert_after_hours_sell(self, code, name, item, reason, current_price, order_price, qty):
+        """[관측성] 장 마감 후 감지된 매도 신호를 알린다.
+
+        마감 뒤에는 주문을 낼 수 없어 종전에는 로그 한 줄만 남고 끝났다. 청산이 다음
+        개장까지 밀리는데 운영자가 그 사실을 알 방법이 없었다 — 손절·트레일링이면
+        하룻밤의 갭이 그대로 손실이므로, 직접 판단할 기회를 준다.
+
+        [주의] 이 신호는 확정이 아니다. 다음 개장 때 그 시점 가격으로 다시 판정하므로
+        신호가 사라질 수도, 다른 사유로 바뀔 수도 있다. 문구에 그대로 적는다.
+
+        같은 종목·같은 사유는 마감 세션당 한 번만 보낸다(주기마다 재감지되므로).
+        사유가 바뀌면 다시 알린다 — 트레일링과 손절은 운영자가 할 판단이 다르다.
+        """
+        try:
+            if self.after_hours_sell_notified.get(code) == reason:
+                return
+            self.after_hours_sell_notified[code] = reason
+
+            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+            eval_amt = api.safe_int(item.get('evlu_amt', 0))
+            pfls_amt = api.safe_int(item.get('evlu_pfls_amt', 0))
+
+            api.send_telegram_message(
+                f"🔔 [장마감 후 매도 신호]\n\n"
+                f"종목: {name}({code})\n"
+                f"사유: {reason}\n"
+                f"수익률: {profit_rate:+.2f}% / 평가손익 {pfls_amt:,}원\n"
+                f"보유: {qty:,}주 / 평가금 {eval_amt:,}원\n"
+                f"기준가: {int(current_price):,}원 (예상 주문가 {order_price:,}원)\n\n"
+                f"장이 마감되어 주문은 전송되지 않았습니다.\n"
+                f"다음 개장 시 그 시점 가격으로 다시 판정합니다 — 신호가 유지되면 "
+                f"자동 청산되고, 사라지면 보유를 유지합니다.")
+        except Exception as e:
+            logger.debug(f"[장마감 매도 신호 알림] {code} 처리 실패: {e}")
+
     def _check_sell_conditions(self, holdings, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [정리] 보유가 끝난 종목의 '매도 불가 연속 횟수'를 버린다. 남겨 두면 나중에 같은
         #  종목을 재매수했을 때 옛 횟수에 이어붙어 첫 일시적 0에서 곧바로 오경보가 난다.
@@ -4233,6 +4323,13 @@ class AutoTrader:
                 del self.no_sellable_streak[gone]
             for gone in [c for c in self.stuck_pending_streak if c not in held]:
                 del self.stuck_pending_streak[gone]
+            # 장이 열리면 마감 후 알림 스로틀을 푼다 — 신호가 개장 후에도 살아 있으면
+            #  정상 청산되고, 그날 마감 뒤 다시 감지되면 그때 다시 알려야 한다.
+            if is_market_open:
+                self.after_hours_sell_notified.clear()
+            else:
+                for gone in [c for c in self.after_hours_sell_notified if c not in held]:
+                    del self.after_hours_sell_notified[gone]
         except Exception:
             pass
 
@@ -4519,6 +4616,8 @@ class AutoTrader:
 
                 if not is_market_open:
                     self.log(f"[장마감] 매도 신호 감지 (주문 미전송): {name} - {reason}")
+                    self._alert_after_hours_sell(code, name, item, reason,
+                                                 current_price, order_price, target_sell_qty)
                     return
 
                 real_qty = api.fetch_sellable_quantity(code)
@@ -4708,10 +4807,8 @@ class AutoTrader:
             ind = result.get('ind') or {}
             atr_val = ind.get('atr', 0) or 0
             if use_atr_stop and atr_val > 0 and current_price > 0:
-                sl_rate = -((atr_val * atr_mult / current_price) * 100)
-                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
-                if max_atr_sl != 0 and sl_rate < max_atr_sl:
-                    sl_rate = max_atr_sl
+                # [SSOT] 신규 매수와 같은 함수를 쓴다 (engine.atr_stop_rate).
+                sl_rate = _pkg().atr_stop_rate(atr_val, current_price, atr_mult=atr_mult) or sl_rate
 
             # [추가] 포트폴리오 히트 캡: 증액분 리스크가 남은 예산을 넘으면 피라미딩 보류.
             #  (_sell_worker 스레드 동시 실행 대비, 예산 확인과 선점을 락으로 원자화)
@@ -5419,15 +5516,14 @@ class AutoTrader:
             atr_sl_rate = None # DB 저장용
             
             if use_atr_stop and atr_val > 0 and price_val > 0:
-                # [수정] ATR 기반 동적 손절률 계산 (음수 값)
-                stop_distance = atr_val * atr_mult
-                sl_rate = -((stop_distance / price_val) * 100)
-
-                # [추가] ATR 손절률 최대 한도 설정 (데이터 오류 등으로 인한 과도한 리스크 방지)
-                max_atr_sl = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
-                if max_atr_sl != 0 and sl_rate < max_atr_sl:
-                    self.log(f"[리스크 조정] ATR 손절률({sl_rate:.1f}%)이 최대 한도({max_atr_sl}%)를 초과하여 조정됩니다.")
-                    sl_rate = max_atr_sl
+                # [SSOT 2026-08-09] 산식·캡은 engine.atr_stop_rate 가 단독 보유한다.
+                #  종전에는 이 자리와 피라미딩·백테스트가 각자 같은 식을 복제해 6벌이 있었다.
+                #  캡(MAX_ATR_STOP_LOSS_RATE)을 조정하면 실매매와 백테스트가 갈라질 수 있는
+                #  구조였고, 그 캡의 타당성을 백테스트로 검증하려던 참이라 먼저 통합한다.
+                uncapped = -((atr_val * atr_mult / price_val) * 100)
+                sl_rate = _pkg().atr_stop_rate(atr_val, price_val, atr_mult=atr_mult)
+                if sl_rate is not None and sl_rate > uncapped:
+                    self.log(f"[리스크 조정] ATR 손절률({uncapped:.1f}%)이 최대 한도({sl_rate:.1f}%)를 초과하여 조정됩니다.")
 
             # [추세추종 안전장치] "탈출 전략이 없다면 포지션을 잡지 마라"
             #  ATR 손절이 꺼져 있고(또는 ATR 미확보) 고정 손절도 0(미사용)이면 이 매수는

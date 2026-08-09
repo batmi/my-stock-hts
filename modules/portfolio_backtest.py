@@ -52,14 +52,15 @@ def precompute_status(dfs, thresholds):
 
 
 def _atr_stop_rate(atr, price, atr_mult):
-    """진입 시점 ATR 손절률(%). simulate_strategy와 동일하게 MAX_ATR_STOP_LOSS_RATE로 캡한다."""
-    if not (atr and atr > 0 and price > 0):
-        return 0.0
-    rate = -((atr * atr_mult / price) * 100)
-    cap = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
-    if cap != 0 and rate < cap:
-        rate = cap
-    return rate
+    """진입 시점 ATR 손절률(%).
+
+    [SSOT 2026-08-09] 산식·캡은 engine.atr_stop_rate 가 단독 보유한다. 여기서 식을 다시
+    쓰면 캡(MAX_ATR_STOP_LOSS_RATE)을 조정할 때 실매매·백테스트·포트폴리오 백테스트가
+    서로 다른 손절선으로 돌 수 있다 — 캡의 타당성을 이 백테스트로 검증하려는 마당에
+    그 전제가 깨지면 결과를 실매매에 옮길 수 없다. 반환 규약(0.0)만 여기서 맞춘다.
+    """
+    from modules.auto_trade import engine as _eng
+    return _eng.atr_stop_rate(atr, price, atr_mult=atr_mult) or 0.0
 
 
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
@@ -328,6 +329,25 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 ts_act_eff = breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
                                                        ts_callback, ts_atr_mult, use_atr)
 
+            # [무장 래치 — 기각됨. 켜지 말 것] 발동선은 매일 '현재 봉' ATR로 다시 계산되므로
+            #  변동성이 오르면 문턱이 올라가 이미 무장된 TS가 풀린다(실측 2026-08-09:
+            #  가상진입 30,333건 기준 해제율이 10년 내내 22~40%인데 2026년 70.9%).
+            #  armed는 어디에도 저장되지 않아 래치가 없다 — 결함으로 의심해 반사실을 쟀다.
+            #
+            #  결과는 반대였다. 래치 ON은 10년 5구간 중 4구간에서 열위이고 최근 구간에서
+            #  가장 크게 진다(구간5 수익 113.2%→74.6%, 상위10% 72.4→55.1, 수익승 2/15).
+            #  무장 해제는 버그가 아니라 적응 장치다 — 변동성이 커질 때 트레일링 보호를
+            #  풀어 포지션에 숨 쉴 공간을 준다. 래치를 걸면 고변동 구간에서 조기 발동해
+            #  승자를 잘라내고 fat-tail이 먼저 무너진다. 재검증용으로만 남긴다.
+            ts_breakeven_eff = ts_breakeven and ts_act_fn is None
+            if config.SELL_STRATEGY.get("TS_ARM_LATCH", False):
+                if pos.get("ts_armed") or max_profit >= ts_act_eff:
+                    pos["ts_armed"] = True
+                    ts_act_eff = -1e9
+                    # decide_sell은 ts_breakeven이 켜져 있으면 발동선을 스스로 다시 구해
+                    #  ts_act를 무시한다. 래치가 덮이지 않게 여기서 내려준다.
+                    ts_breakeven_eff = False
+
             sell, reason = decide_sell(
                 price=price, high=pos["high"], avg=pos["avg"], sl_rate=sl_rate,
                 atr_applied=atr_applied, is_bep=is_bep, holding_days=holding_days,
@@ -337,7 +357,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
                      "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
                      "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
-                     "ts_breakeven": ts_breakeven and ts_act_fn is None,
+                     "ts_breakeven": ts_breakeven_eff,
                      "sell_score_limit": sell_score_limit,
                      "profit_lock_use": lock_use, "profit_lock_min_mfe": lock_min_mfe,
                      "profit_lock_giveback": lock_giveback})
