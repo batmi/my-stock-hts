@@ -344,3 +344,65 @@ def test_duplicate_note_is_quotable_by_the_tps_log(tmp_path):
              patch.object(instance_lock, 'APPKEY_HOLDER', "pid=999"):
             note = instance_lock.appkey_duplicate_note()
             assert "감지" in note and "pid=999" in note
+
+
+@pytest.fixture
+def clean_appkey_locks(tmp_path):
+    """앱키 잠금 전역을 격리한다(파일 경로도 임시로 돌린다)."""
+    from modules import instance_lock
+    saved = (list(instance_lock._APPKEY_LOCKS), instance_lock.APPKEY_DUPLICATE,
+             instance_lock.APPKEY_HOLDER, instance_lock.APPKEY_DUP_LABEL)
+    instance_lock._APPKEY_LOCKS = []
+    instance_lock.APPKEY_DUPLICATE = False
+    instance_lock.APPKEY_HOLDER = ""
+    instance_lock.APPKEY_DUP_LABEL = ""
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        yield instance_lock
+    for lk in instance_lock._APPKEY_LOCKS:
+        try:
+            lk.release()
+        except Exception:
+            pass
+    (instance_lock._APPKEY_LOCKS, instance_lock.APPKEY_DUPLICATE,
+     instance_lock.APPKEY_HOLDER, instance_lock.APPKEY_DUP_LABEL) = saved
+
+
+def test_appkey_guard_holds_both_manual_and_auto_keys(clean_appkey_locks):
+    """수동 키와 자동매매 키를 동시에 잠근다.
+
+    TPS 예산이 앱키별로 갈리면서(ThrottledSession의 앱키별 버킷) '어느 키가 중복인가'가
+    '어느 트래픽이 영향을 받는가'와 같은 뜻이 됐다. 시스템 트레이딩 트래픽은 전부
+    자동매매 키로 나가므로 수동 키만 봐서는 정작 매매에 영향을 주는 중복을 놓친다.
+
+    종전 구현은 잠금 객체를 단일 전역에 담아 두 번째 호출이 첫 잠금을 덮어썼고,
+    GC와 함께 첫 키가 조용히 풀렸다.
+    """
+    il = clean_appkey_locks
+    assert il.guard_appkey("GUARD_MAIN_KEY", "수동") is True
+    assert il.guard_appkey("GUARD_AUTO_KEY", "자동매매") is True
+    assert len(il._APPKEY_LOCKS) == 2, "두 번째 잠금이 첫 잠금을 덮어썼다"
+
+    other = il.AppKeyLock("GUARD_MAIN_KEY")
+    assert other.acquire() is False, "수동 키 잠금이 조용히 풀려 있었다"
+
+
+def test_appkey_duplicate_note_names_the_offending_key(clean_appkey_locks):
+    """진단 로그가 어느 키에서 중복이 났는지 밝혀야 한다."""
+    il = clean_appkey_locks
+    holder = il.AppKeyLock("GUARD_DUP_KEY")
+    assert holder.acquire() is True
+    try:
+        assert il.guard_appkey("GUARD_DUP_KEY", "자동매매") is False
+        assert il.APPKEY_DUPLICATE is True
+        note = il.appkey_duplicate_note()
+        assert "자동매매" in note, f"어느 키가 중복인지 드러나지 않는다: {note}"
+    finally:
+        holder.release()
+
+
+def test_appkey_guard_treats_missing_key_as_out_of_scope(clean_appkey_locks):
+    """앱키 미설정(자동매매 키 없음)은 중복이 아니라 검사 대상이 아니다."""
+    il = clean_appkey_locks
+    assert il.guard_appkey("", "자동매매") is True
+    assert len(il._APPKEY_LOCKS) == 0
+    assert il.APPKEY_DUPLICATE is False

@@ -31,6 +31,10 @@ def mock_dependencies():
         mock_config.session.auto_acnt_prdt_cd = "01"
         mock_config.session.is_simulation = False
         mock_config.session.is_toss = False
+        # [필수] MagicMock의 임의 속성은 truthy다. is_paper를 명시하지 않으면
+        #  _check_conclusions 첫 줄의 관찰모드 가드에 걸려 _check_paper_conclusions로
+        #  빠지고 즉시 반환한다 — 아래 검증이 통째로 무의미해진다(2026-08-09 수정).
+        mock_config.session.is_paper = False
         
         # We need _check_conclusions to process the items without exceptions
         mock_db.get_all_stock_strategies.return_value = []

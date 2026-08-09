@@ -113,7 +113,10 @@ class InstanceLock:
 #  차단이 필요하면 config.APPKEY_DUP_ABORT 를 켠다.
 APPKEY_DUPLICATE = False   # 같은 앱키를 쓰는 다른 프로세스가 있는가
 APPKEY_HOLDER = ""         # 있다면 그 프로세스 정보(pid=…)
-_APPKEY_LOCK = None        # 프로세스 수명 동안 fd 를 살려 둔다(GC 되면 잠금이 풀린다)
+APPKEY_DUP_LABEL = ""      # 중복이 걸린 키의 이름(수동/자동매매)
+_APPKEY_LOCKS = []         # 프로세스 수명 동안 fd 를 살려 둔다(GC 되면 잠금이 풀린다).
+                           #  수동 키와 자동매매 키를 따로 잠그므로 리스트다 — 단일 변수로
+                           #  두면 두 번째 호출이 첫 잠금을 덮어써 조용히 풀린다.
 
 
 def _appkey_fingerprint(app_key):
@@ -132,21 +135,24 @@ class AppKeyLock(InstanceLock):
         super().__init__(_appkey_fingerprint(app_key))
 
 
-def guard_appkey(app_key):
+def guard_appkey(app_key, label="수동"):
     """앱키 잠금을 잡고 중복 여부를 모듈 전역에 기록한다. (중복이면 False)
 
     반환값은 '이 프로세스가 유일한가'다. 잠금 객체는 전역에 붙들어 프로세스가 살아 있는
     동안 유지한다 — 해제는 프로세스 종료 시 커널이 한다(비정상 종료도 동일).
+
+    label은 어느 키에서 중복이 났는지 로그에 남기기 위한 것이다. 수동 계좌와 자동매매
+    계좌가 서로 다른 앱키를 쓰면 유량 예산도 키마다 따로 잡히므로(api.ThrottledSession의
+    앱키별 버킷), '어느 쪽 키가 중복인가'가 곧 '어느 트래픽이 영향을 받는가'다.
     """
-    global APPKEY_DUPLICATE, APPKEY_HOLDER, _APPKEY_LOCK
+    global APPKEY_DUPLICATE, APPKEY_HOLDER, APPKEY_DUP_LABEL, _APPKEY_LOCKS
 
     if not app_key:
         return True
     try:
         lock = AppKeyLock(app_key)
         if lock.acquire():
-            _APPKEY_LOCK = lock
-            APPKEY_DUPLICATE, APPKEY_HOLDER = False, ""
+            _APPKEY_LOCKS.append(lock)
             return True
     except Exception as e:
         # 잠금 장치가 고장 났다고 프로그램을 막지는 않는다(보조 진단 장치다).
@@ -154,8 +160,9 @@ def guard_appkey(app_key):
         return True
 
     APPKEY_DUPLICATE, APPKEY_HOLDER = True, (lock.holder or "unknown")
+    APPKEY_DUP_LABEL = label
     logger.warning(
-        f"[AppKeyLock] 같은 앱키를 쓰는 다른 프로세스가 이미 실행 중입니다 ({APPKEY_HOLDER}). "
+        f"[AppKeyLock] 같은 {label} 앱키를 쓰는 다른 프로세스가 이미 실행 중입니다 ({APPKEY_HOLDER}). "
         f"KIS의 TPS(20)·웹소켓(1)·토큰 발급 제약은 앱키 단위라 두 프로세스가 유량을 나눠 쓰게 되며, "
         f"EGW00201(초당 거래건수 초과)의 직접 원인이 됩니다.")
     return False
@@ -164,5 +171,5 @@ def guard_appkey(app_key):
 def appkey_duplicate_note():
     """진단 로그에 붙일 한 줄. api.py의 TPS 경고가 그대로 인용한다."""
     if APPKEY_DUPLICATE:
-        return f"중복 프로세스 감지됨({APPKEY_HOLDER})"
+        return f"중복 프로세스 감지됨({APPKEY_DUP_LABEL}키, {APPKEY_HOLDER})"
     return "중복 프로세스 없음"

@@ -978,10 +978,20 @@ def main():
     #  확인할 방법이 없어 레이트리밋 원인 분석이 매번 추측에서 멈췄다(2026-08-09).
     if not config.session.is_toss:
         from modules import instance_lock
-        if not instance_lock.guard_appkey(config.session.app_key):
+        # 수동 키와 자동매매 키를 모두 본다. 두 키가 다르면 유량 예산도 키마다 따로
+        #  잡히므로(api.ThrottledSession의 앱키별 버킷), 자동매매 키의 중복은 수동 키를
+        #  아무리 확인해도 드러나지 않는다 — 그런데 시스템 트레이딩 트래픽은 전부
+        #  그쪽 키로 나간다.
+        _keys = [(config.session.app_key, "수동")]
+        _auto = getattr(config.session, 'auto_app_key', '')
+        if _auto and _auto != config.session.app_key:
+            _keys.append((_auto, "자동매매"))
+        _dup = [(k, lbl) for k, lbl in _keys if not instance_lock.guard_appkey(k, lbl)]
+        if _dup:
             holder = instance_lock.APPKEY_HOLDER
+            _labels = "·".join(lbl for _, lbl in _dup)
             config.console.print(
-                f"\n[bold yellow]⚠️ 같은 앱키로 다른 프로세스가 이미 실행 중입니다 ({holder}).[/bold yellow]")
+                f"\n[bold yellow]⚠️ 같은 {_labels} 앱키로 다른 프로세스가 이미 실행 중입니다 ({holder}).[/bold yellow]")
             config.console.print(
                 "[dim]  KIS 유량(20 TPS)·웹소켓(1개)·토큰 발급 제약은 앱키 단위입니다. "
                 "두 인스턴스가 유량을 나눠 쓰면서 양쪽 모두 초당 거래건수 초과에 걸립니다.[/dim]")
