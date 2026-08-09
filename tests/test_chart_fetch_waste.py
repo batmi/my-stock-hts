@@ -580,3 +580,44 @@ def test_clear_chart_cache_clears_seed(tmp_path, monkeypatch):
     assert api._toss_seed_get('X') is not None
     api._chart_disk_clear()
     assert api._toss_seed_get('X') is None
+
+
+# ==========================================================
+# 예열(CacheWarmer)이 현재가 오버레이를 부르지 않는다
+# ==========================================================
+def test_warmer_does_not_overlay_current_price():
+    """[핵심] 백그라운드 예열은 일봉 캐시만 채운다 — 현재가 API를 종목마다 더 부르면 안 된다.
+
+    prefetch_watchlists_async 는 get_chart_data 의 **반환값을 쓰지 않는다**. 목적은 캐시를
+    채우는 것뿐인데, realtime 기본값(True)이면 캐시가 적중해도 종목마다 현재가 오버레이
+    API를 1건씩 더 부르고 그 결과를 버렸다. 해외는 데이마켓 세션 중 거래소 후보 순회까지
+    겹쳐 종목당 2콜이 된다. delay=0.1 과 맞물려 '아무것도 안 한 상태'에서 8 TPS가 나갔고,
+    실효 한도(실측 ~6.7 TPS)를 넘겨 EGW00201을 상시 유발했다(2026-08-09 라즈베리파이 관측).
+
+    당일 봉은 실제 조회 시점에 오버레이되므로 신선도 손실은 없다.
+    """
+    import config
+
+    seen = []
+
+    def fake_chart(code, is_overseas=False, **kw):
+        seen.append((code, kw.get('realtime')))
+        return None
+
+    stock_data = {"stocks_kr": [{"code": "005930"}], "etfs_kr": [],
+                  "stocks_us": [{"code": "AAPL"}], "etfs_us": []}
+
+    with patch.object(api, 'get_chart_data', side_effect=fake_chart), \
+         patch.object(config.session, 'stock_data', stock_data, create=True), \
+         patch('modules.market.ALL_INDICES', []), \
+         patch.object(api.time, 'sleep', lambda *_: None):
+        t = api.prefetch_watchlists_async()
+        t.join(timeout=10)
+        assert not t.is_alive(), "예열 스레드가 끝나지 않았다"
+
+    warmed = {code: rt for code, rt in seen}
+    assert set(warmed) == {"005930", "AAPL"}, f"예열이 종목 루프를 돌지 않았다: {seen}"
+    for code, realtime in seen:
+        assert realtime is False, (
+            f"{code} 예열이 realtime={realtime} 로 호출됐다 — 반환값도 안 쓰면서 "
+            f"현재가 오버레이 API를 종목마다 더 부른다")

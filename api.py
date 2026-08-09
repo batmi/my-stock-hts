@@ -1688,7 +1688,13 @@ def prefetch_watchlists_async():
             for code, is_overseas in unique_stocks:
                 try:
                     # 캐시 적중 시 API 호출 생략 처리 로직은 _get_cached_chart 안에 이미 포함됨
-                    get_chart_data(code, is_overseas=is_overseas)
+                    # [Fix 2026-08-09] realtime=False. 이 호출은 반환값을 쓰지 않는다 —
+                    #  목적은 일봉 캐시를 채우는 것뿐인데, 기본값(realtime=True)이면 캐시가
+                    #  적중해도 종목마다 현재가 오버레이 API를 1건씩 더 부르고 그 결과를 버렸다.
+                    #  해외는 데이마켓 세션 중 거래소 후보 순회(BAQ→NAS 등)까지 겹쳐 종목당
+                    #  2콜이 된다. delay=0.1과 맞물려 '아무것도 안 한 상태'에서 8 TPS가 나갔다.
+                    #  당일 봉은 실제 조회 시점에 오버레이되므로 신선도 손실이 없다.
+                    get_chart_data(code, is_overseas=is_overseas, realtime=False)
                 except Exception as e:
                     logger.debug(f"[Cache] 예열 중 오류({code}): {e}")
                 
