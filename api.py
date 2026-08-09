@@ -4760,7 +4760,8 @@ def fetch_buyable_quantity(stock_code, price):
     data = call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BUYABLE"], "domestic", "inquiry", "buyable", params=params, timeout=5)
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
-        api_qty = safe_int(out.get('ord_psbl_qty')) or safe_int(out.get('nrcvb_buy_qty')) or safe_int(out.get('max_buy_qty'))
+        # 미수 없는 수량을 1순위로 쓴다(get_deposit_balance의 order_possible과 같은 이유).
+        api_qty = safe_int(out.get('nrcvb_buy_qty')) or safe_int(out.get('ord_psbl_qty')) or safe_int(out.get('max_buy_qty'))
         if price > 0:
             cash = safe_int(out.get('ord_psbl_cash'))
             return min(api_qty, int(cash / price))
@@ -7082,8 +7083,14 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
         
         if data_order.get('rt_cd') == '0':
             out = data_order.get('output', {})
-            # [수정] 실전투자 주문가능금액: ord_psbl_amt가 없으면 nrcvb_buy_amt(미수없는매수금액) 사용
-            res['order_possible'] = safe_int(out.get('ord_psbl_amt')) or safe_int(out.get('nrcvb_buy_amt'))
+            # [실전 주문가능금액] nrcvb_buy_amt(미수없는매수금액)를 **1순위**로 쓴다.
+            #  ord_psbl_amt는 계좌에 신용·대용 여력이 있으면 그것까지 포함한 값이 될 수 있다.
+            #  자본대비 리스크 한도를 두는 시스템에서 매수여력은 '증권사가 허용하는 최대'가
+            #  아니라 '미수 없이 살 수 있는 금액'이어야 한다 — 미수가 나면 연체이자와
+            #  반대매매가 붙어 손절 규칙 바깥에서 포지션이 정리된다.
+            #  (실측 2026-08-09: 이 계좌들은 ord_psbl_amt 자체가 응답에 없어 이미 폴백으로
+            #   안전했으나, 그건 우연이다. 순서를 뒤집어 명시적으로 만든다.)
+            res['order_possible'] = safe_int(out.get('nrcvb_buy_amt')) or safe_int(out.get('ord_psbl_amt'))
             logger.info(f"[API] 주문가능금액 조회 성공: {res['order_possible']:,}원 (TR_ID: TTTC8908R)")
             res['withdraw'] = safe_int(out.get('ord_psbl_cash')) # 출금가능은 현금 기준
             # 예수금 정보가 없을 경우 주문가능현금으로 대체
