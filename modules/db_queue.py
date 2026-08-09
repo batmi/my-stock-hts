@@ -4,6 +4,8 @@ import threading
 import logging
 import time
 
+import context
+
 logger = logging.getLogger(__name__)
 
 # =========================================================================
@@ -33,13 +35,21 @@ class DBWorker(threading.Thread):
                 if task is None:  # 종료 시그널 수신 시 루프 탈출
                     break
 
-                method_name, args, kwargs, result_queue = task
+                method_name, args, kwargs, result_queue, use_auto = task
                 
                 # 큐에 작업이 많이 쌓이면 병목 현상 경고 로깅
                 q_size = self._queue.qsize()
                 if q_size > 10:
                     logger.warning(f"[DBQueue] High load: {q_size} tasks waiting.")
 
+                # [계좌 컨텍스트 전파] DBManager는 기록 대상 계좌를 thread-local
+                #  (context.trade_context.use_auto_account)에서 읽는다. 그런데 실제 실행은
+                #  이 워커 스레드에서 일어나고 thread-local은 상속되지 않으므로, 감싸지 않으면
+                #  자동매매가 낸 주문이 전부 '수동 계좌' 기록으로 남는다.
+                #  주문은 자동 계좌로 나가는데 기록만 수동 계좌에 쌓이면, 계좌로 필터하는
+                #  조회(get_trades(account=...))가 빈 결과를 돌려주고 평단·트레일링 최고가·
+                #  손절 기준이 붙을 자리를 잃는다. 호출 스레드의 값을 그대로 복원한다.
+                context.trade_context.use_auto_account = use_auto
                 try:
                     # 커스텀 함수 실행 로직 (트랜잭션 단위 작업 등)
                     if method_name == "__CUSTOM__":
@@ -91,7 +101,8 @@ class DBProxy:
         """
         result_queue = queue.Queue()
         # 특수 메서드명 __CUSTOM__을 사용하여 메인 큐에 적재
-        self._queue.put(("__CUSTOM__", (func, args, kwargs), {}, result_queue))
+        self._queue.put(("__CUSTOM__", (func, args, kwargs), {}, result_queue,
+                         getattr(context.trade_context, 'use_auto_account', False)))
         
         try:
             # 워커 스레드가 작업을 마치고 결과를 돌려줄 때까지 대기 (최대 30초)
@@ -114,8 +125,11 @@ class DBProxy:
             def wrapper(*args, **kwargs):
                 # 호출한 스레드가 결과를 돌려받을 1회용 큐 생성
                 result_queue = queue.Queue()
-                # (메서드명, 인자, 키워드인자, 결과큐)를 메인 작업 큐에 전달
-                self._queue.put((name, args, kwargs, result_queue))
+                # (메서드명, 인자, 키워드인자, 결과큐, 계좌컨텍스트)를 메인 작업 큐에 전달.
+                #  계좌 컨텍스트는 **호출 스레드에서** 읽어야 한다 — 워커 스레드에서 읽으면
+                #  항상 기본값(수동 계좌)이다(DBWorker.run 주석 참조).
+                self._queue.put((name, args, kwargs, result_queue,
+                                 getattr(context.trade_context, 'use_auto_account', False)))
                 
                 try:
                     # 30초 타임아웃 설정 (무한 대기 방지)

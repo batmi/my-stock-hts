@@ -43,12 +43,14 @@ def test_db_proxy_method_call(db_proxy_setup):
     
     # 큐에서 작업 가져오기 (타임아웃 설정으로 무한 대기 방지)
     try:
-        # task_queue.get() -> (method_name, args, kwargs, result_queue)
+        # task_queue.get() -> (method_name, args, kwargs, result_queue, use_auto)
+        #  마지막 원소는 호출 스레드의 계좌 컨텍스트다. 워커 스레드는 thread-local을
+        #  상속하지 않으므로 이 값을 함께 실어 보내야 기록이 올바른 계좌로 남는다.
         item = task_queue.get(timeout=2)
     except queue.Empty:
         pytest.fail("큐에 작업이 들어오지 않았습니다.")
         
-    name, args, kwargs, result_queue = item
+    name, args, kwargs, result_queue, use_auto = item
     
     assert name == "echo"
     assert args == ("Hello",)
@@ -80,7 +82,7 @@ def test_db_proxy_exception_propagation(db_proxy_setup):
     except queue.Empty:
         pytest.fail("큐에 작업이 들어오지 않았습니다.")
         
-    name, args, kwargs, result_queue = item
+    name, args, kwargs, result_queue, use_auto = item
     assert name == "error"
     
     # 워커 로직 시뮬레이션: 예외 발생 및 전송
@@ -112,8 +114,8 @@ def test_execute_custom(db_proxy_setup):
     except queue.Empty:
         pytest.fail("큐에 작업이 들어오지 않았습니다.")
         
-    # execute_custom은 ("__CUSTOM__", (func, args, kwargs), {}, result_queue) 형태로 넣음
-    name, args_tuple, kwargs, result_queue = item
+    # execute_custom은 ("__CUSTOM__", (func, args, kwargs), {}, result_queue, use_auto) 형태로 넣음
+    name, args_tuple, kwargs, result_queue, use_auto = item
     
     assert name == "__CUSTOM__"
     func, f_args, f_kwargs = args_tuple
